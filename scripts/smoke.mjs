@@ -73,8 +73,10 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map(t => t.name).sort();
-  check("tools/list returns 5 tools", names.length === 5, `got ${JSON.stringify(names)}`);
+  check("tools/list returns 7 tools", names.length === 7, `got ${JSON.stringify(names)}`);
   const expected = [
+    "obsidian_dataview_query",
+    "obsidian_get_backlinks",
     "obsidian_get_recent_edits",
     "obsidian_list_notes",
     "obsidian_read_note",
@@ -144,6 +146,26 @@ try {
   } else {
     console.log("      (no wikilinks found in first batch — skipping resolve test)");
   }
+
+  // Pick a target with at least one inbound link from our list_notes scan and try backlinks.
+  if (listParsed[0]) {
+    const back = await rpc("tools/call", {
+      name: "obsidian_get_backlinks",
+      arguments: { path: listParsed[0].path, limit: 5 }
+    });
+    const backParsed = JSON.parse(back.result.content[0].text);
+    check("get_backlinks returns array", Array.isArray(backParsed), back.result.content[0].text.slice(0, 200));
+    console.log(`      → backlinks to "${listParsed[0].title}": ${backParsed.length} hits`);
+  }
+
+  // Run a tiny dataview query.
+  const dql = await rpc("tools/call", {
+    name: "obsidian_dataview_query",
+    arguments: { query: "LIST SORT file.mtime DESC LIMIT 3" }
+  });
+  const dqlParsed = JSON.parse(dql.result.content[0].text);
+  check("dataview_query returns rows", Array.isArray(dqlParsed.rows), dql.result.content[0].text.slice(0, 200));
+  console.log(`      → dql top 3 by mtime: ${dqlParsed.rows.map(r => r["file.name"]).join(", ")}`);
 } catch (err) {
   console.error("Smoke test threw:", err);
   failures.push(err.message);

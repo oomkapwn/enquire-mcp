@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { Vault, FileEntry } from "./vault.js";
-import { parseNote } from "./parser.js";
+import { Embed, Wikilink } from "./parser.js";
+import { parseDql, runDql } from "./dql.js";
 
 export interface NoteSummary {
   title: string;
@@ -27,8 +28,7 @@ export async function listNotes(
   const out: NoteSummary[] = [];
   for (const e of entries) {
     if (sinceMs !== null && e.mtimeMs < sinceMs) continue;
-    const text = await vault.readFile(e.absPath);
-    const parsed = parseNote(text);
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     if (wantTag && !parsed.tags.some(t => normalizeTag(t) === wantTag)) continue;
     out.push({
       title: stripMd(e.basename),
@@ -50,22 +50,22 @@ export async function readNote(
   title: string;
   content: string;
   frontmatter: Record<string, unknown>;
-  wikilinks: ReturnType<typeof parseNote>["wikilinks"];
+  wikilinks: Wikilink[];
+  embeds: Embed[];
   tags: string[];
   mtime: string;
 }> {
   const entry = await resolveTarget(vault, args);
-  const text = await vault.readFile(entry.absPath);
-  const parsed = parseNote(text);
-  const stat = await vault.stat(entry.absPath);
+  const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
   return {
     path: entry.relPath,
     title: stripMd(entry.basename),
     content: parsed.body,
     frontmatter: parsed.frontmatter,
     wikilinks: parsed.wikilinks,
+    embeds: parsed.embeds,
     tags: parsed.tags,
-    mtime: new Date(stat.mtimeMs).toISOString()
+    mtime: new Date(mtimeMs).toISOString()
   };
 }
 
@@ -81,7 +81,7 @@ export async function resolveWikilink(
   block: string | null;
   alias: string | null;
 }> {
-  const cleaned = args.wikilink.replace(/^\[\[|\]\]$/g, "");
+  const cleaned = args.wikilink.replace(/^!?\[\[|\]\]$/g, "");
   const aliasIdx = cleaned.indexOf("|");
   const alias = aliasIdx === -1 ? null : cleaned.slice(aliasIdx + 1).trim();
   let rest = aliasIdx === -1 ? cleaned : cleaned.slice(0, aliasIdx);
@@ -101,12 +101,16 @@ export async function resolveWikilink(
   if (!match) {
     return { found: false, path: null, title: null, content: null, section, block, alias };
   }
-  const content = args.include_content !== false ? await vault.readFile(match.absPath) : null;
+  let body: string | null = null;
+  if (args.include_content !== false) {
+    const { parsed } = await vault.readNote(match.absPath, match.mtimeMs);
+    body = parsed.body;
+  }
   return {
     found: true,
     path: match.relPath,
     title: stripMd(match.basename),
-    content: content !== null ? parseNote(content).body : null,
+    content: body,
     section,
     block,
     alias
@@ -124,8 +128,8 @@ export async function searchText(
   const entries = await vault.listMarkdown(args.folder);
   const out: Array<{ path: string; snippet: string; score: number; line: number }> = [];
   for (const e of entries) {
-    const text = await vault.readFile(e.absPath);
-    const lower = text.toLowerCase();
+    const { content } = await vault.readNote(e.absPath, e.mtimeMs);
+    const lower = content.toLowerCase();
     let score = 0;
     let firstHit = -1;
     let from = 0;
@@ -137,7 +141,7 @@ export async function searchText(
       from = idx + lowerQ.length;
     }
     if (score === 0) continue;
-    const { snippet, line } = sliceSnippet(text, firstHit, q.length);
+    const { snippet, line } = sliceSnippet(content, firstHit, q.length);
     out.push({ path: e.relPath, snippet, score, line });
   }
   out.sort((a, b) => b.score - a.score);
@@ -159,8 +163,7 @@ export async function getRecentEdits(
   const out: NoteSummary[] = [];
   for (const e of entries) {
     if (sinceMs !== null && e.mtimeMs < sinceMs) break;
-    const text = await vault.readFile(e.absPath);
-    const parsed = parseNote(text);
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     out.push({
       title: stripMd(e.basename),
       path: e.relPath,
@@ -171,6 +174,76 @@ export async function getRecentEdits(
     if (out.length >= limit) break;
   }
   return out;
+}
+
+export interface BacklinkHit {
+  path: string;
+  title: string;
+  count: number;
+  snippets: string[];
+  link_kind: "wikilink" | "embed" | "mixed";
+}
+
+export async function getBacklinks(
+  vault: Vault,
+  args: { path?: string; title?: string; limit?: number; include_embeds?: boolean }
+): Promise<BacklinkHit[]> {
+  const limit = args.limit ?? 50;
+  const includeEmbeds = args.include_embeds !== false;
+  const target = await resolveTarget(vault, args);
+  const targetAbs = target.absPath;
+  const all = await vault.listMarkdown();
+
+  const hits: BacklinkHit[] = [];
+  for (const e of all) {
+    if (e.absPath === targetAbs) continue;
+    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const linkBag: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
+      ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
+      ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+    ];
+    if (!linkBag.length) continue;
+
+    let count = 0;
+    let kindFlags = { wikilink: false, embed: false };
+    const snippets: string[] = [];
+    for (const { link, kind } of linkBag) {
+      const match = findBestMatch(all, link.target, e.relPath);
+      if (!match || match.absPath !== targetAbs) continue;
+      count += 1;
+      kindFlags[kind] = true;
+      if (snippets.length < 2) {
+        const literal = (kind === "embed" ? "![[" : "[[") + link.raw + "]]";
+        const idx = content.indexOf(literal);
+        const { snippet } = sliceSnippet(content, idx, literal.length);
+        if (snippet) snippets.push(snippet);
+      }
+    }
+    if (count === 0) continue;
+    hits.push({
+      path: e.relPath,
+      title: stripMd(e.basename),
+      count,
+      snippets,
+      link_kind: kindFlags.wikilink && kindFlags.embed
+        ? "mixed"
+        : kindFlags.embed ? "embed" : "wikilink"
+    });
+  }
+  hits.sort((a, b) => b.count - a.count);
+  return hits.slice(0, limit);
+}
+
+export async function dataviewQuery(
+  vault: Vault,
+  args: { query: string }
+): Promise<{
+  query: string;
+  rows: Array<Record<string, unknown>>;
+}> {
+  const parsed = parseDql(args.query);
+  const rows = await runDql(vault, parsed);
+  return { query: args.query, rows };
 }
 
 async function resolveTarget(

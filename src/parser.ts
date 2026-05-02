@@ -8,10 +8,13 @@ export interface Wikilink {
   alias?: string;
 }
 
+export type Embed = Wikilink;
+
 export interface ParsedNote {
   frontmatter: Record<string, unknown>;
   body: string;
   wikilinks: Wikilink[];
+  embeds: Embed[];
   tags: string[];
 }
 
@@ -31,15 +34,25 @@ export function parseNote(source: string): ParsedNote {
     frontmatter,
     body,
     wikilinks: extractWikilinks(sanitized),
+    embeds: extractEmbeds(sanitized),
     tags: collectTags(frontmatter, sanitized)
   };
 }
 
-const WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
+const WIKILINK_RE = /(?<!!)\[\[([^\]\n]+?)\]\]/g;
+const EMBED_RE = /!\[\[([^\]\n]+?)\]\]/g;
 
 export function extractWikilinks(text: string): Wikilink[] {
+  return matchLinks(text, WIKILINK_RE);
+}
+
+export function extractEmbeds(text: string): Embed[] {
+  return matchLinks(text, EMBED_RE);
+}
+
+function matchLinks(text: string, re: RegExp): Wikilink[] {
   const out: Wikilink[] = [];
-  for (const m of text.matchAll(WIKILINK_RE)) {
+  for (const m of text.matchAll(re)) {
     const raw = m[1];
     let alias: string | undefined;
     let rest = raw;

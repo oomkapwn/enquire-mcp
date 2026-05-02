@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { parseNote, ParsedNote } from "./parser.js";
 
 const SKIP_DIRS = new Set([
   ".git",
@@ -16,8 +17,15 @@ export interface FileEntry {
   mtimeMs: number;
 }
 
+export interface CachedNote {
+  content: string;
+  parsed: ParsedNote;
+  mtimeMs: number;
+}
+
 export class Vault {
   readonly root: string;
+  private cache = new Map<string, CachedNote>();
 
   constructor(root: string) {
     this.root = path.resolve(root);
@@ -49,6 +57,22 @@ export class Vault {
   async readFile(relOrAbs: string): Promise<string> {
     const abs = path.isAbsolute(relOrAbs) ? this.assertInside(relOrAbs) : this.resolveInside(relOrAbs);
     return fs.readFile(abs, "utf8");
+  }
+
+  async readNote(relOrAbs: string, knownMtimeMs?: number): Promise<CachedNote> {
+    const abs = path.isAbsolute(relOrAbs) ? this.assertInside(relOrAbs) : this.resolveInside(relOrAbs);
+    const mtimeMs = knownMtimeMs ?? (await fs.stat(abs)).mtimeMs;
+    const cached = this.cache.get(abs);
+    if (cached && cached.mtimeMs === mtimeMs) return cached;
+    const content = await fs.readFile(abs, "utf8");
+    const parsed = parseNote(content);
+    const entry = { content, parsed, mtimeMs };
+    this.cache.set(abs, entry);
+    return entry;
+  }
+
+  invalidateCache(): void {
+    this.cache.clear();
   }
 
   async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {

@@ -1,10 +1,10 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/obsidian-mcp"><img src="./assets/social-preview.png" alt="obsidian-mcp banner — first-class Obsidian vault access for Claude, Cursor, and Devin" width="100%"></a>
+<a href="https://github.com/oomkapwn/obsidian-mcp"><img src="./assets/social-preview.png" alt="obsidian-mcp banner — first-class Obsidian vault access for Claude, Cursor and Devin" width="100%"></a>
 
 # obsidian-mcp
 
-**Give Claude, Cursor, and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, basic Dataview queries.**
+**Give Claude, Cursor and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, basic Dataview queries.**
 
 [![CI](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/obsidian-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/obsidian-mcp)

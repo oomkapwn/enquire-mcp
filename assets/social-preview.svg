@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e27"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e1b3a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="80%" cy="20%" r="60%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="10%" cy="90%" r="45%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" x="0" y="0" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1" fill="#1e293b" opacity="0.5"/>
+    </pattern>
+  </defs>
+
+  <!-- Background layers -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#dots)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect width="1280" height="640" fill="url(#glow2)"/>
+
+  <!-- Accent corner bar -->
+  <rect x="0" y="0" width="6" height="640" fill="#8b5cf6"/>
+
+  <!-- Title block (left) -->
+  <g transform="translate(72, 130)">
+    <!-- prompt prefix -->
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="22" fill="#8b5cf6" font-weight="600">
+      [[mcp]]
+    </text>
+    <!-- main title -->
+    <text x="0" y="80" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="84" fill="#f8fafc" font-weight="700" letter-spacing="-2">
+      obsidian-mcp
+    </text>
+    <!-- divider -->
+    <line x1="0" y1="115" x2="120" y2="115" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
+    <!-- tagline -->
+    <text x="0" y="170" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="28" fill="#cbd5e1" font-weight="500">
+      First-class Obsidian vault access
+    </text>
+    <text x="0" y="208" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="28" fill="#cbd5e1" font-weight="500">
+      for Claude, Cursor, and Devin.
+    </text>
+    <!-- features row -->
+    <text x="0" y="280" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="18" fill="#94a3b8">
+      wikilinks · backlinks · frontmatter · tags · Dataview
+    </text>
+  </g>
+
+  <!-- Terminal mockup (right) -->
+  <g transform="translate(720, 175)">
+    <!-- window chrome -->
+    <rect x="0" y="0" width="496" height="290" rx="10" ry="10" fill="#0b1020" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="496" height="32" rx="10" ry="10" fill="#111827"/>
+    <rect x="0" y="22" width="496" height="10" fill="#111827"/>
+    <circle cx="18" cy="16" r="5" fill="#ef4444" opacity="0.85"/>
+    <circle cx="36" cy="16" r="5" fill="#f59e0b" opacity="0.85"/>
+    <circle cx="54" cy="16" r="5" fill="#10b981" opacity="0.85"/>
+    <text x="240" y="20" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="12" fill="#64748b" text-anchor="middle">claude — obsidian-mcp</text>
+
+    <!-- terminal lines -->
+    <g font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14">
+      <text x="20" y="64" fill="#06b6d4">›</text>
+      <text x="38" y="64" fill="#e2e8f0">What was I working on yesterday?</text>
+
+      <text x="20" y="104" fill="#8b5cf6">→</text>
+      <text x="38" y="104" fill="#94a3b8">obsidian_get_recent_edits(</text>
+      <text x="38" y="124" fill="#94a3b8">  since_minutes=1440)</text>
+
+      <text x="20" y="160" fill="#8b5cf6">→</text>
+      <text x="38" y="160" fill="#94a3b8">obsidian_get_backlinks(</text>
+      <text x="38" y="180" fill="#94a3b8">  title=</text>
+      <text x="76" y="180" fill="#f59e0b">"Apollo"</text>
+      <text x="132" y="180" fill="#94a3b8">)</text>
+
+      <text x="20" y="224" fill="#10b981">✓</text>
+      <text x="38" y="224" fill="#e2e8f0">"You shipped the v0.3 spec.</text>
+      <text x="38" y="244" fill="#e2e8f0">3 open threads in </text>
+      <text x="178" y="244" fill="#8b5cf6">[[Apollo/Open Threads]]</text>
+      <text x="38" y="264" fill="#e2e8f0">2 daily notes link back."</text>
+    </g>
+  </g>
+
+  <!-- Footer strip -->
+  <g transform="translate(72, 540)">
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="16" fill="#64748b" font-weight="500">
+      <tspan fill="#cbd5e1">10 tools</tspan>
+      <tspan> · </tspan>
+      <tspan fill="#cbd5e1">MCP resources</tspan>
+      <tspan> · </tspan>
+      <tspan fill="#cbd5e1">MCP prompts</tspan>
+      <tspan> · </tspan>
+      <tspan fill="#cbd5e1">86 tests</tspan>
+      <tspan> · </tspan>
+      <tspan fill="#cbd5e1">TypeScript</tspan>
+      <tspan> · </tspan>
+      <tspan fill="#cbd5e1">MIT</tspan>
+    </text>
+    <text x="0" y="36" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14" fill="#475569">
+      github.com/oomkapwn/obsidian-mcp
+    </text>
+  </g>
+</svg>

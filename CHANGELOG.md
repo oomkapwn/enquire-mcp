@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `assets/social-preview.svg` + rendered `assets/social-preview.png` (1280×640) for the GitHub repo "Social preview" setting and Twitter / HN / Slack link cards.
+- `npm run render:preview` script to regenerate the PNG from the SVG (sharp dev dependency).
+- Banner shown at the top of README.md.
+
 ## [0.3.1] — 2026-05-02
 
 ### Security

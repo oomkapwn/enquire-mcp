@@ -1,5 +1,7 @@
 <div align="center">
 
+<a href="https://github.com/oomkapwn/obsidian-mcp"><img src="./assets/social-preview.png" alt="obsidian-mcp banner — first-class Obsidian vault access for Claude, Cursor, and Devin" width="100%"></a>
+
 # obsidian-mcp
 
 **Give Claude, Cursor, and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, basic Dataview queries.**

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-02
+
+Wave 3 of the launch-prep roadmap: stricter TypeScript, lint/format with Biome, and DQL gains `OR` + `LIKE`.
+
+### Added (DQL)
+- `OR` between predicate groups: `WHERE a = 1 OR b = 2`. `OR` has lower precedence than `AND`, so `a = 1 AND b = 2 OR c = 3` parses as `(a = 1 AND b = 2) OR (c = 3)`. Quote-aware tokenizer ensures `"OR"` inside a string is data, not a clause boundary.
+- `like` operator: SQL-LIKE-style wildcard matching, case-insensitive. `*` is the wildcard, `\*` is a literal asterisk. Works on string fields and on string elements of array fields. Examples: `file.name like "draft*"`, `status like "*progress*"`.
+
+### Changed (DQL parse model — backward compatible at the query level)
+- `DataviewQuery.where` is now `Predicate[][]` (disjunction of conjunctions) instead of `Predicate[]`. Querie strings without `OR` produce a single-element outer array, so existing AND-only queries keep working unchanged.
+
+### Code quality
+- TypeScript strict++: enabled `noUncheckedIndexedAccess` and `noImplicitOverride`. Surfaced and fixed real defensive-coding gaps in `dql.ts` and `parser.ts` where regex match groups and array indexing could return `undefined`. (`exactOptionalPropertyTypes` was tried and removed — fights too hard with Zod-inferred types.)
+- **Biome 2** added as a lint+format toolchain: `npm run lint`, `npm run lint:fix`, `npm run format`. CI gains a dedicated `lint` job. `prepublishOnly` now runs `lint && build && test`. Codebase formatted to a consistent house style (line-width 120, double quotes, trailing-comma none).
+- All `catch (err: any)` replaced with `catch (err) { if (isErrnoException(err)) ... }` for type-safe error handling.
+
+### Tests
+- 119 unit tests (was 112). New coverage: `OR` parsing, mixed AND/OR precedence, `LIKE` parsing, `LIKE` matching with leading/trailing wildcards, `LIKE` case-insensitivity. Plus 2 quote-aware-keyword tests now covering `OR`.
+
 ## [0.4.0] — 2026-05-02
 
 Wave 2 of the launch-prep roadmap: two new vault-introspection tools, three new workflow prompts, and CI-driven coverage.

@@ -1,16 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  parseNote,
-  extractWikilinks,
   extractEmbeds,
+  extractFrontmatterTags,
   extractInlineTags,
-  extractFrontmatterTags
+  extractWikilinks,
+  parseNote
 } from "../src/parser.js";
 
 describe("extractWikilinks", () => {
   it("parses simple wikilinks", () => {
     const links = extractWikilinks("see [[Foo]] and [[Bar Baz]]");
-    expect(links.map(l => l.target)).toEqual(["Foo", "Bar Baz"]);
+    expect(links.map((l) => l.target)).toEqual(["Foo", "Bar Baz"]);
   });
 
   it("parses aliased wikilinks", () => {
@@ -101,8 +101,8 @@ describe("extractFrontmatterTags", () => {
 describe("extractEmbeds", () => {
   it("captures embed syntax separately from wikilinks", () => {
     const text = "regular [[Link]] and embed ![[Image]]";
-    expect(extractWikilinks(text).map(l => l.target)).toEqual(["Link"]);
-    expect(extractEmbeds(text).map(l => l.target)).toEqual(["Image"]);
+    expect(extractWikilinks(text).map((l) => l.target)).toEqual(["Link"]);
+    expect(extractEmbeds(text).map((l) => l.target)).toEqual(["Image"]);
   });
 
   it("handles embed with section ref", () => {
@@ -125,14 +125,14 @@ describe("parseNote", () => {
 
   it("separates wikilinks from embeds in same note", () => {
     const r = parseNote("![[Diagram]] explained in [[Notes]].");
-    expect(r.wikilinks.map(l => l.target)).toEqual(["Notes"]);
-    expect(r.embeds.map(l => l.target)).toEqual(["Diagram"]);
+    expect(r.wikilinks.map((l) => l.target)).toEqual(["Notes"]);
+    expect(r.embeds.map((l) => l.target)).toEqual(["Diagram"]);
   });
 
   it("strips wikilinks/tags found inside fenced code blocks", () => {
     const src = "Outer [[Real]]\n\n```\n[[NotALink]] and #notag\n```\n";
     const r = parseNote(src);
-    expect(r.wikilinks.map(l => l.target)).toEqual(["Real"]);
+    expect(r.wikilinks.map((l) => l.target)).toEqual(["Real"]);
     expect(r.tags).toEqual([]);
   });
 

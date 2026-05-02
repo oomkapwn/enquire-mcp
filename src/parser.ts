@@ -54,6 +54,7 @@ function matchLinks(text: string, re: RegExp): Wikilink[] {
   const out: Wikilink[] = [];
   for (const m of text.matchAll(re)) {
     const raw = m[1];
+    if (raw === undefined) continue;
     let alias: string | undefined;
     let rest = raw;
     const pipe = rest.indexOf("|");
@@ -74,7 +75,7 @@ function matchLinks(text: string, re: RegExp): Wikilink[] {
       rest = rest.slice(0, hashIdx);
     }
     out.push({
-      raw: m[1],
+      raw,
       target: rest.trim(),
       ...(section !== undefined ? { section } : {}),
       ...(block !== undefined ? { block } : {}),
@@ -84,12 +85,12 @@ function matchLinks(text: string, re: RegExp): Wikilink[] {
   return out;
 }
 
-const TAG_RE = /(?:^|[\s(\[{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
+const TAG_RE = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
 
 export function extractInlineTags(text: string): string[] {
   const found = new Set<string>();
   for (const m of text.matchAll(TAG_RE)) {
-    found.add(m[1]);
+    if (m[1] !== undefined) found.add(m[1]);
   }
   return [...found];
 }
@@ -101,7 +102,10 @@ export function extractFrontmatterTags(fm: Record<string, unknown>): string[] {
     return raw.filter((t): t is string => typeof t === "string").map(normalizeTag);
   }
   if (typeof raw === "string") {
-    return raw.split(/[,\s]+/).filter(Boolean).map(normalizeTag);
+    return raw
+      .split(/[,\s]+/)
+      .filter(Boolean)
+      .map(normalizeTag);
   }
   return [];
 }

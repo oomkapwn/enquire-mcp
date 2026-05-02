@@ -1,21 +1,23 @@
-import { Vault, FileEntry } from "./vault.js";
+import type { FileEntry, Vault } from "./vault.js";
 
-export type Source =
-  | { type: "all" }
-  | { type: "folder"; path: string }
-  | { type: "tag"; tag: string };
+export type Source = { type: "all" } | { type: "folder"; path: string } | { type: "tag"; tag: string };
+
+export type Op = "=" | "!=" | "contains" | "like";
 
 export interface Predicate {
   field: string;
-  op: "=" | "!=" | "contains";
+  op: Op;
   value: string | number | boolean | null;
 }
+
+/** A WHERE clause is a disjunction of conjunctions: (A AND B) OR (C AND D). */
+export type WhereGroups = Predicate[][];
 
 export interface DataviewQuery {
   kind: "LIST" | "TABLE";
   columns: string[];
   source: Source;
-  where: Predicate[];
+  where: WhereGroups;
   sort?: { field: string; dir: "ASC" | "DESC" };
   limit?: number;
 }
@@ -29,16 +31,20 @@ export function parseDql(input: string): DataviewQuery {
   if (!trimmed) throw new DqlParseError("Empty query");
 
   const kindMatch = /^(LIST|TABLE)\b\s*(.*)$/i.exec(trimmed);
-  if (!kindMatch) throw new DqlParseError("Query must start with LIST or TABLE");
+  if (!kindMatch || kindMatch[1] === undefined) throw new DqlParseError("Query must start with LIST or TABLE");
   const kind = kindMatch[1].toUpperCase() as "LIST" | "TABLE";
-  let rest = kindMatch[2];
+  const rest = kindMatch[2] ?? "";
 
   const clauses = splitClauses(rest);
 
   const columnsRaw = clauses.head;
-  const columns: string[] = kind === "TABLE"
-    ? columnsRaw.split(",").map(c => c.trim()).filter(Boolean)
-    : [];
+  const columns: string[] =
+    kind === "TABLE"
+      ? columnsRaw
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean)
+      : [];
 
   if (kind === "LIST" && columnsRaw.trim()) {
     throw new DqlParseError(`LIST does not take columns: got "${columnsRaw}"`);
@@ -47,7 +53,7 @@ export function parseDql(input: string): DataviewQuery {
   const source = parseSource(clauses.from ?? "");
   const where = clauses.where ? parseWhere(clauses.where) : [];
   const sort = clauses.sort ? parseSort(clauses.sort) : undefined;
-  const limit = clauses.limit ? parseLimit(clauses.limit) : undefined;
+  const limit = clauses.limit !== undefined ? parseLimit(clauses.limit) : undefined;
 
   return { kind, columns, source, where, sort, limit };
 }
@@ -76,15 +82,17 @@ function splitClauses(input: string): Clauses {
       i++;
       continue;
     }
-    if (i === 0 || /\s/.test(input[i - 1])) {
+    const prev = i > 0 ? input[i - 1] : undefined;
+    if (i === 0 || (prev !== undefined && /\s/.test(prev))) {
       const remaining = input.slice(i);
-      const matched = KEYWORDS.find(k => {
+      const matched = KEYWORDS.find((k) => {
         if (!remaining.toUpperCase().startsWith(k)) return false;
         const after = remaining[k.length];
         return after === undefined || /\s/.test(after);
       });
       if (matched) {
-        parts[parts.length - 1].content = input.slice(lastEnd, i).trim();
+        const tail = parts[parts.length - 1];
+        if (tail) tail.content = input.slice(lastEnd, i).trim();
         parts.push({ kw: matched, content: "" });
         i += matched.length;
         lastEnd = i;
@@ -93,7 +101,8 @@ function splitClauses(input: string): Clauses {
     }
     i++;
   }
-  parts[parts.length - 1].content = input.slice(lastEnd).trim();
+  const last = parts[parts.length - 1];
+  if (last) last.content = input.slice(lastEnd).trim();
   for (const p of parts) {
     if (p.kw === "HEAD") out.head = p.content;
     else if (p.kw === "FROM") out.from = p.content;
@@ -108,14 +117,14 @@ function parseSource(raw: string): Source {
   const s = raw.trim();
   if (!s) return { type: "all" };
   const strMatch = /^"([^"]*)"$/.exec(s);
-  if (strMatch) return { type: "folder", path: strMatch[1] };
+  if (strMatch && strMatch[1] !== undefined) return { type: "folder", path: strMatch[1] };
   if (s.startsWith("#")) return { type: "tag", tag: s.slice(1).trim() };
   throw new DqlParseError(`Unsupported FROM source: ${raw}. Use "folder" or #tag.`);
 }
 
-function parseWhere(raw: string): Predicate[] {
-  const clauses = splitOnKeyword(raw, "AND");
-  return clauses.map(parsePredicate);
+function parseWhere(raw: string): WhereGroups {
+  const orClauses = splitOnKeyword(raw, "OR");
+  return orClauses.map((orClause) => splitOnKeyword(orClause, "AND").map(parsePredicate));
 }
 
 function splitOnKeyword(input: string, keyword: string): string[] {
@@ -133,7 +142,8 @@ function splitOnKeyword(input: string, keyword: string): string[] {
       i++;
       continue;
     }
-    if (i === 0 || /\s/.test(input[i - 1])) {
+    const prev = i > 0 ? input[i - 1] : undefined;
+    if (i === 0 || (prev !== undefined && /\s/.test(prev))) {
       const slice = input.slice(i, i + keyword.length).toUpperCase();
       const after = input[i + keyword.length];
       if (slice === keyword.toUpperCase() && (after === undefined || /\s/.test(after))) {
@@ -151,18 +161,20 @@ function splitOnKeyword(input: string, keyword: string): string[] {
 }
 
 function parsePredicate(raw: string): Predicate {
-  const m = /^([\w.]+)\s*(=|!=|contains)\s*(.+)$/i.exec(raw.trim());
-  if (!m) throw new DqlParseError(`Cannot parse predicate: ${raw}`);
+  const m = /^([\w.]+)\s*(=|!=|contains|like)\s*(.+)$/i.exec(raw.trim());
+  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
+    throw new DqlParseError(`Cannot parse predicate: ${raw}`);
+  }
   return {
     field: m[1],
-    op: m[2].toLowerCase() as Predicate["op"],
+    op: m[2].toLowerCase() as Op,
     value: parseValue(m[3].trim())
   };
 }
 
 function parseValue(raw: string): string | number | boolean | null {
   const strMatch = /^"([^"]*)"$/.exec(raw);
-  if (strMatch) return strMatch[1];
+  if (strMatch && strMatch[1] !== undefined) return strMatch[1];
   if (raw === "true") return true;
   if (raw === "false") return false;
   if (raw === "null") return null;
@@ -172,7 +184,7 @@ function parseValue(raw: string): string | number | boolean | null {
 
 function parseSort(raw: string): { field: string; dir: "ASC" | "DESC" } {
   const m = /^([\w.]+)(?:\s+(ASC|DESC))?$/i.exec(raw.trim());
-  if (!m) throw new DqlParseError(`Cannot parse SORT: ${raw}`);
+  if (!m || m[1] === undefined) throw new DqlParseError(`Cannot parse SORT: ${raw}`);
   return { field: m[1], dir: (m[2]?.toUpperCase() as "ASC" | "DESC") ?? "ASC" };
 }
 
@@ -205,10 +217,10 @@ export async function runDql(
   const rows: Row[] = [];
   for (const entry of entries) {
     const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
-    if (wantTag && !parsed.tags.some(t => t.toLowerCase() === wantTag)) continue;
+    if (wantTag && !parsed.tags.some((t) => t.toLowerCase() === wantTag)) continue;
 
     const fieldVal = (field: string) => resolveField(field, entry, parsed.frontmatter, parsed.tags, mtimeMs);
-    if (!query.where.every(p => evalPredicate(p, fieldVal(p.field)))) continue;
+    if (!evalWhere(query.where, fieldVal)) continue;
 
     const out: Record<string, unknown> = {
       "file.path": entry.relPath,
@@ -231,7 +243,12 @@ export async function runDql(
   }
 
   const cap = query.limit ?? defaultLimit;
-  return rows.slice(0, cap).map(r => r.values);
+  return rows.slice(0, cap).map((r) => r.values);
+}
+
+function evalWhere(where: WhereGroups, fieldVal: (field: string) => unknown): boolean {
+  if (where.length === 0) return true;
+  return where.some((group) => group.every((pred) => evalPredicate(pred, fieldVal(pred.field))));
 }
 
 function resolveField(
@@ -242,31 +259,58 @@ function resolveField(
   mtimeMs: number
 ): unknown {
   switch (field) {
-    case "file.name": return stripMd(entry.basename);
-    case "file.path": return entry.relPath;
-    case "file.mtime": return new Date(mtimeMs).toISOString();
-    case "file.tags": return tags;
-    default: return frontmatter[field];
+    case "file.name":
+      return stripMd(entry.basename);
+    case "file.path":
+      return entry.relPath;
+    case "file.mtime":
+      return new Date(mtimeMs).toISOString();
+    case "file.tags":
+      return tags;
+    default:
+      return frontmatter[field];
   }
 }
 
 function evalPredicate(pred: Predicate, value: unknown): boolean {
   switch (pred.op) {
     case "=":
-      if (Array.isArray(value)) return value.some(v => looseEq(v, pred.value));
+      if (Array.isArray(value)) return value.some((v) => looseEq(v, pred.value));
       return looseEq(value, pred.value);
     case "!=":
-      if (Array.isArray(value)) return !value.some(v => looseEq(v, pred.value));
+      if (Array.isArray(value)) return !value.some((v) => looseEq(v, pred.value));
       return !looseEq(value, pred.value);
     case "contains":
       if (Array.isArray(value)) {
-        return value.some(v => typeof v === "string" && typeof pred.value === "string" && v.toLowerCase().includes(pred.value.toLowerCase()));
+        return value.some(
+          (v) =>
+            typeof v === "string" &&
+            typeof pred.value === "string" &&
+            v.toLowerCase().includes(pred.value.toLowerCase())
+        );
       }
       if (typeof value === "string" && typeof pred.value === "string") {
         return value.toLowerCase().includes(pred.value.toLowerCase());
       }
       return false;
+    case "like": {
+      if (typeof pred.value !== "string") return false;
+      const re = likeToRegex(pred.value);
+      if (Array.isArray(value)) {
+        return value.some((v) => typeof v === "string" && re.test(v));
+      }
+      if (typeof value === "string") return re.test(value);
+      return false;
+    }
   }
+}
+
+function likeToRegex(pattern: string): RegExp {
+  // Escape regex specials, then turn unescaped * into .* (SQL-LIKE-style wildcard).
+  // \* is treated as a literal asterisk.
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const withWildcards = escaped.replace(/(?<!\\)\*/g, ".*").replace(/\\\*/g, "\\*");
+  return new RegExp(`^${withWildcards}$`, "iu");
 }
 
 function looseEq(a: unknown, b: unknown): boolean {

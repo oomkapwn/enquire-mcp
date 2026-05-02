@@ -136,17 +136,22 @@ Run a minimal Dataview-style query. Phase-2 minimal — designed to cover the co
 ### Grammar (subset)
 
 ```
-QUERY  ::= ("LIST" | "TABLE" COLUMNS) ("FROM" SOURCE)? WHERE? SORT? LIMIT?
-COLUMNS ::= IDENT ("," IDENT)*
-SOURCE  ::= "\"" PATH "\""    -- folder
-          | "#" TAG           -- tag
-WHERE   ::= "WHERE" PRED ("AND" PRED)*
-PRED    ::= IDENT OP VALUE
-OP      ::= "=" | "!=" | "contains"
-VALUE   ::= "\"" STRING "\"" | NUMBER | "true" | "false" | "null" | BARE
-SORT    ::= "SORT" IDENT ("ASC" | "DESC")?
-LIMIT   ::= "LIMIT" INTEGER
+QUERY    ::= ("LIST" | "TABLE" COLUMNS) ("FROM" SOURCE)? WHERE? SORT? LIMIT?
+COLUMNS  ::= IDENT ("," IDENT)*
+SOURCE   ::= "\"" PATH "\""    -- folder
+           | "#" TAG           -- tag
+WHERE    ::= "WHERE" CONJ ("OR" CONJ)*
+CONJ     ::= PRED ("AND" PRED)*
+PRED     ::= IDENT OP VALUE
+OP       ::= "=" | "!=" | "contains" | "like"
+VALUE    ::= "\"" STRING "\"" | NUMBER | "true" | "false" | "null" | BARE
+SORT     ::= "SORT" IDENT ("ASC" | "DESC")?
+LIMIT    ::= "LIMIT" INTEGER
 ```
+
+`OR` has lower precedence than `AND` — `WHERE a = 1 AND b = 2 OR c = 3` parses as `(a = 1 AND b = 2) OR (c = 3)`. Use parentheses-style alternatives in the future once we add them; for now you can express any DNF directly.
+
+`like` is a SQL-LIKE-style wildcard match (case-insensitive). `*` matches any run of characters; `\*` is a literal asterisk. Examples: `file.name like "draft*"`, `status like "in*progress"`.
 
 ### Special fields
 
@@ -171,12 +176,12 @@ TABLE status, priority FROM "01_Projects" WHERE done = false SORT priority ASC L
 LIST FROM #people WHERE file.tags contains "core-team"
 ```
 
-### Not supported (Phase 2 minimal)
+### Not supported (yet)
 
 - Expressions / arithmetic / function calls (`length(...)`, `regexmatch(...)`, etc.)
-- `OR` between predicates (only `AND` is supported)
 - `FLATTEN`, `GROUP BY`, joins, embedded queries
-- `SOURCE` combinations beyond a single folder or single tag
+- `SOURCE` combinations beyond a single folder or single tag (no `FROM "a" OR #b`)
+- Parentheses for explicit precedence in `WHERE`
 
 ### Row caps
 

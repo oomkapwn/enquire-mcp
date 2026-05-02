@@ -12,10 +12,7 @@ const svgPath = path.join(root, "assets", "social-preview.svg");
 const pngPath = path.join(root, "assets", "social-preview.png");
 
 const svg = await fs.readFile(svgPath);
-await sharp(svg, { density: 300 })
-  .resize(1280, 640, { fit: "fill" })
-  .png({ compressionLevel: 9 })
-  .toFile(pngPath);
+await sharp(svg, { density: 300 }).resize(1280, 640, { fit: "fill" }).png({ compressionLevel: 9 }).toFile(pngPath);
 
 const stat = await fs.stat(pngPath);
 console.log(`wrote ${path.relative(root, pngPath)} (${(stat.size / 1024).toFixed(1)} kB)`);

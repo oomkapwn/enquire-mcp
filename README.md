@@ -11,8 +11,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-119%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-83%25%20lines-brightgreen.svg)](#develop)
+[![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
 </div>
 
@@ -131,7 +132,7 @@ Restart your client. The server logs `obsidian-mcp <version> ready (read-only, v
 | `obsidian_get_outbound_links` | Symmetric counterpart to backlinks — every link a note points to, with resolution status. |
 | `obsidian_get_unresolved_wikilinks` | Vault-hygiene: every `[[broken]]` link in the vault. |
 | `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
-| `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. |
+| `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. Supports `AND` / `OR` / `=` / `!=` / `contains` / `like`. |
 
 ### 2 write tools (opt-in via `--enable-write`)
 
@@ -279,8 +280,10 @@ Avoids name squatting on the `obsidian-mcp` namespace. The CLI binary is still j
 ## Develop
 
 ```bash
-npm test              # 112 unit tests
+npm test              # 119 unit tests
 npm run test:coverage # vitest --coverage (v8 provider)
+npm run lint          # biome check
+npm run lint:fix      # biome check --write (auto-fixes)
 npm run dev           # tsc --watch
 node scripts/smoke.mjs [vault-path]   # end-to-end JSON-RPC smoke
 ```

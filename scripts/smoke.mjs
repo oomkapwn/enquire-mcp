@@ -2,8 +2,8 @@
 // Smoke test: spawn the built MCP server, run the JSON-RPC handshake,
 // then call a few tools. Prints PASS/FAIL summary and exits non-zero on failure.
 import { spawn } from "node:child_process";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,14 +16,17 @@ const proc = spawn("node", [bin, "serve", "--vault", vault], {
 });
 
 let stderr = "";
-proc.stderr.on("data", (d) => { stderr += d.toString(); });
+proc.stderr.on("data", (d) => {
+  stderr += d.toString();
+});
 
 let buf = "";
 const pending = new Map();
 proc.stdout.on("data", (d) => {
   buf += d.toString();
-  let nl;
-  while ((nl = buf.indexOf("\n")) !== -1) {
+  while (true) {
+    const nl = buf.indexOf("\n");
+    if (nl === -1) break;
     const line = buf.slice(0, nl);
     buf = buf.slice(nl + 1);
     if (!line.trim()) continue;
@@ -43,7 +46,7 @@ proc.stdout.on("data", (d) => {
 let nextId = 1;
 function rpc(method, params) {
   const id = nextId++;
-  const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
+  const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
     proc.stdin.write(payload);
@@ -59,7 +62,10 @@ function rpc(method, params) {
 const failures = [];
 function check(label, ok, detail) {
   if (ok) console.log(`PASS  ${label}`);
-  else { console.log(`FAIL  ${label} — ${detail}`); failures.push(label); }
+  else {
+    console.log(`FAIL  ${label} — ${detail}`);
+    failures.push(label);
+  }
 }
 
 try {
@@ -69,10 +75,10 @@ try {
     clientInfo: { name: "smoke", version: "0.0.1" }
   });
   check("initialize", !!init.result?.serverInfo?.name, JSON.stringify(init).slice(0, 200));
-  proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
 
   const list = await rpc("tools/list", {});
-  const names = (list.result?.tools ?? []).map(t => t.name).sort();
+  const names = (list.result?.tools ?? []).map((t) => t.name).sort();
   check("tools/list returns 10 read tools", names.length === 10, `got ${JSON.stringify(names)}`);
   const expected = [
     "obsidian_dataview_query",
@@ -87,7 +93,7 @@ try {
     "obsidian_search_text"
   ];
   check("tool names match spec", JSON.stringify(names) === JSON.stringify(expected), JSON.stringify(names));
-  const allReadOnly = (list.result?.tools ?? []).every(t => t.annotations?.readOnlyHint === true);
+  const allReadOnly = (list.result?.tools ?? []).every((t) => t.annotations?.readOnlyHint === true);
   check("read tools all have readOnlyHint=true", allReadOnly, "missing annotations");
 
   const recent = await rpc("tools/call", {
@@ -107,7 +113,12 @@ try {
   const listText = listNotes.result?.content?.[0]?.text ?? "";
   const listParsed = JSON.parse(listText);
   check("list_notes returns array", Array.isArray(listParsed), listText.slice(0, 200));
-  console.log(`      → first 3: ${listParsed.slice(0, 3).map(n => n.title).join(", ")}`);
+  console.log(
+    `      → first 3: ${listParsed
+      .slice(0, 3)
+      .map((n) => n.title)
+      .join(", ")}`
+  );
 
   // Pick something likely searchable from the vault.
   const search = await rpc("tools/call", {
@@ -138,7 +149,10 @@ try {
       arguments: { path: note.path }
     });
     const p = JSON.parse(r.result.content[0].text);
-    if (p.wikilinks?.length) { wikilinkSample = { from: note.path, link: p.wikilinks[0] }; break; }
+    if (p.wikilinks?.length) {
+      wikilinkSample = { from: note.path, link: p.wikilinks[0] };
+      break;
+    }
   }
   if (wikilinkSample) {
     const res = await rpc("tools/call", {
@@ -146,7 +160,9 @@ try {
       arguments: { wikilink: wikilinkSample.link.target, from_note: wikilinkSample.from, include_content: false }
     });
     const parsed = JSON.parse(res.result.content[0].text);
-    console.log(`      → wikilink "[[${wikilinkSample.link.target}]]" from ${wikilinkSample.from}: found=${parsed.found} path=${parsed.path}`);
+    console.log(
+      `      → wikilink "[[${wikilinkSample.link.target}]]" from ${wikilinkSample.from}: found=${parsed.found} path=${parsed.path}`
+    );
     check("resolve_wikilink returns shape", typeof parsed.found === "boolean", JSON.stringify(parsed).slice(0, 200));
   } else {
     console.log("      (no wikilinks found in first batch — skipping resolve test)");
@@ -170,7 +186,7 @@ try {
   });
   const dqlParsed = JSON.parse(dql.result.content[0].text);
   check("dataview_query returns rows", Array.isArray(dqlParsed.rows), dql.result.content[0].text.slice(0, 200));
-  console.log(`      → dql top 3 by mtime: ${dqlParsed.rows.map(r => r["file.name"]).join(", ")}`);
+  console.log(`      → dql top 3 by mtime: ${dqlParsed.rows.map((r) => r["file.name"]).join(", ")}`);
 
   // List tags.
   const tags = await rpc("tools/call", {
@@ -179,27 +195,37 @@ try {
   });
   const tagsParsed = JSON.parse(tags.result.content[0].text);
   check("list_tags returns array", Array.isArray(tagsParsed), tags.result.content[0].text.slice(0, 200));
-  console.log(`      → top tags: ${tagsParsed.map(t => `#${t.tag}(${t.count})`).join(" ")}`);
+  console.log(`      → top tags: ${tagsParsed.map((t) => `#${t.tag}(${t.count})`).join(" ")}`);
 
   // Resources: vault info.
   const resources = await rpc("resources/list", {});
   const staticResources = resources.result?.resources ?? [];
-  check("resources/list returns vault info", staticResources.some(r => r.uri === "obsidian://vault/info"), JSON.stringify(staticResources).slice(0, 200));
+  check(
+    "resources/list returns vault info",
+    staticResources.some((r) => r.uri === "obsidian://vault/info"),
+    JSON.stringify(staticResources).slice(0, 200)
+  );
 
   const vaultInfo = await rpc("resources/read", { uri: "obsidian://vault/info" });
   const vaultInfoText = vaultInfo.result?.contents?.[0]?.text ?? "";
   const vaultInfoParsed = JSON.parse(vaultInfoText);
   check("vault/info has note_count", typeof vaultInfoParsed.note_count === "number", vaultInfoText.slice(0, 200));
-  console.log(`      → vault/info: ${vaultInfoParsed.note_count} notes, write_enabled=${vaultInfoParsed.write_enabled}`);
+  console.log(
+    `      → vault/info: ${vaultInfoParsed.note_count} notes, write_enabled=${vaultInfoParsed.write_enabled}`
+  );
 
   // Resources: list note templates and read one back.
   const tmpl = await rpc("resources/templates/list", {});
   const templates = tmpl.result?.resourceTemplates ?? [];
-  check("resource template registered", templates.some(t => String(t.uriTemplate ?? t.uri ?? "").startsWith("obsidian://note/")), JSON.stringify(templates).slice(0, 200));
+  check(
+    "resource template registered",
+    templates.some((t) => String(t.uriTemplate ?? t.uri ?? "").startsWith("obsidian://note/")),
+    JSON.stringify(templates).slice(0, 200)
+  );
 
   // Prompts.
   const prompts = await rpc("prompts/list", {});
-  const promptNames = (prompts.result?.prompts ?? []).map(p => p.name).sort();
+  const promptNames = (prompts.result?.prompts ?? []).map((p) => p.name).sort();
   check("prompts/list returns 6 prompts", promptNames.length === 6, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
 
@@ -210,7 +236,11 @@ try {
       arguments: { path: listParsed[0].path, include_unresolved: true }
     });
     const outboundParsed = JSON.parse(outbound.result.content[0].text);
-    check("get_outbound_links returns links array", Array.isArray(outboundParsed.links), outbound.result.content[0].text.slice(0, 200));
+    check(
+      "get_outbound_links returns links array",
+      Array.isArray(outboundParsed.links),
+      outbound.result.content[0].text.slice(0, 200)
+    );
     console.log(`      → outbound from "${listParsed[0].title}": ${outboundParsed.links.length} link(s)`);
   }
   const unresolved = await rpc("tools/call", {
@@ -218,7 +248,11 @@ try {
     arguments: { limit: 5 }
   });
   const unresolvedParsed = JSON.parse(unresolved.result.content[0].text);
-  check("get_unresolved_wikilinks returns array", Array.isArray(unresolvedParsed), unresolved.result.content[0].text.slice(0, 200));
+  check(
+    "get_unresolved_wikilinks returns array",
+    Array.isArray(unresolvedParsed),
+    unresolved.result.content[0].text.slice(0, 200)
+  );
   console.log(`      → unresolved wikilinks (vault-wide): ${unresolvedParsed.length}`);
 } catch (err) {
   console.error("Smoke test threw:", err);
@@ -228,7 +262,7 @@ try {
   proc.kill();
 }
 
-if (stderr) console.error("--- server stderr ---\n" + stderr);
+if (stderr) console.error(`--- server stderr ---\n${stderr}`);
 
 if (failures.length) {
   console.log(`\n${failures.length} failure(s)`);

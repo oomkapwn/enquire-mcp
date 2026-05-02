@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import { Vault, FileEntry } from "./vault.js";
-import { Embed, Wikilink } from "./parser.js";
 import { parseDql, runDql } from "./dql.js";
+import type { Embed, Wikilink } from "./parser.js";
+import type { FileEntry, Vault } from "./vault.js";
 
 export interface NoteSummary {
   title: string;
@@ -30,7 +30,7 @@ export async function listNotes(
   for (const e of entries) {
     if (sinceMs !== null && e.mtimeMs < sinceMs) continue;
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    if (wantTag && !parsed.tags.some(t => normalizeTag(t) === wantTag)) continue;
+    if (wantTag && !parsed.tags.some((t) => normalizeTag(t) === wantTag)) continue;
     out.push({
       title: stripMd(e.basename),
       path: e.relPath,
@@ -158,9 +158,7 @@ export async function getRecentEdits(
 ): Promise<NoteSummary[]> {
   await vault.ensureExists();
   const limit = args.limit ?? 20;
-  const sinceMs = args.since_minutes !== undefined
-    ? Date.now() - args.since_minutes * 60_000
-    : null;
+  const sinceMs = args.since_minutes !== undefined ? Date.now() - args.since_minutes * 60_000 : null;
 
   const entries = await vault.listMarkdown(args.folder);
   entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -205,13 +203,13 @@ export async function getBacklinks(
     if (e.absPath === targetAbs) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const linkBag: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-      ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
-      ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+      ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
+      ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
     ];
     if (!linkBag.length) continue;
 
     let count = 0;
-    let kindFlags = { wikilink: false, embed: false };
+    const kindFlags = { wikilink: false, embed: false };
     const snippets: string[] = [];
     for (const { link, kind } of linkBag) {
       const match = findBestMatch(all, link.target, e.relPath);
@@ -219,7 +217,7 @@ export async function getBacklinks(
       count += 1;
       kindFlags[kind] = true;
       if (snippets.length < 2) {
-        const literal = (kind === "embed" ? "![[" : "[[") + link.raw + "]]";
+        const literal = `${(kind === "embed" ? "![[" : "[[") + link.raw}]]`;
         const idx = content.indexOf(literal);
         const { snippet } = sliceSnippet(content, idx, literal.length);
         if (snippet) snippets.push(snippet);
@@ -231,9 +229,7 @@ export async function getBacklinks(
       title: stripMd(e.basename),
       count,
       snippets,
-      link_kind: kindFlags.wikilink && kindFlags.embed
-        ? "mixed"
-        : kindFlags.embed ? "embed" : "wikilink"
+      link_kind: kindFlags.wikilink && kindFlags.embed ? "mixed" : kindFlags.embed ? "embed" : "wikilink"
     });
   }
   hits.sort((a, b) => b.count - a.count);
@@ -279,15 +275,15 @@ export async function getUnresolvedWikilinks(
     if (out.length >= limit) break;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-      ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
-      ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+      ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
+      ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
     ];
     for (const { link, kind } of candidates) {
       if (out.length >= limit) break;
       if (!link.target) continue;
       const match = findBestMatch(all, link.target, e.relPath);
       if (match) continue;
-      const literal = (kind === "embed" ? "![[" : "[[") + link.raw + "]]";
+      const literal = `${(kind === "embed" ? "![[" : "[[") + link.raw}]]`;
       const idx = content.indexOf(literal);
       const { snippet, line } = sliceSnippet(content, idx, literal.length);
       out.push({
@@ -328,8 +324,8 @@ export async function getOutboundLinks(
   const { parsed } = await vault.readNote(entry.absPath, entry.mtimeMs);
   const all = await vault.listMarkdown();
   const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-    ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
-    ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+    ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
+    ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
   ];
   const links: OutboundLink[] = [];
   for (const { link, kind } of candidates) {
@@ -431,13 +427,13 @@ function renderFrontmatter(fm: Record<string, unknown>): string {
   for (const [key, value] of Object.entries(fm)) {
     lines.push(renderFrontmatterEntry(key, value));
   }
-  return lines.join("\n") + "\n";
+  return `${lines.join("\n")}\n`;
 }
 
 function renderFrontmatterEntry(key: string, value: unknown): string {
   if (Array.isArray(value)) {
     if (value.length === 0) return `${key}: []`;
-    return `${key}:\n${value.map(v => `  - ${renderScalar(v)}`).join("\n")}`;
+    return `${key}:\n${value.map((v) => `  - ${renderScalar(v)}`).join("\n")}`;
   }
   return `${key}: ${renderScalar(value)}`;
 }
@@ -446,7 +442,13 @@ function renderScalar(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   const str = String(value);
-  if (/[:\n#&*?{}\[\],"\\]/.test(str) || /^\s/.test(str) || /\s$/.test(str) || str === "" || /^(true|false|null|yes|no)$/i.test(str)) {
+  if (
+    /[:\n#&*?{}[\],"\\]/.test(str) ||
+    /^\s/.test(str) ||
+    /\s$/.test(str) ||
+    str === "" ||
+    /^(true|false|null|yes|no)$/i.test(str)
+  ) {
     return JSON.stringify(str);
   }
   return str;
@@ -460,17 +462,12 @@ function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {
     : typeof raw === "string"
       ? raw.split(/[,\s]+/).filter(Boolean)
       : [];
-  return list.map(t => t.replace(/^#+/, "").toLowerCase());
+  return list.map((t) => t.replace(/^#+/, "").toLowerCase());
 }
 
-async function resolveTarget(
-  vault: Vault,
-  args: { path?: string; title?: string }
-): Promise<FileEntry> {
+async function resolveTarget(vault: Vault, args: { path?: string; title?: string }): Promise<FileEntry> {
   if (args.path) {
-    const candidates = args.path.toLowerCase().endsWith(".md")
-      ? [args.path]
-      : [args.path, `${args.path}.md`];
+    const candidates = args.path.toLowerCase().endsWith(".md") ? [args.path] : [args.path, `${args.path}.md`];
     let lastErr: unknown;
     for (const candidate of candidates) {
       const abs = vault.resolveInside(candidate);
@@ -486,9 +483,7 @@ async function resolveTarget(
         lastErr = err;
       }
     }
-    throw lastErr instanceof Error
-      ? lastErr
-      : new Error(`Note not found: ${args.path}`);
+    throw lastErr instanceof Error ? lastErr : new Error(`Note not found: ${args.path}`);
   }
   if (args.title) {
     const found = await vault.findByTitle(args.title);
@@ -504,24 +499,24 @@ function findBestMatch(entries: FileEntry[], target: string, fromNote?: string):
       const fromDir = path.dirname(fromNote);
       const joined = path.posix.normalize(path.posix.join(fromDir.split(path.sep).join("/"), target));
       const lower = stripMd(joined).toLowerCase();
-      const rel = entries.find(e => stripMd(e.relPath).toLowerCase() === lower);
+      const rel = entries.find((e) => stripMd(e.relPath).toLowerCase() === lower);
       if (rel) return rel;
     }
   }
   const norm = stripMd(target).toLowerCase();
-  const exact = entries.filter(e => stripMd(e.basename).toLowerCase() === norm);
-  if (exact.length === 1) return exact[0];
+  const exact = entries.filter((e) => stripMd(e.basename).toLowerCase() === norm);
+  if (exact.length === 1) return exact[0] ?? null;
   if (exact.length > 1 && fromNote) {
     const fromDir = path.dirname(fromNote);
-    const sameDir = exact.find(e => path.dirname(e.relPath) === fromDir);
+    const sameDir = exact.find((e) => path.dirname(e.relPath) === fromDir);
     if (sameDir) return sameDir;
   }
-  if (exact.length > 0) return exact[0];
+  if (exact.length > 0) return exact[0] ?? null;
   if (target.includes("/")) {
     const lower = stripMd(target).toLowerCase();
-    const path1 = entries.find(e => stripMd(e.relPath).toLowerCase() === lower);
+    const path1 = entries.find((e) => stripMd(e.relPath).toLowerCase() === lower);
     if (path1) return path1;
-    const path2 = entries.find(e => stripMd(e.relPath).toLowerCase().endsWith("/" + lower));
+    const path2 = entries.find((e) => stripMd(e.relPath).toLowerCase().endsWith(`/${lower}`));
     if (path2) return path2;
   }
   return null;
@@ -532,8 +527,8 @@ function sliceSnippet(text: string, idx: number, qLen: number): { snippet: strin
   const before = Math.max(0, idx - 60);
   const after = Math.min(text.length, idx + qLen + 60);
   let snippet = text.slice(before, after).replace(/\s+/g, " ").trim();
-  if (before > 0) snippet = "…" + snippet;
-  if (after < text.length) snippet = snippet + "…";
+  if (before > 0) snippet = `…${snippet}`;
+  if (after < text.length) snippet = `${snippet}…`;
   const line = text.slice(0, idx).split("\n").length;
   return { snippet, line };
 }

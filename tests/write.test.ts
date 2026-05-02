@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { appendToNote, createNote } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
-import { createNote, appendToNote } from "../src/tools.js";
 
 let root: string;
 
@@ -34,7 +34,7 @@ describe("createNote", () => {
     const text = await fs.readFile(path.join(root, "Inbox", "Hello.md"), "utf8");
     expect(text).toMatch(/^---\n/);
     expect(text).toMatch(/title: Hello/);
-    expect(text).toMatch(/tags:\n  - foo\n  - bar/);
+    expect(text).toMatch(/tags:\n {2}- foo\n {2}- bar/);
     expect(text).toMatch(/Body here\./);
   });
 
@@ -91,7 +91,7 @@ describe("createNote", () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     const created = await createNote(v, { path: "MtimeCheck.md", content: "first" });
-    await new Promise(r => setTimeout(r, 12));
+    await new Promise((r) => setTimeout(r, 12));
     const appended = await appendToNote(v, { path: "MtimeCheck.md", content: "second" });
     expect(new Date(appended.mtime).getTime()).toBeGreaterThan(new Date(created.mtime).getTime());
   });

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listNotes, readNote } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
-import { readNote, listNotes } from "../src/tools.js";
 
 let root: string;
 let outsideDir: string;
@@ -32,8 +32,8 @@ describe("Vault — symlink safety", () => {
     const v = new Vault(root);
     await v.ensureExists();
     const notes = await listNotes(v, {});
-    expect(notes.map(n => n.title)).toEqual(["Inside"]);
-    expect(notes.find(n => n.title === "Secret")).toBeUndefined();
+    expect(notes.map((n) => n.title)).toEqual(["Inside"]);
+    expect(notes.find((n) => n.title === "Secret")).toBeUndefined();
   });
 
   it("rejects reads of symlinked files that resolve outside vault", async () => {
@@ -85,19 +85,19 @@ describe("Vault — cache cap & LRU", () => {
     await fs.writeFile(a, "A");
     await fs.writeFile(b, "B");
     await fs.writeFile(c, "C");
-    await v.readNote(a);                     // cache: {A}
-    await v.readNote(b);                     // cache: {A, B}
-    await v.readNote(a);                     // LRU bump → cache: {B, A}
-    await v.readNote(c);                     // evict head (B): cache: {A, C}
+    await v.readNote(a); // cache: {A}
+    await v.readNote(b); // cache: {A, B}
+    await v.readNote(a); // LRU bump → cache: {B, A}
+    await v.readNote(c); // evict head (B): cache: {A, C}
 
     const cache = (v as unknown as { cache: Map<string, unknown> }).cache;
     expect(cache.size).toBeLessThanOrEqual(2);
-    const cached = [...cache.keys()].map(k => path.basename(k));
-    expect(cached).toContain("LRU-A.md");    // re-read entry survived
-    expect(cached).toContain("LRU-C.md");    // newest entry survived
-    expect(cached).not.toContain("LRU-B.md");// untouched middle entry evicted
+    const cached = [...cache.keys()].map((k) => path.basename(k));
+    expect(cached).toContain("LRU-A.md"); // re-read entry survived
+    expect(cached).toContain("LRU-C.md"); // newest entry survived
+    expect(cached).not.toContain("LRU-B.md"); // untouched middle entry evicted
 
-    await Promise.all([a, b, c].map(p => fs.unlink(p).catch(() => {})));
+    await Promise.all([a, b, c].map((p) => fs.unlink(p).catch(() => {})));
   });
 });
 
@@ -111,7 +111,7 @@ describe("Vault — internal symlinks", () => {
     await fs.symlink(target, link).catch(() => null);
     const linkExists = await fs.lstat(link).catch(() => null);
     if (!linkExists) return;
-    const titles = (await listNotes(v, {})).map(n => n.title);
+    const titles = (await listNotes(v, {})).map((n) => n.title);
     expect(titles).toContain("Target-internal");
     expect(titles).not.toContain("Link-internal");
     await fs.unlink(link).catch(() => {});

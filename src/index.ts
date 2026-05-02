@@ -1,27 +1,27 @@
 #!/usr/bin/env node
-import { fileURLToPath } from "node:url";
 import * as path from "node:path";
-import { Command } from "commander";
-import { z } from "zod";
+import { fileURLToPath } from "node:url";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { Vault } from "./vault.js";
+import { Command } from "commander";
+import { z } from "zod";
 import {
+  appendToNote,
+  createNote,
+  dataviewQuery,
+  getBacklinks,
+  getOutboundLinks,
+  getRecentEdits,
+  getUnresolvedWikilinks,
   listNotes,
+  listTags,
   readNote,
   resolveWikilink,
-  searchText,
-  getRecentEdits,
-  getBacklinks,
-  dataviewQuery,
-  listTags,
-  getUnresolvedWikilinks,
-  getOutboundLinks,
-  createNote,
-  appendToNote
+  searchText
 } from "./tools.js";
+import { Vault } from "./vault.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 interface ServeOptions {
   vault: string;
@@ -54,12 +54,8 @@ async function main(): Promise<void> {
 async function startServer(opts: ServeOptions): Promise<void> {
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
-    maxFileBytes: opts.maxFileBytes !== undefined
-      ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes")
-      : undefined,
-    maxCacheEntries: opts.cacheSize !== undefined
-      ? parsePositiveInt(opts.cacheSize, "--cache-size")
-      : undefined
+    maxFileBytes: opts.maxFileBytes !== undefined ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes") : undefined,
+    maxCacheEntries: opts.cacheSize !== undefined ? parsePositiveInt(opts.cacheSize, "--cache-size") : undefined
   });
   await vault.ensureExists();
 
@@ -123,7 +119,10 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       annotations: { ...READ_ONLY, title: "Resolve wikilink" },
       inputSchema: {
         wikilink: z.string().describe("Wikilink target (e.g. 'Note Name', 'Note#Heading', 'Folder/Note|alias')"),
-        from_note: z.string().optional().describe("Calling note's relative path (used to disambiguate same-name files)"),
+        from_note: z
+          .string()
+          .optional()
+          .describe("Calling note's relative path (used to disambiguate same-name files)"),
         include_content: z.boolean().optional().describe("Include resolved file's body (default true)")
       }
     },
@@ -150,8 +149,7 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     "obsidian_get_recent_edits",
     {
       title: "Get recent edits",
-      description:
-        "List notes ordered by most recent modification. Useful for picking up where work was left off.",
+      description: "List notes ordered by most recent modification. Useful for picking up where work was left off.",
       annotations: { ...READ_ONLY, title: "Get recent edits" },
       inputSchema: {
         since_minutes: z.number().int().positive().optional().describe("Only notes edited within this many minutes"),
@@ -188,7 +186,12 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       annotations: { ...READ_ONLY, title: "List tags" },
       inputSchema: {
         folder: z.string().optional().describe("Restrict to a subfolder"),
-        min_count: z.number().int().positive().optional().describe("Drop tags used fewer than this many times (default 1)"),
+        min_count: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Drop tags used fewer than this many times (default 1)"),
         limit: z.number().int().positive().max(2000).optional().describe("Max results (default 200)")
       }
     },
@@ -200,7 +203,7 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     {
       title: "Dataview query (basic)",
       description:
-        "Run a minimal Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM (\"folder\" | #tag) [WHERE field op value [AND …]] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains. Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, OR, FLATTEN, or GROUP BY — see docs/api.md for the unsupported set.",
+        'Run a minimal Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM ("folder" | #tag) [WHERE field op value [AND …]] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains. Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, OR, FLATTEN, or GROUP BY — see docs/api.md for the unsupported set.',
       annotations: { ...READ_ONLY, title: "Dataview query" },
       inputSchema: {
         query: z.string().min(1).describe("Dataview-style query string")
@@ -256,7 +259,10 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       inputSchema: {
         path: z.string().describe("Vault-relative path (e.g. 'Inbox/My Note' or 'Inbox/My Note.md')"),
         content: z.string().describe("Markdown body (frontmatter is supplied separately)"),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe("Optional YAML frontmatter as a flat object"),
+        frontmatter: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe("Optional YAML frontmatter as a flat object"),
         overwrite: z.boolean().optional().describe("Allow overwriting an existing note (default false)")
       }
     },
@@ -274,7 +280,10 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
         path: z.string().optional().describe("Vault-relative path of the target note"),
         title: z.string().optional().describe("Target note title (filename without .md)"),
         content: z.string().describe("Markdown to append"),
-        separator: z.string().optional().describe("String inserted between existing body and the new content (default \"\\n\\n\")")
+        separator: z
+          .string()
+          .optional()
+          .describe('String inserted between existing body and the new content (default "\\n\\n")')
       }
     },
     async (args) => textResult(await appendToNote(vault, args))
@@ -312,7 +321,7 @@ function registerResources(server: McpServer, vault: Vault): void {
       list: async () => {
         const entries = await vault.listMarkdown();
         return {
-          resources: entries.map(e => ({
+          resources: entries.map((e) => ({
             uri: `obsidian://note/${encodeNotePath(e.relPath)}`,
             name: e.basename.replace(/\.md$/i, ""),
             description: e.relPath,
@@ -481,7 +490,8 @@ ${tag ? "5" : "4"}. End with a one-line "highest-leverage next action" pick — 
     "process_inbox",
     {
       title: "Process inbox",
-      description: "For every note in an inbox folder, propose where it should live and which existing notes link to it.",
+      description:
+        "For every note in an inbox folder, propose where it should live and which existing notes link to it.",
       argsSchema: {
         folder: z.string().describe("Inbox folder path (e.g. '00_Inbox')")
       }
@@ -545,9 +555,9 @@ const isCliEntry = (() => {
 
 if (isCliEntry) {
   main().catch((err) => {
-    process.stderr.write(`obsidian-mcp fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.stderr.write(`obsidian-mcp fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });
 }
 
-export { main, startServer, parsePositiveInt };
+export { main, parsePositiveInt, startServer };

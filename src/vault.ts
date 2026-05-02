@@ -1,14 +1,8 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { parseNote, ParsedNote } from "./parser.js";
+import { type ParsedNote, parseNote } from "./parser.js";
 
-const SKIP_DIRS = new Set([
-  ".git",
-  ".obsidian",
-  ".trash",
-  "node_modules",
-  ".DS_Store"
-]);
+const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
 export const DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_MAX_CACHE_ENTRIES = 1024;
@@ -48,7 +42,7 @@ export class Vault {
   }
 
   async ensureExists(): Promise<void> {
-    let stat;
+    let stat: import("node:fs").Stats;
     try {
       stat = await fs.stat(this.root);
     } catch {
@@ -111,7 +105,11 @@ export class Vault {
     return entry;
   }
 
-  async writeNote(relPath: string, content: string, opts: { overwrite?: boolean } = {}): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
+  async writeNote(
+    relPath: string,
+    content: string,
+    opts: { overwrite?: boolean } = {}
+  ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
     }
@@ -123,7 +121,10 @@ export class Vault {
     const abs = this.resolveInside(targetRel);
     await this.assertParentInsideVault(abs);
     if (!opts.overwrite) {
-      const exists = await fs.stat(abs).then(() => true).catch(() => false);
+      const exists = await fs
+        .stat(abs)
+        .then(() => true)
+        .catch(() => false);
       if (exists) throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -154,7 +155,10 @@ export class Vault {
     }
   }
 
-  async appendNote(relOrAbs: string, addition: string): Promise<{ absPath: string; relPath: string; mtimeMs: number; appended_bytes: number }> {
+  async appendNote(
+    relOrAbs: string,
+    addition: string
+  ): Promise<{ absPath: string; relPath: string; mtimeMs: number; appended_bytes: number }> {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note appends");
     }
@@ -191,7 +195,7 @@ export class Vault {
   async findByTitle(title: string): Promise<FileEntry | null> {
     const norm = stripMdExt(title).toLowerCase();
     const all = await this.listMarkdown();
-    return all.find(e => stripMdExt(e.basename).toLowerCase() === norm) ?? null;
+    return all.find((e) => stripMdExt(e.basename).toLowerCase() === norm) ?? null;
   }
 
   private async resolveSafePath(relOrAbs: string): Promise<string> {
@@ -214,8 +218,8 @@ export class Vault {
         throw new Error(`Resolved path escapes vault root: ${abs}`);
       }
       return real;
-    } catch (err: any) {
-      if (err && err.code === "ENOENT") return abs;
+    } catch (err) {
+      if (isErrnoException(err) && err.code === "ENOENT") return abs;
       throw err;
     }
   }
@@ -223,7 +227,9 @@ export class Vault {
   private async assertSize(abs: string): Promise<void> {
     const stat = await fs.stat(abs);
     if (stat.size > this.maxFileBytes) {
-      throw new Error(`File too large (${stat.size} bytes > limit ${this.maxFileBytes}): ${path.relative(this.root, abs)}`);
+      throw new Error(
+        `File too large (${stat.size} bytes > limit ${this.maxFileBytes}): ${path.relative(this.root, abs)}`
+      );
     }
   }
 
@@ -234,14 +240,10 @@ export class Vault {
     }
     this.cache.set(key, value);
   }
+}
 
-  private assertInside(abs: string): string {
-    const rel = path.relative(this.root, abs);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
-      throw new Error(`Path escapes vault root: ${abs}`);
-    }
-    return abs;
-  }
+function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && "code" in err;
 }
 
 async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-05-02
+
+Dependency triage — all 7 outstanding Dependabot major-version PRs landed in a single verified bump. Each was tested locally (full test suite + JSON-RPC smoke against a synthetic vault) before bundling.
+
+### Dependencies
+- `@types/node` 22 → 25 (devDep)
+- `typescript` 5 → 6 (devDep) — required adding `types: ["node"]` to `tsconfig.json`. TS 6 dropped the implicit fallback that auto-discovered `@types/node` ambient globals; `process`, `Buffer`, and `node:*` modules need an explicit type-resolution hint now.
+- `commander` 12 → 14 (runtime) — no API surface change in our usage.
+- `zod` 3 → 4 (runtime) — `z.string().optional()`, `z.boolean().optional()`, `z.record(z.string(), z.unknown())` all migrate cleanly. No app code changes.
+- `vitest` 2 → 4 (devDep) — also resolves the moderate-severity vulnerabilities flagged by `npm audit` in the `vite` / `esbuild` chain (Dependabot security PRs #8 and #9 superseded).
+
+### Tests
+- 103 unit tests, all green on the new dependency stack.
+- Smoke green: 17 checks, all 10 MCP tools + 2 resources + 3 prompts verified against the synthetic CI vault.
+
+### Notes
+- Zero application code changes — pure dependency updates with one tsconfig tweak.
+- Dependabot PRs #3 — #9 closed as superseded by this release.
+
 ## [0.3.2] — 2026-05-02
 
 External read-only audit pass closed four real findings.

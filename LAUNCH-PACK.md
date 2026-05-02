@@ -97,5 +97,19 @@ MCP server that lets Claude Code / Cursor / Devin read any Obsidian vault. Markd
 - ✅ LAUNCH-PACK.md (this file)
 - ⏳ **Awaiting:** Alex starts отдельная Claude Code session OR self-execute via this session
 
-### Day 1 — TBD
-- [ ]
+### Day 1 (2026-05-02) — Phase 1 MVP shipped
+
+- ✅ TypeScript + `@modelcontextprotocol/sdk` 1.29 scaffold (`type: module`, ES2022, Node16 resolution)
+- ✅ Vault walker with path-traversal guards, skips `.git`/`.obsidian`/dot-dirs
+- ✅ Frontmatter parser via `gray-matter`; wikilink + tag extractors with code-fence stripping
+- ✅ 5 tools implemented: `list_notes`, `read_note`, `resolve_wikilink`, `search_text`, `get_recent_edits`
+- ✅ Wikilink resolver handles aliases / section refs / block refs / `..` relative paths
+- ✅ 34 unit tests (parser + tools, all passing)
+- ✅ `scripts/smoke.mjs` — JSON-RPC handshake against real vault, 9 checks all green
+- ✅ Dogfooded on `~/Documents/Obsidian Vault/` (117 notes, 0 errors)
+- ✅ README + `docs/api.md` updated with Phase 1 tool spec
+
+**Next (Week 2):**
+- [ ] npm publish prep (`prepublishOnly`, package.json polish, README badges)
+- [ ] HN Show + Twitter launch (paired with vault tweet drafts)
+- [ ] Phase 2 scoping — dataview, backlinks, embed resolution

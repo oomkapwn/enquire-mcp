@@ -1,0 +1,52 @@
+{
+  "name": "@oomkapwn/obsidian-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for reading Obsidian vaults — wikilinks, frontmatter, tags, recent edits.",
+  "type": "module",
+  "bin": {
+    "obsidian-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "obsidian",
+    "claude",
+    "claude-code",
+    "model-context-protocol",
+    "wikilinks",
+    "markdown"
+  ],
+  "author": "Alex (@OomkaBear)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oomkapwn/obsidian-mcp.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "commander": "^12.1.0",
+    "gray-matter": "^4.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Vault } from "../src/vault.js";
 import { parseDql, runDql, DqlParseError } from "../src/dql.js";
-import { dataviewQuery } from "../src/tools.js";
+import { dataviewQuery, listTags } from "../src/tools.js";
 
 let root: string;
 
@@ -122,5 +122,38 @@ describe("dataviewQuery (tool wrapper)", () => {
     const result = await dataviewQuery(v, { query: 'LIST FROM "projects" WHERE status = "done"' });
     expect(result.query).toContain("done");
     expect(result.rows.map(r => r["file.name"])).toEqual(["beta"]);
+  });
+
+  it("treats SQL keywords inside quoted strings as data, not clauses", async () => {
+    const v = new Vault(root);
+    // The string contains "SORT", "WHERE", and "LIMIT" — none should split clauses.
+    const q = parseDql('LIST WHERE status = "active sort limit where"');
+    expect(q.where.length).toBe(1);
+    expect(q.where[0].value).toBe("active sort limit where");
+    expect(q.sort).toBeUndefined();
+    expect(q.limit).toBeUndefined();
+  });
+
+  it("treats AND inside quoted strings as data, not predicate join", async () => {
+    const q = parseDql('LIST WHERE status = "first AND second"');
+    expect(q.where.length).toBe(1);
+    expect(q.where[0].value).toBe("first AND second");
+  });
+});
+
+describe("listTags", () => {
+  it("aggregates tag counts across frontmatter and inline", async () => {
+    const v = new Vault(root);
+    const tags = await listTags(v, {});
+    const projectTag = tags.find(t => t.tag === "project");
+    expect(projectTag?.count).toBe(2);
+    expect(projectTag?.frontmatter_count).toBe(2);
+    expect(tags.find(t => t.tag === "idea")?.count).toBe(1);
+  });
+
+  it("respects min_count", async () => {
+    const v = new Vault(root);
+    const tags = await listTags(v, { min_count: 2 });
+    expect(tags.every(t => t.count >= 2)).toBe(true);
   });
 });

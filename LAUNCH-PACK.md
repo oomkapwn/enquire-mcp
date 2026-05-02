@@ -130,4 +130,25 @@ Alex requested "do everything we can right now," so the 2-week schedule was coll
 **Still open:**
 - [ ] `npm publish` — first public release. Needs Alex's npm auth + final go-ahead.
 - [ ] Make repo public + HN Show + Twitter launch.
-- [ ] Phase 3 backlog: persistent index for >10k-note vaults, full DQL (OR/FLATTEN/GROUP BY/expressions), graph queries, write tools.
+- [ ] Phase 3 backlog: persistent on-disk index for >10k-note vaults, full DQL (OR/FLATTEN/GROUP BY/expressions), graph queries.
+
+### Day 1 (cont., 2026-05-02) — Audit pass → v0.3.0
+
+Alex requested a full audit + "everything else we can do" before public launch. Calendar fully collapsed.
+
+- ✅ **Security hardening**: Vault walker skips symlinks; `realpath`-based safety check on every read/write target; file-size guard (default 5MB); FIFO-bounded parsed-note cache (default 1024 entries).
+- ✅ **DQL bug fix**: keyword detection (`FROM`/`WHERE`/`SORT`/`LIMIT`/`AND`) now respects quoted-string boundaries — `WHERE x = "foo SORT bar"` no longer mis-splits.
+- ✅ **New read tool**: `obsidian_list_tags` — every unique tag in the vault with frontmatter / inline counts.
+- ✅ **Opt-in write tools** behind `--enable-write` flag (default off):
+  - `obsidian_create_note` — refuses overwrite by default; auto-appends `.md`; renders frontmatter as block-list YAML; quotes ambiguous scalars.
+  - `obsidian_append_to_note` — accepts `path` or `title`; configurable separator; size-bounded.
+- ✅ **MCP resources**: `obsidian://vault/info` (vault metadata) + `obsidian://note/{path}` template (every note browseable).
+- ✅ **MCP prompts**: `summarize_recent_edits`, `review_tag`, `find_orphans` — ready-made workflow scaffolds.
+- ✅ **Tool annotations**: every read tool tagged `readOnlyHint=true`, write tools tagged `readOnlyHint=false`.
+- ✅ **Package polish**: dropped `main` (CLI-only); added `publishConfig.access=public`; `prepublishOnly` runs build *and* tests; CLI guarded by `import.meta.url` check (library imports don't auto-start the server); CHANGELOG.md included in tarball.
+- ✅ **Docs**: CONTRIBUTING.md, .editorconfig, README troubleshooting + `npx` snippet + write-flag docs, full v0.3 grammar in `docs/api.md`.
+- ✅ **79 unit tests** (was 57): symlink rejection, oversized-file refusal, malformed YAML fallback, Unicode titles/tags, DQL quoted-keyword edge cases, write-tool happy paths and refusals.
+- ✅ **Smoke script extended**: now exercises 8 read tools, MCP resources (`vault/info` + template list), and prompts. All green against `~/Documents/Obsidian Vault/` (116 notes — sync count drift from earlier 117).
+- ✅ **`npm pack --dry-run`**: 30 kB tarball, 24 files, version `0.3.0`. Ready to publish.
+
+System is at "max readiness for public launch." Pending only: Alex flips repo public + runs `npm publish` (his auth required).

@@ -9,7 +9,9 @@ MCP server for reading Obsidian vaults. Lets Claude Code / Cursor / Devin unders
 
 ## Status
 
-`v0.2.0` (2026-05-02) — seven tools, dogfooded against a 117-note vault.
+`v0.3.0` (2026-05-02) — 8 read tools, 2 opt-in write tools, MCP resources + prompts, hardened against symlinks/oversize/cache-blow.
+
+### Read tools (always on)
 
 - `obsidian_list_notes` — filter by tag, folder, modified-since
 - `obsidian_read_note` — content + frontmatter + wikilinks + embeds + tags
@@ -17,7 +19,24 @@ MCP server for reading Obsidian vaults. Lets Claude Code / Cursor / Devin unders
 - `obsidian_search_text` — ranked substring search
 - `obsidian_get_recent_edits` — newest-first, optional time window
 - `obsidian_get_backlinks` — every note linking the target, ranked, with snippets
+- `obsidian_list_tags` — every unique tag with frontmatter / inline counts
 - `obsidian_dataview_query` — basic LIST/TABLE with WHERE, SORT, LIMIT
+
+### Write tools (opt-in via `--enable-write`)
+
+- `obsidian_create_note` — create a note with optional frontmatter; refuses to overwrite by default
+- `obsidian_append_to_note` — append a markdown block to an existing note
+
+### MCP resources
+
+- `obsidian://vault/info` — vault metadata (root, note count, write-enabled, limits)
+- `obsidian://note/<relative-path>` — every note as a first-class MCP resource (browseable in compatible clients)
+
+### MCP prompts
+
+- `summarize_recent_edits` — quick "what was I working on?"
+- `review_tag` — pull every note for a tag, surface open threads
+- `find_orphans` — notes with no inbound links
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes and [docs/api.md](./docs/api.md) for the full tool spec.
 
@@ -58,12 +77,51 @@ Then wire it into Claude Code (`~/.claude.json` or project-level `.mcp.json`):
 }
 ```
 
+Or with `npx` (no global install):
+
+```json
+{
+  "mcpServers": {
+    "obsidian": {
+      "command": "npx",
+      "args": ["-y", "@oomkapwn/obsidian-mcp", "serve", "--vault", "/Users/you/Documents/Obsidian Vault"]
+    }
+  }
+}
+```
+
 After publishing to npm:
 
 ```bash
 npm install -g @oomkapwn/obsidian-mcp
 obsidian-mcp serve --vault ~/Documents/Obsidian\ Vault
 ```
+
+### Enabling write tools (opt-in)
+
+By default the server is **strictly read-only**. To allow `obsidian_create_note` and `obsidian_append_to_note`, start it with `--enable-write`:
+
+```json
+{
+  "command": "node",
+  "args": [
+    "/path/to/obsidian-mcp/dist/index.js",
+    "serve",
+    "--vault", "/Users/you/Documents/Obsidian Vault",
+    "--enable-write"
+  ]
+}
+```
+
+The server logs `WRITE-ENABLED` to stderr on boot when the flag is on, so you can verify the mode at a glance.
+
+### Other flags
+
+| Flag                  | Default | What it does                             |
+|-----------------------|---------|------------------------------------------|
+| `--max-file-bytes <n>` | 5 MB    | Refuse to read or write any file larger. |
+| `--cache-size <n>`    | 1024    | Max parsed-note cache entries (LRU).     |
+| `--enable-write`      | off     | Register the two write tools.            |
 
 ## Example workflows
 
@@ -103,10 +161,19 @@ TypeScript · `@modelcontextprotocol/sdk` · `gray-matter` · `commander` · `vi
 ## Develop
 
 ```bash
-npm test           # unit tests (33+)
+npm test           # unit tests (79+)
 npm run dev        # tsc --watch
 node scripts/smoke.mjs [vault-path]   # JSON-RPC smoke test
 ```
+
+## Troubleshooting
+
+- **"Vault not found" on boot** — pass an absolute path or `~`-prefixed shell-expanded path to `--vault`. Relative paths are resolved against the process's cwd, which is rarely what you want.
+- **"Path escapes vault root"** — the path you passed (or a wikilink resolved to) leaves the vault, often via a symlink. The server intentionally refuses these reads. If the file genuinely lives outside, move it inside the vault first.
+- **"File too large" on a `.md` you didn't expect** — usually a binary or sync conflict file accidentally renamed `.md`. Bump `--max-file-bytes` if you really want to ingest large notes.
+- **Write tool not visible to the client** — start the server with `--enable-write`. The flag must come *after* the `serve` subcommand.
+- **Russian / non-ASCII titles** — supported. Both inline `#тег` and YAML `tags: [идея]` are picked up. Filenames with non-ASCII characters round-trip correctly through `obsidian_read_note` by title.
+- **"My DQL query returned nothing but the data is there"** — verify the source. `LIST FROM "01_Projects"` matches notes whose path starts with `01_Projects/`; `LIST FROM #idea` matches notes carrying the `idea` tag. Mix them with `WHERE`. See `docs/api.md` for the supported subset.
 
 ## See
 

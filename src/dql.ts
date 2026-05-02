@@ -63,14 +63,35 @@ interface Clauses {
 function splitClauses(input: string): Clauses {
   const out: Clauses = { head: "" };
   const parts: Array<{ kw: string | "HEAD"; content: string }> = [{ kw: "HEAD", content: "" }];
-  let cursor = 0;
-  const re = new RegExp(`\\b(${KEYWORDS.join("|")})\\b`, "gi");
-  let m: RegExpExecArray | null;
   let lastEnd = 0;
-  while ((m = re.exec(input)) !== null) {
-    parts[parts.length - 1].content = input.slice(lastEnd, m.index).trim();
-    parts.push({ kw: m[1].toUpperCase(), content: "" });
-    lastEnd = m.index + m[0].length;
+  let i = 0;
+  while (i < input.length) {
+    const ch = input[i];
+    if (ch === '"') {
+      i++;
+      while (i < input.length && input[i] !== '"') {
+        if (input[i] === "\\" && i + 1 < input.length) i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (i === 0 || /\s/.test(input[i - 1])) {
+      const remaining = input.slice(i);
+      const matched = KEYWORDS.find(k => {
+        if (!remaining.toUpperCase().startsWith(k)) return false;
+        const after = remaining[k.length];
+        return after === undefined || /\s/.test(after);
+      });
+      if (matched) {
+        parts[parts.length - 1].content = input.slice(lastEnd, i).trim();
+        parts.push({ kw: matched, content: "" });
+        i += matched.length;
+        lastEnd = i;
+        continue;
+      }
+    }
+    i++;
   }
   parts[parts.length - 1].content = input.slice(lastEnd).trim();
   for (const p of parts) {
@@ -93,11 +114,40 @@ function parseSource(raw: string): Source {
 }
 
 function parseWhere(raw: string): Predicate[] {
-  const preds: Predicate[] = [];
-  for (const clause of raw.split(/\s+AND\s+/i)) {
-    preds.push(parsePredicate(clause));
+  const clauses = splitOnKeyword(raw, "AND");
+  return clauses.map(parsePredicate);
+}
+
+function splitOnKeyword(input: string, keyword: string): string[] {
+  const out: string[] = [];
+  let last = 0;
+  let i = 0;
+  while (i < input.length) {
+    const ch = input[i];
+    if (ch === '"') {
+      i++;
+      while (i < input.length && input[i] !== '"') {
+        if (input[i] === "\\" && i + 1 < input.length) i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (i === 0 || /\s/.test(input[i - 1])) {
+      const slice = input.slice(i, i + keyword.length).toUpperCase();
+      const after = input[i + keyword.length];
+      if (slice === keyword.toUpperCase() && (after === undefined || /\s/.test(after))) {
+        out.push(input.slice(last, i).trim());
+        i += keyword.length;
+        last = i;
+        continue;
+      }
+    }
+    i++;
   }
-  return preds;
+  const tail = input.slice(last).trim();
+  if (tail) out.push(tail);
+  return out;
 }
 
 function parsePredicate(raw: string): Predicate {

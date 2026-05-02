@@ -73,17 +73,20 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map(t => t.name).sort();
-  check("tools/list returns 7 tools", names.length === 7, `got ${JSON.stringify(names)}`);
+  check("tools/list returns 8 read tools", names.length === 8, `got ${JSON.stringify(names)}`);
   const expected = [
     "obsidian_dataview_query",
     "obsidian_get_backlinks",
     "obsidian_get_recent_edits",
     "obsidian_list_notes",
+    "obsidian_list_tags",
     "obsidian_read_note",
     "obsidian_resolve_wikilink",
     "obsidian_search_text"
   ];
   check("tool names match spec", JSON.stringify(names) === JSON.stringify(expected), JSON.stringify(names));
+  const allReadOnly = (list.result?.tools ?? []).every(t => t.annotations?.readOnlyHint === true);
+  check("read tools all have readOnlyHint=true", allReadOnly, "missing annotations");
 
   const recent = await rpc("tools/call", {
     name: "obsidian_get_recent_edits",
@@ -166,6 +169,37 @@ try {
   const dqlParsed = JSON.parse(dql.result.content[0].text);
   check("dataview_query returns rows", Array.isArray(dqlParsed.rows), dql.result.content[0].text.slice(0, 200));
   console.log(`      → dql top 3 by mtime: ${dqlParsed.rows.map(r => r["file.name"]).join(", ")}`);
+
+  // List tags.
+  const tags = await rpc("tools/call", {
+    name: "obsidian_list_tags",
+    arguments: { limit: 5 }
+  });
+  const tagsParsed = JSON.parse(tags.result.content[0].text);
+  check("list_tags returns array", Array.isArray(tagsParsed), tags.result.content[0].text.slice(0, 200));
+  console.log(`      → top tags: ${tagsParsed.map(t => `#${t.tag}(${t.count})`).join(" ")}`);
+
+  // Resources: vault info.
+  const resources = await rpc("resources/list", {});
+  const staticResources = resources.result?.resources ?? [];
+  check("resources/list returns vault info", staticResources.some(r => r.uri === "obsidian://vault/info"), JSON.stringify(staticResources).slice(0, 200));
+
+  const vaultInfo = await rpc("resources/read", { uri: "obsidian://vault/info" });
+  const vaultInfoText = vaultInfo.result?.contents?.[0]?.text ?? "";
+  const vaultInfoParsed = JSON.parse(vaultInfoText);
+  check("vault/info has note_count", typeof vaultInfoParsed.note_count === "number", vaultInfoText.slice(0, 200));
+  console.log(`      → vault/info: ${vaultInfoParsed.note_count} notes, write_enabled=${vaultInfoParsed.write_enabled}`);
+
+  // Resources: list note templates and read one back.
+  const tmpl = await rpc("resources/templates/list", {});
+  const templates = tmpl.result?.resourceTemplates ?? [];
+  check("resource template registered", templates.some(t => String(t.uriTemplate ?? t.uri ?? "").startsWith("obsidian://note/")), JSON.stringify(templates).slice(0, 200));
+
+  // Prompts.
+  const prompts = await rpc("prompts/list", {});
+  const promptNames = (prompts.result?.prompts ?? []).map(p => p.name).sort();
+  check("prompts/list returns 3 prompts", promptNames.length === 3, JSON.stringify(promptNames));
+  console.log(`      → prompts: ${promptNames.join(", ")}`);
 } catch (err) {
   console.error("Smoke test threw:", err);
   failures.push(err.message);

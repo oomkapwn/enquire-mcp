@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-02
+
+### Added
+- `obsidian_list_tags` — every unique tag in the vault with frontmatter / inline counts. Sorted by usage.
+- **Opt-in write tools** behind `--enable-write`:
+  - `obsidian_create_note` — creates a new note with optional frontmatter; refuses overwrite by default.
+  - `obsidian_append_to_note` — appends a markdown block to an existing note (`path` or `title`).
+- **MCP resources**:
+  - `obsidian://vault/info` — vault metadata (root, note count, limits, write flag).
+  - `obsidian://note/<relative-path>` — every note as a browsable resource via `ResourceTemplate`.
+- **MCP prompts**: `summarize_recent_edits`, `review_tag`, `find_orphans`.
+- **Tool annotations**: every read tool tagged `readOnlyHint: true, idempotentHint: true`; write tools tagged `readOnlyHint: false`.
+- New CLI flags: `--enable-write`, `--max-file-bytes <n>`, `--cache-size <n>`.
+
+### Security & robustness
+- Vault walker skips symbolic links and refuses to descend into directories whose realpath exits the vault.
+- `realpath`-based safety check on every read/write target — prevents symlink-escape attacks even if a link is created after server boot.
+- File-size guard (default 5 MB) on every read and write — blocks oversized binary-renamed-md from blowing memory.
+- Parsed-note cache is now bounded (default 1024 entries) with FIFO eviction — predictable memory ceiling on huge vaults.
+- DQL parser respects quoted strings: `WHERE x = "foo SORT bar"` no longer prematurely splits on `SORT` / `WHERE` / `LIMIT` / `AND` keywords inside string literals.
+
+### Changed
+- `obsidian_resolve_wikilink` now also accepts `![[…]]` syntax in its `wikilink` argument.
+- `obsidian_read_note` output now includes `embeds` alongside `wikilinks`.
+- `package.json` — dropped `main` field (CLI-only package), added `publishConfig.access = public`, added `CHANGELOG.md` to `files`, `prepublishOnly` now runs build *and* tests.
+- CLI no longer runs `main()` on bare module import (guarded by `import.meta.url` check).
+
+### Docs
+- New `CONTRIBUTING.md` with scope guidelines.
+- `.editorconfig` for consistent style across editors.
+- README gains a Troubleshooting section, an `npx`-based MCP wiring snippet, and write-flag docs.
+
+### Tests
+- 79 unit tests (was 57). New coverage: symlink rejection, oversized-file refusal, malformed YAML fallback, Unicode titles/tags, DQL keyword-in-string, write-tool happy paths and refusals.
+
 ## [0.2.0] — 2026-05-02
 
 ### Added

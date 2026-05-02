@@ -368,14 +368,27 @@ async function resolveTarget(
   args: { path?: string; title?: string }
 ): Promise<FileEntry> {
   if (args.path) {
-    const abs = vault.resolveInside(args.path);
-    const stat = await vault.stat(abs);
-    return {
-      absPath: abs,
-      relPath: vault.toRel(abs),
-      basename: path.basename(abs),
-      mtimeMs: stat.mtimeMs
-    };
+    const candidates = args.path.toLowerCase().endsWith(".md")
+      ? [args.path]
+      : [args.path, `${args.path}.md`];
+    let lastErr: unknown;
+    for (const candidate of candidates) {
+      const abs = vault.resolveInside(candidate);
+      try {
+        const stat = await vault.stat(abs);
+        return {
+          absPath: abs,
+          relPath: vault.toRel(abs),
+          basename: path.basename(abs),
+          mtimeMs: stat.mtimeMs
+        };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error(`Note not found: ${args.path}`);
   }
   if (args.title) {
     const found = await vault.findByTitle(args.title);

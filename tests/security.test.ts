@@ -119,6 +119,25 @@ describe("Vault — internal symlinks", () => {
   });
 });
 
+describe("Vault — listMarkdown(folder) symlink-out (audit P2-1)", () => {
+  it("returns empty when folder argument is a symlink to outside the vault", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-fold-out-"));
+    await fs.writeFile(path.join(outside, "Secret.md"), "should NOT be enumerated");
+    try {
+      await fs.symlink(outside, path.join(root, "linked-out"));
+      const linkExists = await fs.lstat(path.join(root, "linked-out")).catch(() => null);
+      if (!linkExists) return;
+      const out = await listNotes(v, { folder: "linked-out" });
+      expect(out).toEqual([]);
+    } finally {
+      await fs.unlink(path.join(root, "linked-out")).catch(() => {});
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("parseNote — malformed input", () => {
   it("falls back gracefully on broken YAML", async () => {
     const v = new Vault(root);

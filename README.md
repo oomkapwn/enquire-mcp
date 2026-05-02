@@ -110,7 +110,7 @@ obsidian-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 </details>
 
-Restart your client. The server logs `obsidian-mcp 0.3.0 ready (read-only, vault=…)` on stderr — that's your "it's connected" signal.
+Restart your client. The server logs `obsidian-mcp <version> ready (read-only, vault=…)` on stderr — that's your "it's connected" signal.
 
 ---
 

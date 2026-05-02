@@ -84,7 +84,7 @@ function matchLinks(text: string, re: RegExp): Wikilink[] {
   return out;
 }
 
-const TAG_RE = /(?:^|[\s(\[{>])#([A-Za-z][\w/-]*)/g;
+const TAG_RE = /(?:^|[\s(\[{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
 
 export function extractInlineTags(text: string): string[] {
   const found = new Set<string>();

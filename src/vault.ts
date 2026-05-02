@@ -73,6 +73,15 @@ export class Vault {
   async listMarkdown(folder?: string): Promise<FileEntry[]> {
     if (!this.ready) await this.ensureExists();
     const start = folder ? this.resolveInside(folder) : this.root;
+    if (folder) {
+      const lstat = await fs.lstat(start).catch(() => null);
+      if (!lstat) return [];
+      if (lstat.isSymbolicLink()) return [];
+      const real = await fs.realpath(start).catch(() => null);
+      if (!real) return [];
+      const rel = path.relative(this.root, real);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
+    }
     const out: FileEntry[] = [];
     await walk(start, this.root, out);
     return out;

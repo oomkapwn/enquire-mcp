@@ -19,7 +19,7 @@ import {
   appendToNote
 } from "./tools.js";
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 interface ServeOptions {
   vault: string;
@@ -52,8 +52,12 @@ async function main(): Promise<void> {
 async function startServer(opts: ServeOptions): Promise<void> {
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
-    maxFileBytes: opts.maxFileBytes ? Number(opts.maxFileBytes) : undefined,
-    maxCacheEntries: opts.cacheSize ? Number(opts.cacheSize) : undefined
+    maxFileBytes: opts.maxFileBytes !== undefined
+      ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes")
+      : undefined,
+    maxCacheEntries: opts.cacheSize !== undefined
+      ? parsePositiveInt(opts.cacheSize, "--cache-size")
+      : undefined
   });
   await vault.ensureExists();
 
@@ -381,6 +385,14 @@ function registerPrompts(server: McpServer): void {
   );
 }
 
+function parsePositiveInt(raw: string, flag: string): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    throw new Error(`${flag} must be a positive integer; got "${raw}"`);
+  }
+  return n;
+}
+
 function encodeNotePath(relPath: string): string {
   return relPath.split(path.sep).map(encodeURIComponent).join("/");
 }
@@ -411,4 +423,4 @@ if (isCliEntry) {
   });
 }
 
-export { main, startServer };
+export { main, startServer, parsePositiveInt };

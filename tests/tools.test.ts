@@ -87,6 +87,20 @@ describe("readNote", () => {
     const v = new Vault(root);
     await expect(readNote(v, { path: "../etc/passwd" })).rejects.toThrow(/escapes vault root/);
   });
+
+  it("accepts path without .md extension (audit P2-3)", async () => {
+    const v = new Vault(root);
+    const out = await readNote(v, { path: "Alpha" });
+    expect(out.title).toBe("Alpha");
+    expect(out.path).toBe("Alpha.md");
+  });
+
+  it("accepts subfolder path without .md extension", async () => {
+    const v = new Vault(root);
+    const out = await readNote(v, { path: "subfolder/Gamma" });
+    expect(out.title).toBe("Gamma");
+    expect(out.path).toBe(path.join("subfolder", "Gamma.md"));
+  });
 });
 
 describe("resolveWikilink", () => {

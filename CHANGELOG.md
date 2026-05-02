@@ -2,12 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.2] — 2026-05-02
 
-### Added
-- `assets/social-preview.svg` + rendered `assets/social-preview.png` (1280×640) for the GitHub repo "Social preview" setting and Twitter / HN / Slack link cards.
-- `npm run render:preview` script to regenerate the PNG from the SVG (sharp dev dependency).
-- Banner shown at the top of README.md.
+External read-only audit pass closed four real findings.
+
+### Security & correctness
+- **P2** `listMarkdown(folder)` now `lstat`s and realpath-checks the start directory before walking. Previously, passing a vault-internal symlink that pointed *outside* the vault as the `folder` argument would enumerate the external directory's `.md` files (reads still failed downstream, but the listing leaked filenames). Fix: empty list returned in that case.
+- **P2** `--max-file-bytes` and `--cache-size` are now validated as positive finite integers at server boot. Previously, passing `NaN` / `Infinity` / floats / negative values silently disabled the size guard and produced unpredictable cache behavior. The server now exits with a clear error.
+- **P2** `obsidian_read_note` now honors its documented contract — `path` works with *or* without the `.md` extension, matching the schema description and the parallel behavior of `obsidian_create_note`.
+- **P3** Inline tag regex is now Unicode-aware: `#русский`, `#日本語`, `#café-au-lait`, `#русский/путь` all parse correctly. Previously the regex started with `[A-Za-z]` and silently dropped non-ASCII tags, contradicting the README's i18n promise.
+
+### Packaging
+- `docs/api.md` and `SECURITY.md` are now included in the npm tarball — README links from the published package no longer 404.
+- CI: `actions/setup-node@v4` → `v6` on `main` (dependabot superseded).
+
+### Docs
+- README quick-start no longer hard-codes a stale boot-message version string.
+- `LAUNCH-PACK.md` gains a top-of-file note clarifying it's a historical day-by-day log, not the current state of the project.
+
+### Tests
+- 103 unit tests (was 86). New regression coverage for every audit finding above:
+  - `listMarkdown(folder)` returns `[]` for symlinked-out start directory (P2-1).
+  - `parsePositiveInt` rejects NaN / Infinity / non-integer / non-positive / non-numeric (P2-2).
+  - `obsidian_read_note` accepts paths with and without `.md` (P2-3).
+  - Cyrillic / CJK / accented inline tags parse correctly; mid-word `#` does not produce a tag (P3-1).
 
 ## [0.3.1] — 2026-05-02
 

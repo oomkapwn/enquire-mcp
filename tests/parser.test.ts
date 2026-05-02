@@ -60,6 +60,24 @@ describe("extractInlineTags", () => {
   it("dedupes", () => {
     expect(extractInlineTags("#x and #x again")).toEqual(["x"]);
   });
+
+  it("captures Cyrillic / non-ASCII inline tags (audit P3-1)", () => {
+    const tags = extractInlineTags("body with #русский and #русский/путь and #idea");
+    expect(tags).toContain("русский");
+    expect(tags).toContain("русский/путь");
+    expect(tags).toContain("idea");
+  });
+
+  it("captures CJK and accented inline tags", () => {
+    const tags = extractInlineTags("#日本語 #café-au-lait #über");
+    expect(tags).toContain("日本語");
+    expect(tags).toContain("café-au-lait");
+    expect(tags).toContain("über");
+  });
+
+  it("still rejects mid-word hashes for Unicode words", () => {
+    expect(extractInlineTags("issue#42 не тег и проблема#тест тоже")).toEqual([]);
+  });
 });
 
 describe("extractFrontmatterTags", () => {

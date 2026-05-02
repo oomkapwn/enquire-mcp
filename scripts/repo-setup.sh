@@ -46,3 +46,11 @@ gh release create v0.3.1 \
 
 echo
 echo "Done. Verify at https://github.com/$REPO"
+echo
+echo "MANUAL STEP — Social preview image:"
+echo "  GitHub doesn't expose a 'set social preview' API, so this one needs"
+echo "  the web UI:"
+echo "    1. https://github.com/$REPO/settings"
+echo "    2. Scroll to 'Social preview' → 'Edit' → 'Upload an image…'"
+echo "    3. Pick assets/social-preview.png from the repo (1280×640, ~150kB)."
+echo "  Regenerate with: npm run render:preview"

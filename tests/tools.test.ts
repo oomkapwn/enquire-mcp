@@ -8,7 +8,8 @@ import {
   readNote,
   resolveWikilink,
   searchText,
-  getRecentEdits
+  getRecentEdits,
+  getBacklinks
 } from "../src/tools.js";
 
 let root: string;
@@ -18,7 +19,7 @@ beforeAll(async () => {
   await fs.mkdir(path.join(root, "subfolder"), { recursive: true });
   await fs.writeFile(
     path.join(root, "Alpha.md"),
-    "---\ntags: [planning]\n---\n\nAlpha note linking to [[Beta]] and #idea tag.\n"
+    "---\ntags: [planning]\n---\n\nAlpha note with #idea tag (no outbound links here).\n"
   );
   await fs.writeFile(
     path.join(root, "Beta.md"),
@@ -26,7 +27,7 @@ beforeAll(async () => {
   );
   await fs.writeFile(
     path.join(root, "subfolder", "Gamma.md"),
-    "---\ntags: [idea]\n---\n\nGamma in subfolder, links to [[Alpha|the first one]].\n"
+    "---\ntags: [idea]\n---\n\nGamma in subfolder, links to [[Alpha|the first one]] and embeds ![[Beta]].\n"
   );
   // Touch files with distinct mtimes (Beta = newest).
   const now = Date.now();
@@ -167,5 +168,49 @@ describe("getRecentEdits", () => {
     const v = new Vault(root);
     const out = await getRecentEdits(v, { since_minutes: 1 });
     expect(out.map(n => n.title).sort()).toEqual(["Beta", "Gamma"]);
+  });
+});
+
+describe("getBacklinks", () => {
+  it("finds notes that wikilink the target", async () => {
+    const v = new Vault(root);
+    const out = await getBacklinks(v, { title: "Alpha" });
+    expect(out.map(h => h.title)).toEqual(["Gamma"]);
+    expect(out[0].count).toBe(1);
+    expect(out[0].link_kind).toBe("wikilink");
+  });
+
+  it("finds embed-style backlinks too", async () => {
+    const v = new Vault(root);
+    const out = await getBacklinks(v, { title: "Beta" });
+    expect(out.map(h => h.title)).toEqual(["Gamma"]);
+    expect(out[0].link_kind).toBe("embed");
+  });
+
+  it("excludes embeds when include_embeds=false", async () => {
+    const v = new Vault(root);
+    const out = await getBacklinks(v, { title: "Beta", include_embeds: false });
+    expect(out).toEqual([]);
+  });
+
+  it("returns snippets around the link", async () => {
+    const v = new Vault(root);
+    const out = await getBacklinks(v, { title: "Alpha" });
+    expect(out[0].snippets[0]).toMatch(/Alpha\|the first one/);
+  });
+
+  it("does not list the target itself", async () => {
+    const v = new Vault(root);
+    const out = await getBacklinks(v, { title: "Beta" });
+    expect(out.every(h => h.title !== "Beta")).toBe(true);
+  });
+});
+
+describe("readNote — embeds in output", () => {
+  it("surfaces embeds alongside wikilinks", async () => {
+    const v = new Vault(root);
+    const out = await readNote(v, { path: "subfolder/Gamma.md" });
+    expect(out.embeds.map(e => e.target)).toEqual(["Beta"]);
+    expect(out.wikilinks.map(w => w.target)).toEqual(["Alpha"]);
   });
 });

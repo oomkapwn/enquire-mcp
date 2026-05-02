@@ -9,10 +9,12 @@ import {
   readNote,
   resolveWikilink,
   searchText,
-  getRecentEdits
+  getRecentEdits,
+  getBacklinks,
+  dataviewQuery
 } from "./tools.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -114,6 +116,35 @@ async function startServer(vaultPath: string): Promise<void> {
       }
     },
     async (args) => textResult(await getRecentEdits(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_get_backlinks",
+    {
+      title: "Get backlinks",
+      description:
+        "List every note in the vault that links (or embeds) the target note. Returns ranked hits with snippets.",
+      inputSchema: {
+        path: z.string().optional().describe("Target note path relative to vault root"),
+        title: z.string().optional().describe("Target note title (filename without .md)"),
+        include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
+        limit: z.number().int().positive().max(500).optional().describe("Max results (default 50)")
+      }
+    },
+    async (args) => textResult(await getBacklinks(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_dataview_query",
+    {
+      title: "Dataview query (basic)",
+      description:
+        "Run a minimal Dataview-style query over the vault. Supports LIST / TABLE col1, col2 FROM (\"folder\" | #tag) [WHERE field op value [AND …]] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains. Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. Phase-2 minimal — no expressions, no function calls, no joins.",
+      inputSchema: {
+        query: z.string().min(1).describe("Dataview-style query string")
+      }
+    },
+    async (args) => textResult(await dataviewQuery(vault, args))
   );
 
   const transport = new StdioServerTransport();

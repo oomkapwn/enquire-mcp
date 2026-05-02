@@ -110,6 +110,24 @@ MCP server that lets Claude Code / Cursor / Devin read any Obsidian vault. Markd
 - ✅ README + `docs/api.md` updated with Phase 1 tool spec
 
 **Next (Week 2):**
-- [ ] npm publish prep (`prepublishOnly`, package.json polish, README badges)
+- [x] npm publish prep (`prepublishOnly`, package.json polish, README badges)
 - [ ] HN Show + Twitter launch (paired with vault tweet drafts)
-- [ ] Phase 2 scoping — dataview, backlinks, embed resolution
+- [x] Phase 2 scoping — dataview, backlinks, embed resolution
+
+### Day 1 (cont., 2026-05-02) — Phase 2 + Week 2 infra (calendar collapsed)
+
+Alex requested "do everything we can right now," so the 2-week schedule was collapsed into a single session.
+
+- ✅ `obsidian_get_backlinks` — finds every note linking the target; ranks by hit count; emits snippets; distinguishes `wikilink` / `embed` / `mixed` link kinds.
+- ✅ `obsidian_dataview_query` — minimal DQL: LIST/TABLE, FROM "folder"|#tag, WHERE field op value (AND-chained), SORT, LIMIT. Operators: `=`, `!=`, `contains`. Special fields: `file.name`, `file.path`, `file.mtime`, `file.tags`. Other identifiers read frontmatter.
+- ✅ Embed (`![[…]]`) extraction surfaced in `obsidian_read_note` alongside `wikilinks`.
+- ✅ Mtime-keyed parse cache in `Vault` — repeat reads of unchanged notes are O(1).
+- ✅ GitHub Actions CI (`.github/workflows/ci.yml`) — Node 18 / 20 / 22 matrix.
+- ✅ CHANGELOG.md (Keep-a-Changelog format), README badges (CI, MIT, Node, MCP), updated `docs/api.md` with Phase-2 grammar + examples.
+- ✅ 57 unit tests (parser/tools/dql) + extended smoke script (now exercises 7 tools incl. dataview + backlinks). All green against `~/Documents/Obsidian Vault/` (117 notes).
+- ✅ Bumped to `v0.2.0`. Pushed to `git@github.com:oomkapwn/obsidian-mcp.git` (private for now).
+
+**Still open:**
+- [ ] `npm publish` — first public release. Needs Alex's npm auth + final go-ahead.
+- [ ] Make repo public + HN Show + Twitter launch.
+- [ ] Phase 3 backlog: persistent index for >10k-note vaults, full DQL (OR/FLATTEN/GROUP BY/expressions), graph queries, write tools.

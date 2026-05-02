@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseNote,
   extractWikilinks,
+  extractEmbeds,
   extractInlineTags,
   extractFrontmatterTags
 } from "../src/parser.js";
@@ -79,6 +80,20 @@ describe("extractFrontmatterTags", () => {
   });
 });
 
+describe("extractEmbeds", () => {
+  it("captures embed syntax separately from wikilinks", () => {
+    const text = "regular [[Link]] and embed ![[Image]]";
+    expect(extractWikilinks(text).map(l => l.target)).toEqual(["Link"]);
+    expect(extractEmbeds(text).map(l => l.target)).toEqual(["Image"]);
+  });
+
+  it("handles embed with section ref", () => {
+    const [embed] = extractEmbeds("![[Note#Section]]");
+    expect(embed.target).toBe("Note");
+    expect(embed.section).toBe("Section");
+  });
+});
+
 describe("parseNote", () => {
   it("parses frontmatter and body", () => {
     const src = "---\ntitle: Hello\ntags: [foo, bar]\n---\n\nBody with [[Link]] and #inline tag.\n";
@@ -86,7 +101,14 @@ describe("parseNote", () => {
     expect(r.frontmatter.title).toBe("Hello");
     expect(r.tags.sort()).toEqual(["bar", "foo", "inline"]);
     expect(r.wikilinks[0].target).toBe("Link");
+    expect(r.embeds).toEqual([]);
     expect(r.body.trim().startsWith("Body")).toBe(true);
+  });
+
+  it("separates wikilinks from embeds in same note", () => {
+    const r = parseNote("![[Diagram]] explained in [[Notes]].");
+    expect(r.wikilinks.map(l => l.target)).toEqual(["Notes"]);
+    expect(r.embeds.map(l => l.target)).toEqual(["Diagram"]);
   });
 
   it("strips wikilinks/tags found inside fenced code blocks", () => {

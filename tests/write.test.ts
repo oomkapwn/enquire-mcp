@@ -67,6 +67,35 @@ describe("createNote", () => {
     await expect(createNote(v, { path: "../outside.md", content: "nope" })).rejects.toThrow(/escapes vault root/);
   });
 
+  it("rejects writes whose parent dir is a symlink to outside the vault", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Create a symlinked subfolder inside the vault that resolves OUTSIDE the vault.
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-parent-link-"));
+    try {
+      await fs.symlink(outside, path.join(root, "linked-folder"));
+      const linkExists = await fs.lstat(path.join(root, "linked-folder")).catch(() => null);
+      if (!linkExists) return;
+      await expect(
+        createNote(v, { path: "linked-folder/sneaky.md", content: "should not land outside vault" })
+      ).rejects.toThrow(/parent directory resolves outside vault/);
+      const escaped = await fs.stat(path.join(outside, "sneaky.md")).catch(() => null);
+      expect(escaped).toBeNull();
+    } finally {
+      await fs.unlink(path.join(root, "linked-folder")).catch(() => {});
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("write_then_append moves mtime forward", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    const created = await createNote(v, { path: "MtimeCheck.md", content: "first" });
+    await new Promise(r => setTimeout(r, 12));
+    const appended = await appendToNote(v, { path: "MtimeCheck.md", content: "second" });
+    expect(new Date(appended.mtime).getTime()).toBeGreaterThan(new Date(created.mtime).getTime());
+  });
+
   it("handles values that look like booleans by quoting them", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

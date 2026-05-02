@@ -204,6 +204,19 @@ describe("getBacklinks", () => {
     const out = await getBacklinks(v, { title: "Beta" });
     expect(out.every(h => h.title !== "Beta")).toBe(true);
   });
+
+  it("resolves a path-form wikilink target", async () => {
+    const v = new Vault(root);
+    // Add a note that uses a folder-prefixed wikilink to a unique target.
+    await fs.writeFile(path.join(root, "PathRef.md"), "Pointer to [[subfolder/Gamma]].\n");
+    try {
+      const out = await getBacklinks(v, { path: "subfolder/Gamma.md" });
+      const titles = out.map(h => h.title);
+      expect(titles).toContain("PathRef");
+    } finally {
+      await fs.unlink(path.join(root, "PathRef.md")).catch(() => {});
+    }
+  });
 });
 
 describe("readNote — embeds in output", () => {

@@ -1,0 +1,74 @@
+name: Bug report
+description: Something the server does wrong, or doesn't do that it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. The more concrete the repro, the faster the fix.
+  - type: input
+    id: version
+    attributes:
+      label: obsidian-mcp version
+      description: Output of `obsidian-mcp --version`
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code (CLI)
+        - Claude Code (web)
+        - Cursor
+        - Devin
+        - Custom / other
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+  - type: textarea
+    id: vault
+    attributes:
+      label: Vault shape (anonymized is fine)
+      description: |
+        Roughly what does the vault look like? E.g. `01_Projects/`, `99_Daily/`. Especially mention if you have symlinks, sync conflicts, or non-ASCII filenames.
+      placeholder: |
+        ~/Documents/MyVault/
+          ├── 01_Projects/  (300 notes)
+          ├── 99_Daily/     (~1500 notes)
+          └── synced via iCloud Drive
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact tool call(s) you (or the assistant) made.
+      placeholder: |
+        1. Started server: `obsidian-mcp serve --vault ~/MyVault`
+        2. Called `obsidian_resolve_wikilink({ wikilink: "Foo" })`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: stderr
+    attributes:
+      label: Server stderr
+      description: Anything the server logged. `obsidian-mcp fatal: …` lines are gold.
+      render: shell
+    validations:
+      required: false

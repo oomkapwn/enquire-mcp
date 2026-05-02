@@ -1,66 +1,71 @@
+<div align="center">
+
 # obsidian-mcp
+
+**Give Claude, Cursor, and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, basic Dataview queries.**
 
 [![CI](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/obsidian-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/obsidian-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
+[![tests](https://img.shields.io/badge/tests-86%20passing-brightgreen.svg)](#develop)
 
-MCP server for reading Obsidian vaults. Lets Claude Code / Cursor / Devin understand wikilinks, embeds, frontmatter, tags, backlinks, and basic Dataview queries — not just raw filesystem reads.
+</div>
 
-## Status
+> An [MCP](https://modelcontextprotocol.io/) server purpose-built for Obsidian. Drop it in front of any vault and your AI assistant stops guessing at filesystem paths and starts reasoning about your notes the way you do.
 
-`v0.3.0` (2026-05-02) — 8 read tools, 2 opt-in write tools, MCP resources + prompts, hardened against symlinks/oversize/cache-blow.
+```text
+You:    "What was I working on yesterday in the Apollo project?"
+Claude: → obsidian_get_recent_edits({ since_minutes: 1440, folder: "01_Projects" })
+        → obsidian_read_note({ title: "Apollo" })
+        → obsidian_get_backlinks({ title: "Apollo" })
+        "You shipped the v0.3 spec, opened 3 open questions in [[Apollo/Open Threads]],
+        and 2 daily notes link back to it. Top blocker: the auth review."
+```
 
-### Read tools (always on)
+---
 
-- `obsidian_list_notes` — filter by tag, folder, modified-since
-- `obsidian_read_note` — content + frontmatter + wikilinks + embeds + tags
-- `obsidian_resolve_wikilink` — handles aliases, sections, block refs, `..` relative paths
-- `obsidian_search_text` — ranked substring search
-- `obsidian_get_recent_edits` — newest-first, optional time window
-- `obsidian_get_backlinks` — every note linking the target, ranked, with snippets
-- `obsidian_list_tags` — every unique tag with frontmatter / inline counts
-- `obsidian_dataview_query` — basic LIST/TABLE with WHERE, SORT, LIMIT
+## Why this exists
 
-### Write tools (opt-in via `--enable-write`)
+Generic filesystem MCPs treat your vault as a tree of opaque text files. **They don't know what an Obsidian vault is.** They can't:
 
-- `obsidian_create_note` — create a note with optional frontmatter; refuses to overwrite by default
-- `obsidian_append_to_note` — append a markdown block to an existing note
+| Capability | Filesystem MCP | obsidian-mcp |
+|---|:---:|:---:|
+| Read a `.md` file | ✅ | ✅ |
+| Resolve `[[Wikilink]]` to the actual file | ❌ | ✅ |
+| Resolve `[[Folder/Note#Heading\|alias]]` | ❌ | ✅ |
+| Surface `![[Embed]]` separately from links | ❌ | ✅ |
+| Parse YAML frontmatter as typed data | ❌ | ✅ |
+| Filter notes by tag (frontmatter + inline) | ❌ | ✅ |
+| Find every note that links to X (backlinks) | ❌ | ✅ |
+| Run `LIST FROM #idea WHERE status="active"` | ❌ | ✅ |
+| Stream "newest-first" recent edits | ❌ | ✅ |
+| Skip `.obsidian` / `.trash` / symlinks safely | ❌ | ✅ |
+| MCP **resources** for vault browsing | ❌ | ✅ |
+| MCP **prompts** for "summarize / review / find orphans" | ❌ | ✅ |
 
-### MCP resources
+That's the gap. obsidian-mcp closes it in ~1500 lines of TypeScript and four runtime dependencies.
 
-- `obsidian://vault/info` — vault metadata (root, note count, write-enabled, limits)
-- `obsidian://note/<relative-path>` — every note as a first-class MCP resource (browseable in compatible clients)
+---
 
-### MCP prompts
+## Who is this for?
 
-- `summarize_recent_edits` — quick "what was I working on?"
-- `review_tag` — pull every note for a tag, surface open threads
-- `find_orphans` — notes with no inbound links
+- **Obsidian users on Claude Code / Cursor / Devin** who want the assistant to draft notes that actually link properly, follow `[[…]]`, and respect frontmatter.
+- **Agentic workflow builders** who need a structured layer over a markdown vault — `dataview_query`, `get_backlinks`, `list_tags` are the kind of primitives that compose into real automations.
+- **Tinkerers** who want to wire their PKM into LLM pipelines without writing a parser. We did the parsing.
 
-See [CHANGELOG.md](./CHANGELOG.md) for release notes and [docs/api.md](./docs/api.md) for the full tool spec.
-
-## Why
-
-No MCP existed for Obsidian as of 2026-05-02. Generic filesystem MCPs don't understand:
-- `[[Wikilink]]` resolution
-- YAML frontmatter typing
-- Tag-based filtering
-- Recent-edit streams
-
-This server adds that layer. Drop it in for any vault.
+---
 
 ## Quick start
 
 ```bash
+# 1. Get the code
 git clone https://github.com/oomkapwn/obsidian-mcp
-cd obsidian-mcp
-npm install
-npm run build
-```
+cd obsidian-mcp && npm install && npm run build
 
-Then wire it into Claude Code (`~/.claude.json` or project-level `.mcp.json`):
+# 2. Wire into Claude Code (~/.claude.json or .mcp.json)
+```
 
 ```json
 {
@@ -70,15 +75,15 @@ Then wire it into Claude Code (`~/.claude.json` or project-level `.mcp.json`):
       "args": [
         "/absolute/path/to/obsidian-mcp/dist/index.js",
         "serve",
-        "--vault",
-        "/Users/you/Documents/Obsidian Vault"
+        "--vault", "/Users/you/Documents/Obsidian Vault"
       ]
     }
   }
 }
 ```
 
-Or with `npx` (no global install):
+<details>
+<summary><b>Or use <code>npx</code> (no global install)</b></summary>
 
 ```json
 {
@@ -91,93 +96,214 @@ Or with `npx` (no global install):
 }
 ```
 
-After publishing to npm:
+</details>
+
+<details>
+<summary><b>Or install globally</b></summary>
 
 ```bash
 npm install -g @oomkapwn/obsidian-mcp
 obsidian-mcp serve --vault ~/Documents/Obsidian\ Vault
 ```
 
-### Enabling write tools (opt-in)
+</details>
 
-By default the server is **strictly read-only**. To allow `obsidian_create_note` and `obsidian_append_to_note`, start it with `--enable-write`:
+Restart your client. The server logs `obsidian-mcp 0.3.0 ready (read-only, vault=…)` on stderr — that's your "it's connected" signal.
 
-```json
-{
-  "command": "node",
-  "args": [
-    "/path/to/obsidian-mcp/dist/index.js",
-    "serve",
-    "--vault", "/Users/you/Documents/Obsidian Vault",
-    "--enable-write"
-  ]
-}
-```
+---
 
-The server logs `WRITE-ENABLED` to stderr on boot when the flag is on, so you can verify the mode at a glance.
+## What you get
 
-### Other flags
+### 8 read tools (always on)
 
-| Flag                  | Default | What it does                             |
-|-----------------------|---------|------------------------------------------|
-| `--max-file-bytes <n>` | 5 MB    | Refuse to read or write any file larger. |
-| `--cache-size <n>`    | 1024    | Max parsed-note cache entries (LRU).     |
-| `--enable-write`      | off     | Register the two write tools.            |
+| Tool | What it does |
+|---|---|
+| `obsidian_list_notes` | Filter by tag / folder / modified-since. Returns title, path, frontmatter, tags, mtime — newest first. |
+| `obsidian_read_note` | Body + frontmatter + wikilinks + embeds + tags for a note (by path or title). |
+| `obsidian_resolve_wikilink` | `[[Note]]`, `[[Note#Heading]]`, `[[Folder/Note\|alias]]`, `![[Embed]]`, `[[../relative/path]]` — all resolved to a real file. |
+| `obsidian_search_text` | Ranked case-insensitive substring search with snippets and line numbers. |
+| `obsidian_get_recent_edits` | Newest-first stream, optional time window. |
+| `obsidian_get_backlinks` | Every note linking the target, ranked by hit count, with snippets. Distinguishes wikilink vs embed vs mixed. |
+| `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
+| `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. |
+
+### 2 write tools (opt-in via `--enable-write`)
+
+| Tool | What it does |
+|---|---|
+| `obsidian_create_note` | Create a note with optional frontmatter. Refuses to overwrite by default. |
+| `obsidian_append_to_note` | Append a markdown block to an existing note. Configurable separator. |
+
+### MCP resources
+
+- `obsidian://vault/info` — root, note count, write flag, byte/cache limits, server version.
+- `obsidian://note/{path}` — every note as a first-class browsable resource. Compatible clients show your vault as a tree.
+
+### MCP prompts
+
+| Prompt | Args | What it scaffolds |
+|---|---|---|
+| `summarize_recent_edits` | `since_minutes?` | "What was I working on?" workflow. |
+| `review_tag` | `tag` | Pull every note for a tag, surface open threads. |
+| `find_orphans` | `folder?` | Notes with zero inbound links — archive candidates. |
+
+---
 
 ## Example workflows
 
 ### 1. Scan tagged ideas
-> "Show me notes tagged `idea` from the last two weeks."
+> "Show me notes tagged `#idea` from the last two weeks."
 
-Claude calls `obsidian_list_notes({ tag: "idea", since_date: "2026-04-18" })`.
+`obsidian_list_notes({ tag: "idea", since_date: "2026-04-18" })`
 
 ### 2. Follow wikilinks
 > "Read [[Project Apollo]] and summarise the open questions."
 
-Claude calls `obsidian_resolve_wikilink({ wikilink: "Project Apollo" })`, then walks any `[[…]]` inside the result.
+`obsidian_resolve_wikilink({ wikilink: "Project Apollo" })` → walk any `[[…]]` inside the result.
 
 ### 3. Pick up where you left off
 > "What was I editing today?"
 
-Claude calls `obsidian_get_recent_edits({ since_minutes: 720 })`.
+`obsidian_get_recent_edits({ since_minutes: 720 })`
 
 ### 4. Audit a hub note
 > "Which notes link to [[Project Apollo]]?"
 
-Claude calls `obsidian_get_backlinks({ title: "Project Apollo" })` and gets ranked snippets.
+`obsidian_get_backlinks({ title: "Project Apollo" })` → ranked list with snippets.
 
 ### 5. Run a Dataview-style query
-> "List all notes tagged #idea where status = active, sorted by mtime."
+> "List active ideas, sorted by mtime."
 
-Claude calls `obsidian_dataview_query({ query: 'TABLE status FROM #idea WHERE status = "active" SORT file.mtime DESC' })`.
+```text
+TABLE status FROM #idea WHERE status = "active" SORT file.mtime DESC
+```
 
-## Requirements
+### 6. Daily journaling (write mode)
+> "Append a 'shipped today' bullet to today's daily note."
 
-Node 18+. No native dependencies.
+With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-02", content: "- Shipped obsidian-mcp v0.3" })`
 
-## Tech
+---
 
-TypeScript · `@modelcontextprotocol/sdk` · `gray-matter` · `commander` · `vitest`. Zero runtime deps beyond those four.
+## Architecture
+
+```
+┌─────────────────┐     stdio JSON-RPC     ┌─────────────────────┐
+│  Claude Code /  │ ◄────────────────────► │   obsidian-mcp      │
+│  Cursor / Devin │   tools/resources/     │  (this server)      │
+└─────────────────┘   prompts                └─────────┬───────────┘
+                                                      │
+                                          ┌───────────┼────────────┐
+                                          │           │            │
+                                          ▼           ▼            ▼
+                                    ┌─────────┐ ┌──────────┐ ┌──────────┐
+                                    │ Vault   │ │  Parser  │ │   DQL    │
+                                    │ walker  │ │  (gray-  │ │  engine  │
+                                    │ + cache │ │  matter) │ │          │
+                                    └────┬────┘ └──────────┘ └──────────┘
+                                         │
+                                         ▼
+                                ┌─────────────────────┐
+                                │  ~/Documents/       │
+                                │  Obsidian Vault/    │
+                                │  *.md *.md *.md ... │
+                                └─────────────────────┘
+```
+
+- **Vault walker** — recursive, skips `.git` / `.obsidian` / `.trash` / dot-dirs / symlinks. Realpath-checks every read and write to prevent symlink-escape attacks.
+- **Cache** — mtime-keyed, LRU-evicted. Default cap 1024 entries.
+- **Parser** — `gray-matter` for YAML, hand-rolled regex for wikilinks / embeds / tags. Fenced code blocks are stripped before tag extraction.
+- **DQL engine** — quote-aware tokenizer for keywords (`FROM`, `WHERE`, `SORT`, `LIMIT`, `AND`); won't mis-split on `WHERE x = "foo SORT bar"`.
+
+---
+
+## Configuration
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--vault <path>` | (required) | Path to the Obsidian vault root. |
+| `--enable-write` | off | Register the two write tools. Server is otherwise strictly read-only. |
+| `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
+| `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
+
+The server logs `WRITE-ENABLED` to stderr on boot when the flag is on, so you can verify the mode at a glance.
+
+---
+
+## Security
+
+- **Read-only by default.** Write tools are not even registered unless `--enable-write` is passed.
+- **Path traversal blocked.** Every resolved path is checked against the vault root via `realpath`.
+- **Symlink-escape blocked.** Symlinks inside the vault that resolve outside (file or directory) are skipped on listing and rejected on read/write.
+- **DoS guard.** Default 5 MB cap on any single file read or write; bounded LRU cache.
+- **YAML.** Parsed via `gray-matter` (`js-yaml` `safeLoad` under the hood) — no code execution.
+
+Found a security issue? See [SECURITY.md](./SECURITY.md).
+
+---
+
+## FAQ
+
+**Does it support Roam / Logseq / TiddlyWiki?**
+No. Obsidian's wikilink semantics, frontmatter conventions, and folder structure are baked in. Other tools are out of scope.
+
+**Will it modify my vault?**
+Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the two write tools refuse to overwrite existing notes (`obsidian_create_note` requires `overwrite=true`) and refuse to write outside the vault even if a parent dir is symlinked away.
+
+**Does it work over the network?**
+No. It's a local stdio MCP server, designed for one client process per vault. There's no HTTP transport, no auth, no rate limiting — and that's intentional.
+
+**My DQL query returned nothing.**
+Verify the source. `LIST FROM "01_Projects"` matches notes whose path starts with `01_Projects/`. `LIST FROM #idea` matches notes carrying the `idea` tag. Mix them with `WHERE`. See [docs/api.md](./docs/api.md) for the supported subset and grammar.
+
+**What about the full Dataview plugin?**
+We implement a deliberately small subset (`LIST` / `TABLE`, `FROM "folder" | #tag`, `WHERE field op value AND …`, `SORT`, `LIMIT`). No expressions, no `OR`, no `FLATTEN`/`GROUP BY`, no joins. PRs that close those gaps are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+**How big a vault can it handle?**
+Tested daily against a 117-note vault. The walker is O(notes) per call; the cache makes repeat reads O(1). For 10k+ vaults a persistent index would help — that's on the Phase 3 roadmap.
+
+**Why scoped npm name (`@oomkapwn/obsidian-mcp`)?**
+Avoids name squatting on the `obsidian-mcp` namespace. The CLI binary is still just `obsidian-mcp`.
+
+---
 
 ## Develop
 
 ```bash
-npm test           # unit tests (79+)
-npm run dev        # tsc --watch
-node scripts/smoke.mjs [vault-path]   # JSON-RPC smoke test
+npm test              # 86 unit tests
+npm run dev           # tsc --watch
+node scripts/smoke.mjs [vault-path]   # end-to-end JSON-RPC smoke
 ```
+
+Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 18 / 20 / 22, runs the smoke against a synthetic vault, and runs `npm audit --audit-level=high`.
+
+---
 
 ## Troubleshooting
 
-- **"Vault not found" on boot** — pass an absolute path or `~`-prefixed shell-expanded path to `--vault`. Relative paths are resolved against the process's cwd, which is rarely what you want.
-- **"Path escapes vault root"** — the path you passed (or a wikilink resolved to) leaves the vault, often via a symlink. The server intentionally refuses these reads. If the file genuinely lives outside, move it inside the vault first.
-- **"File too large" on a `.md` you didn't expect** — usually a binary or sync conflict file accidentally renamed `.md`. Bump `--max-file-bytes` if you really want to ingest large notes.
-- **Write tool not visible to the client** — start the server with `--enable-write`. The flag must come *after* the `serve` subcommand.
-- **Russian / non-ASCII titles** — supported. Both inline `#тег` and YAML `tags: [идея]` are picked up. Filenames with non-ASCII characters round-trip correctly through `obsidian_read_note` by title.
-- **"My DQL query returned nothing but the data is there"** — verify the source. `LIST FROM "01_Projects"` matches notes whose path starts with `01_Projects/`; `LIST FROM #idea` matches notes carrying the `idea` tag. Mix them with `WHERE`. See `docs/api.md` for the supported subset.
+- **"Vault not found" on boot** — pass an absolute path or `~`-prefixed shell-expanded path to `--vault`. Relative paths resolve against the process cwd.
+- **"Path escapes vault root"** — the path you passed (or a wikilink resolved to) leaves the vault, often via a symlink. The server intentionally refuses these reads.
+- **"File too large" on a `.md` you didn't expect** — usually a sync conflict or binary accidentally renamed `.md`. Bump `--max-file-bytes` if you really want it ingested.
+- **Write tool not visible to the client** — start the server with `--enable-write`, *after* the `serve` subcommand.
+- **Russian / non-ASCII titles** — supported. Both inline `#тег` and YAML `tags: [идея]` are picked up.
 
-## See
+---
 
-- [LAUNCH-PACK.md](./LAUNCH-PACK.md) — Phase 1 plan + daily log
-- [docs/api.md](./docs/api.md) — full tool spec
-- License: [MIT](./LICENSE)
+## Versioning & releases
+
+Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
+
+- **0.3.x** — current. 8 read tools, 2 opt-in write tools, MCP resources + prompts, hardened.
+- **Phase 3 (planned)** — persistent on-disk index for 10k+ vaults; full DQL (`OR`, `FLATTEN`, `GROUP BY`, expressions); multi-hop graph queries.
+
+---
+
+## Contributing
+
+Bug fixes welcome. New tools should pass the bar of "useful against an Obsidian vault on day 1." See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+---
+
+## License & credits
+
+[MIT](./LICENSE). Built by [@OomkaBear](https://github.com/oomkapwn). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.

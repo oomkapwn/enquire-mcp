@@ -98,6 +98,8 @@ Enumerate every unique tag used in the vault with usage counts.
 
 **Returns:** `Array<{ tag, count, frontmatter_count, inline_count }>`, sorted by `count` desc.
 
+> **Counting rules.** Each note contributes at most `+1` to a tag's `count` even if the tag appears in both the note's frontmatter and inline body. The note is credited to `frontmatter_count` if the tag was found in frontmatter, otherwise to `inline_count`. So `frontmatter_count + inline_count == count` for every tag.
+
 ## `obsidian_dataview_query`
 
 Run a minimal Dataview-style query. Phase-2 minimal — designed to cover the common shape, not to replicate the Obsidian Dataview plugin.
@@ -150,6 +152,10 @@ LIST FROM #people WHERE file.tags contains "core-team"
 - `OR` between predicates (only `AND` is supported)
 - `FLATTEN`, `GROUP BY`, joins, embedded queries
 - `SOURCE` combinations beyond a single folder or single tag
+
+### Row caps
+
+If the query has no explicit `LIMIT`, results are capped at **1000 rows** by default to prevent runaway responses on large vaults. Use `LIMIT n` (any positive integer) to override.
 
 ## Write tools (opt-in)
 

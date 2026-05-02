@@ -19,7 +19,7 @@ import {
   appendToNote
 } from "./tools.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 interface ServeOptions {
   vault: string;

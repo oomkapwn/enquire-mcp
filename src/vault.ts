@@ -88,7 +88,12 @@ export class Vault {
     const abs = await this.resolveSafePath(relOrAbs);
     const mtimeMs = knownMtimeMs ?? (await fs.stat(abs)).mtimeMs;
     const cached = this.cache.get(abs);
-    if (cached && cached.mtimeMs === mtimeMs) return cached;
+    if (cached && cached.mtimeMs === mtimeMs) {
+      // LRU bump: re-insert so this entry is "freshest"
+      this.cache.delete(abs);
+      this.cache.set(abs, cached);
+      return cached;
+    }
     await this.assertSize(abs);
     const content = await fs.readFile(abs, "utf8");
     const parsed = parseNote(content);
@@ -101,16 +106,19 @@ export class Vault {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
     }
+    if (!this.ready) await this.ensureExists();
     if (Buffer.byteLength(content, "utf8") > this.maxFileBytes) {
       throw new Error(`Refusing to write ${Buffer.byteLength(content, "utf8")} bytes (limit ${this.maxFileBytes})`);
     }
     const targetRel = relPath.toLowerCase().endsWith(".md") ? relPath : `${relPath}.md`;
     const abs = this.resolveInside(targetRel);
+    await this.assertParentInsideVault(abs);
     if (!opts.overwrite) {
       const exists = await fs.stat(abs).then(() => true).catch(() => false);
       if (exists) throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
+    await this.assertParentInsideVault(abs);
     await fs.writeFile(abs, content, "utf8");
     this.cache.delete(abs);
     const stat = await fs.stat(abs);
@@ -120,6 +128,21 @@ export class Vault {
       mtimeMs: stat.mtimeMs,
       bytes: stat.size
     };
+  }
+
+  private async assertParentInsideVault(abs: string): Promise<void> {
+    let current = path.dirname(abs);
+    while (current !== this.root && current !== path.dirname(current)) {
+      const real = await fs.realpath(current).catch(() => null);
+      if (real) {
+        const rel = path.relative(this.root, real);
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          throw new Error(`Refusing to write — parent directory resolves outside vault: ${current}`);
+        }
+        break;
+      }
+      current = path.dirname(current);
+    }
   }
 
   async appendNote(relOrAbs: string, addition: string): Promise<{ absPath: string; relPath: string; mtimeMs: number; appended_bytes: number }> {

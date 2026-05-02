@@ -11,7 +11,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-86%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#develop)
+[![coverage](https://img.shields.io/badge/coverage-83%25%20lines-brightgreen.svg)](#develop)
 
 </div>
 
@@ -41,6 +42,7 @@ Generic filesystem MCPs treat your vault as a tree of opaque text files. **They 
 | Parse YAML frontmatter as typed data | ❌ | ✅ |
 | Filter notes by tag (frontmatter + inline) | ❌ | ✅ |
 | Find every note that links to X (backlinks) | ❌ | ✅ |
+| Find every broken `[[wikilink]]` in the vault | ❌ | ✅ |
 | Run `LIST FROM #idea WHERE status="active"` | ❌ | ✅ |
 | Stream "newest-first" recent edits | ❌ | ✅ |
 | Skip `.obsidian` / `.trash` / symlinks safely | ❌ | ✅ |
@@ -116,7 +118,7 @@ Restart your client. The server logs `obsidian-mcp <version> ready (read-only, v
 
 ## What you get
 
-### 8 read tools (always on)
+### 10 read tools (always on)
 
 | Tool | What it does |
 |---|---|
@@ -126,6 +128,8 @@ Restart your client. The server logs `obsidian-mcp <version> ready (read-only, v
 | `obsidian_search_text` | Ranked case-insensitive substring search with snippets and line numbers. |
 | `obsidian_get_recent_edits` | Newest-first stream, optional time window. |
 | `obsidian_get_backlinks` | Every note linking the target, ranked by hit count, with snippets. Distinguishes wikilink vs embed vs mixed. |
+| `obsidian_get_outbound_links` | Symmetric counterpart to backlinks — every link a note points to, with resolution status. |
+| `obsidian_get_unresolved_wikilinks` | Vault-hygiene: every `[[broken]]` link in the vault. |
 | `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
 | `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. |
 
@@ -148,6 +152,9 @@ Restart your client. The server logs `obsidian-mcp <version> ready (read-only, v
 | `summarize_recent_edits` | `since_minutes?` | "What was I working on?" workflow. |
 | `review_tag` | `tag` | Pull every note for a tag, surface open threads. |
 | `find_orphans` | `folder?` | Notes with zero inbound links — archive candidates. |
+| `weekly_review` | `folder?` | Last 7 days of edits, grouped by tag — shipped / open / stuck. |
+| `extract_todos` | `folder?`, `tag?` | Every TODO / FIXME / QUESTION, grouped by note. |
+| `process_inbox` | `folder` | Move / Merge / Promote / Archive proposals for an inbox folder. |
 
 ---
 
@@ -272,12 +279,15 @@ Avoids name squatting on the `obsidian-mcp` namespace. The CLI binary is still j
 ## Develop
 
 ```bash
-npm test              # 86 unit tests
+npm test              # 112 unit tests
+npm run test:coverage # vitest --coverage (v8 provider)
 npm run dev           # tsc --watch
 node scripts/smoke.mjs [vault-path]   # end-to-end JSON-RPC smoke
 ```
 
-Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 18 / 20 / 22, runs the smoke against a synthetic vault, and runs `npm audit --audit-level=high`.
+Coverage on the latest release: **83% lines · 79% statements · 73% branches**. CI uploads the full HTML report as a workflow artifact (`coverage-report`).
+
+Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 18 / 20 / 22, runs the smoke against a synthetic vault, generates a coverage report, and runs `npm audit --audit-level=high`.
 
 ---
 

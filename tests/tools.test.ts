@@ -9,7 +9,9 @@ import {
   resolveWikilink,
   searchText,
   getRecentEdits,
-  getBacklinks
+  getBacklinks,
+  getUnresolvedWikilinks,
+  getOutboundLinks
 } from "../src/tools.js";
 
 let root: string;
@@ -239,5 +241,113 @@ describe("readNote — embeds in output", () => {
     const out = await readNote(v, { path: "subfolder/Gamma.md" });
     expect(out.embeds.map(e => e.target)).toEqual(["Beta"]);
     expect(out.wikilinks.map(w => w.target)).toEqual(["Alpha"]);
+  });
+});
+
+describe("getUnresolvedWikilinks", () => {
+  it("finds links to non-existent notes", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Broken.md"), "Pointer to [[NonexistentTarget]] and [[AlsoMissing]].");
+    try {
+      const out = await getUnresolvedWikilinks(v, {});
+      const targets = out.filter(u => u.from_path === "Broken.md").map(u => u.target);
+      expect(targets).toContain("NonexistentTarget");
+      expect(targets).toContain("AlsoMissing");
+    } finally {
+      await fs.unlink(path.join(root, "Broken.md")).catch(() => {});
+    }
+  });
+
+  it("does NOT include resolved links", async () => {
+    const v = new Vault(root);
+    const out = await getUnresolvedWikilinks(v, {});
+    expect(out.every(u => u.target !== "Alpha" && u.target !== "Beta")).toBe(true);
+  });
+
+  it("respects folder filter", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Broken.md"), "Pointer to [[NoSuchNote]].");
+    try {
+      const subfolderOut = await getUnresolvedWikilinks(v, { folder: "subfolder" });
+      expect(subfolderOut.find(u => u.from_path === "Broken.md")).toBeUndefined();
+    } finally {
+      await fs.unlink(path.join(root, "Broken.md")).catch(() => {});
+    }
+  });
+
+  it("can exclude embeds", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "BrokenEmbed.md"), "![[NoSuchEmbed]]");
+    try {
+      const withEmbeds = await getUnresolvedWikilinks(v, { include_embeds: true });
+      expect(withEmbeds.some(u => u.target === "NoSuchEmbed" && u.kind === "embed")).toBe(true);
+      const withoutEmbeds = await getUnresolvedWikilinks(v, { include_embeds: false });
+      expect(withoutEmbeds.some(u => u.target === "NoSuchEmbed")).toBe(false);
+    } finally {
+      await fs.unlink(path.join(root, "BrokenEmbed.md")).catch(() => {});
+    }
+  });
+});
+
+describe("getOutboundLinks", () => {
+  it("lists wikilinks and embeds with resolution status", async () => {
+    const v = new Vault(root);
+    const out = await getOutboundLinks(v, { path: "subfolder/Gamma.md" });
+    expect(out.from_title).toBe("Gamma");
+    const targets = out.links.map(l => l.target).sort();
+    expect(targets).toEqual(["Alpha", "Beta"]);
+    const alpha = out.links.find(l => l.target === "Alpha")!;
+    expect(alpha.resolved_path).toBe("Alpha.md");
+    expect(alpha.kind).toBe("wikilink");
+    const beta = out.links.find(l => l.target === "Beta")!;
+    expect(beta.resolved_path).toBe("Beta.md");
+    expect(beta.kind).toBe("embed");
+  });
+
+  it("can exclude embeds", async () => {
+    const v = new Vault(root);
+    const out = await getOutboundLinks(v, { path: "subfolder/Gamma.md", include_embeds: false });
+    expect(out.links.map(l => l.target)).toEqual(["Alpha"]);
+  });
+
+  it("marks unresolved links with null resolved_path", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Mixed.md"), "Has [[Alpha]] and [[Ghost]].");
+    try {
+      const out = await getOutboundLinks(v, { path: "Mixed.md" });
+      const ghost = out.links.find(l => l.target === "Ghost")!;
+      expect(ghost.resolved_path).toBeNull();
+      expect(ghost.resolved_title).toBeNull();
+      const alpha = out.links.find(l => l.target === "Alpha")!;
+      expect(alpha.resolved_path).toBe("Alpha.md");
+    } finally {
+      await fs.unlink(path.join(root, "Mixed.md")).catch(() => {});
+    }
+  });
+
+  it("can hide unresolved links", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Mixed2.md"), "Has [[Alpha]] and [[Ghost2]].");
+    try {
+      const out = await getOutboundLinks(v, { path: "Mixed2.md", include_unresolved: false });
+      expect(out.links.map(l => l.target)).toEqual(["Alpha"]);
+    } finally {
+      await fs.unlink(path.join(root, "Mixed2.md")).catch(() => {});
+    }
+  });
+
+  it("preserves alias / section / block metadata", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Meta.md"), "Hit [[Alpha#Heading|alt]] and [[Beta^block-id]].");
+    try {
+      const out = await getOutboundLinks(v, { path: "Meta.md" });
+      const alpha = out.links.find(l => l.target === "Alpha")!;
+      expect(alpha.alias).toBe("alt");
+      expect(alpha.section).toBe("Heading");
+      const beta = out.links.find(l => l.target === "Beta")!;
+      expect(beta.block).toBe("block-id");
+    } finally {
+      await fs.unlink(path.join(root, "Meta.md")).catch(() => {});
+    }
   });
 });

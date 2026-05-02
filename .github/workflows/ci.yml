@@ -31,6 +31,24 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5

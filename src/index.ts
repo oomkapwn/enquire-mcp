@@ -15,11 +15,13 @@ import {
   getBacklinks,
   dataviewQuery,
   listTags,
+  getUnresolvedWikilinks,
+  getOutboundLinks,
   createNote,
   appendToNote
 } from "./tools.js";
 
-const VERSION = "0.3.3";
+const VERSION = "0.4.0";
 
 interface ServeOptions {
   vault: string;
@@ -206,6 +208,39 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     },
     async (args) => textResult(await dataviewQuery(vault, args))
   );
+
+  server.registerTool(
+    "obsidian_get_unresolved_wikilinks",
+    {
+      title: "Get unresolved wikilinks",
+      description:
+        "Find every [[wikilink]] (and ![[embed]]) in the vault whose target does not resolve to a file. Useful as a vault-hygiene utility — broken links, typos, notes you intended to create.",
+      annotations: { ...READ_ONLY, title: "Get unresolved wikilinks" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the scan to a subfolder"),
+        include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
+        limit: z.number().int().positive().max(2000).optional().describe("Max results (default 200)")
+      }
+    },
+    async (args) => textResult(await getUnresolvedWikilinks(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_get_outbound_links",
+    {
+      title: "Get outbound links",
+      description:
+        "List every link this note points to — wikilinks and (optionally) embeds, with each one's resolution status. Symmetric counterpart to obsidian_get_backlinks.",
+      annotations: { ...READ_ONLY, title: "Get outbound links" },
+      inputSchema: {
+        path: z.string().optional().describe("Source note path relative to vault root"),
+        title: z.string().optional().describe("Source note title (filename without .md)"),
+        include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
+        include_unresolved: z.boolean().optional().describe("Include links that don't resolve (default true)")
+      }
+    },
+    async (args) => textResult(await getOutboundLinks(vault, args))
+  );
 }
 
 function registerWriteTools(server: McpServer, vault: Vault): void {
@@ -378,6 +413,98 @@ function registerPrompts(server: McpServer): void {
 2. For each note, call \`obsidian_get_backlinks\` and note the \`count\`.
 3. Output the notes with \`count == 0\`, sorted by mtime ascending (oldest first).
 4. For each orphan, propose one of: archive, link from a hub note, delete. Pick based on its frontmatter and a 1-line skim of its body.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "weekly_review",
+    {
+      title: "Weekly review",
+      description: "Aggregate the last 7 days of vault edits and surface what shipped, what's open, what's stuck.",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict the review to a subfolder")
+      }
+    },
+    ({ folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Run a weekly review of my Obsidian vault${folder ? ` (folder \`${folder}\`)` : ""}.
+
+1. Call \`obsidian_get_recent_edits\` with \`since_minutes=10080\`${folder ? `, \`folder=${folder}\`` : ""}, \`limit=50\` to get the past week's edits.
+2. Group results by top-level frontmatter \`tags\` (or by the most-frequent inline tag if no frontmatter).
+3. For each tag-group, read the top 2 notes via \`obsidian_read_note\` and produce one bullet:
+   - "Shipped:" what was completed
+   - "Open:" any TODO/FIXME/QUESTION still in the body
+   - "Stuck:" anything explicitly blocked
+4. End with a 2-sentence reflection: where did the week's energy actually go vs. where you intended.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "extract_todos",
+    {
+      title: "Extract TODOs",
+      description: "Surface every TODO / FIXME / QUESTION across the vault, grouped by note.",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict the scan to a subfolder"),
+        tag: z.string().optional().describe("Restrict to notes carrying a specific tag")
+      }
+    },
+    ({ folder, tag }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Extract every actionable item from my Obsidian vault${folder ? ` under \`${folder}\`` : ""}${tag ? ` (tag \`${tag}\`)` : ""}.
+
+1. Call \`obsidian_search_text\` three times — once each for "TODO", "FIXME", "QUESTION" — with ${folder ? `\`folder=${folder}\`` : "no folder filter"} and \`limit=200\`.${tag ? `\n2. Cross-filter the hits to only notes from \`obsidian_list_notes({ tag: "${tag}" })\`.` : ""}
+${tag ? "3" : "2"}. For each unique source note, read it via \`obsidian_read_note\` and pull the actual TODO/FIXME/QUESTION lines verbatim.
+${tag ? "4" : "3"}. Output a flat list grouped by note path. Sort within each group by line number.
+${tag ? "5" : "4"}. End with a one-line "highest-leverage next action" pick — the single TODO that, if done today, would unblock the most other items.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "process_inbox",
+    {
+      title: "Process inbox",
+      description: "For every note in an inbox folder, propose where it should live and which existing notes link to it.",
+      argsSchema: {
+        folder: z.string().describe("Inbox folder path (e.g. '00_Inbox')")
+      }
+    },
+    ({ folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Process every note in \`${folder}\`.
+
+1. Call \`obsidian_list_notes\` with \`folder=${folder}\`, \`limit=100\`.
+2. For each note:
+   a. Read it via \`obsidian_read_note\`.
+   b. Check inbound references via \`obsidian_get_backlinks\`.
+   c. Skim outbound links via \`obsidian_get_outbound_links\`.
+3. For each note, propose ONE of:
+   - **Move to \`<destination>\`** — pick a real existing folder based on the note's tags and content.
+   - **Merge into \`<existing-note>\`** — if the content overlaps with an existing note.
+   - **Promote to its own hub** — if it spawned 3+ outbound links.
+   - **Archive / delete** — if it's stale and unlinked.
+4. Output: one block per note with the proposed action and a one-sentence rationale. Don't actually move anything; just propose.`
           }
         }
       ]

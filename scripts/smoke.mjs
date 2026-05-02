@@ -73,11 +73,13 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map(t => t.name).sort();
-  check("tools/list returns 8 read tools", names.length === 8, `got ${JSON.stringify(names)}`);
+  check("tools/list returns 10 read tools", names.length === 10, `got ${JSON.stringify(names)}`);
   const expected = [
     "obsidian_dataview_query",
     "obsidian_get_backlinks",
+    "obsidian_get_outbound_links",
     "obsidian_get_recent_edits",
+    "obsidian_get_unresolved_wikilinks",
     "obsidian_list_notes",
     "obsidian_list_tags",
     "obsidian_read_note",
@@ -198,8 +200,26 @@ try {
   // Prompts.
   const prompts = await rpc("prompts/list", {});
   const promptNames = (prompts.result?.prompts ?? []).map(p => p.name).sort();
-  check("prompts/list returns 3 prompts", promptNames.length === 3, JSON.stringify(promptNames));
+  check("prompts/list returns 6 prompts", promptNames.length === 6, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
+
+  // Sanity-check the new D / E tools.
+  if (listParsed[0]) {
+    const outbound = await rpc("tools/call", {
+      name: "obsidian_get_outbound_links",
+      arguments: { path: listParsed[0].path, include_unresolved: true }
+    });
+    const outboundParsed = JSON.parse(outbound.result.content[0].text);
+    check("get_outbound_links returns links array", Array.isArray(outboundParsed.links), outbound.result.content[0].text.slice(0, 200));
+    console.log(`      → outbound from "${listParsed[0].title}": ${outboundParsed.links.length} link(s)`);
+  }
+  const unresolved = await rpc("tools/call", {
+    name: "obsidian_get_unresolved_wikilinks",
+    arguments: { limit: 5 }
+  });
+  const unresolvedParsed = JSON.parse(unresolved.result.content[0].text);
+  check("get_unresolved_wikilinks returns array", Array.isArray(unresolvedParsed), unresolved.result.content[0].text.slice(0, 200));
+  console.log(`      → unresolved wikilinks (vault-wide): ${unresolvedParsed.length}`);
 } catch (err) {
   console.error("Smoke test threw:", err);
   failures.push(err.message);

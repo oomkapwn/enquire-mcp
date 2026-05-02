@@ -6,5 +6,6 @@ dist/
 .vscode/
 .idea/
 coverage/
+.vitest-cache/
 *.tgz
 .npmrc

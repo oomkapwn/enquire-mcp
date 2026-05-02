@@ -253,6 +253,106 @@ export async function dataviewQuery(
   return { query: args.query, rows };
 }
 
+export interface UnresolvedWikilink {
+  from_path: string;
+  target: string;
+  raw: string;
+  kind: "wikilink" | "embed";
+  alias: string | null;
+  section: string | null;
+  block: string | null;
+  line: number;
+  snippet: string;
+}
+
+export async function getUnresolvedWikilinks(
+  vault: Vault,
+  args: { folder?: string; include_embeds?: boolean; limit?: number }
+): Promise<UnresolvedWikilink[]> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 200;
+  const includeEmbeds = args.include_embeds !== false;
+  const entries = await vault.listMarkdown(args.folder);
+  const all = await vault.listMarkdown();
+  const out: UnresolvedWikilink[] = [];
+  for (const e of entries) {
+    if (out.length >= limit) break;
+    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
+      ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
+      ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+    ];
+    for (const { link, kind } of candidates) {
+      if (out.length >= limit) break;
+      if (!link.target) continue;
+      const match = findBestMatch(all, link.target, e.relPath);
+      if (match) continue;
+      const literal = (kind === "embed" ? "![[" : "[[") + link.raw + "]]";
+      const idx = content.indexOf(literal);
+      const { snippet, line } = sliceSnippet(content, idx, literal.length);
+      out.push({
+        from_path: e.relPath,
+        target: link.target,
+        raw: link.raw,
+        kind,
+        alias: link.alias ?? null,
+        section: link.section ?? null,
+        block: link.block ?? null,
+        line,
+        snippet
+      });
+    }
+  }
+  return out;
+}
+
+export interface OutboundLink {
+  raw: string;
+  target: string;
+  kind: "wikilink" | "embed";
+  alias: string | null;
+  section: string | null;
+  block: string | null;
+  resolved_path: string | null;
+  resolved_title: string | null;
+}
+
+export async function getOutboundLinks(
+  vault: Vault,
+  args: { path?: string; title?: string; include_embeds?: boolean; include_unresolved?: boolean }
+): Promise<{ from_path: string; from_title: string; links: OutboundLink[] }> {
+  await vault.ensureExists();
+  const includeEmbeds = args.include_embeds !== false;
+  const includeUnresolved = args.include_unresolved !== false;
+  const entry = await resolveTarget(vault, args);
+  const { parsed } = await vault.readNote(entry.absPath, entry.mtimeMs);
+  const all = await vault.listMarkdown();
+  const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
+    ...parsed.wikilinks.map(l => ({ link: l, kind: "wikilink" as const })),
+    ...(includeEmbeds ? parsed.embeds.map(l => ({ link: l, kind: "embed" as const })) : [])
+  ];
+  const links: OutboundLink[] = [];
+  for (const { link, kind } of candidates) {
+    const match = findBestMatch(all, link.target, entry.relPath);
+    if (!match && !includeUnresolved) continue;
+    links.push({
+      raw: link.raw,
+      target: link.target,
+      kind,
+      alias: link.alias ?? null,
+      section: link.section ?? null,
+      block: link.block ?? null,
+      resolved_path: match ? match.relPath : null,
+      resolved_title: match ? stripMd(match.basename) : null
+    });
+  }
+  return {
+    from_path: entry.relPath,
+    from_title: stripMd(entry.basename),
+    links
+  };
+}
+
 export interface TagSummary {
   tag: string;
   count: number;

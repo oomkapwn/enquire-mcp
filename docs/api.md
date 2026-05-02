@@ -1,6 +1,6 @@
 # obsidian-mcp — API (v0.3)
 
-10 MCP tools (8 read + 2 opt-in write), 2 MCP resources, 3 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 ## CLI flags
 
@@ -99,6 +99,31 @@ Enumerate every unique tag used in the vault with usage counts.
 **Returns:** `Array<{ tag, count, frontmatter_count, inline_count }>`, sorted by `count` desc.
 
 > **Counting rules.** Each note contributes at most `+1` to a tag's `count` even if the tag appears in both the note's frontmatter and inline body. The note is credited to `frontmatter_count` if the tag was found in frontmatter, otherwise to `inline_count`. So `frontmatter_count + inline_count == count` for every tag.
+
+## `obsidian_get_unresolved_wikilinks`
+
+Find every `[[wikilink]]` (and `![[embed]]`) in the vault whose target does not resolve to a real file. Vault-hygiene utility — broken links, typos, intended-but-not-yet-created notes.
+
+| Argument         | Type       | Notes                                                       |
+|------------------|------------|-------------------------------------------------------------|
+| `folder`         | `string?`  | Restrict the scan to a subfolder.                           |
+| `include_embeds` | `boolean?` | Include `![[…]]` embeds (default `true`).                   |
+| `limit`          | `number?`  | Max results (default 200, ≤ 2000).                          |
+
+**Returns:** `Array<{ from_path, target, raw, kind, alias, section, block, line, snippet }>`. `kind` is `"wikilink"` or `"embed"`. `snippet` is a ~120-char window around the literal `[[…]]` / `![[…]]`.
+
+## `obsidian_get_outbound_links`
+
+Symmetric counterpart to `obsidian_get_backlinks`. For one note, list every outbound link (wikilink or embed) and its resolution status.
+
+| Argument             | Type       | Notes                                                        |
+|----------------------|------------|--------------------------------------------------------------|
+| `path`               | `string?`  | Source note path; provide either this or `title`.            |
+| `title`              | `string?`  | Source note title (filename without `.md`).                  |
+| `include_embeds`     | `boolean?` | Include `![[…]]` embeds (default `true`).                    |
+| `include_unresolved` | `boolean?` | Include links that don't resolve (default `true`).           |
+
+**Returns:** `{ from_path, from_title, links: Array<{ raw, target, kind, alias, section, block, resolved_path, resolved_title }> }`. `resolved_path` and `resolved_title` are `null` when the link doesn't resolve.
 
 ## `obsidian_dataview_query`
 
@@ -203,6 +228,9 @@ The note template implements `list`, so MCP clients with a resource browser will
 | `summarize_recent_edits`| `since_minutes?`           | Walks recent edits, reads top-3, produces a writeup. |
 | `review_tag`            | `tag`                      | Pulls every note for a tag, surfaces open threads. |
 | `find_orphans`          | `folder?`                  | Finds notes with zero inbound links — archive candidates. |
+| `weekly_review`         | `folder?`                  | Aggregates the last 7 days of edits; groups by tag; surfaces shipped / open / stuck. |
+| `extract_todos`         | `folder?`, `tag?`          | Greps TODO / FIXME / QUESTION across the vault, groups by note, picks a top-leverage next action. |
+| `process_inbox`         | `folder` (required)        | Walks an inbox folder, proposes Move / Merge / Promote / Archive for each note. |
 
 ## Path safety
 

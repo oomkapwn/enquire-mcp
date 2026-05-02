@@ -1,6 +1,17 @@
-# obsidian-mcp — API (v0.2)
+# obsidian-mcp — API (v0.3)
 
-Seven MCP tools, all read-only. The server speaks stdio JSON-RPC and is launched per-vault.
+10 MCP tools (8 read + 2 opt-in write), 2 MCP resources, 3 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+
+## CLI flags
+
+| Flag                   | Default | Notes                                      |
+|------------------------|---------|--------------------------------------------|
+| `--vault <path>`       | (required) | Path to the Obsidian vault root.        |
+| `--enable-write`       | off     | Register the two write tools.              |
+| `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
+| `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
+
+## Read tools (always registered)
 
 ## `obsidian_list_notes`
 
@@ -75,6 +86,18 @@ List every note that links (or embeds) the target note. Ranked by hit count.
 
 **Returns:** `Array<{ path, title, count, snippets, link_kind }>`. `link_kind` is `"wikilink"`, `"embed"`, or `"mixed"`. `snippets` are up to two ~120-char excerpts around the literal `[[…]]` / `![[…]]`.
 
+## `obsidian_list_tags`
+
+Enumerate every unique tag used in the vault with usage counts.
+
+| Argument    | Type      | Notes                                      |
+|-------------|-----------|--------------------------------------------|
+| `folder`    | `string?` | Restrict to a subfolder.                   |
+| `min_count` | `number?` | Drop tags used fewer than this (default 1).|
+| `limit`     | `number?` | Max results (default 200, ≤ 2000).         |
+
+**Returns:** `Array<{ tag, count, frontmatter_count, inline_count }>`, sorted by `count` desc.
+
 ## `obsidian_dataview_query`
 
 Run a minimal Dataview-style query. Phase-2 minimal — designed to cover the common shape, not to replicate the Obsidian Dataview plugin.
@@ -127,6 +150,53 @@ LIST FROM #people WHERE file.tags contains "core-team"
 - `OR` between predicates (only `AND` is supported)
 - `FLATTEN`, `GROUP BY`, joins, embedded queries
 - `SOURCE` combinations beyond a single folder or single tag
+
+## Write tools (opt-in)
+
+Both write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
+
+### `obsidian_create_note`
+
+Create a new note at the given vault-relative path.
+
+| Argument      | Type       | Notes                                                         |
+|---------------|------------|---------------------------------------------------------------|
+| `path`        | `string`   | Vault-relative path; `.md` is appended if missing.            |
+| `content`     | `string`   | Markdown body (frontmatter is supplied separately).           |
+| `frontmatter` | `object?`  | Flat key/value YAML to render. Arrays render as block lists.  |
+| `overwrite`   | `boolean?` | Default `false`. Existing notes are not clobbered without it. |
+
+**Returns:** `{ path, mtime, bytes }`. Throws if the path escapes the vault, the file would exceed `--max-file-bytes`, or the file exists and `overwrite=false`.
+
+### `obsidian_append_to_note`
+
+Append a markdown block to an existing note.
+
+| Argument    | Type       | Notes                                                       |
+|-------------|------------|-------------------------------------------------------------|
+| `path`      | `string?`  | Path of the target note. Provide either this or `title`.    |
+| `title`     | `string?`  | Title (filename without `.md`).                             |
+| `content`   | `string`   | Markdown to append.                                         |
+| `separator` | `string?`  | Inserted between existing body and new content (default `"\n\n"`). |
+
+**Returns:** `{ path, mtime, appended_bytes }`. Refuses to grow the file past `--max-file-bytes`.
+
+## MCP resources
+
+| URI                          | Type           | Description                                |
+|------------------------------|----------------|--------------------------------------------|
+| `obsidian://vault/info`      | static JSON    | Root, note count, write flag, byte/cache limits, server version. |
+| `obsidian://note/{notePath}` | template (md)  | Each markdown note. `notePath` is the URI-encoded vault-relative path. |
+
+The note template implements `list`, so MCP clients with a resource browser will see the full vault enumerated on connect.
+
+## MCP prompts
+
+| Prompt                  | Args                       | What it sets up                                |
+|-------------------------|----------------------------|-----------------------------------------------|
+| `summarize_recent_edits`| `since_minutes?`           | Walks recent edits, reads top-3, produces a writeup. |
+| `review_tag`            | `tag`                      | Pulls every note for a tag, surfaces open threads. |
+| `find_orphans`          | `folder?`                  | Finds notes with zero inbound links — archive candidates. |
 
 ## Path safety
 

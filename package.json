@@ -1,24 +1,27 @@
 {
   "name": "@oomkapwn/obsidian-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for reading Obsidian vaults — wikilinks, frontmatter, tags, recent edits.",
   "type": "module",
   "bin": {
     "obsidian-mcp": "dist/index.js"
   },
-  "main": "dist/index.js",
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "mcp",

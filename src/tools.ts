@@ -15,6 +15,7 @@ export async function listNotes(
   vault: Vault,
   args: { tag?: string; folder?: string; since_date?: string; limit?: number }
 ): Promise<NoteSummary[]> {
+  await vault.ensureExists();
   const limit = args.limit ?? 50;
   const sinceMs = args.since_date ? Date.parse(args.since_date) : null;
   if (sinceMs !== null && Number.isNaN(sinceMs)) {
@@ -55,6 +56,7 @@ export async function readNote(
   tags: string[];
   mtime: string;
 }> {
+  await vault.ensureExists();
   const entry = await resolveTarget(vault, args);
   const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
   return {
@@ -81,6 +83,7 @@ export async function resolveWikilink(
   block: string | null;
   alias: string | null;
 }> {
+  await vault.ensureExists();
   const cleaned = args.wikilink.replace(/^!?\[\[|\]\]$/g, "");
   const aliasIdx = cleaned.indexOf("|");
   const alias = aliasIdx === -1 ? null : cleaned.slice(aliasIdx + 1).trim();
@@ -121,6 +124,7 @@ export async function searchText(
   vault: Vault,
   args: { query: string; folder?: string; limit?: number }
 ): Promise<Array<{ path: string; snippet: string; score: number; line: number }>> {
+  await vault.ensureExists();
   const limit = args.limit ?? 25;
   const q = args.query;
   if (!q.trim()) throw new Error("query must not be empty");
@@ -152,6 +156,7 @@ export async function getRecentEdits(
   vault: Vault,
   args: { since_minutes?: number; limit?: number; folder?: string }
 ): Promise<NoteSummary[]> {
+  await vault.ensureExists();
   const limit = args.limit ?? 20;
   const sinceMs = args.since_minutes !== undefined
     ? Date.now() - args.since_minutes * 60_000
@@ -188,6 +193,7 @@ export async function getBacklinks(
   vault: Vault,
   args: { path?: string; title?: string; limit?: number; include_embeds?: boolean }
 ): Promise<BacklinkHit[]> {
+  await vault.ensureExists();
   const limit = args.limit ?? 50;
   const includeEmbeds = args.include_embeds !== false;
   const target = await resolveTarget(vault, args);
@@ -241,9 +247,122 @@ export async function dataviewQuery(
   query: string;
   rows: Array<Record<string, unknown>>;
 }> {
+  await vault.ensureExists();
   const parsed = parseDql(args.query);
   const rows = await runDql(vault, parsed);
   return { query: args.query, rows };
+}
+
+export interface TagSummary {
+  tag: string;
+  count: number;
+  frontmatter_count: number;
+  inline_count: number;
+}
+
+export async function listTags(
+  vault: Vault,
+  args: { folder?: string; min_count?: number; limit?: number }
+): Promise<TagSummary[]> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 200;
+  const minCount = args.min_count ?? 1;
+  const entries = await vault.listMarkdown(args.folder);
+  const counts = new Map<string, { count: number; fm: number; inline: number }>();
+  const fmTagsCache = new WeakMap<object, Set<string>>();
+  for (const e of entries) {
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const fmSet = new Set(extractFrontmatterTagsLower(parsed.frontmatter));
+    fmTagsCache.set(parsed.frontmatter, fmSet);
+    for (const t of parsed.tags) {
+      const key = t.toLowerCase();
+      const slot = counts.get(key) ?? { count: 0, fm: 0, inline: 0 };
+      slot.count += 1;
+      if (fmSet.has(key)) slot.fm += 1;
+      else slot.inline += 1;
+      counts.set(key, slot);
+    }
+  }
+  const out: TagSummary[] = [];
+  for (const [tag, slot] of counts) {
+    if (slot.count < minCount) continue;
+    out.push({ tag, count: slot.count, frontmatter_count: slot.fm, inline_count: slot.inline });
+  }
+  out.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  return out.slice(0, limit);
+}
+
+export async function createNote(
+  vault: Vault,
+  args: { path: string; content: string; frontmatter?: Record<string, unknown>; overwrite?: boolean }
+): Promise<{ path: string; mtime: string; bytes: number }> {
+  await vault.ensureExists();
+  const body = composeNote(args.frontmatter, args.content);
+  const result = await vault.writeNote(args.path, body, { overwrite: args.overwrite });
+  return {
+    path: result.relPath,
+    mtime: new Date(result.mtimeMs).toISOString(),
+    bytes: result.bytes
+  };
+}
+
+export async function appendToNote(
+  vault: Vault,
+  args: { path?: string; title?: string; content: string; separator?: string }
+): Promise<{ path: string; mtime: string; appended_bytes: number }> {
+  await vault.ensureExists();
+  const target = await resolveTarget(vault, args);
+  const sep = args.separator ?? "\n\n";
+  const result = await vault.appendNote(target.absPath, sep + args.content);
+  return {
+    path: result.relPath,
+    mtime: new Date(result.mtimeMs).toISOString(),
+    appended_bytes: result.appended_bytes
+  };
+}
+
+function composeNote(frontmatter: Record<string, unknown> | undefined, content: string): string {
+  if (!frontmatter || Object.keys(frontmatter).length === 0) return content;
+  const yaml = renderFrontmatter(frontmatter);
+  const trimmed = content.startsWith("\n") ? content : `\n${content}`;
+  return `---\n${yaml}---${trimmed}`;
+}
+
+function renderFrontmatter(fm: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(fm)) {
+    lines.push(renderFrontmatterEntry(key, value));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function renderFrontmatterEntry(key: string, value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return `${key}: []`;
+    return `${key}:\n${value.map(v => `  - ${renderScalar(v)}`).join("\n")}`;
+  }
+  return `${key}: ${renderScalar(value)}`;
+}
+
+function renderScalar(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const str = String(value);
+  if (/[:\n#&*?{}\[\],"\\]/.test(str) || /^\s/.test(str) || /\s$/.test(str) || str === "" || /^(true|false|null|yes|no)$/i.test(str)) {
+    return JSON.stringify(str);
+  }
+  return str;
+}
+
+function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {
+  const raw = fm.tags ?? fm.tag;
+  if (!raw) return [];
+  const list: string[] = Array.isArray(raw)
+    ? raw.filter((t): t is string => typeof t === "string")
+    : typeof raw === "string"
+      ? raw.split(/[,\s]+/).filter(Boolean)
+      : [];
+  return list.map(t => t.replace(/^#+/, "").toLowerCase());
 }
 
 async function resolveTarget(

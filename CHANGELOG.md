@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-02
+
+### Security
+- `obsidian_create_note` now realpath-checks the *parent directory* of the target before writing. Previously, a parent dir that was a symlink resolving outside the vault would let a write escape the vault root. With this fix, such writes are refused.
+
+### Fixed
+- Cache eviction is now a true **LRU** instead of FIFO — re-reading a cached entry bumps it to the freshest slot. README/CHANGELOG already advertised LRU; behavior now matches docs.
+- Dropped a small dead-code path in `obsidian_list_tags` (an unused `WeakMap`).
+
+### Added
+- `obsidian_dataview_query` now applies a default row cap of **1000** when the query has no explicit `LIMIT`. Prevents runaway responses on huge vaults.
+- CI gains a dedicated **smoke job** that builds a synthetic vault and runs the JSON-RPC end-to-end against the real binary.
+- CI gains an **`npm audit --audit-level=high`** job.
+- CI hardened with `permissions: contents: read`, `timeout-minutes`, and concurrency cancellation.
+- New tests (86 total, was 79): LRU eviction order, internal-symlink rejection in walker, path-form wikilink backlink, mtime moves forward across write→append, write refusal when parent dir is a symlink to outside the vault, default-row-cap behavior in DQL.
+- `SECURITY.md`, GitHub issue templates (bug / feature), PR template, FUNDING.yml.
+
+### Docs
+- Major README rewrite for launch readiness: value-prop lead, comparison table vs filesystem MCPs, "who is this for?" section, ASCII architecture diagram, FAQ, transactional install / `npx` / global blocks.
+- `docs/api.md`: documented tag-counting semantics (`fm + inline == count`) and the default DQL row cap.
+
 ## [0.3.0] — 2026-05-02
 
 ### Added

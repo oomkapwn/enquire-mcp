@@ -60,7 +60,7 @@ describe("Vault — file size limit", () => {
   });
 });
 
-describe("Vault — cache cap", () => {
+describe("Vault — cache cap & LRU", () => {
   it("evicts oldest entries when over maxCacheEntries", async () => {
     const v = new Vault(root, { maxCacheEntries: 2 });
     await v.ensureExists();
@@ -69,15 +69,53 @@ describe("Vault — cache cap", () => {
       await fs.writeFile(p, `Note ${i}\n`);
       await v.readNote(p);
     }
-    // After reading 4 notes with cap=2, only the newest 2 should still be cached.
-    // We verify by introspecting the private cache via a subsequent read with mismatched mtime
-    // (cache hit would skip stat; cache miss would re-read). Implementation detail —
-    // here we just confirm the call doesn't blow up and listMarkdown still works.
     const notes = await listNotes(v, {});
     expect(notes.length).toBeGreaterThanOrEqual(4);
     for (let i = 0; i < 4; i++) {
       await fs.unlink(path.join(root, `Note${i}.md`)).catch(() => {});
     }
+  });
+
+  it("LRU bumps a re-read entry so it survives eviction", async () => {
+    const v = new Vault(root, { maxCacheEntries: 2 });
+    await v.ensureExists();
+    const a = path.join(root, "LRU-A.md");
+    const b = path.join(root, "LRU-B.md");
+    const c = path.join(root, "LRU-C.md");
+    await fs.writeFile(a, "A");
+    await fs.writeFile(b, "B");
+    await fs.writeFile(c, "C");
+    await v.readNote(a);                     // cache: {A}
+    await v.readNote(b);                     // cache: {A, B}
+    await v.readNote(a);                     // LRU bump → cache: {B, A}
+    await v.readNote(c);                     // evict head (B): cache: {A, C}
+
+    const cache = (v as unknown as { cache: Map<string, unknown> }).cache;
+    expect(cache.size).toBeLessThanOrEqual(2);
+    const cached = [...cache.keys()].map(k => path.basename(k));
+    expect(cached).toContain("LRU-A.md");    // re-read entry survived
+    expect(cached).toContain("LRU-C.md");    // newest entry survived
+    expect(cached).not.toContain("LRU-B.md");// untouched middle entry evicted
+
+    await Promise.all([a, b, c].map(p => fs.unlink(p).catch(() => {})));
+  });
+});
+
+describe("Vault — internal symlinks", () => {
+  it("skips symlinks even when they point inside the vault", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const target = path.join(root, "Target-internal.md");
+    const link = path.join(root, "Link-internal.md");
+    await fs.writeFile(target, "internal target");
+    await fs.symlink(target, link).catch(() => null);
+    const linkExists = await fs.lstat(link).catch(() => null);
+    if (!linkExists) return;
+    const titles = (await listNotes(v, {})).map(n => n.title);
+    expect(titles).toContain("Target-internal");
+    expect(titles).not.toContain("Link-internal");
+    await fs.unlink(link).catch(() => {});
+    await fs.unlink(target).catch(() => {});
   });
 });
 

@@ -6,10 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
         node-version: [18, 20, 22]
     steps:
@@ -21,3 +30,33 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build synthetic vault
+        id: vault
+        run: echo "path=$(node scripts/synthetic-vault.mjs)" >> "$GITHUB_OUTPUT"
+      - name: JSON-RPC smoke test
+        run: node scripts/smoke.mjs "${{ steps.vault.outputs.path }}"
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high

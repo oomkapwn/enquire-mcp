@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a new tool, prompt, resource, or capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We optimize for *fewer* tools that compose well. Please align on scope before writing the code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What workflow are you trying to enable?
+      description: Describe the user-facing goal, not the API surface you'd write.
+      placeholder: |
+        "When I'm reviewing my weekly notes, I want Claude to surface every TODO from the last 7 days grouped by tag."
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: How would you shape the API?
+      description: Tool / prompt / resource? Inputs and outputs?
+      placeholder: |
+        New tool `obsidian_extract_todos({ since_date?, group_by? })`
+        Returns: `Array<{ note_path, todos: string[] }>` grouped by tag.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Could existing tools cover this?
+      description: |
+        Often the answer is yes via composition. Walking through `obsidian_dataview_query` + `obsidian_search_text` + a small parse may already work.
+    validations:
+      required: false
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Are you willing to contribute the implementation?
+      options:
+        - "Yes, I'll send a PR if scope is approved"
+        - "I can help with testing"
+        - "No, just suggesting"
+    validations:
+      required: true

@@ -269,11 +269,9 @@ export async function listTags(
   const minCount = args.min_count ?? 1;
   const entries = await vault.listMarkdown(args.folder);
   const counts = new Map<string, { count: number; fm: number; inline: number }>();
-  const fmTagsCache = new WeakMap<object, Set<string>>();
   for (const e of entries) {
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const fmSet = new Set(extractFrontmatterTagsLower(parsed.frontmatter));
-    fmTagsCache.set(parsed.frontmatter, fmSet);
     for (const t of parsed.tags) {
       const key = t.toLowerCase();
       const slot = counts.get(key) ?? { count: 0, fm: 0, inline: 0 };

@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Vault } from "../src/vault.js";
-import { parseDql, runDql, DqlParseError } from "../src/dql.js";
+import { parseDql, runDql, DqlParseError, DEFAULT_DQL_ROW_LIMIT } from "../src/dql.js";
 import { dataviewQuery, listTags } from "../src/tools.js";
 
 let root: string;
@@ -155,5 +155,19 @@ describe("listTags", () => {
     const v = new Vault(root);
     const tags = await listTags(v, { min_count: 2 });
     expect(tags.every(t => t.count >= 2)).toBe(true);
+  });
+});
+
+describe("runDql — row cap", () => {
+  it("applies the default row cap when no LIMIT is given", async () => {
+    const v = new Vault(root);
+    const rows = await runDql(v, parseDql("LIST"), { defaultLimit: 1 });
+    expect(rows.length).toBe(1);
+  });
+
+  it("an explicit LIMIT overrides the default cap", async () => {
+    const v = new Vault(root);
+    const rows = await runDql(v, parseDql("LIST LIMIT 2"), { defaultLimit: 1 });
+    expect(rows.length).toBe(2);
   });
 });

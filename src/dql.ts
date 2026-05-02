@@ -190,7 +190,14 @@ interface Row {
   values: Record<string, unknown>;
 }
 
-export async function runDql(vault: Vault, query: DataviewQuery): Promise<Array<Record<string, unknown>>> {
+export const DEFAULT_DQL_ROW_LIMIT = 1000;
+
+export async function runDql(
+  vault: Vault,
+  query: DataviewQuery,
+  opts: { defaultLimit?: number } = {}
+): Promise<Array<Record<string, unknown>>> {
+  const defaultLimit = opts.defaultLimit ?? DEFAULT_DQL_ROW_LIMIT;
   const folder = query.source.type === "folder" ? query.source.path : undefined;
   const entries = await vault.listMarkdown(folder);
   const wantTag = query.source.type === "tag" ? query.source.tag.toLowerCase() : null;
@@ -223,8 +230,8 @@ export async function runDql(vault: Vault, query: DataviewQuery): Promise<Array<
     });
   }
 
-  const limited = query.limit !== undefined ? rows.slice(0, query.limit) : rows;
-  return limited.map(r => r.values);
+  const cap = query.limit ?? defaultLimit;
+  return rows.slice(0, cap).map(r => r.values);
 }
 
 function resolveField(

@@ -21,13 +21,15 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 interface ServeOptions {
   vault: string;
   enableWrite?: boolean;
   maxFileBytes?: string;
   cacheSize?: string;
+  persistentCache?: boolean;
+  cacheFile?: string;
 }
 
 async function main(): Promise<void> {
@@ -44,6 +46,8 @@ async function main(): Promise<void> {
     .option("--enable-write", "Enable write tools (create_note, append_to_note). Off by default.")
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
+    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
     });
@@ -55,7 +59,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
     maxFileBytes: opts.maxFileBytes !== undefined ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes") : undefined,
-    maxCacheEntries: opts.cacheSize !== undefined ? parsePositiveInt(opts.cacheSize, "--cache-size") : undefined
+    maxCacheEntries: opts.cacheSize !== undefined ? parsePositiveInt(opts.cacheSize, "--cache-size") : undefined,
+    persistentCache: !!opts.persistentCache,
+    cacheFile: opts.cacheFile
   });
   await vault.ensureExists();
 
@@ -71,8 +77,33 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  if (vault.persistentCacheEnabled) {
+    let saving = false;
+    const flush = async () => {
+      if (saving) return;
+      saving = true;
+      await vault.saveDiskCache().catch((err) => {
+        process.stderr.write(
+          `obsidian-mcp: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      });
+      saving = false;
+    };
+    process.on("SIGINT", () => {
+      flush().finally(() => process.exit(0));
+    });
+    process.on("SIGTERM", () => {
+      flush().finally(() => process.exit(0));
+    });
+    process.on("beforeExit", () => {
+      void flush();
+    });
+  }
+
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
-  process.stderr.write(`obsidian-mcp ${VERSION} ready (${writeMode}, vault=${vault.root})\n`);
+  const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
+  process.stderr.write(`obsidian-mcp ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
 }
 
 function registerReadTools(server: McpServer, vault: Vault): void {

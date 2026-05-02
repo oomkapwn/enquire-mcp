@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-02
+
+Wave 4: persistent on-disk cache for warm cold-starts on large vaults.
+
+### Added
+- `--persistent-cache` CLI flag — opt-in. When set, the parsed-note cache is loaded from disk on boot and written back on graceful shutdown (SIGINT/SIGTERM/`beforeExit`). On second startup of the same process against an unchanged vault, repeat parses are skipped — net win on tools that walk the whole vault (`get_backlinks`, `search_text`, `list_tags`, `get_unresolved_wikilinks`).
+- `--cache-file <path>` flag to override the default cache file location (useful for sandboxed environments).
+- Default cache location: `$XDG_CACHE_HOME/obsidian-mcp/<vault-hash>.json` if set, otherwise `~/Library/Caches/obsidian-mcp/<hash>.json` on macOS, `~/.cache/obsidian-mcp/<hash>.json` on Linux. Vault path is hashed (sha1, 12 chars) so multiple vaults coexist.
+- Atomic writes: cache is staged to `<file>.tmp` and renamed on success.
+- Schema-versioned cache (`version: 1`) — invalidates whole file if shape ever changes between releases.
+- Stale-entry detection: each entry stores its source mtime; on load, mismatched mtimes are silently dropped.
+- Cross-vault protection: cache is rejected if its `root` field doesn't match the current vault realpath.
+
+### Why opt-in (not default)
+- The default fast path (in-memory cache + per-read mtime stat) is already O(1) for repeat reads within a session. Persistent cache only helps **across** process restarts, which most MCP-client workflows don't need (the client keeps the server warm).
+- For users who do restart often (e.g. CI bots, scratch agents on huge vaults), the flag delivers a meaningful warm-cache start. Once we have telemetry from real users, we may flip the default.
+
+### Skipped (was J in the roadmap): chokidar-based watch mode
+- Decided to skip for now. The current mtime-on-read check is correct and cheap (one `fs.stat` per read), and chokidar adds ~50KB of dep weight without measurable user-facing benefit at our vault sizes. Will revisit in v0.7+ if a benchmark says otherwise.
+
+### Tests
+- 126 unit tests (was 119). 7 new for persistent-cache: opt-in default-off, write-then-read round-trip, mtime invalidation, vault-root rejection, version mismatch rejection, corrupt-file graceful fallback, and cache file write atomicity.
+
 ## [0.5.0] — 2026-05-02
 
 Wave 3 of the launch-prep roadmap: stricter TypeScript, lint/format with Biome, and DQL gains `OR` + `LIKE`.

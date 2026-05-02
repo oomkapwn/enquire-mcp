@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-119%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-126%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-83%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -235,6 +235,8 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-02", content: 
 | `--enable-write` | off | Register the two write tools. Server is otherwise strictly read-only. |
 | `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
+| `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. |
+| `--cache-file <path>` | auto | Override persistent-cache file location. |
 
 The server logs `WRITE-ENABLED` to stderr on boot when the flag is on, so you can verify the mode at a glance.
 

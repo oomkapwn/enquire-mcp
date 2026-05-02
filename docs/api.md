@@ -10,6 +10,8 @@
 | `--enable-write`       | off     | Register the two write tools.              |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
+| `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. |
+| `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/obsidian-mcp/<vault-hash>.json` (macOS) or `~/.cache/obsidian-mcp/<vault-hash>.json` (Linux). |
 
 ## Read tools (always registered)
 

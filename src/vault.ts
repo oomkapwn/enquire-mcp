@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { type ParsedNote, parseNote } from "./parser.js";
 
@@ -6,6 +8,9 @@ const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_S
 
 export const DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_MAX_CACHE_ENTRIES = 1024;
+
+/** Bumped on any change to ParsedNote shape — invalidates persisted caches that don't match. */
+const DISK_CACHE_VERSION = 1;
 
 export interface FileEntry {
   absPath: string;
@@ -24,6 +29,9 @@ export interface VaultOptions {
   maxFileBytes?: number;
   maxCacheEntries?: number;
   enableWrite?: boolean;
+  persistentCache?: boolean;
+  /** Override the cache file location. Default: ~/.cache/obsidian-mcp/<vault-hash>.json. */
+  cacheFile?: string;
 }
 
 export class Vault {
@@ -31,7 +39,10 @@ export class Vault {
   readonly maxFileBytes: number;
   readonly maxCacheEntries: number;
   readonly writeEnabled: boolean;
+  readonly persistentCacheEnabled: boolean;
+  cacheFile: string | null;
   private cache = new Map<string, CachedNote>();
+  private cacheDirty = false;
   private ready = false;
 
   constructor(root: string, opts: VaultOptions = {}) {
@@ -39,9 +50,12 @@ export class Vault {
     this.maxFileBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
     this.maxCacheEntries = opts.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
     this.writeEnabled = opts.enableWrite ?? false;
+    this.persistentCacheEnabled = opts.persistentCache ?? false;
+    this.cacheFile = opts.cacheFile ?? null;
   }
 
   async ensureExists(): Promise<void> {
+    if (this.ready) return;
     let stat: import("node:fs").Stats;
     try {
       stat = await fs.stat(this.root);
@@ -52,7 +66,62 @@ export class Vault {
       throw new Error(`Vault path is not a directory: ${this.root}`);
     }
     this.root = await fs.realpath(this.root);
+    if (this.persistentCacheEnabled && !this.cacheFile) {
+      this.cacheFile = defaultCacheFile(this.root);
+    }
     this.ready = true;
+    if (this.persistentCacheEnabled) {
+      await this.loadDiskCache();
+    }
+  }
+
+  async loadDiskCache(): Promise<number> {
+    if (!this.cacheFile) return 0;
+    try {
+      const raw = await fs.readFile(this.cacheFile, "utf8");
+      const data = JSON.parse(raw) as DiskCacheFile;
+      if (data.version !== DISK_CACHE_VERSION || data.root !== this.root) return 0;
+      let loaded = 0;
+      for (const entry of data.entries) {
+        if (this.cache.size >= this.maxCacheEntries) break;
+        const abs = path.resolve(this.root, entry.relPath);
+        try {
+          const stat = await fs.stat(abs);
+          if (stat.mtimeMs !== entry.mtimeMs) continue;
+          this.cache.set(abs, { content: entry.content, parsed: entry.parsed, mtimeMs: entry.mtimeMs });
+          loaded += 1;
+        } catch {
+          // File gone — skip.
+        }
+      }
+      return loaded;
+    } catch {
+      return 0;
+    }
+  }
+
+  async saveDiskCache(): Promise<void> {
+    if (!this.persistentCacheEnabled || !this.cacheFile || !this.cacheDirty) return;
+    const entries: DiskCacheEntry[] = [];
+    for (const [abs, cached] of this.cache) {
+      entries.push({
+        relPath: path.relative(this.root, abs),
+        mtimeMs: cached.mtimeMs,
+        content: cached.content,
+        parsed: cached.parsed
+      });
+    }
+    const payload: DiskCacheFile = {
+      version: DISK_CACHE_VERSION,
+      root: this.root,
+      writtenAt: new Date().toISOString(),
+      entries
+    };
+    await fs.mkdir(path.dirname(this.cacheFile), { recursive: true });
+    const tmp = `${this.cacheFile}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
+    await fs.rename(tmp, this.cacheFile);
+    this.cacheDirty = false;
   }
 
   resolveInside(p: string): string {
@@ -239,11 +308,34 @@ export class Vault {
       if (oldest !== undefined) this.cache.delete(oldest);
     }
     this.cache.set(key, value);
+    this.cacheDirty = true;
   }
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
+}
+
+interface DiskCacheEntry {
+  relPath: string;
+  mtimeMs: number;
+  content: string;
+  parsed: ParsedNote;
+}
+
+interface DiskCacheFile {
+  version: number;
+  root: string;
+  writtenAt: string;
+  entries: DiskCacheEntry[];
+}
+
+function defaultCacheFile(root: string): string {
+  const base =
+    process.env.XDG_CACHE_HOME ??
+    (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
+  const hash = createHash("sha1").update(root).digest("hex").slice(0, 12);
+  return path.join(base, "obsidian-mcp", `${hash}.json`);
 }
 
 async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {

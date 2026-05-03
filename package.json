@@ -1,7 +1,7 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "0.10.4",
-  "description": "Drop-in MCP server for Obsidian vaults. Wikilinks resolved, backlinks ranked, frontmatter typed, Dataview-style queries. Read-only by default; opt-in writes. Works with Claude Code, Cursor, Codex, Devin, and any MCP-compatible client.",
+  "version": "0.10.5",
+  "description": "Drop-in MCP server for Obsidian vaults. Wikilinks resolved, backlinks ranked, frontmatter typed, Dataview-style queries. Read-only by default; opt-in writes. Works with Claude Code, Cursor, OpenClaw, Codex, Devin, and any MCP-compatible client.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -40,6 +40,7 @@
     "claude",
     "claude-code",
     "cursor",
+    "openclaw",
     "codex",
     "enquire",
     "berners-lee",

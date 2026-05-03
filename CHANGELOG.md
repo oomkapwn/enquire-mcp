@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-05-03
+
+CI re-release of v0.10.4 (lint failed on the same biome severity divergence that bit v0.10.2 — `useTemplate` rule registers as `info` locally but `error` on the GitHub Actions image). Same code as v0.10.4 plus:
+
+### Added — marketing surface for OpenClaw
+- README, package.json description, and GitHub repo description now feature **OpenClaw** alongside Claude Code, Cursor, and Codex as primary MCP clients. The reference deployment for the FTS5 search backend (issue #10) is the SZBOX trading-system memory layer running on OpenClaw — explicit attribution makes that pairing discoverable.
+- Devin moves from the headline list to "any other MCP-compatible client" — kept as a supported target, just not the lead example.
+- Per-client install table gains an OpenClaw row.
+- npm `keywords` adds `openclaw`. GitHub repo `topics` adds `openclaw` (now at the 20-topic max).
+
+### Fixed (vs the broken v0.10.4 npm publish)
+- `src/fts5.ts` `getChunk()`: collapsed the multi-line `prepare("…")` into one line via a `sql` const. Same biome `useTemplate`/format edge that bit v0.10.2.
+
 ## [0.10.4] — 2026-05-03
 
 External-audit pass on top of v0.10.3 — closes one P1 (chunk-resource leaking FTS5 internal enrichment), tightens privacy posture for the FTS5 path, plugs a folder-filter pattern issue, hardens the release pipeline, and clears doc drift accumulated across the v0.10.x range.

@@ -6,7 +6,7 @@
 
 ### MCP server for Obsidian vaults
 
-**Give Claude Code, Cursor, Codex, and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, Dataview queries, MCP resources, and read-only safety by default.**
+**Give Claude Code, Cursor, OpenClaw, and Codex first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, Dataview queries, MCP resources, and read-only safety by default.** Works with Devin and any other MCP-compatible client.
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -63,7 +63,7 @@ That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandato
 
 ## Who is this for?
 
-- **Obsidian users on Claude Code / Cursor / Codex / Devin** (or any MCP-compatible client) who want the assistant to draft notes that actually link properly, follow `[[…]]`, and respect frontmatter.
+- **Obsidian users on Claude Code / Cursor / OpenClaw / Codex** (or Devin or any other MCP-compatible client) who want the assistant to draft notes that actually link properly, follow `[[…]]`, and respect frontmatter.
 - **Agentic workflow builders** who need a structured layer over a markdown vault — `dataview_query`, `get_backlinks`, `list_tags` are the kind of primitives that compose into real automations.
 - **Tinkerers** who want to wire their PKM into LLM pipelines without writing a parser. We did the parsing.
 
@@ -91,8 +91,9 @@ That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandato
 | **Claude Desktop** | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`<br>Windows: `%APPDATA%\Claude\claude_desktop_config.json` |
 | **Claude Code (CLI)** | `~/.claude.json` (global) or `.mcp.json` (per-project) |
 | **Cursor** | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per-project) |
+| **OpenClaw** | per your OpenClaw shared-memory MCP config |
 | **Codex / Codex CLI** | per-project `.mcp.json` or environment-specific config |
-| **Any MCP client** | wherever your client expects MCP server JSON |
+| **Devin / any other MCP client** | wherever your client expects MCP server JSON |
 
 To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`), add `"--enable-write"` to the `args` array.
 
@@ -208,7 +209,9 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: 
 ```
 ┌─────────────────┐     stdio JSON-RPC     ┌─────────────────────┐
 │  Claude Code /  │ ◄────────────────────► │   enquire           │
-│  Cursor / Codex │   tools/resources/     │  (this server)      │
+│  Cursor /       │   tools/resources/     │  (this server)      │
+│  OpenClaw /     │                        │                     │
+│  Codex          │                        │                     │
 └─────────────────┘   prompts                └─────────┬───────────┘
                                                       │
                                           ┌───────────┼────────────┐

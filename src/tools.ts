@@ -121,36 +121,97 @@ export async function resolveWikilink(
   };
 }
 
+export type SearchMode = "all" | "any" | "phrase";
+
+export interface SearchHit {
+  path: string;
+  snippet: string;
+  score: number;
+  line: number;
+  matched_terms: string[];
+}
+
+export interface SearchResponse {
+  query: string;
+  mode: SearchMode;
+  scanned_notes: number;
+  matches: SearchHit[];
+}
+
 export async function searchText(
   vault: Vault,
-  args: { query: string; folder?: string; limit?: number }
-): Promise<Array<{ path: string; snippet: string; score: number; line: number }>> {
+  args: { query: string; folder?: string; limit?: number; mode?: SearchMode }
+): Promise<SearchResponse> {
   await vault.ensureExists();
   const limit = args.limit ?? 25;
+  const mode: SearchMode = args.mode ?? "all";
   const q = args.query;
   if (!q.trim()) throw new Error("query must not be empty");
-  const lowerQ = q.toLowerCase();
+
+  // Tokenize on whitespace for "all" / "any". Phrase mode keeps the raw query.
+  const tokens = mode === "phrase" ? [q] : q.trim().split(/\s+/);
+  const lowerTokens = tokens.map((t) => t.toLowerCase());
+
   const entries = await vault.listMarkdown(args.folder);
-  const out: Array<{ path: string; snippet: string; score: number; line: number }> = [];
-  for (const e of entries) {
-    const { content } = await vault.readNote(e.absPath, e.mtimeMs);
-    const lower = content.toLowerCase();
-    let score = 0;
-    let firstHit = -1;
-    let from = 0;
-    while (true) {
-      const idx = lower.indexOf(lowerQ, from);
-      if (idx === -1) break;
-      score += 1;
-      if (firstHit === -1) firstHit = idx;
-      from = idx + lowerQ.length;
-    }
-    if (score === 0) continue;
-    const { snippet, line } = sliceSnippet(content, firstHit, q.length);
-    out.push({ path: e.relPath, snippet, score, line });
+
+  // Parallel file reads — was sequential, slow on large vaults. Chunk to
+  // bound concurrency (avoid blowing the open-fd limit on huge vaults).
+  const CHUNK = 16;
+  const matches: SearchHit[] = [];
+  for (let i = 0; i < entries.length; i += CHUNK) {
+    const chunk = entries.slice(i, i + CHUNK);
+    const results = await Promise.all(
+      chunk.map(async (e) => {
+        const { content } = await vault.readNote(e.absPath, e.mtimeMs);
+        const lower = content.toLowerCase();
+        let totalScore = 0;
+        let firstHit = -1;
+        let firstHitLen = 0;
+        const matched: string[] = [];
+        for (let t = 0; t < lowerTokens.length; t++) {
+          const lowerT = lowerTokens[t];
+          if (lowerT === undefined || lowerT === "") continue;
+          let tokenScore = 0;
+          let from = 0;
+          while (true) {
+            const idx = lower.indexOf(lowerT, from);
+            if (idx === -1) break;
+            tokenScore += 1;
+            if (firstHit === -1 || idx < firstHit) {
+              firstHit = idx;
+              firstHitLen = lowerT.length;
+            }
+            from = idx + lowerT.length;
+          }
+          if (tokenScore > 0) {
+            totalScore += tokenScore;
+            matched.push(tokens[t] ?? lowerT);
+          }
+        }
+        // Mode policy: "all" requires every token to match; "any" requires at
+        // least one; "phrase" requires the raw query (single token).
+        if (mode === "all" && matched.length !== lowerTokens.filter(Boolean).length) return null;
+        if (totalScore === 0) return null;
+        const { snippet, line } = sliceSnippet(content, firstHit, firstHitLen);
+        const hit: SearchHit = {
+          path: e.relPath,
+          snippet,
+          score: totalScore,
+          line,
+          matched_terms: matched
+        };
+        return hit;
+      })
+    );
+    for (const r of results) if (r) matches.push(r);
   }
-  out.sort((a, b) => b.score - a.score);
-  return out.slice(0, limit);
+  matches.sort((a, b) => b.score - a.score);
+  return {
+    query: q,
+    mode,
+    scanned_notes: entries.length,
+    matches: matches.slice(0, limit)
+  };
 }
 
 export async function getRecentEdits(

@@ -22,7 +22,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.8.1";
+const VERSION = "0.9.0";
 
 interface ServeOptions {
   vault: string;
@@ -186,12 +186,19 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     {
       title: "Search text",
       description:
-        "Case-insensitive substring search across all notes. Returns ranked matches with snippets and line numbers.",
+        "Case-insensitive token search across all notes. Default mode `all` requires every whitespace-separated token to appear in a note (AND-tokenizer); `any` requires at least one (OR); `phrase` does the old contiguous-substring match. Returns a structured response with `query`, `mode`, `scanned_notes`, and ranked `matches` (each with snippet, line, score, matched_terms) — empty matches are explicit, not ambiguous with a broken call.",
       annotations: { ...READ_ONLY, title: "Search text" },
       inputSchema: {
-        query: z.string().min(1).describe("Search string (case-insensitive substring)"),
+        query: z
+          .string()
+          .min(1)
+          .describe('Search string. With mode=all/any, whitespace tokenizes ("foo bar" → ["foo","bar"]).'),
         folder: z.string().optional().describe("Restrict to a subfolder"),
-        limit: z.number().int().positive().max(200).optional().describe("Max results (default 25)")
+        limit: z.number().int().positive().max(200).optional().describe("Max results (default 25)"),
+        mode: z
+          .enum(["all", "any", "phrase"])
+          .optional()
+          .describe('"all" (default, AND), "any" (OR), or "phrase" (literal substring — pre-v0.9 behavior)')
       }
     },
     async (args) => textResult(await searchText(vault, args))

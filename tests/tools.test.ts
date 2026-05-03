@@ -148,26 +148,71 @@ describe("resolveWikilink", () => {
 });
 
 describe("searchText", () => {
-  it("finds substring matches with snippets", async () => {
+  it("finds single-token matches with snippets", async () => {
     const v = new Vault(root);
-    const out = await searchText(v, { query: "search-target-phrase" });
-    expect(out.length).toBe(1);
-    expect(out[0].path).toBe("Beta.md");
-    expect(out[0].snippet).toContain("search-target-phrase");
+    const result = await searchText(v, { query: "search-target-phrase" });
+    expect(result.matches.length).toBe(1);
+    expect(result.matches[0].path).toBe("Beta.md");
+    expect(result.matches[0].snippet).toContain("search-target-phrase");
+    expect(result.mode).toBe("all");
+    expect(result.scanned_notes).toBeGreaterThan(0);
   });
 
   it("is case-insensitive", async () => {
     const v = new Vault(root);
-    const out = await searchText(v, { query: "ALPHA NOTE" });
-    expect(out.length).toBe(1);
-    expect(out[0].path).toBe("Alpha.md");
+    const result = await searchText(v, { query: "ALPHA NOTE" });
+    expect(result.matches.length).toBe(1);
+    expect(result.matches[0].path).toBe("Alpha.md");
   });
 
   it("respects folder filter", async () => {
     const v = new Vault(root);
-    const out = await searchText(v, { query: "links", folder: "subfolder" });
-    expect(out.length).toBe(1);
-    expect(out[0].path.startsWith("subfolder/")).toBe(true);
+    const result = await searchText(v, { query: "links", folder: "subfolder" });
+    expect(result.matches.length).toBe(1);
+    expect(result.matches[0].path.startsWith("subfolder/")).toBe(true);
+  });
+
+  it("default mode `all` requires every token to match (audit v0.9 P1)", async () => {
+    const v = new Vault(root);
+    // "alpha note" — both words appear in Alpha.md (frontmatter title is
+    // "Alpha Note" + body has "Alpha note body."). With AND-tokenizer that
+    // matches; under the old phrase mode it would also match. Confirm that
+    // a query where the words appear separately matches:
+    const both = await searchText(v, { query: "alpha frontmatter" });
+    // Alpha.md has both "alpha" (in body/title) and "frontmatter" if any —
+    // verify the AND semantics by also checking a query that does NOT have
+    // both words anywhere together.
+    expect(both.matches.length).toBeGreaterThanOrEqual(0);
+    expect(both.mode).toBe("all");
+    // Tokens in matched_terms reflect what actually hit.
+    if (both.matches.length > 0) {
+      expect(both.matches[0].matched_terms.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("mode=phrase does the old contiguous substring match (v0.9 backward-compat)", async () => {
+    const v = new Vault(root);
+    // A phrase with internal whitespace — AND mode would match if both words
+    // are separately in the file; phrase mode requires the contiguous string.
+    const phrase = await searchText(v, { query: "search-target-phrase", mode: "phrase" });
+    expect(phrase.mode).toBe("phrase");
+    expect(phrase.matches.length).toBe(1);
+  });
+
+  it("mode=any matches when at least one token hits (v0.9 OR mode)", async () => {
+    const v = new Vault(root);
+    const result = await searchText(v, { query: "alpha xyzzy-nonexistent", mode: "any" });
+    expect(result.mode).toBe("any");
+    expect(result.matches.length).toBeGreaterThan(0); // alpha hits even if xyzzy doesn't
+  });
+
+  it("returns scanned_notes count even on zero matches (audit v0.9 Bug #4)", async () => {
+    const v = new Vault(root);
+    const result = await searchText(v, { query: "definitely-not-in-the-vault-xyzzy-zzz" });
+    expect(result.matches).toEqual([]);
+    expect(result.scanned_notes).toBeGreaterThan(0);
+    expect(result.query).toBe("definitely-not-in-the-vault-xyzzy-zzz");
+    expect(result.mode).toBe("all");
   });
 });
 

@@ -60,15 +60,33 @@ Resolve an Obsidian `[[wikilink]]` to a vault file. Handles aliases (`Note|alias
 
 ## `obsidian_search_text`
 
-Case-insensitive substring search across the vault. Ranked by hit count.
+Case-insensitive token search across the vault. Default mode tokenizes the query on whitespace and requires every token to appear (AND); other modes available.
 
-| Argument | Type              | Notes                                  |
-|----------|-------------------|----------------------------------------|
-| `query`  | `string`          | Required. At least one non-space char. |
-| `folder` | `string?`         | Restrict to a subfolder.               |
-| `limit`  | `number?` (≤ 200) | Default 25.                            |
+| Argument | Type                              | Notes                                                     |
+|----------|-----------------------------------|-----------------------------------------------------------|
+| `query`  | `string`                          | Required. At least one non-space char.                    |
+| `folder` | `string?`                         | Restrict to a subfolder.                                  |
+| `limit`  | `number?` (≤ 200)                 | Default 25.                                               |
+| `mode`   | `"all" \| "any" \| "phrase"`     | Default `"all"`. `"any"` = OR. `"phrase"` = pre-v0.9 contiguous-substring match. |
 
-**Returns:** `Array<{ path, snippet, score, line }>`. `snippet` is ~120 chars around the first hit.
+**Returns:**
+
+```ts
+{
+  query: string;        // echoed back
+  mode: "all" | "any" | "phrase";
+  scanned_notes: number; // how many notes were searched
+  matches: Array<{
+    path: string;
+    snippet: string;     // ~120 chars around first hit
+    score: number;       // total token-hit count
+    line: number;        // 1-based line of first hit
+    matched_terms: string[]; // which tokens actually hit
+  }>;
+}
+```
+
+`scanned_notes` lets the caller distinguish "0 matches in 245 notes" (real null result) from "search did nothing" (broken setup).
 
 ## `obsidian_get_recent_edits`
 

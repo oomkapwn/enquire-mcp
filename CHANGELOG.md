@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-05-03
+
+External-user feedback on `obsidian_search_text`. Three issues, all addressed.
+
+### Changed (BREAKING — semver-minor on 0.x is fine)
+- **`obsidian_search_text` default semantics: substring → AND-tokenizer.** Pre-v0.9, a query like `"meeting notes"` only matched files where those two words were a contiguous substring (literal phrase). It silently returned `[]` even when both words appeared separately in a file — confusing and indistinguishable from a broken call. Reported by an external user.
+
+  v0.9 default tokenizes the query on whitespace and requires every token to appear in the note (mode `"all"`). New `mode` parameter:
+  - `"all"` — every token must appear (default, AND).
+  - `"any"` — at least one token (OR).
+  - `"phrase"` — pre-v0.9 contiguous-substring match (use this for the old behavior).
+
+  Migration: if you relied on the old behavior, pass `mode: "phrase"`.
+
+- **`obsidian_search_text` response shape: bare array → structured object.** Was: `[{path, snippet, score, line}]`. Now: `{query, mode, scanned_notes, matches: [{path, snippet, score, line, matched_terms}]}`. The wrapper closes the "0 matches vs broken silently" antipattern (you can now see how many notes were scanned and which terms were used). `matched_terms` lists which tokens actually hit, useful for diagnostic.
+
+### Performance
+- **`obsidian_search_text` reads files in parallel chunks of 16** (was strictly sequential). On a 100-note vault that's roughly a 4–8x cold-cache speedup for the search path. Open-fd consumption is bounded by the chunk size. Larger vaults still benefit from `--persistent-cache` for warm reads.
+
+### Tests
+- 163 unit tests (was 159). 4 new for `searchText`: AND-default, `any` mode, `phrase` mode (backward-compat), structured-response with `scanned_notes` on zero matches.
+
+### Migration cheat-sheet
+```diff
+- searchText({ query: "weekly review" })
++ searchText({ query: "weekly review", mode: "phrase" })  // if you wanted the old phrase match
++ searchText({ query: "weekly review" })                  // new default: any note with both words
+```
+
 ## [0.8.1] — 2026-05-03
 
 ### Fixed

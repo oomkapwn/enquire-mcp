@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-159%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-163%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -53,7 +53,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
-| TypeScript strict + Biome lint + 159 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 163 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2000 lines of TypeScript and four runtime dependencies.
 
@@ -133,7 +133,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_list_notes` | Filter by tag / folder / modified-since. Returns title, path, frontmatter, tags, mtime — newest first. |
 | `obsidian_read_note` | Body + frontmatter + wikilinks + embeds + tags for a note (by path or title). |
 | `obsidian_resolve_wikilink` | `[[Note]]`, `[[Note#Heading]]`, `[[Folder/Note\|alias]]`, `![[Embed]]`, `[[../relative/path]]` — all resolved to a real file. |
-| `obsidian_search_text` | Ranked case-insensitive substring search with snippets and line numbers. |
+| `obsidian_search_text` | Ranked case-insensitive token search across all notes (AND-tokenizer by default; `any` and `phrase` modes available). Returns structured response: `query`, `mode`, `scanned_notes`, ranked `matches` with snippets. |
 | `obsidian_get_recent_edits` | Newest-first stream, optional time window. |
 | `obsidian_get_backlinks` | Every note linking the target, ranked by hit count, with snippets. Distinguishes wikilink vs embed vs mixed. |
 | `obsidian_get_outbound_links` | Symmetric counterpart to backlinks — every link a note points to, with resolution status. |

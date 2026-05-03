@@ -90,3 +90,153 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     expect(out.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
+
+describe("CLI subcommands E2E (against built dist/)", () => {
+  let tmpdir: string;
+  let vault: string;
+  let canRunFts5 = true;
+  const distEntry = path.resolve(__dirname, "..", "dist", "index.js");
+
+  beforeEach(async () => {
+    tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-cli-e2e-"));
+    vault = path.join(tmpdir, "vault");
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(
+      path.join(vault, "Apollo.md"),
+      "---\ntitle: Apollo\ntags: [project]\n---\n\nApollo project notes\n\nSecond paragraph mentions rocketry.\n"
+    );
+    await fs.writeFile(
+      path.join(vault, "Hermes.md"),
+      "---\ntitle: Hermes\n---\n\nHermes is unrelated to Apollo.\n"
+    );
+    try {
+      await import("better-sqlite3");
+    } catch {
+      canRunFts5 = false;
+    }
+  });
+  afterEach(async () => {
+    await fs.rm(tmpdir, { recursive: true, force: true });
+  });
+
+  function distExists(): boolean {
+    try {
+      execFileSync(process.execPath, [distEntry, "--version"], { encoding: "utf8" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("`enquire-mcp --version` prints the package version", () => {
+    if (!distExists()) return;
+    const out = execFileSync(process.execPath, [distEntry, "--version"], { encoding: "utf8" });
+    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("`enquire-mcp --help` shows all subcommands (serve / clear-cache / clear-index / index)", () => {
+    if (!distExists()) return;
+    const out = execFileSync(process.execPath, [distEntry, "--help"], { encoding: "utf8" });
+    // commander's auto-help lists subcommands in a Commands: section.
+    expect(out).toContain("serve");
+    expect(out).toContain("clear-cache");
+    expect(out).toContain("clear-index");
+    expect(out).toContain("index");
+  });
+
+  it("`enquire-mcp clear-cache` reports 'no cache file' when none exists", () => {
+    if (!distExists()) return;
+    const cacheFile = path.join(tmpdir, "no-such.json");
+    const out = execFileSync(
+      process.execPath,
+      [distEntry, "clear-cache", "--vault", vault, "--cache-file", cacheFile],
+      { encoding: "utf8" }
+    );
+    expect(out).toContain("no cache file");
+  });
+
+  it("`enquire-mcp clear-index` reports 'no fts5 index' when none exists", () => {
+    if (!distExists()) return;
+    const indexFile = path.join(tmpdir, "no-such.fts5.db");
+    const out = execFileSync(
+      process.execPath,
+      [distEntry, "clear-index", "--vault", vault, "--index-file", indexFile],
+      { encoding: "utf8" }
+    );
+    expect(out).toContain("no fts5 index");
+  });
+
+  it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    const indexFile = path.join(tmpdir, "test.fts5.db");
+    const out = execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
+      { encoding: "utf8" }
+    );
+    expect(out).toMatch(/added=2 updated=0 deleted=0 unchanged=0 total_chunks=\d+/);
+    expect(out).toContain(indexFile);
+  });
+
+  it("`enquire-mcp clear-index` removes db + WAL/SHM after a build", async () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    const indexFile = path.join(tmpdir, "purge.fts5.db");
+    execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
+    const dbExisted = await fs
+      .stat(indexFile)
+      .then(() => true)
+      .catch(() => false);
+    expect(dbExisted).toBe(true);
+
+    const out = execFileSync(
+      process.execPath,
+      [distEntry, "clear-index", "--vault", vault, "--index-file", indexFile],
+      { encoding: "utf8" }
+    );
+    expect(out).toContain("removed fts5 index");
+
+    const dbStillThere = await fs
+      .stat(indexFile)
+      .then(() => true)
+      .catch(() => false);
+    expect(dbStillThere).toBe(false);
+  });
+
+  it("`enquire-mcp index` then second call reports unchanged=N (incremental skips unchanged files)", () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    const indexFile = path.join(tmpdir, "incremental.fts5.db");
+    execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
+    const out2 = execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
+      { encoding: "utf8" }
+    );
+    // No file changed between runs → both files appear in `unchanged`, none in added/updated.
+    expect(out2).toMatch(/added=0 updated=0 deleted=0 unchanged=2/);
+  });
+
+  it("`enquire-mcp index --tokenize trigram` then re-run with default tokenize triggers a rebuild", () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    const indexFile = path.join(tmpdir, "tokenize-flip.fts5.db");
+    execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile, "--tokenize", "trigram"],
+      { encoding: "utf8" }
+    );
+    // Second run with no --tokenize (default = unicode61) should clear and re-add.
+    const out2 = execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
+      { encoding: "utf8" }
+    );
+    expect(out2).toMatch(/added=2 updated=0/);
+  });
+});

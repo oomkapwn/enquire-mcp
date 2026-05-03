@@ -59,11 +59,18 @@ Maintainer-only:
 npm run build && npm test && node scripts/smoke.mjs ~/Documents/MyVault
 
 # Bump
-# (edit package.json + CHANGELOG.md)
+# (edit package.json + src/index.ts VERSION constant + CHANGELOG.md
+#  + regenerate package-lock.json via `npm install --package-lock-only`)
+node scripts/check-version-consistency.mjs
 
-# Tag and publish
-git tag v0.X.Y && git push --tags
-npm publish
+# Tag and push (CI publishes to npm with provenance)
+git commit -am "release: vX.Y.Z" && git push origin main
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The `prepublishOnly` hook runs `build` + `test` again as a backstop.
+The push of a `v*` tag triggers `.github/workflows/release.yml`, which runs
+lint + build + test then `npm publish --provenance`. Manual `npm publish`
+is no longer needed; `prepublishOnly` is still a local backstop.
+
+After release: create a GitHub Release for the tag (`gh release create`)
+with notes extracted from the matching CHANGELOG section.

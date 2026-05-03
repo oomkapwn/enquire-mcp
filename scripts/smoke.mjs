@@ -120,15 +120,21 @@ try {
       .join(", ")}`
   );
 
-  // Pick something likely searchable from the vault.
+  // Pick something likely searchable from the vault. Since v0.9.0 the
+  // response is structured: {query, mode, scanned_notes, matches[]}.
+  // Use a token that actually appears (synthetic vault has "Apollo").
   const search = await rpc("tools/call", {
     name: "obsidian_search_text",
-    arguments: { query: "obsidian", limit: 3 }
+    arguments: { query: "Apollo", limit: 3 }
   });
   const searchText = search.result?.content?.[0]?.text ?? "";
   const searchParsed = JSON.parse(searchText);
-  check("search_text returns array", Array.isArray(searchParsed), searchText.slice(0, 200));
-  console.log(`      → search hits: ${searchParsed.length}`);
+  check(
+    "search_text returns structured response",
+    typeof searchParsed === "object" && Array.isArray(searchParsed.matches) && typeof searchParsed.scanned_notes === "number",
+    searchText.slice(0, 200)
+  );
+  console.log(`      → search hits: ${searchParsed.matches.length} of ${searchParsed.scanned_notes} scanned (mode=${searchParsed.mode})`);
 
   // Read the first listed note round-trip.
   if (listParsed[0]) {

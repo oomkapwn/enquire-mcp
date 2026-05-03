@@ -302,6 +302,22 @@ export class FtsIndex {
     }));
   }
 
+  /**
+   * Fetch a single chunk by (rel_path, chunk_index). Backs the
+   * `obsidian://chunk/{chunkIndex}/{+notePath}` resource so MCP clients can
+   * deep-link into specific chunks returned by a prior search.
+   */
+  getChunk(
+    relPath: string,
+    chunkIndex: number
+  ): { content: string; line_start: number; line_end: number } | null {
+    const db = this.requireDb();
+    const row = db
+      .prepare("SELECT content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?")
+      .get<{ content: string; line_start: number; line_end: number }>(relPath, chunkIndex);
+    return row ?? null;
+  }
+
   totalChunks(): number {
     const db = this.requireDb();
     const row = db.prepare("SELECT COUNT(*) AS c FROM chunks").get<{ c: number }>();

@@ -23,7 +23,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.10.1";
+const VERSION = "0.10.2";
 
 interface ServeOptions {
   vault: string;
@@ -141,6 +141,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
   if (vault.writeEnabled) registerWriteTools(server, vault);
   if (ftsIndex) registerFtsTools(server, ftsIndex);
   registerResources(server, vault);
+  if (ftsIndex) registerChunkResource(server, ftsIndex);
   registerPrompts(server);
 
   const transport = new StdioServerTransport();
@@ -493,6 +494,51 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await appendToNote(vault, args))
+  );
+}
+
+function registerChunkResource(server: McpServer, idx: FtsIndex): void {
+  // Chunk-level addressing — closes the v0.10 roadmap item from issue #10
+  // suggestion 1. URI shape: obsidian://chunk/{chunkIndex}/{+notePath}.
+  // Index FIRST so the {+notePath} can greedily eat slash-bearing paths.
+  server.registerResource(
+    "vault-chunk",
+    new ResourceTemplate("obsidian://chunk/{chunkIndex}/{+notePath}", {
+      list: async () => {
+        // No exhaustive enumeration — chunks are a derived index that can
+        // contain thousands of entries per vault. Clients should construct
+        // these URIs from search hits returned by `obsidian_full_text_search`.
+        // We surface a single example URI so the schema is discoverable.
+        return { resources: [] };
+      }
+    }),
+    {
+      title: "Vault chunks (FTS5 index)",
+      description:
+        "Chunk-level addressing for FTS5 search hits. URI shape: `obsidian://chunk/<chunk_index>/<note-path>` — only registered when `--persistent-index` is on. Construct these URIs from `chunk_index` + `rel_path` returned by `obsidian_full_text_search`.",
+      mimeType: "text/plain"
+    },
+    async (uri, params) => {
+      const indexRaw = String(params.chunkIndex ?? "");
+      const chunkIndex = Number.parseInt(indexRaw, 10);
+      if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+        throw new Error(`Invalid chunk index in URI: ${indexRaw}`);
+      }
+      const notePathRaw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
+      const decoded = decodeNotePath(notePathRaw);
+      const chunk = idx.getChunk(decoded, chunkIndex);
+      if (!chunk) throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
+      const payload = {
+        rel_path: decoded,
+        chunk_index: chunkIndex,
+        line_start: chunk.line_start,
+        line_end: chunk.line_end,
+        content: chunk.content
+      };
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }]
+      };
+    }
   );
 }
 

@@ -261,6 +261,29 @@ describe("FtsIndex — full lifecycle", () => {
     }
   });
 
+  it("getChunk returns the right chunk by (rel_path, chunk_index) — backs the chunk resource URI (v0.10.2)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("multi.md", 1000, "first paragraph here\n\nsecond paragraph there\n\nthird paragraph done");
+      const c0 = idx.getChunk("multi.md", 0);
+      const c1 = idx.getChunk("multi.md", 1);
+      const c2 = idx.getChunk("multi.md", 2);
+      expect(c0?.content).toContain("first paragraph");
+      expect(c1?.content).toContain("second paragraph");
+      expect(c2?.content).toContain("third paragraph");
+      expect(c0?.line_start).toBe(1);
+      expect(c1?.line_start).toBeGreaterThan(1);
+      // out-of-range index returns null
+      expect(idx.getChunk("multi.md", 99)).toBeNull();
+      // missing path returns null
+      expect(idx.getChunk("nonexistent.md", 0)).toBeNull();
+    } finally {
+      idx.close();
+    }
+  });
+
   it("combined filters (folder + tag + since) compose with AND semantics (v0.10.1)", async () => {
     if (!canRunFts5) return;
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-05-03
+
+Closes the last open item from the v0.10 roadmap (issue #10 suggestion 1): chunk-level addressing for FTS5 search hits.
+
+### Added
+- **MCP resource template `obsidian://chunk/{chunkIndex}/{+notePath}`** — only registered when `--persistent-index` is on. Returns chunk content + line range as JSON. Closes the addressing gap so MCP clients can deep-link directly into specific chunks returned by `obsidian_full_text_search` (e.g. surface a "show full chunk" follow-up button after a search hit).
+- **`FtsIndex.getChunk(relPath, chunkIndex)`** public method backing the resource (returns content + line_start + line_end, or `null` for out-of-range / missing).
+
+### URI shape
+```
+obsidian://chunk/0/01_Projects/Apollo.md   → chunk 0 of 01_Projects/Apollo.md
+obsidian://chunk/3/notes/long-note.md      → chunk 3 of notes/long-note.md
+```
+
+Index goes FIRST (single path segment, no slashes) so the rest of the URI greedily eats the note path including subdirectories — keeps the template unambiguous.
+
+### Tests
+- 185 unit tests (was 184). 1 new for `getChunk` covering hit / out-of-range / missing-path.
+
 ## [0.10.1] — 2026-05-03
 
 Closes the open items from the v0.10.0 changelog: filter args on the FTS5 path, plus a real bench comparing the two search backends.

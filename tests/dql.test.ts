@@ -271,6 +271,37 @@ describe("DQL — quote-preserving whitespace (audit v0.7.6 P2)", () => {
   });
 });
 
+describe("DQL — `contains` for arrays = membership, not substring (v0.8 BREAKING)", () => {
+  it("matches exact tag membership, not substring", async () => {
+    const v = new Vault(root);
+    // beta.md has tags: [project, archive] — `contains "archive"` should match.
+    const archiveRows = await runDql(v, parseDql('LIST WHERE file.tags contains "archive"'));
+    expect(archiveRows.map((r) => r["file.name"]).sort()).toEqual(["beta"]);
+    // Substring `arch` should NOT match the tag `archive` under membership semantics.
+    const partialRows = await runDql(v, parseDql('LIST WHERE file.tags contains "arch"'));
+    expect(partialRows.length).toBe(0);
+  });
+
+  it("string `contains` retains substring semantics for non-array fields", async () => {
+    const v = new Vault(root);
+    // `status` is a string field; `contains "act"` should match status="active".
+    const rows = await runDql(v, parseDql('LIST WHERE status contains "act"'));
+    expect(rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("DQL — `!=` on missing fields treats absent as not-equal (audit v0.8 P0)", () => {
+  it("returns rows whose field is missing when comparing with !=", async () => {
+    const v = new Vault(root);
+    // ideas.md has no `priority` field → `priority != "1"` should match.
+    const rows = await runDql(v, parseDql('LIST WHERE priority != "1"'));
+    const names = rows.map((r) => r["file.name"]);
+    expect(names).toContain("ideas");
+    expect(names).toContain("beta");
+    expect(names).not.toContain("alpha"); // alpha has priority: 1
+  });
+});
+
 describe("DQL — LIMIT must be a positive integer (audit v0.7.6 P4)", () => {
   it("rejects non-integer LIMIT", () => {
     expect(() => parseDql("LIST LIMIT 1.5")).toThrow(/positive integer/);

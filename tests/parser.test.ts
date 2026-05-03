@@ -42,6 +42,19 @@ describe("extractWikilinks", () => {
     const [link] = extractWikilinks("[[folder/sub/Note]]");
     expect(link.target).toBe("folder/sub/Note");
   });
+
+  it("does not produce a wikilink for empty `[[]]` (audit v0.8 P0)", () => {
+    expect(extractWikilinks("a [[]] b").length).toBe(0);
+    expect(extractWikilinks("[[ ]]").length).toBe(1); // a single space is still a target — surface to user
+  });
+
+  it("strips a UTF-8 BOM at the start of a file before parsing (audit v0.8 P0)", () => {
+    // BOM-prefixed YAML frontmatter must still parse (gray-matter strips BOM).
+    const text = "﻿---\ntitle: BOM Test\n---\n\nbody [[Linked]]\n";
+    const parsed = parseNote(text);
+    expect(parsed.frontmatter.title).toBe("BOM Test");
+    expect(parsed.wikilinks.map((w) => w.target)).toEqual(["Linked"]);
+  });
 });
 
 describe("extractInlineTags", () => {

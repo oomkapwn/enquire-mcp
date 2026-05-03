@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-05-03
+
+Closes the v0.8 backlog from the post-launch audit pass: one DQL semantic correction, four P0 test gaps, and the standard Code of Conduct.
+
+### Changed (potentially breaking — semver-minor on 0.x is fine)
+- **DQL `contains` for arrays is now exact-membership, not substring**: `WHERE file.tags contains "core"` no longer falsely matches a `core-team` tag. Strings keep substring semantics (e.g. `WHERE title contains "draft"` still works as before). The previous behavior was a v0.7.x correctness bug that diverged from the Dataview convention this query language emulates. If you relied on substring matching against array elements, switch to `like` with explicit wildcards (e.g. `tags like "*core*"`).
+
+### Added (test coverage for previously-implicit behavior)
+- **Empty `[[]]` wikilink** — locked in as "produces no link" (whereas `[[ ]]` with one space is still a link target, surfaced to the user).
+- **UTF-8 BOM-prefixed files** — confirmed they parse correctly through `gray-matter`.
+- **`createNote` file mode** — verified files are created with reasonable permissions (read+write to owner, no exec bits).
+- **DQL `!=` against missing fields** — confirmed absent fields evaluate as "not equal" to any compared value (Dataview-compatible).
+
+### Added
+- **`CODE_OF_CONDUCT.md`** based on Contributor Covenant 2.1. Brings the GitHub community profile to 100%.
+
+### Tests
+- 156 unit tests (was 150). 6 new regression tests covering all four P0 audit gaps + the DQL contains semantics change (2 tests).
+
 ## [0.7.6] — 2026-05-03
 
 Audit-pass cleanup: two real correctness bugs in write-mode + DQL, plus a privacy guarantee tightening and a few P3/P4 polishes.

@@ -146,6 +146,17 @@ describe("createNote", () => {
     expect(round.frontmatter.due).toBe("2026-05-03");
   });
 
+  it("creates new note with regular file permissions, not executable (audit v0.8 P0)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await createNote(v, { path: "Permcheck.md", content: "body" });
+    const stat = await fs.stat(path.join(root, "Permcheck.md"));
+    // Owner write + at least one of read; no exec bits set anywhere.
+    const mode = stat.mode & 0o777;
+    expect(mode & 0o600).toBeTruthy(); // user can read+write
+    expect(mode & 0o111).toBe(0); // no exec bits anywhere
+  });
+
   it("renders YAML-special strings (!important, a | b, leading @) without breaking YAML (audit v0.7.6 P2)", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

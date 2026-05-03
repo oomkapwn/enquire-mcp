@@ -314,14 +314,15 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
       return !looseEq(value, pred.value);
     case "contains":
       if (Array.isArray(value)) {
-        return value.some(
-          (v) =>
-            typeof v === "string" &&
-            typeof pred.value === "string" &&
-            v.toLowerCase().includes(pred.value.toLowerCase())
-        );
+        // Membership test (case-insensitive exact match) for arrays — matches
+        // the Dataview convention. Substring matching on array elements (the
+        // pre-v0.8 behavior) caused `file.tags contains "core"` to falsely
+        // match a `core-team` tag.
+        return value.some((v) => looseEq(v, pred.value));
       }
       if (typeof value === "string" && typeof pred.value === "string") {
+        // Strings keep substring semantics — `title contains "draft"` is
+        // typically what users want.
         return value.toLowerCase().includes(pred.value.toLowerCase());
       }
       return false;

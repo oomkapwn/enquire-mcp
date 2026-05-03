@@ -1,6 +1,6 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Drop-in MCP server for Obsidian vaults. Wikilinks resolved, backlinks ranked, frontmatter typed, Dataview-style queries. Read-only by default; opt-in writes. Works with Claude Code, Cursor, Codex, Devin, and any MCP-compatible client.",
   "type": "module",
   "bin": {
@@ -74,10 +74,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.5",
     "sharp": "^0.34.5",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.9.0"
   }
 }

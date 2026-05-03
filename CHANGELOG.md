@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-05-03
+
+Anchor feature: SQLite FTS5 inverted index. Architecture and reference numbers contributed by an external user via [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) — full credit in `src/fts5.ts` header.
+
+### Added
+- **Opt-in `--persistent-index` flag** for `enquire-mcp serve` — boots a SQLite FTS5 inverted index, syncs against the live vault on startup (`~5s` cold for ~1k files, `~50ms` incremental on subsequent boots).
+- **New CLI subcommand**: `enquire-mcp index --vault <path>` for explicit cold-build / refresh outside `serve`.
+- **New MCP tool `obsidian_full_text_search`**, registered only when `--persistent-index` is on. BM25-ranked, sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with `«…»`-bracketed snippets.
+- **`--tokenize unicode61|trigram`** flag — defaults to `unicode61 remove_diacritics 2` (Latin / Cyrillic). Use `trigram` for CJK / mixed-script vaults at ~2x index-size cost.
+- **`--index-file <path>`** to override the default index location (`~/Library/Caches/enquire/<hash>.fts5.db` on macOS, `~/.cache/enquire/<hash>.fts5.db` on Linux).
+- **New optional runtime dep**: `better-sqlite3` (sync API; lazy-loaded so `npm install` without native build tools still succeeds — only fails when `--persistent-index` is actually used).
+
+### Index design
+- `chunks` (FTS5 virtual table): paragraph-first chunking with `\n\n → \n → hard-cut at 4 KB` fallback. Each chunk carries 1-based line offsets for precise quoting.
+- `source_state` (mtime tracking): incremental updates skip files whose mtime hasn't changed.
+- `meta` table tracks `schema_version`, `vault_root`, and `tokenize_mode`. A change to any of those triggers an automatic index reset on next open with a stderr warning so the user knows why the next sync is longer.
+- Wikilink targets are appended as a `[wikilink_targets: A, B]` meta-line per chunk so a search for a target name recalls notes that link to it without naming it inline.
+- Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted by `safeFts5Query` so users don't have to learn FTS5 syntax. Reserved keywords (`AND` / `OR` / `NOT` / `NEAR`) are stripped from queries.
+
+### Tests
+- 181 unit tests (was 163). 18 new for FTS5: query escaping, chunking edge cases (paragraph / line-fallback / hard-cut), full index lifecycle, `diff()` categorization, `dropFile`, cross-vault guard, tokenize-mode rebuild, wikilink-target recall, folder filter. All FTS5 tests skip gracefully if `better-sqlite3` couldn't be loaded.
+
+### Docs
+- README: `obsidian_full_text_search` row added to the read-tools table; "10 read tools" → "10 read tools + 1 opt-in".
+- `docs/api.md`: full tool spec, CLI subcommand block, roadmap reflects what's still open vs landed.
+
+### Pending for future patch / minor releases
+- Filter args (`tag`, `since`) on `obsidian_full_text_search`.
+- `obsidian://chunk/<path>#<index>` resource URI for chunk-level addressing from MCP clients.
+- Bench numbers from the FTS5 path vs the linear scan — preliminary local numbers in [scripts/bench-search.mjs](./scripts/bench-search.mjs) suggest the gap widens steeply past ~2k notes.
+
 ## [0.9.0] — 2026-05-03
 
 External-user feedback on `obsidian_search_text`. Three issues, all addressed.

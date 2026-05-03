@@ -6,6 +6,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Command } from "commander";
 import { z } from "zod";
+import { defaultIndexFile, FtsIndex } from "./fts5.js";
 import {
   appendToNote,
   createNote,
@@ -22,7 +23,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 
 interface ServeOptions {
   vault: string;
@@ -31,6 +32,9 @@ interface ServeOptions {
   cacheSize?: string;
   persistentCache?: boolean;
   cacheFile?: string;
+  persistentIndex?: boolean;
+  indexFile?: string;
+  tokenize?: "unicode61" | "trigram";
 }
 
 async function main(): Promise<void> {
@@ -49,6 +53,15 @@ async function main(): Promise<void> {
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
     .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
     .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option(
+      "--persistent-index",
+      "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers obsidian_full_text_search."
+    )
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option(
+      "--tokenize <mode>",
+      "FTS5 tokenize mode: 'unicode61' (default; Latin/Cyrillic) or 'trigram' (CJK/mixed-script)"
+    )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
     });
@@ -69,6 +82,31 @@ async function main(): Promise<void> {
       }
     });
 
+  program
+    .command("index")
+    .description(
+      "Cold-build (or refresh) the FTS5 search index for a vault. Useful before first --persistent-index use."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .action(async (opts: { vault: string; indexFile?: string; tokenize?: "unicode61" | "trigram" }) => {
+      const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+      const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
+      await idx.open();
+      try {
+        const report = await syncFtsIndex(vault, idx);
+        process.stdout.write(
+          `enquire: index ${indexFile} — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+        );
+      } finally {
+        idx.close();
+      }
+    });
+
   await program.parseAsync(process.argv);
 }
 
@@ -82,6 +120,18 @@ async function startServer(opts: ServeOptions): Promise<void> {
   });
   await vault.ensureExists();
 
+  // Optional FTS5 index. Sync on boot so the first MCP call sees a fresh
+  // index. For typical vault sizes this is sub-second; cold-build of a fresh
+  // 1k-file vault is ~5s.
+  let ftsIndex: FtsIndex | null = null;
+  if (opts.persistentIndex) {
+    const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
+    const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+    ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
+    await ftsIndex.open();
+    await syncFtsIndex(vault, ftsIndex);
+  }
+
   const server = new McpServer({
     name: "enquire",
     version: VERSION
@@ -89,6 +139,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   registerReadTools(server, vault);
   if (vault.writeEnabled) registerWriteTools(server, vault);
+  if (ftsIndex) registerFtsTools(server, ftsIndex);
   registerResources(server, vault);
   registerPrompts(server);
 
@@ -124,7 +175,75 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
-  process.stderr.write(`enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
+  const ftsMode = ftsIndex ? `, fts5-index (${ftsIndex.totalFiles()} files / ${ftsIndex.totalChunks()} chunks)` : "";
+  process.stderr.write(`enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode})\n`);
+
+  if (ftsIndex) {
+    const closeFts = () => ftsIndex?.close();
+    process.once("SIGINT", closeFts);
+    process.once("SIGTERM", closeFts);
+    process.on("beforeExit", closeFts);
+  }
+}
+
+async function syncFtsIndex(
+  vault: Vault,
+  idx: FtsIndex
+): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const entries = await vault.listMarkdown();
+  const live = entries.map((e) => ({ relPath: e.relPath, mtimeMs: e.mtimeMs }));
+  const diff = idx.diff(live);
+  for (const relPath of diff.deleted) idx.dropFile(relPath);
+  for (const relPath of [...diff.added, ...diff.updated]) {
+    const entry = entries.find((e) => e.relPath === relPath);
+    if (!entry) continue;
+    try {
+      const note = await vault.readNote(entry.absPath, entry.mtimeMs);
+      const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
+      idx.reindexFile(relPath, entry.mtimeMs, note.content, wikilinkTargets);
+    } catch (err) {
+      process.stderr.write(
+        `enquire: skipping ${relPath} during fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+  return {
+    added: diff.added.length,
+    updated: diff.updated.length,
+    deleted: diff.deleted.length,
+    unchanged: diff.unchanged.length,
+    total_chunks: idx.totalChunks()
+  };
+}
+
+function registerFtsTools(server: McpServer, idx: FtsIndex): void {
+  const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
+  server.registerTool(
+    "obsidian_full_text_search",
+    {
+      title: "Full-text search (BM25, FTS5 index)",
+      description:
+        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with `--persistent-index`.",
+      annotations: { ...READ_ONLY, title: "Full-text search" },
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .describe(
+            "Search query. Whitespace-tokenized; FTS5 BM25 matching with `unicode61` (default) or `trigram` tokenizer."
+          ),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        limit: z.number().int().positive().max(200).optional().describe("Max hits (default 25)")
+      }
+    },
+    async (args) =>
+      textResult({
+        query: args.query,
+        total_chunks: idx.totalChunks(),
+        total_files: idx.totalFiles(),
+        matches: idx.search(args.query, { limit: args.limit, folder: args.folder })
+      })
+  );
 }
 
 function registerReadTools(server: McpServer, vault: Vault): void {

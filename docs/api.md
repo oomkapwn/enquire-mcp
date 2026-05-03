@@ -268,18 +268,60 @@ The note template implements `list`, so MCP clients with a resource browser will
 
 Every path argument is resolved relative to the vault root and rejected if it escapes the root via `..`. The server never reads outside the vault.
 
-## Skipped directories
+## `obsidian_full_text_search` _(opt-in, requires `--persistent-index`)_
 
-The walker ignores `.git`, `.obsidian`, `.trash`, `node_modules`, and any other dot-directory.
+BM25-ranked full-text search over a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Only registered when the server is started with `--persistent-index`; otherwise use `obsidian_search_text`.
+
+| Argument | Type                              | Notes                                                     |
+|----------|-----------------------------------|-----------------------------------------------------------|
+| `query`  | `string`                          | Required. Whitespace-tokenized; hyphenated tokens (e.g. `claude-telegram`) auto-quoted so FTS5 doesn't interpret `-` as `NOT`. |
+| `folder` | `string?`                         | Restrict to a subfolder (vault-relative).                  |
+| `limit`  | `number?` (≤ 200)                 | Default 25.                                                |
+
+**Returns:**
+
+```ts
+{
+  query: string;
+  total_chunks: number;
+  total_files: number;
+  matches: Array<{
+    rel_path: string;
+    chunk_index: number;     // 0-based; can address with obsidian://chunk URI later
+    line_start: number;      // 1-based
+    line_end: number;
+    snippet: string;         // «…term…» format from FTS5 snippet()
+    score: number;           // BM25 relevance, higher = better
+  }>;
+}
+```
+
+**Implementation note:** see [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) for the full architecture and trade-offs (production-verified by an external contributor at 1771 chunks / 368 files, 9.8 MB index, 50–100ms BM25 top-10).
+
+## CLI subcommands for the FTS5 index
+
+```bash
+# Cold-build or refresh the index (useful before first --persistent-index serve).
+enquire-mcp index --vault /path/to/vault [--tokenize unicode61|trigram] [--index-file <path>]
+
+# Then serve with the index loaded.
+enquire-mcp serve --vault /path/to/vault --persistent-index
+```
+
+The index file lives at `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux) by default. Override with `--index-file <path>`.
 
 ## Roadmap
 
-### v1.0 (anchor feature)
-- **SQLite FTS5 inverted index** for sub-100ms BM25-ranked search on multi-thousand-note vaults — opt-in via `--persistent-index`, separate from `--persistent-cache`. Production-verified design + numbers in [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10).
-- New tool `obsidian_full_text_search` with structured response, BM25 ranking, optional metadata filters (folder, tag, since-date), and chunk-level addressing via `obsidian://chunk/<path>#<chunk_id>` URIs.
-- `--tokenize=unicode61|trigram` flag for CJK / mixed-script vaults.
+### v1.0 polish (in progress on `feat/fts5-index`)
+- Filter API: `tag`, `since` on `obsidian_full_text_search`.
+- `obsidian://chunk/<path>#<index>` resource URI so MCP clients can deep-link to specific chunks.
+- Examples directory with the contributor's reference Python implementation (per [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10)).
 
 ### Beyond v1.0
 - Full DQL: expressions, `FLATTEN`, `GROUP BY`, parenthesized precedence.
 - Higher-level write tools: rename/move with wikilink rewrites, tag refactor.
 - Graph queries (multi-hop link traversal).
+
+## Skipped directories
+
+The walker ignores `.git`, `.obsidian`, `.trash`, `node_modules`, and any other dot-directory.

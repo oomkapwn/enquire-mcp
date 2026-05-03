@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-163%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-181%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -53,7 +53,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
-| TypeScript strict + Biome lint + 163 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 181 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2000 lines of TypeScript and four runtime dependencies.
 
@@ -126,7 +126,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 10 read tools (always on)
+### 10 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -140,6 +140,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_get_unresolved_wikilinks` | Vault-hygiene: every `[[broken]]` link in the vault. |
 | `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
 | `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. Supports `AND` / `OR` / `=` / `!=` / `contains` / `like`. |
+| `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 2 write tools (opt-in via `--enable-write`)
 

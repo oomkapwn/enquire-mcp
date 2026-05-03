@@ -254,9 +254,9 @@ Every path argument is resolved relative to the vault root and rejected if it es
 
 The walker ignores `.git`, `.obsidian`, `.trash`, `node_modules`, and any other dot-directory.
 
-## Phase 3 (planned)
+## Roadmap
 
-- Persistent cross-vault index (Phase 2 cache is in-memory only)
-- Full DQL: expressions, FLATTEN, GROUP BY, parenthesized precedence
-- Vault write tools (create/update note, with confirmation)
+- Persistent cross-vault search/link index (current persistent cache is per-vault and cold-start only)
+- Full DQL: expressions, `FLATTEN`, `GROUP BY`, parenthesized precedence
+- Higher-level write tools: rename/move with wikilink rewrites, tag refactor
 - Graph queries (multi-hop link traversal)

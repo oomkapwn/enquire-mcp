@@ -2,7 +2,18 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.3] — 2026-05-03
+## [0.7.4] — 2026-05-03
+
+Repeat-audit pass — five public-facing inconsistencies closed.
+
+### Packaging
+- Regenerated `package-lock.json`. The lockfile root still claimed `@oomkapwn/obsidian-mcp@0.4.0` with `node>=18` and bin `obsidian-mcp` — pre-rename identity. Now correctly reflects `@oomkapwn/enquire-mcp@0.7.4`, `node>=20`, bin `enquire-mcp`. No dependency-tree changes.
+
+### Docs
+- README "Support the project" links now use absolute GitHub URLs (`https://github.com/oomkapwn/enquire-mcp/issues/new?template=...`) instead of relative `./.github/...` paths that would 404 when the README is rendered on npmjs.com.
+- `docs/api.md` "Phase 3 (planned)" section renamed to "Roadmap" and rewritten — it claimed persistent cache and write tools were future work, but both shipped in v0.6.0 / v0.3.0 respectively. Now lists actual remaining items (cross-vault index, full DQL, rename/move tools, graph queries).
+- `.github/ISSUE_TEMPLATE/bug_report.yml` version placeholder bumped from `0.7.1` to neutral `0.7.x` so it doesn't drift again next release.
+- Social preview banner updated: `137 tests` → `140 tests`. Both SVG and rendered PNG refreshed.
 
 ### Security
 - **P1 — Symlink-overwrite via `obsidian_create_note` with `overwrite=true`**: if a path inside the vault was a symlink whose target lived outside the vault, `fs.writeFile(abs, ...)` followed the link and overwrote the outside file. The existing `assertParentInsideVault` only protected parent directories; the leaf target was unchecked. Fix: `writeNote` now `lstat`s the target before writing and refuses if it's a symlink. The `overwrite=false` path was unaffected (a dangling symlink-to-missing-target presents as `not exists` to `fs.stat`, but `lstat` catches it explicitly). Regression test added.

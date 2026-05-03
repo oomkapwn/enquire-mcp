@@ -11,7 +11,7 @@ body:
     attributes:
       label: enquire-mcp version
       description: Output of `enquire-mcp --version`
-      placeholder: "0.7.1"
+      placeholder: "0.7.x"
     validations:
       required: true
   - type: dropdown

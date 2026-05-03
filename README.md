@@ -344,8 +344,8 @@ Bug fixes welcome. New tools should pass the bar of "useful against an Obsidian 
 If enquire-mcp saves you keystrokes or makes your AI assistant smarter about your vault, **consider [starring the repo](https://github.com/oomkapwn/enquire-mcp) to show your ❤️ and support.** Stars help other Obsidian users find the project, and they tell us where to invest the next cycle.
 
 Other ways to help:
-- 🐛 **File a bug** — the more concrete the repro (vault shape, exact tool call, server stderr), the faster the fix. See [the bug template](./.github/ISSUE_TEMPLATE/bug_report.yml).
-- 💡 **Propose a feature** — open a [feature request](./.github/ISSUE_TEMPLATE/feature_request.yml) and we'll align on scope before any code is written.
+- 🐛 **File a bug** — the more concrete the repro (vault shape, exact tool call, server stderr), the faster the fix. Use [the bug template](https://github.com/oomkapwn/enquire-mcp/issues/new?template=bug_report.yml).
+- 💡 **Propose a feature** — open a [feature request](https://github.com/oomkapwn/enquire-mcp/issues/new?template=feature_request.yml) and we'll align on scope before any code is written.
 - 🔧 **Send a PR** — bug fixes always welcome. New tools should pass the «useful against an Obsidian vault on day 1» bar. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 - 💬 **Tell us how you use it** — open a thread in [Discussions](https://github.com/oomkapwn/enquire-mcp/discussions) and we'll figure out what to build next from real workflows.
 

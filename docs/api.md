@@ -274,7 +274,12 @@ The walker ignores `.git`, `.obsidian`, `.trash`, `node_modules`, and any other 
 
 ## Roadmap
 
-- Persistent cross-vault search/link index (current persistent cache is per-vault and cold-start only)
-- Full DQL: expressions, `FLATTEN`, `GROUP BY`, parenthesized precedence
-- Higher-level write tools: rename/move with wikilink rewrites, tag refactor
-- Graph queries (multi-hop link traversal)
+### v1.0 (anchor feature)
+- **SQLite FTS5 inverted index** for sub-100ms BM25-ranked search on multi-thousand-note vaults — opt-in via `--persistent-index`, separate from `--persistent-cache`. Production-verified design + numbers in [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10).
+- New tool `obsidian_full_text_search` with structured response, BM25 ranking, optional metadata filters (folder, tag, since-date), and chunk-level addressing via `obsidian://chunk/<path>#<chunk_id>` URIs.
+- `--tokenize=unicode61|trigram` flag for CJK / mixed-script vaults.
+
+### Beyond v1.0
+- Full DQL: expressions, `FLATTEN`, `GROUP BY`, parenthesized precedence.
+- Higher-level write tools: rename/move with wikilink rewrites, tag refactor.
+- Graph queries (multi-hop link traversal).

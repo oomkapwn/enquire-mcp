@@ -27,7 +27,9 @@ const surfaces = {
 
 const distinct = new Set(Object.values(surfaces));
 if (distinct.size === 1) {
-  process.stdout.write(`OK — version ${[...distinct][0]} is consistent across ${Object.keys(surfaces).length} surfaces\n`);
+  process.stdout.write(
+    `OK — version ${[...distinct][0]} is consistent across ${Object.keys(surfaces).length} surfaces\n`
+  );
   process.exit(0);
 }
 

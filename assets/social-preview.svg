@@ -44,12 +44,12 @@
     <text x="0" y="178" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="32" fill="#06b6d4" font-weight="600">
       MCP server for Obsidian vaults
     </text>
-    <!-- meta-reference tagline -->
-    <text x="0" y="218" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="20" fill="#cbd5e1" font-weight="400">
-      Berners-Lee wrote ENQUIRE at CERN in 1980 — the prototype of the Web.
+    <!-- value-prop tagline -->
+    <text x="0" y="218" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
+      Give Claude Code, Cursor and Codex
     </text>
-    <text x="0" y="244" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="20" fill="#cbd5e1" font-weight="400">
-      Same idea, brought to your AI assistant.
+    <text x="0" y="248" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
+      first-class access to your Obsidian vault.
     </text>
     <!-- features row -->
     <text x="0" y="296" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="17" fill="#94a3b8">

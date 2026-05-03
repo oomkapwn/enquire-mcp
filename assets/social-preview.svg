@@ -94,13 +94,11 @@
   <!-- Footer strip -->
   <g transform="translate(72, 555)">
     <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="16" fill="#64748b" font-weight="500">
-      <tspan fill="#cbd5e1">12 tools</tspan>
+      <tspan fill="#cbd5e1">MCP server</tspan>
       <tspan> · </tspan>
-      <tspan fill="#cbd5e1">MCP resources</tspan>
+      <tspan fill="#cbd5e1">stdio</tspan>
       <tspan> · </tspan>
-      <tspan fill="#cbd5e1">6 prompts</tspan>
-      <tspan> · </tspan>
-      <tspan fill="#cbd5e1">156 tests</tspan>
+      <tspan fill="#cbd5e1">read-only by default</tspan>
       <tspan> · </tspan>
       <tspan fill="#cbd5e1">TypeScript</tspan>
       <tspan> · </tspan>

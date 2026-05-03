@@ -1,6 +1,6 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the World Wide Web. Wikilinks, frontmatter, backlinks, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes.",
   "type": "module",
   "bin": {
@@ -29,6 +29,7 @@
     "lint:fix": "biome check --write",
     "format": "biome format --write",
     "render:preview": "node scripts/render-social-preview.mjs",
+    "prepare": "tsc && chmod +x dist/index.js",
     "prepublishOnly": "npm run lint && npm run build && npm test"
   },
   "keywords": [

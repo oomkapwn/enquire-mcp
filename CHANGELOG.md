@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-05-03
+
+### Fixed
+- **`npm install -g github:oomkapwn/enquire-mcp` left a broken symlink in `node_modules`**: `dist/` is `.gitignore`d, so a fresh git clone has no compiled output. npm runs the `prepare` script automatically on git-source installs, but `package.json` had none — so npm completed the clone, found no `bin` target, silently cleaned up the tmp clone, and the global symlink ended up pointing at a now-deleted path.
+
+  Fix: added `"prepare": "tsc && chmod +x dist/index.js"` to `package.json` `scripts`. Git-source installs now build automatically. Registry installs (`npm install -g @oomkapwn/enquire-mcp`) were unaffected — the npm tarball already ships `dist/`.
+
+  Reported by an early user. Thank you 🙏
+
+### CI
+- v0.8.1 is the first release published via the new `.github/workflows/release.yml` workflow — `npm publish --provenance` runs in CI on `v*` tag push, no manual `npm publish` needed. The published package now carries the npm "Published with provenance" trust badge.
+
 ## [0.8.0] — 2026-05-03
 
 Closes the v0.8 backlog from the post-launch audit pass: one DQL semantic correction, four P0 test gaps, and the standard Code of Conduct.

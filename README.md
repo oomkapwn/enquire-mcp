@@ -71,31 +71,7 @@ That's the gap. enquire closes it in ~2000 lines of TypeScript and four runtime 
 
 ## Quick start
 
-```bash
-# 1. Get the code
-git clone https://github.com/oomkapwn/enquire-mcp
-cd enquire-mcp && npm install && npm run build
-
-# 2. Wire into Claude Code (~/.claude.json or .mcp.json)
-```
-
-```json
-{
-  "mcpServers": {
-    "obsidian": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/enquire-mcp/dist/index.js",
-        "serve",
-        "--vault", "/Users/you/Documents/Obsidian Vault"
-      ]
-    }
-  }
-}
-```
-
-<details>
-<summary><b>Or use <code>npx</code> (no global install)</b></summary>
+**Recommended: zero-install via `npx` — no clone, no build.** Add this to your MCP client's config:
 
 ```json
 {
@@ -108,15 +84,39 @@ cd enquire-mcp && npm install && npm run build
 }
 ```
 
-</details>
+**Where to drop that JSON, by client:**
+
+| Client | Config file |
+|---|---|
+| **Claude Desktop** | macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`<br>Windows: `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Claude Code (CLI)** | `~/.claude.json` (global) or `.mcp.json` (per-project) |
+| **Cursor** | `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per-project) |
+| **Codex / Codex CLI** | per-project `.mcp.json` or environment-specific config |
+| **Any MCP client** | wherever your client expects MCP server JSON |
+
+To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`), add `"--enable-write"` to the `args` array.
 
 <details>
-<summary><b>Or install globally</b></summary>
+<summary><b>Alternative: global npm install</b></summary>
 
 ```bash
 npm install -g @oomkapwn/enquire-mcp
 enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 ```
+
+Then in your client config use `"command": "enquire-mcp"` instead of `"command": "npx"`.
+
+</details>
+
+<details>
+<summary><b>Alternative: from source (development)</b></summary>
+
+```bash
+git clone https://github.com/oomkapwn/enquire-mcp
+cd enquire-mcp && npm install && npm run build
+```
+
+Then `"command": "node"` with `"args": ["/absolute/path/to/dist/index.js", "serve", "--vault", "..."]`.
 
 </details>
 

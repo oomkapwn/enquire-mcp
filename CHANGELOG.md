@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] — 2026-05-03
+
+Audit-pass cleanup: two real correctness bugs in write-mode + DQL, plus a privacy guarantee tightening and a few P3/P4 polishes.
+
+### Fixed
+- **P2 — `obsidian_create_note` could corrupt YAML frontmatter**: the hand-rolled YAML renderer in `tools.ts` quoted only a narrow set of special chars, so date-like strings (`"2026-05-03"`), values starting with `!`/`>`/`@`, and values containing `|` either round-tripped as the wrong type (timestamp instead of string) or produced YAML that `gray-matter` couldn't parse back. Replaced with `gray-matter`'s `stringify` (backed by `js-yaml`) — every YAML edge case is now correctly handled. Two regression tests added (`tests/write.test.ts`).
+- **P2 — DQL parser collapsed whitespace inside quoted strings**: `parseDql` did a global `.replace(/\s+/g, " ")` *before* the quote-aware tokenizer ran. Folder names like `"Two  Spaces"` and frontmatter values like `"in  progress"` silently lost their repeated whitespace and failed to match. Removed the global collapse — `splitClauses` is already quote-aware and handles separator whitespace correctly. Three regression tests added (`tests/dql.test.ts`).
+- **P3 — Persistent-cache directory mode could be looser than `0700`**: `fs.mkdir({ mode: 0o700 })` only applies on creation. If the cache parent directory already existed with looser perms (custom `--cache-file` path, or pre-existing XDG dir), the README/SECURITY.md `0700` guarantee was unenforced. Added a follow-up `chmod(dir, 0o700)`.
+- **P4 — DQL `LIMIT` accepted floats**: `LIMIT 1.5` silently truncated to `1`. Now requires `Number.isInteger(n)`.
+
+### Tests
+- 150 unit tests (was 142). 8 new regression tests covering the YAML, DQL whitespace, and LIMIT edge cases.
+
+### Docs / assets
+- Social preview banner: `140 tests` → `142 tests` (also matches v0.7.5 baseline; the v0.7.6 PNG re-render reflects 142 since that's what the v0.7.5 published baseline showed). README badge already at 142.
+
 ## [0.7.5] — 2026-05-03
 
 **Critical hotfix** — v0.7.4 (and likely all earlier published versions) had a CLI guard that compared `import.meta.url` (resolved through realpath) against `process.argv[1]` (raw, no symlink resolution). When npm installs the package, the `bin` entry is exposed as a symlink in `node_modules/.bin/`, and on macOS `/tmp` is itself a symlink to `/private/tmp` — so the comparison failed and `main()` never ran. The CLI exited 0 with no output, making `npx -y @oomkapwn/enquire-mcp serve …` a no-op.

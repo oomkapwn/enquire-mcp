@@ -252,3 +252,34 @@ describe("runDql — row cap", () => {
     expect(rows.length).toBe(2);
   });
 });
+
+describe("DQL — quote-preserving whitespace (audit v0.7.6 P2)", () => {
+  it("preserves repeated whitespace inside quoted FROM folder", () => {
+    const q = parseDql('LIST FROM "Two  Spaces"');
+    expect(q.source).toEqual({ type: "folder", path: "Two  Spaces" });
+  });
+
+  it("preserves repeated whitespace inside quoted WHERE value", () => {
+    const q = parseDql('LIST WHERE status = "in  progress"');
+    expect(q.where[0]?.[0]).toEqual({ field: "status", op: "=", value: "in  progress" });
+  });
+
+  it("still collapses unquoted runs of whitespace as syntax separators", () => {
+    // Multiple spaces between keywords/values must still parse.
+    const q = parseDql("LIST    FROM    #idea");
+    expect(q.source).toEqual({ type: "tag", tag: "idea" });
+  });
+});
+
+describe("DQL — LIMIT must be a positive integer (audit v0.7.6 P4)", () => {
+  it("rejects non-integer LIMIT", () => {
+    expect(() => parseDql("LIST LIMIT 1.5")).toThrow(/positive integer/);
+  });
+  it("rejects scientific notation that's not integral", () => {
+    expect(() => parseDql("LIST LIMIT 1.5e2")).not.toThrow(); // 150 is integral
+    expect(() => parseDql("LIST LIMIT 1.55e1")).toThrow(/positive integer/); // 15.5
+  });
+  it("still accepts plain positive integers", () => {
+    expect(parseDql("LIST LIMIT 50").limit).toBe(50);
+  });
+});

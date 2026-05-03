@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import matter from "gray-matter";
 import { parseDql, runDql } from "./dql.js";
 import type { Embed, Wikilink } from "./parser.js";
 import type { FileEntry, Vault } from "./vault.js";
@@ -417,41 +418,12 @@ export async function appendToNote(
 
 function composeNote(frontmatter: Record<string, unknown> | undefined, content: string): string {
   if (!frontmatter || Object.keys(frontmatter).length === 0) return content;
-  const yaml = renderFrontmatter(frontmatter);
-  const trimmed = content.startsWith("\n") ? content : `\n${content}`;
-  return `---\n${yaml}---${trimmed}`;
-}
-
-function renderFrontmatter(fm: Record<string, unknown>): string {
-  const lines: string[] = [];
-  for (const [key, value] of Object.entries(fm)) {
-    lines.push(renderFrontmatterEntry(key, value));
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-function renderFrontmatterEntry(key: string, value: unknown): string {
-  if (Array.isArray(value)) {
-    if (value.length === 0) return `${key}: []`;
-    return `${key}:\n${value.map((v) => `  - ${renderScalar(v)}`).join("\n")}`;
-  }
-  return `${key}: ${renderScalar(value)}`;
-}
-
-function renderScalar(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const str = String(value);
-  if (
-    /[:\n#&*?{}[\],"\\]/.test(str) ||
-    /^\s/.test(str) ||
-    /\s$/.test(str) ||
-    str === "" ||
-    /^(true|false|null|yes|no)$/i.test(str)
-  ) {
-    return JSON.stringify(str);
-  }
-  return str;
+  // Use gray-matter's stringify (backed by js-yaml) so YAML-special strings —
+  // date-like ("2026-05-03"), !-prefixed, pipe-containing, etc. — are
+  // round-trip-safe. The hand-rolled renderer this replaced silently corrupted
+  // a long tail of valid string values (e.g. "due: 2026-05-03" came back as a
+  // Date object on read).
+  return matter.stringify(content, frontmatter);
 }
 
 function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {

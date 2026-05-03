@@ -126,10 +126,46 @@ describe("createNote", () => {
       frontmatter: { status: "true", note: "yes" }
     });
     const text = await fs.readFile(path.join(root, "Tricky.md"), "utf8");
-    expect(text).toMatch(/status: "true"/);
-    expect(text).toMatch(/note: "yes"/);
+    // gray-matter (js-yaml) emits single-quoted scalars by default; both
+    // styles are valid YAML and round-trip the same. What matters: the values
+    // are quoted, not bare (otherwise YAML would parse them back as boolean).
+    expect(text).toMatch(/status: ['"]true['"]/);
+    expect(text).toMatch(/note: ['"]yes['"]/);
+  });
+
+  it("renders date-like strings as strings, not as YAML timestamps (audit v0.7.6 P2)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await createNote(v, {
+      path: "Dated.md",
+      content: "body",
+      frontmatter: { due: "2026-05-03" }
+    });
+    const round = await readNoteRaw(v, "Dated.md");
+    expect(typeof round.frontmatter.due).toBe("string");
+    expect(round.frontmatter.due).toBe("2026-05-03");
+  });
+
+  it("renders YAML-special strings (!important, a | b, leading @) without breaking YAML (audit v0.7.6 P2)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await createNote(v, {
+      path: "YamlSpecial.md",
+      content: "body",
+      frontmatter: { bang: "!important", pipe: "a | b", at: "@mention", gt: ">arrow" }
+    });
+    const round = await readNoteRaw(v, "YamlSpecial.md");
+    expect(round.frontmatter.bang).toBe("!important");
+    expect(round.frontmatter.pipe).toBe("a | b");
+    expect(round.frontmatter.at).toBe("@mention");
+    expect(round.frontmatter.gt).toBe(">arrow");
   });
 });
+
+async function readNoteRaw(v: Vault, rel: string): Promise<{ frontmatter: Record<string, unknown> }> {
+  const note = await v.readNote(path.join(v.root, rel));
+  return { frontmatter: note.parsed.frontmatter as Record<string, unknown> };
+}
 
 describe("appendToNote", () => {
   it("appends to an existing note with default separator", async () => {

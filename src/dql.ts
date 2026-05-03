@@ -27,7 +27,10 @@ export class DqlParseError extends Error {}
 const KEYWORDS = ["FROM", "WHERE", "SORT", "LIMIT"];
 
 export function parseDql(input: string): DataviewQuery {
-  const trimmed = input.trim().replace(/\s+/g, " ");
+  // No global whitespace collapse here — splitClauses is quote-aware and would
+  // otherwise see post-collapsed quoted strings, which silently mangles real
+  // folder names and frontmatter values containing repeated whitespace.
+  const trimmed = input.trim();
   if (!trimmed) throw new DqlParseError("Empty query");
 
   const kindMatch = /^(LIST|TABLE)\b\s*(.*)$/i.exec(trimmed);
@@ -219,8 +222,8 @@ function parseSort(raw: string): { field: string; dir: "ASC" | "DESC" } {
 
 function parseLimit(raw: string): number {
   const n = Number(raw.trim());
-  if (!Number.isFinite(n) || n <= 0) throw new DqlParseError(`Invalid LIMIT: ${raw}`);
-  return Math.floor(n);
+  if (!Number.isInteger(n) || n <= 0) throw new DqlParseError(`Invalid LIMIT: ${raw} (positive integer required)`);
+  return n;
 }
 
 interface Row {

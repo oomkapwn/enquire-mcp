@@ -197,7 +197,13 @@ export class Vault {
       );
       return;
     }
-    await fs.mkdir(path.dirname(this.cacheFile), { recursive: true, mode: 0o700 });
+    const cacheDir = path.dirname(this.cacheFile);
+    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    // mkdir's mode option only applies on creation. If the directory already
+    // existed (e.g. from a prior run with looser perms, or a custom --cache-file
+    // path under XDG_CACHE_HOME), chmod brings it down to 0700 — matching the
+    // privacy guarantee documented in README/SECURITY.md.
+    await fs.chmod(cacheDir, 0o700).catch(() => {});
     const tmp = `${this.cacheFile}.tmp`;
     // mode 0o600 — full note bodies live here, treat as private to the user account.
     await fs.writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });

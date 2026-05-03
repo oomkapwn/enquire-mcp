@@ -105,10 +105,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       path.join(vault, "Apollo.md"),
       "---\ntitle: Apollo\ntags: [project]\n---\n\nApollo project notes\n\nSecond paragraph mentions rocketry.\n"
     );
-    await fs.writeFile(
-      path.join(vault, "Hermes.md"),
-      "---\ntitle: Hermes\n---\n\nHermes is unrelated to Apollo.\n"
-    );
+    await fs.writeFile(path.join(vault, "Hermes.md"), "---\ntitle: Hermes\n---\n\nHermes is unrelated to Apollo.\n");
     try {
       await import("better-sqlite3");
     } catch {
@@ -170,11 +167,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     if (!distExists()) return;
     if (!canRunFts5) return;
     const indexFile = path.join(tmpdir, "test.fts5.db");
-    const out = execFileSync(
-      process.execPath,
-      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
-      { encoding: "utf8" }
-    );
+    const out = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
     expect(out).toMatch(/added=2 updated=0 deleted=0 unchanged=0 total_chunks=\d+/);
     expect(out).toContain(indexFile);
   });
@@ -213,11 +208,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
     });
-    const out2 = execFileSync(
-      process.execPath,
-      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
-      { encoding: "utf8" }
-    );
+    const out2 = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
     // No file changed between runs → both files appear in `unchanged`, none in added/updated.
     expect(out2).toMatch(/added=0 updated=0 deleted=0 unchanged=2/);
   });
@@ -232,11 +225,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       { encoding: "utf8" }
     );
     // Second run with no --tokenize (default = unicode61) should clear and re-add.
-    const out2 = execFileSync(
-      process.execPath,
-      [distEntry, "index", "--vault", vault, "--index-file", indexFile],
-      { encoding: "utf8" }
-    );
+    const out2 = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
     expect(out2).toMatch(/added=2 updated=0/);
   });
 });

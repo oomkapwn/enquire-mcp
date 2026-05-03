@@ -5,6 +5,7 @@ dist/
 *.log
 .vscode/
 .idea/
+.claude/
 coverage/
 .vitest-cache/
 *.tgz

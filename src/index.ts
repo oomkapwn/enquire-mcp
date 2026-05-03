@@ -21,7 +21,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.7.2";
+const VERSION = "0.7.3";
 
 interface ServeOptions {
   vault: string;

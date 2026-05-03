@@ -1,6 +1,6 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the World Wide Web. Wikilinks, frontmatter, backlinks, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes.",
   "type": "module",
   "bin": {
@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "docs",
+    "assets/social-preview.png",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",

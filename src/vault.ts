@@ -281,6 +281,13 @@ export class Vault {
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await this.assertParentInsideVault(abs);
+    // Refuse to write through a symlink. fs.writeFile follows the link and would
+    // write to wherever it points — possibly outside the vault. assertParentInsideVault
+    // only guards parent dirs; the leaf target itself is checked here.
+    const targetLstat = await fs.lstat(abs).catch(() => null);
+    if (targetLstat?.isSymbolicLink()) {
+      throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
+    }
     await fs.writeFile(abs, content, "utf8");
     this.cache.delete(abs);
     const stat = await fs.stat(abs);

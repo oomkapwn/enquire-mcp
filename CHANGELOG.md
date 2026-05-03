@@ -2,34 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.2] — 2026-05-03
+## [0.7.3] — 2026-05-03
 
-Internal full-audit pass. One real security finding closed, one MCP-spec correctness fix, two cosmetic cleanups, one star-the-repo CTA + Berners-Lee credit at end of README.
+### Security
+- **P1 — Symlink-overwrite via `obsidian_create_note` with `overwrite=true`**: if a path inside the vault was a symlink whose target lived outside the vault, `fs.writeFile(abs, ...)` followed the link and overwrote the outside file. The existing `assertParentInsideVault` only protected parent directories; the leaf target was unchecked. Fix: `writeNote` now `lstat`s the target before writing and refuses if it's a symlink. The `overwrite=false` path was unaffected (a dangling symlink-to-missing-target presents as `not exists` to `fs.stat`, but `lstat` catches it explicitly). Regression test added.
+
+### Packaging
+- Added `assets/social-preview.png` to the `files` list in `package.json`. Without it, the README hero image rendered broken on npmjs.com — the file was referenced but not shipped. Tarball grew from ~58 kB → ~214 kB (the PNG is 159 kB).
+
+### Repo hygiene
+- Added `.claude/` to `.gitignore`.
+
+### Tests
+- 140 unit tests (was 139).
+
+## [0.7.2] — 2026-05-03
 
 ### Security
 - **P1 — Cache pollution via path traversal**: a crafted persistent-cache file with a `relPath` like `../../../etc/hosts` could pollute the in-memory cache with content keyed by paths outside the vault root. The orphaned entry was never *served* via tools (`resolveSafePath` blocks reads to out-of-vault paths), but it would persist back to the on-disk cache file on the next save, perpetuating the pollution. Fix: `loadDiskCache` now validates the resolved abs path stays inside the vault (relative-path check + `realpath` belt-and-braces). Two regression tests added (relative `../` traversal and absolute paths).
 
 ### MCP-spec correctness
-- **P2 — Write tool annotations**: `obsidian_create_note` (which can overwrite irreversibly with `overwrite=true`) and `obsidian_append_to_note` (which mutates persistent state) were both annotated `destructiveHint: false`. Per MCP spec, `destructiveHint: true` is the right hint for tools that may make non-undoable changes. Updated. Read tools remain `destructiveHint` unset / `readOnlyHint: true`.
+- **Write tool annotations**: `obsidian_create_note` (which can overwrite irreversibly with `overwrite=true`) and `obsidian_append_to_note` (which mutates persistent state) were both annotated `destructiveHint: false`. Per MCP spec, `destructiveHint: true` is the right hint for tools that may make non-undoable changes. Updated. Read tools remain `destructiveHint` unset / `readOnlyHint: true`.
 
 ### Cleanup
-- **P3 — Dead conditional in `likeToRegex`**: simplified `next === "*" || next === "\\" ? \`\\${next}\` : \`\\${next}\`` to its always-equal RHS. No behavior change.
-- **P3 — README coverage badge** drifted from 83% → actual 82% lines (slight churn after persistent-cache code added). Refreshed badge and the per-percent breakdown.
+- Dead conditional in `likeToRegex`: simplified `next === "*" || next === "\\" ? \`\\${next}\` : \`\\${next}\`` to its always-equal RHS. No behavior change.
+- README coverage badge drifted from 83% → actual 82% lines (slight churn after persistent-cache code added). Refreshed badge and the per-percent breakdown.
 
 ### Docs
-- **README "Support the project" section** added at the bottom: star CTA + bug-report / feature-request / PR / Discussions pointers. Plus the ENQUIRE/Berners-Lee origin story moved into the credits as a one-paragraph close.
+- README gains a "Support the project" section (star CTA + bug-report / feature-request / PR / Discussions pointers) and the ENQUIRE/Berners-Lee origin moved into the credits as a one-paragraph close.
 
 ### Tests
 - 139 unit tests (was 137). 2 new regression tests for cache path-traversal (relative `..` escape and absolute path).
-
-### What was checked but found clean
-- `biome check` — 0 errors
-- `tsc --noEmit` (TS strict + `noUncheckedIndexedAccess`) — 0 errors
-- `npm audit --audit-level=moderate` — 0 vulnerabilities (production AND dev)
-- `npm outdated` — empty (deps current)
-- `npm pack --dry-run` — 55.8 kB tarball, 26 files, version `0.7.2`
-- Runtime probes: NaN/Infinity/float CLI flag rejection, `clear-cache` on missing file, malformed DQL inputs (`LIST WHERE`, `LIST AND OR`, `LIST FROM`)
-- GitHub state: description ✓, homepage ✓, 19 topics ✓, Discussions on ✓, repo private (intentional pre-launch), CI green on last 2 main commits, social preview image still pending manual upload (the only thing GitHub has no API for)
 
 ## [0.7.1] — 2026-05-03
 
@@ -92,24 +95,24 @@ All `obsidian_*` tool names (`obsidian_list_notes`, `obsidian_read_note`, etc.) 
 ### Disclaimer added
 Explicit "Not affiliated with Obsidian.md" notice in README and SECURITY.md. Obsidian and the Obsidian logo are trademarks of Dynalist Inc.
 
-### Bundled audit fixes (folded from in-progress v0.6.1 + post-rename external audit)
+### Bundled fixes
 
-**From internal pre-rename work:**
+**Cleanups carried into this release:**
 - **DQL `LIKE` regex bug**: `\*` (escaped literal asterisk) used to compile to `^\\*$` — a regex matching "any number of literal backslashes" — instead of matching a literal `*`. Rewrote `likeToRegex` as a single-pass walker so escaping is unambiguous.
 - **Disk cache load: parallelized stats**: `loadDiskCache` now does `Promise.all` over all entry-stat checks instead of awaiting them one at a time.
 - **Disk cache size guard**: refuses to load or save cache files exceeding 50 MB by default (configurable via `maxDiskCacheBytes`).
 - **Disk cache per-entry validation**: rejects entries whose `content` exceeds `maxFileBytes`, whose `relPath` isn't a string, or whose `mtimeMs` isn't a number.
 - **`beforeExit` flush race**: guarded by a `saved` flag so flush completion doesn't trigger recursive `beforeExit`. Signal handlers use `process.once`.
 
-**From external audit on v0.6.0:**
-- **P2 — Persistent cache size-limit bypass**: `loadDiskCache` already filtered oversized entries from the in-memory cache load (above), but the audit confirmed it. Closed.
-- **P2 — Persistent cache privacy**: cache file is now written with mode `0600` and parent directory `0700`. Documented explicitly in [README "Cache & privacy"](./README.md#cache--privacy) and [SECURITY.md](./SECURITY.md). Added test for file mode.
-- **P2 — Deleted-note content lingers in cache**: when `loadDiskCache` skips entries because the source file was deleted (or is mtime-stale, or oversized), the cache is now marked dirty. Next save writes a clean file without those entries. Added test for deleted-note purge.
-- **P2 — `clear-cache` CLI subcommand**: `memex-mcp clear-cache --vault <path>` deletes the persistent-cache file. Returns 0 even if no file exists.
-- **P2 — Node 18 incompatibility**: `commander` 14 and `vitest` 4 (shipped in v0.3.3) require Node ≥ 20. Bumped `engines.node` to `>=20`, dropped Node 18 from CI matrix (now `[20, 22, 24]`), updated README badge.
-- **P2 — DQL malformed `OR` / `FROM #` accepted as match-all**: `parseWhere` now rejects empty `OR` / `AND` groups (trailing-OR, duplicated-OR-OR, trailing-AND, etc.) with `DqlParseError`. `parseSource` rejects `FROM ""` and `FROM #` with no tag name. 5 regression tests added.
-- **P3 — Stale `obsidian_dataview_query` description**: tool description still claimed "no OR" — updated to reflect `AND`/`OR`, `=`/`!=`/`contains`/`like` operators, and the actual unsupported list (`FLATTEN`/`GROUP BY`/parens).
-- **P3 — README stale references** (`119 unit tests`, `0.3.x current`, "no OR" FAQ) refreshed.
+**Audit findings closed:**
+- **Persistent cache size-limit bypass**: `loadDiskCache` filters oversized entries from the in-memory cache load.
+- **Persistent cache privacy**: cache file is now written with mode `0600` and parent directory `0700`. Documented explicitly in [README "Cache & privacy"](./README.md#cache--privacy) and [SECURITY.md](./SECURITY.md). Added test for file mode.
+- **Deleted-note content lingers in cache**: when `loadDiskCache` skips entries because the source file was deleted (or is mtime-stale, or oversized), the cache is now marked dirty. Next save writes a clean file without those entries. Added test for deleted-note purge.
+- **`clear-cache` CLI subcommand**: `enquire-mcp clear-cache --vault <path>` deletes the persistent-cache file. Returns 0 even if no file exists.
+- **Node 18 incompatibility**: `commander` 14 and `vitest` 4 (shipped in v0.3.3) require Node ≥ 20. Bumped `engines.node` to `>=20`, dropped Node 18 from CI matrix (now `[20, 22, 24]`), updated README badge.
+- **DQL malformed `OR` / `FROM #` accepted as match-all**: `parseWhere` now rejects empty `OR` / `AND` groups (trailing-OR, duplicated-OR-OR, trailing-AND, etc.) with `DqlParseError`. `parseSource` rejects `FROM ""` and `FROM #` with no tag name. 5 regression tests added.
+- **Stale `obsidian_dataview_query` description**: tool description still claimed "no OR" — updated to reflect `AND`/`OR`, `=`/`!=`/`contains`/`like` operators, and the actual unsupported list (`FLATTEN`/`GROUP BY`/parens).
+- **README stale references** (`119 unit tests`, `0.3.x current`, "no OR" FAQ) refreshed.
 
 ### Tests
 - 137 unit tests (was 119). New since v0.6.0:
@@ -127,7 +130,7 @@ Explicit "Not affiliated with Obsidian.md" notice in README and SECURITY.md. Obs
 
 ## [0.6.0] — 2026-05-02
 
-Wave 4: persistent on-disk cache for warm cold-starts on large vaults.
+Adds an opt-in persistent on-disk cache for warm cold-starts on large vaults.
 
 ### Added
 - `--persistent-cache` CLI flag — opt-in. When set, the parsed-note cache is loaded from disk on boot and written back on graceful shutdown (SIGINT/SIGTERM/`beforeExit`). On second startup of the same process against an unchanged vault, repeat parses are skipped — net win on tools that walk the whole vault (`get_backlinks`, `search_text`, `list_tags`, `get_unresolved_wikilinks`).
@@ -142,7 +145,7 @@ Wave 4: persistent on-disk cache for warm cold-starts on large vaults.
 - The default fast path (in-memory cache + per-read mtime stat) is already O(1) for repeat reads within a session. Persistent cache only helps **across** process restarts, which most MCP-client workflows don't need (the client keeps the server warm).
 - For users who do restart often (e.g. CI bots, scratch agents on huge vaults), the flag delivers a meaningful warm-cache start. Once we have telemetry from real users, we may flip the default.
 
-### Skipped (was J in the roadmap): chokidar-based watch mode
+### Skipped: chokidar-based watch mode
 - Decided to skip for now. The current mtime-on-read check is correct and cheap (one `fs.stat` per read), and chokidar adds ~50KB of dep weight without measurable user-facing benefit at our vault sizes. Will revisit in v0.7+ if a benchmark says otherwise.
 
 ### Tests
@@ -150,7 +153,7 @@ Wave 4: persistent on-disk cache for warm cold-starts on large vaults.
 
 ## [0.5.0] — 2026-05-02
 
-Wave 3 of the launch-prep roadmap: stricter TypeScript, lint/format with Biome, and DQL gains `OR` + `LIKE`.
+Stricter TypeScript, lint/format with Biome, and DQL gains `OR` + `LIKE`.
 
 ### Added (DQL)
 - `OR` between predicate groups: `WHERE a = 1 OR b = 2`. `OR` has lower precedence than `AND`, so `a = 1 AND b = 2 OR c = 3` parses as `(a = 1 AND b = 2) OR (c = 3)`. Quote-aware tokenizer ensures `"OR"` inside a string is data, not a clause boundary.
@@ -169,7 +172,7 @@ Wave 3 of the launch-prep roadmap: stricter TypeScript, lint/format with Biome, 
 
 ## [0.4.0] — 2026-05-02
 
-Wave 2 of the launch-prep roadmap: two new vault-introspection tools, three new workflow prompts, and CI-driven coverage.
+Two new vault-introspection tools, three new workflow prompts, and CI-driven coverage.
 
 ### Added (read tools)
 - `obsidian_get_unresolved_wikilinks` — find every `[[wikilink]]` (and `![[embed]]`) whose target doesn't resolve. Vault-hygiene utility for finding broken links, typos, and intended-but-not-yet-created notes. Args: `folder?`, `include_embeds?`, `limit?`. Returns `{ from_path, target, raw, kind, alias, section, block, line, snippet }`.
@@ -229,7 +232,6 @@ External read-only audit pass closed four real findings.
 
 ### Docs
 - README quick-start no longer hard-codes a stale boot-message version string.
-- `LAUNCH-PACK.md` gains a top-of-file note clarifying it's a historical day-by-day log, not the current state of the project.
 
 ### Tests
 - 103 unit tests (was 86). New regression coverage for every audit finding above:

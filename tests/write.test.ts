@@ -67,6 +67,27 @@ describe("createNote", () => {
     await expect(createNote(v, { path: "../outside.md", content: "nope" })).rejects.toThrow(/escapes vault root/);
   });
 
+  it("rejects writing through a symlink whose target is outside the vault (audit v0.7.3 P1)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-link-out-"));
+    const outsideTarget = path.join(outside, "outside-target.md");
+    await fs.writeFile(outsideTarget, "BEFORE");
+    try {
+      await fs.symlink(outsideTarget, path.join(root, "Link.md"));
+      const linkExists = await fs.lstat(path.join(root, "Link.md")).catch(() => null);
+      if (!linkExists) return;
+      await expect(createNote(v, { path: "Link.md", content: "AFTER", overwrite: true })).rejects.toThrow(
+        /target is a symlink/
+      );
+      const after = await fs.readFile(outsideTarget, "utf8");
+      expect(after).toBe("BEFORE");
+    } finally {
+      await fs.unlink(path.join(root, "Link.md")).catch(() => {});
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("rejects writes whose parent dir is a symlink to outside the vault", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

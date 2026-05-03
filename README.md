@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-140%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-142%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -49,11 +49,11 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | Lists **outbound links** for one note with resolution status | ❌ | ✅ |
 | Built-in **Dataview-style queries** (`LIST` / `TABLE`, `AND`/`OR`, `LIKE`) | only via Obsidian plugin | ✅ first-class |
 | **MCP resources** for browsing the vault as a tree | ❌ | ✅ |
-| **MCP prompts** (`summarize_recent`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`) | ❌ | ✅ 6 prompts |
+| **MCP prompts** (`summarize_recent_edits`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`) | ❌ | ✅ 6 prompts |
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
-| TypeScript strict + Biome lint + 140 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 142 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2000 lines of TypeScript and four runtime dependencies.
 

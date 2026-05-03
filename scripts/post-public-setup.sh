@@ -40,9 +40,13 @@ gh api -X POST "repos/$REPO/rulesets" \
       "parameters": {
         "strict_required_status_checks_policy": false,
         "required_status_checks": [
+          { "context": "lint",      "integration_id": 15368 },
           { "context": "test (20)", "integration_id": 15368 },
+          { "context": "test (22)", "integration_id": 15368 },
+          { "context": "test (24)", "integration_id": 15368 },
           { "context": "smoke",     "integration_id": 15368 },
-          { "context": "audit",     "integration_id": 15368 }
+          { "context": "audit",     "integration_id": 15368 },
+          { "context": "coverage",  "integration_id": 15368 }
         ]
       }
     }

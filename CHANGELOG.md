@@ -2,7 +2,23 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-05-03
+
+Re-release of v0.10.2. The v0.10.2 git tag exists, but the auto-publish workflow's `npm run lint` step failed on CI (a biome `useTemplate` finding that registered as `info` locally but was `error` on the CI image). v0.10.2 never reached npm; v0.10.3 contains the same code plus the lint fix and is the first npm-published version with chunk-level addressing.
+
+### Same content as v0.10.2 (since the tag was a no-op on npm):
+- **MCP resource template `obsidian://chunk/{chunkIndex}/{+notePath}`** — only registered when `--persistent-index` is on. Returns chunk content + line range as JSON. Closes the addressing gap so MCP clients can deep-link directly into specific chunks returned by `obsidian_full_text_search`.
+- **`FtsIndex.getChunk(relPath, chunkIndex)`** public method backing the resource.
+
+### Fixed (vs the broken v0.10.2 release attempt)
+- `scripts/bench-search.mjs` line 38: string concatenation → template literal (biome `useTemplate` rule).
+- `src/fts5.ts` `getChunk` signature line-wrap (biome formatter).
+
 ## [0.10.2] — 2026-05-03
+
+**⚠️ Tagged but never published to npm** — the auto-publish workflow's lint step failed on a biome formatting check. Use v0.10.3, which contains identical functionality plus the lint fix.
+
+
 
 Closes the last open item from the v0.10 roadmap (issue #10 suggestion 1): chunk-level addressing for FTS5 search hits.
 

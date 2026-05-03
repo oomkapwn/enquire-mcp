@@ -307,10 +307,7 @@ export class FtsIndex {
    * `obsidian://chunk/{chunkIndex}/{+notePath}` resource so MCP clients can
    * deep-link into specific chunks returned by a prior search.
    */
-  getChunk(
-    relPath: string,
-    chunkIndex: number
-  ): { content: string; line_start: number; line_end: number } | null {
+  getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
     const db = this.requireDb();
     const row = db
       .prepare("SELECT content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?")

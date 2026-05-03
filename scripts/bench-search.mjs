@@ -35,7 +35,7 @@ async function buildVault(n) {
     const tags = i % 3 === 0 ? "[project, alpha]" : i % 3 === 1 ? "[idea]" : "[archive]";
     const body = [
       "lorem ipsum dolor sit amet consectetur adipiscing elit.",
-      "alpha frontmatter status placeholder body for note " + i + ".",
+      `alpha frontmatter status placeholder body for note ${i}.`,
       "the quick brown fox jumps over the lazy dog.",
       i === Math.floor(n / 2) ? "obscure-marker-XYZZY appears here exactly once." : "filler line."
     ].join("\n");

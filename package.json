@@ -1,6 +1,6 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Drop-in MCP server for Obsidian vaults. Wikilinks resolved, backlinks ranked, frontmatter typed, Dataview-style queries. Read-only by default; opt-in writes. Works with Claude Code, Cursor, Codex, Devin, and any MCP-compatible client.",
   "type": "module",
   "bin": {

@@ -23,7 +23,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.10.0";
+const VERSION = "0.10.1";
 
 interface ServeOptions {
   vault: string;
@@ -200,7 +200,7 @@ async function syncFtsIndex(
     try {
       const note = await vault.readNote(entry.absPath, entry.mtimeMs);
       const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      idx.reindexFile(relPath, entry.mtimeMs, note.content, wikilinkTargets);
+      idx.reindexFile(relPath, entry.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);
     } catch (err) {
       process.stderr.write(
         `enquire: skipping ${relPath} during fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`
@@ -223,7 +223,7 @@ function registerFtsTools(server: McpServer, idx: FtsIndex): void {
     {
       title: "Full-text search (BM25, FTS5 index)",
       description:
-        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with `--persistent-index`.",
+        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with `--persistent-index`.",
       annotations: { ...READ_ONLY, title: "Full-text search" },
       inputSchema: {
         query: z
@@ -233,16 +233,41 @@ function registerFtsTools(server: McpServer, idx: FtsIndex): void {
             "Search query. Whitespace-tokenized; FTS5 BM25 matching with `unicode61` (default) or `trigram` tokenizer."
           ),
         folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        tag: z
+          .string()
+          .optional()
+          .describe("Exact tag membership (e.g. 'project'). Matches frontmatter + inline tags. No leading #."),
+        since: z
+          .string()
+          .optional()
+          .describe("ISO 8601 date or timestamp — restrict to chunks from notes modified on/after this."),
         limit: z.number().int().positive().max(200).optional().describe("Max hits (default 25)")
       }
     },
-    async (args) =>
-      textResult({
+    async (args) => {
+      let sinceMtimeMs: number | undefined;
+      if (args.since) {
+        const t = Date.parse(args.since);
+        if (Number.isFinite(t)) sinceMtimeMs = t;
+        else throw new Error(`Invalid 'since' value (expected ISO date): ${args.since}`);
+      }
+      return textResult({
         query: args.query,
         total_chunks: idx.totalChunks(),
         total_files: idx.totalFiles(),
-        matches: idx.search(args.query, { limit: args.limit, folder: args.folder })
-      })
+        applied_filters: {
+          folder: args.folder ?? null,
+          tag: args.tag ?? null,
+          since: args.since ?? null
+        },
+        matches: idx.search(args.query, {
+          limit: args.limit,
+          folder: args.folder,
+          tag: args.tag,
+          sinceMtimeMs
+        })
+      });
+    }
   );
 }
 

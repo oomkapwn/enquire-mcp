@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2; // v2 added the `tags` UNINDEXED column for tag-filtered search.
 
 export type TokenizeMode = "unicode61" | "trigram";
 
@@ -109,29 +109,15 @@ export class FtsIndex {
   private bootstrapSchema(): void {
     const db = this.requireDb();
     const tokenizeArg = this.tokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
+
+    // Meta is always present so we can read it before deciding on rebuilds.
     db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
-        content,
-        rel_path UNINDEXED,
-        chunk_index UNINDEXED,
-        line_start UNINDEXED,
-        line_end UNINDEXED,
-        tokenize='${tokenizeArg}'
-      );
-      CREATE TABLE IF NOT EXISTS source_state (
-        rel_path TEXT PRIMARY KEY,
-        mtime_ms INTEGER NOT NULL,
-        n_chunks INTEGER NOT NULL,
-        indexed_at TEXT NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
     `);
-    // Detect cross-vault contamination + tokenize-mode flips → require rebuild
-    // by clearing the index when the vault root or tokenize choice changed.
-    // Stderr warning so the user knows why the next sync takes longer than usual.
+
     const meta = this.readMeta();
     const tokenizeMatch = meta.tokenize_mode === undefined || meta.tokenize_mode === this.tokenize;
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
@@ -142,8 +128,29 @@ export class FtsIndex {
       if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
       if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
       process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
-      db.exec("DELETE FROM chunks; DELETE FROM source_state;");
+      // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
+      // the `tags` column). DROP IF EXISTS handles a fresh DB too.
+      db.exec("DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS source_state;");
     }
+
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
+        content,
+        rel_path UNINDEXED,
+        chunk_index UNINDEXED,
+        line_start UNINDEXED,
+        line_end UNINDEXED,
+        tags UNINDEXED,
+        tokenize='${tokenizeArg}'
+      );
+      CREATE TABLE IF NOT EXISTS source_state (
+        rel_path TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL,
+        n_chunks INTEGER NOT NULL,
+        indexed_at TEXT NOT NULL
+      );
+    `);
+
     this.writeMeta({
       schema_version: String(SCHEMA_VERSION),
       vault_root: this.vaultRoot,
@@ -211,18 +218,27 @@ export class FtsIndex {
   }
 
   /** Re-chunk a single file, replacing its existing chunks atomically. */
-  reindexFile(relPath: string, mtimeMs: number, content: string, wikilinkTargets: string[] = []): number {
+  reindexFile(
+    relPath: string,
+    mtimeMs: number,
+    content: string,
+    wikilinkTargets: string[] = [],
+    tags: string[] = []
+  ): number {
     const db = this.requireDb();
     const chunks = chunkContent(content);
     db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
     const insert = db.prepare(
-      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags) VALUES (?, ?, ?, ?, ?, ?)"
     );
+    // Stored as a comma-delimited list so the tag-filter LIKE pattern can
+    // wrap it with leading/trailing commas for exact-tag matching at query time.
+    const tagsSerialized = tags.length ? tags.join(",") : "";
     chunks.forEach((c, i) => {
       // Append wikilink targets as a meta-line so notes that link out are
       // recalled on a search for the link target — pattern from issue #10.
       const enriched = wikilinkTargets.length ? `${c.text}\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : c.text;
-      insert.run(enriched, relPath, i, c.lineStart, c.lineEnd);
+      insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized);
     });
     db.prepare(
       "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at) VALUES (?, ?, ?, ?)"
@@ -230,24 +246,43 @@ export class FtsIndex {
     return chunks.length;
   }
 
-  search(rawQuery: string, opts: { limit?: number; folder?: string } = {}): FtsSearchHit[] {
+  search(
+    rawQuery: string,
+    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
+  ): FtsSearchHit[] {
     const db = this.requireDb();
     const limit = opts.limit ?? 25;
     const safe = safeFts5Query(rawQuery);
     if (!safe) return [];
-    const folderClause = opts.folder ? "AND rel_path GLOB ?" : "";
+    const where: string[] = ["chunks MATCH ?"];
+    const params: unknown[] = [safe];
+    if (opts.folder) {
+      where.push("chunks.rel_path GLOB ?");
+      params.push(`${opts.folder.replace(/\/+$/, "")}/*`);
+    }
+    if (opts.tag) {
+      // Exact-tag membership inside the comma-separated `tags` column —
+      // wrap both sides with commas so "core" doesn't match "core-team".
+      where.push("(',' || chunks.tags || ',') LIKE ?");
+      params.push(`%,${opts.tag},%`);
+    }
+    let join = "";
+    if (opts.sinceMtimeMs !== undefined) {
+      join = "JOIN source_state ON chunks.rel_path = source_state.rel_path";
+      where.push("source_state.mtime_ms >= ?");
+      params.push(opts.sinceMtimeMs);
+    }
     const sql = `
-      SELECT rel_path, chunk_index, line_start, line_end,
+      SELECT chunks.rel_path AS rel_path, chunks.chunk_index AS chunk_index,
+             chunks.line_start AS line_start, chunks.line_end AS line_end,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
              bm25(chunks) AS score
       FROM chunks
-      WHERE chunks MATCH ?
-      ${folderClause}
+      ${join}
+      WHERE ${where.join(" AND ")}
       ORDER BY score
       LIMIT ?
     `;
-    const params: unknown[] = [safe];
-    if (opts.folder) params.push(`${opts.folder.replace(/\/+$/, "")}/*`);
     params.push(limit);
     const rows = db.prepare(sql).all<{
       rel_path: string;

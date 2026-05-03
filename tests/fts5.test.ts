@@ -218,4 +218,69 @@ describe("FtsIndex — full lifecycle", () => {
       idx.close();
     }
   });
+
+  it("tag filter exact-matches against comma-separated frontmatter+inline tags (v0.10.1)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("a.md", 1000, "shared-marker", [], ["project", "core"]);
+      idx.reindexFile("b.md", 1000, "shared-marker", [], ["core-team"]); // substring of "core"
+      idx.reindexFile("c.md", 1000, "shared-marker", [], ["archive"]);
+      // tag="core" must match a.md only — NOT b.md (which has "core-team", a substring trap).
+      const coreOnly = idx.search("shared-marker", { tag: "core" });
+      expect(coreOnly.map((h) => h.rel_path)).toEqual(["a.md"]);
+      // tag="archive" matches just c.md.
+      const archiveOnly = idx.search("shared-marker", { tag: "archive" });
+      expect(archiveOnly.map((h) => h.rel_path)).toEqual(["c.md"]);
+      // No filter: all three.
+      const all = idx.search("shared-marker");
+      expect(all.length).toBe(3);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("since filter restricts to chunks from notes modified at or after a timestamp (v0.10.1)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      const t1 = Date.parse("2026-01-01T00:00:00Z");
+      const t2 = Date.parse("2026-06-01T00:00:00Z");
+      const t3 = Date.parse("2026-11-01T00:00:00Z");
+      idx.reindexFile("old.md", t1, "deadline-marker old");
+      idx.reindexFile("mid.md", t2, "deadline-marker mid");
+      idx.reindexFile("new.md", t3, "deadline-marker new");
+      const sinceMid = idx.search("deadline-marker", { sinceMtimeMs: t2 });
+      expect(sinceMid.map((h) => h.rel_path).sort()).toEqual(["mid.md", "new.md"]);
+      const sinceFuture = idx.search("deadline-marker", { sinceMtimeMs: Date.parse("2027-01-01T00:00:00Z") });
+      expect(sinceFuture).toEqual([]);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("combined filters (folder + tag + since) compose with AND semantics (v0.10.1)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      const recent = Date.parse("2026-06-01T00:00:00Z");
+      const old = Date.parse("2025-06-01T00:00:00Z");
+      idx.reindexFile("projects/x.md", recent, "combo-marker", [], ["project"]);
+      idx.reindexFile("projects/y.md", recent, "combo-marker", [], ["archive"]);
+      idx.reindexFile("inbox/z.md", recent, "combo-marker", [], ["project"]);
+      idx.reindexFile("projects/old.md", old, "combo-marker", [], ["project"]);
+      const r = idx.search("combo-marker", {
+        folder: "projects",
+        tag: "project",
+        sinceMtimeMs: recent
+      });
+      // Only projects/x.md satisfies all three filters.
+      expect(r.map((h) => h.rel_path)).toEqual(["projects/x.md"]);
+    } finally {
+      idx.close();
+    }
+  });
 });

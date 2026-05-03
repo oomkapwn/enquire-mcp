@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-05-03
+
+Closes the open items from the v0.10.0 changelog: filter args on the FTS5 path, plus a real bench comparing the two search backends.
+
+### Added — filter API on `obsidian_full_text_search`
+- **`tag` filter** — exact-tag membership (e.g. `tag: "project"`). Matches both frontmatter and inline tags. Implemented via a comma-wrapped `LIKE` against an indexed `tags` column on `chunks`. Won't false-match `core-team` for `tag: "core"` (the comma boundary makes membership explicit).
+- **`since` filter** — ISO 8601 date or timestamp; restricts to chunks whose source note's `mtime ≥ since`. Joins against `source_state.mtime_ms`.
+- **`folder` filter** continues to work; all three filters compose with AND semantics.
+- The tool response now echoes `applied_filters: { folder, tag, since }` so callers see exactly which filters narrowed the result.
+
+### Schema migration
+- Added `tags` UNINDEXED column to `chunks`. Bumped `SCHEMA_VERSION` from 1 → 2 — existing v0.10.0 indexes auto-rebuild on first v0.10.1 boot (~5s for 1k files); a stderr warning explains why the next sync is longer than usual.
+
+### Bench numbers
+[`scripts/bench-search.mjs`](./scripts/bench-search.mjs) now compares both paths on the same synthetic vault. Direct function calls — no MCP RPC overhead.
+
+| Vault    | scan cold | scan warm | fts5 build | fts5 warm | speedup (warm) |
+|----------|-----------|-----------|------------|-----------|----------------|
+| 100      | 12.2ms    | 3.7ms     | 22.9ms     | 0.1ms     | **37x**        |
+| 500      | 31.7ms    | 15.7ms    | 123.5ms    | 0.2ms     | **78x**        |
+| 1000     | 61.4ms    | 31.0ms    | 314.7ms    | 0.3ms     | **103x**       |
+
+The gap widens with vault size — scan is O(N), FTS5 is effectively constant. Cold-build is a one-time cost per vault (subsequent boots are incremental: ~50ms when nothing changed).
+
+### Tests
+- 184 unit tests (was 181). 3 new for the filter args: tag exact-match, since timestamp filter, combined folder+tag+since composition.
+
+### Pending for v0.11+
+- `obsidian://chunk/<path>#<index>` resource URI for chunk-level addressing (issue #10 suggestion 1).
+
 ## [0.10.0] — 2026-05-03
 
 Anchor feature: SQLite FTS5 inverted index. Architecture and reference numbers contributed by an external user via [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) — full credit in `src/fts5.ts` header.

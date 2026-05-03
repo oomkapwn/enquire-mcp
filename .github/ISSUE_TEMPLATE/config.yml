@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question / discussion
-    url: https://github.com/oomkapwn/memex/discussions
+    url: https://github.com/oomkapwn/enquire-mcp/discussions
     about: Use Discussions for usage questions, ideas, and "how do I…" threads.
   - name: Security report
-    url: https://github.com/oomkapwn/memex/blob/main/SECURITY.md
+    url: https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md
     about: Report vulnerabilities privately via the policy in SECURITY.md.

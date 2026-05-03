@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const root = await fs.mkdtemp(path.join(os.tmpdir(), "memex-ci-vault-"));
+const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-ci-vault-"));
 await fs.mkdir(path.join(root, "01_Projects"), { recursive: true });
 await fs.mkdir(path.join(root, "99_Daily"), { recursive: true });
 

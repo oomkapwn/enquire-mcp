@@ -1,10 +1,10 @@
 {
-  "name": "@oomkapwn/memex",
-  "version": "0.7.0",
-  "description": "memex — MCP server for Obsidian vaults. Wikilinks, frontmatter, backlinks, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes.",
+  "name": "@oomkapwn/enquire-mcp",
+  "version": "0.7.1",
+  "description": "enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the World Wide Web. Wikilinks, frontmatter, backlinks, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes.",
   "type": "module",
   "bin": {
-    "memex-mcp": "dist/index.js"
+    "enquire-mcp": "dist/index.js"
   },
   "files": [
     "dist",
@@ -38,7 +38,9 @@
     "claude",
     "claude-code",
     "cursor",
-    "memex",
+    "codex",
+    "enquire",
+    "berners-lee",
     "wikilinks",
     "backlinks",
     "frontmatter",
@@ -46,17 +48,18 @@
     "markdown",
     "pkm",
     "knowledge-management",
-    "ai-agent"
+    "ai-agent",
+    "hypertext"
   ],
   "author": "Alex (@OomkaBear)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oomkapwn/memex.git"
+    "url": "git+https://github.com/oomkapwn/enquire-mcp.git"
   },
-  "homepage": "https://github.com/oomkapwn/memex#readme",
+  "homepage": "https://github.com/oomkapwn/enquire-mcp#readme",
   "bugs": {
-    "url": "https://github.com/oomkapwn/memex/issues"
+    "url": "https://github.com/oomkapwn/enquire-mcp/issues"
   },
   "engines": {
     "node": ">=20"

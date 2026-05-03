@@ -29,27 +29,30 @@
   <rect x="0" y="0" width="6" height="640" fill="#8b5cf6"/>
 
   <!-- Title block (left) -->
-  <g transform="translate(72, 120)">
+  <g transform="translate(72, 110)">
     <!-- prefix tag -->
-    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="22" fill="#8b5cf6" font-weight="600">
-      [[mcp]]
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="20" fill="#8b5cf6" font-weight="600">
+      [[mcp · since 1980]]
     </text>
     <!-- main brand -->
-    <text x="0" y="92" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="120" fill="#f8fafc" font-weight="700" letter-spacing="-3">
-      memex
+    <text x="0" y="98" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="124" fill="#f8fafc" font-weight="700" letter-spacing="-3">
+      enquire
     </text>
     <!-- divider -->
-    <line x1="0" y1="125" x2="120" y2="125" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
+    <line x1="0" y1="132" x2="120" y2="132" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
     <!-- explicit Obsidian-MCP subtitle for SEO + clarity -->
-    <text x="0" y="172" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="32" fill="#06b6d4" font-weight="600">
+    <text x="0" y="178" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="32" fill="#06b6d4" font-weight="600">
       MCP server for Obsidian vaults
     </text>
-    <!-- value tagline -->
-    <text x="0" y="220" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="400">
-      First-class vault access for Claude Code, Cursor, Codex.
+    <!-- meta-reference tagline -->
+    <text x="0" y="218" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="20" fill="#cbd5e1" font-weight="400">
+      Berners-Lee wrote ENQUIRE at CERN in 1980 — the prototype of the Web.
+    </text>
+    <text x="0" y="244" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="20" fill="#cbd5e1" font-weight="400">
+      Same idea, brought to your AI assistant.
     </text>
     <!-- features row -->
-    <text x="0" y="282" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="17" fill="#94a3b8">
+    <text x="0" y="296" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="17" fill="#94a3b8">
       wikilinks · backlinks · frontmatter · tags · Dataview
     </text>
   </g>
@@ -63,7 +66,7 @@
     <circle cx="18" cy="16" r="5" fill="#ef4444" opacity="0.85"/>
     <circle cx="36" cy="16" r="5" fill="#f59e0b" opacity="0.85"/>
     <circle cx="54" cy="16" r="5" fill="#10b981" opacity="0.85"/>
-    <text x="240" y="20" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="12" fill="#64748b" text-anchor="middle">claude — memex</text>
+    <text x="240" y="20" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="12" fill="#64748b" text-anchor="middle">claude — enquire</text>
 
     <!-- terminal lines -->
     <g font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14">
@@ -89,7 +92,7 @@
   </g>
 
   <!-- Footer strip -->
-  <g transform="translate(72, 540)">
+  <g transform="translate(72, 555)">
     <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="16" fill="#64748b" font-weight="500">
       <tspan fill="#cbd5e1">12 tools</tspan>
       <tspan> · </tspan>
@@ -97,14 +100,14 @@
       <tspan> · </tspan>
       <tspan fill="#cbd5e1">6 prompts</tspan>
       <tspan> · </tspan>
-      <tspan fill="#cbd5e1">128 tests</tspan>
+      <tspan fill="#cbd5e1">137 tests</tspan>
       <tspan> · </tspan>
       <tspan fill="#cbd5e1">TypeScript</tspan>
       <tspan> · </tspan>
       <tspan fill="#cbd5e1">MIT</tspan>
     </text>
-    <text x="0" y="36" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14" fill="#475569">
-      github.com/oomkapwn/memex
+    <text x="0" y="32" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14" fill="#475569">
+      github.com/oomkapwn/enquire-mcp
     </text>
   </g>
 </svg>

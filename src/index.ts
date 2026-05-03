@@ -21,7 +21,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 
 interface ServeOptions {
   vault: string;
@@ -35,8 +35,8 @@ interface ServeOptions {
 async function main(): Promise<void> {
   const program = new Command();
   program
-    .name("memex-mcp")
-    .description("memex — MCP server for Obsidian vaults. Wikilinks, frontmatter, backlinks, basic Dataview")
+    .name("enquire-mcp")
+    .description("enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the WWW.")
     .version(VERSION);
 
   program
@@ -62,9 +62,9 @@ async function main(): Promise<void> {
       await vault.ensureExists();
       const removed = await vault.clearDiskCache();
       if (removed) {
-        process.stdout.write(`memex: removed cache file ${vault.cacheFile}\n`);
+        process.stdout.write(`enquire: removed cache file ${vault.cacheFile}\n`);
       } else {
-        process.stdout.write(`memex: no cache file at ${vault.cacheFile}\n`);
+        process.stdout.write(`enquire: no cache file at ${vault.cacheFile}\n`);
       }
     });
 
@@ -82,7 +82,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
   await vault.ensureExists();
 
   const server = new McpServer({
-    name: "memex",
+    name: "enquire",
     version: VERSION
   });
 
@@ -104,7 +104,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
         await vault.saveDiskCache();
         saved = true;
       } catch (err) {
-        process.stderr.write(`memex: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
+        process.stderr.write(`enquire: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
       } finally {
         saving = false;
       }
@@ -123,7 +123,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
-  process.stderr.write(`memex ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
+  process.stderr.write(`enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
 }
 
 function registerReadTools(server: McpServer, vault: Vault): void {
@@ -606,7 +606,7 @@ const isCliEntry = (() => {
 
 if (isCliEntry) {
   main().catch((err) => {
-    process.stderr.write(`memex fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    process.stderr.write(`enquire fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });
 }

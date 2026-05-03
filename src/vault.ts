@@ -31,7 +31,7 @@ export interface VaultOptions {
   maxCacheEntries?: number;
   enableWrite?: boolean;
   persistentCache?: boolean;
-  /** Override the cache file location. Default: ~/.cache/memex/<vault-hash>.json. */
+  /** Override the cache file location. Default: ~/.cache/enquire/<vault-hash>.json. */
   cacheFile?: string;
   /** Refuse to read/write a cache file larger than this (default 50 MB). */
   maxDiskCacheBytes?: number;
@@ -86,7 +86,7 @@ export class Vault {
       const stat = await fs.stat(this.cacheFile);
       if (stat.size > this.maxDiskCacheBytes) {
         process.stderr.write(
-          `memex: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+          `enquire: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
         );
         return 0;
       }
@@ -181,7 +181,7 @@ export class Vault {
     const serialized = JSON.stringify(payload);
     if (Buffer.byteLength(serialized, "utf8") > this.maxDiskCacheBytes) {
       process.stderr.write(
-        `memex: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+        `enquire: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
       );
       return;
     }
@@ -406,7 +406,7 @@ function defaultCacheFile(root: string): string {
     process.env.XDG_CACHE_HOME ??
     (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
   const hash = createHash("sha1").update(root).digest("hex").slice(0, 12);
-  return path.join(base, "memex", `${hash}.json`);
+  return path.join(base, "enquire", `${hash}.json`);
 }
 
 async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {

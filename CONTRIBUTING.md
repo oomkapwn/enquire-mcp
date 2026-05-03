@@ -1,12 +1,12 @@
-# Contributing to memex
+# Contributing to enquire-mcp
 
-Thanks for your interest. memex is a small, opinionated MCP server for Obsidian vaults — the bar for new features is "does it pull weight against an Obsidian vault on day 1." The bar for fixes is much lower.
+Thanks for your interest. enquire-mcp is a small, opinionated MCP server for Obsidian vaults — the bar for new features is "does it pull weight against an Obsidian vault on day 1." The bar for fixes is much lower.
 
 ## Getting started
 
 ```bash
-git clone https://github.com/oomkapwn/memex
-cd memex
+git clone https://github.com/oomkapwn/enquire-mcp
+cd enquire-mcp
 npm install
 npm run build
 npm test

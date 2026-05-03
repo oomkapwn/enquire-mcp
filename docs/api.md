@@ -1,6 +1,6 @@
-# memex — API (v0.7)
+# enquire — API (v0.7)
 
-**memex is an MCP server for Obsidian vaults.** 12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 ## CLI flags
 
@@ -11,7 +11,7 @@
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
-| `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/memex/<vault-hash>.json` (macOS) or `~/.cache/memex/<vault-hash>.json` (Linux). |
+| `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/enquire/<vault-hash>.json` (macOS) or `~/.cache/enquire/<vault-hash>.json` (Linux). |
 
 ## Subcommands
 

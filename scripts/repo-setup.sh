@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# One-shot GitHub repo polish: description, homepage, topics, and the v0.3.1 release.
+# One-shot GitHub repo polish: description, homepage, topics, and create the latest release.
 # Run after `gh auth login` (GH CLI not authenticated on this machine).
 
 set -euo pipefail
 
-REPO="oomkapwn/memex"
+REPO="oomkapwn/enquire-mcp"
 
 echo "== Setting description + homepage =="
 gh repo edit "$REPO" \
-  --description "memex — MCP server for Obsidian vaults. Wikilinks, backlinks, frontmatter, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes. For Claude Code, Cursor, Codex, Devin and any MCP-compatible client." \
-  --homepage "https://www.npmjs.com/package/@oomkapwn/memex"
+  --description "enquire — MCP server for Obsidian vaults. Wikilinks, backlinks, frontmatter, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes. For Claude Code, Cursor, Codex, Devin and any MCP-compatible client." \
+  --homepage "https://www.npmjs.com/package/@oomkapwn/enquire-mcp"
 
 echo "== Setting topics =="
 gh repo edit "$REPO" \

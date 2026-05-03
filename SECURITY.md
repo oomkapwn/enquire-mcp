@@ -2,9 +2,9 @@
 
 ## Reporting a vulnerability
 
-If you've found a security issue in memex, **please don't open a public GitHub issue**. Instead:
+If you've found a security issue in enquire, **please don't open a public GitHub issue**. Instead:
 
-1. Email the maintainer at `oomkapwn@gmail.com` with the subject `memex security`.
+1. Email the maintainer at `oomkapwn@gmail.com` with the subject `enquire security`.
 2. Include a reproducer if you have one — vault layout, exact CLI flags, the operation that triggered the issue.
 3. Expect an acknowledgement within 72 hours.
 
@@ -39,11 +39,11 @@ Only the latest minor release receives security patches. We bump the patch versi
 
 ## Persistent cache: privacy posture
 
-When `--persistent-cache` is enabled, full note bodies are written to a JSON file under `~/Library/Caches/memex/` (macOS) or `~/.cache/memex/` (Linux).
+When `--persistent-cache` is enabled, full note bodies are written to a JSON file under `~/Library/Caches/enquire/` (macOS) or `~/.cache/enquire/` (Linux).
 
 - File mode is **`0600`**, parent directory mode is **`0700`** — restricted to the user account.
 - Cache file is rejected if its `root` field doesn't match the current vault realpath (cross-vault protection).
 - Cache file is rejected if its declared `version` doesn't match the current schema version.
 - Deleted notes: on load, entries whose source file no longer exists are dropped from memory AND the cache is marked dirty so the next save rewrites the file without those entries.
-- Manual purge: `memex-mcp clear-cache --vault <path>` deletes the cache file.
+- Manual purge: `enquire-mcp clear-cache --vault <path>` deletes the cache file.
 - **Caveat:** anyone with read access to your user account can read the cache file. If your threat model includes other local users on the same machine, do not use `--persistent-cache`.

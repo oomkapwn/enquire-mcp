@@ -4,7 +4,7 @@
 # Requires `gh auth login`.
 
 set -euo pipefail
-REPO="oomkapwn/memex"
+REPO="oomkapwn/enquire-mcp"
 
 echo "== Verifying repo is public =="
 VIS=$(gh repo view "$REPO" --json visibility -q .visibility)

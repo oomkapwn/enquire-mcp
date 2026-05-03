@@ -2,9 +2,46 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-05-03
+
+**Second rename: `memex` → `enquire-mcp`.**
+
+### Why a second rename
+After v0.7.0 shipped under «memex», a deeper landscape audit revealed the `memex` namespace is even more contested than `obsidian-mcp`:
+- **[WorldBrain Memex](https://github.com/WorldBrain/Memex)** — established browser extension with an explicit **memex-obsidian** plugin. Direct user-confusion risk.
+- **[iamtouchskyer/memex](https://github.com/iamtouchskyer/memex)** (npm `@touchskyer/memex`) — Zettelkasten persistent memory for AI coding agents. Same client list (Claude Code / Cursor / Codex / Windsurf), same MCP positioning. Functionally near-identical.
+- **[memex.tech](https://memex.tech/)** — commercial product with active MCP launch.
+- **[memex.ai](https://memex.ai/)** — commercial brand.
+- **[`memex-ai`](https://www.npmjs.com/package/memex-ai)** npm package: «Install the Memex AI MCP server for Claude Code and Claude Desktop». Tight collision.
+- Plus `memex-md`, `@ai2070/memex`, `memex-cc`, `memex-vault` (Obsidian template), `memex-life/memex`, `memex-lab/memex`, etc.
+
+We traded one crowded namespace for an even more crowded one. Time to commit to a name with a unique historical referent and minimal commercial collision.
+
+### Why ENQUIRE
+[**ENQUIRE**](https://en.wikipedia.org/wiki/ENQUIRE) is the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». It was the **direct prototype of the World Wide Web** — cards with hyperlinked relationships, exactly the data model we expose to AI agents over MCP. Bush's memex was theoretical; ENQUIRE was real, working hypertext software. No commercial trademark holder. Available on npm with `-mcp` suffix and across all relevant places.
+
+### Renamed
+- npm package: `@oomkapwn/memex` → `@oomkapwn/enquire-mcp`
+- CLI binary: `memex-mcp` → `enquire-mcp`
+- GitHub repo: `oomkapwn/memex` → `oomkapwn/enquire-mcp`
+- MCP server `name` reported in handshake: `memex` → `enquire`
+- Boot stderr message: `memex <v> ready` → `enquire <v> ready`
+- Default cache dir: `~/Library/Caches/memex/` → `~/Library/Caches/enquire/`
+- Banner redesigned: «enquire» as brand, «MCP server for Obsidian vaults» subtitle in cyan, Berners-Lee tagline.
+- README hero rewritten with the ENQUIRE narrative + Wikipedia link to ENQUIRE.
+
+### Tool names: still unchanged
+`obsidian_*` tool names (`obsidian_list_notes`, etc.) **remain `obsidian_`-prefixed** by design. The prefix tells the LLM what domain it's operating in.
+
+### Disclaimer reaffirmed
+README and SECURITY.md still carry the «Not affiliated with Obsidian.md» notice. Added clarification that the «enquire» name is a tribute to Berners-Lee's 1980 system, not a trademark claim.
+
+### Tests
+Still 137 unit tests, all green. No code changes — pure rename + docs.
+
 ## [0.7.0] — 2026-05-03
 
-**Project renamed: `obsidian-mcp` → `memex`.**
+**First rename: `obsidian-mcp` → `memex`.**
 
 ### Why the rename
 - The npm/GitHub `obsidian-mcp` namespace turned out to be crowded — at least 12 GitHub projects and 4 npm packages with overlapping names. We're indistinguishable in search.

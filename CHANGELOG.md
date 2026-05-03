@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] — 2026-05-03
+
+**Critical hotfix** — v0.7.4 (and likely all earlier published versions) had a CLI guard that compared `import.meta.url` (resolved through realpath) against `process.argv[1]` (raw, no symlink resolution). When npm installs the package, the `bin` entry is exposed as a symlink in `node_modules/.bin/`, and on macOS `/tmp` is itself a symlink to `/private/tmp` — so the comparison failed and `main()` never ran. The CLI exited 0 with no output, making `npx -y @oomkapwn/enquire-mcp serve …` a no-op.
+
+### Fixed
+- `src/index.ts` `isCliEntry` check now `realpathSync`s both sides of the comparison. Tested via two regression cases in `tests/cli.test.ts`: (1) explicit symlink mimicking the npm bin shim, (2) macOS `/tmp` indirection.
+
+### Tests
+- 142 unit tests (was 140). 2 new regression tests for the CLI guard.
+
+### Mitigation for users on 0.7.4
+- v0.7.4 has been deprecated on npm with a redirect message. `npx -y @oomkapwn/enquire-mcp@latest …` automatically picks up 0.7.5.
+
 ## [0.7.4] — 2026-05-03
 
 Repeat-audit pass — five public-facing inconsistencies closed.

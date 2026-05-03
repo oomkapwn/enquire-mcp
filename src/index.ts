@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as path from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -21,7 +22,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.7.4";
+const VERSION = "0.7.5";
 
 interface ServeOptions {
   vault: string;
@@ -601,7 +602,13 @@ function textResult(payload: unknown): { content: Array<{ type: "text"; text: st
 const isCliEntry = (() => {
   if (!process.argv[1]) return false;
   try {
-    return fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+    // Both sides via realpath — npm installs the binary as a symlink in
+    // `node_modules/.bin/`, and on macOS `/tmp` is itself a symlink to
+    // `/private/tmp`. Without realpath on argv[1], the comparison fails and
+    // main() never runs (silent exit 0). Regression test in tests/cli.test.ts.
+    const meta = realpathSync(fileURLToPath(import.meta.url));
+    const argv = realpathSync(process.argv[1]);
+    return meta === argv;
   } catch {
     return false;
   }

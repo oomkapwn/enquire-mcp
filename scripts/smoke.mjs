@@ -131,10 +131,14 @@ try {
   const searchParsed = JSON.parse(searchText);
   check(
     "search_text returns structured response",
-    typeof searchParsed === "object" && Array.isArray(searchParsed.matches) && typeof searchParsed.scanned_notes === "number",
+    typeof searchParsed === "object" &&
+      Array.isArray(searchParsed.matches) &&
+      typeof searchParsed.scanned_notes === "number",
     searchText.slice(0, 200)
   );
-  console.log(`      → search hits: ${searchParsed.matches.length} of ${searchParsed.scanned_notes} scanned (mode=${searchParsed.mode})`);
+  console.log(
+    `      → search hits: ${searchParsed.matches.length} of ${searchParsed.scanned_notes} scanned (mode=${searchParsed.mode})`
+  );
 
   // Read the first listed note round-trip.
   if (listParsed[0]) {

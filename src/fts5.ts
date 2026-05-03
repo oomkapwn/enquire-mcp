@@ -131,11 +131,17 @@ export class FtsIndex {
     `);
     // Detect cross-vault contamination + tokenize-mode flips → require rebuild
     // by clearing the index when the vault root or tokenize choice changed.
+    // Stderr warning so the user knows why the next sync takes longer than usual.
     const meta = this.readMeta();
     const tokenizeMatch = meta.tokenize_mode === undefined || meta.tokenize_mode === this.tokenize;
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
     const versionMatch = meta.schema_version === undefined || meta.schema_version === String(SCHEMA_VERSION);
     if (!tokenizeMatch || !rootMatch || !versionMatch) {
+      const reason: string[] = [];
+      if (!tokenizeMatch) reason.push(`tokenize ${meta.tokenize_mode} → ${this.tokenize}`);
+      if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
+      if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
+      process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
       db.exec("DELETE FROM chunks; DELETE FROM source_state;");
     }
     this.writeMeta({

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] — 2026-05-03
+
+CI re-release of v0.10.5. Same content + applied biome's auto-format wrap on the SQL string in `src/fts5.ts` (line was just past biome's 120-col `lineWidth`, CI strict where local was lenient until I re-ran `npm run lint`). v0.10.5 git tag exists pointing at 6039dc6 but never reached npm.
+
+This is a CI-pipeline issue, not a code or branding change — v0.10.6 functionality is identical to v0.10.5.
+
 ## [0.10.5] — 2026-05-03
 
 CI re-release of v0.10.4 (lint failed on the same biome severity divergence that bit v0.10.2 — `useTemplate` rule registers as `info` locally but `error` on the GitHub Actions image). Same code as v0.10.4 plus:

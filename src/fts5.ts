@@ -347,7 +347,8 @@ export class FtsIndex {
    */
   getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
     const db = this.requireDb();
-    const sql = "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?";
+    const sql =
+      "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?";
     const row = db.prepare(sql).get<{ content: string; line_start: number; line_end: number }>(relPath, chunkIndex);
     return row ?? null;
   }

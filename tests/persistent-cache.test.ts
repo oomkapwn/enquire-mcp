@@ -175,6 +175,62 @@ describe("persistent cache", () => {
     ).toBe(false);
   });
 
+  it("rejects relative-path traversal in cache entries (audit v0.7.2 P1)", async () => {
+    // Craft a cache file with a relPath that escapes the vault. Even with a
+    // valid mtime for the target, the entry must not pollute the in-memory cache.
+    await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+    const v1 = new Vault(root, { persistentCache: true, cacheFile });
+    await v1.ensureExists();
+    const realRoot = v1.root;
+    const hostsStat = await fs.stat("/etc/hosts").catch(() => null);
+    if (!hostsStat) return; // /etc/hosts not readable on this CI
+    const relToHosts = path.relative(realRoot, "/etc/hosts");
+    const data = {
+      version: 1,
+      root: realRoot,
+      writtenAt: new Date().toISOString(),
+      entries: [
+        {
+          relPath: relToHosts,
+          mtimeMs: hostsStat.mtimeMs,
+          content: "INJECTED FROM /etc/hosts",
+          parsed: { frontmatter: {}, body: "INJECTED", wikilinks: [], embeds: [], tags: [] }
+        }
+      ]
+    };
+    await fs.writeFile(cacheFile, JSON.stringify(data));
+
+    const v2 = new Vault(root, { persistentCache: true, cacheFile });
+    const loaded = await v2.loadDiskCache();
+    expect(loaded).toBe(0);
+    const internal = v2 as unknown as { cache: Map<string, unknown> };
+    expect(internal.cache.size).toBe(0);
+  });
+
+  it("rejects absolute-path entries in cache (audit v0.7.2 P1)", async () => {
+    await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+    const v1 = new Vault(root, { persistentCache: true, cacheFile });
+    await v1.ensureExists();
+    const data = {
+      version: 1,
+      root: v1.root,
+      writtenAt: new Date().toISOString(),
+      entries: [
+        {
+          relPath: "/etc/hosts",
+          mtimeMs: 1,
+          content: "INJECTED",
+          parsed: { frontmatter: {}, body: "x", wikilinks: [], embeds: [], tags: [] }
+        }
+      ]
+    };
+    await fs.writeFile(cacheFile, JSON.stringify(data));
+
+    const v2 = new Vault(root, { persistentCache: true, cacheFile });
+    const loaded = await v2.loadDiskCache();
+    expect(loaded).toBe(0);
+  });
+
   it("rejects oversized cached content on load (audit P2-1)", async () => {
     // Write a cache file with a fake oversized entry.
     const big = "x".repeat(200);

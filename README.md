@@ -14,7 +14,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![tests](https://img.shields.io/badge/tests-137%20passing-brightgreen.svg)](#develop)
-[![coverage](https://img.shields.io/badge/coverage-83%25%20lines-brightgreen.svg)](#develop)
+[![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
 </div>
@@ -308,7 +308,7 @@ npm run dev           # tsc --watch
 node scripts/smoke.mjs [vault-path]   # end-to-end JSON-RPC smoke
 ```
 
-Coverage on the latest release: **83% lines · 79% statements · 73% branches**. CI uploads the full HTML report as a workflow artifact (`coverage-report`).
+Coverage on the latest release: **82% lines · 78% statements · 73% branches**. CI uploads the full HTML report as a workflow artifact (`coverage-report`).
 
 Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 24, runs the smoke against a synthetic vault, generates a coverage report, and runs `npm audit --audit-level=high`.
 
@@ -339,6 +339,20 @@ Bug fixes welcome. New tools should pass the bar of "useful against an Obsidian 
 
 ---
 
+## Support the project
+
+If enquire-mcp saves you keystrokes or makes your AI assistant smarter about your vault, **consider [starring the repo](https://github.com/oomkapwn/enquire-mcp) to show your ❤️ and support.** Stars help other Obsidian users find the project, and they tell us where to invest the next cycle.
+
+Other ways to help:
+- 🐛 **File a bug** — the more concrete the repro (vault shape, exact tool call, server stderr), the faster the fix. See [the bug template](./.github/ISSUE_TEMPLATE/bug_report.yml).
+- 💡 **Propose a feature** — open a [feature request](./.github/ISSUE_TEMPLATE/feature_request.yml) and we'll align on scope before any code is written.
+- 🔧 **Send a PR** — bug fixes always welcome. New tools should pass the «useful against an Obsidian vault on day 1» bar. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+- 💬 **Tell us how you use it** — open a thread in [Discussions](https://github.com/oomkapwn/enquire-mcp/discussions) and we'll figure out what to build next from real workflows.
+
+---
+
 ## License & credits
 
 [MIT](./LICENSE). Built by [@OomkaBear](https://github.com/oomkapwn). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
+
+Named after [ENQUIRE](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, no plugin required.

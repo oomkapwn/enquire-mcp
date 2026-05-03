@@ -346,8 +346,9 @@ function likeToRegex(pattern: string): RegExp {
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
     if (ch === "\\" && i + 1 < pattern.length) {
+      // Backslash escapes the next char into a regex-literal of itself.
       const next = pattern[i + 1] as string;
-      out += next === "*" || next === "\\" ? `\\${next}` : `\\${next}`;
+      out += `\\${next}`;
       i++;
       continue;
     }

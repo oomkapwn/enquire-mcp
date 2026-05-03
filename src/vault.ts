@@ -114,10 +114,22 @@ export class Vault {
         if (typeof entry.relPath !== "string" || typeof entry.mtimeMs !== "number") return { kind: "drop" } as const;
         if (typeof entry.content !== "string") return { kind: "drop" } as const;
         if (Buffer.byteLength(entry.content, "utf8") > this.maxFileBytes) return { kind: "drop" } as const;
+        // Reject relative paths that escape the vault root after resolution.
+        // A crafted cache file with relPath like "../../../etc/hosts" would
+        // otherwise pollute the in-memory cache with a key pointing outside
+        // the vault. The orphaned entry would never be served (resolveSafePath
+        // blocks reads), but it would persist back to disk on next save.
         const abs = path.resolve(this.root, entry.relPath);
+        const relCheck = path.relative(this.root, abs);
+        if (relCheck.startsWith("..") || path.isAbsolute(relCheck)) return { kind: "drop" } as const;
         try {
           const s = await fs.stat(abs);
           if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
+          // Belt-and-braces: realpath check in case the path includes a symlink
+          // chain that resolves outside the vault.
+          const real = await fs.realpath(abs).catch(() => abs);
+          const realRel = path.relative(this.root, real);
+          if (realRel.startsWith("..") || path.isAbsolute(realRel)) return { kind: "drop" } as const;
           return { kind: "hit", abs, entry } as const;
         } catch {
           // Source file gone — drop and force a clean rewrite on next save.

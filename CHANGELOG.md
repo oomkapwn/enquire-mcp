@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-05-03
+
+Internal full-audit pass. One real security finding closed, one MCP-spec correctness fix, two cosmetic cleanups, one star-the-repo CTA + Berners-Lee credit at end of README.
+
+### Security
+- **P1 — Cache pollution via path traversal**: a crafted persistent-cache file with a `relPath` like `../../../etc/hosts` could pollute the in-memory cache with content keyed by paths outside the vault root. The orphaned entry was never *served* via tools (`resolveSafePath` blocks reads to out-of-vault paths), but it would persist back to the on-disk cache file on the next save, perpetuating the pollution. Fix: `loadDiskCache` now validates the resolved abs path stays inside the vault (relative-path check + `realpath` belt-and-braces). Two regression tests added (relative `../` traversal and absolute paths).
+
+### MCP-spec correctness
+- **P2 — Write tool annotations**: `obsidian_create_note` (which can overwrite irreversibly with `overwrite=true`) and `obsidian_append_to_note` (which mutates persistent state) were both annotated `destructiveHint: false`. Per MCP spec, `destructiveHint: true` is the right hint for tools that may make non-undoable changes. Updated. Read tools remain `destructiveHint` unset / `readOnlyHint: true`.
+
+### Cleanup
+- **P3 — Dead conditional in `likeToRegex`**: simplified `next === "*" || next === "\\" ? \`\\${next}\` : \`\\${next}\`` to its always-equal RHS. No behavior change.
+- **P3 — README coverage badge** drifted from 83% → actual 82% lines (slight churn after persistent-cache code added). Refreshed badge and the per-percent breakdown.
+
+### Docs
+- **README "Support the project" section** added at the bottom: star CTA + bug-report / feature-request / PR / Discussions pointers. Plus the ENQUIRE/Berners-Lee origin story moved into the credits as a one-paragraph close.
+
+### Tests
+- 139 unit tests (was 137). 2 new regression tests for cache path-traversal (relative `..` escape and absolute path).
+
+### What was checked but found clean
+- `biome check` — 0 errors
+- `tsc --noEmit` (TS strict + `noUncheckedIndexedAccess`) — 0 errors
+- `npm audit --audit-level=moderate` — 0 vulnerabilities (production AND dev)
+- `npm outdated` — empty (deps current)
+- `npm pack --dry-run` — 55.8 kB tarball, 26 files, version `0.7.2`
+- Runtime probes: NaN/Infinity/float CLI flag rejection, `clear-cache` on missing file, malformed DQL inputs (`LIST WHERE`, `LIST AND OR`, `LIST FROM`)
+- GitHub state: description ✓, homepage ✓, 19 topics ✓, Discussions on ✓, repo private (intentional pre-launch), CI green on last 2 main commits, social preview image still pending manual upload (the only thing GitHub has no API for)
+
 ## [0.7.1] — 2026-05-03
 
 **Second rename: `memex` → `enquire-mcp`.**

@@ -21,7 +21,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.7.1";
+const VERSION = "0.7.2";
 
 interface ServeOptions {
   vault: string;
@@ -298,7 +298,10 @@ function registerReadTools(server: McpServer, vault: Vault): void {
 }
 
 function registerWriteTools(server: McpServer, vault: Vault): void {
-  const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+  // destructiveHint=true: `obsidian_create_note` with overwrite=true replaces a
+  // file irreversibly; `obsidian_append_to_note` mutates persistent state with
+  // no built-in undo. Per MCP spec, both qualify as destructive.
+  const WRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
 
   server.registerTool(
     "obsidian_create_note",

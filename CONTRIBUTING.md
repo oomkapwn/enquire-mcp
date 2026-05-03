@@ -1,12 +1,12 @@
-# Contributing to obsidian-mcp
+# Contributing to memex
 
-Thanks for your interest. obsidian-mcp is a small, opinionated MCP server — the bar for new features is "does it pull weight against an Obsidian vault on day 1." The bar for fixes is much lower.
+Thanks for your interest. memex is a small, opinionated MCP server for Obsidian vaults — the bar for new features is "does it pull weight against an Obsidian vault on day 1." The bar for fixes is much lower.
 
 ## Getting started
 
 ```bash
-git clone https://github.com/oomkapwn/obsidian-mcp
-cd obsidian-mcp
+git clone https://github.com/oomkapwn/memex
+cd memex
 npm install
 npm run build
 npm test

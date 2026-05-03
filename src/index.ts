@@ -21,7 +21,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 interface ServeOptions {
   vault: string;
@@ -35,8 +35,8 @@ interface ServeOptions {
 async function main(): Promise<void> {
   const program = new Command();
   program
-    .name("obsidian-mcp")
-    .description("MCP server for reading Obsidian vaults — wikilinks, frontmatter, tags, backlinks, basic Dataview")
+    .name("memex-mcp")
+    .description("memex — MCP server for Obsidian vaults. Wikilinks, frontmatter, backlinks, basic Dataview")
     .version(VERSION);
 
   program
@@ -50,6 +50,22 @@ async function main(): Promise<void> {
     .option("--cache-file <path>", "Override the persistent-cache file location")
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
+    });
+
+  program
+    .command("clear-cache")
+    .description("Delete the persistent-cache file for a given vault")
+    .requiredOption("--vault <path>", "Vault whose cache to delete")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .action(async (opts: { vault: string; cacheFile?: string }) => {
+      const vault = new Vault(opts.vault, { persistentCache: true, cacheFile: opts.cacheFile });
+      await vault.ensureExists();
+      const removed = await vault.clearDiskCache();
+      if (removed) {
+        process.stdout.write(`memex: removed cache file ${vault.cacheFile}\n`);
+      } else {
+        process.stdout.write(`memex: no cache file at ${vault.cacheFile}\n`);
+      }
     });
 
   await program.parseAsync(process.argv);
@@ -66,7 +82,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
   await vault.ensureExists();
 
   const server = new McpServer({
-    name: "obsidian-mcp",
+    name: "memex",
     version: VERSION
   });
 
@@ -80,30 +96,34 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   if (vault.persistentCacheEnabled) {
     let saving = false;
+    let saved = false;
     const flush = async () => {
-      if (saving) return;
+      if (saving || saved) return;
       saving = true;
-      await vault.saveDiskCache().catch((err) => {
-        process.stderr.write(
-          `obsidian-mcp: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`
-        );
-      });
-      saving = false;
+      try {
+        await vault.saveDiskCache();
+        saved = true;
+      } catch (err) {
+        process.stderr.write(`memex: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
+      } finally {
+        saving = false;
+      }
     };
-    process.on("SIGINT", () => {
+    const onSignal = () => {
       flush().finally(() => process.exit(0));
-    });
-    process.on("SIGTERM", () => {
-      flush().finally(() => process.exit(0));
-    });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    // beforeExit fires when the loop empties; we schedule one async flush.
+    // The `saved` guard prevents recursion when flush completes and beforeExit fires again.
     process.on("beforeExit", () => {
-      void flush();
+      if (!saved && !saving) void flush();
     });
   }
 
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
-  process.stderr.write(`obsidian-mcp ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
+  process.stderr.write(`memex ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode})\n`);
 }
 
 function registerReadTools(server: McpServer, vault: Vault): void {
@@ -234,7 +254,7 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     {
       title: "Dataview query (basic)",
       description:
-        'Run a minimal Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM ("folder" | #tag) [WHERE field op value [AND …]] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains. Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, OR, FLATTEN, or GROUP BY — see docs/api.md for the unsupported set.',
+        'Run a Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM ("folder" | #tag) [WHERE pred (AND|OR pred)*] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains, like (SQL-LIKE wildcard with *, escape with \\*). Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, FLATTEN, GROUP BY, or joins — see docs/api.md for the unsupported set.',
       annotations: { ...READ_ONLY, title: "Dataview query" },
       inputSchema: {
         query: z.string().min(1).describe("Dataview-style query string")
@@ -586,7 +606,7 @@ const isCliEntry = (() => {
 
 if (isCliEntry) {
   main().catch((err) => {
-    process.stderr.write(`obsidian-mcp fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    process.stderr.write(`memex fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });
 }

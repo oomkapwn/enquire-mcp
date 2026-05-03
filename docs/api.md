@@ -1,6 +1,6 @@
-# obsidian-mcp — API (v0.3)
+# memex — API (v0.7)
 
-12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**memex is an MCP server for Obsidian vaults.** 12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 ## CLI flags
 
@@ -10,8 +10,15 @@
 | `--enable-write`       | off     | Register the two write tools.              |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
-| `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. |
-| `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/obsidian-mcp/<vault-hash>.json` (macOS) or `~/.cache/obsidian-mcp/<vault-hash>.json` (Linux). |
+| `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
+| `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/memex/<vault-hash>.json` (macOS) or `~/.cache/memex/<vault-hash>.json` (Linux). |
+
+## Subcommands
+
+| Subcommand | Args | What it does |
+|---|---|---|
+| `serve` (default) | see flags above | Start the MCP server over stdio. |
+| `clear-cache` | `--vault <path>` `[--cache-file <path>]` | Delete the persistent-cache file for the given vault. Useful for purging stale or sensitive content. Returns 0 even if no cache file exists. |
 
 ## Read tools (always registered)
 
@@ -250,6 +257,6 @@ The walker ignores `.git`, `.obsidian`, `.trash`, `node_modules`, and any other 
 ## Phase 3 (planned)
 
 - Persistent cross-vault index (Phase 2 cache is in-memory only)
-- Full DQL: expressions, OR, FLATTEN, GROUP BY
+- Full DQL: expressions, FLATTEN, GROUP BY, parenthesized precedence
 - Vault write tools (create/update note, with confirmation)
 - Graph queries (multi-hop link traversal)

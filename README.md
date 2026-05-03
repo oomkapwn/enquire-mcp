@@ -1,23 +1,27 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/obsidian-mcp"><img src="./assets/social-preview.png" alt="obsidian-mcp banner — first-class Obsidian vault access for Claude, Cursor and Devin" width="100%"></a>
+<a href="https://github.com/oomkapwn/memex"><img src="./assets/social-preview.png" alt="memex — MCP server for Obsidian vaults. Wikilinks, frontmatter, backlinks, Dataview, MCP resources & prompts." width="100%"></a>
 
-# obsidian-mcp
+# memex
 
-**Give Claude, Cursor and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, basic Dataview queries.**
+### MCP server for Obsidian vaults
 
-[![CI](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/obsidian-mcp/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/@oomkapwn/obsidian-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/obsidian-mcp)
+**Give Claude Code, Cursor, Codex, and Devin first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, Dataview queries, MCP resources, and read-only safety by default.**
+
+[![CI](https://github.com/oomkapwn/memex/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/memex/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@oomkapwn/memex.svg)](https://www.npmjs.com/package/@oomkapwn/memex)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-126%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-137%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-83%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
 </div>
 
-> An [MCP](https://modelcontextprotocol.io/) server purpose-built for Obsidian. Drop it in front of any vault and your AI assistant stops guessing at filesystem paths and starts reasoning about your notes the way you do.
+> **memex** is an [MCP](https://modelcontextprotocol.io/) server purpose-built for **[Obsidian](https://obsidian.md/) vaults**. Drop it in front of any vault and your AI assistant stops guessing at filesystem paths and starts reasoning about your notes the way you do — following `[[wikilinks]]`, respecting frontmatter, walking backlinks, running Dataview-style queries.
+>
+> Named after Vannevar Bush's 1945 [Memex](https://en.wikipedia.org/wiki/Memex) — the original vision of a personal knowledge system with associative trails. obsidian-mcp by spirit, memex by name.
 
 ```text
 You:    "What was I working on yesterday in the Apollo project?"
@@ -30,33 +34,36 @@ Claude: → obsidian_get_recent_edits({ since_minutes: 1440, folder: "01_Project
 
 ---
 
-## Why this exists
+## Why memex exists (vs other Obsidian-MCP options)
 
-Generic filesystem MCPs treat your vault as a tree of opaque text files. **They don't know what an Obsidian vault is.** They can't:
+There are several Obsidian-MCP servers out there. memex differentiates on three axes — **standalone**, **read-rich**, and **safe-by-default**:
 
-| Capability | Filesystem MCP | obsidian-mcp |
+| Capability | Most Obsidian-MCPs | memex |
 |---|:---:|:---:|
-| Read a `.md` file | ✅ | ✅ |
-| Resolve `[[Wikilink]]` to the actual file | ❌ | ✅ |
-| Resolve `[[Folder/Note#Heading\|alias]]` | ❌ | ✅ |
+| Works with `.md` files | ✅ | ✅ |
+| Requires Obsidian's Local REST API plugin | usually ✅ | ❌ — direct vault read |
+| Resolve `[[Wikilink]]` (alias, section, block, `../` relative) | partial | ✅ full |
 | Surface `![[Embed]]` separately from links | ❌ | ✅ |
-| Parse YAML frontmatter as typed data | ❌ | ✅ |
-| Filter notes by tag (frontmatter + inline) | ❌ | ✅ |
-| Find every note that links to X (backlinks) | ❌ | ✅ |
-| Find every broken `[[wikilink]]` in the vault | ❌ | ✅ |
-| Run `LIST FROM #idea WHERE status="active"` | ❌ | ✅ |
-| Stream "newest-first" recent edits | ❌ | ✅ |
-| Skip `.obsidian` / `.trash` / symlinks safely | ❌ | ✅ |
-| MCP **resources** for vault browsing | ❌ | ✅ |
-| MCP **prompts** for "summarize / review / find orphans" | ❌ | ✅ |
+| Find every note linking to X (**backlinks**) | rare | ✅ ranked + snippets |
+| Find every **broken `[[wikilink]]`** in the vault | ❌ | ✅ vault-hygiene tool |
+| List **outbound links** for one note with resolution status | ❌ | ✅ |
+| Built-in **Dataview-style queries** (`LIST` / `TABLE`, `OR`, `LIKE`) | only via Obsidian plugin | ✅ first-class |
+| **MCP resources** for browsing the vault as a tree | ❌ | ✅ |
+| **MCP prompts** (`summarize_recent`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`) | ❌ | ✅ 6 prompts |
+| **Read-only by default**, write tools opt-in | rarely | ✅ `--enable-write` |
+| Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
+| Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
+| TypeScript strict + Biome lint + 128 unit tests | varies | ✅ |
 
-That's the gap. obsidian-mcp closes it in ~1500 lines of TypeScript and four runtime dependencies.
+That's the gap. memex closes it in ~2000 lines of TypeScript and four runtime dependencies.
+
+> **Not affiliated with Obsidian.md.** Obsidian and the Obsidian logo are trademarks of Dynalist Inc. memex is an independent open-source project that reads Obsidian-format vaults.
 
 ---
 
 ## Who is this for?
 
-- **Obsidian users on Claude Code / Cursor / Devin** who want the assistant to draft notes that actually link properly, follow `[[…]]`, and respect frontmatter.
+- **Obsidian users on Claude Code / Cursor / Codex / Devin** (or any MCP-compatible client) who want the assistant to draft notes that actually link properly, follow `[[…]]`, and respect frontmatter.
 - **Agentic workflow builders** who need a structured layer over a markdown vault — `dataview_query`, `get_backlinks`, `list_tags` are the kind of primitives that compose into real automations.
 - **Tinkerers** who want to wire their PKM into LLM pipelines without writing a parser. We did the parsing.
 
@@ -66,8 +73,8 @@ That's the gap. obsidian-mcp closes it in ~1500 lines of TypeScript and four run
 
 ```bash
 # 1. Get the code
-git clone https://github.com/oomkapwn/obsidian-mcp
-cd obsidian-mcp && npm install && npm run build
+git clone https://github.com/oomkapwn/memex
+cd memex && npm install && npm run build
 
 # 2. Wire into Claude Code (~/.claude.json or .mcp.json)
 ```
@@ -78,7 +85,7 @@ cd obsidian-mcp && npm install && npm run build
     "obsidian": {
       "command": "node",
       "args": [
-        "/absolute/path/to/obsidian-mcp/dist/index.js",
+        "/absolute/path/to/memex/dist/index.js",
         "serve",
         "--vault", "/Users/you/Documents/Obsidian Vault"
       ]
@@ -95,7 +102,7 @@ cd obsidian-mcp && npm install && npm run build
   "mcpServers": {
     "obsidian": {
       "command": "npx",
-      "args": ["-y", "@oomkapwn/obsidian-mcp", "serve", "--vault", "/Users/you/Documents/Obsidian Vault"]
+      "args": ["-y", "@oomkapwn/memex", "serve", "--vault", "/Users/you/Documents/Obsidian Vault"]
     }
   }
 }
@@ -107,13 +114,13 @@ cd obsidian-mcp && npm install && npm run build
 <summary><b>Or install globally</b></summary>
 
 ```bash
-npm install -g @oomkapwn/obsidian-mcp
-obsidian-mcp serve --vault ~/Documents/Obsidian\ Vault
+npm install -g @oomkapwn/memex
+memex-mcp serve --vault ~/Documents/Obsidian\ Vault
 ```
 
 </details>
 
-Restart your client. The server logs `obsidian-mcp <version> ready (read-only, vault=…)` on stderr — that's your "it's connected" signal.
+Restart your client. The server logs `memex <version> ready (read-only, vault=…)` on stderr — that's your "it's connected" signal.
 
 ---
 
@@ -191,7 +198,7 @@ TABLE status FROM #idea WHERE status = "active" SORT file.mtime DESC
 ### 6. Daily journaling (write mode)
 > "Append a 'shipped today' bullet to today's daily note."
 
-With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-02", content: "- Shipped obsidian-mcp v0.3" })`
+With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: "- Shipped memex v0.7" })`
 
 ---
 
@@ -199,8 +206,8 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-02", content: 
 
 ```
 ┌─────────────────┐     stdio JSON-RPC     ┌─────────────────────┐
-│  Claude Code /  │ ◄────────────────────► │   obsidian-mcp      │
-│  Cursor / Devin │   tools/resources/     │  (this server)      │
+│  Claude Code /  │ ◄────────────────────► │   memex             │
+│  Cursor / Codex │   tools/resources/     │  (this server)      │
 └─────────────────┘   prompts                └─────────┬───────────┘
                                                       │
                                           ┌───────────┼────────────┐
@@ -235,8 +242,19 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-02", content: 
 | `--enable-write` | off | Register the two write tools. Server is otherwise strictly read-only. |
 | `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
-| `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. |
+| `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
 | `--cache-file <path>` | auto | Override persistent-cache file location. |
+
+### Cache & privacy
+
+When `--persistent-cache` is on, parsed notes are serialized to disk so subsequent server restarts skip re-parsing. By default the file lives at `~/Library/Caches/memex/<sha1>.json` on macOS, `~/.cache/memex/<sha1>.json` on Linux. Important caveats:
+
+- **Full note bodies are stored**, not just metadata. Anyone who can read your home cache directory can read your vault.
+- **File mode is `0600`** (user-read/write only) and the parent directory is `0700`. We don't trust shared home directories.
+- **Deleted notes are purged** on the next server start: when memex sees a cached entry whose source file no longer exists, it drops the entry from memory and rewrites the cache file without it on shutdown.
+- **Stale entries** (file mtime changed since cache write) are silently dropped on load; the source file is re-parsed.
+- **Manual purge:** run `memex-mcp clear-cache --vault <path>` to delete the cache file for a specific vault.
+- The cache file is **never read or written for vaults other than the one whose realpath matches the cache file's `root` field** — protects against cross-vault content leaks if you share a cache dir.
 
 The server logs `WRITE-ENABLED` to stderr on boot when the flag is on, so you can verify the mode at a glance.
 
@@ -269,20 +287,20 @@ No. It's a local stdio MCP server, designed for one client process per vault. Th
 Verify the source. `LIST FROM "01_Projects"` matches notes whose path starts with `01_Projects/`. `LIST FROM #idea` matches notes carrying the `idea` tag. Mix them with `WHERE`. See [docs/api.md](./docs/api.md) for the supported subset and grammar.
 
 **What about the full Dataview plugin?**
-We implement a deliberately small subset (`LIST` / `TABLE`, `FROM "folder" | #tag`, `WHERE field op value AND …`, `SORT`, `LIMIT`). No expressions, no `OR`, no `FLATTEN`/`GROUP BY`, no joins. PRs that close those gaps are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+We implement a deliberately small subset (`LIST` / `TABLE`, `FROM "folder" | #tag`, `WHERE pred (AND|OR pred)*`, `SORT`, `LIMIT`; ops `=`, `!=`, `contains`, `like`). No arithmetic / functions / `FLATTEN` / `GROUP BY` / joins / parenthesized precedence. PRs that close those gaps are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 **How big a vault can it handle?**
 Tested daily against a 117-note vault. The walker is O(notes) per call; the cache makes repeat reads O(1). For 10k+ vaults a persistent index would help — that's on the Phase 3 roadmap.
 
-**Why scoped npm name (`@oomkapwn/obsidian-mcp`)?**
-Avoids name squatting on the `obsidian-mcp` namespace. The CLI binary is still just `obsidian-mcp`.
+**Why scoped npm name (`@oomkapwn/memex`)?**
+A scoped name protects the brand and side-steps the very crowded `obsidian-mcp` / `mcp-obsidian` namespace on npm. The CLI binary is `memex-mcp`.
 
 ---
 
 ## Develop
 
 ```bash
-npm test              # 119 unit tests
+npm test              # 130+ unit tests
 npm run test:coverage # vitest --coverage (v8 provider)
 npm run lint          # biome check
 npm run lint:fix      # biome check --write (auto-fixes)
@@ -292,7 +310,7 @@ node scripts/smoke.mjs [vault-path]   # end-to-end JSON-RPC smoke
 
 Coverage on the latest release: **83% lines · 79% statements · 73% branches**. CI uploads the full HTML report as a workflow artifact (`coverage-report`).
 
-Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 18 / 20 / 22, runs the smoke against a synthetic vault, generates a coverage report, and runs `npm audit --audit-level=high`.
+Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 24, runs the smoke against a synthetic vault, generates a coverage report, and runs `npm audit --audit-level=high`.
 
 ---
 
@@ -310,8 +328,8 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 18 / 20 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
-- **0.3.x** — current. 8 read tools, 2 opt-in write tools, MCP resources + prompts, hardened.
-- **Phase 3 (planned)** — persistent on-disk index for 10k+ vaults; full DQL (`OR`, `FLATTEN`, `GROUP BY`, expressions); multi-hop graph queries.
+- **0.7.x** — current. Renamed from `obsidian-mcp` to `memex`. 10 read tools, 2 opt-in write tools, MCP resources + prompts, persistent on-disk cache (opt-in), DQL with `OR` + `LIKE`, hardened security.
+- **Roadmap** — graph queries (multi-hop, hub/orphan detection); refactoring tools (`rename_note`, `rename_tag` with wikilink rewrite); DQL expressions / parentheses / `FLATTEN` / `GROUP BY`; performance benchmarks against 10k+ vaults.
 
 ---
 

@@ -11,6 +11,7 @@ export const DEFAULT_MAX_CACHE_ENTRIES = 1024;
 
 /** Bumped on any change to ParsedNote shape — invalidates persisted caches that don't match. */
 const DISK_CACHE_VERSION = 1;
+export const DEFAULT_MAX_DISK_CACHE_BYTES = 50 * 1024 * 1024;
 
 export interface FileEntry {
   absPath: string;
@@ -30,8 +31,10 @@ export interface VaultOptions {
   maxCacheEntries?: number;
   enableWrite?: boolean;
   persistentCache?: boolean;
-  /** Override the cache file location. Default: ~/.cache/obsidian-mcp/<vault-hash>.json. */
+  /** Override the cache file location. Default: ~/.cache/memex/<vault-hash>.json. */
   cacheFile?: string;
+  /** Refuse to read/write a cache file larger than this (default 50 MB). */
+  maxDiskCacheBytes?: number;
 }
 
 export class Vault {
@@ -40,6 +43,7 @@ export class Vault {
   readonly maxCacheEntries: number;
   readonly writeEnabled: boolean;
   readonly persistentCacheEnabled: boolean;
+  readonly maxDiskCacheBytes: number;
   cacheFile: string | null;
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
@@ -51,6 +55,7 @@ export class Vault {
     this.maxCacheEntries = opts.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
     this.writeEnabled = opts.enableWrite ?? false;
     this.persistentCacheEnabled = opts.persistentCache ?? false;
+    this.maxDiskCacheBytes = opts.maxDiskCacheBytes ?? DEFAULT_MAX_DISK_CACHE_BYTES;
     this.cacheFile = opts.cacheFile ?? null;
   }
 
@@ -78,25 +83,81 @@ export class Vault {
   async loadDiskCache(): Promise<number> {
     if (!this.cacheFile) return 0;
     try {
-      const raw = await fs.readFile(this.cacheFile, "utf8");
-      const data = JSON.parse(raw) as DiskCacheFile;
-      if (data.version !== DISK_CACHE_VERSION || data.root !== this.root) return 0;
-      let loaded = 0;
-      for (const entry of data.entries) {
-        if (this.cache.size >= this.maxCacheEntries) break;
-        const abs = path.resolve(this.root, entry.relPath);
-        try {
-          const stat = await fs.stat(abs);
-          if (stat.mtimeMs !== entry.mtimeMs) continue;
-          this.cache.set(abs, { content: entry.content, parsed: entry.parsed, mtimeMs: entry.mtimeMs });
-          loaded += 1;
-        } catch {
-          // File gone — skip.
-        }
+      const stat = await fs.stat(this.cacheFile);
+      if (stat.size > this.maxDiskCacheBytes) {
+        process.stderr.write(
+          `memex: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+        );
+        return 0;
       }
-      return loaded;
     } catch {
       return 0;
+    }
+    let raw: string;
+    try {
+      raw = await fs.readFile(this.cacheFile, "utf8");
+    } catch {
+      return 0;
+    }
+    let data: DiskCacheFile;
+    try {
+      data = JSON.parse(raw) as DiskCacheFile;
+    } catch {
+      return 0;
+    }
+    if (data.version !== DISK_CACHE_VERSION || data.root !== this.root) return 0;
+    if (!Array.isArray(data.entries)) return 0;
+
+    // Stat every candidate in parallel — sequential blocked on big caches.
+    const checks = await Promise.all(
+      data.entries.map(async (entry) => {
+        if (typeof entry.relPath !== "string" || typeof entry.mtimeMs !== "number") return { kind: "drop" } as const;
+        if (typeof entry.content !== "string") return { kind: "drop" } as const;
+        if (Buffer.byteLength(entry.content, "utf8") > this.maxFileBytes) return { kind: "drop" } as const;
+        const abs = path.resolve(this.root, entry.relPath);
+        try {
+          const s = await fs.stat(abs);
+          if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
+          return { kind: "hit", abs, entry } as const;
+        } catch {
+          // Source file gone — drop and force a clean rewrite on next save.
+          return { kind: "drop" } as const;
+        }
+      })
+    );
+    let loaded = 0;
+    let dropped = 0;
+    for (const result of checks) {
+      if (result.kind === "drop") {
+        dropped += 1;
+        continue;
+      }
+      if (this.cache.size >= this.maxCacheEntries) break;
+      this.cache.set(result.abs, {
+        content: result.entry.content,
+        parsed: result.entry.parsed,
+        mtimeMs: result.entry.mtimeMs
+      });
+      loaded += 1;
+    }
+    // If we silently dropped any persisted entries (deleted notes, oversized,
+    // mtime-stale), mark the cache dirty so the next save rewrites WITHOUT
+    // those entries. Closes the audit finding about deleted-note content
+    // lingering on disk after the source note is removed from the vault.
+    if (dropped > 0) this.cacheDirty = true;
+    return loaded;
+  }
+
+  async clearDiskCache(): Promise<boolean> {
+    if (!this.cacheFile) return false;
+    try {
+      await fs.unlink(this.cacheFile);
+      this.cache.clear();
+      this.cacheDirty = false;
+      return true;
+    } catch (err) {
+      if (isErrnoException(err) && err.code === "ENOENT") return false;
+      throw err;
     }
   }
 
@@ -117,10 +178,20 @@ export class Vault {
       writtenAt: new Date().toISOString(),
       entries
     };
-    await fs.mkdir(path.dirname(this.cacheFile), { recursive: true });
+    const serialized = JSON.stringify(payload);
+    if (Buffer.byteLength(serialized, "utf8") > this.maxDiskCacheBytes) {
+      process.stderr.write(
+        `memex: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+      );
+      return;
+    }
+    await fs.mkdir(path.dirname(this.cacheFile), { recursive: true, mode: 0o700 });
     const tmp = `${this.cacheFile}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
+    // mode 0o600 — full note bodies live here, treat as private to the user account.
+    await fs.writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
     await fs.rename(tmp, this.cacheFile);
+    // Defensive: rename preserves original mode if file existed; chmod ensures 0o600 either way.
+    await fs.chmod(this.cacheFile, 0o600).catch(() => {});
     this.cacheDirty = false;
   }
 
@@ -335,7 +406,7 @@ function defaultCacheFile(root: string): string {
     process.env.XDG_CACHE_HOME ??
     (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
   const hash = createHash("sha1").update(root).digest("hex").slice(0, 12);
-  return path.join(base, "obsidian-mcp", `${hash}.json`);
+  return path.join(base, "memex", `${hash}.json`);
 }
 
 async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {

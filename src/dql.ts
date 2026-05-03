@@ -117,20 +117,45 @@ function parseSource(raw: string): Source {
   const s = raw.trim();
   if (!s) return { type: "all" };
   const strMatch = /^"([^"]*)"$/.exec(s);
-  if (strMatch && strMatch[1] !== undefined) return { type: "folder", path: strMatch[1] };
-  if (s.startsWith("#")) return { type: "tag", tag: s.slice(1).trim() };
+  if (strMatch && strMatch[1] !== undefined) {
+    if (!strMatch[1]) throw new DqlParseError(`FROM "" is not allowed; omit the FROM clause to scan the whole vault`);
+    return { type: "folder", path: strMatch[1] };
+  }
+  if (s.startsWith("#")) {
+    const tag = s.slice(1).trim();
+    if (!tag) throw new DqlParseError(`FROM # requires a tag name (e.g. FROM #idea)`);
+    return { type: "tag", tag };
+  }
   throw new DqlParseError(`Unsupported FROM source: ${raw}. Use "folder" or #tag.`);
 }
 
 function parseWhere(raw: string): WhereGroups {
   const orClauses = splitOnKeyword(raw, "OR");
-  return orClauses.map((orClause) => splitOnKeyword(orClause, "AND").map(parsePredicate));
+  if (orClauses.length === 0) throw new DqlParseError(`WHERE clause is empty`);
+  const groups: WhereGroups = [];
+  for (const orClause of orClauses) {
+    if (!orClause.trim()) {
+      throw new DqlParseError(`WHERE has an empty OR group — check for trailing or duplicated OR`);
+    }
+    const andClauses = splitOnKeyword(orClause, "AND");
+    if (andClauses.length === 0) {
+      throw new DqlParseError(`WHERE has an empty AND group — check for trailing or duplicated AND`);
+    }
+    for (const ac of andClauses) {
+      if (!ac.trim()) {
+        throw new DqlParseError(`WHERE has an empty predicate — check for trailing or duplicated AND`);
+      }
+    }
+    groups.push(andClauses.map(parsePredicate));
+  }
+  return groups;
 }
 
 function splitOnKeyword(input: string, keyword: string): string[] {
   const out: string[] = [];
   let last = 0;
   let i = 0;
+  let foundAny = false;
   while (i < input.length) {
     const ch = input[i];
     if (ch === '"') {
@@ -150,13 +175,17 @@ function splitOnKeyword(input: string, keyword: string): string[] {
         out.push(input.slice(last, i).trim());
         i += keyword.length;
         last = i;
+        foundAny = true;
         continue;
       }
     }
     i++;
   }
+  // Always push the tail when we saw at least one separator — preserves trailing-empty so
+  // validators upstream (parseWhere) can detect malformed `... OR` / `... AND` queries.
+  // When no separator was found at all and the whole thing trims to empty, return [].
   const tail = input.slice(last).trim();
-  if (tail) out.push(tail);
+  if (foundAny || tail) out.push(tail);
   return out;
 }
 
@@ -306,11 +335,33 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
 }
 
 function likeToRegex(pattern: string): RegExp {
-  // Escape regex specials, then turn unescaped * into .* (SQL-LIKE-style wildcard).
-  // \* is treated as a literal asterisk.
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const withWildcards = escaped.replace(/(?<!\\)\*/g, ".*").replace(/\\\*/g, "\\*");
-  return new RegExp(`^${withWildcards}$`, "iu");
+  // Single-pass walker so escaping is unambiguous:
+  //   *  → .*   (SQL-LIKE-style wildcard, any run of chars)
+  //   \* → \*   (literal asterisk; the \ is an escape, dropped)
+  //   \\ → \\   (literal backslash; the \ escapes the next \)
+  //   anything else regex-special → escaped
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: regex meta-chars list, not a template
+  const REGEX_SPECIALS = ".+^${}()|[]";
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\" && i + 1 < pattern.length) {
+      const next = pattern[i + 1] as string;
+      out += next === "*" || next === "\\" ? `\\${next}` : `\\${next}`;
+      i++;
+      continue;
+    }
+    if (ch === "*") {
+      out += ".*";
+      continue;
+    }
+    if (ch !== undefined && REGEX_SPECIALS.includes(ch)) {
+      out += `\\${ch}`;
+      continue;
+    }
+    out += ch;
+  }
+  return new RegExp(`^${out}$`, "iu");
 }
 
 function looseEq(a: unknown, b: unknown): boolean {

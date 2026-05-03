@@ -122,4 +122,83 @@ describe("persistent cache", () => {
     const note = await v.readNote(path.join(root, "Hello.md"));
     expect(note.content).toContain("Hello body");
   });
+
+  it("writes cache file with 0600 mode (audit P2-2 privacy)", async () => {
+    const v = new Vault(root, { persistentCache: true, cacheFile });
+    await v.ensureExists();
+    await v.readNote(path.join(root, "Hello.md"));
+    await v.saveDiskCache();
+    const stat = await fs.stat(cacheFile);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("re-saves cache after deleted-note entries are dropped on load (audit P2-2)", async () => {
+    // Seed cache with 2 entries.
+    const v1 = new Vault(root, { persistentCache: true, cacheFile });
+    await v1.ensureExists();
+    await v1.readNote(path.join(root, "Hello.md"));
+    await v1.readNote(path.join(root, "World.md"));
+    await v1.saveDiskCache();
+    const beforeBody = await fs.readFile(cacheFile, "utf8");
+    expect(beforeBody).toContain("Hello body");
+
+    // Delete World.md from the vault.
+    await fs.unlink(path.join(root, "World.md"));
+
+    // New Vault loads cache, should drop World.md entry AND mark dirty.
+    const v2 = new Vault(root, { persistentCache: true, cacheFile });
+    await v2.ensureExists();
+    await v2.saveDiskCache();
+    const afterBody = await fs.readFile(cacheFile, "utf8");
+    expect(afterBody).not.toContain("World note");
+    expect(afterBody).toContain("Hello body");
+  });
+
+  it("clearDiskCache removes the cache file and in-memory cache", async () => {
+    const v = new Vault(root, { persistentCache: true, cacheFile });
+    await v.ensureExists();
+    await v.readNote(path.join(root, "Hello.md"));
+    await v.saveDiskCache();
+    expect(
+      await fs
+        .stat(cacheFile)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(true);
+    const removed = await v.clearDiskCache();
+    expect(removed).toBe(true);
+    expect(
+      await fs
+        .stat(cacheFile)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
+  it("rejects oversized cached content on load (audit P2-1)", async () => {
+    // Write a cache file with a fake oversized entry.
+    const big = "x".repeat(200);
+    await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+    const v1 = new Vault(root, { persistentCache: true, cacheFile });
+    await v1.ensureExists();
+    const data = {
+      version: 1,
+      root: v1.root,
+      writtenAt: new Date().toISOString(),
+      entries: [
+        {
+          relPath: "Hello.md",
+          mtimeMs: (await fs.stat(path.join(root, "Hello.md"))).mtimeMs,
+          content: big,
+          parsed: { frontmatter: {}, body: big, wikilinks: [], embeds: [], tags: [] }
+        }
+      ]
+    };
+    await fs.writeFile(cacheFile, JSON.stringify(data));
+
+    // Load with stricter limit — entry must be dropped.
+    const v2 = new Vault(root, { persistentCache: true, cacheFile, maxFileBytes: 50 });
+    const loaded = await v2.loadDiskCache();
+    expect(loaded).toBe(0);
+  });
 });

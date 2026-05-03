@@ -89,6 +89,26 @@ describe("parseDql", () => {
   it("rejects columns on LIST", () => {
     expect(() => parseDql('LIST status FROM "projects"')).toThrow(DqlParseError);
   });
+
+  it("rejects empty tag source 'FROM #' (audit P2-4)", () => {
+    expect(() => parseDql("LIST FROM #")).toThrow(/tag name/);
+  });
+
+  it("rejects empty folder source 'FROM \"\"' (audit P2-4)", () => {
+    expect(() => parseDql('LIST FROM ""')).toThrow(/not allowed/);
+  });
+
+  it("rejects trailing OR (audit P2-4)", () => {
+    expect(() => parseDql('LIST WHERE status = "active" OR')).toThrow(/empty OR group|empty predicate/);
+  });
+
+  it("rejects trailing AND (audit P2-4)", () => {
+    expect(() => parseDql('LIST WHERE status = "active" AND')).toThrow(/empty AND group|empty predicate/);
+  });
+
+  it("rejects duplicated OR like 'OR OR' (audit P2-4)", () => {
+    expect(() => parseDql('LIST WHERE status = "a" OR OR status = "b"')).toThrow(/empty OR group/);
+  });
 });
 
 describe("runDql", () => {
@@ -148,6 +168,26 @@ describe("runDql", () => {
     const v = new Vault(root);
     const rows = await runDql(v, parseDql('LIST FROM "projects" WHERE file.name like "ALPHA"'));
     expect(rows.map((r) => r["file.name"])).toEqual(["alpha"]);
+  });
+
+  it("LIKE escapes regex specials — 'a.b' is literal, not 'a-any-char-b' (audit fix)", async () => {
+    const v = new Vault(root);
+    // 'a.b' as a literal LIKE pattern must NOT match 'alpha' (or any char-in-the-middle).
+    const rows = await runDql(v, parseDql('LIST FROM "projects" WHERE file.name like "a.p"'));
+    expect(rows).toEqual([]);
+  });
+
+  it("LIKE backslash-asterisk matches a literal asterisk (audit fix)", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "projects", "star.md"), '---\nlabel: "a*b"\n---\nbody');
+    try {
+      const rows = await runDql(v, parseDql('LIST FROM "projects" WHERE label like "a\\*b"'));
+      expect(rows.map((r) => r["file.name"])).toEqual(["star"]);
+      const noMatch = await runDql(v, parseDql('LIST FROM "projects" WHERE label like "x\\*b"'));
+      expect(noMatch).toEqual([]);
+    } finally {
+      await fs.unlink(path.join(root, "projects", "star.md")).catch(() => {});
+    }
   });
 
   it("matches contains on tags array", async () => {

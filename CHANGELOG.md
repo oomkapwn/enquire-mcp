@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-03
+
+**Project renamed: `obsidian-mcp` → `memex`.**
+
+### Why the rename
+- The npm/GitHub `obsidian-mcp` namespace turned out to be crowded — at least 12 GitHub projects and 4 npm packages with overlapping names. We're indistinguishable in search.
+- Trademark risk: `bitbonsai/mcpvault` was forced-renamed by Obsidian.md in March 2026, even though it didn't contain "obsidian" in the name. Anything with "obsidian" in the package name is exposed.
+- The new name (`memex`) is a nod to Vannevar Bush's 1945 essay [As We May Think](https://en.wikipedia.org/wiki/Memex) — the original vision of a personal knowledge system. Resonates with the PKM / second-brain audience without leaning on Obsidian's brand.
+- Obsidian-MCP discoverability is preserved via npm description, GitHub topics, README hero subtitle ("MCP server for Obsidian vaults"), and SVG banner — not via the package name.
+
+### Renamed
+- npm package: `@oomkapwn/obsidian-mcp` → `@oomkapwn/memex`
+- CLI binary: `obsidian-mcp` → `memex-mcp`
+- GitHub repo: `oomkapwn/obsidian-mcp` → `oomkapwn/memex`
+- MCP server `name` reported in handshake: `obsidian-mcp` → `memex`
+- Boot stderr message: `obsidian-mcp <v> ready` → `memex <v> ready`
+- Default cache dir: `~/Library/Caches/obsidian-mcp/` → `~/Library/Caches/memex/`
+
+### Tool names: unchanged
+All `obsidian_*` tool names (`obsidian_list_notes`, `obsidian_read_note`, etc.) **remain `obsidian_`-prefixed** by design. The prefix tells the LLM what domain it's operating in. We are an MCP server that operates on Obsidian vaults; the tools should advertise that.
+
+### Disclaimer added
+Explicit "Not affiliated with Obsidian.md" notice in README and SECURITY.md. Obsidian and the Obsidian logo are trademarks of Dynalist Inc.
+
+### Bundled audit fixes (folded from in-progress v0.6.1 + post-rename external audit)
+
+**From internal pre-rename work:**
+- **DQL `LIKE` regex bug**: `\*` (escaped literal asterisk) used to compile to `^\\*$` — a regex matching "any number of literal backslashes" — instead of matching a literal `*`. Rewrote `likeToRegex` as a single-pass walker so escaping is unambiguous.
+- **Disk cache load: parallelized stats**: `loadDiskCache` now does `Promise.all` over all entry-stat checks instead of awaiting them one at a time.
+- **Disk cache size guard**: refuses to load or save cache files exceeding 50 MB by default (configurable via `maxDiskCacheBytes`).
+- **Disk cache per-entry validation**: rejects entries whose `content` exceeds `maxFileBytes`, whose `relPath` isn't a string, or whose `mtimeMs` isn't a number.
+- **`beforeExit` flush race**: guarded by a `saved` flag so flush completion doesn't trigger recursive `beforeExit`. Signal handlers use `process.once`.
+
+**From external audit on v0.6.0:**
+- **P2 — Persistent cache size-limit bypass**: `loadDiskCache` already filtered oversized entries from the in-memory cache load (above), but the audit confirmed it. Closed.
+- **P2 — Persistent cache privacy**: cache file is now written with mode `0600` and parent directory `0700`. Documented explicitly in [README "Cache & privacy"](./README.md#cache--privacy) and [SECURITY.md](./SECURITY.md). Added test for file mode.
+- **P2 — Deleted-note content lingers in cache**: when `loadDiskCache` skips entries because the source file was deleted (or is mtime-stale, or oversized), the cache is now marked dirty. Next save writes a clean file without those entries. Added test for deleted-note purge.
+- **P2 — `clear-cache` CLI subcommand**: `memex-mcp clear-cache --vault <path>` deletes the persistent-cache file. Returns 0 even if no file exists.
+- **P2 — Node 18 incompatibility**: `commander` 14 and `vitest` 4 (shipped in v0.3.3) require Node ≥ 20. Bumped `engines.node` to `>=20`, dropped Node 18 from CI matrix (now `[20, 22, 24]`), updated README badge.
+- **P2 — DQL malformed `OR` / `FROM #` accepted as match-all**: `parseWhere` now rejects empty `OR` / `AND` groups (trailing-OR, duplicated-OR-OR, trailing-AND, etc.) with `DqlParseError`. `parseSource` rejects `FROM ""` and `FROM #` with no tag name. 5 regression tests added.
+- **P3 — Stale `obsidian_dataview_query` description**: tool description still claimed "no OR" — updated to reflect `AND`/`OR`, `=`/`!=`/`contains`/`like` operators, and the actual unsupported list (`FLATTEN`/`GROUP BY`/parens).
+- **P3 — README stale references** (`119 unit tests`, `0.3.x current`, "no OR" FAQ) refreshed.
+
+### Tests
+- 137 unit tests (was 119). New since v0.6.0:
+  - Cache mode `0600` enforced on save
+  - Deleted-note entries purged on next save after load
+  - `clearDiskCache` integration
+  - Oversized cached content rejected on load
+  - DQL: `FROM #` rejected (audit P2-4)
+  - DQL: `FROM ""` rejected
+  - DQL: trailing `OR` rejected
+  - DQL: trailing `AND` rejected
+  - DQL: `OR OR` (empty middle group) rejected
+  - DQL: `LIKE` with regex specials (`a.b` is literal)
+  - DQL: `LIKE` with `\*` matches literal asterisk
+
 ## [0.6.0] — 2026-05-02
 
 Wave 4: persistent on-disk cache for warm cold-starts on large vaults.

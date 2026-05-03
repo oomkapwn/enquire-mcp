@@ -4,12 +4,12 @@
 
 set -euo pipefail
 
-REPO="oomkapwn/obsidian-mcp"
+REPO="oomkapwn/memex"
 
 echo "== Setting description + homepage =="
 gh repo edit "$REPO" \
-  --description "MCP server for Obsidian vaults — wikilinks, backlinks, frontmatter, tags, basic Dataview. Read-only by default; opt-in writes. For Claude Code, Cursor, Devin." \
-  --homepage "https://www.npmjs.com/package/@oomkapwn/obsidian-mcp"
+  --description "memex — MCP server for Obsidian vaults. Wikilinks, backlinks, frontmatter, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes. For Claude Code, Cursor, Codex, Devin and any MCP-compatible client." \
+  --homepage "https://www.npmjs.com/package/@oomkapwn/memex"
 
 echo "== Setting topics =="
 gh repo edit "$REPO" \

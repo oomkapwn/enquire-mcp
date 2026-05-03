@@ -1,10 +1,10 @@
 {
-  "name": "@oomkapwn/obsidian-mcp",
-  "version": "0.6.0",
-  "description": "MCP server for reading Obsidian vaults — wikilinks, frontmatter, tags, recent edits.",
+  "name": "@oomkapwn/memex",
+  "version": "0.7.0",
+  "description": "memex — MCP server for Obsidian vaults. Wikilinks, frontmatter, backlinks, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes.",
   "type": "module",
   "bin": {
-    "obsidian-mcp": "dist/index.js"
+    "memex-mcp": "dist/index.js"
   },
   "files": [
     "dist",
@@ -31,26 +31,35 @@
     "prepublishOnly": "npm run lint && npm run build && npm test"
   },
   "keywords": [
-    "mcp",
     "obsidian",
+    "obsidian-md",
+    "mcp",
+    "model-context-protocol",
     "claude",
     "claude-code",
-    "model-context-protocol",
+    "cursor",
+    "memex",
     "wikilinks",
-    "markdown"
+    "backlinks",
+    "frontmatter",
+    "dataview",
+    "markdown",
+    "pkm",
+    "knowledge-management",
+    "ai-agent"
   ],
   "author": "Alex (@OomkaBear)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oomkapwn/obsidian-mcp.git"
+    "url": "git+https://github.com/oomkapwn/memex.git"
   },
-  "homepage": "https://github.com/oomkapwn/obsidian-mcp#readme",
+  "homepage": "https://github.com/oomkapwn/memex#readme",
   "bugs": {
-    "url": "https://github.com/oomkapwn/obsidian-mcp/issues"
+    "url": "https://github.com/oomkapwn/memex/issues"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

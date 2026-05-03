@@ -4,7 +4,7 @@
 # Requires `gh auth login`.
 
 set -euo pipefail
-REPO="oomkapwn/obsidian-mcp"
+REPO="oomkapwn/memex"
 
 echo "== Verifying repo is public =="
 VIS=$(gh repo view "$REPO" --json visibility -q .visibility)

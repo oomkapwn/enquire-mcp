@@ -9,9 +9,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: obsidian-mcp version
-      description: Output of `obsidian-mcp --version`
-      placeholder: "0.3.0"
+      label: memex version
+      description: Output of `memex-mcp --version`
+      placeholder: "0.7.0"
     validations:
       required: true
   - type: dropdown
@@ -53,7 +53,7 @@ body:
       label: Steps to reproduce
       description: Exact tool call(s) you (or the assistant) made.
       placeholder: |
-        1. Started server: `obsidian-mcp serve --vault ~/MyVault`
+        1. Started server: `memex-mcp serve --vault ~/MyVault`
         2. Called `obsidian_resolve_wikilink({ wikilink: "Foo" })`
         3. ...
     validations:
@@ -68,7 +68,7 @@ body:
     id: stderr
     attributes:
       label: Server stderr
-      description: Anything the server logged. `obsidian-mcp fatal: …` lines are gold.
+      description: Anything the server logged. `memex fatal: …` lines are gold.
       render: shell
     validations:
       required: false

@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-185%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-186%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -53,9 +53,9 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
-| TypeScript strict + Biome lint + 185 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 186 unit tests | varies | ✅ |
 
-That's the gap. enquire closes it in ~2000 lines of TypeScript and four runtime dependencies.
+That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
 > **Not affiliated with Obsidian.md.** Obsidian and the Obsidian logo are trademarks of Dynalist Inc. enquire-mcp is an independent open-source project that reads Obsidian-format vaults. The name «enquire» is a tribute to Tim Berners-Lee's 1980 hypertext system, not a trademark claim against any party.
 
@@ -199,7 +199,7 @@ TABLE status FROM #idea WHERE status = "active" SORT file.mtime DESC
 ### 6. Daily journaling (write mode)
 > "Append a 'shipped today' bullet to today's daily note."
 
-With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: "- Shipped enquire v0.7.1" })`
+With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: "- shipped a thing" })`
 
 ---
 
@@ -291,7 +291,7 @@ Verify the source. `LIST FROM "01_Projects"` matches notes whose path starts wit
 We implement a deliberately small subset (`LIST` / `TABLE`, `FROM "folder" | #tag`, `WHERE pred (AND|OR pred)*`, `SORT`, `LIMIT`; ops `=`, `!=`, `contains`, `like`). No arithmetic / functions / `FLATTEN` / `GROUP BY` / joins / parenthesized precedence. PRs that close those gaps are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 **How big a vault can it handle?**
-Tested daily against a 117-note vault. The walker is O(notes) per call; the cache makes repeat reads O(1). For 10k+ vaults a persistent index would help — that's on the Phase 3 roadmap.
+Tested daily against a ~120-note vault; benched up to 1000 synthetic notes (see [`scripts/bench-search.mjs`](./scripts/bench-search.mjs)). The walker is O(notes) per call; the in-memory cache makes repeat reads O(1). For multi-thousand-note vaults pass `--persistent-index` — the SQLite FTS5 backend gives sub-millisecond BM25 search (37–103x faster than the linear-scan path on 100–1000 notes).
 
 **Why scoped npm name (`@oomkapwn/enquire-mcp`)?**
 A scoped name protects the brand and side-steps the very crowded `obsidian-mcp` / `mcp-obsidian` namespace on npm. The CLI binary is `enquire-mcp` to match the npm package name.
@@ -301,7 +301,7 @@ A scoped name protects the brand and side-steps the very crowded `obsidian-mcp` 
 ## Develop
 
 ```bash
-npm test              # 130+ unit tests
+npm test              # full suite (count in the badge)
 npm run test:coverage # vitest --coverage (v8 provider)
 npm run lint          # biome check
 npm run lint:fix      # biome check --write (auto-fixes)
@@ -329,8 +329,11 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
-- **0.7.x** — current. Renamed twice (`obsidian-mcp` → `memex` → `enquire-mcp`) to escape the crowded `obsidian-mcp` namespace and to land on a name with a clear historical referent — Tim Berners-Lee's 1980 ENQUIRE prototype of the Web. 10 read tools, 2 opt-in write tools, MCP resources + prompts, persistent on-disk cache (opt-in), DQL with `AND`/`OR`/`LIKE`, hardened security.
-- **Roadmap** — graph queries (multi-hop, hub/orphan detection); refactoring tools (`rename_note`, `rename_tag` with wikilink rewrite); DQL expressions / parentheses / `FLATTEN` / `GROUP BY`; performance benchmarks against 10k+ vaults.
+- **0.10.x** — SQLite FTS5 inverted index (opt-in via `--persistent-index`), BM25 ranking, sub-millisecond search on multi-thousand-note vaults (37–103x faster than the linear scan path), chunk-level addressing via `obsidian://chunk/{n}/{path}` resource. Filter API on full-text search (`tag`, `since`, `folder`).
+- **0.9.x** — `search_text` switched to AND-tokenizer default with structured response (BREAKING). Parallel file reads in scan path.
+- **0.8.x** — DQL `contains` semantics for arrays (membership, not substring). Code of Conduct.
+- **0.7.x** — Renamed `obsidian-mcp` → `enquire-mcp` (via brief `memex` detour) to escape the crowded `obsidian-mcp` npm namespace and to land on a name with a clear historical referent — Tim Berners-Lee's 1980 ENQUIRE prototype of the Web.
+- **Roadmap (beyond 0.10)** — graph queries (multi-hop, hub/orphan detection); refactoring tools (`rename_note`, `rename_tag` with wikilink rewrite); DQL expressions / parentheses / `FLATTEN` / `GROUP BY`; benchmarks at 10k+ vaults.
 
 ---
 

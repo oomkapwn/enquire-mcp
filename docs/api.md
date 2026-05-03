@@ -1,6 +1,8 @@
-# enquire — API (v0.7)
+# enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 12 MCP tools (10 read + 2 opt-in write), 2 MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 13 MCP tools (10 always-on read + 1 opt-in read via `--persistent-index` + 2 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+
+> Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
 ## CLI flags
 
@@ -276,6 +278,8 @@ BM25-ranked full-text search over a SQLite FTS5 inverted index. Sub-100ms on mul
 |----------|-----------------------------------|-----------------------------------------------------------|
 | `query`  | `string`                          | Required. Whitespace-tokenized; hyphenated tokens (e.g. `claude-telegram`) auto-quoted so FTS5 doesn't interpret `-` as `NOT`. |
 | `folder` | `string?`                         | Restrict to a subfolder (vault-relative).                  |
+| `tag`    | `string?`                         | Exact tag membership (e.g. `"project"`). Frontmatter + inline tags. No leading `#`. |
+| `since`  | `string?`                         | ISO 8601 date or timestamp — restrict to chunks from notes modified on/after this. |
 | `limit`  | `number?` (≤ 200)                 | Default 25.                                                |
 
 **Returns:**
@@ -285,9 +289,10 @@ BM25-ranked full-text search over a SQLite FTS5 inverted index. Sub-100ms on mul
   query: string;
   total_chunks: number;
   total_files: number;
+  applied_filters: { folder: string|null; tag: string|null; since: string|null };
   matches: Array<{
     rel_path: string;
-    chunk_index: number;     // 0-based; can address with obsidian://chunk URI later
+    chunk_index: number;     // 0-based; address via obsidian://chunk/<index>/<path>
     line_start: number;      // 1-based
     line_end: number;
     snippet: string;         // «…term…» format from FTS5 snippet()
@@ -296,7 +301,18 @@ BM25-ranked full-text search over a SQLite FTS5 inverted index. Sub-100ms on mul
 }
 ```
 
-**Implementation note:** see [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) for the full architecture and trade-offs (production-verified by an external contributor at 1771 chunks / 368 files, 9.8 MB index, 50–100ms BM25 top-10).
+**Implementation note:** see [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) for the full architecture (production-verified by an external contributor at 1771 chunks / 368 files, 9.8 MB index, 50–100ms BM25 top-10). Local bench against synthetic vault sees 37–103x speedup over the linear-scan path on 100–1000 notes — see [`scripts/bench-search.mjs`](../scripts/bench-search.mjs).
+
+## `obsidian://chunk/{chunkIndex}/{+notePath}` resource _(opt-in, requires `--persistent-index`)_
+
+Chunk-level deep-linking. Construct the URI from `rel_path` + `chunk_index` returned by `obsidian_full_text_search`:
+
+```
+obsidian://chunk/0/01_Projects/Apollo.md   → chunk 0 of 01_Projects/Apollo.md
+obsidian://chunk/3/notes/long-note.md      → chunk 3 of notes/long-note.md
+```
+
+Returns `{rel_path, chunk_index, line_start, line_end, content}` JSON. **`content` is the verbatim original chunk text** — the synthetic FTS5 wikilink-target enrichment used for recall does NOT appear in the response.
 
 ## CLI subcommands for the FTS5 index
 
@@ -306,21 +322,28 @@ enquire-mcp index --vault /path/to/vault [--tokenize unicode61|trigram] [--index
 
 # Then serve with the index loaded.
 enquire-mcp serve --vault /path/to/vault --persistent-index
+
+# Remove the index files (.fts5.db + WAL/SHM sidecar) — privacy purge.
+enquire-mcp clear-index --vault /path/to/vault [--index-file <path>]
 ```
 
-The index file lives at `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux) by default. Override with `--index-file <path>`.
+The index file lives at `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux) by default. Override with `--index-file <path>`. DB + WAL + SHM files are chmod'd to `0600`; parent directory to `0700`. See [SECURITY.md "Persistent FTS5 index: privacy posture"](../SECURITY.md#persistent-fts5-index-privacy-posture) for full privacy details.
 
 ## Roadmap
 
-### v1.0 polish (in progress on `feat/fts5-index`)
-- Filter API: `tag`, `since` on `obsidian_full_text_search`.
-- `obsidian://chunk/<path>#<index>` resource URI so MCP clients can deep-link to specific chunks.
-- Examples directory with the contributor's reference Python implementation (per [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10)).
+### Shipped in 0.10
+- ✅ SQLite FTS5 inverted index (`--persistent-index`).
+- ✅ BM25 ranking, sub-millisecond warm queries on multi-thousand-note vaults.
+- ✅ Filter API on `obsidian_full_text_search`: `tag`, `since`, `folder`.
+- ✅ Chunk-level resource URI (`obsidian://chunk/{n}/{path}`).
+- ✅ `--tokenize=unicode61|trigram` for CJK / mixed-script vaults.
+- ✅ `clear-index` subcommand for privacy purge.
 
-### Beyond v1.0
+### Open
 - Full DQL: expressions, `FLATTEN`, `GROUP BY`, parenthesized precedence.
 - Higher-level write tools: rename/move with wikilink rewrites, tag refactor.
 - Graph queries (multi-hop link traversal).
+- Examples directory with the contributor's reference Python implementation (per [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10)).
 
 ## Skipped directories
 

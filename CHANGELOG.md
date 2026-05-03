@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] — 2026-05-03
+
+External-audit pass on top of v0.10.3 — closes one P1 (chunk-resource leaking FTS5 internal enrichment), tightens privacy posture for the FTS5 path, plugs a folder-filter pattern issue, hardens the release pipeline, and clears doc drift accumulated across the v0.10.x range.
+
+### Fixed
+- **P1 — `obsidian://chunk/{n}/{path}` resource was returning the FTS5-enriched chunk text, not the raw note text.** The FTS5 `content` column carries an appended `[wikilink_targets: …]` synthetic line for recall (so a search for a target name surfaces notes that link out to it without naming it inline). The resource handler returned that enriched text — meaning MCP clients were seeing a synthetic line that doesn't exist in the source note, breaking quoting and creating ambiguity in deep-link responses. Fix: schema bump (v2 → v3) adds an UNINDEXED `raw_content` column carrying the verbatim chunk; `getChunk()` now selects `raw_content`. Existing v0.10.x indexes auto-rebuild on first v0.10.4 boot. Negative-assertion regression test added in `tests/fts5.test.ts`.
+- **P2 — FTS5 folder filter used SQLite `GLOB`** which interprets `*?[]` as pattern syntax. A folder named `Project [A]` or `Q?A` would expand into wider matches. Switched to `substr(rel_path, 1, ?) = ?` for prefix-equality with no pattern semantics.
+
+### Added — privacy
+- **DB + WAL + SHM file mode `0600`** on every `FtsIndex.open()` (was: only the parent dir got `0700`, and only when first created). Closes the audit gap that the FTS5 index — which stores chunked note content + tag list + wikilink targets — wasn't getting the same explicit chmod that the persistent parse cache does.
+- **New CLI subcommand `enquire-mcp clear-index`** for full privacy purge: removes `.fts5.db`, `.fts5.db-wal`, `.fts5.db-shm`. Symmetric to `clear-cache`.
+- **`SECURITY.md` gains a "Persistent FTS5 index: privacy posture" section** mirroring the existing persistent-cache section. Covers what the index stores, file modes, the WAL/SHM gotcha, the cross-vault contamination guard, and the manual purge path.
+
+### Added — release pipeline
+- **`.github/workflows/release.yml` now runs the full quality gate before `npm publish`**: lint, build, test, **`check-version-consistency`**, **`npm audit --audit-level=high`**, and a **JSON-RPC smoke test against a synthetic vault**. Previously a bad commit could publish to npm if it passed lint+build+test alone. (v0.10.2 already showed how brittle the slimmer gate was.)
+
+### Added — server hardening
+- **`startServer()` wraps FTS5 sync in try/catch** that closes the SQLite handle if `syncFtsIndex` throws — was leaking the connection until process exit.
+
+### Docs cleanup (drift across the v0.10.x range)
+- `docs/api.md` header was still `# enquire — API (v0.7)` and claimed `12 MCP tools (10 read + 2 opt-in write)` — actually 13 tools when both opt-ins are enabled (10 always-on read + 1 opt-in FTS read + 2 opt-in write). Header de-versioned, count corrected, link to CHANGELOG added.
+- `docs/api.md` `obsidian_full_text_search` schema was missing the `tag` and `since` filters (shipped in v0.10.1) and the `applied_filters` field of the response shape. Added.
+- `docs/api.md` `obsidian_full_text_search` returns shape: `chunk_index` no longer says "can address with obsidian://chunk URI later" — that resource shipped in v0.10.2 and is documented in its own section now.
+- `docs/api.md` Roadmap reorganized: shipped items moved to "Shipped in 0.10" with checkmarks; only unshipped items remain in "Open".
+- `README.md`: line 202 example used `"Shipped enquire v0.7.1"` — now version-agnostic. Line 304 said `npm test # 130+ unit tests` — generalized to "full suite (count in the badge)". Line 332 historical block claimed `0.7.x — current` — replaced with current 0.10.x → 0.7.x narrative.
+- `README.md`: dependency claim updated from "four runtime dependencies" to "four mandatory + one optional (`better-sqlite3`)".
+- `README.md`: 10k+ vault story now points at the FTS5 path (which shipped) instead of the prior "would help, on the Phase 3 roadmap" wording.
+- `assets/social-preview.svg`: terminal mockup said `"You shipped the v0.7 spec."` — now version-agnostic.
+
+### Tests
+- 186 unit tests (was 185). 1 new negative-assertion regression test for the chunk-resource raw-content fix.
+
+### What I'd done as a meta-pass: why was the chunk leak missed?
+- The v0.10.0 wikilink-recall test asserted *positive* recall (search finds the file). It didn't assert *absence* of the synthetic enrichment in resource output.
+- The v0.10.2 `getChunk` test used `toContain("first paragraph")`, which silently passes even when the chunk has extra trailing content.
+- Storage column and API response field were treated as the same thing by default — nothing in the test discipline caught the divergence. Lesson: round-trip exact-equality assertions for any "fetch what you stored" path.
+- A `grep` of `src/` for similar "store enriched / serve to user" patterns found this was the ONLY occurrence; no other path returns indexed-form data via a user-facing resource or tool.
+
 ## [0.10.3] — 2026-05-03
 
 Re-release of v0.10.2. The v0.10.2 git tag exists, but the auto-publish workflow's `npm run lint` step failed on CI (a biome `useTemplate` finding that registered as `info` locally but was `error` on the CI image). v0.10.2 never reached npm; v0.10.3 contains the same code plus the lint fix and is the first npm-published version with chunk-level addressing.

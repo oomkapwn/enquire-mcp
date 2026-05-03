@@ -47,3 +47,14 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 - Deleted notes: on load, entries whose source file no longer exists are dropped from memory AND the cache is marked dirty so the next save rewrites the file without those entries.
 - Manual purge: `enquire-mcp clear-cache --vault <path>` deletes the cache file.
 - **Caveat:** anyone with read access to your user account can read the cache file. If your threat model includes other local users on the same machine, do not use `--persistent-cache`.
+
+## Persistent FTS5 index: privacy posture
+
+When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.
+
+- DB file + WAL (`<file>-wal`) + SHM (`<file>-shm`) sidecar files are all chmod'd to **`0600`** on every `open()`.
+- Parent directory mode is **`0700`**.
+- `obsidian://chunk/{n}/{path}` resource returns the **raw original chunk text only** — the synthetic `[wikilink_targets: …]` enrichment used for FTS5 recall does NOT leak into the resource response.
+- Cross-vault contamination guard: a `meta` table stores `vault_root` and `tokenize_mode`; if either changes between runs, the index is dropped and rebuilt with a stderr warning.
+- Manual purge: `enquire-mcp clear-index --vault <path>` removes the `.fts5.db`, `.fts5.db-wal`, and `.fts5.db-shm` files.
+- **Caveat:** SQLite WAL mode keeps the most-recent uncommitted writes in `<file>-wal`. If you delete only `<file>` manually (not via `clear-index`), some recently-indexed chunks may persist in the sidecar. Always use `clear-index` for full removal.

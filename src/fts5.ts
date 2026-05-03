@@ -16,7 +16,11 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const SCHEMA_VERSION = 2; // v2 added the `tags` UNINDEXED column for tag-filtered search.
+const SCHEMA_VERSION = 3;
+// v2 added the `tags` UNINDEXED column for tag-filtered search.
+// v3 added `raw_content` UNINDEXED so the chunk resource can return the
+// original note text, while FTS5's `content` column keeps the enriched
+// version (with appended wikilink_targets) for recall.
 
 export type TokenizeMode = "unicode61" | "trigram";
 
@@ -97,6 +101,27 @@ export class FtsIndex {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.bootstrapSchema();
+    // Best-effort: tighten perms on the DB and its WAL/SHM sidecar files to
+    // 0600. The index stores chunked note content so it deserves the same
+    // privacy posture as the persistent parse cache (see SECURITY.md).
+    await Promise.all(
+      [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
+    );
+  }
+
+  /** Remove the index file + WAL/SHM sidecar files. Idempotent. */
+  async clearOnDisk(): Promise<boolean> {
+    this.close();
+    let removed = false;
+    for (const p of [this.file, `${this.file}-wal`, `${this.file}-shm`]) {
+      try {
+        await fs.unlink(p);
+        removed = true;
+      } catch {
+        // missing files are fine
+      }
+    }
+    return removed;
   }
 
   close(): void {
@@ -141,6 +166,7 @@ export class FtsIndex {
         line_start UNINDEXED,
         line_end UNINDEXED,
         tags UNINDEXED,
+        raw_content UNINDEXED,
         tokenize='${tokenizeArg}'
       );
       CREATE TABLE IF NOT EXISTS source_state (
@@ -229,16 +255,21 @@ export class FtsIndex {
     const chunks = chunkContent(content);
     db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
     const insert = db.prepare(
-      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content) VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
-    // Stored as a comma-delimited list so the tag-filter LIKE pattern can
-    // wrap it with leading/trailing commas for exact-tag matching at query time.
+    // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
+    // with leading/trailing commas for exact-tag matching at query time.
     const tagsSerialized = tags.length ? tags.join(",") : "";
     chunks.forEach((c, i) => {
-      // Append wikilink targets as a meta-line so notes that link out are
-      // recalled on a search for the link target — pattern from issue #10.
+      // FTS5 column `content` carries an enriched form: original text + a
+      // synthetic `[wikilink_targets: …]` meta-line so a search for a link
+      // target name recalls notes that link out without naming it inline.
+      // The unindexed `raw_content` keeps the *original* chunk so the
+      // `obsidian://chunk/{n}/{path}` resource can return verbatim text
+      // (the audit P1 — without raw_content the resource was leaking the
+      // synthetic line into MCP-client view, breaking quoting).
       const enriched = wikilinkTargets.length ? `${c.text}\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : c.text;
-      insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized);
+      insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
     });
     db.prepare(
       "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at) VALUES (?, ?, ?, ?)"
@@ -257,8 +288,12 @@ export class FtsIndex {
     const where: string[] = ["chunks MATCH ?"];
     const params: unknown[] = [safe];
     if (opts.folder) {
-      where.push("chunks.rel_path GLOB ?");
-      params.push(`${opts.folder.replace(/\/+$/, "")}/*`);
+      // Prefix-equality via substr — avoids GLOB pattern semantics so folder
+      // names containing `*`, `?`, `[`, `]` (rare but possible in Obsidian)
+      // don't expand into wider matches.
+      const prefix = `${opts.folder.replace(/\/+$/, "")}/`;
+      where.push("substr(chunks.rel_path, 1, ?) = ?");
+      params.push(prefix.length, prefix);
     }
     if (opts.tag) {
       // Exact-tag membership inside the comma-separated `tags` column —
@@ -305,12 +340,17 @@ export class FtsIndex {
   /**
    * Fetch a single chunk by (rel_path, chunk_index). Backs the
    * `obsidian://chunk/{chunkIndex}/{+notePath}` resource so MCP clients can
-   * deep-link into specific chunks returned by a prior search.
+   * deep-link into specific chunks returned by a prior search. Returns the
+   * RAW chunk text (the unenriched original); the FTS5 `content` column
+   * additionally carries a synthetic wikilink-targets meta-line for recall,
+   * which would otherwise pollute resource responses (audit v0.10.4 P1).
    */
   getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
     const db = this.requireDb();
     const row = db
-      .prepare("SELECT content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?")
+      .prepare(
+        "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?"
+      )
       .get<{ content: string; line_start: number; line_end: number }>(relPath, chunkIndex);
     return row ?? null;
   }

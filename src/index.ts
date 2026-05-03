@@ -23,7 +23,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.10.3";
+const VERSION = "0.10.4";
 
 interface ServeOptions {
   vault: string;
@@ -83,6 +83,24 @@ async function main(): Promise<void> {
     });
 
   program
+    .command("clear-index")
+    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM sidecar) for a given vault")
+    .requiredOption("--vault <path>", "Vault whose index to delete")
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .action(async (opts: { vault: string; indexFile?: string }) => {
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+      const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
+      const removed = await idx.clearOnDisk();
+      if (removed) {
+        process.stdout.write(`enquire: removed fts5 index files at ${indexFile}\n`);
+      } else {
+        process.stdout.write(`enquire: no fts5 index files at ${indexFile}\n`);
+      }
+    });
+
+  program
     .command("index")
     .description(
       "Cold-build (or refresh) the FTS5 search index for a vault. Useful before first --persistent-index use."
@@ -128,8 +146,14 @@ async function startServer(opts: ServeOptions): Promise<void> {
     const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
     const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
     ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
-    await ftsIndex.open();
-    await syncFtsIndex(vault, ftsIndex);
+    try {
+      await ftsIndex.open();
+      await syncFtsIndex(vault, ftsIndex);
+    } catch (err) {
+      // Don't leak the SQLite handle if open() succeeded but sync threw.
+      ftsIndex.close();
+      throw err;
+    }
   }
 
   const server = new McpServer({

@@ -101,7 +101,8 @@ describe("FtsIndex — full lifecycle", () => {
       idx.reindexFile("notes/beta.md", 1001, "Beta note discussing Apollo project plans.\n\nDetails on rocketry.");
       idx.reindexFile("notes/gamma.md", 1002, "Gamma is unrelated to the search keywords above.");
       expect(idx.totalFiles()).toBe(3);
-      expect(idx.totalChunks()).toBeGreaterThanOrEqual(5);
+      // Tightened from `>= 5`: alpha has 2 paragraphs, beta has 2, gamma has 1 → exactly 5 chunks.
+      expect(idx.totalChunks()).toBe(5);
 
       const apolloHits = idx.search("Apollo");
       expect(apolloHits.length).toBeGreaterThan(0);
@@ -198,6 +199,26 @@ describe("FtsIndex — full lifecycle", () => {
       const apolloHits = idx.search("Apollo");
       expect(apolloHits.length).toBe(1);
       expect(apolloHits[0]?.rel_path).toBe("daily.md");
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("getChunk returns RAW chunk text, not the enriched FTS5 storage form (audit v0.10.4 P1)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      const original = "Quick standup notes for today.";
+      idx.reindexFile("daily.md", 1000, original, ["Apollo", "Hermes"]);
+      const chunk = idx.getChunk("daily.md", 0);
+      // Negative assertion — the synthetic FTS5 enrichment must NOT leak.
+      expect(chunk?.content).not.toContain("[wikilink_targets:");
+      expect(chunk?.content).not.toContain("Apollo");
+      // Positive: getChunk returns the verbatim original text.
+      expect(chunk?.content).toBe(original);
+      // But the search index DOES find Apollo through the enrichment.
+      expect(idx.search("Apollo").length).toBe(1);
     } finally {
       idx.close();
     }

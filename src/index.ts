@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import * as path from "node:path";
 import { realpathSync } from "node:fs";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

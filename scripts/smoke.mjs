@@ -9,9 +9,25 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const bin = path.join(root, "dist", "index.js");
-const vault = process.argv[2] ?? path.join(os.homedir(), "Documents", "Obsidian Vault");
 
-const proc = spawn("node", [bin, "serve", "--vault", vault], {
+// Args: first non-flag positional is the vault path; --with-fts flips on
+// --persistent-index and exercises the FTS5-only surface (extra tool +
+// chunk resource).
+const args = process.argv.slice(2);
+const positional = args.filter((a) => !a.startsWith("--"));
+const vault = positional[0] ?? path.join(os.homedir(), "Documents", "Obsidian Vault");
+const withFts = args.includes("--with-fts");
+
+const serveArgs = [bin, "serve", "--vault", vault];
+if (withFts) serveArgs.push("--persistent-index");
+
+if (withFts) {
+  console.log("=== smoke variant: --persistent-index (FTS5 path) ===");
+} else {
+  console.log("=== smoke variant: scan (no --persistent-index) ===");
+}
+
+const proc = spawn("node", serveArgs, {
   stdio: ["pipe", "pipe", "pipe"]
 });
 
@@ -79,8 +95,13 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  check("tools/list returns 10 read tools", names.length === 10, `got ${JSON.stringify(names)}`);
-  const expected = [
+  const expectedCount = withFts ? 11 : 10;
+  check(
+    `tools/list returns ${expectedCount} read tools`,
+    names.length === expectedCount,
+    `got ${JSON.stringify(names)}`
+  );
+  const baseTools = [
     "obsidian_dataview_query",
     "obsidian_get_backlinks",
     "obsidian_get_outbound_links",
@@ -92,6 +113,7 @@ try {
     "obsidian_resolve_wikilink",
     "obsidian_search_text"
   ];
+  const expected = withFts ? [...baseTools, "obsidian_full_text_search"].sort() : baseTools;
   check("tool names match spec", JSON.stringify(names) === JSON.stringify(expected), JSON.stringify(names));
   const allReadOnly = (list.result?.tools ?? []).every((t) => t.annotations?.readOnlyHint === true);
   check("read tools all have readOnlyHint=true", allReadOnly, "missing annotations");
@@ -264,6 +286,53 @@ try {
     unresolved.result.content[0].text.slice(0, 200)
   );
   console.log(`      → unresolved wikilinks (vault-wide): ${unresolvedParsed.length}`);
+
+  // FTS5-only surface: full_text_search tool + chunk resource template.
+  if (withFts) {
+    const fts = await rpc("tools/call", {
+      name: "obsidian_full_text_search",
+      arguments: { query: "Apollo", limit: 3 }
+    });
+    const ftsText = fts.result?.content?.[0]?.text ?? "";
+    const ftsParsed = JSON.parse(ftsText);
+    check(
+      "full_text_search returns structured BM25 response",
+      typeof ftsParsed === "object" &&
+        Array.isArray(ftsParsed.matches) &&
+        typeof ftsParsed.total_chunks === "number" &&
+        typeof ftsParsed.applied_filters === "object",
+      ftsText.slice(0, 200)
+    );
+    console.log(
+      `      → fts5 hits: ${ftsParsed.matches.length} of ${ftsParsed.total_chunks} chunks across ${ftsParsed.total_files} files`
+    );
+
+    // Chunk resource — construct URI from a hit and read it back.
+    if (ftsParsed.matches.length > 0) {
+      const m = ftsParsed.matches[0];
+      const chunkUri = `obsidian://chunk/${m.chunk_index}/${m.rel_path}`;
+      const chunk = await rpc("resources/read", { uri: chunkUri });
+      const chunkText = chunk.result?.contents?.[0]?.text ?? "";
+      const chunkParsed = JSON.parse(chunkText);
+      check(
+        "obsidian://chunk URI returns raw chunk content (no [wikilink_targets] enrichment leak)",
+        typeof chunkParsed.content === "string" && !chunkParsed.content.includes("[wikilink_targets:"),
+        chunkText.slice(0, 200)
+      );
+      console.log(
+        `      → chunk ${m.chunk_index}/${m.rel_path}: ${chunkParsed.content.length} chars (line ${chunkParsed.line_start}–${chunkParsed.line_end})`
+      );
+    }
+
+    // FTS5 chunks template should be registered when --persistent-index is on.
+    const tmpl2 = await rpc("resources/templates/list", {});
+    const templates2 = tmpl2.result?.resourceTemplates ?? [];
+    check(
+      "fts5 chunk resource template registered",
+      templates2.some((t) => String(t.uriTemplate ?? t.uri ?? "").startsWith("obsidian://chunk/")),
+      JSON.stringify(templates2).slice(0, 200)
+    );
+  }
 } catch (err) {
   console.error("Smoke test threw:", err);
   failures.push(err.message);

@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Pre-commit: run biome lint locally so the same severity rules CI uses
+# are applied before commits land. We were burning CI cycles 4-5 times
+# in the v0.10.x range catching biome line-width and useTemplate findings
+# that bit only on the GitHub Actions image.
+
+if ! npm run -s lint >/tmp/enquire-lint-$$.log 2>&1; then
+  echo "❌ pre-commit: 'npm run lint' failed — see below."
+  cat /tmp/enquire-lint-$$.log
+  rm -f /tmp/enquire-lint-$$.log
+  echo
+  echo "Hint: 'npm run lint:fix' auto-applies most format fixes."
+  exit 1
+fi
+rm -f /tmp/enquire-lint-$$.log

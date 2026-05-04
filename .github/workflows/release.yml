@@ -28,10 +28,11 @@ jobs:
         run: node scripts/check-version-consistency.mjs
       - name: npm audit (high+)
         run: npm audit --audit-level=high
-      - name: JSON-RPC smoke test against synthetic vault
+      - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"
           node scripts/smoke.mjs "$VAULT"
+          node scripts/smoke.mjs "$VAULT" --with-fts
       - name: Publish with provenance
         run: npm publish --provenance --access public
         env:

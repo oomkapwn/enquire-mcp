@@ -76,8 +76,10 @@ jobs:
       - name: Build synthetic vault
         id: vault
         run: echo "path=$(node scripts/synthetic-vault.mjs)" >> "$GITHUB_OUTPUT"
-      - name: JSON-RPC smoke test
+      - name: JSON-RPC smoke test (scan path)
         run: node scripts/smoke.mjs "${{ steps.vault.outputs.path }}"
+      - name: JSON-RPC smoke test (FTS5 --persistent-index path)
+        run: node scripts/smoke.mjs "${{ steps.vault.outputs.path }}" --with-fts
 
   audit:
     runs-on: ubuntu-latest

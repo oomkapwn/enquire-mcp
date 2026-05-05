@@ -23,7 +23,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.10.6";
+const VERSION = "0.11.0";
 
 interface ServeOptions {
   vault: string;
@@ -35,6 +35,7 @@ interface ServeOptions {
   persistentIndex?: boolean;
   indexFile?: string;
   tokenize?: "unicode61" | "trigram";
+  excludeGlob?: string[];
 }
 
 async function main(): Promise<void> {
@@ -61,6 +62,10 @@ async function main(): Promise<void> {
     .option(
       "--tokenize <mode>",
       "FTS5 tokenize mode: 'unicode61' (default; Latin/Cyrillic) or 'trigram' (CJK/mixed-script)"
+    )
+    .option(
+      "--exclude-glob <pattern...>",
+      "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -134,7 +139,8 @@ async function startServer(opts: ServeOptions): Promise<void> {
     maxFileBytes: opts.maxFileBytes !== undefined ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes") : undefined,
     maxCacheEntries: opts.cacheSize !== undefined ? parsePositiveInt(opts.cacheSize, "--cache-size") : undefined,
     persistentCache: !!opts.persistentCache,
-    cacheFile: opts.cacheFile
+    cacheFile: opts.cacheFile,
+    excludeGlobs: opts.excludeGlob
   });
   await vault.ensureExists();
 
@@ -201,7 +207,10 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
   const ftsMode = ftsIndex ? `, fts5-index (${ftsIndex.totalFiles()} files / ${ftsIndex.totalChunks()} chunks)` : "";
-  process.stderr.write(`enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode})\n`);
+  const privacyMode = vault.excludeGlobs.length > 0 ? `, exclude-globs=${vault.excludeGlobs.length}` : "";
+  process.stderr.write(
+    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode})\n`
+  );
 
   if (ftsIndex) {
     const closeFts = () => ftsIndex?.close();
@@ -321,11 +330,18 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     {
       title: "Read note",
       description:
-        "Read a note by relative path or by title (filename without .md). Returns content, frontmatter, wikilinks, embeds, tags, mtime.",
+        'Read a note by relative path or by title (filename without .md). Default `format: "full"` returns content + frontmatter + wikilinks + embeds + tags. `format: "map"` returns just headings + frontmatter keys + counts (no body) — useful for planning a surgical edit without paying token cost for the body. Title accepts periodic-note aliases ("today"/"daily"/"weekly"/"monthly") that resolve to the standard `YYYY-MM-DD`/`YYYY-Www`/`YYYY-MM` names. Errors include `Did you mean: ...` suggestions on near-misses.',
       annotations: { ...READ_ONLY, title: "Read note" },
       inputSchema: {
         path: z.string().optional().describe("Path relative to vault root, with or without .md"),
-        title: z.string().optional().describe("Note title (filename without .md)")
+        title: z
+          .string()
+          .optional()
+          .describe('Note title (filename without .md). Aliases: "today"/"daily"/"weekly"/"monthly".'),
+        format: z
+          .enum(["full", "map"])
+          .optional()
+          .describe('"full" (default) returns body + parsed metadata. "map" returns just headings + counts.')
       }
     },
     async (args) => textResult(await readNote(vault, args))

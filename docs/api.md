@@ -17,6 +17,7 @@
 | `--persistent-index`   | off     | Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers `obsidian_full_text_search` + the `obsidian://chunk/{n}/{path}` resource. **Stores chunked note content + tag list + wikilink targets — see [SECURITY.md "Persistent FTS5 index"](../SECURITY.md#persistent-fts5-index-privacy-posture).** |
 | `--tokenize <mode>`    | `unicode61` | FTS5 tokenize mode. `unicode61` (default; Latin/Cyrillic, removes diacritics) or `trigram` (CJK / mixed-script, ~2x index size). Changing this triggers an automatic index rebuild. |
 | `--index-file <path>`  | auto    | Override the FTS5 index file location. Default: `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux). |
+| `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter. Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
 
 ## Subcommands
 

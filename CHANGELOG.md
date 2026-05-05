@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-05-05
+
+Competitive feature set — borrowed/synthesized from a deep audit of the obsidian-MCP space (StevenStavrakis, MarkusPfundstein, cyanheads, marcelmarais, aaronsb, mcpvault) and Obsidian community pain-point research (forum, HN, Reddit). Four user-visible features land here, none of them invented from scratch — each closes a gap real users complain about with the existing tools.
+
+### Added — privacy
+- **`--exclude-glob <pattern...>`** CLI flag (repeatable). Glob patterns matching vault-relative paths make those notes invisible to *every* tool — `list_notes`, `read_note`, `search_text`, `dataview_query`, even direct path reads. Closes the most-frequent forum complaint about Obsidian-MCP setups: *"the AI can see my whole vault and that isn't something I have enabled permanently in my main vault"*. Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md' 'Inbox/*.draft.md'`. Backed by 7 unit tests for both glob semantics and Vault filtering.
+
+### Added — daily-note workflow
+- **Periodic-note aliases on `obsidian_read_note`** — `title: "today"` (or `"daily"` / `"weekly"` / `"monthly"`) resolves to today's daily/weekly/monthly note using the standard Daily-Notes-plugin formats: `YYYY-MM-DD` / `YYYY-Www` (ISO week) / `YYYY-MM`. Literal title takes priority — if you have an actual `Daily.md`, that one wins. Borrowed from cyanheads/obsidian-mcp-server, made standalone (no Local REST API plugin needed).
+
+### Added — LLM-friendly errors
+- **`Did you mean: …` suggestions** on every `Note not found` error from `obsidian_read_note`, `obsidian_create_note`, and `obsidian_append_to_note`. Up to 3 nearest paths by case-insensitive prefix/contains/relpath ranking. Closes the cyanheads-style "case-insensitive retry plus closest-match hint" UX gap that LLMs hit when they paraphrase a note name.
+
+### Added — projection format
+- **`obsidian_read_note` accepts `format: "map"`** for a document-map projection: returns headings (with `level` + `text` + `line`) + frontmatter keys + wikilink/embed/tag counts + `byte_size` *without* the body. Lets an LLM plan a surgical edit without paying the token cost of reading the full note. Default `format: "full"` preserves the v0.10 shape.
+
+### Tests
+- 213 unit tests (was 195). 18 new across 4 features:
+  - `globToRegex` semantics (4 tests)
+  - `--exclude-glob` filtering at `listNotes` + `readNote` paths (4 tests)
+  - Document-map projection — headings inside fences correctly skipped (2 tests)
+  - Periodic-note aliases — `today`/`daily`/`weekly`/`monthly` resolution + literal-priority + error-message format (5 tests)
+  - Did-you-mean — typo path/title suggestions, exact match doesn't include hint (3 tests)
+
+### Why this matters
+Each of these four features came directly from the competitor + community research:
+- **`--exclude-glob`**: the privacy concern was the #1 unmet user want from the forum thread; nobody else ships per-folder ACL.
+- **Periodic aliases**: daily-note workflow is one of the top reasons people use Obsidian; cyanheads had this, nobody else with the standalone-FS architecture did.
+- **Did-you-mean + map projection**: cyanheads' UX patterns the rest of the field hadn't borrowed yet.
+
 ## [0.10.6] — 2026-05-03
 
 CI re-release of v0.10.5. Same content + applied biome's auto-format wrap on the SQL string in `src/fts5.ts` (line was just past biome's 120-col `lineWidth`, CI strict where local was lenient until I re-ran `npm run lint`). v0.10.5 git tag exists pointing at 6039dc6 but never reached npm.

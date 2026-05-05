@@ -1,9 +1,9 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { listNotes, readNote } from "../src/tools.js";
-import { Vault } from "../src/vault.js";
+import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;
 let outsideDir: string;
@@ -157,5 +157,70 @@ describe("parseNote — malformed input", () => {
     expect(out.title).toBe("Заметка");
     expect(out.tags).toContain("идея");
     await fs.unlink(path.join(root, "Заметка.md"));
+  });
+});
+
+describe("globToRegex (v0.11 — privacy filter)", () => {
+  it("`**` matches across path separators", () => {
+    expect(globToRegex("Personal/**").test("Personal/Inbox/x.md")).toBe(true);
+    expect(globToRegex("Personal/**").test("Other/Inbox/x.md")).toBe(false);
+  });
+  it("`*` matches within a single segment only", () => {
+    expect(globToRegex("private/*.md").test("private/x.md")).toBe(true);
+    expect(globToRegex("private/*.md").test("private/sub/x.md")).toBe(false);
+  });
+  it("`?` matches exactly one non-slash char", () => {
+    expect(globToRegex("?_temp.md").test("x_temp.md")).toBe(true);
+    expect(globToRegex("?_temp.md").test("xx_temp.md")).toBe(false);
+    expect(globToRegex("?_temp.md").test("/_temp.md")).toBe(false);
+  });
+  it("escapes regex specials in literal segments", () => {
+    expect(globToRegex("(parens)/x.md").test("(parens)/x.md")).toBe(true);
+    expect(globToRegex("dot.path/x.md").test("dot.path/x.md")).toBe(true);
+    expect(globToRegex("dot.path/x.md").test("dotXpath/x.md")).toBe(false);
+  });
+});
+
+describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
+  let vroot: string;
+  beforeEach(async () => {
+    vroot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-exclude-"));
+    await fs.mkdir(path.join(vroot, "Personal"), { recursive: true });
+    await fs.mkdir(path.join(vroot, "Work"), { recursive: true });
+    await fs.writeFile(path.join(vroot, "Personal", "diary.md"), "private");
+    await fs.writeFile(path.join(vroot, "Work", "project.md"), "work");
+    await fs.writeFile(path.join(vroot, "INDEX.md"), "index");
+  });
+  afterEach(async () => {
+    await fs.rm(vroot, { recursive: true, force: true });
+  });
+
+  it("listNotes hides paths matching --exclude-glob", async () => {
+    const v = new Vault(vroot, { excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    const out = await listNotes(v, {});
+    const paths = out.map((n) => n.path).sort();
+    expect(paths).toEqual(["INDEX.md", "Work/project.md"]);
+    expect(paths).not.toContain("Personal/diary.md");
+  });
+
+  it("readNote refuses to surface excluded content even by direct path", async () => {
+    const v = new Vault(vroot, { excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(readNote(v, { path: "Personal/diary.md" })).rejects.toThrow(/excluded by --exclude-glob/);
+  });
+
+  it("multiple exclude patterns AND'd correctly (any match → excluded)", async () => {
+    const v = new Vault(vroot, { excludeGlobs: ["Personal/**", "INDEX.md"] });
+    await v.ensureExists();
+    const out = await listNotes(v, {});
+    expect(out.map((n) => n.path)).toEqual(["Work/project.md"]);
+  });
+
+  it("listMarkdown(folder) of an excluded folder returns empty", async () => {
+    const v = new Vault(vroot, { excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    const out = await listNotes(v, { folder: "Personal" });
+    expect(out).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-194%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-213%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -53,7 +53,11 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
-| TypeScript strict + Biome lint + 194 unit tests | varies | ✅ |
+| **Per-folder privacy filter** (`--exclude-glob '02_Personal/**'`) | ❌ | ✅ |
+| **Periodic-note aliases** (`title: "today"` resolves to today's daily-note) | rare | ✅ |
+| **`Did you mean: ...`** suggestions on note-not-found errors | rare | ✅ |
+| **Document-map projection** (`format: "map"`: headings + counts, no body) | ❌ | ✅ |
+| TypeScript strict + Biome lint + 213 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 

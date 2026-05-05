@@ -397,3 +397,105 @@ describe("getOutboundLinks", () => {
     }
   });
 });
+
+describe("readNote — document-map projection (v0.11)", () => {
+  it('`format: "map"` returns headings + counts, no body', async () => {
+    const v = new Vault(root);
+    await fs.writeFile(
+      path.join(root, "Mapped.md"),
+      "---\ntitle: Mapped\ntags: [demo]\n---\n\n# Top heading\n\nbody line\n\n## Sub\n\nmore body\n\n```\n## not-a-heading-in-fence\n```\n\n### Deep\n"
+    );
+    try {
+      const result = await readNote(v, { path: "Mapped.md", format: "map" });
+      if (!("format" in result)) throw new Error("expected map projection");
+      expect(result.format).toBe("map");
+      expect(result.frontmatter_keys.sort()).toEqual(["tags", "title"]);
+      expect(result.headings.map((h) => `${"#".repeat(h.level)} ${h.text}`)).toEqual([
+        "# Top heading",
+        "## Sub",
+        "### Deep" // ## inside ``` is correctly NOT extracted
+      ]);
+      expect(result.byte_size).toBeGreaterThan(0);
+      // No body field on map projection.
+      expect("content" in result).toBe(false);
+    } finally {
+      await fs.unlink(path.join(root, "Mapped.md")).catch(() => {});
+    }
+  });
+
+  it('`format: "full"` (default) keeps existing shape', async () => {
+    const v = new Vault(root);
+    const result = await readNote(v, { path: "Alpha.md" });
+    if ("format" in result) throw new Error("expected full shape");
+    expect(typeof result.content).toBe("string");
+    expect(result.content.length).toBeGreaterThan(0);
+  });
+});
+
+describe("readNote — periodic-note aliases (v0.11)", () => {
+  it('`title: "today"` resolves to YYYY-MM-DD and reads the matching daily note', async () => {
+    const v = new Vault(root);
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    const dailyName = `${yyyy}-${mm}-${dd}.md`;
+    await fs.writeFile(path.join(root, dailyName), "---\ntags: [daily]\n---\n\nToday's standup.\n");
+    try {
+      const result = await readNote(v, { title: "today" });
+      if ("format" in result) throw new Error("expected full shape");
+      expect(result.path).toBe(dailyName);
+      expect(result.tags).toContain("daily");
+    } finally {
+      await fs.unlink(path.join(root, dailyName)).catch(() => {});
+    }
+  });
+
+  it('"daily" alias error message includes the resolved date when neither literal nor alias matches', async () => {
+    const v = new Vault(root);
+    await expect(readNote(v, { title: "daily" })).rejects.toThrow(/also tried periodic alias "\d{4}-\d{2}-\d{2}"/);
+  });
+
+  it('"weekly" alias resolves to YYYY-Www format', async () => {
+    const v = new Vault(root);
+    await expect(readNote(v, { title: "weekly" })).rejects.toThrow(/also tried periodic alias "\d{4}-W\d{2}"/);
+  });
+
+  it('"monthly" alias resolves to YYYY-MM format', async () => {
+    const v = new Vault(root);
+    await expect(readNote(v, { title: "monthly" })).rejects.toThrow(/also tried periodic alias "\d{4}-\d{2}"/);
+  });
+
+  it("literal title takes priority over alias (user with `Daily.md` in vault)", async () => {
+    const v = new Vault(root);
+    // Stash a file literally named Daily.md to verify literal-first behavior.
+    await fs.writeFile(path.join(root, "Daily.md"), "literal daily file");
+    try {
+      const result = await readNote(v, { title: "daily" });
+      if ("format" in result) throw new Error("expected full shape");
+      expect(result.path).toBe("Daily.md");
+      expect(result.content).toContain("literal daily file");
+    } finally {
+      await fs.unlink(path.join(root, "Daily.md")).catch(() => {});
+    }
+  });
+});
+
+describe("readNote — did-you-mean suggestions (v0.11)", () => {
+  it("near-miss path returns suggestions in error message", async () => {
+    const v = new Vault(root);
+    await expect(readNote(v, { path: "alph" })).rejects.toThrow(/Did you mean.*Alpha/i);
+  });
+
+  it("near-miss title returns suggestions in error message", async () => {
+    const v = new Vault(root);
+    await expect(readNote(v, { title: "alph" })).rejects.toThrow(/Did you mean.*Alpha/i);
+  });
+
+  it("exact match never includes 'Did you mean' (only on miss)", async () => {
+    const v = new Vault(root);
+    const result = await readNote(v, { title: "Alpha" });
+    if ("format" in result) throw new Error("expected full shape");
+    expect(result.title).toBe("Alpha");
+  });
+});

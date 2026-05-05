@@ -44,10 +44,7 @@ export async function listNotes(
   return out;
 }
 
-export async function readNote(
-  vault: Vault,
-  args: { path?: string; title?: string }
-): Promise<{
+export interface NoteReadFull {
   path: string;
   title: string;
   content: string;
@@ -56,10 +53,46 @@ export async function readNote(
   embeds: Embed[];
   tags: string[];
   mtime: string;
-}> {
+}
+
+export interface NoteReadMap {
+  path: string;
+  title: string;
+  format: "map";
+  frontmatter_keys: string[];
+  headings: Array<{ level: number; text: string; line: number }>;
+  wikilinks_count: number;
+  embeds_count: number;
+  tags: string[];
+  mtime: string;
+  byte_size: number;
+}
+
+export async function readNote(
+  vault: Vault,
+  args: { path?: string; title?: string; format?: "full" | "map" }
+): Promise<NoteReadFull | NoteReadMap> {
   await vault.ensureExists();
   const entry = await resolveTarget(vault, args);
-  const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
+  const { content, parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
+
+  if (args.format === "map") {
+    // Document-map projection — headings + frontmatter keys + counts. Lets an
+    // LLM plan a surgical edit without paying token cost for the full body.
+    return {
+      path: entry.relPath,
+      title: stripMd(entry.basename),
+      format: "map",
+      frontmatter_keys: Object.keys(parsed.frontmatter),
+      headings: extractHeadings(parsed.body),
+      wikilinks_count: parsed.wikilinks.length,
+      embeds_count: parsed.embeds.length,
+      tags: parsed.tags,
+      mtime: new Date(mtimeMs).toISOString(),
+      byte_size: Buffer.byteLength(content, "utf8")
+    };
+  }
+
   return {
     path: entry.relPath,
     title: stripMd(entry.basename),
@@ -70,6 +103,28 @@ export async function readNote(
     tags: parsed.tags,
     mtime: new Date(mtimeMs).toISOString()
   };
+}
+
+/** Pull ATX headings (`#`, `##`, `###`, etc.) out of note body for the
+ *  document-map projection. Skips ATX inside fenced code blocks via a simple
+ *  line-by-line backtick toggle. */
+function extractHeadings(body: string): Array<{ level: number; text: string; line: number }> {
+  const out: Array<{ level: number; text: string; line: number }> = [];
+  const lines = body.split("\n");
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (m && m[1] && m[2]) {
+      out.push({ level: m[1].length, text: m[2], line: i + 1 });
+    }
+  }
+  return out;
 }
 
 export async function resolveWikilink(
@@ -498,6 +553,56 @@ function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {
   return list.map((t) => t.replace(/^#+/, "").toLowerCase());
 }
 
+/** Resolve "today"/"daily"/"weekly"/"monthly" to today's periodic-note name
+ *  using the standard Obsidian Daily-Notes-plugin formats. Custom formats are
+ *  out of scope (users with non-default conventions address by exact name). */
+function resolvePeriodicAlias(title: string): string | null {
+  const lower = title.trim().toLowerCase();
+  if (lower !== "daily" && lower !== "today" && lower !== "weekly" && lower !== "monthly") {
+    return null;
+  }
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  if (lower === "daily" || lower === "today") return `${yyyy}-${mm}-${dd}`;
+  if (lower === "monthly") return `${yyyy}-${mm}`;
+  // ISO week number (Mon-based, ISO 8601). Weekly format: YYYY-Www.
+  const target = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dayNum = target.getUTCDay() || 7; // Mon=1..Sun=7
+  target.setUTCDate(target.getUTCDate() + 4 - dayNum); // Thursday of this week
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((target.valueOf() - yearStart.valueOf()) / 86400000 + 1) / 7);
+  return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+/** Up to 3 vault-relative paths whose basename or relPath looks similar to
+ *  the missing target. Used to enrich `Note not found` errors with did-you-mean
+ *  hints — meaningful for LLMs that mistype a note name. */
+async function suggestSimilar(vault: Vault, target: string): Promise<string[]> {
+  try {
+    const all = await vault.listMarkdown();
+    const lower = target.toLowerCase().replace(/\.md$/i, "");
+    const ranked = all
+      .map((e) => {
+        const baseLower = stripMd(e.basename).toLowerCase();
+        const relLower = e.relPath.toLowerCase();
+        let score = 0;
+        if (baseLower === lower) score = 100;
+        else if (baseLower.startsWith(lower) || lower.startsWith(baseLower)) score = 70;
+        else if (baseLower.includes(lower) || lower.includes(baseLower)) score = 50;
+        else if (relLower.includes(lower)) score = 30;
+        return { path: e.relPath, score };
+      })
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    return ranked.map((r) => r.path);
+  } catch {
+    return [];
+  }
+}
+
 async function resolveTarget(vault: Vault, args: { path?: string; title?: string }): Promise<FileEntry> {
   if (args.path) {
     const candidates = args.path.toLowerCase().endsWith(".md") ? [args.path] : [args.path, `${args.path}.md`];
@@ -516,12 +621,27 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
         lastErr = err;
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(`Note not found: ${args.path}`);
+    const suggestions = await suggestSimilar(vault, args.path);
+    const hint = suggestions.length ? `. Did you mean: ${suggestions.join(", ")}?` : "";
+    throw lastErr instanceof Error
+      ? new Error(`${lastErr.message}${hint}`)
+      : new Error(`Note not found: ${args.path}${hint}`);
   }
   if (args.title) {
-    const found = await vault.findByTitle(args.title);
-    if (!found) throw new Error(`No note found with title: ${args.title}`);
-    return found;
+    // Try literal title first — a user may have an actual file named
+    // "Daily.md" / "Today.md" they meant to address. Only fall back to the
+    // periodic-note alias when the literal lookup misses.
+    const literal = await vault.findByTitle(args.title);
+    if (literal) return literal;
+    const aliased = resolvePeriodicAlias(args.title);
+    if (aliased) {
+      const aliasMatch = await vault.findByTitle(aliased);
+      if (aliasMatch) return aliasMatch;
+    }
+    const suggestions = await suggestSimilar(vault, args.title);
+    const hint = suggestions.length ? `. Did you mean: ${suggestions.join(", ")}?` : "";
+    const aliasNote = aliased ? ` (also tried periodic alias "${aliased}")` : "";
+    throw new Error(`No note found with title: ${args.title}${aliasNote}${hint}`);
   }
   throw new Error("Either path or title is required");
 }

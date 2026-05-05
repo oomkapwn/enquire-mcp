@@ -35,6 +35,10 @@ export interface VaultOptions {
   cacheFile?: string;
   /** Refuse to read/write a cache file larger than this (default 50 MB). */
   maxDiskCacheBytes?: number;
+  /** Glob patterns matched against vault-relative paths. Excluded paths never appear in
+   *  listMarkdown(), and reads/writes against them throw. Privacy filter for users who
+   *  point an LLM at a vault but want `02_Personal/**` invisible. */
+  excludeGlobs?: string[];
 }
 
 export class Vault {
@@ -44,6 +48,8 @@ export class Vault {
   readonly writeEnabled: boolean;
   readonly persistentCacheEnabled: boolean;
   readonly maxDiskCacheBytes: number;
+  readonly excludeGlobs: readonly string[];
+  private excludeRegexes: RegExp[];
   cacheFile: string | null;
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
@@ -57,6 +63,15 @@ export class Vault {
     this.persistentCacheEnabled = opts.persistentCache ?? false;
     this.maxDiskCacheBytes = opts.maxDiskCacheBytes ?? DEFAULT_MAX_DISK_CACHE_BYTES;
     this.cacheFile = opts.cacheFile ?? null;
+    this.excludeGlobs = Object.freeze([...(opts.excludeGlobs ?? [])]);
+    this.excludeRegexes = this.excludeGlobs.map(globToRegex);
+  }
+
+  /** True if a vault-relative path matches any --exclude-glob pattern. */
+  isExcluded(relPath: string): boolean {
+    if (this.excludeRegexes.length === 0) return false;
+    const norm = relPath.replace(/\\/g, "/");
+    return this.excludeRegexes.some((re) => re.test(norm));
   }
 
   async ensureExists(): Promise<void> {
@@ -233,9 +248,17 @@ export class Vault {
       if (!real) return [];
       const rel = path.relative(this.root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
+      // If the requested folder itself matches an exclude glob, treat as empty.
+      if (this.isExcluded(rel)) return [];
     }
     const out: FileEntry[] = [];
     await walk(start, this.root, out);
+    // Apply privacy filter — paths matching any --exclude-glob pattern are
+    // omitted from the listing entirely. resolveSafePath also rejects them on
+    // direct read/write, so the LLM has no way to reach excluded content.
+    if (this.excludeRegexes.length > 0) {
+      return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
+    }
     return out;
   }
 
@@ -382,6 +405,12 @@ export class Vault {
       if (rel.startsWith("..") || path.isAbsolute(rel)) {
         throw new Error(`Resolved path escapes vault root: ${abs}`);
       }
+      // Privacy filter — refuse to surface excluded content even via direct
+      // read/write. Combined with listMarkdown filtering, the LLM has no
+      // path into excluded files.
+      if (this.isExcluded(rel.replace(/\\/g, "/"))) {
+        throw new Error(`Path is excluded by --exclude-glob: ${rel}`);
+      }
       return real;
     } catch (err) {
       if (isErrnoException(err) && err.code === "ENOENT") return abs;
@@ -463,6 +492,51 @@ async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> 
       });
     }
   }
+}
+
+/**
+ * Convert a minimal glob pattern to a RegExp anchored against vault-relative
+ * paths (forward-slash separated). Supports:
+ *   `*`   — any run of non-slash characters
+ *   `**`  — any run of characters including slashes (globstar)
+ *   `?`   — exactly one non-slash character
+ * No bracket sets, no `!` negation, no `{a,b}` alternation. Patterns are
+ * matched against the full vault-relative path (e.g. `02_Personal/Inbox/x.md`).
+ */
+export function globToRegex(glob: string): RegExp {
+  let i = 0;
+  let out = "^";
+  while (i < glob.length) {
+    const ch = glob[i];
+    if (ch === "*") {
+      // `**` means cross-segment (any chars), `*` means within-segment.
+      if (glob[i + 1] === "*") {
+        out += ".*";
+        i += 2;
+        // Eat a trailing `/` after `**` so `a/**/b` matches `a/b` too.
+        if (glob[i] === "/") i += 1;
+        continue;
+      }
+      out += "[^/]*";
+      i += 1;
+      continue;
+    }
+    if (ch === "?") {
+      out += "[^/]";
+      i += 1;
+      continue;
+    }
+    // Escape regex specials.
+    if (ch && /[.+^${}()|[\]\\]/.test(ch)) {
+      out += `\\${ch}`;
+      i += 1;
+      continue;
+    }
+    out += ch ?? "";
+    i += 1;
+  }
+  out += "$";
+  return new RegExp(out);
 }
 
 function stripMdExt(name: string): string {

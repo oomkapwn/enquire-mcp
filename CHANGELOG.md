@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-05-05
+
+**Stable.** API freeze. Same code as v0.13.0 plus 4 polish commits (perf cleanup in `getVaultStats`, 3 more edge-case tests, full API docs for v0.12 + v0.13 tools, README test counter).
+
+### Stability promise
+
+- The 17 MCP tool names (`obsidian_*`) and their argument shapes are stable and will follow semver going forward — no breaking change without a major bump.
+- The MCP resource URIs (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidian://chunk/{n}/{path}`) are stable.
+- The 6 prompts (`summarize_recent_edits`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`) are stable.
+- The CLI flags (`--vault`, `--enable-write`, `--persistent-cache`, `--persistent-index`, `--tokenize`, `--exclude-glob`, …) are stable.
+- The four runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`) are the contract — no surprise additions.
+
+### What ships in 1.0
+
+- **17 MCP tools** = 14 always-on read + 1 opt-in read (`--persistent-index`) + 2 opt-in write (`--enable-write`).
+- **3 MCP resources** = `obsidian://vault/info`, `obsidian://note/{path}`, plus `obsidian://chunk/{n}/{path}` when FTS5 is enabled.
+- **6 MCP prompts** for common workflows.
+- **Privacy filter** via `--exclude-glob` (multi-pattern, glob semantics, blocks every read path).
+- **Anti-slop write validator** (`obsidian_validate_note_proposal`) — lint a draft note before writing.
+- **Graph-aware retrieval** (`obsidian_find_similar` + `obsidian_get_note_neighbors`) — multi-signal lexical hybrid, no embeddings.
+- **FTS5 BM25 search** with `unicode61`/`trigram` tokenize modes and persistent SQLite index.
+- **Persistent on-disk cache** for warm cold-starts.
+- **228 unit tests**, TypeScript strict + `noUncheckedIndexedAccess`, Biome 2 lint, Husky pre-commit hooks.
+- **CI gate** = lint + tests on Node 20/22/24 + smoke on scan + smoke on FTS5 + npm audit + version-consistency + coverage. Branch protection requires all 7 to pass.
+- **Release pipeline** with SLSA-3 provenance via `npm publish --provenance`.
+
+### What's not in 1.0 (planned for 1.x)
+
+- `obsidian_rename_note` — atomic rename + automatic backlink update.
+- Optional embedding-based retrieval (sqlite-vec + a small JS-runnable model). The `find_similar` lexical hybrid already covers the 80%; embeddings are for the long tail.
+- Watcher-driven incremental FTS5 reindex (currently rebuilt on boot).
+
 ## [0.13.0] — 2026-05-05
 
 Graph-aware retrieval — three new read-only tools that expose the vault's structural graph as first-class context for the LLM. No embeddings, no native dependencies, no model download — just the same metadata an Obsidian user already curates (tags, headings, link graph) reorganized into the queries an agent actually wants to make.

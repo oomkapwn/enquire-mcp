@@ -1073,19 +1073,21 @@ export async function getVaultStats(vault: Vault, args: { top_tags?: number }): 
   // Build inbound map in one pass so orphans and broken counts are O(N).
   const inbound = new Map<string, number>();
   let broken = 0;
-  let outboundTotal = 0;
+  // outboundPresence is collected in the same single pass (cache hits keep
+  // this O(N) instead of the previous O(2N) re-read).
+  const outboundPresence = new Set<string>();
   for (const e of entries) {
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     totalSize += Buffer.byteLength(content, "utf8");
     totalWords += content.trim() ? content.trim().split(/\s+/).length : 0;
     if (e.mtimeMs >= sevenDaysMs) recent += 1;
     if (Object.keys(parsed.frontmatter).length > 0) withFm += 1;
+    if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
     for (const t of parsed.tags) {
       const key = t.toLowerCase();
       tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1);
     }
     for (const link of parsed.wikilinks) {
-      outboundTotal += 1;
       const m = findBestMatch(entries, link.target, e.relPath);
       if (!m) {
         broken += 1;
@@ -1093,12 +1095,6 @@ export async function getVaultStats(vault: Vault, args: { top_tags?: number }): 
       }
       inbound.set(m.relPath, (inbound.get(m.relPath) ?? 0) + 1);
     }
-  }
-  // Orphan = no inbound AND no outbound. Need outbound-presence per file.
-  const outboundPresence = new Set<string>();
-  for (const e of entries) {
-    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
   }
   let orphans = 0;
   for (const e of entries) {
@@ -1108,10 +1104,6 @@ export async function getVaultStats(vault: Vault, args: { top_tags?: number }): 
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, topTagsLimit)
     .map(([tag, count]) => ({ tag, count }));
-
-  // Sanity: outboundTotal isn't returned directly but is used to validate that
-  // the orphan/broken pass saw at least one link if any exist.
-  if (outboundTotal === 0 && broken !== 0) broken = 0; // defensive — never reachable.
 
   return {
     total_notes: entries.length,

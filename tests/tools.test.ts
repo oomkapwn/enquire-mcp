@@ -691,4 +691,35 @@ describe("findSimilar / getNoteNeighbors / getVaultStats (v0.13)", () => {
       await fs.rm(empty, { recursive: true, force: true });
     }
   });
+
+  it("findSimilar handles a tagless / linkless source without crashing", async () => {
+    const v = new Vault(groot);
+    const out = await findSimilar(v, { path: "Orphan.md", limit: 10, min_score: 0 });
+    // No tags, no outbound, no co-backlinks → only title_3gram could fire.
+    // Just assert it doesn't throw and returns sane shape.
+    expect(Array.isArray(out)).toBe(true);
+    for (const r of out) {
+      expect(r.score).toBeGreaterThanOrEqual(0);
+      expect(r.signals.tag_jaccard).toBe(0);
+      expect(r.signals.shared_outbound).toBe(0);
+      expect(r.signals.co_backlink).toBe(0);
+    }
+  });
+
+  it("getNoteNeighbors handles a node with no inbound and no outbound", async () => {
+    const v = new Vault(groot);
+    const out = await getNoteNeighbors(v, { path: "Orphan.md" });
+    expect(out.center.path).toBe("Orphan.md");
+    expect(out.outbound).toEqual([]);
+    expect(out.inbound).toEqual([]);
+    expect(out.tag_siblings).toEqual([]); // no tags → no siblings
+  });
+
+  it("getNoteNeighbors max_per_bucket truly caps each bucket", async () => {
+    const v = new Vault(groot);
+    const out = await getNoteNeighbors(v, { path: "Hub.md", max_per_bucket: 1 });
+    expect(out.outbound.length).toBeLessThanOrEqual(1);
+    expect(out.inbound.length).toBeLessThanOrEqual(1);
+    expect(out.tag_siblings.length).toBeLessThanOrEqual(1);
+  });
 });

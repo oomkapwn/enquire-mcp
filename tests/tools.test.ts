@@ -177,17 +177,18 @@ describe("searchText", () => {
     // "alpha note" — both words appear in Alpha.md (frontmatter title is
     // "Alpha Note" + body has "Alpha note body."). With AND-tokenizer that
     // matches; under the old phrase mode it would also match. Confirm that
-    // a query where the words appear separately matches:
-    const both = await searchText(v, { query: "alpha frontmatter" });
-    // Alpha.md has both "alpha" (in body/title) and "frontmatter" if any —
-    // verify the AND semantics by also checking a query that does NOT have
-    // both words anywhere together.
-    expect(both.matches.length).toBeGreaterThanOrEqual(0);
-    expect(both.mode).toBe("all");
-    // Tokens in matched_terms reflect what actually hit.
-    if (both.matches.length > 0) {
-      expect(both.matches[0].matched_terms.length).toBeGreaterThan(0);
-    }
+    // a query where one word matches one note + the other word matches a
+    // disjoint note — under "all" mode no single note has BOTH, so 0 hits
+    // is the correct answer (the previous `>=0` assertion was meaningless).
+    const disjoint = await searchText(v, { query: "alpha xyzzy-nonexistent" });
+    expect(disjoint.matches.length).toBe(0);
+    expect(disjoint.mode).toBe("all");
+
+    // a query where both words appear in the SAME note — should match.
+    const colocated = await searchText(v, { query: "alpha note" });
+    expect(colocated.matches.length).toBeGreaterThan(0);
+    expect(colocated.matches[0].matched_terms).toContain("alpha");
+    expect(colocated.matches[0].matched_terms).toContain("note");
   });
 
   it("mode=phrase does the old contiguous substring match (v0.9 backward-compat)", async () => {

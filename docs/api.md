@@ -14,6 +14,9 @@
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
 | `--cache-file <path>`  | auto    | Override the persistent-cache file location. Default: `~/Library/Caches/enquire/<vault-hash>.json` (macOS) or `~/.cache/enquire/<vault-hash>.json` (Linux). |
+| `--persistent-index`   | off     | Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers `obsidian_full_text_search` + the `obsidian://chunk/{n}/{path}` resource. **Stores chunked note content + tag list + wikilink targets — see [SECURITY.md "Persistent FTS5 index"](../SECURITY.md#persistent-fts5-index-privacy-posture).** |
+| `--tokenize <mode>`    | `unicode61` | FTS5 tokenize mode. `unicode61` (default; Latin/Cyrillic, removes diacritics) or `trigram` (CJK / mixed-script, ~2x index size). Changing this triggers an automatic index rebuild. |
+| `--index-file <path>`  | auto    | Override the FTS5 index file location. Default: `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux). |
 
 ## Subcommands
 
@@ -21,6 +24,8 @@
 |---|---|---|
 | `serve` (default) | see flags above | Start the MCP server over stdio. |
 | `clear-cache` | `--vault <path>` `[--cache-file <path>]` | Delete the persistent-cache file for the given vault. Useful for purging stale or sensitive content. Returns 0 even if no cache file exists. |
+| `clear-index` | `--vault <path>` `[--index-file <path>]` | Delete the FTS5 search-index files (`.fts5.db` + WAL/SHM sidecar) for the given vault. Privacy purge for `--persistent-index` users. Returns 0 even if no files exist. |
+| `index` | `--vault <path>` `[--tokenize <mode>]` `[--index-file <path>]` | Cold-build (or refresh) the FTS5 search index for a vault. Useful before first `--persistent-index serve`. Reports `added`/`updated`/`deleted`/`unchanged` chunk counts. |
 
 ## Read tools (always registered)
 

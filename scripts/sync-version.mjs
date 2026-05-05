@@ -53,7 +53,11 @@ execFileSync("npm", ["install", "--package-lock-only"], { stdio: "inherit", cwd:
 
 // 3. CHANGELOG content check (warn-only — content is human work).
 const changelog = await readFile(path.join(repoRoot, "CHANGELOG.md"), "utf8");
-const headingRe = new RegExp(`^## \\[${version.replace(/[.+]/g, "\\$&")}\\]`, "m");
+// Escape every regex special — version strings should never contain them in
+// practice (semver is constrained), but CodeQL flags incomplete-sanitization
+// regardless and a complete escape is the same one-liner.
+const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const headingRe = new RegExp(`^## \\[${escapedVersion}\\]`, "m");
 if (!headingRe.test(changelog)) {
   process.stderr.write(
     `sync-version: WARN — CHANGELOG.md is missing a "## [${version}]" heading. Add one before pushing the tag.\n`

@@ -240,6 +240,28 @@ describe("FtsIndex — full lifecycle", () => {
     }
   });
 
+  it("folder filter prefix-equality, NOT GLOB pattern (audit v0.10.4 P2 — folders with `*` `?` `[` should not glob-expand)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("Project [A]/a.md", 1000, "specials-marker");
+      idx.reindexFile("Project [B]/b.md", 1000, "specials-marker");
+      idx.reindexFile("Other/c.md", 1000, "specials-marker");
+      // With the v0.10.4 substr-equality fix, folder:"Project [A]" must match
+      // ONLY "Project [A]/a.md" — not glob-expand to "Project [B]" too.
+      const a = idx.search("specials-marker", { folder: "Project [A]" });
+      expect(a.map((h) => h.rel_path)).toEqual(["Project [A]/a.md"]);
+      // Folder with `*` should also be safe (no glob).
+      idx.reindexFile("star*folder/x.md", 1000, "specials-marker");
+      idx.reindexFile("star_folder/y.md", 1000, "specials-marker"); // would match if `*` glob'd to anything
+      const star = idx.search("specials-marker", { folder: "star*folder" });
+      expect(star.map((h) => h.rel_path)).toEqual(["star*folder/x.md"]);
+    } finally {
+      idx.close();
+    }
+  });
+
   it("tag filter exact-matches against comma-separated frontmatter+inline tags (v0.10.1)", async () => {
     if (!canRunFts5) return;
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });

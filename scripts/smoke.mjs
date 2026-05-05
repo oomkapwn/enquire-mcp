@@ -95,7 +95,7 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expectedCount = withFts ? 12 : 11;
+  const expectedCount = withFts ? 15 : 14;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -103,7 +103,9 @@ try {
   );
   const baseTools = [
     "obsidian_dataview_query",
+    "obsidian_find_similar",
     "obsidian_get_backlinks",
+    "obsidian_get_note_neighbors",
     "obsidian_get_outbound_links",
     "obsidian_get_recent_edits",
     "obsidian_get_unresolved_wikilinks",
@@ -112,6 +114,7 @@ try {
     "obsidian_read_note",
     "obsidian_resolve_wikilink",
     "obsidian_search_text",
+    "obsidian_stats",
     "obsidian_validate_note_proposal"
   ];
   const expected = withFts ? [...baseTools, "obsidian_full_text_search"].sort() : baseTools;
@@ -287,6 +290,53 @@ try {
     unresolved.result.content[0].text.slice(0, 200)
   );
   console.log(`      → unresolved wikilinks (vault-wide): ${unresolvedParsed.length}`);
+
+  // v0.13.0 — graph-aware context tools.
+  const stats = await rpc("tools/call", { name: "obsidian_stats", arguments: {} });
+  const statsParsed = JSON.parse(stats.result.content[0].text);
+  check(
+    "stats returns vault dashboard with total_notes",
+    typeof statsParsed === "object" &&
+      typeof statsParsed.total_notes === "number" &&
+      Array.isArray(statsParsed.top_tags) &&
+      typeof statsParsed.broken_wikilinks === "number",
+    stats.result.content[0].text.slice(0, 200)
+  );
+  console.log(
+    `      → stats: ${statsParsed.total_notes} notes · ${statsParsed.total_tags} tags · ${statsParsed.broken_wikilinks} broken links`
+  );
+
+  if (listParsed[0]) {
+    const similar = await rpc("tools/call", {
+      name: "obsidian_find_similar",
+      arguments: { path: listParsed[0].path, limit: 5 }
+    });
+    const similarParsed = JSON.parse(similar.result.content[0].text);
+    check(
+      "find_similar returns ranked list with signals",
+      Array.isArray(similarParsed) && (similarParsed.length === 0 || typeof similarParsed[0].signals === "object"),
+      similar.result.content[0].text.slice(0, 200)
+    );
+    console.log(`      → find_similar from "${listParsed[0].title}": ${similarParsed.length} hit(s)`);
+
+    const neighbors = await rpc("tools/call", {
+      name: "obsidian_get_note_neighbors",
+      arguments: { path: listParsed[0].path }
+    });
+    const neighborsParsed = JSON.parse(neighbors.result.content[0].text);
+    check(
+      "get_note_neighbors returns center + outbound + inbound + tag_siblings",
+      typeof neighborsParsed === "object" &&
+        typeof neighborsParsed.center === "object" &&
+        Array.isArray(neighborsParsed.outbound) &&
+        Array.isArray(neighborsParsed.inbound) &&
+        Array.isArray(neighborsParsed.tag_siblings),
+      neighbors.result.content[0].text.slice(0, 200)
+    );
+    console.log(
+      `      → neighbors of "${neighborsParsed.center.title}": ${neighborsParsed.outbound.length} out, ${neighborsParsed.inbound.length} in, ${neighborsParsed.tag_siblings.length} tag-sibling(s)`
+    );
+  }
 
   // FTS5-only surface: full_text_search tool + chunk resource template.
   if (withFts) {

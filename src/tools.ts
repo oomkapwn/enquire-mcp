@@ -833,6 +833,326 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   };
 }
 
+// ─── obsidian_find_similar (v0.13 lexical-hybrid similarity) ─────────────────
+// Given a note, rank other notes in the vault by how related they are. This is
+// hybrid retrieval done with vault-native signals — no embeddings, no model
+// download, no native dep — just the same structural metadata an Obsidian user
+// already curates: tags, headings, link graph, and word overlap.
+//
+// Score = weighted sum of four signals, all in [0,1]:
+//   • tag_jaccard       — |A.tags ∩ B.tags| / |A.tags ∪ B.tags|         (×3.0)
+//   • title_3gram       — character 3-gram Jaccard of basenames         (×1.5)
+//   • shared_outbound   — % of A's outbound links also in B's outbound  (×2.0)
+//   • co_backlink       — % of X with X→A AND X→B (over union)          (×2.0)
+//
+// Body cosine isn't included: at vault scale (~5k notes × ~5KB each) a full
+// TF-IDF pass is OK, but the structural signals above already converge on the
+// notes a human would call "related" without paying that cost on every call.
+
+export interface SimilarNote {
+  path: string;
+  title: string;
+  score: number;
+  signals: {
+    tag_jaccard: number;
+    title_3gram: number;
+    shared_outbound: number;
+    co_backlink: number;
+  };
+  shared_tags: string[];
+  mtime: string;
+}
+
+export async function findSimilar(
+  vault: Vault,
+  args: { path?: string; title?: string; limit?: number; min_score?: number }
+): Promise<SimilarNote[]> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 10;
+  const minScore = args.min_score ?? 0.05;
+  const target = await resolveTarget(vault, args);
+  const entries = await vault.listMarkdown();
+
+  // Pre-extract metadata for all notes including the target.
+  type NoteMeta = {
+    entry: FileEntry;
+    tags: Set<string>;
+    title3grams: Set<string>;
+    outbound: Set<string>; // resolved relPaths this note links to
+  };
+  const metas = new Map<string, NoteMeta>();
+  for (const e of entries) {
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const tags = new Set(parsed.tags.map((t) => t.toLowerCase()));
+    const title3grams = ngrams(stripMd(e.basename).toLowerCase(), 3);
+    const outbound = new Set<string>();
+    for (const link of parsed.wikilinks) {
+      const m = findBestMatch(entries, link.target, e.relPath);
+      if (m) outbound.add(m.relPath);
+    }
+    metas.set(e.relPath, { entry: e, tags, title3grams, outbound });
+  }
+
+  const targetMeta = metas.get(target.relPath);
+  if (!targetMeta) {
+    // The target was found by resolveTarget but may have been excluded from
+    // listMarkdown by --exclude-glob. Treat as zero results rather than crash.
+    return [];
+  }
+
+  // For co-backlink: build "who links to X?" for everyone we care about
+  // (target + all candidates). Single pass over outbound sets.
+  const inboundFor = new Map<string, Set<string>>();
+  for (const [from, m] of metas) {
+    for (const to of m.outbound) {
+      const set = inboundFor.get(to) ?? new Set();
+      set.add(from);
+      inboundFor.set(to, set);
+    }
+  }
+  const targetInbound = inboundFor.get(target.relPath) ?? new Set();
+
+  const out: SimilarNote[] = [];
+  for (const [relPath, m] of metas) {
+    if (relPath === target.relPath) continue;
+    const tagJ = jaccard(targetMeta.tags, m.tags);
+    const titleJ = jaccard(targetMeta.title3grams, m.title3grams);
+    const candInbound = inboundFor.get(relPath) ?? new Set();
+    // shared_outbound: how much of A's outbound is also in B's
+    const sharedOut =
+      targetMeta.outbound.size === 0 ? 0 : intersectionSize(targetMeta.outbound, m.outbound) / targetMeta.outbound.size;
+    // co_backlink: how many notes link to both target and candidate, over union
+    const coBack = jaccard(targetInbound, candInbound);
+
+    const score = 3.0 * tagJ + 1.5 * titleJ + 2.0 * sharedOut + 2.0 * coBack;
+    if (score < minScore) continue;
+
+    const shared: string[] = [];
+    for (const t of targetMeta.tags) if (m.tags.has(t)) shared.push(t);
+    shared.sort();
+
+    out.push({
+      path: m.entry.relPath,
+      title: stripMd(m.entry.basename),
+      score: Math.round(score * 10000) / 10000,
+      signals: {
+        tag_jaccard: Math.round(tagJ * 10000) / 10000,
+        title_3gram: Math.round(titleJ * 10000) / 10000,
+        shared_outbound: Math.round(sharedOut * 10000) / 10000,
+        co_backlink: Math.round(coBack * 10000) / 10000
+      },
+      shared_tags: shared,
+      mtime: new Date(m.entry.mtimeMs).toISOString()
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, limit);
+}
+
+// ─── obsidian_get_note_neighbors (v0.13 graph-aware context) ─────────────────
+// Return a note + its 1-hop graph neighborhood — outbound links + backlinks +
+// tag-cluster siblings. Designed as the canonical "give the LLM enough context
+// to reason about this note" call: instead of read_note → backlinks → outbound
+// → resolve_wikilink (4 round-trips), one call returns the node and its edges.
+
+export interface NoteNeighbors {
+  center: {
+    path: string;
+    title: string;
+    tags: string[];
+    mtime: string;
+  };
+  outbound: Array<{ path: string; title: string; tags: string[] }>;
+  inbound: Array<{ path: string; title: string; tags: string[]; count: number }>;
+  tag_siblings: Array<{ path: string; title: string; shared_tags: string[] }>;
+}
+
+export async function getNoteNeighbors(
+  vault: Vault,
+  args: { path?: string; title?: string; max_per_bucket?: number }
+): Promise<NoteNeighbors> {
+  await vault.ensureExists();
+  const cap = args.max_per_bucket ?? 20;
+  const target = await resolveTarget(vault, args);
+  const entries = await vault.listMarkdown();
+  const { parsed: targetParsed } = await vault.readNote(target.absPath, target.mtimeMs);
+  const targetTagsLower = new Set(targetParsed.tags.map((t) => t.toLowerCase()));
+
+  // Outbound: resolved unique destinations from the target.
+  const seenOut = new Set<string>();
+  const outbound: NoteNeighbors["outbound"] = [];
+  for (const link of targetParsed.wikilinks) {
+    const m = findBestMatch(entries, link.target, target.relPath);
+    if (!m || seenOut.has(m.relPath)) continue;
+    seenOut.add(m.relPath);
+    const { parsed: nbrParsed } = await vault.readNote(m.absPath, m.mtimeMs);
+    outbound.push({ path: m.relPath, title: stripMd(m.basename), tags: nbrParsed.tags });
+    if (outbound.length >= cap) break;
+  }
+
+  // Inbound: notes that link to target, with backlink count.
+  const inboundCounts = new Map<string, { entry: FileEntry; count: number; tags: string[] }>();
+  for (const e of entries) {
+    if (e.absPath === target.absPath) continue;
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    let cnt = 0;
+    for (const link of parsed.wikilinks) {
+      const m = findBestMatch(entries, link.target, e.relPath);
+      if (m && m.absPath === target.absPath) cnt += 1;
+    }
+    if (cnt > 0) inboundCounts.set(e.relPath, { entry: e, count: cnt, tags: parsed.tags });
+  }
+  const inbound: NoteNeighbors["inbound"] = [...inboundCounts.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, cap)
+    .map((x) => ({ path: x.entry.relPath, title: stripMd(x.entry.basename), tags: x.tags, count: x.count }));
+
+  // Tag siblings: notes sharing ≥1 tag with target, excluding outbound/inbound.
+  const tag_siblings: NoteNeighbors["tag_siblings"] = [];
+  if (targetTagsLower.size > 0) {
+    const exclude = new Set<string>([target.relPath, ...seenOut, ...inboundCounts.keys()]);
+    const candidates: Array<{ path: string; title: string; shared: string[] }> = [];
+    for (const e of entries) {
+      if (exclude.has(e.relPath)) continue;
+      const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+      const shared: string[] = [];
+      for (const t of parsed.tags) {
+        if (targetTagsLower.has(t.toLowerCase())) shared.push(t);
+      }
+      if (shared.length > 0) {
+        candidates.push({ path: e.relPath, title: stripMd(e.basename), shared });
+      }
+    }
+    candidates.sort((a, b) => b.shared.length - a.shared.length);
+    for (const c of candidates.slice(0, cap)) {
+      tag_siblings.push({ path: c.path, title: c.title, shared_tags: c.shared });
+    }
+  }
+
+  return {
+    center: {
+      path: target.relPath,
+      title: stripMd(target.basename),
+      tags: targetParsed.tags,
+      mtime: new Date(target.mtimeMs).toISOString()
+    },
+    outbound,
+    inbound,
+    tag_siblings
+  };
+}
+
+// ─── obsidian_stats (v0.13 vault dashboard) ──────────────────────────────────
+// Single-shot vault summary the LLM can call once at the start of a session
+// to orient itself. Cheap signals only — no full-text scan.
+
+export interface VaultStats {
+  total_notes: number;
+  total_size_bytes: number;
+  avg_note_words: number;
+  recently_modified_7d: number;
+  orphans: number;
+  broken_wikilinks: number;
+  total_tags: number;
+  top_tags: Array<{ tag: string; count: number }>;
+  notes_with_frontmatter: number;
+  generated_at: string;
+}
+
+export async function getVaultStats(vault: Vault, args: { top_tags?: number }): Promise<VaultStats> {
+  await vault.ensureExists();
+  const topTagsLimit = args.top_tags ?? 10;
+  const entries = await vault.listMarkdown();
+  const sevenDaysMs = Date.now() - 7 * 24 * 3600 * 1000;
+
+  let totalSize = 0;
+  let totalWords = 0;
+  let recent = 0;
+  let withFm = 0;
+  const tagCounts = new Map<string, number>();
+  // Build inbound map in one pass so orphans and broken counts are O(N).
+  const inbound = new Map<string, number>();
+  let broken = 0;
+  let outboundTotal = 0;
+  for (const e of entries) {
+    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    totalSize += Buffer.byteLength(content, "utf8");
+    totalWords += content.trim() ? content.trim().split(/\s+/).length : 0;
+    if (e.mtimeMs >= sevenDaysMs) recent += 1;
+    if (Object.keys(parsed.frontmatter).length > 0) withFm += 1;
+    for (const t of parsed.tags) {
+      const key = t.toLowerCase();
+      tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1);
+    }
+    for (const link of parsed.wikilinks) {
+      outboundTotal += 1;
+      const m = findBestMatch(entries, link.target, e.relPath);
+      if (!m) {
+        broken += 1;
+        continue;
+      }
+      inbound.set(m.relPath, (inbound.get(m.relPath) ?? 0) + 1);
+    }
+  }
+  // Orphan = no inbound AND no outbound. Need outbound-presence per file.
+  const outboundPresence = new Set<string>();
+  for (const e of entries) {
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
+  }
+  let orphans = 0;
+  for (const e of entries) {
+    if (!inbound.get(e.relPath) && !outboundPresence.has(e.relPath)) orphans += 1;
+  }
+  const top_tags = [...tagCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topTagsLimit)
+    .map(([tag, count]) => ({ tag, count }));
+
+  // Sanity: outboundTotal isn't returned directly but is used to validate that
+  // the orphan/broken pass saw at least one link if any exist.
+  if (outboundTotal === 0 && broken !== 0) broken = 0; // defensive — never reachable.
+
+  return {
+    total_notes: entries.length,
+    total_size_bytes: totalSize,
+    avg_note_words: entries.length === 0 ? 0 : Math.round(totalWords / entries.length),
+    recently_modified_7d: recent,
+    orphans,
+    broken_wikilinks: broken,
+    total_tags: tagCounts.size,
+    top_tags,
+    notes_with_frontmatter: withFm,
+    generated_at: new Date().toISOString()
+  };
+}
+
+// ─── small set / string helpers shared by find_similar / get_note_neighbors ─
+
+function jaccard<T>(a: Set<T>, b: Set<T>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+function intersectionSize<T>(a: Set<T>, b: Set<T>): number {
+  let n = 0;
+  for (const x of a) if (b.has(x)) n += 1;
+  return n;
+}
+
+function ngrams(s: string, n: number): Set<string> {
+  const out = new Set<string>();
+  if (s.length < n) {
+    if (s) out.add(s);
+    return out;
+  }
+  for (let i = 0; i <= s.length - n; i++) out.add(s.slice(i, i + n));
+  return out;
+}
+
 function findBestMatch(entries: FileEntry[], target: string, fromNote?: string): FileEntry | null {
   if (target.startsWith("./") || target.startsWith("../") || target.includes("/../")) {
     if (fromNote) {

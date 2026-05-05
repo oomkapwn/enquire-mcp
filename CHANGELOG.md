@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-05-05
+
+Graph-aware retrieval — three new read-only tools that expose the vault's structural graph as first-class context for the LLM. No embeddings, no native dependencies, no model download — just the same metadata an Obsidian user already curates (tags, headings, link graph) reorganized into the queries an agent actually wants to make.
+
+### Added — `obsidian_find_similar` tool
+Given a note, return up to N other notes ranked by structural similarity. Score is a weighted sum of four signals — each also returned individually so the caller can re-rank:
+- **`tag_jaccard`** (×3.0) — Jaccard over the case-folded tag set
+- **`title_3gram`** (×1.5) — character 3-gram Jaccard over basenames (catches near-duplicates: "Apollo Project" vs "Apollo-Project")
+- **`shared_outbound`** (×2.0) — fraction of A's resolved outbound links also present in B's
+- **`co_backlink`** (×2.0) — Jaccard over the set of notes that link to A and to B (graph-co-mentioned siblings)
+
+This is "hybrid retrieval" done with vault-native lexical signals — competitive at vault scales (1k–10k notes) without paying the cost of an embedding model.
+
+### Added — `obsidian_get_note_neighbors` tool
+Return a note + its 1-hop graph neighborhood in a single call: outbound resolved wikilinks, inbound backlinks (with count), and tag-cluster siblings (notes sharing ≥1 tag, excluding outbound/inbound). Replaces the `read_note → backlinks → outbound → resolve_wikilink` chain (4 round-trips) with one call. Designed for "give the LLM enough context to reason about THIS note" RAG workflows. `max_per_bucket` caps each bucket independently.
+
+### Added — `obsidian_stats` tool
+One-shot vault dashboard. Cheap (one pass over cached parses): `total_notes`, `total_size_bytes`, `avg_note_words`, `recently_modified_7d`, `orphans` (no inbound + no outbound), `broken_wikilinks`, `total_tags`, `top_tags` (frequency-ranked), `notes_with_frontmatter`. Useful as the first call in a session so the agent has structural context before issuing targeted reads.
+
+### Repo state
+- **14 read tools** (was 11). Smoke + docs-consistency tests updated.
+- 3 new tools all annotated `READ_ONLY`. None require `--enable-write`.
+
 ## [0.12.0] — 2026-05-05
 
 Anti-slop write validator — closes the #1 LLM-write pain found across forum #111443, Eleanor Konik's blog, and every chatforest review: *"AI generates structurally-broken notes — bad YAML, fake wikilinks, inconsistent tags — and I spend 10 minutes reformatting per note"*.

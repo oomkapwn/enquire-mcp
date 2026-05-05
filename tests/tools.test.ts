@@ -3,10 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  findSimilar,
   getBacklinks,
+  getNoteNeighbors,
   getOutboundLinks,
   getRecentEdits,
   getUnresolvedWikilinks,
+  getVaultStats,
   listNotes,
   readNote,
   resolveWikilink,
@@ -590,5 +593,102 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
       content: "body"
     });
     expect(result.proposed_path).toBe("Inbox/some-name.md");
+  });
+});
+
+// ─── v0.13 graph-aware retrieval ─────────────────────────────────────────────
+// Use a dedicated fixture so the existing fixture's mtime / link topology
+// doesn't get reshaped to fit similarity assertions.
+
+describe("findSimilar / getNoteNeighbors / getVaultStats (v0.13)", () => {
+  let groot: string;
+
+  beforeAll(async () => {
+    groot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-v013-"));
+    // Hub
+    await fs.writeFile(path.join(groot, "Hub.md"), "---\ntags: [hub]\n---\n\nHub: [[A]] [[B]] [[C]]\n");
+    // A and B share #project tag and both link to Common; C is unrelated
+    await fs.writeFile(
+      path.join(groot, "A.md"),
+      "---\ntags: [project, blue]\n---\n\nA links to [[Common]] and [[B]].\n"
+    );
+    await fs.writeFile(path.join(groot, "B.md"), "---\ntags: [project, red]\n---\n\nB links to [[Common]].\n");
+    await fs.writeFile(path.join(groot, "C.md"), "---\ntags: [unrelated]\n---\n\nC has no shared signals.\n");
+    await fs.writeFile(path.join(groot, "Common.md"), "---\ntags: [shared]\n---\n\nCommon target.\n");
+    // Orphan: no inbound, no outbound
+    await fs.writeFile(path.join(groot, "Orphan.md"), "An orphan note with no links and no tags.\n");
+    // Note with a broken wikilink
+    await fs.writeFile(path.join(groot, "Broken.md"), "---\ntags: [project]\n---\n\nThis links to [[NonExistent]].\n");
+  });
+
+  afterAll(async () => {
+    await fs.rm(groot, { recursive: true, force: true });
+  });
+
+  it("findSimilar ranks B above C for source=A (shared tag + shared outbound)", async () => {
+    const v = new Vault(groot);
+    const out = await findSimilar(v, { path: "A.md", limit: 10 });
+    const titles = out.map((s) => s.title);
+    // B should appear and rank above C (which has nothing in common).
+    const bIdx = titles.indexOf("B");
+    const cIdx = titles.indexOf("C");
+    expect(bIdx).toBeGreaterThanOrEqual(0);
+    if (cIdx >= 0) expect(bIdx).toBeLessThan(cIdx);
+    // The top hit must surface the shared "project" tag.
+    expect(out[0]?.shared_tags).toContain("project");
+    // Each result has all four signals.
+    for (const r of out) {
+      expect(r.signals).toHaveProperty("tag_jaccard");
+      expect(r.signals).toHaveProperty("title_3gram");
+      expect(r.signals).toHaveProperty("shared_outbound");
+      expect(r.signals).toHaveProperty("co_backlink");
+    }
+  });
+
+  it("findSimilar respects min_score and never returns the source itself", async () => {
+    const v = new Vault(groot);
+    const all = await findSimilar(v, { path: "A.md", limit: 100, min_score: 0 });
+    expect(all.find((r) => r.path === "A.md")).toBeUndefined();
+    const filtered = await findSimilar(v, { path: "A.md", limit: 100, min_score: 100 });
+    expect(filtered.length).toBe(0);
+  });
+
+  it("getNoteNeighbors returns center + outbound + inbound + tag_siblings", async () => {
+    const v = new Vault(groot);
+    const out = await getNoteNeighbors(v, { path: "A.md" });
+    expect(out.center.path).toBe("A.md");
+    expect(out.outbound.map((o) => o.title).sort()).toEqual(["B", "Common"]);
+    expect(out.inbound.map((o) => o.title)).toContain("Hub");
+    // Tag siblings: notes that share #project but aren't already outbound/inbound.
+    // Broken.md has #project and is neither linked from nor to A → expected sibling.
+    expect(out.tag_siblings.map((s) => s.title)).toContain("Broken");
+  });
+
+  it("getVaultStats reports counts, orphans, broken links, top tags", async () => {
+    const v = new Vault(groot);
+    const s = await getVaultStats(v, {});
+    expect(s.total_notes).toBe(7);
+    expect(s.orphans).toBe(1); // Orphan.md
+    expect(s.broken_wikilinks).toBe(1); // [[NonExistent]] from Broken.md
+    expect(s.notes_with_frontmatter).toBe(6); // every note except Orphan.md
+    const tags = s.top_tags.map((t) => t.tag);
+    expect(tags).toContain("project");
+    // total_tags should equal unique tag count across the vault
+    expect(s.total_tags).toBeGreaterThanOrEqual(5);
+  });
+
+  it("getVaultStats handles an empty vault", async () => {
+    const empty = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-empty-"));
+    try {
+      const v = new Vault(empty);
+      const s = await getVaultStats(v, {});
+      expect(s.total_notes).toBe(0);
+      expect(s.avg_note_words).toBe(0);
+      expect(s.orphans).toBe(0);
+      expect(s.broken_wikilinks).toBe(0);
+      expect(s.top_tags).toEqual([]);
+    } finally {
+      await fs.rm(empty, { recursive: true, force: true });
+    }
   });
 });

@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-225%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -58,7 +58,9 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **`Did you mean: ...`** suggestions on note-not-found errors | rare | ✅ |
 | **Document-map projection** (`format: "map"`: headings + counts, no body) | ❌ | ✅ |
 | **Anti-slop write validator** (`obsidian_validate_note_proposal` lints YAML + wikilinks + tags before write) | ❌ | ✅ |
-| TypeScript strict + Biome lint + 220 unit tests | varies | ✅ |
+| **Graph-aware retrieval** (`find_similar` + `get_note_neighbors` — multi-signal lexical hybrid, no embeddings) | ❌ | ✅ |
+| **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
+| TypeScript strict + Biome lint + 225 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -132,12 +134,12 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 11 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 14 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
 | `obsidian_list_notes` | Filter by tag / folder / modified-since. Returns title, path, frontmatter, tags, mtime — newest first. |
-| `obsidian_read_note` | Body + frontmatter + wikilinks + embeds + tags for a note (by path or title). |
+| `obsidian_read_note` | Body + frontmatter + wikilinks + embeds + tags for a note (by path or title). `format: "map"` returns just headings + counts. |
 | `obsidian_resolve_wikilink` | `[[Note]]`, `[[Note#Heading]]`, `[[Folder/Note\|alias]]`, `![[Embed]]`, `[[../relative/path]]` — all resolved to a real file. |
 | `obsidian_search_text` | Ranked case-insensitive token search across all notes (AND-tokenizer by default; `any` and `phrase` modes available). Returns structured response: `query`, `mode`, `scanned_notes`, ranked `matches` with snippets. |
 | `obsidian_get_recent_edits` | Newest-first stream, optional time window. |
@@ -147,6 +149,9 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
 | `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. Supports `AND` / `OR` / `=` / `!=` / `contains` / `like`. |
 | `obsidian_validate_note_proposal` | **Anti-slop write linter.** Lint a draft note BEFORE writing — parses YAML, resolves every `[[wikilink]]` against the live vault, pre-classifies every tag (existing vs new), checks path/title collisions. Returns errors + warnings + per-link/tag diagnostics. Closes the #1 LLM-write pain ("AI generates structurally-broken notes"). |
+| `obsidian_find_similar` | **Hybrid lexical similarity** — given a note, rank others by tag-Jaccard + title 3-gram + shared-outbound + co-backlink. Each signal returned individually so the caller can re-rank. No embeddings, no native deps. |
+| `obsidian_get_note_neighbors` | **Graph context in one call** — outbound + backlinks + tag-cluster siblings for a note. Replaces 4 round-trips with 1. Designed for "give the LLM enough context to reason about THIS note" RAG. |
+| `obsidian_stats` | **Vault dashboard** — total notes, total bytes, recently-modified count, orphans, broken wikilinks, top tags. One-shot orientation call. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 2 write tools (opt-in via `--enable-write`)

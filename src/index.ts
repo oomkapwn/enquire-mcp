@@ -11,10 +11,13 @@ import {
   appendToNote,
   createNote,
   dataviewQuery,
+  findSimilar,
   getBacklinks,
+  getNoteNeighbors,
   getOutboundLinks,
   getRecentEdits,
   getUnresolvedWikilinks,
+  getVaultStats,
   listNotes,
   listTags,
   readNote,
@@ -24,7 +27,7 @@ import {
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.12.0";
+const VERSION = "0.13.0";
 
 interface ServeOptions {
   vault: string;
@@ -507,6 +510,59 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await validateNoteProposal(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_find_similar",
+    {
+      title: "Find similar notes (lexical-hybrid)",
+      description:
+        "Given a note, return up to N other notes that are 'related' — by tag overlap (Jaccard), title 3-gram overlap, shared outbound links, and co-backlinks. Score is a weighted sum of those four signals; each is also returned individually so the caller can re-rank. No embeddings, no native deps — pure structural retrieval over the existing vault graph. Runs O(N) over the whole vault per call; for vaults >5k notes prefer batching.",
+      annotations: { ...READ_ONLY, title: "Find similar notes" },
+      inputSchema: {
+        path: z.string().optional().describe("Vault-relative path to the source note"),
+        title: z.string().optional().describe("Source note title (alternative to path)"),
+        limit: z.number().int().positive().max(50).optional().describe("Max similar notes to return (default 10)"),
+        min_score: z.number().min(0).max(10).optional().describe("Drop hits below this score (default 0.05)")
+      }
+    },
+    async (args) => textResult(await findSimilar(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_get_note_neighbors",
+    {
+      title: "Get a note + its 1-hop graph neighborhood",
+      description:
+        "Return a note's immediate graph neighborhood in one call: outbound wikilinks (resolved), inbound backlinks (with count), and tag-cluster siblings (notes sharing ≥1 tag, excluding outbound/inbound). Replaces the read_note → backlinks → outbound → resolve_wikilink chain with a single round-trip — designed for RAG-style 'give the LLM enough context to reason about THIS note'.",
+      annotations: { ...READ_ONLY, title: "Get note neighbors" },
+      inputSchema: {
+        path: z.string().optional().describe("Vault-relative path to the center note"),
+        title: z.string().optional().describe("Center note title (alternative to path)"),
+        max_per_bucket: z
+          .number()
+          .int()
+          .positive()
+          .max(100)
+          .optional()
+          .describe("Cap each bucket (outbound/inbound/tag_siblings). Default 20.")
+      }
+    },
+    async (args) => textResult(await getNoteNeighbors(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_stats",
+    {
+      title: "Vault dashboard (one-shot orientation)",
+      description:
+        "Vault-wide summary: total notes, total bytes, average note length, recently-modified count (last 7 days), orphan notes (no inbound + no outbound), broken wikilink count, total tag count, and top-N tags by frequency. Cheap (one pass over the cached parse). Useful as the first call in a session so the LLM has structural context before issuing targeted reads.",
+      annotations: { ...READ_ONLY, title: "Vault stats" },
+      inputSchema: {
+        top_tags: z.number().int().positive().max(50).optional().describe("How many top tags to return (default 10)")
+      }
+    },
+    async (args) => textResult(await getVaultStats(vault, args))
   );
 }
 

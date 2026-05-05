@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 13 MCP tools (10 always-on read + 1 opt-in read via `--persistent-index` + 2 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 17 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 2 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -221,6 +221,60 @@ LIST FROM #people WHERE file.tags contains "core-team"
 ### Row caps
 
 If the query has no explicit `LIMIT`, results are capped at **1000 rows** by default to prevent runaway responses on large vaults. Use `LIMIT n` (any positive integer) to override.
+
+## `obsidian_validate_note_proposal`
+
+Anti-slop write linter. Lint a draft note **before** writing — parses YAML, resolves every `[[wikilink]]` against the live vault, pre-classifies every tag (existing vs new), and checks path/title collisions. Always available — does **not** require `--enable-write`. Recommended workflow: validate → fix → `obsidian_create_note`.
+
+| Argument  | Type                                       | Notes                                                                |
+|-----------|--------------------------------------------|----------------------------------------------------------------------|
+| `path`    | `string`                                   | Vault-relative path the LLM intends to write to.                     |
+| `content` | `string`                                   | Full proposed markdown content (frontmatter + body).                 |
+| `mode`    | `"create" \| "overwrite" \| "append"`     | Default `"create"`. Affects how a path collision is reported.        |
+
+**Returns:** `{ ok, proposed_path, mode, errors[], warnings[], yaml: { parsed, error, keys[] }, wikilinks[], tags[], collision }`. `errors[]` is blocking; `warnings[]` is informational. Each wikilink is tagged `resolved`/`broken`/`ambiguous` with `did-you-mean` suggestions; each tag is tagged `existing` or `new`.
+
+## `obsidian_find_similar`
+
+Lexical-hybrid similarity ranking. Given a note, returns up to N other notes scored by:
+
+| Signal           | Weight | Definition                                                            |
+|------------------|--------|-----------------------------------------------------------------------|
+| `tag_jaccard`    | 3.0    | Jaccard over case-folded tag set.                                     |
+| `title_3gram`    | 1.5    | Character 3-gram Jaccard over basenames.                              |
+| `shared_outbound`| 2.0    | Fraction of source's resolved outbound links also present in candidate's. |
+| `co_backlink`    | 2.0    | Jaccard over the set of notes that link to source AND to candidate.   |
+
+| Argument    | Type                  | Notes                                                |
+|-------------|-----------------------|------------------------------------------------------|
+| `path`      | `string?`             | Vault-relative path of the source note.              |
+| `title`     | `string?`             | Source note title (alternative to `path`).           |
+| `limit`     | `number?` (≤ 50)      | Default 10.                                          |
+| `min_score` | `number?` (0 – 10)    | Default 0.05. Drops hits below this raw score.       |
+
+**Returns:** `Array<{ path, title, score, signals: { tag_jaccard, title_3gram, shared_outbound, co_backlink }, shared_tags, mtime }>`, ranked descending by score.
+
+## `obsidian_get_note_neighbors`
+
+Returns a note + its 1-hop graph neighborhood: outbound links + backlinks + tag-cluster siblings (notes sharing ≥1 tag, excluding outbound/inbound). Replaces a `read_note → backlinks → outbound → resolve_wikilink` chain with one round-trip.
+
+| Argument          | Type                | Notes                                              |
+|-------------------|---------------------|----------------------------------------------------|
+| `path`            | `string?`           | Vault-relative path of the center note.            |
+| `title`           | `string?`           | Center note title (alternative to `path`).        |
+| `max_per_bucket`  | `number?` (≤ 100)   | Cap per bucket (outbound / inbound / tag_siblings). Default 20. |
+
+**Returns:** `{ center: { path, title, tags, mtime }, outbound: [{ path, title, tags }], inbound: [{ path, title, tags, count }], tag_siblings: [{ path, title, shared_tags }] }`.
+
+## `obsidian_stats`
+
+Vault dashboard. One-shot orientation call — useful as the first call in a session so the agent has structural context before issuing targeted reads.
+
+| Argument   | Type                | Notes                                  |
+|------------|---------------------|----------------------------------------|
+| `top_tags` | `number?` (≤ 50)    | Number of top tags to return. Default 10. |
+
+**Returns:** `{ total_notes, total_size_bytes, avg_note_words, recently_modified_7d, orphans, broken_wikilinks, total_tags, top_tags: [{ tag, count }], notes_with_frontmatter, generated_at }`. `orphans` = notes with no inbound *and* no outbound wikilinks.
 
 ## Write tools (opt-in)
 

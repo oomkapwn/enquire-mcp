@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-225%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-228%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -60,7 +60,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Anti-slop write validator** (`obsidian_validate_note_proposal` lints YAML + wikilinks + tags before write) | ❌ | ✅ |
 | **Graph-aware retrieval** (`find_similar` + `get_note_neighbors` — multi-signal lexical hybrid, no embeddings) | ❌ | ✅ |
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
-| TypeScript strict + Biome lint + 225 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 228 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 

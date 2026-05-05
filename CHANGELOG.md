@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-05-05
+
+Anti-slop write validator — closes the #1 LLM-write pain found across forum #111443, Eleanor Konik's blog, and every chatforest review: *"AI generates structurally-broken notes — bad YAML, fake wikilinks, inconsistent tags — and I spend 10 minutes reformatting per note"*.
+
+### Added — `obsidian_validate_note_proposal` tool
+Lint a draft note BEFORE the LLM commits to writing. Inputs: `path` + `content` (full markdown including frontmatter) + optional `mode` ("create" | "overwrite" | "append"). Returns a structured diagnostic so the LLM can fix-and-retry rather than ship a broken note.
+
+What it checks:
+- **YAML parse** via `gray-matter` (the same parser used at write time). Reports `parsed: true|false` + error string + observed keys.
+- **Every `[[wikilink]]`** resolved against the live vault via `findBestMatch`. Each link tagged `resolved` / `broken` with `resolved_path` or `did-you-mean` suggestions (top-3 nearest by prefix/contains rank).
+- **Every tag** (frontmatter + inline) pre-classified as `existing` (case-insensitive match against `listTags()`) or `new` — flags `new` ones so the LLM doesn't fork a tag forest (`#productivity` vs `#productive` vs `#prod`).
+- **Path collision**:
+  - `mode: "create"` (default) — exact path exists → blocking `path-collision` error.
+  - `mode: "overwrite"` / `"append"` — path exists → soft warning, validation passes.
+  - Title collision (note with same basename at a different path) → soft warning regardless of mode.
+- **Path traversal** caught and returned as a structured error (not an exception) — validator never throws on input shape.
+
+This is a **read-only tool**. Always available, even without `--enable-write`. Recommended workflow: `validate → fix → obsidian_create_note`.
+
+Why it's a moat: nobody else in the obsidian-MCP space ships this. Closes the gap between "scary LLM that touches my vault" and "LLM that drafts notes that arrive ready-to-merge".
+
+### Tests
+- 220 unit tests (was 213). 7 new for the validator: happy path, broken-wikilinks, new-tag classification, path-collision modes, invalid YAML pass-through, path traversal as structured error, auto `.md` append.
+
+### Repo state
+- 11 read tools (was 10). Smoke + docs-consistency tests updated.
+- README comparison-table row added — "Anti-slop write validator".
+
 ## [0.11.0] — 2026-05-05
 
 Competitive feature set — borrowed/synthesized from a deep audit of the obsidian-MCP space (StevenStavrakis, MarkusPfundstein, cyanheads, marcelmarais, aaronsb, mcpvault) and Obsidian community pain-point research (forum, HN, Reddit). Four user-visible features land here, none of them invented from scratch — each closes a gap real users complain about with the existing tools.

@@ -13,7 +13,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-213%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -57,7 +57,8 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Periodic-note aliases** (`title: "today"` resolves to today's daily-note) | rare | ✅ |
 | **`Did you mean: ...`** suggestions on note-not-found errors | rare | ✅ |
 | **Document-map projection** (`format: "map"`: headings + counts, no body) | ❌ | ✅ |
-| TypeScript strict + Biome lint + 213 unit tests | varies | ✅ |
+| **Anti-slop write validator** (`obsidian_validate_note_proposal` lints YAML + wikilinks + tags before write) | ❌ | ✅ |
+| TypeScript strict + Biome lint + 220 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -131,7 +132,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 10 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 11 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -145,6 +146,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_get_unresolved_wikilinks` | Vault-hygiene: every `[[broken]]` link in the vault. |
 | `obsidian_list_tags` | Every unique tag with frontmatter / inline counts. |
 | `obsidian_dataview_query` | `LIST` / `TABLE` with `FROM`, `WHERE`, `SORT`, `LIMIT`. Supports `AND` / `OR` / `=` / `!=` / `contains` / `like`. |
+| `obsidian_validate_note_proposal` | **Anti-slop write linter.** Lint a draft note BEFORE writing — parses YAML, resolves every `[[wikilink]]` against the live vault, pre-classifies every tag (existing vs new), checks path/title collisions. Returns errors + warnings + per-link/tag diagnostics. Closes the #1 LLM-write pain ("AI generates structurally-broken notes"). |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 2 write tools (opt-in via `--enable-write`)

@@ -646,6 +646,193 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
   throw new Error("Either path or title is required");
 }
 
+// ─── obsidian_validate_note_proposal (v0.12 anti-slop validator) ─────────────
+// Closes the #1 user-pain finding: LLM-generated notes arrive structurally
+// broken — bad YAML, fake wikilinks, inconsistent tags — and users spend
+// minutes reformatting per note. This tool is called BEFORE create/append:
+// the LLM proposes a draft, we lint it against the live vault, return
+// errors/warnings/suggestions, and the LLM can fix-and-retry without ever
+// writing a broken note.
+
+export interface ValidateProposalArgs {
+  /** Vault-relative path the LLM intends to write to (e.g. "Inbox/idea.md"). */
+  path: string;
+  /** Full proposed markdown content including any frontmatter block. */
+  content: string;
+  /** "create" (default) → fail if path exists. "overwrite" / "append" → ok if exists. */
+  mode?: "create" | "overwrite" | "append";
+}
+
+export interface ValidateProposalResult {
+  ok: boolean;
+  proposed_path: string;
+  mode: "create" | "overwrite" | "append";
+  errors: Array<{ kind: string; message: string }>;
+  warnings: Array<{ kind: string; message: string; suggestion?: string }>;
+  yaml: {
+    parsed: boolean;
+    error: string | null;
+    keys: string[];
+  };
+  wikilinks: Array<{
+    raw: string;
+    target: string;
+    status: "resolved" | "broken" | "ambiguous";
+    resolved_path: string | null;
+    suggestions: string[];
+  }>;
+  tags: Array<{
+    name: string;
+    status: "existing" | "new";
+  }>;
+  collision: {
+    kind: "none" | "path-exists" | "title-exists-elsewhere";
+    existing_path?: string;
+  };
+}
+
+export async function validateNoteProposal(vault: Vault, args: ValidateProposalArgs): Promise<ValidateProposalResult> {
+  await vault.ensureExists();
+  const mode = args.mode ?? "create";
+  const errors: Array<{ kind: string; message: string }> = [];
+  const warnings: Array<{ kind: string; message: string; suggestion?: string }> = [];
+
+  // 1. Path sanity. resolveInside throws on traversal — capture as error,
+  //    don't let it propagate as a generic exception (the validator should
+  //    return a structured result for ANY input).
+  let normalizedPath = args.path.toLowerCase().endsWith(".md") ? args.path : `${args.path}.md`;
+  let absPath: string | null = null;
+  try {
+    absPath = vault.resolveInside(normalizedPath);
+    normalizedPath = vault.toRel(absPath);
+  } catch (err) {
+    errors.push({
+      kind: "path-traversal",
+      message: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  // 2. YAML parse via gray-matter (the same parser used at write time).
+  const yamlReport = { parsed: false, error: null as string | null, keys: [] as string[] };
+  let bodyAfterFm = args.content;
+  try {
+    const parsed = matter(args.content);
+    yamlReport.parsed = true;
+    yamlReport.keys = Object.keys(parsed.data ?? {});
+    bodyAfterFm = parsed.content;
+  } catch (err) {
+    yamlReport.error = err instanceof Error ? err.message : String(err);
+    errors.push({ kind: "yaml-invalid", message: `YAML frontmatter could not be parsed: ${yamlReport.error}` });
+  }
+
+  // 3. Wikilink resolution against the live vault.
+  const all = await vault.listMarkdown();
+  const wikilinkRe = /(?<!!)\[\[([^\]\n]+?)\]\]/g;
+  const wikilinks: ValidateProposalResult["wikilinks"] = [];
+  for (const m of bodyAfterFm.matchAll(wikilinkRe)) {
+    const raw = m[0];
+    const inner = (m[1] ?? "").trim();
+    if (!inner) continue;
+    // Strip alias / section / block to get the bare target name.
+    const beforePipe = inner.split("|")[0] ?? "";
+    const beforeHash = beforePipe.split("#")[0] ?? "";
+    const target = beforeHash.split("^")[0]?.trim() ?? "";
+    if (!target) continue;
+    const match = findBestMatch(all, target, normalizedPath);
+    if (match) {
+      wikilinks.push({
+        raw,
+        target,
+        status: "resolved",
+        resolved_path: match.relPath,
+        suggestions: []
+      });
+    } else {
+      const suggestions = await suggestSimilar(vault, target);
+      wikilinks.push({
+        raw,
+        target,
+        status: "broken",
+        resolved_path: null,
+        suggestions
+      });
+      warnings.push({
+        kind: "broken-wikilink",
+        message: `[[${target}]] does not resolve to any existing note`,
+        suggestion: suggestions.length ? `Closest matches: ${suggestions.join(", ")}` : undefined
+      });
+    }
+  }
+
+  // 4. Tag pre-classification (existing vs new).
+  const existingTags = new Set((await listTags(vault, {})).map((t) => t.tag.toLowerCase()));
+  const proposedTagsRaw = new Set<string>();
+  // Frontmatter tags.
+  const fmData = yamlReport.parsed ? matter(args.content).data : {};
+  const fmTags = fmData.tags ?? fmData.tag;
+  if (Array.isArray(fmTags)) {
+    for (const t of fmTags) if (typeof t === "string" && t) proposedTagsRaw.add(t.replace(/^#/, ""));
+  } else if (typeof fmTags === "string" && fmTags) {
+    for (const t of fmTags.split(/[\s,]+/)) if (t) proposedTagsRaw.add(t.replace(/^#/, ""));
+  }
+  // Inline tags.
+  const inlineTagRe = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
+  for (const m of bodyAfterFm.matchAll(inlineTagRe)) {
+    if (m[1]) proposedTagsRaw.add(m[1]);
+  }
+  const tags: ValidateProposalResult["tags"] = [];
+  for (const t of proposedTagsRaw) {
+    const status = existingTags.has(t.toLowerCase()) ? "existing" : "new";
+    tags.push({ name: t, status });
+    if (status === "new") {
+      warnings.push({
+        kind: "new-tag",
+        message: `#${t} is new — won't fork an existing tag (case-insensitive check)`
+      });
+    }
+  }
+
+  // 5. Path collision check.
+  let collision: ValidateProposalResult["collision"] = { kind: "none" };
+  if (absPath) {
+    try {
+      await vault.stat(absPath);
+      // Path exists.
+      if (mode === "create") {
+        errors.push({
+          kind: "path-collision",
+          message: `Note already exists at ${normalizedPath} (mode="create" refuses overwrite)`
+        });
+      }
+      collision = { kind: "path-exists", existing_path: normalizedPath };
+    } catch {
+      // Path doesn't exist — try title collision (an existing note at a different path).
+      const titleFromBasename = stripMd(path.basename(normalizedPath));
+      const existing = await vault.findByTitle(titleFromBasename);
+      if (existing && existing.relPath !== normalizedPath) {
+        warnings.push({
+          kind: "title-collision",
+          message: `A note titled "${titleFromBasename}" already exists at ${existing.relPath} — proceeding will create a same-titled file at a different path`,
+          suggestion: existing.relPath
+        });
+        collision = { kind: "title-exists-elsewhere", existing_path: existing.relPath };
+      }
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    proposed_path: normalizedPath,
+    mode,
+    errors,
+    warnings,
+    yaml: yamlReport,
+    wikilinks,
+    tags,
+    collision
+  };
+}
+
 function findBestMatch(entries: FileEntry[], target: string, fromNote?: string): FileEntry | null {
   if (target.startsWith("./") || target.startsWith("../") || target.includes("/../")) {
     if (fromNote) {

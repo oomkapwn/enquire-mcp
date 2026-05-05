@@ -19,11 +19,12 @@ import {
   listTags,
   readNote,
   resolveWikilink,
-  searchText
+  searchText,
+  validateNoteProposal
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 
 interface ServeOptions {
   vault: string;
@@ -487,6 +488,25 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await getOutboundLinks(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_validate_note_proposal",
+    {
+      title: "Validate a proposed new note (anti-slop)",
+      description:
+        "Lint a draft note BEFORE writing. Closes the #1 LLM-write pain: AI generates structurally-broken notes (bad YAML, fake wikilinks, inconsistent tags). This tool parses the proposed YAML, resolves every [[wikilink]] against the live vault (broken/resolved with did-you-mean), pre-classifies every tag (existing vs new), and checks for path/title collisions. Returns errors (blocking) + warnings (non-blocking) + per-link/tag diagnostics. Always available — does NOT require --enable-write. Recommended workflow: validate → fix → obsidian_create_note.",
+      annotations: { ...READ_ONLY, title: "Validate note proposal" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path the LLM intends to write to (e.g. 'Inbox/idea.md')"),
+        content: z.string().describe("Full proposed markdown content including any frontmatter block"),
+        mode: z
+          .enum(["create", "overwrite", "append"])
+          .optional()
+          .describe('"create" (default) errors if path exists. "overwrite"/"append" allow existing path.')
+      }
+    },
+    async (args) => textResult(await validateNoteProposal(vault, args))
   );
 }
 

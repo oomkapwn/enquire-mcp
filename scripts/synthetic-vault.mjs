@@ -26,6 +26,16 @@ await fs.writeFile(
   "---\ntags: [daily]\n---\n\nWorked on [[Apollo]] today. Logged #idea about velocity.\n"
 );
 
+// .obsidian/daily-notes.json so smoke exercises the v1.10 plugin-aware
+// periodic-alias resolver. Without this, "today" / "daily" titles fall
+// back to v0.11 hard-coded defaults — which works, but doesn't catch
+// regressions in the loadPeriodicConfig + formatMoment codepath.
+await fs.mkdir(path.join(root, ".obsidian"), { recursive: true });
+await fs.writeFile(
+  path.join(root, ".obsidian", "daily-notes.json"),
+  JSON.stringify({ folder: "99_Daily", format: "YYYY-MM-DD", template: "" }, null, 2)
+);
+
 // Canvas board so smoke can exercise obsidian_list_canvases / read_canvas (v1.7).
 await fs.mkdir(path.join(root, "Boards"), { recursive: true });
 await fs.writeFile(

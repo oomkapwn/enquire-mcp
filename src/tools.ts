@@ -1035,8 +1035,17 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
           basename: path.basename(abs),
           mtimeMs: stat.mtimeMs
         };
-      } catch {
-        // Fall through to basename match.
+      } catch (err) {
+        // v1.11.1: surface exclusion errors instead of masking them as
+        // "not found". The path-based lookup above already does this via
+        // lastErr — keep both codepaths consistent. Exclusion errors come
+        // from a user's own --read-paths / --exclude-glob config, so they
+        // deserve a clear "excluded" message rather than silent fallthrough
+        // to the legacy alias resolver (which won't help anyway).
+        if (err instanceof Error && /excluded by --(read-paths|exclude-glob)/.test(err.message)) {
+          throw err;
+        }
+        // Fall through to basename match on ENOENT-class errors only.
       }
       const basenameMatch = await vault.findByTitle(path.basename(periodicResolved.relPath));
       if (basenameMatch) return basenameMatch;
@@ -2426,9 +2435,16 @@ const STOP_WORDS = new Set([
 ]);
 
 function tokenizeForTfidf(text: string): string[] {
+  // v1.11.1: Unicode-aware tokenizer. The previous ASCII-only regex
+  // (`/[a-z0-9][a-z0-9_-]*/g`) silently dropped Cyrillic, Greek, CJK,
+  // Hebrew, Arabic, and any non-Latin content from the TF-IDF index —
+  // semantic search returned zero hits for non-English queries on
+  // non-English notes. `\p{L}` matches any Unicode letter; `\p{N}`
+  // matches any Unicode number. The leading-class restriction prevents
+  // tokens that start with `_-` separators.
   const lower = text.toLowerCase();
   const out: string[] = [];
-  for (const m of lower.matchAll(/[a-z0-9][a-z0-9_-]*/g)) {
+  for (const m of lower.matchAll(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)) {
     const t = m[0];
     if (t.length < 2) continue;
     if (t.length > 40) continue;

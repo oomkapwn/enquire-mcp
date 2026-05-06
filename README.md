@@ -86,7 +86,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
-| TypeScript strict + Biome lint + 294+ unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 341+ unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -128,7 +128,7 @@ That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandato
 | **Codex / Codex CLI** | per-project `.mcp.json` or environment-specific config |
 | **Devin / any other MCP client** | wherever your client expects MCP server JSON |
 
-To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`), add `"--enable-write"` to the `args` array.
+To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_replace_in_notes`, `obsidian_archive_note`), add `"--enable-write"` to the `args` array.
 
 <details>
 <summary><b>Alternative: global npm install</b></summary>
@@ -362,7 +362,7 @@ Found a security issue? See [SECURITY.md](./SECURITY.md).
 No. Obsidian's wikilink semantics, frontmatter conventions, and folder structure are baked in. Other tools are out of scope.
 
 **Will it modify my vault?**
-Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the four write tools refuse to overwrite existing notes by default (`obsidian_create_note` and `obsidian_rename_note` both require `overwrite=true` to clobber; `obsidian_replace_in_notes` refuses identical search/replace + empty search), and all writes refuse to land outside the vault even if a parent dir is symlinked away.
+Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the five write tools refuse to overwrite existing notes by default (`obsidian_create_note` and `obsidian_rename_note` both require `overwrite=true` to clobber; `obsidian_replace_in_notes` refuses identical search/replace + empty search; `obsidian_archive_note` is a thin rename-into-archive wrapper that inherits the same guards), and all writes refuse to land outside the vault even if a parent dir is symlinked away.
 
 **Does it work over the network?**
 No. It's a local stdio MCP server, designed for one client process per vault. There's no HTTP transport, no auth, no rate limiting — and that's intentional.

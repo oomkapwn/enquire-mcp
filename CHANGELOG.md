@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] — 2026-05-05
+
+Audit-driven patch. Five-agent audit of the v1.10 → v1.11 surface flagged two real P1 code bugs and one CI/process gap; this release fixes all three plus the doc drift the audit found.
+
+### Fixed — `obsidian_semantic_search` now indexes non-Latin content
+
+The TF-IDF tokenizer used `/[a-z0-9][a-z0-9_-]*/g` — ASCII-only. Russian / Greek / Hebrew / Arabic notes were silently dropped from the index AND non-Latin queries returned zero hits.
+
+Replaced with `/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu` (Unicode-aware). Cyrillic / Greek / Hebrew / Arabic / Devanagari now work end-to-end. CJK languages (Chinese / Japanese / Thai) still need a segmenter pass first — tracked as v2.0 backlog (the regex matches them, but unsegmented sentences become single >40-char tokens which the length filter drops).
+
+Regression tests: `tests/semantic.test.ts` now seeds Cyrillic + Greek vaults and asserts top-hit ranking.
+
+### Fixed — periodic-alias resolver respects `--read-paths` / `--exclude-glob` consistently
+
+`resolveTarget()` had two codepaths: path-based lookup (which preserved exclusion errors and re-threw them via `lastErr`) and periodic-alias lookup (which had a bare `catch {}` that silently swallowed exclusion errors). When a user requested `title: "today"` and the configured Daily Notes folder was excluded, the periodic-alias path fell through to the legacy basename matcher — which could surface a different (visible) note with a colliding basename.
+
+Both codepaths now surface exclusion errors uniformly. The agent gets a clear `"Path is excluded by --read-paths allowlist"` or `"--exclude-glob denylist"` error instead of a wrong-note return.
+
+Regression test: `tests/security.test.ts` adds two cases — one for `--exclude-glob`, one for `--read-paths`.
+
+### Fixed — synthetic vault now exercises the v1.10 plugin-aware periodic resolver
+
+`scripts/synthetic-vault.mjs` (CI smoke) didn't write `.obsidian/daily-notes.json`, so smoke fell back to the v0.11 hard-coded defaults — leaving `loadPeriodicConfig()` + `formatMoment()` regression-free in CI even when the actual code broke.
+
+Added a 3-line config (`folder: "99_Daily"`, `format: "YYYY-MM-DD"`) so `obsidian_resolve_periodic_alias today` now exercises the lazy-load → cache → format codepath in every CI run.
+
+### Docs
+
+- README: write-tools quick-start now lists all five (`obsidian_create_note`, `_append_to_note`, `_rename_note`, `_replace_in_notes`, `_archive_note`); FAQ updated to "five write tools"; test-count badge bumped 294 → 341.
+- SECURITY.md: new sections for the v1.10 periodic-config disk-read posture and the `--enabled-tools` / `--disabled-tools` per-tool gating posture.
+
+### Tests
+
+341 unit tests pass (was 337). Three regression tests added: 2× Unicode tokenizer (Cyrillic + Greek), 2× periodic-alias exclusion (`--exclude-glob` + `--read-paths`).
+
 ## [1.11.0] — 2026-05-06
 
 Two more small wins, both completing surfaces from earlier releases:

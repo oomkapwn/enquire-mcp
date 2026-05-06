@@ -395,6 +395,28 @@ try {
     `      → semantic_search "${semParsed.query}": ${semParsed.matches.length}/${semParsed.total_docs} hit(s)`
   );
 
+  // v1.10 — periodic-alias resolver via read_note(title:"2026-05-02").
+  // Synthetic vault seeds .obsidian/daily-notes.json + 99_Daily/2026-05-02.md
+  // so this exercises the plugin-aware codepath (loadPeriodicConfig +
+  // formatMoment) — without this probe, regressions in the lazy-load codepath
+  // wouldn't fail CI. We only check that the resolver returns a path ending
+  // in 2026-05-02.md (any folder); the synthetic vault always produces
+  // 99_Daily/2026-05-02.md, but real vaults may have a different layout.
+  const aliasReq = await rpc("tools/call", {
+    name: "obsidian_read_note",
+    arguments: { title: "2026-05-02", format: "map" }
+  });
+  const aliasText = aliasReq.result?.content?.[0]?.text ?? "";
+  const aliasParsed = JSON.parse(aliasText);
+  check(
+    "read_note resolves a daily-notes basename (plugin-config folder honored)",
+    typeof aliasParsed === "object" &&
+      typeof aliasParsed.path === "string" &&
+      aliasParsed.path.endsWith("2026-05-02.md"),
+    aliasText.slice(0, 200)
+  );
+  console.log(`      → read_note title:2026-05-02 → "${aliasParsed.path}"`);
+
   // FTS5-only surface: full_text_search tool + chunk resource template.
   if (withFts) {
     const fts = await rpc("tools/call", {

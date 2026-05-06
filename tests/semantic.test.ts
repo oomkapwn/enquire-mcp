@@ -120,3 +120,53 @@ describe("semanticSearch (v1.8 TF-IDF cosine)", () => {
     expect(result.total_docs).toBe(6);
   });
 });
+
+// v1.11.1: tokenizer must accept Unicode letters (Cyrillic / Greek / Arabic /
+// Hebrew etc.). The pre-1.11.1 ASCII-only regex silently dropped non-Latin
+// content from both the index AND the query, returning zero hits for Russian /
+// Greek / Hebrew vaults. Regression test catches the leak.
+//
+// Note: CJK languages (Chinese / Japanese / unsegmented Thai) need an
+// Intl.Segmenter pass before this regex is useful — they don't use spaces.
+// Tracked as v2.0 backlog; v1.11.1 fixes the >80% case (whitespace-segmented
+// non-Latin scripts).
+describe("semanticSearch (v1.11.1 Unicode tokenizer)", () => {
+  let uroot: string;
+
+  beforeAll(async () => {
+    uroot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-semantic-unicode-"));
+    await fs.writeFile(
+      path.join(uroot, "Аутентификация.md"),
+      "Поток OAuth с токенами JWT. Сервер авторизации выдаёт токены доступа и обновления.\n"
+    );
+    await fs.writeFile(
+      path.join(uroot, "Кулинария.md"),
+      "Карбонара: гуанчиале, пекорино романо, яйца, чёрный перец. Перемешать с горячей пастой.\n"
+    );
+    await fs.writeFile(
+      path.join(uroot, "Αυθεντικοποίηση.md"),
+      "Ροή OAuth με JWT διακριτικά. Ο διακομιστής εξουσιοδότησης εκδίδει διακριτικά πρόσβασης.\n"
+    );
+  });
+
+  afterAll(async () => {
+    await fs.rm(uroot, { recursive: true, force: true });
+  });
+
+  it("indexes Cyrillic content and ranks the auth note above the cooking note", async () => {
+    const v = new Vault(uroot);
+    const result = await semanticSearch(v, { query: "токены авторизации", limit: 10 });
+    expect(result.matches.length).toBeGreaterThan(0);
+    // Top hit must be Аутентификация — token vocabulary overlaps there, not in
+    // the carbonara recipe. Pre-1.11.1, the tokenizer dropped both query and
+    // doc tokens, so this returned 0 matches.
+    expect(result.matches[0]?.path).toBe("Аутентификация.md");
+  });
+
+  it("indexes Greek content for Greek queries", async () => {
+    const v = new Vault(uroot);
+    const result = await semanticSearch(v, { query: "διακριτικά εξουσιοδότησης", limit: 10 });
+    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.matches[0]?.path).toBe("Αυθεντικοποίηση.md");
+  });
+});

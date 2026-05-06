@@ -106,6 +106,32 @@ Out of scope:
 - Timing-side-channel: `--exclude-glob` filtering happens AFTER chokidar's stat call, so an external observer with read access to system call timing could in principle infer that *some* event fired even for excluded paths. Acceptable — anyone with that level of system access already controls the vault.
 - Watcher event ordering: chokidar coalesces but doesn't strictly serialize events. If the server's own write tools (`create_note`, `append_to_note`, `rename_note`) fire and the watcher reacts before the tool's own cache invalidation, the watcher may do redundant work but never produces inconsistent state — every read goes back to the disk.
 
+## Periodic-Notes plugin config: disk-read posture
+
+`obsidian_resolve_periodic_alias` and the periodic-alias resolver inside `obsidian_read_note` / `obsidian_append_to_note` etc. (added v1.10.0) lazily read **two files** under the vault's `.obsidian/` directory at first use:
+
+1. `.obsidian/daily-notes.json` — the core Daily Notes plugin's settings.
+2. `.obsidian/plugins/periodic-notes/data.json` — the community Periodic Notes plugin's settings.
+
+Posture:
+
+- **Reads only.** Both files are opened with `fs.readFile` and parsed via `JSON.parse`; the resolver never writes back. A malformed file logs to stderr and falls through to the v0.11 hard-coded defaults — never throws.
+- **Inside the vault root.** Both paths live under the vault root the user already exposed. No new filesystem surface is introduced.
+- **No `.obsidian/` listing.** The walker's `SKIP_DIRS` set (which includes `.obsidian`) still hides everything else under that folder; only those two specific files are read by-name.
+- **Cached for the process lifetime.** The first call populates `Vault.periodicConfig` and subsequent calls return that snapshot — restart the server after editing the plugin config.
+- **No string interpolation.** The `format` string from the plugin config feeds a fixed Moment.js token table (`YYYY`, `MMM`, `Do`, …) and bracket-escaped literals; there's no `eval` or template path that could turn user-provided format text into code execution.
+- **`--read-paths` allowlist now consistent.** v1.11.1 surfaces "excluded by --read-paths / --exclude-glob" errors from the periodic-alias path lookup the same way as the path-based lookup. Pre-1.11.1, exclusion errors were silently caught and the resolver fell through to the legacy basename matcher — which could surface a different (visible) note with a colliding basename. v1.11.1 re-throws exclusion errors, so the agent gets a clear refusal instead.
+
+## `--enabled-tools` / `--disabled-tools`: per-tool gating posture
+
+`--disabled-tools` (added v1.10.0) and `--enabled-tools` (added v1.11.0) both gate which MCP tools the server registers, via a monkey-patched `server.registerTool()`:
+
+- **`--disabled-tools` is a denylist.** Comma-separated list of tool names; matching tools are skipped at registration time. Useful for surface-area reduction without forking.
+- **`--enabled-tools` is an allowlist.** Comma-separated list; ONLY listed tools are registered. Combined with `--disabled-tools`, both predicates apply (a tool must be in the allowlist AND not in the denylist).
+- **Names are validated against the canonical tool list.** Unknown names log a stderr warning and are otherwise ignored — typos don't silently disable nothing.
+- **Write-tool gating composes with `--enable-write`.** Disabling `obsidian_create_note` while leaving `obsidian_replace_in_notes` enabled is a valid configuration; the gate is independent of the global write flag.
+- **Posture is "fail closed".** Tools blocked at registration time never appear in `tools/list` and a `tools/call` against a gated name returns a clean MCP-protocol error from the SDK — there's no codepath where a disabled tool can still execute.
+
 ## Persistent FTS5 index: privacy posture
 
 When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.

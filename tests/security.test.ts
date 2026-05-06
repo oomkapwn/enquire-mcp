@@ -224,3 +224,45 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
     expect(out).toEqual([]);
   });
 });
+
+// v1.11.1 audit fix: resolveTarget's periodic-alias codepath used to silently
+// swallow exclusion errors and fall through to the legacy alias resolver +
+// findByTitle, which could surface a different (visible) basename match —
+// returning the WRONG note. The path-based codepath already preserved
+// exclusion errors via lastErr; both should now behave consistently.
+describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () => {
+  let vroot: string;
+  beforeEach(async () => {
+    vroot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-periodic-exclude-"));
+    await fs.mkdir(path.join(vroot, ".obsidian"), { recursive: true });
+    await fs.mkdir(path.join(vroot, "Daily Notes"), { recursive: true });
+    // Periodic Notes plugin config — points "today" / "daily" at the
+    // Daily Notes/ folder.
+    await fs.writeFile(
+      path.join(vroot, ".obsidian", "daily-notes.json"),
+      JSON.stringify({ folder: "Daily Notes", format: "YYYY-MM-DD" })
+    );
+    // Today's daily note exists but is excluded by the user's filter.
+    const today = new Date().toISOString().slice(0, 10);
+    await fs.writeFile(path.join(vroot, "Daily Notes", `${today}.md`), "private daily entry");
+  });
+  afterEach(async () => {
+    await fs.rm(vroot, { recursive: true, force: true });
+  });
+
+  it("readNote(title:'today') surfaces exclusion error instead of falling through", async () => {
+    const v = new Vault(vroot, { excludeGlobs: ["Daily Notes/**"] });
+    await v.ensureExists();
+    // Pre-1.11.1: bare catch{} swallowed the exclusion error and fell through
+    // to legacy alias + findByTitle, returning "No note found" (or worse, a
+    // visible basename collision). Post-fix: we surface "excluded by..."
+    // consistently with the path-based lookup.
+    await expect(readNote(v, { title: "today" })).rejects.toThrow(/excluded by --exclude-glob/);
+  });
+
+  it("readNote(title:'daily') with --read-paths allowlist surfaces allowlist rejection", async () => {
+    const v = new Vault(vroot, { readPaths: ["Work/**"] });
+    await v.ensureExists();
+    await expect(readNote(v, { title: "daily" })).rejects.toThrow(/excluded by --read-paths/);
+  });
+});

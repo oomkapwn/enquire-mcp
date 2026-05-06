@@ -29,7 +29,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.3.1";
+const VERSION = "1.4.0";
 
 interface ServeOptions {
   vault: string;
@@ -930,6 +930,105 @@ ${tag ? "5" : "4"}. End with a one-line "highest-leverage next action" pick — 
    - **Promote to its own hub** — if it spawned 3+ outbound links.
    - **Archive / delete** — if it's stale and unlinked.
 4. Output: one block per note with the proposed action and a one-sentence rationale. Don't actually move anything; just propose.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "consolidate_tags",
+    {
+      title: "Consolidate tags",
+      description:
+        "Surface near-duplicate or inconsistently-cased tags (#productivity vs #productive vs #Productivity) and propose unifications.",
+      argsSchema: {
+        min_count: z.string().optional().describe("Only consider tags with at least N uses (default 2)")
+      }
+    },
+    ({ min_count }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Audit my tag forest and propose consolidations.
+
+1. Call \`obsidian_list_tags\` with \`min_count=${min_count ?? 2}\`, \`limit=200\`.
+2. Group tags by 3-gram similarity AND by case-folded prefix. Look for clusters like:
+   - Pluralization drift: \`project\` vs \`projects\` vs \`proj\`.
+   - Case drift: \`AI\` vs \`ai\` vs \`Ai\`.
+   - Hyphen/space drift: \`book-notes\` vs \`booknotes\` vs \`book_notes\`.
+   - Hierarchy drift: \`work/clients\` vs \`clients\` vs \`work-clients\`.
+3. For each cluster of 2+ near-duplicates, propose a single canonical tag (the highest-count one or the most-style-conformant one).
+4. Output a markdown table: \`canonical | aliases-to-merge | total-affected-notes\`. End with a one-line "do this first" pick — the highest-leverage merge.
+
+DO NOT modify any notes. This is read-only analysis.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "find_duplicates",
+    {
+      title: "Find near-duplicate notes",
+      description:
+        "Walk the vault for clusters of structurally similar notes (same tags, overlapping titles, shared backlinks) — candidates for merge.",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict the scan to a subfolder"),
+        min_score: z.string().optional().describe("Similarity threshold (0-10, default 1.5 — moderately tight)")
+      }
+    },
+    ({ folder, min_score }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Find clusters of near-duplicate notes${folder ? ` under \`${folder}\`` : ""} that are merge candidates.
+
+1. Call \`obsidian_list_notes\`${folder ? ` with \`folder=${folder}\`,` : " with"} \`limit=200\` to seed the candidate set.
+2. For each candidate, call \`obsidian_find_similar\` with \`min_score=${min_score ?? "1.5"}\`, \`limit=5\`.
+3. Build clusters: a cluster is a group of notes that all rank in each other's top-5 with score above the threshold. Discard solo notes.
+4. For each cluster, read the top 2 notes via \`obsidian_read_note\` to verify content overlap (don't trust the structural signal alone).
+5. Output: one block per cluster with member paths, signal scores, and a one-line proposal — \`merge into <best-canonical>\`, \`split into <distinct-topics>\`, or \`leave-they're-genuinely-different\`.
+
+DO NOT modify any notes. Read-only.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "monthly_review",
+    {
+      title: "Monthly review",
+      description:
+        "30-day version of `weekly_review` — aggregates a month of vault activity, identifies themes, and surfaces what stalled.",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict the review to a subfolder")
+      }
+    },
+    ({ folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Run a monthly review of my Obsidian vault${folder ? ` (folder \`${folder}\`)` : ""}.
+
+1. Call \`obsidian_stats\` first to get the lay of the land — total notes, top tags, orphan count, broken-link count, recently-modified-7d.
+2. Call \`obsidian_get_recent_edits\` with \`since_minutes=43200\`${folder ? `, \`folder=${folder}\`` : ""}, \`limit=200\` to enumerate the past 30 days.
+3. Group results by top-level frontmatter \`tags\` (or the most-frequent inline tag).
+4. For each tag-group with 5+ touches:
+   - "Theme:" what's the through-line of the work?
+   - "Shipped:" 2-3 notes that look like they reached a conclusion.
+   - "Stalled:" notes touched once early in the month and not since (likely abandoned).
+5. Compare against the previous month's tag distribution if you can infer it from \`obsidian_get_recent_edits\` with a wider window — note any tag that was active last month but silent this one.
+6. End with a 3-sentence reflection: what does the month say about your actual focus vs. your stated focus, and what's the one tag-cluster that deserves more attention next month.`
           }
         }
       ]

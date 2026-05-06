@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-05-06
+
+Three new MCP prompts + closes the v1.3.1 audit's last test gap. Pure additions; no breaking changes; embeddings retrieval is still the only outstanding 1.x roadmap item (deferred to 2.x because of the dep-footprint impact).
+
+### Added — 3 new MCP prompts (6 → 9)
+
+- **`consolidate_tags`** — surfaces near-duplicate / inconsistently-cased tags (`#productivity` vs `#productive` vs `#Productivity`) by clustering on 3-gram similarity and case-folded prefixes. Proposes a single canonical tag per cluster + total affected note count. Read-only — never writes. Args: `min_count?` (default 2).
+
+- **`find_duplicates`** — walks the vault for clusters of structurally-similar notes via the existing `obsidian_find_similar` tool. A cluster is a group of notes that all rank in each other's top-5 with score above the threshold. Reads top-2 of each cluster to verify content overlap (doesn't trust structural signal alone). Outputs merge proposals only — never modifies. Args: `folder?`, `min_score?` (default 1.5).
+
+- **`monthly_review`** — 30-day version of the existing `weekly_review`. Calls `obsidian_stats` first for orientation, then groups the past month's edits by tag, identifies stalled work, and compares against the previous month's tag distribution. Ends with a 3-sentence reflection on focus vs stated intent. Args: `folder?`.
+
+### Tested
+- **`tests/write.test.ts`** — closes the v1.3.1-audit P2 test gap: a self-reference inside a path-qualified target (`Folder/Foo.md` containing `[[Folder/Foo]]`) now has explicit coverage. Verifies that after a cross-folder rename the path component AND the basename component both update — the bare and the path-qualified self-link forms are both rewritten correctly.
+
+### Repo state
+- **18 MCP tools** (unchanged). 14 read + 1 opt-in FTS5 + 3 write.
+- **9 MCP prompts** (was 6). All read-only — they orchestrate existing tools; none introduce new write paths.
+- **247 unit tests** (was 246, +1 for the path-qualified self-reference case).
+- Smoke + docs-consistency tests updated to expect 9 prompts.
+- Code surface unchanged outside `src/index.ts` prompt registrations and the new test.
+
 ## [1.3.1] — 2026-05-06
 
 Patch release driven by a 5-agent post-1.3 audit (code · security · process · docs · 48-hour git history). All 5 agents reported zero P0/P1 code bugs; this release closes the doc + UX drift the audits surfaced.

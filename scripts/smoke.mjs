@@ -262,7 +262,7 @@ try {
   // Prompts.
   const prompts = await rpc("prompts/list", {});
   const promptNames = (prompts.result?.prompts ?? []).map((p) => p.name).sort();
-  check("prompts/list returns 6 prompts", promptNames.length === 6, JSON.stringify(promptNames));
+  check("prompts/list returns 9 prompts", promptNames.length === 9, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
 
   // Sanity-check the new D / E tools.

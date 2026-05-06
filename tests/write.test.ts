@@ -411,4 +411,28 @@ describe("renameNote (v1.1)", () => {
     // PointsAtDest unchanged — its [[Dest]] still resolves (to Source's content now).
     expect(await fs.readFile(path.join(root, "PointsAtDest.md"), "utf8")).toContain("[[Dest]]");
   });
+
+  it("self-reference + path-qualified target: [[Folder/Foo]] inside Folder/Foo.md (audit P2 v1.4)", async () => {
+    // Pre-existing audit gap: a self-reference in a path-qualified form
+    // (`Folder/Foo.md` containing `[[Folder/Foo]]`) was not explicitly tested.
+    // After cross-folder rename, the path-qualified self-link must update its
+    // path component AND its basename component.
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Inbox"), { recursive: true });
+    await fs.mkdir(path.join(root, "Archive"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "Inbox", "Foo.md"),
+      "I link to myself path-qualified [[Inbox/Foo]] and bare [[Foo]].\n"
+    );
+    await renameNote(v, { from: "Inbox/Foo.md", to: "Archive/Bar.md" });
+    const txt = await fs.readFile(path.join(root, "Archive", "Bar.md"), "utf8");
+    // Path-qualified self-link → new folder + new basename.
+    expect(txt).toContain("[[Archive/Bar]]");
+    // Bare self-link → new basename only (no path).
+    expect(txt).toContain("[[Bar]]");
+    // Old form is fully gone.
+    expect(txt).not.toContain("[[Inbox/Foo]]");
+    expect(txt).not.toContain("[[Foo]]");
+  });
 });

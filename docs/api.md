@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 18 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 18 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 9 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -337,8 +337,11 @@ The note template implements `list`, so MCP clients with a resource browser will
 | `review_tag`            | `tag`                      | Pulls every note for a tag, surfaces open threads. |
 | `find_orphans`          | `folder?`                  | Finds notes with zero inbound links — archive candidates. |
 | `weekly_review`         | `folder?`                  | Aggregates the last 7 days of edits; groups by tag; surfaces shipped / open / stuck. |
+| `monthly_review`        | `folder?`                  | 30-day version: themes, what stalled, focus vs stated intent. Calls `obsidian_stats` first. |
 | `extract_todos`         | `folder?`, `tag?`          | Greps TODO / FIXME / QUESTION across the vault, groups by note, picks a top-leverage next action. |
 | `process_inbox`         | `folder` (required)        | Walks an inbox folder, proposes Move / Merge / Promote / Archive for each note. |
+| `consolidate_tags`      | `min_count?`               | Surfaces near-duplicate / inconsistently-cased tags via `obsidian_list_tags` clustering. Proposes canonical merges. Read-only. |
+| `find_duplicates`       | `folder?`, `min_score?`    | Walks the vault clustering structurally-similar notes via `obsidian_find_similar`. Outputs merge proposals; never modifies. |
 
 ## Path safety
 

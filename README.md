@@ -65,7 +65,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | Lists **outbound links** for one note with resolution status | ❌ | ✅ |
 | Built-in **Dataview-style queries** (`LIST` / `TABLE`, `AND`/`OR`, `LIKE`) | only via Obsidian plugin | ✅ first-class |
 | **MCP resources** for browsing the vault as a tree | ❌ | ✅ |
-| **MCP prompts** (`summarize_recent_edits`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`) | ❌ | ✅ 6 prompts |
+| **MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`) | ❌ | ✅ 9 prompts |
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
@@ -193,8 +193,11 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `review_tag` | `tag` | Pull every note for a tag, surface open threads. |
 | `find_orphans` | `folder?` | Notes with zero inbound links — archive candidates. |
 | `weekly_review` | `folder?` | Last 7 days of edits, grouped by tag — shipped / open / stuck. |
+| `monthly_review` | `folder?` | 30-day version: themes, what stalled, focus vs intent. |
 | `extract_todos` | `folder?`, `tag?` | Every TODO / FIXME / QUESTION, grouped by note. |
 | `process_inbox` | `folder` | Move / Merge / Promote / Archive proposals for an inbox folder. |
+| `consolidate_tags` | `min_count?` | Surface near-duplicate tags (`#productivity` vs `#productive`) and propose canonical merges. Read-only. |
+| `find_duplicates` | `folder?`, `min_score?` | Walk the vault for clusters of structurally-similar notes via `obsidian_find_similar`. Read-only — outputs merge proposals only. |
 
 ---
 

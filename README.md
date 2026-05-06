@@ -10,13 +10,10 @@
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![Stable 1.0](https://img.shields.io/badge/release-1.0%20stable-brightgreen.svg)](./CHANGELOG.md)
+[![Stable](https://img.shields.io/badge/release-stable-brightgreen.svg)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-239%20passing-brightgreen.svg)](#develop)
-[![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
-[![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
 </div>
 
@@ -122,7 +119,7 @@ That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandato
 | **Codex / Codex CLI** | per-project `.mcp.json` or environment-specific config |
 | **Devin / any other MCP client** | wherever your client expects MCP server JSON |
 
-To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`), add `"--enable-write"` to the `args` array.
+To enable write tools (`obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`), add `"--enable-write"` to the `args` array.
 
 <details>
 <summary><b>Alternative: global npm install</b></summary>
@@ -275,7 +272,7 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: 
 | Flag | Default | What it does |
 |---|---|---|
 | `--vault <path>` | (required) | Path to the Obsidian vault root. |
-| `--enable-write` | off | Register the two write tools. Server is otherwise strictly read-only. |
+| `--enable-write` | off | Register the three write tools. Server is otherwise strictly read-only. |
 | `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
@@ -314,7 +311,7 @@ Found a security issue? See [SECURITY.md](./SECURITY.md).
 No. Obsidian's wikilink semantics, frontmatter conventions, and folder structure are baked in. Other tools are out of scope.
 
 **Will it modify my vault?**
-Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the two write tools refuse to overwrite existing notes (`obsidian_create_note` requires `overwrite=true`) and refuse to write outside the vault even if a parent dir is symlinked away.
+Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the three write tools refuse to overwrite existing notes by default (`obsidian_create_note` and `obsidian_rename_note` both require `overwrite=true` to clobber) and refuse to write outside the vault even if a parent dir is symlinked away.
 
 **Does it work over the network?**
 No. It's a local stdio MCP server, designed for one client process per vault. There's no HTTP transport, no auth, no rate limiting — and that's intentional.
@@ -396,6 +393,6 @@ Other ways to help:
 
 ## License & credits
 
-[MIT](./LICENSE). Built by [@OomkaBear](https://github.com/oomkapwn). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
+[MIT](./LICENSE). Built by Alex — [GitHub `@oomkapwn`](https://github.com/oomkapwn) · [X / Twitter `@OomkaBear`](https://twitter.com/OomkaBear). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
 
 Named after [ENQUIRE](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, no plugin required.

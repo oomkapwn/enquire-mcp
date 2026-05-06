@@ -48,6 +48,25 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 - Manual purge: `enquire-mcp clear-cache --vault <path>` deletes the cache file.
 - **Caveat:** anyone with read access to your user account can read the cache file. If your threat model includes other local users on the same machine, do not use `--persistent-cache`.
 
+## `obsidian_rename_note`: atomic-rewrite posture
+
+`obsidian_rename_note` (write tool, requires `--enable-write`) is the most privileged MCP surface — a single call mutates many files in the vault. The threat model is: an attacker-controlled MCP client invokes `rename_note` with crafted arguments to clobber files outside the vault, leak content, or leave the vault in a corrupted half-state.
+
+Mitigations already in place:
+
+- **Path-traversal rejected** on both `from` and `to` arguments via `vault.resolveInside()` + `vault.stat()` + `vault.renameFile()`. A `to` that escapes the vault root throws before any writes.
+- **Symlink-escape rejected** — destination behind a symlink is refused at rename time.
+- **`--exclude-glob` honored** — both `from` and `to` are checked against the exclude list. A rename whose source or destination matches a privacy-filtered pattern is refused.
+- **Refuses overwrite by default** — `to` already exists → throws unless the caller passes `overwrite: true` explicitly.
+- **Refuses `from === to`** — a same-path rename is treated as an error rather than a silent no-op.
+- **Code-fence-aware rewrite** — wikilinks inside ` ``` ` / `~~~` blocks are left verbatim. An attacker can't smuggle a payload like `[[Foo]]` inside a code block to force unrelated files to be rewritten — only outside-fence wikilinks resolved by the parser are touched.
+- **Atomicity & recovery posture** — write order is: (1) all backlink-bearing files, (2) the source file's rewritten content (still at OLD path), (3) `fs.rename` source's old path → new path. A failure at any step before step 3 leaves backlinks pointing at the still-present old name (worst case: safe and recoverable; old wikilinks resolve, the user can re-run the rename).
+- **`dry_run: true` preview** — caller can inspect the full per-file rewrite plan before any disk mutation.
+
+Out of scope:
+- A vault that spans multiple filesystems (rare; symlink to a mounted drive). `fs.rename` will fail with `EXDEV` after the backlink files are written. The user can move the vault to a single filesystem and re-run; we don't auto-fall back to copy-then-delete.
+- A note that contains identical literal `[[X]]` strings inside AND outside a code fence where only the outside ones should be rewritten — the parser excludes code-fenced wikilinks, so the rewrite plan correctly only includes outside-fence ones, and the line-walker skips fence lines during the actual replacement.
+
 ## Persistent FTS5 index: privacy posture
 
 When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.

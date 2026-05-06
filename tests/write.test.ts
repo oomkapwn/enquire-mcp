@@ -358,4 +358,57 @@ describe("renameNote (v1.1)", () => {
     await fs.writeFile(path.join(root, "Same.md"), "x");
     await expect(renameNote(v, { from: "Same.md", to: "Same.md" })).rejects.toThrow(/same path/);
   });
+
+  it("rewrites self-references inside the renamed file (audit P1 v1.1)", async () => {
+    // Pre-fix: a note that linked to itself stayed referencing the old name
+    // after rename, leaving the renamed file with a broken self-link.
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(
+      path.join(root, "Foo.md"),
+      "Foo describes itself and references [[Foo]] and ![[Foo]] from inside.\n"
+    );
+    const out = await renameNote(v, { from: "Foo.md", to: "Bar.md" });
+    expect(out.total_links_rewritten).toBe(2);
+    // The renamed file's self-references must point at the new name.
+    const bar = await fs.readFile(path.join(root, "Bar.md"), "utf8");
+    expect(bar).toContain("[[Bar]]");
+    expect(bar).toContain("![[Bar]]");
+    expect(bar).not.toContain("[[Foo]]");
+    // The plan response surfaces the source-file rewrite at its NEW path.
+    const sourceEntry = out.files_updated.find((p) => p.path === "Bar.md");
+    expect(sourceEntry?.rewrites).toBe(2);
+  });
+
+  it("self-reference rewrite respects code fences (no rewrite inside ```)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(
+      path.join(root, "Doc.md"),
+      "Outside [[Doc]].\n\n```\nInside fence: [[Doc]] stays.\n```\n\nMore outside [[Doc]].\n"
+    );
+    const out = await renameNote(v, { from: "Doc.md", to: "Manual.md" });
+    expect(out.total_links_rewritten).toBe(2); // 2 outside, 1 inside-fence preserved
+    const txt = await fs.readFile(path.join(root, "Manual.md"), "utf8");
+    expect(txt.match(/\[\[Manual\]\]/g)?.length).toBe(2);
+    expect(txt).toContain("Inside fence: [[Doc]] stays.");
+  });
+
+  it("overwrite=true: clobbers destination, source content lands at to-path", async () => {
+    // Spec: overwrite=true means "replace the file at `to` with the renamed
+    // source's content (and its updated wikilinks)". Existing backlinks that
+    // pointed at `to` will continue to syntactically resolve to it — they now
+    // point at the renamed source's content. That's the contract.
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Source.md"), "I am source linking to nothing.\n");
+    await fs.writeFile(path.join(root, "Dest.md"), "I am the doomed destination.\n");
+    await fs.writeFile(path.join(root, "PointsAtDest.md"), "Hello [[Dest]].\n");
+    await renameNote(v, { from: "Source.md", to: "Dest.md", overwrite: true });
+    // Source file gone; Dest file present with Source's content.
+    expect(await fs.stat(path.join(root, "Source.md")).catch(() => null)).toBeNull();
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toContain("I am source linking to nothing");
+    // PointsAtDest unchanged — its [[Dest]] still resolves (to Source's content now).
+    expect(await fs.readFile(path.join(root, "PointsAtDest.md"), "utf8")).toContain("[[Dest]]");
+  });
 });

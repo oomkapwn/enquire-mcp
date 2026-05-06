@@ -9,7 +9,7 @@
 | Flag                   | Default | Notes                                      |
 |------------------------|---------|--------------------------------------------|
 | `--vault <path>`       | (required) | Path to the Obsidian vault root.        |
-| `--enable-write`       | off     | Register the two write tools.              |
+| `--enable-write`       | off     | Register the three write tools.            |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-05-06
+
+Patch release driven by a 4-agent post-1.1 audit (code · process · docs · repo page).
+
+### Fixed
+- **`obsidian_rename_note` self-reference rewrite (P1).** A note that linked to itself (e.g. `Foo.md` containing `[[Foo]]`) was previously skipped by the rename pass — the file got moved as-is and ended up with a broken self-link at the new name. Now the source file is included in the rewrite plan, written to its old path with the updated literals, and `fs.rename`'d last. Code-fence-aware behavior for the source file matches every other file (wikilinks inside ` ``` ` / `~~~` blocks stay verbatim). Two new tests cover the fix; one new test pins the existing `overwrite: true` semantics so they don't drift.
+
+### Documented
+- **`SECURITY.md` — `obsidian_rename_note` atomic-rewrite posture.** New section covers path-traversal/symlink-escape rejection on both `from` and `to`, `--exclude-glob` enforcement on the destination, refuses-by-default policy on overwrite + `from === to`, code-fence-aware rewrite as defense against arbitrary content injection in unrelated files, and the write-order recovery story (backlinks → source → rename) plus the `EXDEV` cross-filesystem caveat.
+- **Write-tool count corrected from "two" to "three"** in three doc locations (`README.md` config table + FAQ; `docs/api.md` flag table) where the v1.1 rename tool wasn't reflected.
+- **Banner + README badge made version-agnostic.** `assets/social-preview.svg` subtitle was "1.0 stable 🦞" — now "stable 🦞" so it doesn't drift on every minor. README "Stable 1.0" badge → "Stable".
+
+### Polish
+- **README badges trimmed** 9 → 6 (CI, npm, Stable, MIT, Node, MCP). Dropped tests-passing / coverage / lint badges that drifted on every version bump.
+- **README author footer** now lists both `@oomkapwn` (GitHub) and `@OomkaBear` (X / Twitter).
+- **GitHub repo description** refreshed to pain-led + version-agnostic.
+
+### Repo state
+- 18 MCP tools (unchanged). 14 read + 1 opt-in FTS5 + 3 write.
+- 242 unit tests (was 239, +3 for the self-reference + overwrite fixes).
+
 ## [1.1.0] — 2026-05-06
 
 First post-1.0 minor — the most-requested 1.x roadmap item lands: **atomic rename with automatic backlink rewrite**.

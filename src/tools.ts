@@ -593,14 +593,16 @@ export async function renameNote(
   const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
   const entries = await vault.listMarkdown();
 
-  // Build the rewrite plan. Skip the source file itself; if it links to itself
-  // those literals stay valid relative to the new name (basename target) but
-  // a path-qualified self-reference would break. We don't rewrite the source —
-  // it gets moved as-is.
+  // Build the rewrite plan. INCLUDES the source file itself so that any
+  // self-references (e.g. `[[Foo]]` inside `Foo.md`) are also rewritten —
+  // otherwise the renamed file would ship with a broken self-link. The source
+  // is rewritten in place at the OLD path; fs.rename then carries the new
+  // content to the new path in one atomic step.
   const plan: RenameProposal[] = [];
   let totalRewrites = 0;
+  let sourcePlan: RenameProposal | null = null;
   for (const e of entries) {
-    if (e.absPath === fromAbs) continue;
+    const isSource = e.absPath === fromAbs;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 
     // Find every wikilink + embed whose target resolves to fromAbs. Group by
@@ -627,30 +629,48 @@ export async function renameNote(
     const { content: newContent, count } = rewriteOutsideCodeFences(content, oldRawsToNew);
     if (count === 0) continue;
 
-    plan.push({ path: e.relPath, rewrites: count, before: content, after: newContent });
+    const proposal: RenameProposal = { path: e.relPath, rewrites: count, before: content, after: newContent };
+    if (isSource) {
+      // The source file's rewrite is held separately so we can write it last,
+      // immediately before fs.rename, keeping the disk in a maximally-recoverable
+      // state if anything between writes fails.
+      sourcePlan = proposal;
+    } else {
+      plan.push(proposal);
+    }
     totalRewrites += count;
   }
 
   if (!dryRun) {
-    // Write all updated files first (so a mid-run failure leaves the rename
-    // un-done and the linked-from files in a consistent half-state at worst —
-    // their backlinks point at the OLD name, which still exists). Order: write
-    // backlink-bearing files, THEN rename the source file last.
+    // Write order:
+    //   1. All backlink-bearing files (other notes pointing at the source).
+    //   2. Source file's rewritten content, written to its OLD path.
+    //   3. fs.rename source's old path → new path.
+    // A failure at any step leaves backlinks pointing at the still-present old
+    // name (worst case: safe, recoverable).
     for (const p of plan) {
-      const abs = vault.resolveInside(p.path);
-      // overwrite=true because the file already exists.
       await vault.writeNote(p.path, p.after, { overwrite: true });
-      // writeNote invalidates cache for `abs`; double-tap not needed.
-      void abs;
+    }
+    if (sourcePlan) {
+      await vault.writeNote(sourcePlan.path, sourcePlan.after, { overwrite: true });
     }
     // Atomic file move + cache invalidation.
     await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
   }
 
+  // Combine plans for the response so the caller sees the full picture.
+  const allPlans = sourcePlan ? [...plan, sourcePlan] : plan;
+
   // Strip `before`/`after` from the response — the caller doesn't need the
   // full file contents back, just the per-file count. We kept them for the
-  // pre-write loop; the response trims them.
-  const trimmedPlan = plan.map(({ path, rewrites }) => ({ path, rewrites, before: "", after: "" }));
+  // pre-write loop; the response trims them. The source-file entry uses its
+  // POST-rename path so the caller sees where the rewrite ended up.
+  const trimmedPlan = allPlans.map((p) => ({
+    path: p === sourcePlan ? toRelCheck : p.path,
+    rewrites: p.rewrites,
+    before: "",
+    after: ""
+  }));
 
   return {
     from: fromRel,

@@ -1426,7 +1426,7 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
   const conceptMentions = new Map<string, Set<string>>(); // phrase → set of source paths
 
   for (const e of entries) {
-    const { content, parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
+    const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
 
     // Outbound + broken pass.
     if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
@@ -1655,7 +1655,7 @@ export async function paperAudit(
   const flagged: PaperAuditFinding[] = [];
   for (const e of entries) {
     if (flagged.length >= limit) break;
-    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const tagsLower = parsed.tags.map((t) => t.toLowerCase());
     if (!tagsLower.includes(tag)) continue;
     scanned += 1;
@@ -1778,6 +1778,12 @@ export async function findPath(
   // BFS layer-by-layer. visited tracks shortest-known-depth so we don't
   // revisit at greater depths. We continue collecting at the depth where
   // we first hit the target IF include_alternatives is set.
+  // v1.8.1 perf fix: build a relPath → entry map ONCE before the BFS loop.
+  // Pre-fix: entries.find((e) => e.relPath === node.rel) was O(N) per visited
+  // node, making the whole BFS O(N²) on large vaults.
+  const byRel = new Map<string, FileEntry>();
+  for (const e of entries) byRel.set(e.relPath, e);
+
   type FrontierEntry = { rel: string; trail: PathStep[] };
   const visited = new Set<string>([fromEntry.relPath]);
   let frontier: FrontierEntry[] = [
@@ -1789,7 +1795,7 @@ export async function findPath(
   for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
     const next: FrontierEntry[] = [];
     for (const node of frontier) {
-      const entry = entries.find((e) => e.relPath === node.rel);
+      const entry = byRel.get(node.rel);
       if (!entry) continue;
       const { parsed } = await vault.readNote(entry.absPath, entry.mtimeMs);
       const links = followEmbeds ? [...parsed.wikilinks, ...parsed.embeds] : parsed.wikilinks;
@@ -2353,12 +2359,18 @@ export async function semanticSearch(
   const matches: SemanticHit[] = [];
   for (const { doc, score, matchedTerms } of scored.slice(0, limit)) {
     matchedTerms.sort((a, b) => (idf.get(b) ?? 0) - (idf.get(a) ?? 0));
-    const { content } = await vault.readNote(vault.resolveInside(doc.relPath), doc.mtimeMs);
+    // v1.8.1 fix: snippet was being built from `content` (full file with
+    // frontmatter), so a matched term that lived in the YAML block could leak
+    // YAML keys/values into the response. Use `parsed.body` instead — TF-IDF
+    // is built from body too, so the indexOf below is guaranteed to land if
+    // the term contributed to the cosine score.
+    const { parsed } = await vault.readNote(vault.resolveInside(doc.relPath), doc.mtimeMs);
+    const body = parsed.body;
     let snippetText = "";
     for (const t of matchedTerms) {
-      const idx = content.toLowerCase().indexOf(t);
+      const idx = body.toLowerCase().indexOf(t);
       if (idx >= 0) {
-        const { snippet } = sliceSnippet(content, idx, t.length);
+        const { snippet } = sliceSnippet(body, idx, t.length);
         snippetText = snippet;
         break;
       }

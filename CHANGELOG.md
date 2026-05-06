@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] — 2026-05-06
+
+Patch release driven by a 5-agent post-1.8 audit (code · process · docs · repo page · strategy). Three real bugs found, one process gap, several doc drifts. All fixed in this release. No new features.
+
+### Fixed — code (3 P1 bugs)
+
+- **`obsidian_find_path` was O(N²) on large vaults.** The BFS loop did `entries.find((e) => e.relPath === node.rel)` for every visited node — O(N) per visit times the visited-set size. Now builds a `Map<relPath, FileEntry>` once before the loop. On a 10k-vault BFS with depth 5, this drops the dominant cost from quadratic to linear.
+
+- **`obsidian_semantic_search` snippet leaked frontmatter.** The snippet was built from the FULL file `content` (including the YAML frontmatter block), so a matched term that lived in YAML metadata could surface YAML keys/values in the response. Now uses `parsed.body` — TF-IDF is built from body too, so the indexOf is guaranteed to land if the term contributed to cosine score.
+
+- **`Vault` exclusion error was misleading.** When `--read-paths` was set and a path didn't match the allowlist, the error said `"Path is excluded by --exclude-glob"` — wrong filter. Now the error names the actual rejecting filter: `"--read-paths allowlist (path doesn't match any allow-glob)"` or `"--exclude-glob denylist"`.
+
+### Fixed — process (1 P0 gap)
+
+- **Smoke test didn't exercise canvas tools.** `scripts/synthetic-vault.mjs` created only `.md` files, so the v1.7 canvas tools (`obsidian_list_canvases`, `obsidian_read_canvas`) were registered but never actually called by smoke. A regression in the canvas reader could ship green. Now `synthetic-vault.mjs` creates `Boards/Apollo Board.canvas` (text + file + link nodes + 1 edge) and `smoke.mjs` exercises both tools end-to-end. Smoke also now exercises `obsidian_semantic_search` (v1.8) for completeness.
+
+### Fixed — docs (drift across the v1.5–v1.8 sprint)
+
+- **README test counter:** comparison-table row said `246 unit tests` (stuck at v1.4). Bumped to `294+` (current actual count) with a `+` to acknowledge ongoing additions.
+- **CONTRIBUTING.md runtime-deps count:** said `four` (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) — missed `chokidar` (added v1.2.0). Now reads `five` plus the optional `better-sqlite3`.
+- **README configuration table missing four flags:** `--persistent-index`, `--tokenize`, `--index-file`, `--exclude-glob` were referenced inline elsewhere but not in the canonical config table. All four added.
+- **`SECURITY.md`:** new sections covering the v1.6+ surfaces — `--read-paths` strict-allowlist threat model + a "v1.5+ read tools: read-only safety" block covering `lint_wiki` / `open_questions` / `paper_audit` / `find_path` / `open_in_ui` / `list_canvases` / `read_canvas` / `semantic_search`. Specifically calls out that `readBinaryFile` (used by canvas) shares the `--max-file-bytes` cap with markdown.
+
+### Hardened — `prepublishOnly`
+
+`package.json:prepublishOnly` ran `lint + build + test` only. CI's release workflow runs all of that **plus** version-consistency check + `npm audit --audit-level=high`. So a maintainer running `npm publish` locally could ship a version mismatch or a high-severity advisory. `prepublishOnly` now runs the same gate set as CI.
+
+### Repo state
+- 26 MCP tools (unchanged). 22 always-on read + 1 opt-in FTS5 + 3 write.
+- 10 MCP prompts (unchanged).
+- 294 unit tests (unchanged). All still pass.
+- Smoke now covers 3 tools that weren't exercised pre-1.8.1 (`list_canvases`, `read_canvas`, `semantic_search`).
+
 ## [1.8.0] — 2026-05-06
 
 **Semantic search.** Pure-JS TF-IDF cosine retrieval — closes the Smart-Connections-paywall gap surfaced in the v1.5 competitive audit, free / offline / no model download / no new runtime deps. Real ML embedding retrieval (with an ONNX model + sqlite-vec) is the v2.0 follow-up; this is the meaningful first step that catches the related-term case BM25 misses.

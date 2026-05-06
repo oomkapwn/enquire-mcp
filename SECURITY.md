@@ -48,6 +48,28 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 - Manual purge: `enquire-mcp clear-cache --vault <path>` deletes the cache file.
 - **Caveat:** anyone with read access to your user account can read the cache file. If your threat model includes other local users on the same machine, do not use `--persistent-cache`.
 
+## `--read-paths`: strict-allowlist posture
+
+`--read-paths` (added v1.6.0) is a **denylist's complement** — when set, ONLY paths matching one of the glob patterns are visible to any tool. Same glob semantics as `--exclude-glob` (`*`, `**`, `?`). Repeatable.
+
+Threat model: an attacker-controlled MCP client tries to read a path the user hasn't whitelisted. Mitigations:
+
+- **`Vault.isExcluded()` enforces both flags.** A path must match the allowlist AND not match any exclude pattern. The same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote` / `readBinaryFile` / write paths all respect it).
+- **Watcher-aware.** When `--watch` is enabled, file events for paths outside the allowlist are dropped at the chokidar `ignored` predicate — the watcher never even sees writes to private folders.
+- **Error-message distinguishes the two filters.** When a tool tries to read a path that's blocked, the error says either `"--read-paths allowlist (path doesn't match any allow-glob)"` or `"--exclude-glob denylist"` — so users can tell which flag rejected the path.
+- **No silent degradation.** If `--read-paths` is set and zero paths match, `listMarkdown()` returns `[]` and tools return empty results rather than falling back to "everything is visible."
+
+## v1.5+ read tools: read-only safety
+
+Tools added in v1.5 (`obsidian_lint_wiki`, `obsidian_open_questions`, `obsidian_paper_audit`), v1.6 (`obsidian_find_path`, `obsidian_open_in_ui`), v1.7 (`obsidian_list_canvases`, `obsidian_read_canvas`), and v1.8 (`obsidian_semantic_search`) are all **read-only**. They never call any write path; they only consume the existing parse / wikilink / FTS5 surfaces.
+
+Specific notes:
+
+- **`obsidian_read_canvas`** uses `Vault.readBinaryFile()`, which goes through the same `resolveSafePath()` + `assertSize()` chain as `readNote`. Path traversal, symlink-escape, and the `--max-file-bytes` cap all apply. The cap is **shared with markdown** (so a `--max-file-bytes 1000000` setting limits both `.md` and `.canvas` files); operators wanting separate limits should split via folder filters or run separate enquire instances.
+- **`obsidian_open_in_ui`** emits an `obsidian://open?vault=&file=` URI — pure URI emission, no fs/network side effect. The vault name is the leaf folder of `vault.root`; if a user runs Obsidian under a different vault name, the URI may fail to resolve in the desktop app, but no privilege escalation is possible.
+- **`obsidian_semantic_search`** memoizes the TF-IDF index in a per-vault `WeakMap` (in-process only; never written to disk). The index rebuilds when `listMarkdown()` returns a different paths-or-mtimes set, so cache invalidation tracks vault edits.
+- **`obsidian_lint_wiki`** + **`obsidian_open_questions`** + **`obsidian_paper_audit`** scan note bodies via `parsed.body` (frontmatter stripped) — a regex match in YAML metadata can't trigger a false-positive in the body-side hygiene reports.
+
 ## `obsidian_rename_note`: atomic-rewrite posture
 
 `obsidian_rename_note` (write tool, requires `--enable-write`) is the most privileged MCP surface — a single call mutates many files in the vault. The threat model is: an attacker-controlled MCP client invokes `rename_note` with crafted arguments to clobber files outside the vault, leak content, or leave the vault in a corrupted half-state.

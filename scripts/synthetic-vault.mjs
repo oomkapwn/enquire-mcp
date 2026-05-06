@@ -26,4 +26,22 @@ await fs.writeFile(
   "---\ntags: [daily]\n---\n\nWorked on [[Apollo]] today. Logged #idea about velocity.\n"
 );
 
+// Canvas board so smoke can exercise obsidian_list_canvases / read_canvas (v1.7).
+await fs.mkdir(path.join(root, "Boards"), { recursive: true });
+await fs.writeFile(
+  path.join(root, "Boards", "Apollo Board.canvas"),
+  JSON.stringify(
+    {
+      nodes: [
+        { id: "n1", type: "text", x: 0, y: 0, width: 200, height: 80, text: "Apollo cluster" },
+        { id: "n2", type: "file", x: 240, y: 0, width: 200, height: 80, file: "01_Projects/Apollo.md" },
+        { id: "n3", type: "link", x: 480, y: 0, width: 200, height: 80, url: "https://example.com" }
+      ],
+      edges: [{ id: "e1", fromNode: "n1", toNode: "n2" }]
+    },
+    null,
+    2
+  )
+);
+
 console.log(root);

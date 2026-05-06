@@ -506,9 +506,16 @@ export class Vault {
       }
       // Privacy filter — refuse to surface excluded content even via direct
       // read/write. Combined with listMarkdown filtering, the LLM has no
-      // path into excluded files.
-      if (this.isExcluded(rel.replace(/\\/g, "/"))) {
-        throw new Error(`Path is excluded by --exclude-glob: ${rel}`);
+      // path into excluded files. v1.8.1: distinguish allowlist-miss from
+      // explicit exclude-glob match in the error message so the user can
+      // tell which flag is rejecting the path.
+      const norm = rel.replace(/\\/g, "/");
+      if (this.isExcluded(norm)) {
+        const reason =
+          this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))
+            ? "--read-paths allowlist (path doesn't match any allow-glob)"
+            : "--exclude-glob denylist";
+        throw new Error(`Path is excluded by ${reason}: ${rel}`);
       }
       return real;
     } catch (err) {

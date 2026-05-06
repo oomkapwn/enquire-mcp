@@ -83,7 +83,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
-| TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 294+ unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -315,8 +315,12 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
 | `--cache-file <path>` | auto | Override persistent-cache file location. |
+| `--persistent-index` | off | Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers `obsidian_full_text_search` + the `obsidian://chunk/{n}/{path}` resource. **Privacy: stores chunked note content + tag list + wikilink targets. See [`SECURITY.md`](./SECURITY.md).** |
+| `--tokenize <mode>` | `unicode61` | FTS5 tokenize mode. `unicode61` (default; Latin/Cyrillic, removes diacritics) or `trigram` (CJK / mixed-script, ~2x index size). Changing this triggers an automatic index rebuild. |
+| `--index-file <path>` | auto | Override the FTS5 index file location. |
+| `--exclude-glob <pattern...>` | none | Denylist privacy filter — paths matching any pattern are invisible to every tool and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. |
+| `--read-paths <pattern...>` | none | **Strict allowlist.** When set, ONLY paths matching one of these glob patterns are visible to any tool. Complement to `--exclude-glob` (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. |
 | `--watch` | off | Watch the vault for `.md` file edits. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also set, incrementally re-sync that file's FTS5 chunks. Editor saves are debounced. Use this for long-running servers where you keep editing in Obsidian. |
-| `--read-paths <pattern...>` | none | **Strict allowlist.** When set, ONLY paths matching one of these glob patterns are visible to any tool. Complement to `--exclude-glob` (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`. |
 
 ### Cache & privacy
 

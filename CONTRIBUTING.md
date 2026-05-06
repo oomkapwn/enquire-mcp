@@ -28,7 +28,7 @@ node scripts/smoke.mjs ~/Documents/MyVault
 ## What we don't accept
 
 - Lockstep cross-cutting refactors (e.g. swapping the tool registration pattern). Open an issue first.
-- New runtime dependencies unless the case is overwhelming. We currently ship four (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`).
+- New runtime dependencies unless the case is overwhelming. We currently ship five (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3` — only loaded with `--persistent-index`).
 - Code that lowers the security floor (skipping path safety, removing size limits, etc.).
 - Markdown / YAML rendering that aims to round-trip every Obsidian quirk. If a write tool can't faithfully preserve some user input, the right move is to refuse the write, not best-effort it.
 

@@ -346,6 +346,55 @@ try {
     );
   }
 
+  // v1.7 — canvas tools. The CI synthetic vault has Boards/Apollo Board.canvas;
+  // a developer's real vault may have zero canvases. Both paths are smoke-OK
+  // — we just verify the tool returns an array, and exercise read_canvas only
+  // when at least one canvas exists.
+  const canvases = await rpc("tools/call", { name: "obsidian_list_canvases", arguments: {} });
+  const canvasesParsed = JSON.parse(canvases.result.content[0].text);
+  check(
+    "list_canvases returns an array (zero or more .canvas files)",
+    Array.isArray(canvasesParsed) && (canvasesParsed.length === 0 || canvasesParsed[0].path?.endsWith(".canvas")),
+    canvases.result.content[0].text.slice(0, 200)
+  );
+  console.log(`      → list_canvases: ${canvasesParsed.length} .canvas file(s)`);
+  if (canvasesParsed[0]?.path) {
+    const canvas = await rpc("tools/call", {
+      name: "obsidian_read_canvas",
+      arguments: { path: canvasesParsed[0].path }
+    });
+    const canvasParsed = JSON.parse(canvas.result.content[0].text);
+    check(
+      "read_canvas returns typed nodes + edges + summary",
+      typeof canvasParsed === "object" &&
+        Array.isArray(canvasParsed.nodes) &&
+        Array.isArray(canvasParsed.edges) &&
+        typeof canvasParsed.summary === "object",
+      canvas.result.content[0].text.slice(0, 200)
+    );
+    console.log(
+      `      → canvas "${canvasParsed.name}": ${canvasParsed.nodes.length} nodes (${Object.entries(canvasParsed.summary)
+        .filter(([, v]) => v > 0)
+        .map(([k, v]) => `${v} ${k}`)
+        .join(", ")}), ${canvasParsed.edges.length} edges`
+    );
+  }
+
+  // v1.8 — semantic search.
+  const sem = await rpc("tools/call", {
+    name: "obsidian_semantic_search",
+    arguments: { query: "Apollo project", limit: 3 }
+  });
+  const semParsed = JSON.parse(sem.result.content[0].text);
+  check(
+    "semantic_search returns tfidf-cosine matches",
+    typeof semParsed === "object" && semParsed.method === "tfidf-cosine" && Array.isArray(semParsed.matches),
+    sem.result.content[0].text.slice(0, 200)
+  );
+  console.log(
+    `      → semantic_search "${semParsed.query}": ${semParsed.matches.length}/${semParsed.total_docs} hit(s)`
+  );
+
   // FTS5-only surface: full_text_search tool + chunk resource template.
   if (withFts) {
     const fts = await rpc("tools/call", {

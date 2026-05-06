@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-05-06
+
+**Semantic search.** Pure-JS TF-IDF cosine retrieval — closes the Smart-Connections-paywall gap surfaced in the v1.5 competitive audit, free / offline / no model download / no new runtime deps. Real ML embedding retrieval (with an ONNX model + sqlite-vec) is the v2.0 follow-up; this is the meaningful first step that catches the related-term case BM25 misses.
+
+### Added — `obsidian_semantic_search` (read-only)
+Tokenizes (alphanumeric + hyphen, ≥ 2 chars, stop-words filtered), TF-IDFs, L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Returns ranked hits with `path` + `title` + `score` (cosine, 0–1) + `snippet` + `matched_terms` (sorted highest-IDF first — the most-discriminating terms in the corpus).
+
+The IDF index is built lazily on first call and memoized via `WeakMap` keyed on the `entries` array reference. Subsequent calls reuse the index when `listMarkdown()` returns the same paths + mtimes; rebuilds automatically when the vault changes.
+
+Args: `query` (required), `folder?` (subfolder restriction), `limit?` (≤ 100, default 10), `min_score?` (0–1, default 0.05).
+
+### Why this matters
+- `obsidian_search_text` does case-insensitive substring match — misses synonyms entirely.
+- `obsidian_full_text_search` (FTS5 BM25) is great for keyword density but still doesn't bridge "access token" ↔ "JWT" ↔ "OAuth flow" the way semantic does.
+- Smart Connections — the dominant Obsidian semantic-search plugin — paywalled this functionality in 2025. enquire-mcp gives it free.
+
+### Why not ML embeddings yet?
+Real embedding retrieval would need a 25–50 MB ONNX model + an inference runtime (`@xenova/transformers` or similar). That breaks the lean "5 runtime deps" promise. TF-IDF cosine ships zero new deps and meaningfully improves over BM25 alone for the related-term case. The v2.0 roadmap is real embeddings + sqlite-vec + RRF fusion with FTS5; this 1.8 release is the foundation.
+
+### Tokenizer details
+- Alphanumeric + hyphen (so `claude-code` stays one token, hyphenated tokens like FTS5).
+- Length 2–40 chars (skip noise + base64 runs).
+- 60 English stop-words filtered.
+- Documented behaviour — the `pattern` argument we ship for `obsidian_open_questions` is intentionally NOT exposed here; the tokenizer is fixed in 1.x and frozen as part of the API contract.
+
+### Repo state
+- **26 MCP tools** (was 25). 22 always-on read + 1 opt-in FTS5 + 3 write.
+- **10 MCP prompts** (unchanged).
+- **294 unit tests** (was 285, +9 covering relevance ranking, vocabulary miss, folder filter, matched-terms ranking, min_score threshold, empty-query refusal, allowlist filtering, score bounds, total_docs reporting).
+
 ## [1.7.0] — 2026-05-06
 
 Canvas (`.canvas`) read tools — green-field per the v1.5 competitive audit. Only obscure forks (`obsidian-mcp-pro`, `aaronsb`'s plugin via Obsidian Bases) had any canvas support, and even those required Obsidian to be running. enquire-mcp now reads Canvas natively from the filesystem like every other vault format.

@@ -1,0 +1,122 @@
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { semanticSearch } from "../src/tools.js";
+import { Vault } from "../src/vault.js";
+
+let root: string;
+
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-semantic-"));
+  await fs.mkdir(path.join(root, "Auth"), { recursive: true });
+  await fs.mkdir(path.join(root, "Other"), { recursive: true });
+
+  // Auth-cluster notes — share OAuth / JWT / authentication terms.
+  await fs.writeFile(
+    path.join(root, "Auth", "OAuth Flows.md"),
+    "OAuth authentication flow with JWT tokens. Authorization server issues access tokens and refresh tokens. Bearer tokens go in the Authorization header.\n"
+  );
+  await fs.writeFile(
+    path.join(root, "Auth", "JWT Validation.md"),
+    "JWT validation: verify signature, expiration, audience, issuer. Token introspection. Refresh token rotation policy.\n"
+  );
+  await fs.writeFile(
+    path.join(root, "Auth", "Login UX.md"),
+    "Login page redirects to authorization server. After consent the OAuth flow returns an access token used for API calls.\n"
+  );
+
+  // Cooking-cluster — completely unrelated.
+  await fs.writeFile(
+    path.join(root, "Other", "Pasta Carbonara.md"),
+    "Carbonara: guanciale, pecorino romano, eggs, black pepper. Toss with hot pasta off the heat.\n"
+  );
+  await fs.writeFile(
+    path.join(root, "Other", "Sourdough.md"),
+    "Sourdough starter feeding schedule. Bulk fermentation 4 hours at 25C. Score before baking.\n"
+  );
+
+  // Hub — mentions everything but lightly.
+  await fs.writeFile(path.join(root, "Index.md"), "Random index that mentions things lightly.\n");
+});
+
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("semanticSearch (v1.8 TF-IDF cosine)", () => {
+  it("ranks auth-cluster notes above unrelated notes for a token query", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "access token validation", limit: 10 });
+    expect(result.method).toBe("tfidf-cosine");
+    expect(result.matches.length).toBeGreaterThan(0);
+    // Top hits must come from Auth/. Cooking notes shouldn't outrank them.
+    const top3 = result.matches.slice(0, 3).map((m) => m.path);
+    expect(top3.every((p) => p.startsWith("Auth/"))).toBe(true);
+  });
+
+  it("returns NO match when query has zero shared vocabulary with any doc", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "xyzzy quux frobozz" });
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("respects folder filter — only returns notes from that folder", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "carbonara pasta", folder: "Other" });
+    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.matches.every((m) => m.path.startsWith("Other/"))).toBe(true);
+  });
+
+  it("includes matched_terms ranked highest-IDF first + a snippet", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "JWT signature audience" });
+    expect(result.matches.length).toBeGreaterThan(0);
+    const top = result.matches[0];
+    expect(top?.matched_terms.length).toBeGreaterThan(0);
+    // The snippet should contain at least one of the matched terms.
+    expect(top?.snippet).toBeTruthy();
+    const someMatch = top?.matched_terms.some((t) => top.snippet.toLowerCase().includes(t));
+    expect(someMatch).toBe(true);
+  });
+
+  it("respects min_score threshold", async () => {
+    const v = new Vault(root);
+    const all = await semanticSearch(v, { query: "OAuth", limit: 50, min_score: 0 });
+    const tight = await semanticSearch(v, { query: "OAuth", limit: 50, min_score: 0.5 });
+    // Tighter threshold returns ≤ as many hits.
+    expect(tight.matches.length).toBeLessThanOrEqual(all.matches.length);
+    // Every tight result has score ≥ threshold.
+    expect(tight.matches.every((m) => m.score >= 0.5)).toBe(true);
+  });
+
+  it("rejects empty query", async () => {
+    const v = new Vault(root);
+    await expect(semanticSearch(v, { query: "" })).rejects.toThrow(/empty/);
+    await expect(semanticSearch(v, { query: "   " })).rejects.toThrow(/empty/);
+  });
+
+  it("respects --read-paths allowlist", async () => {
+    const v = new Vault(root, { readPaths: ["Other/**"] });
+    await v.ensureExists();
+    const result = await semanticSearch(v, { query: "OAuth flow access token", limit: 10 });
+    // Auth/* is filtered out by allowlist — no auth notes in result.
+    expect(result.matches.every((m) => m.path.startsWith("Other/"))).toBe(true);
+  });
+
+  it("scores are bounded in [0, 1] (cosine of L2-normalized vectors)", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "JWT OAuth authentication tokens", limit: 50, min_score: 0 });
+    for (const m of result.matches) {
+      expect(m.score).toBeGreaterThanOrEqual(0);
+      expect(m.score).toBeLessThanOrEqual(1.0001); // tiny float slop
+    }
+  });
+
+  it("total_docs reports the corpus size used for IDF", async () => {
+    const v = new Vault(root);
+    const result = await semanticSearch(v, { query: "anything" });
+    // We seeded 6 markdown files.
+    expect(result.total_docs).toBe(6);
+  });
+});

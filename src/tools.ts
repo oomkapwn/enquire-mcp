@@ -2142,6 +2142,240 @@ export async function readCanvas(vault: Vault, args: { path: string }): Promise<
   };
 }
 
+// ─── obsidian_semantic_search (v1.8 TF-IDF cosine retrieval) ────────────────
+// Pure-JS lexical-semantic search: tokenize + TF-IDF + L2-normalize each
+// note's body, then rank notes by cosine similarity to the query vector.
+// Closes the Smart-Connections-paywall gap surfaced in the v1.5 audit
+// without adding any runtime deps. Real ML embedding retrieval is the v2.0
+// follow-up; this is the meaningful no-deps first step that handles the
+// related-term case the BM25 / exact-substring path misses.
+
+interface DocVector {
+  relPath: string;
+  basename: string;
+  mtimeMs: number;
+  /** Sparse term-frequency-IDF vector. Map<term, weight>. L2-normalized. */
+  weights: Map<string, number>;
+}
+
+const tfidfCache = new WeakMap<Vault, { docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }>();
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "has",
+  "have",
+  "if",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "this",
+  "to",
+  "was",
+  "were",
+  "will",
+  "with",
+  "i",
+  "you",
+  "we",
+  "they",
+  "he",
+  "she",
+  "not",
+  "no",
+  "do",
+  "does",
+  "did",
+  "had",
+  "been",
+  "being",
+  "so",
+  "than",
+  "then",
+  "there",
+  "their",
+  "them",
+  "these",
+  "those",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "how"
+]);
+
+function tokenizeForTfidf(text: string): string[] {
+  const lower = text.toLowerCase();
+  const out: string[] = [];
+  for (const m of lower.matchAll(/[a-z0-9][a-z0-9_-]*/g)) {
+    const t = m[0];
+    if (t.length < 2) continue;
+    if (t.length > 40) continue;
+    if (STOP_WORDS.has(t)) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+async function buildTfidfIndex(
+  vault: Vault
+): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
+  const entries = await vault.listMarkdown();
+  const cached = tfidfCache.get(vault);
+  if (
+    cached &&
+    cached.entriesRef.length === entries.length &&
+    cached.entriesRef.every((e, i) => entries[i]?.relPath === e.relPath && entries[i]?.mtimeMs === e.mtimeMs)
+  ) {
+    return cached;
+  }
+
+  type RawDoc = { entry: FileEntry; tf: Map<string, number> };
+  const rawDocs: RawDoc[] = [];
+  const docFreq = new Map<string, number>();
+  for (const e of entries) {
+    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const tokens = tokenizeForTfidf(parsed.body);
+    const tf = new Map<string, number>();
+    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+    rawDocs.push({ entry: e, tf });
+    for (const t of tf.keys()) docFreq.set(t, (docFreq.get(t) ?? 0) + 1);
+  }
+
+  // Smoothed IDF: ln(1 + N / (1 + df)). Smoothing keeps every-doc terms
+  // non-zero and tames inflation on small vaults.
+  const N = rawDocs.length || 1;
+  const idf = new Map<string, number>();
+  for (const [term, df] of docFreq) {
+    idf.set(term, Math.log(1 + N / (1 + df)));
+  }
+
+  const docs: DocVector[] = [];
+  for (const r of rawDocs) {
+    const weights = new Map<string, number>();
+    let normSq = 0;
+    for (const [term, count] of r.tf) {
+      const w = (1 + Math.log(count)) * (idf.get(term) ?? 0);
+      if (w === 0) continue;
+      weights.set(term, w);
+      normSq += w * w;
+    }
+    const norm = Math.sqrt(normSq);
+    if (norm > 0) {
+      for (const [t, w] of weights) weights.set(t, w / norm);
+    }
+    docs.push({
+      relPath: r.entry.relPath,
+      basename: r.entry.basename,
+      mtimeMs: r.entry.mtimeMs,
+      weights
+    });
+  }
+
+  const result = { docs, idf, entriesRef: entries };
+  tfidfCache.set(vault, result);
+  return result;
+}
+
+export interface SemanticHit {
+  path: string;
+  title: string;
+  score: number;
+  snippet: string;
+  matched_terms: string[];
+  mtime: string;
+}
+
+export async function semanticSearch(
+  vault: Vault,
+  args: { query: string; folder?: string; limit?: number; min_score?: number }
+): Promise<{ query: string; total_docs: number; method: "tfidf-cosine"; matches: SemanticHit[] }> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 10;
+  const minScore = args.min_score ?? 0.05;
+  if (!args.query.trim()) throw new Error("query must not be empty");
+
+  const { docs, idf } = await buildTfidfIndex(vault);
+
+  // Vectorize query: same tokenization, IDF from the corpus, L2 normalize.
+  const qTokens = tokenizeForTfidf(args.query);
+  const qTf = new Map<string, number>();
+  for (const t of qTokens) qTf.set(t, (qTf.get(t) ?? 0) + 1);
+  const qWeights = new Map<string, number>();
+  let qNormSq = 0;
+  for (const [t, count] of qTf) {
+    const w = (1 + Math.log(count)) * (idf.get(t) ?? 0);
+    if (w === 0) continue;
+    qWeights.set(t, w);
+    qNormSq += w * w;
+  }
+  const qNorm = Math.sqrt(qNormSq);
+  if (qNorm > 0) {
+    for (const [t, w] of qWeights) qWeights.set(t, w / qNorm);
+  }
+
+  // Cosine = Σ q[t]·d[t] over shared terms (both vectors are L2-normed).
+  const folderPrefix = args.folder ? `${args.folder.replace(/\/+$/, "")}/` : null;
+  const scored: Array<{ doc: DocVector; score: number; matchedTerms: string[] }> = [];
+  for (const doc of docs) {
+    if (folderPrefix && !doc.relPath.startsWith(folderPrefix) && doc.relPath !== args.folder) continue;
+    let s = 0;
+    const matched: string[] = [];
+    for (const [t, qw] of qWeights) {
+      const dw = doc.weights.get(t);
+      if (dw !== undefined) {
+        s += qw * dw;
+        matched.push(t);
+      }
+    }
+    if (s < minScore) continue;
+    scored.push({ doc, score: s, matchedTerms: matched });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  const matches: SemanticHit[] = [];
+  for (const { doc, score, matchedTerms } of scored.slice(0, limit)) {
+    matchedTerms.sort((a, b) => (idf.get(b) ?? 0) - (idf.get(a) ?? 0));
+    const { content } = await vault.readNote(vault.resolveInside(doc.relPath), doc.mtimeMs);
+    let snippetText = "";
+    for (const t of matchedTerms) {
+      const idx = content.toLowerCase().indexOf(t);
+      if (idx >= 0) {
+        const { snippet } = sliceSnippet(content, idx, t.length);
+        snippetText = snippet;
+        break;
+      }
+    }
+    matches.push({
+      path: doc.relPath,
+      title: stripMd(doc.basename),
+      score: Math.round(score * 10000) / 10000,
+      snippet: snippetText,
+      matched_terms: matchedTerms.slice(0, 8),
+      mtime: new Date(doc.mtimeMs).toISOString()
+    });
+  }
+
+  return { query: args.query, total_docs: docs.length, method: "tfidf-cosine", matches };
+}
+
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
 function jaccard<T>(a: Set<T>, b: Set<T>): number {

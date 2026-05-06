@@ -31,12 +31,13 @@ import {
   renameNote,
   resolveWikilink,
   searchText,
+  semanticSearch,
   validateNoteProposal
 } from "./tools.js";
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.7.0";
+const VERSION = "1.8.0";
 
 interface ServeOptions {
   vault: string;
@@ -761,6 +762,28 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await readCanvas(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_semantic_search",
+    {
+      title: "Semantic search (TF-IDF cosine)",
+      description:
+        "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free / offline / no model download — closes the gap to Smart Connections without paywall, ML deps, or HTTP. Use this when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first).",
+      annotations: { ...READ_ONLY, title: "Semantic search" },
+      inputSchema: {
+        query: z.string().min(1).describe("Free-form query — multi-word, natural language is fine"),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+        min_score: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe("Drop hits below this cosine score (default 0.05). Cosine ranges 0–1.")
+      }
+    },
+    async (args) => textResult(await semanticSearch(vault, args))
   );
 }
 

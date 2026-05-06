@@ -82,6 +82,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Multi-hop graph path-finding** (`obsidian_find_path` — BFS shortest path between two notes over the wikilink graph, with alternatives) | ❌ | ✅ |
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
+| **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
 | TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
@@ -156,7 +157,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 21 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 22 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -181,6 +182,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_open_in_ui` | Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — just URI emission. `new_pane=true` opens the note in a split. |
 | `obsidian_list_canvases` | Lists `.canvas` files (Obsidian's whiteboard / mind-map format) with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. |
 | `obsidian_read_canvas` | Parses one `.canvas` file into typed nodes (text / file / link / group / unknown) + edges (with from/to node IDs, sides, labels, colors). Each `file` node carries a `file_resolved` field (vault-relative path or `null` if broken). Returns a node-kind summary + `broken_file_refs` array. |
+| `obsidian_semantic_search` | **TF-IDF cosine retrieval.** Free / offline / no model download. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Catches synonym + related-term matches that `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 3 write tools (opt-in via `--enable-write`)
@@ -399,6 +401,7 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.8.x** — **Semantic search** (`obsidian_semantic_search`) — pure-JS TF-IDF cosine retrieval. Free / offline / no model download. Catches the synonym + related-term matches BM25 misses. Real ML embedding retrieval is the v2.0 follow-up.
 - **1.7.x** — **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — parses Obsidian's whiteboard format into typed nodes + edges, surfaces broken file refs).
 - **1.6.x** — **Multi-hop graph traversal** (`obsidian_find_path` BFS) + **`obsidian_open_in_ui`** (obsidian:// URI hand-off) + **strict allowlist** (`--read-paths` complement to `--exclude-glob`).
 - **1.5.x** — **Karpathy LLM-Wiki `/lint` workflow** — `obsidian_lint_wiki` (orphans/broken/stubs/stale/concept candidates) + `obsidian_open_questions` + `obsidian_paper_audit` + `lint_wiki` prompt.

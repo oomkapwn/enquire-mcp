@@ -19,6 +19,7 @@
 | `--index-file <path>`  | auto    | Override the FTS5 index file location. Default: `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux). |
 | `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter (denylist). Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
 | `--read-paths <pattern...>` | none | **Strict allowlist** — when set, ONLY paths matching one of these glob patterns are visible. Complement to `--exclude-glob`. If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`. |
+| `--disabled-tools <name...>` | none | Skip registration of specific tools by exact name (matches `tools/list`). Repeatable. Useful for narrow-surface agents. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`. |
 | `--watch`              | off     | Watch the vault for `.md` add/change/unlink events. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also enabled, incrementally re-sync just that file's FTS5 chunks. Editor saves are debounced via chokidar's `awaitWriteFinish`. `--exclude-glob` patterns are honored — edits to excluded paths don't fire. Off by default; opt in for long-running servers. |
 
 ## Subcommands
@@ -55,6 +56,16 @@ Read a single note. Provide either `path` or `title`.
 | `title`  | `string?` | Filename without extension. Case-insensitive lookup.   |
 
 **Returns:** `{ path, title, content, frontmatter, wikilinks, embeds, tags, mtime }`. `content` is the body with frontmatter stripped. `wikilinks` and `embeds` share the same shape (`{ raw, target, section?, block?, alias? }`) and are surfaced separately.
+
+### Periodic-note aliases (v1.10 plugin-aware)
+
+`title` accepts the periodic aliases `today` / `daily` / `weekly` / `monthly` / `quarterly` / `yearly`. Resolution order:
+
+1. **Literal title match** — if you have a real file called `Today.md`, that one wins (no surprise alias hijacking).
+2. **User's plugin config** — `obsidian_read_note` reads `.obsidian/daily-notes.json` (Daily Notes core plugin) and `.obsidian/plugins/periodic-notes/data.json` (Periodic Notes community plugin) at first call, caches them for the session. The user's `format` (Moment.js pattern) and `folder` are honored exactly. Periodic Notes kinds with `enabled: false` are skipped (fall back to default).
+3. **Legacy default formats** — `YYYY-MM-DD` / `YYYY-[W]ww` / `YYYY-MM` / `YYYY-[Q]Q` / `YYYY` at vault root. Matches what enquire shipped pre-1.10.
+
+The Moment.js format converter supports the tokens periodic-note configs actually use: `YYYY` / `YY` / `MMMM` / `MMM` / `MM` / `M` / `Mo` / `Do` / `DD` / `D` / `dddd` / `ddd` / `WW` / `ww` / `Wo` / `wo` / `gggg` / `GGGG` / `Q` / `QQ` / `H` / `HH` / `h` / `hh` / `m` / `mm` / `s` / `ss` / `A` / `a` and bracket-escaped literals (`[W]`, `[Q]`, `[The year is]`).
 
 ## `obsidian_resolve_wikilink`
 

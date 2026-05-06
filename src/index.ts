@@ -38,7 +38,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.9.0";
+const VERSION = "1.10.0";
 
 interface ServeOptions {
   vault: string;
@@ -53,6 +53,7 @@ interface ServeOptions {
   excludeGlob?: string[];
   readPaths?: string[];
   watch?: boolean;
+  disabledTools?: string[];
 }
 
 async function main(): Promise<void> {
@@ -94,6 +95,10 @@ async function main(): Promise<void> {
     .option(
       "--watch",
       "Watch the vault for .md add/change/unlink events and incrementally invalidate the parsed-note cache (and refresh the FTS5 index when --persistent-index is also enabled). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
+    )
+    .option(
+      "--disabled-tools <name...>",
+      "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -196,6 +201,25 @@ async function startServer(opts: ServeOptions): Promise<void> {
     version: VERSION
   });
 
+  // v1.10 — --disabled-tools per-tool gating. Monkey-patch registerTool ONCE
+  // so every register* function below transparently honors the disable set.
+  // We log the skip to stderr so users can verify the flag is doing what they
+  // expect when wiring up an agent with a narrow tool surface.
+  const disabledTools = new Set(opts.disabledTools ?? []);
+  if (disabledTools.size > 0) {
+    const origRegisterTool = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
+    (server as unknown as { registerTool: (name: string, ...rest: unknown[]) => unknown }).registerTool = (
+      name: string,
+      ...rest: unknown[]
+    ) => {
+      if (disabledTools.has(name)) {
+        process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
+        return undefined;
+      }
+      return origRegisterTool(name, ...rest);
+    };
+  }
+
   registerReadTools(server, vault);
   if (vault.writeEnabled) registerWriteTools(server, vault);
   if (ftsIndex) registerFtsTools(server, ftsIndex);
@@ -254,8 +278,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const allowPart = vault.readPaths.length > 0 ? `, read-paths=${vault.readPaths.length}` : "";
   const privacyMode = `${excludePart}${allowPart}`;
   const watchMode = watcher ? ", watch=on" : "";
+  const disabledMode = disabledTools.size > 0 ? `, disabled-tools=${disabledTools.size}` : "";
   process.stderr.write(
-    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode})\n`
+    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode})\n`
   );
 
   if (ftsIndex) {

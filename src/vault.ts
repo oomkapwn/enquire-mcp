@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type ParsedNote, parseNote } from "./parser.js";
+import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
@@ -61,6 +62,10 @@ export class Vault {
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
   private ready = false;
+  /** Lazily loaded periodic-notes config (.obsidian/daily-notes.json + Periodic
+   *  Notes plugin). Cached forever after first read — users restart the server
+   *  if they reconfigure plugins. */
+  private periodicConfig: PeriodicConfig | null = null;
 
   constructor(root: string, opts: VaultOptions = {}) {
     this.root = path.resolve(root);
@@ -483,6 +488,16 @@ export class Vault {
     const norm = stripMdExt(title).toLowerCase();
     const all = await this.listMarkdown();
     return all.find((e) => stripMdExt(e.basename).toLowerCase() === norm) ?? null;
+  }
+
+  /** Periodic Notes plugin config (`.obsidian/daily-notes.json` + Periodic
+   *  Notes plugin's `data.json`). Lazy-loaded, then cached for the process
+   *  lifetime. Returns an empty config when no plugin files exist. */
+  async getPeriodicConfig(): Promise<PeriodicConfig> {
+    if (this.periodicConfig) return this.periodicConfig;
+    if (!this.ready) await this.ensureExists();
+    this.periodicConfig = await loadPeriodicConfig(this.root);
+    return this.periodicConfig;
   }
 
   private async resolveSafePath(relOrAbs: string): Promise<string> {

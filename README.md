@@ -70,7 +70,8 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
 | **Per-folder privacy filter** (`--exclude-glob '02_Personal/**'`) | ❌ | ✅ |
-| **Periodic-note aliases** (`title: "today"` resolves to today's daily-note) | rare | ✅ |
+| **Periodic-note aliases** (`title: "today"` / `"weekly"` / `"monthly"` / `"quarterly"` / `"yearly"` — honors Daily Notes & Periodic Notes plugin config) | rare | ✅ |
+| **Per-tool gating** (`--disabled-tools obsidian_xxx ...` — narrow the surface for restricted agents) | ❌ | ✅ |
 | **`Did you mean: ...`** suggestions on note-not-found errors | rare | ✅ |
 | **Document-map projection** (`format: "map"`: headings + counts, no body) | ❌ | ✅ |
 | **Anti-slop write validator** (`obsidian_validate_note_proposal` lints YAML + wikilinks + tags before write) | ❌ | ✅ |
@@ -323,6 +324,7 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | `--exclude-glob <pattern...>` | none | Denylist privacy filter — paths matching any pattern are invisible to every tool and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. |
 | `--read-paths <pattern...>` | none | **Strict allowlist.** When set, ONLY paths matching one of these glob patterns are visible to any tool. Complement to `--exclude-glob` (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. |
 | `--watch` | off | Watch the vault for `.md` file edits. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also set, incrementally re-sync that file's FTS5 chunks. Editor saves are debounced. Use this for long-running servers where you keep editing in Obsidian. |
+| `--disabled-tools <name...>` | none | Skip registration of specific tools by exact name. Useful for narrowing what an agent can call (e.g. read-only research agent gets only `obsidian_search_text` + `obsidian_read_note`). Repeatable. Names match `tools/list`. |
 
 ### Cache & privacy
 

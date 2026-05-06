@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-05-06
+
+Two small wins, both from the v1.5 competitive audit's Tier 1 list:
+
+### Added — Daily Notes / Periodic Notes plugin awareness
+
+`obsidian_read_note({ title: "today" })` now honors the user's actual plugin config. Pre-1.10 we hard-coded the legacy default formats (`YYYY-MM-DD` for daily, `YYYY-Www` for weekly, `YYYY-MM` for monthly) and assumed the file lived at vault root — which broke for the (very common) case where the user has Daily Notes set to `Daily Notes/YYYY-MM-DD` or a custom Moment format.
+
+v1.10 reads two configs at first call (then caches for the session):
+- `.obsidian/daily-notes.json` — Obsidian's core Daily Notes plugin (`format`, `folder`).
+- `.obsidian/plugins/periodic-notes/data.json` — Periodic Notes community plugin (`daily` / `weekly` / `monthly` / `quarterly` / `yearly`, each with `enabled` + `format` + `folder`).
+
+The Periodic Notes plugin's `enabled: false` flag is honored — disabled kinds fall back to the default formatter rather than producing a path the user explicitly opted out of.
+
+Resolution order for `title: "today"` (and the other 5 aliases):
+1. Literal title match — if `Today.md` exists, that one wins (no surprise alias hijacking).
+2. User's plugin config (Daily Notes / Periodic Notes) format + folder.
+3. Legacy v0.11 default formats (so users with no plugin configured still get the v0.11 behavior).
+
+The Moment.js format converter supports the tokens periodic-note configs actually use: `YYYY` / `YY` / `MMMM` / `MMM` / `MM` / `M` / `Mo` / `Do` / `DD` / `D` / `dddd` / `ddd` / `WW` / `ww` / `Wo` / `wo` / `gggg` / `GGGG` / `Q` / `QQ` / `H` / `HH` / `h` / `hh` / `m` / `mm` / `s` / `ss` / `A` / `a`, plus bracket-escaped literals (`[W]`, `[Q]`, `[The year is]`).
+
+The 5 aliases now supported (was 4): `today` / `daily` / `weekly` / `monthly` / `quarterly` / `yearly`.
+
+Implementation: new `src/periodic.ts` module. `Vault.getPeriodicConfig()` lazy-loads + caches.
+
+### Added — `--disabled-tools <name...>` CLI flag (per-tool gating)
+
+Skip registration of specific tools by exact name. Repeatable. Names match `tools/list` (`obsidian_*`).
+
+```bash
+enquire-mcp serve --vault ~/Vault \
+  --disabled-tools obsidian_dataview_query obsidian_full_text_search
+```
+
+Use case: narrow the surface for a restricted agent (read-only research agent gets only `obsidian_search_text` + `obsidian_read_note`). cyanheads + aaronsb both ship variants of this; v1.10 closes the gap with a one-line monkey-patch on `server.registerTool`. Skips are logged to stderr so users can verify the flag is doing what they expect.
+
+The boot-line summary now reports `disabled-tools=N` when the flag is set.
+
+### Repo state
+- 27 MCP tools (unchanged). 22 always-on read + 1 opt-in FTS5 + 4 write.
+- 10 MCP prompts (unchanged).
+- **330 unit tests** (was 305, +25 covering Moment-format conversion / plugin-config loading / alias resolution / read_note integration with plugin folder).
+- New module: `src/periodic.ts` (~200 LoC, fully tested).
+- `--enable-write` help text unchanged. New `--disabled-tools` help text matches the spec's discoverability conventions.
+
 ## [1.9.0] — 2026-05-06
 
 **Bulk find/replace.** v1.9 adds a write tool that's been on the wishlist since v1.1 — `obsidian_replace_in_notes`. Reuses rename_note's code-fence-aware line walker so example snippets and code documentation stay verbatim. Strategic agent recommended this over outputSchema spec polish: it's user-visible, ships fast, fills a real refactor gap that no other Obsidian-MCP server handles safely.

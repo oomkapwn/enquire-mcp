@@ -2,6 +2,7 @@ import * as path from "node:path";
 import matter from "gray-matter";
 import { parseDql, runDql } from "./dql.js";
 import type { Embed, Wikilink } from "./parser.js";
+import { resolvePeriodicNoteName } from "./periodic.js";
 import type { FileEntry, Vault } from "./vault.js";
 
 export interface NoteSummary {
@@ -980,6 +981,33 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
     // periodic-note alias when the literal lookup misses.
     const literal = await vault.findByTitle(args.title);
     if (literal) return literal;
+    // v1.10: try the user's Daily / Periodic Notes plugin config first. The
+    // user may have configured `Daily Notes/YYYY-MM-DD` or a custom format —
+    // honor that before the v0.11 hard-coded defaults.
+    const periodicConfig = await vault.getPeriodicConfig();
+    const periodicResolved = resolvePeriodicNoteName(args.title, periodicConfig);
+    if (periodicResolved) {
+      // The user's config produced a vault-relative path stem. Look it up by
+      // path (with .md appended); if THAT misses, fall back to basename match
+      // for users whose plugin folder is empty (vault-root files).
+      try {
+        const tryPath = `${periodicResolved.relPath}.md`;
+        const abs = vault.resolveInside(tryPath);
+        const stat = await vault.stat(abs);
+        return {
+          absPath: abs,
+          relPath: vault.toRel(abs),
+          basename: path.basename(abs),
+          mtimeMs: stat.mtimeMs
+        };
+      } catch {
+        // Fall through to basename match.
+      }
+      const basenameMatch = await vault.findByTitle(path.basename(periodicResolved.relPath));
+      if (basenameMatch) return basenameMatch;
+    }
+    // Last-resort: legacy v0.11 hard-coded alias resolver, in case the user
+    // has neither plugin configured but expects the default formats to work.
     const aliased = resolvePeriodicAlias(args.title);
     if (aliased) {
       const aliasMatch = await vault.findByTitle(aliased);
@@ -987,8 +1015,8 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
     }
     const suggestions = await suggestSimilar(vault, args.title);
     const hint = suggestions.length ? `. Did you mean: ${suggestions.join(", ")}?` : "";
-    const aliasNote = aliased ? ` (also tried periodic alias "${aliased}")` : "";
-    throw new Error(`No note found with title: ${args.title}${aliasNote}${hint}`);
+    const aliasHint = periodicResolved ? ` (also tried periodic alias "${periodicResolved.relPath}")` : "";
+    throw new Error(`No note found with title: ${args.title}${aliasHint}${hint}`);
   }
   throw new Error("Either path or title is required");
 }

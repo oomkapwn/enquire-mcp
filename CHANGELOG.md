@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-alpha.0] — 2026-05-06
+
+**Theme: ML-embedding retrieval.** v1.8 shipped TF-IDF cosine as the no-deps semantic-search floor. v2.0 raises the ceiling with real transformer embeddings — closer to Smart Connections quality, but free, offline-capable, multilingual, and (uniquely) chunk-aligned with the FTS5 BM25 index so the v2.0 beta hybrid RRF can score across both surfaces using the same identifier space.
+
+### Added — `obsidian_embeddings_search`
+
+ML-embedding retrieval via [@huggingface/transformers](https://github.com/huggingface/transformers.js) + `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages, 384-dim, runs on CPU). Persistent SQLite vector index next to the FTS5 db. Brute-force cosine top-K (sub-100ms on 50K chunks; HNSW ladder is v2.1 if real users hit that ceiling).
+
+Higher-quality than `obsidian_semantic_search` for paraphrases, synonyms, and cross-language queries — but requires a one-time setup (see below). The TF-IDF path remains the no-deps default.
+
+### Added — `enquire-mcp install-model [alias]` subcommand
+
+Pre-downloads an embedding model so the first MCP call doesn't block on a ~120MB HuggingFace download. Aliases:
+
+- `multilingual` (default) — `Xenova/paraphrase-multilingual-MiniLM-L12-v2`, 384-dim, ~120MB, 50+ languages
+- `bge` — `Xenova/bge-small-en-v1.5`, 384-dim, ~33MB, English-only (better recall on technical content)
+
+Models are cached under `~/.cache/huggingface/transformers.js/` and reused across vaults. Subsequent `install-model` calls are no-ops if the cache is warm.
+
+### Added — `enquire-mcp build-embeddings --vault <path>` subcommand
+
+Cold-build (or refresh) the persistent embedding index for a vault. Same paragraph-level chunking as the FTS5 index (`fts5.chunkContent`) so chunk identity matches across BM25 and embeddings — foundation for the v2.0 beta hybrid RRF.
+
+Incremental rebuilds via `source_state` mtime tracking — only re-embeds notes whose mtime changed since the last `build-embeddings`. ~5-30ms per chunk on M1 CPU.
+
+Supports `--embedding-model <alias>`, `--exclude-glob`, `--read-paths`, `--embed-file <path>`.
+
+### Added — `enquire-mcp clear-embeddings --vault <path>` subcommand
+
+Removes the `.embed.db` + WAL/SHM sidecars. Mirrors `clear-cache` and `clear-index`.
+
+### Added — `@huggingface/transformers ^4.2.0` as `optionalDependencies`
+
+Mirrors the `better-sqlite3` pattern: the heavy ONNX runtime + tokenizer transitive deps install only if the user's npm policy allows optional deps (default). Read-only / TF-IDF / FTS5 paths stay zero-cost — no model load, no runtime cost. Tarball stays under 200KB.
+
+If optional deps are skipped (`npm install --omit=optional`), the embedding tools and subcommands surface a clean error pointing the user at `npm install @huggingface/transformers` rather than an opaque module-not-found.
+
+### Architecture decisions (locked for v2.0)
+
+- **Default model = multilingual.** The user's dogfood vault is bilingual Russian + English; v2.0 covers >80% of real Obsidian users (most personal vaults are not pure English).
+- **Models download on subcommand, not on first MCP call.** Predictable for CI; air-gap-friendly; explicit consent for networked operations. Pattern follows Stripe / Cloudflare CLI conventions.
+- **Hardcoded RRF in v2.0 beta.** No `--rrf-weights` flag (yet). Sensible defaults work in 80% of cases per Cormack et al. Add the flag in v2.1 if real issues come in.
+- **CJK is v2.0 backlog.** The Unicode tokenizer in v1.11.1 catches Cyrillic / Greek / Hebrew / Arabic. Chinese / Japanese / Thai need an `Intl.Segmenter` pass first; out-of-scope for alpha.
+- **Brute-force cosine, not HNSW.** ~50ms top-10 on 50K × 384 floats — fine for >99% of personal vaults. HNSW ladder when the ceiling is hit.
+
+### Tests
+
+364 unit tests pass (was 341, +23). New: `tests/embed-db.test.ts` (synthetic-vector schema + upsert/delete/search semantics, cross-vault contamination guard, dim mismatch, folder filter, minScore threshold). `tests/embeddings.test.ts` (catalog + cosine math, no model load).
+
+End-to-end ML smoke is out-of-band — CI doesn't download the model. Manual verification:
+```bash
+enquire-mcp install-model multilingual
+enquire-mcp build-embeddings --vault ~/Documents/Obsidian\ Vault
+# then via MCP: obsidian_embeddings_search { query: "OAuth flows" }
+```
+
+### Migration from v1.x
+
+**No breaking changes for read-only / TF-IDF / FTS5 users.** All v1.x tools and CLI flags continue to work exactly as before. Embedding features are pure additions, gated behind explicit subcommand invocations.
+
+The next prerelease (v2.0.0-beta.0) will add hybrid RRF scoring (`obsidian_search` umbrella tool over BM25 + TF-IDF + embeddings) — additive, not breaking.
+
+### Excluded from this alpha (deferred to v2.0 beta / RC)
+
+- Hybrid RRF tool (`obsidian_search`) — needs alpha shipping first to validate the embedding plumbing in real vaults
+- HNSW vector index — only matters past 50K chunks, which no current user has
+- `--persistent-embeddings` server flag (auto-build on serve startup) — pulls model load into hot path; alpha users prefer explicit subcommand
+- CJK segmenter — needs `Intl.Segmenter` v18+ feature gating; v2.1 backlog
+
 ## [1.11.1] — 2026-05-05
 
 Audit-driven patch. Five-agent audit of the v1.10 → v1.11 surface flagged two real P1 code bugs and one CI/process gap; this release fixes all three plus the doc drift the audit found.

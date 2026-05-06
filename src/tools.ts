@@ -2602,6 +2602,92 @@ export async function semanticSearch(
   return { query: args.query, total_docs: docs.length, method: "tfidf-cosine", matches };
 }
 
+// ─── obsidian_embeddings_search (v2.0 alpha — ML embeddings retrieval) ──────
+// Hits a persistent vector index built by `enquire-mcp build-embeddings`. If
+// the user hasn't run that yet, returns a clean `index_missing` error rather
+// than blocking inside the model load (which can take ~30s on first call).
+//
+// The index is opt-in and out-of-band: we don't load any ONNX runtime or
+// model files unless the tool is actually invoked. Cold path is identical to
+// `obsidian_semantic_search` (TF-IDF, no native deps, instant).
+
+export interface EmbedHit {
+  path: string;
+  title: string;
+  score: number;
+  snippet: string;
+  chunk_index: number;
+  line_start: number;
+  line_end: number;
+}
+
+export interface EmbedSearchResponse {
+  query: string;
+  method: "embeddings-cosine";
+  model: string;
+  total_chunks: number;
+  matches: EmbedHit[];
+}
+
+export async function embeddingsSearch(
+  vault: Vault,
+  args: { query: string; folder?: string; limit?: number; min_score?: number; model?: string },
+  embedFile: string
+): Promise<EmbedSearchResponse> {
+  await vault.ensureExists();
+  if (!args.query.trim()) throw new Error("query must not be empty");
+  const limit = args.limit ?? 10;
+  const minScore = args.min_score ?? 0.3;
+
+  // Lazy-load embed-db + embeddings only when the tool is actually called.
+  const [{ EmbedDb }, { loadEmbedder, resolveModel }] = await Promise.all([
+    import("./embed-db.js"),
+    import("./embeddings.js")
+  ]);
+
+  // Verify the embed db exists before doing anything heavy. This separates
+  // "user hasn't built the index yet" from "model failed to load".
+  const fsMod = await import("node:fs");
+  if (!fsMod.existsSync(embedFile)) {
+    throw new Error(
+      `Embedding index not found at ${embedFile}. ` +
+        `Run: enquire-mcp build-embeddings --vault ${vault.root} ` +
+        `(first-time setup also needs: enquire-mcp install-model multilingual)`
+    );
+  }
+
+  const model = resolveModel(args.model);
+  const db = new EmbedDb({
+    file: embedFile,
+    vaultRoot: vault.root,
+    modelAlias: model.alias,
+    dim: model.dim
+  });
+  await db.open();
+  try {
+    const total = db.totalChunks();
+    if (total === 0) {
+      return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
+    }
+    const embedder = await loadEmbedder(args.model);
+    const [qVec] = await embedder.embed([args.query]);
+    if (!qVec) throw new Error("Embedder returned no vectors for the query");
+    const hits = db.search(qVec, limit, { folder: args.folder, minScore });
+    const matches: EmbedHit[] = hits.map((h) => ({
+      path: h.rel_path,
+      title: stripMd(path.basename(h.rel_path)),
+      score: Math.round(h.score * 10000) / 10000,
+      snippet: h.text_preview.slice(0, 240),
+      chunk_index: h.chunk_index,
+      line_start: h.line_start,
+      line_end: h.line_end
+    }));
+    return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: total, matches };
+  } finally {
+    db.close();
+  }
+}
+
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
 function jaccard<T>(a: Set<T>, b: Set<T>): number {

@@ -86,9 +86,10 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
-| TypeScript strict + Biome lint + 341+ unit tests | varies | ✅ |
+| **ML embeddings search** (`obsidian_embeddings_search` — paraphrase-multilingual-MiniLM-L12-v2, 50+ languages, persistent SQLite vector index) | ❌ usually paywalled (Smart Connections) | ✅ free + offline-capable (v2.0 alpha) |
+| TypeScript strict + Biome lint + 364+ unit tests | varies | ✅ |
 
-That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
+That's the gap. enquire closes it in ~3500 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus two optional (`better-sqlite3` for `--persistent-index` and `--build-embeddings`; `@huggingface/transformers` for ML embeddings — both are no-ops when not invoked).
 
 > **Not affiliated with Obsidian.md.** Obsidian and the Obsidian logo are trademarks of Dynalist Inc. enquire-mcp is an independent open-source project that reads Obsidian-format vaults. The name «enquire» is a tribute to Tim Berners-Lee's 1980 hypertext system, not a trademark claim against any party.
 
@@ -186,6 +187,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_list_canvases` | Lists `.canvas` files (Obsidian's whiteboard / mind-map format) with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. |
 | `obsidian_read_canvas` | Parses one `.canvas` file into typed nodes (text / file / link / group / unknown) + edges (with from/to node IDs, sides, labels, colors). Each `file` node carries a `file_resolved` field (vault-relative path or `null` if broken). Returns a node-kind summary + `broken_file_refs` array. |
 | `obsidian_semantic_search` | **TF-IDF cosine retrieval.** Free / offline / no model download. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Catches synonym + related-term matches that `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss. |
+| `obsidian_embeddings_search` | _Opt-in via `enquire-mcp install-model` + `enquire-mcp build-embeddings --vault <path>`._ **ML-embedding retrieval** via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries. Persistent SQLite vector index next to the FTS5 db. Chunks match the FTS5 chunker so v2.0 beta can do hybrid RRF over both. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 5 write tools (opt-in via `--enable-write`)

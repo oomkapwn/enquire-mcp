@@ -132,6 +132,30 @@ Posture:
 - **Write-tool gating composes with `--enable-write`.** Disabling `obsidian_create_note` while leaving `obsidian_replace_in_notes` enabled is a valid configuration; the gate is independent of the global write flag.
 - **Posture is "fail closed".** Tools blocked at registration time never appear in `tools/list` and a `tools/call` against a gated name returns a clean MCP-protocol error from the SDK — there's no codepath where a disabled tool can still execute.
 
+## ML embeddings (v2.0 alpha): networked-download + cache posture
+
+The `obsidian_embeddings_search` tool plus the `install-model` and `build-embeddings` subcommands (added v2.0.0-alpha.0) introduce two new surfaces with networked / on-disk implications:
+
+### Model download (`install-model`)
+
+- **Explicit, opt-in.** The `enquire-mcp install-model [alias]` subcommand is the ONLY codepath that hits the network. Serving / read-only / TF-IDF / FTS5 paths never make outbound HTTP. Air-gap-safe by default.
+- **Source: HuggingFace Hub.** Model weights ship as ONNX from the `Xenova/*` org. `@huggingface/transformers` handles the download, hash verification, and caching to `~/.cache/huggingface/transformers.js/`.
+- **Reusable across vaults.** The cache is per-machine, not per-vault. Multiple `enquire-mcp` instances on different vaults share the same model files.
+- **Manual purge.** Delete `~/.cache/huggingface/transformers.js/` to remove cached models.
+
+### Persistent embedding index (`build-embeddings`)
+
+- **0600 chmod** on `<vault-hash>.embed.db` + WAL + SHM sidecar files, parent directory mode 0700 — same as the FTS5 index posture.
+- **Cross-vault contamination guard.** `meta` table stores `vault_root`, `model_alias`, `dim`, and `schema_version`; if any change between runs, the embedding tables are dropped and rebuilt with a stderr warning. Prevents a stale index from leaking content into a different vault.
+- **Caveat — embedding values can leak content via cosine.** Float32 vectors stored in the index are reversible-ish: with the same model loaded, an attacker with read access to the .embed.db file can run nearest-neighbor searches against arbitrary queries to recover note content topics. Treat the .embed.db as having the same sensitivity as the .fts5.db (which already stores raw chunk content). If your threat model includes other local users on the same machine, do not use `--persistent-cache` / `--persistent-index` / build-embeddings.
+- **Manual purge.** `enquire-mcp clear-embeddings --vault <path>` removes the `.embed.db`, `.embed.db-wal`, and `.embed.db-shm` files.
+- **`--exclude-glob` / `--read-paths` honored.** The `build-embeddings` subcommand accepts both flags — excluded notes are never embedded, never appear in results.
+
+### Optional-dep failure mode
+
+- If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
+- Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
+
 ## Persistent FTS5 index: privacy posture
 
 When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.

@@ -95,7 +95,7 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expectedCount = withFts ? 23 : 22;
+  const expectedCount = withFts ? 24 : 23;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -103,6 +103,7 @@ try {
   );
   const baseTools = [
     "obsidian_dataview_query",
+    "obsidian_embeddings_search",
     "obsidian_find_path",
     "obsidian_find_similar",
     "obsidian_get_backlinks",

@@ -6,12 +6,15 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Command } from "commander";
 import { z } from "zod";
-import { defaultIndexFile, FtsIndex } from "./fts5.js";
+import { EmbedDb } from "./embed-db.js";
+import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
+import { chunkContent, defaultIndexFile, FtsIndex } from "./fts5.js";
 import {
   appendToNote,
   archiveNote,
   createNote,
   dataviewQuery,
+  embeddingsSearch,
   findPath,
   findSimilar,
   getBacklinks,
@@ -39,7 +42,14 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.11.1";
+const VERSION = "2.0.0-alpha.0";
+
+/** Default location for the persistent embedding index, alongside .fts5.db. */
+function embedDbPath(vaultRoot: string): string {
+  // Match the FTS5 location convention by stripping the .fts5.db extension
+  // off defaultIndexFile() and appending .embed.db.
+  return defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db");
+}
 
 interface ServeOptions {
   vault: string;
@@ -166,6 +176,93 @@ async function main(): Promise<void> {
         );
       } finally {
         idx.close();
+      }
+    });
+
+  // v2.0 alpha — ML embeddings subcommands.
+  program
+    .command("install-model")
+    .description(
+      `Pre-download an embedding model so the first \`obsidian_embeddings_search\` call doesn't block on a ${EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]?.approxSizeMB}MB HuggingFace download. Models are cached under ~/.cache/huggingface/transformers.js/ and are reused across vaults.`
+    )
+    .argument("[alias]", `Model alias (${Object.keys(EMBEDDING_MODELS).join(" | ")})`, DEFAULT_MODEL_ALIAS)
+    .action(async (alias: string) => {
+      const model = resolveModel(alias);
+      process.stderr.write(
+        `enquire: downloading ${model.hfId} (~${model.approxSizeMB}MB; ${model.dim}-dim, ${
+          model.multilingual ? "multilingual" : "English-only"
+        })...\n`
+      );
+      const t0 = Date.now();
+      // Loading the embedder triggers the transformers.js model download +
+      // local cache write. We don't actually run inference — just verify the
+      // pipeline initializes successfully.
+      const embedder = await loadEmbedder(alias);
+      // Smoke: embed one tiny string so any ONNX-runtime failure surfaces here
+      // rather than at first MCP call.
+      const [vec] = await embedder.embed(["hello"]);
+      if (!vec || vec.length !== model.dim) {
+        throw new Error(`Model loaded but produced unexpected output dim=${vec?.length}`);
+      }
+      process.stdout.write(
+        `enquire: model ${alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+      );
+    });
+
+  program
+    .command("build-embeddings")
+    .description(
+      "Cold-build (or refresh) the persistent embedding index for a vault. Required before `obsidian_embeddings_search` is useful. Uses the same paragraph-level chunking as the FTS5 index, so chunk identity matches across BM25 and embeddings."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
+    .option("--embed-file <path>", "Override the .embed.db file location")
+    .option("--exclude-glob <pattern...>", "Exclude paths matching glob (repeatable)")
+    .option("--read-paths <pattern...>", "Strict allowlist of glob patterns (repeatable)")
+    .action(
+      async (opts: {
+        vault: string;
+        embeddingModel?: string;
+        embedFile?: string;
+        excludeGlob?: string[];
+        readPaths?: string[];
+      }) => {
+        const model = resolveModel(opts.embeddingModel);
+        const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
+        await vault.ensureExists();
+        const embedFile = opts.embedFile ?? embedDbPath(vault.root);
+        const db = new EmbedDb({ file: embedFile, vaultRoot: vault.root, modelAlias: model.alias, dim: model.dim });
+        await db.open();
+        try {
+          process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
+          const embedder = await loadEmbedder(opts.embeddingModel);
+          const report = await syncEmbedDb(vault, db, embedder);
+          process.stdout.write(
+            `enquire: embed db ${embedFile} — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+          );
+        } finally {
+          db.close();
+        }
+      }
+    );
+
+  program
+    .command("clear-embeddings")
+    .description("Delete the embedding index files (.embed.db + WAL/SHM sidecar) for a given vault")
+    .requiredOption("--vault <path>", "Vault whose embedding index to delete")
+    .option("--embed-file <path>", "Override the embedding-index file location")
+    .action(async (opts: { vault: string; embedFile?: string }) => {
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const file = opts.embedFile ?? embedDbPath(vault.root);
+      // Use any model alias / dim for the delete path — bootstrapSchema uses
+      // them only when the file already exists with mismatched meta.
+      const db = new EmbedDb({ file, vaultRoot: vault.root, modelAlias: "n/a", dim: 1 });
+      const removed = await db.clearOnDisk();
+      if (removed) {
+        process.stdout.write(`enquire: removed embedding index files at ${file}\n`);
+      } else {
+        process.stdout.write(`enquire: no embedding index files at ${file}\n`);
       }
     });
 
@@ -307,6 +404,78 @@ async function startServer(opts: ServeOptions): Promise<void> {
     process.once("SIGTERM", closeFts);
     process.on("beforeExit", closeFts);
   }
+}
+
+// v2.0 alpha — sync the persistent embedding index. Same incremental-rebuild
+// pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed
+// notes whose mtime changed. Embedding is the bottleneck (~5-30ms per chunk
+// CPU on M1), so incremental updates are critical for vaults of any size.
+async function syncEmbedDb(
+  vault: Vault,
+  db: EmbedDb,
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>
+): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const entries = await vault.listMarkdown();
+  const known = new Map<string, number>();
+  for (const s of db.getSourceStates()) known.set(s.rel_path, s.mtime_ms);
+
+  const live = new Set<string>();
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  for (const e of entries) {
+    live.add(e.relPath);
+    const prevMtime = known.get(e.relPath);
+    if (prevMtime !== undefined && prevMtime === e.mtimeMs) {
+      unchanged += 1;
+      continue;
+    }
+    try {
+      const note = await vault.readNote(e.absPath, e.mtimeMs);
+      const chunks = chunkContent(note.parsed.body);
+      if (chunks.length === 0) {
+        // No body — drop any stale entries.
+        db.deleteNote(e.relPath);
+        continue;
+      }
+      const vectors = await embedder.embed(chunks.map((c) => c.text));
+      const rows = chunks.map((c, i) => {
+        const vector = vectors[i];
+        if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);
+        return {
+          chunkIndex: i,
+          lineStart: c.lineStart,
+          lineEnd: c.lineEnd,
+          textPreview: c.text.slice(0, 480),
+          vector
+        };
+      });
+      db.upsertNote(e.relPath, e.mtimeMs, rows);
+      if (prevMtime === undefined) added += 1;
+      else updated += 1;
+    } catch (err) {
+      process.stderr.write(
+        `enquire: skipping ${e.relPath} during embed sync — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+
+  // Delete entries for files that have vanished.
+  let deleted = 0;
+  for (const relPath of known.keys()) {
+    if (!live.has(relPath)) {
+      db.deleteNote(relPath);
+      deleted += 1;
+    }
+  }
+
+  return {
+    added,
+    updated,
+    deleted,
+    unchanged,
+    total_chunks: db.totalChunks()
+  };
 }
 
 async function syncFtsIndex(
@@ -828,6 +997,36 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await semanticSearch(vault, args))
+  );
+
+  // v2.0 alpha — ML-embeddings retrieval. Reads a persistent vector index
+  // built by `enquire-mcp build-embeddings`. Returns clean error if the index
+  // doesn't exist (rather than silently downloading a model).
+  server.registerTool(
+    "obsidian_embeddings_search",
+    {
+      title: "Embeddings search (ML, paraphrase-multilingual)",
+      description:
+        "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index (~1ms/chunk on M1). Subsequent queries are sub-100ms top-10. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
+      annotations: { ...READ_ONLY, title: "Embeddings search" },
+      inputSchema: {
+        query: z.string().min(1).describe("Free-form query — multi-word, natural language, any supported language"),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+        min_score: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            "Drop hits below this cosine score (default 0.3). Cosine ranges -1 to 1; embeddings cluster ~0.4-0.9."
+          )
+      }
+    },
+    async (args) => {
+      const embedFile = embedDbPath(vault.root);
+      return textResult(await embeddingsSearch(vault, args, embedFile));
+    }
   );
 }
 

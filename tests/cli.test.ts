@@ -71,7 +71,7 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     const link = path.join(tmpdir, "enquire-mcp");
     await fs.symlink(distEntry, link);
     const out = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
-    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
   });
 
   it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async () => {
@@ -87,7 +87,7 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
       encoding: "utf8",
       cwd: tmpdir
     });
-    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
   });
 });
 
@@ -128,7 +128,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   it("`enquire-mcp --version` prints the package version", () => {
     if (!distExists()) return;
     const out = execFileSync(process.execPath, [distEntry, "--version"], { encoding: "utf8" });
-    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
   });
 
   it("`enquire-mcp --help` shows all subcommands (serve / clear-cache / clear-index / index)", () => {

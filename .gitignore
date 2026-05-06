@@ -10,3 +10,7 @@ coverage/
 .vitest-cache/
 *.tgz
 .npmrc
+# Local bench output — hardware-specific. The numbers in README come from
+# a fresh `npm run bench` on the maintainer's machine; contributors should
+# generate their own and not commit them.
+bench/results.md

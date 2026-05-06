@@ -67,6 +67,23 @@ Out of scope:
 - A vault that spans multiple filesystems (rare; symlink to a mounted drive). `fs.rename` will fail with `EXDEV` after the backlink files are written. The user can move the vault to a single filesystem and re-run; we don't auto-fall back to copy-then-delete.
 - A note that contains identical literal `[[X]]` strings inside AND outside a code fence where only the outside ones should be rewritten — the parser excludes code-fenced wikilinks, so the rewrite plan correctly only includes outside-fence ones, and the line-walker skips fence lines during the actual replacement.
 
+## `--watch`: live-watcher posture
+
+`--watch` (added v1.2.0, opt-in) registers a chokidar-backed watcher on the vault root so the parsed-note cache and the FTS5 index can stay fresh while the server is alive. Threat model: an attacker with write access to the vault filesystem is already inside the trust boundary (they can edit notes directly); the concern here is reducing the watcher's surface beyond what they could do without it.
+
+Mitigations already in place:
+
+- **Symlinks not followed** — `chokidar` is configured with `followSymlinks: false`, matching the vault walker. A symlink inside the vault that resolves outside the vault is invisible to the watcher.
+- **`--exclude-glob` honoured at runtime** — the watcher's `ignored` predicate calls `vault.isExcluded(rel)` per file. Edits to excluded paths fire **no** cache invalidation and **no** FTS5 reindex, so a private subfolder stays private even when the watcher is on.
+- **Skip-dirs match the walker** — `.git`, `.obsidian`, `.trash`, `node_modules`, `.DS_Store` are ignored so editor metadata and SCM noise don't trigger reindex.
+- **Non-`.md` files ignored** — `.txt`, `.png`, `.canvas`, etc. don't fire events.
+- **Editor-debouncing** — chokidar's `awaitWriteFinish` (`stabilityThreshold: 250ms`, `pollInterval: 50ms`) collapses bursts of save events from editors like Obsidian into a single reindex per logical write. This isn't a security mitigation, but it prevents resource-exhaustion via rapid saves.
+- **Cleanup on shutdown** — `SIGINT`/`SIGTERM`/`beforeExit` close the chokidar watcher (releases native fs handles).
+
+Out of scope:
+- Timing-side-channel: `--exclude-glob` filtering happens AFTER chokidar's stat call, so an external observer with read access to system call timing could in principle infer that *some* event fired even for excluded paths. Acceptable — anyone with that level of system access already controls the vault.
+- Watcher event ordering: chokidar coalesces but doesn't strictly serialize events. If the server's own write tools (`create_note`, `append_to_note`, `rename_note`) fire and the watcher reacts before the tool's own cache invalidation, the watcher may do redundant work but never produces inconsistent state — every read goes back to the disk.
+
 ## Persistent FTS5 index: privacy posture
 
 When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.

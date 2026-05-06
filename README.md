@@ -78,7 +78,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
 | **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
-| TypeScript strict + Biome lint + 239 unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -383,6 +383,7 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.3.x** — **Performance + benchmarks.** `findBestMatch` rebuilt around a basename + relPath index (O(N²) → O(1) avg) — 24–46% faster across graph-aware tools at 10k notes. New `scripts/bench.mjs` + reproducible numbers in `bench/results.md`.
 - **1.2.0** — **Watcher mode** (`--watch`) — incremental cache + FTS5 reindex on file changes. Editor saves debounced. `--exclude-glob` honored.
 - **1.1.x** — `obsidian_rename_note` (atomic rename + automatic backlink rewrite, code-fence-aware, dry-run preview).
 - **1.0.0** — **Stable. API freeze.** Stability promise across tool names, argument shapes, resource URIs, prompt names, CLI flags. SLSA-3 release provenance.
@@ -393,7 +394,7 @@ Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 - **0.9.x** — `search_text` switched to AND-tokenizer default with structured response (BREAKING). Parallel file reads in scan path.
 - **0.8.x** — DQL `contains` semantics for arrays (membership, not substring). Code of Conduct.
 - **0.7.x** — Renamed `obsidian-mcp` → `enquire-mcp` (via brief `memex` detour) to escape the crowded `obsidian-mcp` npm namespace and to land on a name with a clear historical referent — Tim Berners-Lee's 1980 ENQUIRE prototype of the Web.
-- **Roadmap (1.x)** — Embedding-based retrieval (sqlite-vec + a small JS-runnable model, layered on top of the existing lexical hybrid); benchmarks at 10k+ vaults.
+- **Roadmap (1.x)** — Embedding-based retrieval (sqlite-vec + a small JS-runnable model, layered on top of the existing lexical hybrid).
 
 ---
 
@@ -417,6 +418,6 @@ Other ways to help:
 
 ## License & credits
 
-[MIT](./LICENSE). Built by Alex — [GitHub `@oomkapwn`](https://github.com/oomkapwn) · [X / Twitter `@OomkaBear`](https://twitter.com/OomkaBear). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
+[MIT](./LICENSE). Built by Alex — [GitHub `@oomkapwn`](https://github.com/oomkapwn) · [X `@OomkaBear`](https://x.com/OomkaBear). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
 
 Named after [ENQUIRE](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, no plugin required.

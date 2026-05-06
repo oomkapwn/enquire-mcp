@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-05-06
+
+Patch release driven by a 5-agent post-1.3 audit (code · security · process · docs · 48-hour git history). All 5 agents reported zero P0/P1 code bugs; this release closes the doc + UX drift the audits surfaced.
+
+### Fixed
+- **`--enable-write` help text** in `src/index.ts` listed only `(create_note, append_to_note)` — the third write tool, `rename_note` (added v1.1.0), was missing. Now reads "Enable the three write tools (create_note, append_to_note, rename_note)."
+- **README test counter drift** — comparison-table row was stuck at 239 across the v1.2/v1.3 ships; bumped to 246 to match the actual count.
+- **README "Versioning & releases" section** was missing a v1.3.0 entry, and the 1.x roadmap line still listed "benchmarks at 10k+ vaults" as planned even though they shipped in v1.3.0. Both fixed.
+- **README author footer** linked `twitter.com/OomkaBear` — switched to the canonical `x.com/OomkaBear` (avoids the 301 redirect and matches how X self-identifies).
+
+### Documented
+- **`SECURITY.md` — `--watch` live-watcher posture** — new section covering the v1.2.0 file watcher's threat model: symlinks not followed (matches walker), `--exclude-glob` honoured at runtime so excluded paths fire no events, skip-dirs match the walker, editor-debouncing, cleanup on shutdown. Out-of-scope items (timing side channels, watcher-vs-tool race coalescing) listed explicitly.
+
+### Added — tooling
+- **`npm run bench` + `npm run bench:quick`** — exposes `scripts/bench.mjs` as discoverable npm scripts so users / contributors don't have to remember the path. `bench:quick` runs only the 100 + 1 000 scales.
+- **`bench/results.md` is now `.gitignore`d** — it's hardware-specific (numbers in mine reflect Apple A18 Pro), so committing it forced spurious diffs on every contributor's local run. README still references the file as the place a fresh `npm run bench` writes its output.
+
+### Repo state
+- 18 MCP tools (unchanged). 14 read + 1 opt-in FTS5 + 3 write.
+- 246 unit tests (unchanged).
+- Code surface unchanged except the `--enable-write` help string. Behaviour identical to 1.3.0.
+
 ## [1.3.0] — 2026-05-06
 
 Performance + benchmarks. The third 1.x roadmap item lands.

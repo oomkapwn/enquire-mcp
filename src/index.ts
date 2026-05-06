@@ -29,7 +29,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 
 interface ServeOptions {
   vault: string;
@@ -56,7 +56,10 @@ async function main(): Promise<void> {
     .command("serve", { isDefault: true })
     .description("Start the MCP server over stdio")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
-    .option("--enable-write", "Enable write tools (create_note, append_to_note). Off by default.")
+    .option(
+      "--enable-write",
+      "Enable the three write tools (create_note, append_to_note, rename_note). Off by default."
+    )
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
     .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")

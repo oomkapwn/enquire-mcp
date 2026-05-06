@@ -2,6 +2,92 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.0] — 2026-05-06
+
+**Theme: Hybrid RRF retrieval.** v2.0.0-alpha.0 shipped ML embeddings as a standalone tool. v2.0.0-beta.0 ships the integration step: a single `obsidian_search` umbrella tool that fuses every available retrieval signal — BM25 (FTS5) + TF-IDF cosine + ML embeddings — via Reciprocal Rank Fusion (Cormack et al, 2009).
+
+This is the v2.0 user-facing thesis: instead of agents picking between four nearly-identical search tools and getting different recall depending on the choice, they call one tool that automatically picks the best evidence available. Result: better recall on paraphrase / synonym / cross-language queries without configuration.
+
+### Added — `obsidian_search` MCP tool (the new default)
+
+Single umbrella tool that auto-detects available signals and fuses them via RRF with k=60. Gracefully degrades:
+
+- **TF-IDF only** (no `--persistent-index`, no embeddings) → produces TF-IDF ranking.
+- **BM25 + TF-IDF** (add `--persistent-index`) → keyword-augmented retrieval, sub-100ms.
+- **BM25 + TF-IDF + embeddings** (add `enquire-mcp build-embeddings`) → matches Smart Connections-quality retrieval, free / offline / open-source.
+
+Returns per-signal observability so agents can see WHY each hit ranked:
+
+```json
+{
+  "query": "OAuth flows",
+  "method": "rrf",
+  "k": 60,
+  "signals_used": ["bm25", "tfidf", "embeddings"],
+  "total_candidates": 47,
+  "matches": [
+    {
+      "path": "Auth/OAuth Flows.md",
+      "score": 0.0492,
+      "snippet": "OAuth authentication flow with JWT tokens...",
+      "chunk_index": 0,
+      "line_start": 1,
+      "line_end": 1,
+      "per_signal": {
+        "bm25": { "rank": 1, "score": 8.5 },
+        "tfidf": { "rank": 2, "score": 0.7 },
+        "embeddings": { "rank": 1, "score": 0.92 }
+      }
+    }
+  ]
+}
+```
+
+`min_signals` parameter lets agents request consensus search — e.g. `min_signals: 2` returns only hits that ranked in two-or-more rankers.
+
+### Added — `src/rrf.ts` (isolated RRF math)
+
+Standalone module implementing Reciprocal Rank Fusion. Pure function over named ranked lists; doesn't know about vaults, SQLite, or embeddings — testable in isolation. 13 unit tests cover the formula, union-safety (missing signals don't penalize), per-signal observability, rank-validation, and graceful degradation.
+
+### Architecture decisions (locked)
+
+- **Note-level fusion** (not chunk-level). BM25 + embeddings return chunks; we collapse to the best chunk per note before fusing. Chunk identity comparison would require all rankers to share a chunk space, which TF-IDF (note-level) doesn't. Note-level wins on simplicity and matches what most agents actually want ("which notes are relevant"). Chunk-level fusion is v2.1 backlog.
+- **Hardcoded equal weights, k=60.** Per Cormack et al, RRF without per-signal weights outperforms most learned alternatives on heterogeneous rankers. We resist the urge to add `--rrf-weights` — sensible defaults serve >80% of users; advanced users can fork. Add the flag in v2.1 if real issues come in.
+- **Graceful degradation, not feature gate.** `obsidian_search` works the moment the server starts (TF-IDF only). Adding `--persistent-index` enables BM25. Running `build-embeddings` enables ML retrieval. Each layer adds quality without changing the API or surface.
+- **Per-signal observability is required, not optional.** The `per_signal` field on every hit is the foundation for v2.1 features (UI explainability, weights tuning, ranker disagreement detection). Hidden by default would be cheap; explicit is the right primitive.
+
+### Tests
+
+384 unit tests pass (was 364, +20). New: `tests/rrf.test.ts` (13 tests covering RRF math, union-safety, observability, rank validation, custom k, topK truncation, all-empty input). `tests/search-hybrid.test.ts` (7 tests covering graceful-degradation paths, min_signals filter, folder filter, empty query rejection, total_candidates accounting).
+
+End-to-end ML smoke remains out-of-band; the v2.0 alpha smoke + hybrid path verifies the wiring against synthetic + real vaults.
+
+### Migration from v2.0.0-alpha.0
+
+**No breaking changes.** `obsidian_search` is purely additive; the existing `obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, `obsidian_embeddings_search` tools continue to work for diagnostics. The v2.0 RC will likely move them all behind a `--diagnostic-tools` opt-in to declutter the default tool list, but that's not yet decided — feedback welcome on the alpha/beta channel.
+
+### Try it
+
+```bash
+npm install -g @oomkapwn/enquire-mcp@beta
+# Or upgrade from alpha:
+# npm install -g @oomkapwn/enquire-mcp@beta
+
+# Tier 1: TF-IDF only (zero setup)
+enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
+# → obsidian_search { query: "OAuth flows" }  ← signals_used: ["tfidf"]
+
+# Tier 2: + BM25
+enquire-mcp serve --vault ~/Documents/Obsidian\ Vault --persistent-index
+# → obsidian_search { query: "OAuth flows" }  ← signals_used: ["bm25","tfidf"]
+
+# Tier 3: + ML embeddings
+enquire-mcp install-model multilingual
+enquire-mcp build-embeddings --vault ~/Documents/Obsidian\ Vault
+enquire-mcp serve --vault ~/Documents/Obsidian\ Vault --persistent-index
+# → obsidian_search { query: "OAuth flows" }  ← signals_used: ["bm25","tfidf","embeddings"]
+```
+
 ## [2.0.0-alpha.0] — 2026-05-06
 
 **Theme: ML-embedding retrieval.** v1.8 shipped TF-IDF cosine as the no-deps semantic-search floor. v2.0 raises the ceiling with real transformer embeddings — closer to Smart Connections quality, but free, offline-capable, multilingual, and (uniquely) chunk-aligned with the FTS5 BM25 index so the v2.0 beta hybrid RRF can score across both surfaces using the same identifier space.

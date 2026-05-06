@@ -95,7 +95,7 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expectedCount = withFts ? 24 : 23;
+  const expectedCount = withFts ? 25 : 24;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -121,6 +121,7 @@ try {
     "obsidian_read_canvas",
     "obsidian_read_note",
     "obsidian_resolve_wikilink",
+    "obsidian_search",
     "obsidian_search_text",
     "obsidian_semantic_search",
     "obsidian_stats",
@@ -394,6 +395,26 @@ try {
   );
   console.log(
     `      → semantic_search "${semParsed.query}": ${semParsed.matches.length}/${semParsed.total_docs} hit(s)`
+  );
+
+  // v2.0 beta — hybrid RRF tool. Without --persistent-index or build-embeddings,
+  // it should still degrade to TF-IDF-only and return matches.
+  const hybrid = await rpc("tools/call", {
+    name: "obsidian_search",
+    arguments: { query: "Apollo project", limit: 3 }
+  });
+  const hybridText = hybrid.result?.content?.[0]?.text ?? "";
+  const hybridParsed = JSON.parse(hybridText);
+  check(
+    "obsidian_search (hybrid RRF) returns matches with method='rrf'",
+    typeof hybridParsed === "object" &&
+      hybridParsed.method === "rrf" &&
+      Array.isArray(hybridParsed.signals_used) &&
+      Array.isArray(hybridParsed.matches),
+    hybridText.slice(0, 200)
+  );
+  console.log(
+    `      → obsidian_search "${hybridParsed.query}": ${hybridParsed.matches.length} hit(s) via [${hybridParsed.signals_used.join(",")}]`
   );
 
   // v1.10 — periodic-alias resolver via read_note(title:"2026-05-02").

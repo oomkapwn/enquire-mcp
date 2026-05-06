@@ -2688,6 +2688,265 @@ export async function embeddingsSearch(
   }
 }
 
+// ─── obsidian_search (v2.0 beta — hybrid RRF over BM25 + TF-IDF + embeddings)
+// Single umbrella tool that fuses every available retrieval signal via
+// Reciprocal Rank Fusion (Cormack et al, 2009). Gracefully degrades:
+//   - All 3 signals available → fuse all 3
+//   - No FTS5 (`--persistent-index` not passed) → TF-IDF + embeddings (or just TF-IDF)
+//   - No embeddings (`build-embeddings` not run) → BM25 + TF-IDF
+//   - Only TF-IDF → falls back to TF-IDF-only ranking
+// Each signal contributes equally; v2.0 ships hardcoded RRF with k=60 per
+// the architecture decision. Future v2.1 may add `--rrf-weights` flag.
+//
+// Note-level fusion: BM25 + embeddings return chunk hits; we collapse to the
+// best chunk per note before fusing. The chunk_index from the highest-ranked
+// chunk hit is preserved on the response so the agent can scroll to the
+// right paragraph.
+
+import type { FtsIndex } from "./fts5.js";
+
+export interface SearchHybridHit {
+  path: string;
+  title: string;
+  /** Fused RRF score (sum of 1/(k+rank) terms across signals). */
+  score: number;
+  /** Snippet from whichever signal produced the best chunk hit. */
+  snippet: string;
+  chunk_index?: number;
+  line_start?: number;
+  line_end?: number;
+  /** Per-signal observability — which signals contributed at what rank/score. */
+  per_signal: {
+    bm25?: { rank: number; score: number };
+    tfidf?: { rank: number; score: number };
+    embeddings?: { rank: number; score: number };
+  };
+}
+
+export interface SearchHybridResponse {
+  query: string;
+  method: "rrf";
+  k: number;
+  signals_used: ("bm25" | "tfidf" | "embeddings")[];
+  total_candidates: number;
+  matches: SearchHybridHit[];
+}
+
+export async function searchHybrid(
+  vault: Vault,
+  args: { query: string; folder?: string; limit?: number; min_signals?: number; embedding_model?: string },
+  ctx: {
+    /** FTS5 index, if `--persistent-index` is enabled at server start. */
+    ftsIndex: FtsIndex | null;
+    /** Path to the `.embed.db` (file may or may not exist — checked at call time). */
+    embedFile: string;
+  }
+): Promise<SearchHybridResponse> {
+  await vault.ensureExists();
+  if (!args.query.trim()) throw new Error("query must not be empty");
+  const limit = args.limit ?? 10;
+  const minSignals = args.min_signals ?? 1;
+  // Fan-out per-ranker top-K. Bigger than user's `limit` so RRF has room
+  // to surface a doc that's mid-rank in one signal but top in another.
+  const fanOutK = Math.max(50, limit * 5);
+
+  const [{ reciprocalRankFusion, RRF_K }, { existsSync }] = await Promise.all([import("./rrf.js"), import("node:fs")]);
+
+  const signalsUsed: ("bm25" | "tfidf" | "embeddings")[] = [];
+
+  // ─── BM25 (FTS5) ────────────────────────────────────────────────────────
+  // Note-level: collapse multi-chunk hits to the best rank per note.
+  let bm25Ranked: Array<{
+    id: string;
+    rank: number;
+    score: number;
+    snippet: string;
+    chunk_index?: number;
+    line_start?: number;
+    line_end?: number;
+  }> = [];
+  if (ctx.ftsIndex) {
+    try {
+      const ftsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
+      const bestPerNote = new Map<
+        string,
+        { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
+      >();
+      ftsHits.forEach((h, i) => {
+        const existing = bestPerNote.get(h.rel_path);
+        if (!existing || i < existing.rank) {
+          bestPerNote.set(h.rel_path, {
+            score: h.score,
+            rank: i + 1,
+            snippet: h.snippet,
+            chunk_index: h.chunk_index,
+            line_start: h.line_start,
+            line_end: h.line_end
+          });
+        }
+      });
+      bm25Ranked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
+        id,
+        rank: b.rank,
+        score: b.score,
+        snippet: b.snippet,
+        chunk_index: b.chunk_index,
+        line_start: b.line_start,
+        line_end: b.line_end
+      }));
+      // Re-sort to ensure 1-based ranks are consecutive after dedup.
+      bm25Ranked.sort((a, b) => a.rank - b.rank);
+      for (let i = 0; i < bm25Ranked.length; i++) {
+        const hit = bm25Ranked[i];
+        if (hit) hit.rank = i + 1;
+      }
+      if (bm25Ranked.length > 0) signalsUsed.push("bm25");
+    } catch (err) {
+      process.stderr.write(
+        `obsidian_search: BM25 ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+
+  // ─── TF-IDF ─────────────────────────────────────────────────────────────
+  // Always available (in-memory, no native deps).
+  let tfidfRanked: Array<{ id: string; rank: number; score: number; snippet: string }> = [];
+  try {
+    const tfidf = await semanticSearch(vault, {
+      query: args.query,
+      folder: args.folder,
+      limit: fanOutK,
+      min_score: 0.05
+    });
+    tfidfRanked = tfidf.matches.map((m, i) => ({
+      id: m.path,
+      rank: i + 1,
+      score: m.score,
+      snippet: m.snippet
+    }));
+    if (tfidfRanked.length > 0) signalsUsed.push("tfidf");
+  } catch (err) {
+    process.stderr.write(
+      `obsidian_search: TF-IDF ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
+    );
+  }
+
+  // ─── ML embeddings (if .embed.db exists) ────────────────────────────────
+  let embedRanked: Array<{
+    id: string;
+    rank: number;
+    score: number;
+    snippet: string;
+    chunk_index?: number;
+    line_start?: number;
+    line_end?: number;
+  }> = [];
+  if (existsSync(ctx.embedFile)) {
+    try {
+      const embed = await embeddingsSearch(
+        vault,
+        { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model },
+        ctx.embedFile
+      );
+      // Same chunk-collapse as BM25.
+      const bestPerNote = new Map<
+        string,
+        { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
+      >();
+      embed.matches.forEach((m, i) => {
+        const existing = bestPerNote.get(m.path);
+        if (!existing || i < existing.rank) {
+          bestPerNote.set(m.path, {
+            score: m.score,
+            rank: i + 1,
+            snippet: m.snippet,
+            chunk_index: m.chunk_index,
+            line_start: m.line_start,
+            line_end: m.line_end
+          });
+        }
+      });
+      embedRanked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
+        id,
+        rank: b.rank,
+        score: b.score,
+        snippet: b.snippet,
+        chunk_index: b.chunk_index,
+        line_start: b.line_start,
+        line_end: b.line_end
+      }));
+      embedRanked.sort((a, b) => a.rank - b.rank);
+      for (let i = 0; i < embedRanked.length; i++) {
+        const hit = embedRanked[i];
+        if (hit) hit.rank = i + 1;
+      }
+      if (embedRanked.length > 0) signalsUsed.push("embeddings");
+    } catch (err) {
+      process.stderr.write(
+        `obsidian_search: embeddings ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+
+  // ─── RRF fusion ─────────────────────────────────────────────────────────
+  const fused = reciprocalRankFusion(
+    {
+      bm25: bm25Ranked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
+      tfidf: tfidfRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
+      embeddings: embedRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score }))
+    },
+    { topK: limit * 2 } // overshoot in case min_signals filter prunes some
+  );
+
+  // Build snippet/chunk lookup tables for attaching the best evidence per
+  // note in the final response.
+  const bm25Map = new Map(bm25Ranked.map((h) => [h.id, h]));
+  const tfidfMap = new Map(tfidfRanked.map((h) => [h.id, h]));
+  const embedMap = new Map(embedRanked.map((h) => [h.id, h]));
+
+  const matches: SearchHybridHit[] = [];
+  for (const f of fused) {
+    const numSignals = Object.keys(f.per_signal).length;
+    if (numSignals < minSignals) continue;
+    // Snippet preference: BM25 > embeddings > TF-IDF (BM25 snippets bracket
+    // the matched terms with «…», highest signal-to-noise).
+    const bm = bm25Map.get(f.id);
+    const emb = embedMap.get(f.id);
+    const tf = tfidfMap.get(f.id);
+    const bestEvidence = bm ?? emb ?? tf;
+    // Build per_signal as a Partial — only include keys that actually
+    // contributed. Setting `key: undefined` keeps the key visible in
+    // Object.keys() and JSON.stringify, which leaks "this signal exists
+    // but didn't match" instead of "this signal wasn't even running".
+    const perSignal: SearchHybridHit["per_signal"] = {};
+    if (f.per_signal.bm25) perSignal.bm25 = { rank: f.per_signal.bm25.rank, score: f.per_signal.bm25.score };
+    if (f.per_signal.tfidf) perSignal.tfidf = { rank: f.per_signal.tfidf.rank, score: f.per_signal.tfidf.score };
+    if (f.per_signal.embeddings) {
+      perSignal.embeddings = { rank: f.per_signal.embeddings.rank, score: f.per_signal.embeddings.score };
+    }
+    matches.push({
+      path: f.id,
+      title: stripMd(path.basename(f.id)),
+      score: Math.round(f.score * 100000) / 100000,
+      snippet: bestEvidence?.snippet ?? "",
+      chunk_index: bm?.chunk_index ?? emb?.chunk_index,
+      line_start: bm?.line_start ?? emb?.line_start,
+      line_end: bm?.line_end ?? emb?.line_end,
+      per_signal: perSignal
+    });
+    if (matches.length >= limit) break;
+  }
+
+  return {
+    query: args.query,
+    method: "rrf",
+    k: RRF_K,
+    signals_used: signalsUsed,
+    total_candidates: fused.length,
+    matches
+  };
+}
+
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
 function jaccard<T>(a: Set<T>, b: Set<T>): number {

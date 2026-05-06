@@ -59,15 +59,15 @@ async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
   }
 }
 
+// better-sqlite3 transaction signature uses `any` in its real types because
+// the generic threads through user-supplied function shapes; we mirror that
+// shape (typed as `unknown[]` here) and cast at the single use-site.
 interface Db {
   prepare(sql: string): Stmt;
   exec(sql: string): void;
   close(): void;
   pragma(query: string): unknown;
-  // biome-ignore lint/suspicious/noExplicitAny: better-sqlite3 transaction
-  // generic is intentionally any — we lose it at the call site otherwise.
-  // biome-ignore lint/style/useNamingConvention: external library shape.
-  transaction<T extends (...args: any[]) => any>(fn: T): T;
+  transaction(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => unknown;
 }
 interface Stmt {
   run(...params: unknown[]): { changes: number };
@@ -221,16 +221,18 @@ export class EmbedDb {
     }>
   ): void {
     const db = this.requireDb();
-    const tx = db.transaction((rows: typeof chunks) => {
+    const dim = this.dim;
+    const tx = db.transaction((...args: unknown[]) => {
+      const rows = args[0] as typeof chunks;
       db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
       const insert = db.prepare(
         `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector)
          VALUES (?, ?, ?, ?, ?, ?)`
       );
       for (const c of rows) {
-        if (c.vector.length !== this.dim) {
+        if (c.vector.length !== dim) {
           throw new Error(
-            `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${this.dim}`
+            `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${dim}`
           );
         }
         insert.run(

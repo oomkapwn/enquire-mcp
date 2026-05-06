@@ -6,7 +6,11 @@
 
 ## Stop your AI guessing at vault paths.
 
-**enquire** is the MCP server that gives **Claude Code, Cursor, OpenClaw 🦞, and Codex** native, structured access to your **Obsidian** vault — wikilinks resolved, backlinks ranked, frontmatter typed, Dataview queries first-class. Read-only by default. No plugin. One command to install.
+**enquire** turns your **Obsidian** vault into structured, searchable memory for **Claude Code, Cursor, OpenClaw 🦞, Codex**, and any MCP-compatible agent.
+
+Wikilinks resolved with aliases and sections. Backlinks ranked with snippets. Frontmatter typed. Dataview queries first-class. **Hybrid retrieval** (BM25 + TF-IDF + ML embeddings, fused via Reciprocal Rank Fusion) that catches paraphrases and synonyms the way Smart Connections does — but free, offline-capable, and open-source.
+
+Read-only by default. No Obsidian plugin required. One command to install.
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -186,6 +190,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_open_in_ui` | Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — just URI emission. `new_pane=true` opens the note in a split. |
 | `obsidian_list_canvases` | Lists `.canvas` files (Obsidian's whiteboard / mind-map format) with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. |
 | `obsidian_read_canvas` | Parses one `.canvas` file into typed nodes (text / file / link / group / unknown) + edges (with from/to node IDs, sides, labels, colors). Each `file` node carries a `file_resolved` field (vault-relative path or `null` if broken). Returns a node-kind summary + `broken_file_refs` array. |
+| `obsidian_search` | **The default search tool from v2.0.** Hybrid retrieval via Reciprocal Rank Fusion (Cormack et al, 2009) over BM25 (FTS5) + TF-IDF + ML embeddings. Auto-detects available signals and gracefully degrades — TF-IDF only out of the box, BM25+TF-IDF with `--persistent-index`, full hybrid with `build-embeddings`. Returns per-signal observability so you can see which rankers contributed each hit. Use this instead of the per-ranker tools unless you specifically need single-ranker output for diagnostics. |
 | `obsidian_semantic_search` | **TF-IDF cosine retrieval.** Free / offline / no model download. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Catches synonym + related-term matches that `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss. |
 | `obsidian_embeddings_search` | _Opt-in via `enquire-mcp install-model` + `enquire-mcp build-embeddings --vault <path>`._ **ML-embedding retrieval** via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries. Persistent SQLite vector index next to the FTS5 db. Chunks match the FTS5 chunker so v2.0 beta can do hybrid RRF over both. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |

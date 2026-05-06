@@ -35,6 +35,7 @@ import {
   renameNote,
   replaceInNotes,
   resolveWikilink,
+  searchHybrid,
   searchText,
   semanticSearch,
   validateNoteProposal
@@ -42,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-alpha.0";
+const VERSION = "2.0.0-beta.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -334,7 +335,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
     };
   }
 
-  registerReadTools(server, vault);
+  registerReadTools(server, vault, ftsIndex);
   if (vault.writeEnabled) registerWriteTools(server, vault);
   if (ftsIndex) registerFtsTools(server, ftsIndex);
   registerResources(server, vault);
@@ -563,7 +564,7 @@ function registerFtsTools(server: McpServer, idx: FtsIndex): void {
   );
 }
 
-function registerReadTools(server: McpServer, vault: Vault): void {
+function registerReadTools(server: McpServer, vault: Vault, ftsIndex: FtsIndex | null): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
 
   server.registerTool(
@@ -1026,6 +1027,44 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     async (args) => {
       const embedFile = embedDbPath(vault.root);
       return textResult(await embeddingsSearch(vault, args, embedFile));
+    }
+  );
+
+  // v2.0 beta — hybrid RRF over BM25 + TF-IDF + embeddings. Single umbrella
+  // tool that auto-detects which signals are available and gracefully
+  // degrades. Equal weights, k=60 (Cormack et al's recommendation). Note-
+  // level fusion: chunk hits collapse to best-rank-per-note before fusion.
+  server.registerTool(
+    "obsidian_search",
+    {
+      title: "Hybrid search (BM25 + TF-IDF + embeddings, RRF-fused)",
+      description:
+        "**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it matches Smart Connections-quality retrieval — free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics.",
+      annotations: { ...READ_ONLY, title: "Hybrid search" },
+      inputSchema: {
+        query: z.string().min(1).describe("Free-form query — multi-word natural language is the sweet spot"),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+        min_signals: z
+          .number()
+          .int()
+          .min(1)
+          .max(3)
+          .optional()
+          .describe(
+            "Filter: only return hits that appeared in at least this many ranker signals. Default 1 (any). Set to 2+ for high-precision multi-ranker consensus."
+          ),
+        embedding_model: z
+          .string()
+          .optional()
+          .describe(
+            "Override the embedding model alias (default 'multilingual'). Only consulted if a .embed.db exists."
+          )
+      }
+    },
+    async (args) => {
+      const embedFile = embedDbPath(vault.root);
+      return textResult(await searchHybrid(vault, args, { ftsIndex, embedFile }));
     }
   );
 }

@@ -79,6 +79,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
 | **Bulk find/replace across vault** (`obsidian_replace_in_notes` — code-fence-aware, dry-run, refuses footguns) | ❌ rare or unsafe | ✅ |
+| **Archive workflow** (`obsidian_archive_note` — wraps rename, default `Archive/` folder, preserves backlinks) | ❌ | ✅ |
 | **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
 | **Karpathy LLM-Wiki `/lint` workflow** (`obsidian_lint_wiki` + `lint_wiki` prompt — orphans, broken links, stubs, stale, concept candidates) | ❌ | ✅ reference impl |
 | **Multi-hop graph path-finding** (`obsidian_find_path` — BFS shortest path between two notes over the wikilink graph, with alternatives) | ❌ | ✅ |
@@ -187,7 +188,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_semantic_search` | **TF-IDF cosine retrieval.** Free / offline / no model download. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Catches synonym + related-term matches that `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
-### 4 write tools (opt-in via `--enable-write`)
+### 5 write tools (opt-in via `--enable-write`)
 
 | Tool | What it does |
 |---|---|
@@ -195,6 +196,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_append_to_note` | Append a markdown block to an existing note. Configurable separator. |
 | `obsidian_rename_note` | **Atomic rename + automatic backlink rewrite.** Renames a note AND rewrites every `[[wikilink]]` / `![[embed]]` in the rest of the vault that resolved to it — preserving alias/section/block + the user's bare-vs-path target convention. Code-fence-aware: wikilinks inside ``` / ~~~ blocks stay verbatim. `dry_run: true` previews the plan without touching disk. |
 | `obsidian_replace_in_notes` | **Bulk find/replace across notes, code-fence-aware.** Walks the vault (or a `folder` subset), substitutes every literal occurrence of `search` with `replace` outside fenced code blocks, returns per-file occurrence counts. `dry_run: true` previews. `case_sensitive: false` for case-insensitive substring match. Refuses identical search/replace + empty search (footgun guards). |
+| `obsidian_archive_note` | Convenience wrapper around `obsidian_rename_note` for the common archive workflow. Moves the note's basename into `archive_folder` (default `Archive/`) and rewrites every wikilink/embed pointing at it. All `rename_note` guarantees apply (code-fence-aware, dry-run preview, refuses to clobber). |
 
 ### MCP resources
 
@@ -313,7 +315,7 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | Flag | Default | What it does |
 |---|---|---|
 | `--vault <path>` | (required) | Path to the Obsidian vault root. |
-| `--enable-write` | off | Register the four write tools. Server is otherwise strictly read-only. |
+| `--enable-write` | off | Register the five write tools. Server is otherwise strictly read-only. |
 | `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
@@ -325,6 +327,7 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | `--read-paths <pattern...>` | none | **Strict allowlist.** When set, ONLY paths matching one of these glob patterns are visible to any tool. Complement to `--exclude-glob` (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. |
 | `--watch` | off | Watch the vault for `.md` file edits. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also set, incrementally re-sync that file's FTS5 chunks. Editor saves are debounced. Use this for long-running servers where you keep editing in Obsidian. |
 | `--disabled-tools <name...>` | none | Skip registration of specific tools by exact name. Useful for narrowing what an agent can call (e.g. read-only research agent gets only `obsidian_search_text` + `obsidian_read_note`). Repeatable. Names match `tools/list`. |
+| `--enabled-tools <name...>` | none | **Strict allowlist** — when set, ONLY listed tools register. Complement to `--disabled-tools`. If both: a tool must be in allowlist AND not in denylist. Repeatable. |
 
 ### Cache & privacy
 

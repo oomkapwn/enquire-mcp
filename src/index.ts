@@ -9,6 +9,7 @@ import { z } from "zod";
 import { defaultIndexFile, FtsIndex } from "./fts5.js";
 import {
   appendToNote,
+  archiveNote,
   createNote,
   dataviewQuery,
   findPath,
@@ -38,7 +39,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 
 interface ServeOptions {
   vault: string;
@@ -54,6 +55,7 @@ interface ServeOptions {
   readPaths?: string[];
   watch?: boolean;
   disabledTools?: string[];
+  enabledTools?: string[];
 }
 
 async function main(): Promise<void> {
@@ -69,7 +71,7 @@ async function main(): Promise<void> {
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option(
       "--enable-write",
-      "Enable the four write tools (create_note, append_to_note, rename_note, replace_in_notes). Off by default."
+      "Enable the five write tools (create_note, append_to_note, rename_note, replace_in_notes, archive_note). Off by default."
     )
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
@@ -99,6 +101,10 @@ async function main(): Promise<void> {
     .option(
       "--disabled-tools <name...>",
       "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`."
+    )
+    .option(
+      "--enabled-tools <name...>",
+      "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -201,17 +207,28 @@ async function startServer(opts: ServeOptions): Promise<void> {
     version: VERSION
   });
 
-  // v1.10 — --disabled-tools per-tool gating. Monkey-patch registerTool ONCE
-  // so every register* function below transparently honors the disable set.
-  // We log the skip to stderr so users can verify the flag is doing what they
-  // expect when wiring up an agent with a narrow tool surface.
+  // v1.10/v1.11 — per-tool gating. Monkey-patch registerTool ONCE so every
+  // register* function below transparently honors the gating rules.
+  //
+  // Rules:
+  //   • --enabled-tools (allowlist): if set, ONLY listed tools register.
+  //   • --disabled-tools (denylist): listed tools are skipped.
+  //   • Both set: tool must be in allowlist AND not in denylist.
+  //
+  // Skips are logged to stderr so users can verify the flags are doing what
+  // they expect when wiring up an agent with a narrow tool surface.
   const disabledTools = new Set(opts.disabledTools ?? []);
-  if (disabledTools.size > 0) {
+  const enabledTools = new Set(opts.enabledTools ?? []);
+  if (disabledTools.size > 0 || enabledTools.size > 0) {
     const origRegisterTool = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
     (server as unknown as { registerTool: (name: string, ...rest: unknown[]) => unknown }).registerTool = (
       name: string,
       ...rest: unknown[]
     ) => {
+      if (enabledTools.size > 0 && !enabledTools.has(name)) {
+        process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
+        return undefined;
+      }
       if (disabledTools.has(name)) {
         process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
         return undefined;
@@ -279,8 +296,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const privacyMode = `${excludePart}${allowPart}`;
   const watchMode = watcher ? ", watch=on" : "";
   const disabledMode = disabledTools.size > 0 ? `, disabled-tools=${disabledTools.size}` : "";
+  const enabledMode = enabledTools.size > 0 ? `, enabled-tools=${enabledTools.size}` : "";
   process.stderr.write(
-    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode})\n`
+    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode}${enabledMode})\n`
   );
 
   if (ftsIndex) {
@@ -900,6 +918,29 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await replaceInNotes(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_archive_note",
+    {
+      title: "Archive a note (move to Archive/ + rewrite backlinks)",
+      description:
+        "Convenience wrapper around obsidian_rename_note for the common archive workflow. Moves the note's basename into `archive_folder` (default `Archive/`) and rewrites every wikilink/embed pointing at it. All the rename_note guarantees apply: code-fence-aware, dry_run preview, refuses to clobber an existing archive entry without `overwrite: true`. Returns the same shape as `obsidian_rename_note`. WRITE TOOL — only registered when --enable-write is passed.",
+      annotations: { ...WRITE, title: "Archive note" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the note to archive (with or without `.md`)"),
+        archive_folder: z
+          .string()
+          .optional()
+          .describe("Destination folder. Default `Archive`. Trailing slash optional."),
+        dry_run: z.boolean().optional().describe("Preview the rewrite plan without touching disk (default false)"),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe("Allow overwriting an existing file at the archive destination (default false)")
+      }
+    },
+    async (args) => textResult(await archiveNote(vault, args))
   );
 }
 

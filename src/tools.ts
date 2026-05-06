@@ -682,6 +682,41 @@ export async function renameNote(
   };
 }
 
+// ─── obsidian_archive_note (v1.11 thin convenience wrapper around rename) ────
+// Common workflow: move a note to a vault Archive folder, preserving every
+// `[[wikilink]]` / `![[embed]]` that pointed at it. Just calls renameNote
+// under the hood with a computed `to` path. Defaults the archive folder to
+// `Archive/` but accepts override.
+
+export interface ArchiveNoteArgs {
+  /** Vault-relative path of the note to archive (with or without `.md`). */
+  path: string;
+  /** Archive folder. Defaults to `Archive/`. Trailing slash optional. */
+  archive_folder?: string;
+  /** Preview the rewrite plan without writing. Default false. */
+  dry_run?: boolean;
+  /** Allow overwriting an existing file at the archive destination. Default false. */
+  overwrite?: boolean;
+}
+
+export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
+  await vault.ensureExists();
+  if (!args.path) throw new Error("archive_note: `path` is required");
+  const folder = (args.archive_folder ?? "Archive").replace(/\/+$/, "");
+  // Strip leading folders from the source so the basename lands cleanly in
+  // the archive — e.g. `Inbox/Foo.md` → `Archive/Foo.md`, not
+  // `Archive/Inbox/Foo.md`. Preserves the user's `.md` extension or appends
+  // it if missing (renameNote handles that anyway).
+  const basename = path.basename(args.path);
+  const renameArgs: { from: string; to: string; dry_run?: boolean; overwrite?: boolean } = {
+    from: args.path,
+    to: `${folder}/${basename}`
+  };
+  if (args.dry_run !== undefined) renameArgs.dry_run = args.dry_run;
+  if (args.overwrite !== undefined) renameArgs.overwrite = args.overwrite;
+  return renameNote(vault, renameArgs);
+}
+
 // ─── obsidian_replace_in_notes (v1.9 bulk find/replace) ─────────────────────
 // Code-fence-aware bulk string replacement across the vault. Reuses the same
 // fence-tracking line walker as rename_note's wikilink rewriter so example

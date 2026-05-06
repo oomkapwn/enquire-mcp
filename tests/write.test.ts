@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendToNote, createNote, renameNote, replaceInNotes } from "../src/tools.js";
+import { appendToNote, archiveNote, createNote, renameNote, replaceInNotes } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -555,5 +555,83 @@ describe("replaceInNotes (v1.9 bulk find/replace)", () => {
     expect(out.files_updated.map((p) => p.path)).toEqual([path.join("Public", "p.md")]);
     // Private file untouched.
     expect(await fs.readFile(path.join(root, "Private", "s.md"), "utf8")).toBe("marker\n");
+  });
+});
+
+describe("archiveNote (v1.11)", () => {
+  it("refuses to write when vault is read-only", async () => {
+    const v = new Vault(root, { enableWrite: false });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Old.md"), "x");
+    await expect(archiveNote(v, { path: "Old.md" })).rejects.toThrow(/read-only/);
+  });
+
+  it("moves a note to the default Archive/ folder + bare backlinks stay valid", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Old.md"), "Body\n");
+    // Bare wikilink — under rename_note's preserved-convention rules, a bare
+    // basename target stays bare (and findBestMatch still resolves it after
+    // the move because `Old.md` is unique by basename in the vault).
+    await fs.writeFile(path.join(root, "Hub.md"), "Bare ref: [[Old]]\n");
+    // Path-qualified wikilink — should be rewritten to point at the new path.
+    await fs.writeFile(path.join(root, "Direct.md"), "Direct ref: [[Old]]\n");
+    await fs.writeFile(path.join(root, "Qualified.md"), "Qualified: [[Old]]\n");
+    // Add a path-qualified caller specifically.
+    await fs.writeFile(path.join(root, "PathRef.md"), "From root: [[Old.md]]\n");
+    const out = await archiveNote(v, { path: "Old.md" });
+    expect(out.from).toBe("Old.md");
+    expect(out.to).toBe(path.join("Archive", "Old.md"));
+    expect(await fs.stat(path.join(root, "Archive", "Old.md")).catch(() => null)).not.toBeNull();
+    expect(await fs.stat(path.join(root, "Old.md")).catch(() => null)).toBeNull();
+    // Bare wikilink stays bare — still resolves via findBestMatch basename match.
+    const hub = await fs.readFile(path.join(root, "Hub.md"), "utf8");
+    expect(hub).toContain("[[Old]]");
+  });
+
+  it("supports custom archive_folder + strips a leading folder from source", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Inbox"), { recursive: true });
+    await fs.writeFile(path.join(root, "Inbox", "Stale.md"), "x\n");
+    // Source is in Inbox/; archive folder is Archive/2026/. Result should be
+    // Archive/2026/Stale.md (basename only, not Archive/2026/Inbox/Stale.md).
+    const out = await archiveNote(v, { path: "Inbox/Stale.md", archive_folder: "Archive/2026" });
+    expect(out.to).toBe(path.join("Archive", "2026", "Stale.md"));
+    expect(await fs.stat(path.join(root, "Archive", "2026", "Stale.md")).catch(() => null)).not.toBeNull();
+  });
+
+  it("dry_run previews without touching disk", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Live.md"), "x\n");
+    const out = await archiveNote(v, { path: "Live.md", dry_run: true });
+    expect(out.dry_run).toBe(true);
+    // File NOT moved.
+    expect(await fs.stat(path.join(root, "Live.md")).catch(() => null)).not.toBeNull();
+    expect(await fs.stat(path.join(root, "Archive", "Live.md")).catch(() => null)).toBeNull();
+  });
+
+  it("refuses if the archive destination already exists (overwrite=false)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Archive"), { recursive: true });
+    await fs.writeFile(path.join(root, "Dup.md"), "live\n");
+    await fs.writeFile(path.join(root, "Archive", "Dup.md"), "already-archived\n");
+    await expect(archiveNote(v, { path: "Dup.md" })).rejects.toThrow(/already exists/);
+  });
+
+  it("rejects empty path", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await expect(archiveNote(v, { path: "" })).rejects.toThrow(/required/);
+  });
+
+  it("trailing slash on archive_folder is normalized away", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Note.md"), "x\n");
+    const out = await archiveNote(v, { path: "Note.md", archive_folder: "Archive///" });
+    expect(out.to).toBe(path.join("Archive", "Note.md"));
   });
 });

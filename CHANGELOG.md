@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-05-06
+
+Two more small wins, both completing surfaces from earlier releases:
+
+### Added — `--enabled-tools <name...>` (allowlist complement to `--disabled-tools`)
+
+When set, **ONLY** listed tools register. Pairs with the v1.10 `--disabled-tools` denylist:
+- Allowlist alone: filter to a narrow surface (`--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits` for a research-only agent).
+- Both flags: a tool must be in allowlist AND not in denylist (composable refinement).
+
+Skips are logged to stderr (`enquire: skipping tool X (not in --enabled-tools allowlist)` or `(disabled by --disabled-tools)`), and the boot summary reports `enabled-tools=N` / `disabled-tools=N`.
+
+Implementation: extends the v1.10 monkey-patch on `server.registerTool` with one extra branch — no per-register-function plumbing needed.
+
+### Added — `obsidian_archive_note` (write tool, opt-in via `--enable-write`)
+
+Thin convenience wrapper around `obsidian_rename_note` for the common archive workflow:
+
+```ts
+obsidian_archive_note({ path: "Inbox/Stale.md" })
+// → from: "Inbox/Stale.md", to: "Archive/Stale.md"
+// → all backlinks pointing at Stale rewritten via the v1.1 fence-aware rewriter.
+```
+
+Defaults `archive_folder` to `Archive/`. Source-folder stripping: `Inbox/Foo.md` archives to `Archive/Foo.md`, not `Archive/Inbox/Foo.md` — pass `archive_folder: "Archive/Inbox"` explicitly if you want the inbox structure preserved.
+
+All `rename_note` guarantees apply: code-fence-aware backlink rewrites, `dry_run` preview, refuses to clobber an existing archive entry without `overwrite: true`. Returns the same shape as `obsidian_rename_note`.
+
+The `--enable-write` help text bumps from "four" to "five" tools.
+
+### Repo state
+- **28 MCP tools** (was 27). 22 always-on read + 1 opt-in FTS5 + **5 write**.
+- **10 MCP prompts** (unchanged).
+- **337 unit tests** (was 330, +7 covering archive happy path / source-folder stripping / dry_run / overwrite refusal / empty path / trailing-slash normalisation / read-only refusal).
+
 ## [1.10.0] — 2026-05-06
 
 Two small wins, both from the v1.5 competitive audit's Tier 1 list:

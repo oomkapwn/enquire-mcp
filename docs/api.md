@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 27 MCP tools (22 always-on read + 1 opt-in read via `--persistent-index` + 4 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 28 MCP tools (22 always-on read + 1 opt-in read via `--persistent-index` + 5 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -9,7 +9,7 @@
 | Flag                   | Default | Notes                                      |
 |------------------------|---------|--------------------------------------------|
 | `--vault <path>`       | (required) | Path to the Obsidian vault root.        |
-| `--enable-write`       | off     | Register the four write tools.             |
+| `--enable-write`       | off     | Register the five write tools.             |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
@@ -20,6 +20,7 @@
 | `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter (denylist). Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
 | `--read-paths <pattern...>` | none | **Strict allowlist** — when set, ONLY paths matching one of these glob patterns are visible. Complement to `--exclude-glob`. If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`. |
 | `--disabled-tools <name...>` | none | Skip registration of specific tools by exact name (matches `tools/list`). Repeatable. Useful for narrow-surface agents. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`. |
+| `--enabled-tools <name...>` | none | **Strict allowlist** — when set, ONLY listed tools register. Complement to `--disabled-tools`. If both are set: a tool must be in allowlist AND not in denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`. |
 | `--watch`              | off     | Watch the vault for `.md` add/change/unlink events. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also enabled, incrementally re-sync just that file's FTS5 chunks. Editor saves are debounced via chokidar's `awaitWriteFinish`. `--exclude-glob` patterns are honored — edits to excluded paths don't fire. Off by default; opt in for long-running servers. |
 
 ## Subcommands
@@ -410,7 +411,7 @@ Pure-JS TF-IDF cosine retrieval. Tokenizes (alphanumeric + hyphen, stop-words fi
 
 ## Write tools (opt-in)
 
-All four write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
+All five write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
 
 ### `obsidian_create_note`
 
@@ -468,6 +469,23 @@ Bulk find/replace across the vault, code-fence-aware. Walks every note (or a `fo
 **Footgun guards.** Refuses (a) empty `search` and (b) identical `search` and `replace` (no-op). Honors `--exclude-glob` and `--read-paths`: writes to filtered paths fail at the `Vault.writeNote` layer.
 
 **Use cases.** Vocabulary refactor (e.g. `GPT-3.5` → `GPT-4`). Deprecation cleanup (delete every `DEPRECATED ` prefix). Brand rename (case-insensitive `api` → `REST` in prose, while keeping URLs intact via the code-fence skip).
+
+### `obsidian_archive_note`
+
+Convenience wrapper around `obsidian_rename_note` for the common archive workflow. Moves the note's basename into `archive_folder` (default `Archive/`) and rewrites every wikilink/embed pointing at it. All `rename_note` guarantees apply.
+
+| Argument         | Type       | Notes                                                                       |
+|------------------|------------|-----------------------------------------------------------------------------|
+| `path`           | `string`   | Vault-relative path of the note to archive (with or without `.md`).         |
+| `archive_folder` | `string?`  | Destination folder. Default `Archive`. Trailing slash optional.             |
+| `dry_run`        | `boolean?` | Preview the rewrite plan without writing. Default `false`.                  |
+| `overwrite`      | `boolean?` | Allow overwriting an existing file at the archive destination. Default `false`. |
+
+**Returns:** Same shape as `obsidian_rename_note`: `{ from, to, dry_run, files_updated, total_links_rewritten }`.
+
+**Source-folder stripping.** The source's leading folders are stripped so the basename lands cleanly in the archive — `Inbox/Foo.md` archives to `Archive/Foo.md`, not `Archive/Inbox/Foo.md`. If you want the inbox structure preserved, pass `archive_folder: "Archive/Inbox"` explicitly.
+
+**Bare-vs-qualified backlinks.** Bare wikilinks (`[[Foo]]`) stay bare and continue to resolve via `findBestMatch`'s basename search — they don't need rewriting. Path-qualified wikilinks (`[[Inbox/Foo]]`) are updated to point at the new path.
 
 ## MCP resources
 

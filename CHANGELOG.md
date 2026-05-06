@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-05-06
+
+Watcher mode — the second 1.x roadmap item lands.
+
+### Added — `--watch` CLI flag
+Closes the long-running-server workflow gap: until now, edits to your vault while the MCP server was alive were invisible to in-memory caches and the FTS5 index. The fix used to be "restart the server and wait for the cold-rebuild." With `--watch`:
+
+- The server registers a vault-rooted file watcher on boot (after the initial FTS5 sync, so we don't double-index).
+- On `add` / `change` / `unlink` of any `.md` file, the parsed-note cache entry for that file is invalidated, and (when `--persistent-index` is also set) the FTS5 index is incrementally re-synced for just that file.
+- Non-`.md` files are ignored; `.git`, `.obsidian`, `.trash`, `node_modules`, `.DS_Store` directories are skipped; symlinks are not followed (matching the rest of the vault walker).
+- `--exclude-glob` patterns are honored — edits to excluded paths don't fire cache invalidation or surface to the FTS5 layer, so private subfolders stay invisible to the running server.
+- Editor-debouncing is delegated to chokidar's `awaitWriteFinish` (`stabilityThreshold: 250ms`, `pollInterval: 50ms`), so a single Obsidian save that fires five `change` events only reindexes once.
+- Stderr emits a one-line trace per event: `enquire: watcher add/change/unlink <relPath> (cache-invalidated|fts5 reindexed|fts5 dropped)`.
+
+Off by default — `--watch` is fully opt-in, no behavior change for users who don't pass the flag.
+
+### Added — runtime dependency
+- `chokidar` ^5.0.0 (battle-tested cross-platform fs watcher; ~6 KB of API surface for our use).
+
+### Internal
+- `Vault.invalidateOne(absPath)` — single-file cache eviction so the watcher doesn't blow away the entire LRU on every edit.
+
+### Repo state
+- 18 MCP tools (unchanged). 14 read + 1 opt-in FTS5 + 3 write.
+- 246 unit tests (was 242, +4 watcher tests: cache invalidation on change, non-.md file ignored, `--exclude-glob` respected, idempotent close).
+- 5 runtime deps (was 4): `@modelcontextprotocol/sdk`, `chokidar` (NEW), `commander`, `gray-matter`, `zod`. Plus the optional `better-sqlite3`.
+
 ## [1.1.1] — 2026-05-06
 
 Patch release driven by a 4-agent post-1.1 audit (code · process · docs · repo page).

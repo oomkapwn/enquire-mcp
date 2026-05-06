@@ -413,6 +413,12 @@ export class Vault {
     this.cache.clear();
   }
 
+  /** Drop a single cached note by absolute path. Used by the watcher when one
+   *  file changes — full-cache clear would be wasteful for a 5k-note vault. */
+  invalidateOne(absPath: string): void {
+    this.cache.delete(absPath);
+  }
+
   async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {
     const abs = await this.resolveSafePath(relOrAbs);
     const s = await fs.stat(abs);

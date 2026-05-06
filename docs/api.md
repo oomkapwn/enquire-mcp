@@ -18,6 +18,7 @@
 | `--tokenize <mode>`    | `unicode61` | FTS5 tokenize mode. `unicode61` (default; Latin/Cyrillic, removes diacritics) or `trigram` (CJK / mixed-script, ~2x index size). Changing this triggers an automatic index rebuild. |
 | `--index-file <path>`  | auto    | Override the FTS5 index file location. Default: `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux). |
 | `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter. Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
+| `--watch`              | off     | Watch the vault for `.md` add/change/unlink events. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also enabled, incrementally re-sync just that file's FTS5 chunks. Editor saves are debounced via chokidar's `awaitWriteFinish`. `--exclude-glob` patterns are honored — edits to excluded paths don't fire. Off by default; opt in for long-running servers. |
 
 ## Subcommands
 

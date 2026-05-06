@@ -27,8 +27,9 @@ import {
   validateNoteProposal
 } from "./tools.js";
 import { Vault } from "./vault.js";
+import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 
 interface ServeOptions {
   vault: string;
@@ -41,6 +42,7 @@ interface ServeOptions {
   indexFile?: string;
   tokenize?: "unicode61" | "trigram";
   excludeGlob?: string[];
+  watch?: boolean;
 }
 
 async function main(): Promise<void> {
@@ -71,6 +73,10 @@ async function main(): Promise<void> {
     .option(
       "--exclude-glob <pattern...>",
       "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
+    )
+    .option(
+      "--watch",
+      "Watch the vault for .md add/change/unlink events and incrementally invalidate the parsed-note cache (and refresh the FTS5 index when --persistent-index is also enabled). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -209,12 +215,27 @@ async function startServer(opts: ServeOptions): Promise<void> {
     });
   }
 
+  // Optional watcher — only when --watch is passed. Starts AFTER the initial
+  // FTS5 sync so we don't double-index files during boot.
+  let watcher: VaultWatcher | null = null;
+  if (opts.watch) {
+    watcher = new VaultWatcher({ vault, ftsIndex });
+    await watcher.start();
+    const closeWatcher = () => {
+      void watcher?.close();
+    };
+    process.once("SIGINT", closeWatcher);
+    process.once("SIGTERM", closeWatcher);
+    process.on("beforeExit", closeWatcher);
+  }
+
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
   const ftsMode = ftsIndex ? `, fts5-index (${ftsIndex.totalFiles()} files / ${ftsIndex.totalChunks()} chunks)` : "";
   const privacyMode = vault.excludeGlobs.length > 0 ? `, exclude-globs=${vault.excludeGlobs.length}` : "";
+  const watchMode = watcher ? ", watch=on" : "";
   process.stderr.write(
-    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode})\n`
+    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode})\n`
   );
 
   if (ftsIndex) {

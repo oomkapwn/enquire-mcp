@@ -77,9 +77,10 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Graph-aware retrieval** (`find_similar` + `get_note_neighbors` — multi-signal lexical hybrid, no embeddings) | ❌ | ✅ |
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
+| **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
 | TypeScript strict + Biome lint + 239 unit tests | varies | ✅ |
 
-That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
+That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
 > **Not affiliated with Obsidian.md.** Obsidian and the Obsidian logo are trademarks of Dynalist Inc. enquire-mcp is an independent open-source project that reads Obsidian-format vaults. The name «enquire» is a tribute to Tim Berners-Lee's 1980 hypertext system, not a trademark claim against any party.
 
@@ -277,6 +278,7 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: 
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
 | `--cache-file <path>` | auto | Override persistent-cache file location. |
+| `--watch` | off | Watch the vault for `.md` file edits. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also set, incrementally re-sync that file's FTS5 chunks. Editor saves are debounced. Use this for long-running servers where you keep editing in Obsidian. |
 
 ### Cache & privacy
 
@@ -361,7 +363,9 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
-- **1.0.0** — **Stable. API freeze.** 17 MCP tools, 3 resources, 6 prompts. Stability promise across tool names, argument shapes, resource URIs, prompt names, CLI flags. SLSA-3 release provenance.
+- **1.2.0** — **Watcher mode** (`--watch`) — incremental cache + FTS5 reindex on file changes. Editor saves debounced. `--exclude-glob` honored.
+- **1.1.x** — `obsidian_rename_note` (atomic rename + automatic backlink rewrite, code-fence-aware, dry-run preview).
+- **1.0.0** — **Stable. API freeze.** Stability promise across tool names, argument shapes, resource URIs, prompt names, CLI flags. SLSA-3 release provenance.
 - **0.13.x** — Graph-aware retrieval: `obsidian_find_similar` (multi-signal lexical hybrid), `obsidian_get_note_neighbors` (1-hop graph context in one call), `obsidian_stats` (vault dashboard).
 - **0.12.x** — Anti-slop write validator (`obsidian_validate_note_proposal`) — lints YAML + wikilinks + tags before write.
 - **0.11.x** — Privacy filter (`--exclude-glob`), periodic-note aliases (`title: "today"`), `Did you mean: …` suggestions, document-map projection (`format: "map"`). *(0.11.0 tag preserved for history; npm publish failed on a runner-availability incident — features rolled into 0.12.0.)*
@@ -369,7 +373,7 @@ Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 - **0.9.x** — `search_text` switched to AND-tokenizer default with structured response (BREAKING). Parallel file reads in scan path.
 - **0.8.x** — DQL `contains` semantics for arrays (membership, not substring). Code of Conduct.
 - **0.7.x** — Renamed `obsidian-mcp` → `enquire-mcp` (via brief `memex` detour) to escape the crowded `obsidian-mcp` npm namespace and to land on a name with a clear historical referent — Tim Berners-Lee's 1980 ENQUIRE prototype of the Web.
-- **Roadmap (1.x)** — `rename_note` (atomic rename + backlink rewrite); embedding-based retrieval (sqlite-vec + a small JS-runnable model, layered on top of the existing lexical hybrid); watcher-driven incremental FTS5 reindex; benchmarks at 10k+ vaults.
+- **Roadmap (1.x)** — Embedding-based retrieval (sqlite-vec + a small JS-runnable model, layered on top of the existing lexical hybrid); benchmarks at 10k+ vaults.
 
 ---
 

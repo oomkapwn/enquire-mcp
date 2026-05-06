@@ -4,9 +4,9 @@
 
 # enquire
 
-### MCP server for Obsidian vaults
+## Stop your AI guessing at vault paths.
 
-**Give Claude Code, Cursor, OpenClaw, and Codex first-class access to your Obsidian vault — wikilinks resolved, frontmatter typed, backlinks indexed, Dataview queries, MCP resources, and read-only safety by default.** Works with Devin and any other MCP-compatible client.
+**enquire** is the MCP server that gives **Claude Code, Cursor, OpenClaw 🦞, and Codex** native, structured access to your **Obsidian** vault — wikilinks resolved, backlinks ranked, frontmatter typed, Dataview queries first-class. Read-only by default. No plugin. One command to install.
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -20,9 +20,25 @@
 
 </div>
 
-> **enquire** is an [MCP](https://modelcontextprotocol.io/) server purpose-built for **[Obsidian](https://obsidian.md/) vaults**. Drop it in front of any vault and your AI assistant stops guessing at filesystem paths and starts reasoning about your notes the way you do — following `[[wikilinks]]`, respecting frontmatter, walking backlinks, running Dataview-style queries, all over stdio MCP.
->
-> Named after [**ENQUIRE**](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, no plugin required.
+### Quick start (30 seconds)
+
+```bash
+# Claude Code:
+claude mcp add --transport stdio obsidian \
+  -- npx -y @oomkapwn/enquire-mcp serve --vault ~/path/to/your/vault
+
+# Cursor / OpenClaw / Codex / others — drop this into your MCP config:
+{
+  "mcpServers": {
+    "obsidian": {
+      "command": "npx",
+      "args": ["-y", "@oomkapwn/enquire-mcp", "serve", "--vault", "/path/to/vault"]
+    }
+  }
+}
+```
+
+Restart your AI client. That's it — your assistant can now follow `[[wikilinks]]`, walk backlinks, run Dataview queries, and reason about your vault the way you do.
 
 ```text
 You:    "What was I working on yesterday in the Apollo project?"
@@ -32,6 +48,8 @@ Claude: → obsidian_get_recent_edits({ since_minutes: 1440, folder: "01_Project
         "You shipped the v0.3 spec, opened 3 open questions in [[Apollo/Open Threads]],
         and 2 daily notes link back to it. Top blocker: the auth review."
 ```
+
+> Named after [**ENQUIRE**](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, zero plugins.
 
 ---
 
@@ -77,9 +95,9 @@ That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandato
 
 ---
 
-## Quick start
+## Configure your AI client
 
-**Recommended: zero-install via `npx` — no clone, no build.** Add this to your MCP client's config:
+**Recommended: zero-install via `npx` — no clone, no build.** Drop this into your MCP client's config:
 
 ```json
 {
@@ -344,11 +362,15 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.0.0** — **Stable. API freeze.** 17 MCP tools, 3 resources, 6 prompts. Stability promise across tool names, argument shapes, resource URIs, prompt names, CLI flags. SLSA-3 release provenance.
+- **0.13.x** — Graph-aware retrieval: `obsidian_find_similar` (multi-signal lexical hybrid), `obsidian_get_note_neighbors` (1-hop graph context in one call), `obsidian_stats` (vault dashboard).
+- **0.12.x** — Anti-slop write validator (`obsidian_validate_note_proposal`) — lints YAML + wikilinks + tags before write.
+- **0.11.x** — Privacy filter (`--exclude-glob`), periodic-note aliases (`title: "today"`), `Did you mean: …` suggestions, document-map projection (`format: "map"`). *(0.11.0 tag preserved for history; npm publish failed on a runner-availability incident — features rolled into 0.12.0.)*
 - **0.10.x** — SQLite FTS5 inverted index (opt-in via `--persistent-index`), BM25 ranking, sub-millisecond search on multi-thousand-note vaults (37–103x faster than the linear scan path), chunk-level addressing via `obsidian://chunk/{n}/{path}` resource. Filter API on full-text search (`tag`, `since`, `folder`).
 - **0.9.x** — `search_text` switched to AND-tokenizer default with structured response (BREAKING). Parallel file reads in scan path.
 - **0.8.x** — DQL `contains` semantics for arrays (membership, not substring). Code of Conduct.
 - **0.7.x** — Renamed `obsidian-mcp` → `enquire-mcp` (via brief `memex` detour) to escape the crowded `obsidian-mcp` npm namespace and to land on a name with a clear historical referent — Tim Berners-Lee's 1980 ENQUIRE prototype of the Web.
-- **Roadmap (beyond 0.10)** — graph queries (multi-hop, hub/orphan detection); refactoring tools (`rename_note`, `rename_tag` with wikilink rewrite); DQL expressions / parentheses / `FLATTEN` / `GROUP BY`; benchmarks at 10k+ vaults.
+- **Roadmap (1.x)** — `rename_note` (atomic rename + backlink rewrite); embedding-based retrieval (sqlite-vec + a small JS-runnable model, layered on top of the existing lexical hybrid); watcher-driven incremental FTS5 reindex; benchmarks at 10k+ vaults.
 
 ---
 

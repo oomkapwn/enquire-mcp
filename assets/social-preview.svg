@@ -42,18 +42,18 @@
     <line x1="0" y1="132" x2="120" y2="132" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
     <!-- explicit Obsidian-MCP subtitle for SEO + clarity -->
     <text x="0" y="178" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="32" fill="#06b6d4" font-weight="600">
-      MCP server for Obsidian vaults
+      MCP server for Obsidian vaults — 1.0 stable 🦞
     </text>
     <!-- value-prop tagline -->
     <text x="0" y="218" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
-      Give OpenClaw, Claude Code, Cursor and Codex
+      Stop your AI guessing at vault paths. Wikilinks
     </text>
     <text x="0" y="248" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
-      first-class access to your Obsidian vault.
+      resolved, backlinks ranked, Dataview first-class.
     </text>
     <!-- features row -->
     <text x="0" y="296" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="17" fill="#94a3b8">
-      wikilinks · backlinks · frontmatter · tags · Dataview
+      Claude Code · Cursor · OpenClaw · Codex · stdio · MIT
     </text>
   </g>
 

@@ -1710,6 +1710,171 @@ export async function paperAudit(
   return { scanned, flagged };
 }
 
+// ─── obsidian_find_path (v1.6 multi-hop graph traversal) ────────────────────
+// BFS over the wikilink graph from `from` to `to`, returning the shortest path
+// (sequence of notes connected by wikilinks) up to `max_depth` hops. Closes
+// the gap aaronsb's plugin opened: "find paths between concepts" was the
+// most-praised graph feature in the competitive audit. We use the shared
+// EntryIndex memo so repeat calls in a session reuse the basename index for
+// O(1) target resolution.
+
+export interface PathStep {
+  path: string;
+  title: string;
+  /** Wikilink raw text (`[[…]]` content) used to traverse FROM the previous
+   *  step to this one. Empty on the source step. */
+  via: string;
+}
+
+export interface FindPathResult {
+  from: string;
+  to: string;
+  found: boolean;
+  path: PathStep[];
+  hops: number;
+  /** Up to 10 same-length alternatives, only when include_alternatives=true. */
+  alternatives?: PathStep[][];
+}
+
+export async function findPath(
+  vault: Vault,
+  args: {
+    from?: string;
+    from_title?: string;
+    to?: string;
+    to_title?: string;
+    max_depth?: number;
+    include_alternatives?: boolean;
+    follow_embeds?: boolean;
+  }
+): Promise<FindPathResult> {
+  await vault.ensureExists();
+  const maxDepth = args.max_depth ?? 5;
+  const includeAlts = args.include_alternatives === true;
+  const followEmbeds = args.follow_embeds !== false;
+
+  const fromArgs: { path?: string; title?: string } = {};
+  if (args.from !== undefined) fromArgs.path = args.from;
+  else if (args.from_title !== undefined) fromArgs.title = args.from_title;
+  const fromEntry = await resolveTarget(vault, fromArgs);
+
+  const toArgs: { path?: string; title?: string } = {};
+  if (args.to !== undefined) toArgs.path = args.to;
+  else if (args.to_title !== undefined) toArgs.title = args.to_title;
+  const toEntry = await resolveTarget(vault, toArgs);
+
+  if (fromEntry.absPath === toEntry.absPath) {
+    return {
+      from: fromEntry.relPath,
+      to: toEntry.relPath,
+      found: true,
+      hops: 0,
+      path: [{ path: fromEntry.relPath, title: stripMd(fromEntry.basename), via: "" }]
+    };
+  }
+
+  const entries = await vault.listMarkdown();
+
+  // BFS layer-by-layer. visited tracks shortest-known-depth so we don't
+  // revisit at greater depths. We continue collecting at the depth where
+  // we first hit the target IF include_alternatives is set.
+  type FrontierEntry = { rel: string; trail: PathStep[] };
+  const visited = new Set<string>([fromEntry.relPath]);
+  let frontier: FrontierEntry[] = [
+    { rel: fromEntry.relPath, trail: [{ path: fromEntry.relPath, title: stripMd(fromEntry.basename), via: "" }] }
+  ];
+  const found: PathStep[][] = [];
+  let foundDepth = -1;
+
+  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+    const next: FrontierEntry[] = [];
+    for (const node of frontier) {
+      const entry = entries.find((e) => e.relPath === node.rel);
+      if (!entry) continue;
+      const { parsed } = await vault.readNote(entry.absPath, entry.mtimeMs);
+      const links = followEmbeds ? [...parsed.wikilinks, ...parsed.embeds] : parsed.wikilinks;
+      for (const link of links) {
+        const m = findBestMatch(entries, link.target, entry.relPath);
+        if (!m) continue;
+        if (visited.has(m.relPath) && m.absPath !== toEntry.absPath) continue;
+        const newTrail: PathStep[] = [...node.trail, { path: m.relPath, title: stripMd(m.basename), via: link.raw }];
+        if (m.absPath === toEntry.absPath) {
+          if (foundDepth === -1) foundDepth = depth + 1;
+          if (foundDepth === depth + 1) {
+            found.push(newTrail);
+            if (!includeAlts) {
+              return {
+                from: fromEntry.relPath,
+                to: toEntry.relPath,
+                found: true,
+                hops: foundDepth,
+                path: newTrail
+              };
+            }
+          }
+        } else {
+          visited.add(m.relPath);
+          next.push({ rel: m.relPath, trail: newTrail });
+        }
+      }
+    }
+    if (foundDepth !== -1 && depth + 1 === foundDepth) break;
+    frontier = next;
+  }
+
+  if (found.length > 0) {
+    found.sort((a, b) => a.length - b.length || (a[0]?.path ?? "").localeCompare(b[0]?.path ?? ""));
+    const first = found[0];
+    if (!first) {
+      return { from: fromEntry.relPath, to: toEntry.relPath, found: false, hops: -1, path: [] };
+    }
+    const result: FindPathResult = {
+      from: fromEntry.relPath,
+      to: toEntry.relPath,
+      found: true,
+      hops: foundDepth,
+      path: first
+    };
+    if (includeAlts) result.alternatives = found.slice(0, 10);
+    return result;
+  }
+
+  return { from: fromEntry.relPath, to: toEntry.relPath, found: false, hops: -1, path: [] };
+}
+
+// ─── obsidian_open_in_ui (v1.6 cyanheads pattern) ───────────────────────────
+// Returns an obsidian:// URI for hand-off to the desktop app. No filesystem or
+// network side effect — the URI emission lets the agent say "open this in
+// Obsidian" without enquire-mcp needing to coordinate with the running app.
+
+export interface OpenInUiResult {
+  uri: string;
+  vault_name: string;
+  path: string;
+  title: string;
+}
+
+export async function openInUi(
+  vault: Vault,
+  args: { path?: string; title?: string; new_pane?: boolean }
+): Promise<OpenInUiResult> {
+  await vault.ensureExists();
+  const target = await resolveTarget(vault, args);
+  // Vault name = leaf of the vault root path. obsidian:// matches by name OR
+  // by the file's absolute path; if the user opened the vault from a
+  // different name in Obsidian, the file argument still resolves correctly.
+  const vaultName = path.basename(vault.root);
+  const noteRel = stripMd(target.relPath);
+  const params = new URLSearchParams({ vault: vaultName, file: noteRel });
+  if (args.new_pane) params.set("newpane", "true");
+  return {
+    uri: `obsidian://open?${params.toString()}`,
+    vault_name: vaultName,
+    path: target.relPath,
+    title: stripMd(target.basename)
+  };
+}
+
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
 function jaccard<T>(a: Set<T>, b: Set<T>): number {

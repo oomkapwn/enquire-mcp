@@ -11,6 +11,7 @@ import {
   appendToNote,
   createNote,
   dataviewQuery,
+  findPath,
   findSimilar,
   getBacklinks,
   getNoteNeighbors,
@@ -22,6 +23,7 @@ import {
   lintWiki,
   listNotes,
   listTags,
+  openInUi,
   paperAudit,
   readNote,
   renameNote,
@@ -32,7 +34,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.5.0";
+const VERSION = "1.6.0";
 
 interface ServeOptions {
   vault: string;
@@ -45,6 +47,7 @@ interface ServeOptions {
   indexFile?: string;
   tokenize?: "unicode61" | "trigram";
   excludeGlob?: string[];
+  readPaths?: string[];
   watch?: boolean;
 }
 
@@ -79,6 +82,10 @@ async function main(): Promise<void> {
     .option(
       "--exclude-glob <pattern...>",
       "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "Strict allowlist — when set, ONLY paths matching one of these glob patterns are visible. Complement to --exclude-glob (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics as --exclude-glob (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`."
     )
     .option(
       "--watch",
@@ -157,7 +164,8 @@ async function startServer(opts: ServeOptions): Promise<void> {
     maxCacheEntries: opts.cacheSize !== undefined ? parsePositiveInt(opts.cacheSize, "--cache-size") : undefined,
     persistentCache: !!opts.persistentCache,
     cacheFile: opts.cacheFile,
-    excludeGlobs: opts.excludeGlob
+    excludeGlobs: opts.excludeGlob,
+    readPaths: opts.readPaths
   });
   await vault.ensureExists();
 
@@ -238,7 +246,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
   const ftsMode = ftsIndex ? `, fts5-index (${ftsIndex.totalFiles()} files / ${ftsIndex.totalChunks()} chunks)` : "";
-  const privacyMode = vault.excludeGlobs.length > 0 ? `, exclude-globs=${vault.excludeGlobs.length}` : "";
+  const excludePart = vault.excludeGlobs.length > 0 ? `, exclude-globs=${vault.excludeGlobs.length}` : "";
+  const allowPart = vault.readPaths.length > 0 ? `, read-paths=${vault.readPaths.length}` : "";
+  const privacyMode = `${excludePart}${allowPart}`;
   const watchMode = watcher ? ", watch=on" : "";
   process.stderr.write(
     `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode})\n`
@@ -675,6 +685,51 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await paperAudit(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_find_path",
+    {
+      title: "Find shortest wikilink path between two notes",
+      description:
+        "Multi-hop graph traversal: BFS from `from` to `to` over the wikilink graph, returning the shortest path (sequence of notes connected by wikilinks) up to `max_depth` hops. Each step in the returned path carries the wikilink text used to traverse to it. With `include_alternatives=true`, returns up to 10 same-length paths so the agent can compare. Embeds (`![[…]]`) are followed by default; pass `follow_embeds=false` to skip them. Read-only.",
+      annotations: { ...READ_ONLY, title: "Find path" },
+      inputSchema: {
+        from: z.string().optional().describe("Vault-relative path of the source note"),
+        from_title: z.string().optional().describe("Source note title (alternative to `from`)"),
+        to: z.string().optional().describe("Vault-relative path of the destination note"),
+        to_title: z.string().optional().describe("Destination note title (alternative to `to`)"),
+        max_depth: z
+          .number()
+          .int()
+          .positive()
+          .max(10)
+          .optional()
+          .describe("Maximum BFS depth (default 5). Each hop is one wikilink edge."),
+        include_alternatives: z
+          .boolean()
+          .optional()
+          .describe("Return up to 10 same-length alternative paths (default false)"),
+        follow_embeds: z.boolean().optional().describe("Treat ![[embeds]] as graph edges (default true)")
+      }
+    },
+    async (args) => textResult(await findPath(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_open_in_ui",
+    {
+      title: "Generate an obsidian:// URI for hand-off to the desktop app",
+      description:
+        "Returns an `obsidian://open?vault=<vault>&file=<path>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — the URI emission lets the agent say 'open this in Obsidian' without enquire-mcp coordinating with the running app. Optional `new_pane=true` opens the note in a split. Read-only.",
+      annotations: { ...READ_ONLY, title: "Open in Obsidian" },
+      inputSchema: {
+        path: z.string().optional().describe("Vault-relative path of the note"),
+        title: z.string().optional().describe("Note title (alternative to `path`)"),
+        new_pane: z.boolean().optional().describe("Append `&newpane=true` so Obsidian opens the note in a split")
+      }
+    },
+    async (args) => textResult(await openInUi(vault, args))
   );
 }
 

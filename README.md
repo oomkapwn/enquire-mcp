@@ -79,6 +79,8 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
 | **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
 | **Karpathy LLM-Wiki `/lint` workflow** (`obsidian_lint_wiki` + `lint_wiki` prompt — orphans, broken links, stubs, stale, concept candidates) | ❌ | ✅ reference impl |
+| **Multi-hop graph path-finding** (`obsidian_find_path` — BFS shortest path between two notes over the wikilink graph, with alternatives) | ❌ | ✅ |
+| **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
@@ -153,7 +155,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 17 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 19 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -174,6 +176,8 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_lint_wiki` | **Karpathy LLM-Wiki lint workflow.** Five-bucket vault-hygiene report in one call: orphans, broken links, stub pages, stale notes, and concept candidates (capitalised phrases mentioned by ≥ K notes that lack their own page). Each finding ships with a fix suggestion. Pairs with the `lint_wiki` prompt. |
 | `obsidian_open_questions` | Walks every note for `Open question:` / `Q:` / `TODO?` / `??` markers. Returns each hit with source path, context heading, line, and age — sorted oldest-first so deferred threads aging out surface first. |
 | `obsidian_paper_audit` | For every `#paper` note, verifies frontmatter has at least one of arxiv/doi/url/isbn. Flags notes whose body mentions an arxiv ID or DOI but doesn't carry it in frontmatter — common after quick-capture from a chat. Returns a `proposed_frontmatter_patch` the agent can apply. |
+| `obsidian_find_path` | **Multi-hop graph traversal** — BFS from `from` to `to` over the wikilink graph, returns the shortest path up to `max_depth` hops with the wikilink text used at each step. `include_alternatives=true` returns up to 10 same-length paths so the agent can compare. Embeds (`![[…]]`) followed by default. |
+| `obsidian_open_in_ui` | Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — just URI emission. `new_pane=true` opens the note in a split. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 3 write tools (opt-in via `--enable-write`)
@@ -307,6 +311,7 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
 | `--cache-file <path>` | auto | Override persistent-cache file location. |
 | `--watch` | off | Watch the vault for `.md` file edits. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also set, incrementally re-sync that file's FTS5 chunks. Editor saves are debounced. Use this for long-running servers where you keep editing in Obsidian. |
+| `--read-paths <pattern...>` | none | **Strict allowlist.** When set, ONLY paths matching one of these glob patterns are visible to any tool. Complement to `--exclude-glob` (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`. |
 
 ### Cache & privacy
 
@@ -391,6 +396,9 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.6.x** — **Multi-hop graph traversal** (`obsidian_find_path` BFS) + **`obsidian_open_in_ui`** (obsidian:// URI hand-off) + **strict allowlist** (`--read-paths` complement to `--exclude-glob`).
+- **1.5.x** — **Karpathy LLM-Wiki `/lint` workflow** — `obsidian_lint_wiki` (orphans/broken/stubs/stale/concept candidates) + `obsidian_open_questions` + `obsidian_paper_audit` + `lint_wiki` prompt.
+- **1.4.x** — Three new MCP prompts (`consolidate_tags`, `find_duplicates`, `monthly_review`) bringing the total to 9.
 - **1.3.x** — **Performance + benchmarks.** `findBestMatch` rebuilt around a basename + relPath index (O(N²) → O(1) avg) — 24–46% faster across graph-aware tools at 10k notes. New `scripts/bench.mjs` + reproducible numbers in `bench/results.md`.
 - **1.2.0** — **Watcher mode** (`--watch`) — incremental cache + FTS5 reindex on file changes. Editor saves debounced. `--exclude-glob` honored.
 - **1.1.x** — `obsidian_rename_note` (atomic rename + automatic backlink rewrite, code-fence-aware, dry-run preview).

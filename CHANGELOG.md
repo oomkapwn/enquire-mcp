@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-05-06
+
+Three Tier-1 items from the v1.5 competitive audit. Same release: a graph-traversal tool that aaronsb's plugin made into a killer feature, an obsidian:// URI hand-off (cyanheads pattern), and a strict allowlist that pairs with the existing denylist.
+
+### Added — `obsidian_find_path` tool
+Multi-hop graph traversal: BFS from `from` to `to` over the wikilink graph, returning the **shortest path** (sequence of notes connected by wikilinks) up to `max_depth` hops. Each step in the returned path carries the wikilink text used to traverse to it. With `include_alternatives=true`, returns up to 10 same-length paths so the agent can compare. Embeds (`![[…]]`) are followed by default; pass `follow_embeds=false` to skip them. `from === to` returns `hops: 0` + the source-only path. Uses the shared `EntryIndex` memo so repeat calls in a session reuse the basename index for O(1) target resolution. Read-only.
+
+### Added — `obsidian_open_in_ui` tool
+Returns an `obsidian://open?vault=<vault>&file=<path>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — the URI emission lets the agent say "open this in Obsidian" without enquire-mcp coordinating with the running app. Optional `new_pane=true` opens the note in a split. The vault name defaults to the leaf folder of the vault root path; Obsidian matches on this OR on the file's absolute path so the URI works even if the user's instance opened the vault under a different name. Read-only.
+
+### Added — `--read-paths <pattern...>` CLI flag
+Strict allowlist complement to `--exclude-glob`. When set, ONLY paths matching one of these glob patterns are visible to any tool — list, read, watcher events, write attempts. If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics (`*` within-segment, `**` cross-segment, `?` single char). Repeatable.
+
+The cyanheads `OBSIDIAN_READ_PATHS` pattern was specifically called out in the competitive audit as a reason users picked their server over `--exclude-glob`-only ones; this closes that gap.
+
+### Internal — listMarkdown filter gating
+Pre-1.6, `listMarkdown()` only filtered when `excludeRegexes.length > 0`. Now filters when EITHER `excludeRegexes` OR `readPathRegexes` is non-empty. This was caught by the test suite during `--read-paths` development (a one-line bug fix that turned a failing allowlist test green).
+
+### Repo state
+- **23 MCP tools** (was 21). 19 always-on read + 1 opt-in FTS5 + 3 write.
+- **10 MCP prompts** (unchanged).
+- **275 unit tests** (was 261, +14 for find_path / open_in_ui / readPaths coverage).
+- Smoke updated to expect 19 base read tools / 20 with FTS5.
+
 ## [1.5.0] — 2026-05-06
 
 **Karpathy LLM-Wiki `/lint` workflow** — three new read tools + a new prompt that turn enquire-mcp into a reference implementation of the lint command from Karpathy's LLM-Wiki gist (`gist.github.com/karpathy/442a6bf555914893e9891c11519de94f`). The gist names three workflows: `ingest`, `query`, `lint`. enquire-mcp had `ingest` (`create_note` + `validate_note_proposal`) and `query` (`search_text` / `full_text_search` / `find_similar` / `get_note_neighbors` / `dataview_query`) since 0.13. v1.5 ships `lint` and closes the trio.

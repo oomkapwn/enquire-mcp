@@ -39,6 +39,11 @@ export interface VaultOptions {
    *  listMarkdown(), and reads/writes against them throw. Privacy filter for users who
    *  point an LLM at a vault but want `02_Personal/**` invisible. */
   excludeGlobs?: string[];
+  /** Glob patterns matched against vault-relative paths. When set, ONLY paths matching
+   *  one of these patterns are visible — strict allowlist mode. Complement to
+   *  excludeGlobs (cyanheads OBSIDIAN_READ_PATHS pattern). If both are set, a path
+   *  must match an allow-glob AND not match any exclude-glob. */
+  readPaths?: string[];
 }
 
 export class Vault {
@@ -49,7 +54,9 @@ export class Vault {
   readonly persistentCacheEnabled: boolean;
   readonly maxDiskCacheBytes: number;
   readonly excludeGlobs: readonly string[];
+  readonly readPaths: readonly string[];
   private excludeRegexes: RegExp[];
+  private readPathRegexes: RegExp[];
   cacheFile: string | null;
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
@@ -65,12 +72,22 @@ export class Vault {
     this.cacheFile = opts.cacheFile ?? null;
     this.excludeGlobs = Object.freeze([...(opts.excludeGlobs ?? [])]);
     this.excludeRegexes = this.excludeGlobs.map(globToRegex);
+    this.readPaths = Object.freeze([...(opts.readPaths ?? [])]);
+    this.readPathRegexes = this.readPaths.map(globToRegex);
   }
 
-  /** True if a vault-relative path matches any --exclude-glob pattern. */
+  /** True if a vault-relative path is filtered out by either --read-paths
+   *  (strict allowlist) or --exclude-glob (denylist). When --read-paths is set
+   *  but the path doesn't match any allow-glob, the file is treated as
+   *  excluded — no list/read/write/watch event surfaces it.
+   *  When BOTH are set: must match an allow-glob AND not match an exclude. */
   isExcluded(relPath: string): boolean {
-    if (this.excludeRegexes.length === 0) return false;
+    if (this.excludeRegexes.length === 0 && this.readPathRegexes.length === 0) return false;
     const norm = relPath.replace(/\\/g, "/");
+    if (this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))) {
+      return true; // not in allowlist → excluded
+    }
+    if (this.excludeRegexes.length === 0) return false;
     return this.excludeRegexes.some((re) => re.test(norm));
   }
 
@@ -253,10 +270,11 @@ export class Vault {
     }
     const out: FileEntry[] = [];
     await walk(start, this.root, out);
-    // Apply privacy filter — paths matching any --exclude-glob pattern are
-    // omitted from the listing entirely. resolveSafePath also rejects them on
-    // direct read/write, so the LLM has no way to reach excluded content.
-    if (this.excludeRegexes.length > 0) {
+    // Apply privacy filter — paths matching any --exclude-glob OR not matching
+    // any --read-paths allowlist pattern are omitted from the listing entirely.
+    // resolveSafePath also rejects them on direct read/write, so the LLM has
+    // no way to reach excluded content.
+    if (this.excludeRegexes.length > 0 || this.readPathRegexes.length > 0) {
       return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
     }
     return out;

@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 21 MCP tools (17 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 23 MCP tools (19 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -17,7 +17,8 @@
 | `--persistent-index`   | off     | Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers `obsidian_full_text_search` + the `obsidian://chunk/{n}/{path}` resource. **Stores chunked note content + tag list + wikilink targets — see [SECURITY.md "Persistent FTS5 index"](../SECURITY.md#persistent-fts5-index-privacy-posture).** |
 | `--tokenize <mode>`    | `unicode61` | FTS5 tokenize mode. `unicode61` (default; Latin/Cyrillic, removes diacritics) or `trigram` (CJK / mixed-script, ~2x index size). Changing this triggers an automatic index rebuild. |
 | `--index-file <path>`  | auto    | Override the FTS5 index file location. Default: `~/Library/Caches/enquire/<vault-hash>.fts5.db` (macOS) or `~/.cache/enquire/<vault-hash>.fts5.db` (Linux). |
-| `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter. Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
+| `--exclude-glob <pattern...>` | none | Repeatable glob pattern(s) — paths matching any pattern are invisible to every tool and refuse direct reads. Privacy filter (denylist). Supports `*` (within-segment), `**` (cross-segment), `?` (single char). Example: `--exclude-glob '02_Personal/**' '*.private.md'`. |
+| `--read-paths <pattern...>` | none | **Strict allowlist** — when set, ONLY paths matching one of these glob patterns are visible. Complement to `--exclude-glob`. If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics. Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`. |
 | `--watch`              | off     | Watch the vault for `.md` add/change/unlink events. On change: invalidate the parsed-note cache for that file; if `--persistent-index` is also enabled, incrementally re-sync just that file's FTS5 chunks. Editor saves are debounced via chokidar's `awaitWriteFinish`. `--exclude-glob` patterns are honored — edits to excluded paths don't fire. Off by default; opt in for long-running servers. |
 
 ## Subcommands
@@ -316,6 +317,34 @@ For each note tagged `#paper` (configurable), verify frontmatter has at least on
 | `limit`  | `number?` (≤ 500)| Max flagged notes. Default 100.                                  |
 
 **Returns:** `{ scanned, flagged: Array<{ path, title, has_frontmatter_citation, found_in_body: { arxiv[], doi[], url[] }, proposed_frontmatter_patch, message }> }`. The `proposed_frontmatter_patch` is a `{key: value}` object the agent can pass to `validate_note_proposal` and then `append_to_note` (or rewrite the YAML block).
+
+## `obsidian_find_path`
+
+Multi-hop graph traversal. BFS from `from` to `to` over the wikilink graph, returning the shortest path (sequence of notes connected by wikilinks) up to `max_depth` hops. Each step in the returned `path` carries the `via` wikilink text used to traverse to it. With `include_alternatives=true`, returns up to 10 same-length paths so the agent can pick the most semantically-coherent one.
+
+| Argument               | Type             | Notes                                                                |
+|------------------------|------------------|----------------------------------------------------------------------|
+| `from`                 | `string?`        | Vault-relative path of the source note.                              |
+| `from_title`           | `string?`        | Source title (alternative to `from`).                                |
+| `to`                   | `string?`        | Vault-relative path of the destination note.                         |
+| `to_title`             | `string?`        | Destination title (alternative to `to`).                             |
+| `max_depth`            | `number?` (≤ 10) | Maximum BFS depth. Default 5. Each hop = one wikilink edge.          |
+| `include_alternatives` | `boolean?`       | Return up to 10 same-length alternative paths. Default `false`.      |
+| `follow_embeds`        | `boolean?`       | Treat `![[embeds]]` as graph edges. Default `true`.                  |
+
+**Returns:** `{ from, to, found, path: [{ path, title, via }], hops, alternatives? }`. `via` is the wikilink raw text used at each step (empty on the source). Returns `found: false`, `hops: -1`, `path: []` when no route exists within `max_depth`. `from === to` returns `hops: 0` + the source-only path.
+
+## `obsidian_open_in_ui`
+
+Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — the URI emission lets the agent say "open this in Obsidian" without enquire-mcp coordinating with the running app.
+
+| Argument   | Type       | Notes                                                                  |
+|------------|------------|------------------------------------------------------------------------|
+| `path`     | `string?`  | Vault-relative path of the note.                                       |
+| `title`    | `string?`  | Title (alternative to `path`).                                         |
+| `new_pane` | `boolean?` | Append `&newpane=true` so Obsidian opens the note in a split. Default `false`. |
+
+**Returns:** `{ uri, vault_name, path, title }`. The `vault_name` is the leaf folder of the vault root path; Obsidian matches on this OR on the absolute file path, so the URI works even if the user's Obsidian instance opened the vault under a different name.
 
 ## Write tools (opt-in)
 

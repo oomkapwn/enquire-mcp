@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { listNotes, readNote } from "../src/tools.js";
+import { createNote, listNotes, readNote } from "../src/tools.js";
 import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;
@@ -222,6 +222,51 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
     await v.ensureExists();
     const out = await listNotes(v, { folder: "Personal" });
     expect(out).toEqual([]);
+  });
+
+  // v2.0.0-beta.1 P0 fix: writeNote was bypassing isExcluded(), so
+  // `obsidian_create_note` with `--read-paths "Public/**"` allowed creating
+  // (and overwriting!) `Private/secret.md`. External audit reproduced this
+  // as a privacy/contract violation — the SECURITY.md model claims allowlist
+  // and denylist gate write paths.
+  it("createNote refuses to write to a path excluded by --exclude-glob", async () => {
+    const v = new Vault(vroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(createNote(v, { path: "Personal/leak.md", content: "leaked" })).rejects.toThrow(
+      /excluded by --exclude-glob/
+    );
+  });
+
+  it("createNote refuses to write to a path outside --read-paths allowlist", async () => {
+    const v = new Vault(vroot, { enableWrite: true, readPaths: ["Public/**"] });
+    await v.ensureExists();
+    await expect(createNote(v, { path: "Private/leak.md", content: "leaked" })).rejects.toThrow(
+      /excluded by --read-paths allowlist/
+    );
+  });
+
+  it("createNote(overwrite=true) on an excluded existing path STILL refused (no clobber-bypass)", async () => {
+    // Pre-fix: an attacker who knew the path could overwrite an excluded note.
+    await fs.writeFile(path.join(vroot, "Personal", "diary.md"), "private");
+    const v = new Vault(vroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(createNote(v, { path: "Personal/diary.md", content: "overwritten", overwrite: true })).rejects.toThrow(
+      /excluded by --exclude-glob/
+    );
+    // Verify the original content still on disk.
+    const after = await fs.readFile(path.join(vroot, "Personal", "diary.md"), "utf8");
+    expect(after).toBe("private");
+  });
+
+  it("createNote rejects empty / dot-only / whitespace path (no silent .md creation)", async () => {
+    const v = new Vault(vroot, { enableWrite: true });
+    await v.ensureExists();
+    // The MCP-tool schema enforces min(1) at the JSON-RPC boundary, but the
+    // vault method must also reject so direct callers (tests, scripts) can't
+    // sneak by. Pre-fix, `path: ""` created `.md` (hidden by walker — silent).
+    await expect(createNote(v, { path: "", content: "x" })).rejects.toThrow(/empty or dot-only/);
+    await expect(createNote(v, { path: "   ", content: "x" })).rejects.toThrow(/empty or dot-only/);
+    await expect(createNote(v, { path: ".md", content: "x" })).rejects.toThrow(/empty or dot-only/);
   });
 });
 

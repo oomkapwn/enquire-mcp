@@ -2843,9 +2843,15 @@ export async function searchHybrid(
   }> = [];
   if (existsSync(ctx.embedFile)) {
     try {
+      // v2.0.0-beta.1 P1 fix: pass `min_score: 0` to fan-out the embeddings
+      // ranker uniformly with BM25 (no floor) and TF-IDF (0.05 floor). The
+      // user-facing precision filter happens AFTER fusion via `min_signals`,
+      // not before — pre-fix, embeddings used the standalone tool's 0.3
+      // default which silently shrank the embedding-side candidate pool and
+      // starved RRF of cross-signal evidence.
       const embed = await embeddingsSearch(
         vault,
-        { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model },
+        { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model, min_score: 0 },
         ctx.embedFile
       );
       // Same chunk-collapse as BM25.

@@ -48,6 +48,14 @@ interface SourceStateRow {
 
 // Lazy-loaded better-sqlite3 binding so missing native module surfaces only
 // when --persistent-index is actually used.
+//
+// v2.0.0-beta.1 P2 fix: import-success is not enough. The JS package can
+// resolve while the native `*.node` binding fails to load (e.g. user ran
+// `npm ci --ignore-scripts`, prebuilds are unavailable for their platform,
+// or compile failed). Pre-fix, the user got a raw `bindings` search-path
+// stack trace at first `new Database(...)` call. Now we probe the
+// constructor against `:memory:` once at load time and wrap any failure
+// with the same clean error users get from import failure.
 let BetterSqliteCtor: (new (file: string) => unknown) | null = null;
 async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
   if (BetterSqliteCtor) return BetterSqliteCtor;
@@ -55,6 +63,17 @@ async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
     const mod = (await import("better-sqlite3")) as { default?: new (file: string) => unknown };
     const ctor = mod.default;
     if (!ctor) throw new Error("better-sqlite3 has no default export");
+    // Probe the native binding by opening + closing an in-memory DB. Catches
+    // the "JS package present but *.node binary missing" failure mode that a
+    // bare import doesn't.
+    try {
+      const probe = new ctor(":memory:") as { close?: () => void };
+      probe.close?.();
+    } catch (probeErr) {
+      throw new Error(
+        `better-sqlite3 native binding failed to load (try: \`npm rebuild better-sqlite3\` or reinstall without --omit=optional / --ignore-scripts). ${probeErr instanceof Error ? probeErr.message : String(probeErr)}`
+      );
+    }
     BetterSqliteCtor = ctor;
     return ctor;
   } catch (err) {

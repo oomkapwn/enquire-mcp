@@ -353,9 +353,30 @@ export class Vault {
     if (Buffer.byteLength(content, "utf8") > this.maxFileBytes) {
       throw new Error(`Refusing to write ${Buffer.byteLength(content, "utf8")} bytes (limit ${this.maxFileBytes})`);
     }
-    const targetRel = relPath.toLowerCase().endsWith(".md") ? relPath : `${relPath}.md`;
+    // v2.0.0-beta.1 audit fix: reject empty / whitespace-only / dot-only note
+    // names before they normalize into bare `.md` (which the walker hides as a
+    // dotfile — silent footgun). The schema enforces `min(1)` upstream too.
+    const trimmed = relPath.trim();
+    if (!trimmed || trimmed === "." || trimmed === ".md") {
+      throw new Error(`Refusing to create note with empty or dot-only name: "${relPath}"`);
+    }
+    const targetRel = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
     const abs = this.resolveInside(targetRel);
     await this.assertParentInsideVault(abs);
+    // v2.0.0-beta.1 P0 fix: enforce --read-paths / --exclude-glob on writes.
+    // Pre-fix, `writeNote()` used `resolveInside()` (path-traversal only) and
+    // never called `isExcluded()`, so `--read-paths "Public/**"` allowed
+    // `obsidian_create_note({ path: "Private/secret.md" })` — a clear violation
+    // of the SECURITY.md privacy contract. We now match the predicate from
+    // `resolveSafePath()` and surface the same allowlist-vs-denylist reason.
+    const targetRelNorm = path.relative(this.root, abs).replace(/\\/g, "/");
+    if (this.isExcluded(targetRelNorm)) {
+      const reason =
+        this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(targetRelNorm))
+          ? "--read-paths allowlist (path doesn't match any allow-glob)"
+          : "--exclude-glob denylist";
+      throw new Error(`Refusing to write — destination is excluded by ${reason}: ${targetRelNorm}`);
+    }
     if (!opts.overwrite) {
       const exists = await fs
         .stat(abs)

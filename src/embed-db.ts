@@ -41,6 +41,9 @@ interface SourceStateRow {
   mtime_ms: number;
 }
 
+// v2.0.0-beta.1 P2 fix: probe the native binding via :memory: open so the
+// "JS package present but *.node binary missing" failure mode produces a
+// clean error pointing at `npm rebuild`, not a raw bindings stack trace.
 let BetterSqliteCtor: (new (file: string) => unknown) | null = null;
 async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
   if (BetterSqliteCtor) return BetterSqliteCtor;
@@ -48,6 +51,14 @@ async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
     const mod = (await import("better-sqlite3")) as { default?: new (file: string) => unknown };
     const ctor = mod.default;
     if (!ctor) throw new Error("better-sqlite3 has no default export");
+    try {
+      const probe = new ctor(":memory:") as { close?: () => void };
+      probe.close?.();
+    } catch (probeErr) {
+      throw new Error(
+        `better-sqlite3 native binding failed to load (try: \`npm rebuild better-sqlite3\` or reinstall without --omit=optional / --ignore-scripts). ${probeErr instanceof Error ? probeErr.message : String(probeErr)}`
+      );
+    }
     BetterSqliteCtor = ctor;
     return ctor;
   } catch (err) {
@@ -277,11 +288,15 @@ export class EmbedDb {
     const minScore = opts.minScore ?? -Infinity;
     const folderPrefix = opts.folder ? `${opts.folder.replace(/\/+$/, "")}/` : null;
 
+    // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern
+    // semantics so folder names containing `%` / `_` (rare but possible in
+    // Obsidian) don't expand into wider matches. Matches the pattern used by
+    // FtsIndex.search() in fts5.ts.
     const rows = db
       .prepare(
         folderPrefix
           ? `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector
-             FROM embeddings WHERE rel_path LIKE ? || '%'`
+             FROM embeddings WHERE substr(rel_path, 1, ?) = ?`
           : `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector FROM embeddings`
       )
       .all<{
@@ -291,10 +306,21 @@ export class EmbedDb {
         line_end: number;
         text_preview: string;
         vector: Buffer;
-      }>(...(folderPrefix ? [folderPrefix] : []));
+      }>(...(folderPrefix ? [folderPrefix.length, folderPrefix] : []));
 
+    const expectedBytes = this.dim * 4; // Float32 = 4 bytes
     const heap: EmbedSearchHit[] = [];
     for (const r of rows) {
+      // v2.0.0-beta.1 P2 fix: assert byteLength before wrapping. A truncated
+      // / corrupt BLOB (e.g. from an aborted upsert mid-transaction) would
+      // produce a Float32Array that reads past the source buffer's end and
+      // emits garbage scores. Skip + warn rather than poison results.
+      if (r.vector.byteLength !== expectedBytes) {
+        process.stderr.write(
+          `enquire: skipping ${r.rel_path}#${r.chunk_index} — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
+        );
+        continue;
+      }
       const vec = new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim);
       let score = 0;
       for (let i = 0; i < this.dim; i++) {

@@ -62,10 +62,19 @@ export function reciprocalRankFusion<S extends string>(
 
   for (const [signalName, hits] of Object.entries(signals) as [S, ReadonlyArray<RankedHit> | undefined][]) {
     if (!hits) continue;
+    // v2.0.0-beta.1 P2 fix: guard duplicate (id, signal) pairs. A buggy
+    // ranker might emit the same id twice (e.g. chunk-collapse missed a
+    // dedup); pre-fix we silently double-added the same signal's
+    // contribution, distorting the fused score. Now we keep only the BEST
+    // (lowest) rank per id within a single signal — matches what callers
+    // upstream of us already do with bestPerNote chunk-collapse.
+    const seenInSignal = new Set<string>();
     for (const hit of hits) {
       if (hit.rank < 1) {
         throw new Error(`RRF expects 1-based ranks, got rank=${hit.rank} for id=${hit.id}`);
       }
+      if (seenInSignal.has(hit.id)) continue;
+      seenInSignal.add(hit.id);
       const term = 1 / (k + hit.rank);
       const existing = fused.get(hit.id);
       if (existing) {

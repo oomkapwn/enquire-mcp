@@ -1,6 +1,8 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 28 MCP tools (22 always-on read + 1 opt-in read via `--persistent-index` + 5 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 30 MCP tools (24 always-on read + 1 opt-in read via `--persistent-index` + 5 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+
+> **Channels:** stable v1.x (`@latest` on npm) ships 28 tools — no ML embeddings, no hybrid search. **v2.0 beta** (`@beta` on npm) adds `obsidian_search` (hybrid RRF) + `obsidian_embeddings_search` + the `install-model` / `build-embeddings` / `clear-embeddings` subcommands. This document covers the **v2.0 beta** surface.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -31,6 +33,9 @@
 | `clear-cache` | `--vault <path>` `[--cache-file <path>]` | Delete the persistent-cache file for the given vault. Useful for purging stale or sensitive content. Returns 0 even if no cache file exists. |
 | `clear-index` | `--vault <path>` `[--index-file <path>]` | Delete the FTS5 search-index files (`.fts5.db` + WAL/SHM sidecar) for the given vault. Privacy purge for `--persistent-index` users. Returns 0 even if no files exist. |
 | `index` | `--vault <path>` `[--tokenize <mode>]` `[--index-file <path>]` | Cold-build (or refresh) the FTS5 search index for a vault. Useful before first `--persistent-index serve`. Reports `added`/`updated`/`deleted`/`unchanged` chunk counts. |
+| `install-model` (v2.0 beta) | `[alias]` (default `multilingual`) | Pre-download an embedding model so the first MCP call doesn't block on a ~120MB HuggingFace download. Aliases: `multilingual` (Xenova/paraphrase-multilingual-MiniLM-L12-v2, 384-dim, 50+ languages, ~120MB) or `bge` (Xenova/bge-small-en-v1.5, 384-dim, English-only, ~33MB). Models cached under `~/.cache/huggingface/transformers.js/` and reused across vaults. Idempotent. |
+| `build-embeddings` (v2.0 beta) | `--vault <path>` `[--embedding-model <alias>]` `[--embed-file <path>]` `[--exclude-glob <pattern...>]` `[--read-paths <pattern...>]` | Cold-build (or refresh) the persistent embedding index for a vault. Required before `obsidian_embeddings_search` and `obsidian_search` (in hybrid mode) are useful. Same paragraph-level chunking as the FTS5 index — chunk identity matches across BM25 and embeddings. Incremental rebuilds via `source_state` mtime tracking. Reports `added`/`updated`/`deleted`/`unchanged` chunk counts. |
+| `clear-embeddings` (v2.0 beta) | `--vault <path>` `[--embed-file <path>]` | Delete the embedding-index files (`.embed.db` + WAL/SHM sidecar). Idempotent. |
 
 ## Read tools (always registered)
 
@@ -407,7 +412,54 @@ Pure-JS TF-IDF cosine retrieval. Tokenizes (alphanumeric + hyphen, stop-words fi
 
 **Performance:** at 10k notes the cold-build is ~5–10s on Apple silicon (similar to FTS5 cold-build). Warm cosine is sub-100ms. For very large vaults, prefer `--persistent-index` + `obsidian_full_text_search` for raw query latency, and use `obsidian_semantic_search` when BM25 misses.
 
-**Why not embeddings?** Real ML embedding retrieval (v2.0 roadmap) would need a 25–50 MB model file and an ONNX/WASM runtime. TF-IDF cosine ships zero new deps, runs offline, and meaningfully improves over BM25 alone for the related-term case. Smart Connections (the dominant Obsidian semantic-search plugin) paywalled this functionality — enquire-mcp gives it free.
+**Why not embeddings?** TF-IDF cosine ships zero new deps, runs offline, and meaningfully improves over BM25 alone for the related-term case. For ML embeddings see `obsidian_embeddings_search` and `obsidian_search` (v2.0 beta).
+
+## `obsidian_embeddings_search` _(v2.0 beta — requires `enquire-mcp install-model` + `enquire-mcp build-embeddings`)_
+
+ML-embedding retrieval via [@huggingface/transformers](https://github.com/huggingface/transformers.js) + `paraphrase-multilingual-MiniLM-L12-v2` (default; 384-dim, 50+ languages, runs on CPU). Persistent SQLite vector index next to the FTS5 db. Brute-force cosine top-K (sub-100ms on 50K chunks; HNSW ladder is v2.1 if real users hit that ceiling).
+
+| Argument           | Type                | Notes                                                                                |
+|--------------------|---------------------|--------------------------------------------------------------------------------------|
+| `query`            | `string`            | Required. Free-form, multi-word, any supported language.                              |
+| `folder`           | `string?`           | Restrict to a subfolder.                                                              |
+| `limit`            | `number?` (≤ 100)   | Max hits. Default 10.                                                                |
+| `min_score`        | `number?` (0–1)     | Drop hits below this cosine score. Default 0.3. Embeddings cluster ~0.4–0.9.          |
+
+**Returns:** `{ query, method: "embeddings-cosine", model, total_chunks, matches: [{ path, title, score, snippet, chunk_index, line_start, line_end }] }`.
+
+**Setup (one-time):**
+```bash
+enquire-mcp install-model multilingual          # ~120MB, cached globally
+enquire-mcp build-embeddings --vault <path>     # ~5-30ms per chunk (CPU)
+```
+
+If the index is missing, the tool returns a clean error pointing at `enquire-mcp build-embeddings` — it does NOT silently kick off a model download at MCP-call time.
+
+**Caveat — token truncation.** The default multilingual model truncates at 128 tokens. The FTS5 chunker produces ~600-1000-token chunks, so the tail of long paragraphs is not embedded. Use the `bge` model (512-token limit) for longer-context English content, or split notes into shorter paragraphs.
+
+## `obsidian_search` _(v2.0 beta — the new default search tool)_
+
+**Hybrid retrieval via Reciprocal Rank Fusion (Cormack et al, 2009).** Auto-detects every available retrieval signal — BM25 via FTS5, TF-IDF cosine, ML embeddings — and fuses them with RRF (k=60, equal weights). Gracefully degrades with whatever signals are available:
+
+| Signals available | Fusion behavior |
+|---|---|
+| TF-IDF only (zero setup) | TF-IDF-style ranking |
+| BM25 + TF-IDF (`--persistent-index`) | Keyword-augmented retrieval, sub-100ms |
+| BM25 + TF-IDF + embeddings (`+ build-embeddings`) | Full hybrid — matches Smart Connections-quality |
+
+| Argument           | Type                  | Notes                                                                              |
+|--------------------|-----------------------|------------------------------------------------------------------------------------|
+| `query`            | `string`              | Required. Multi-word natural language is the sweet spot.                            |
+| `folder`           | `string?`             | Restrict to a subfolder.                                                            |
+| `limit`            | `number?` (≤ 100)     | Max hits. Default 10.                                                              |
+| `min_signals`      | `number?` (1–3)       | Filter: only return hits that ranked in at least N rankers. Default 1. Set 2+ for high-precision multi-ranker consensus. |
+| `embedding_model`  | `string?`             | Override the embedding model alias (default `multilingual`). Only consulted if a `.embed.db` exists. |
+
+**Returns:** `{ query, method: "rrf", k: 60, signals_used, total_candidates, matches: [{ path, title, score, snippet, chunk_index?, line_start?, line_end?, per_signal: { bm25?, tfidf?, embeddings? } }] }`.
+
+`per_signal` is the observability surface: every hit reports which rankers contributed at what rank/score. Use this to debug retrieval quality and understand WHY a hit ranked.
+
+**Why prefer this over the per-ranker tools?** Single tool surface for agents → consistent recall regardless of vault setup. Per-ranker tools (`obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, `obsidian_embeddings_search`) remain available as diagnostic surfaces for tuning / debugging.
 
 ## Write tools (opt-in)
 

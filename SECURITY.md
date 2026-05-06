@@ -108,7 +108,7 @@ Out of scope:
 
 ## Periodic-Notes plugin config: disk-read posture
 
-`obsidian_resolve_periodic_alias` and the periodic-alias resolver inside `obsidian_read_note` / `obsidian_append_to_note` etc. (added v1.10.0) lazily read **two files** under the vault's `.obsidian/` directory at first use:
+The periodic-alias resolver inside `obsidian_read_note` / `obsidian_append_to_note` etc. (added v1.10.0) lazily reads **two files** under the vault's `.obsidian/` directory at first use:
 
 1. `.obsidian/daily-notes.json` — the core Daily Notes plugin's settings.
 2. `.obsidian/plugins/periodic-notes/data.json` — the community Periodic Notes plugin's settings.
@@ -148,6 +148,7 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - **0600 chmod** on `<vault-hash>.embed.db` + WAL + SHM sidecar files, parent directory mode 0700 — same as the FTS5 index posture.
 - **Cross-vault contamination guard.** `meta` table stores `vault_root`, `model_alias`, `dim`, and `schema_version`; if any change between runs, the embedding tables are dropped and rebuilt with a stderr warning. Prevents a stale index from leaking content into a different vault.
 - **Caveat — embedding values can leak content via cosine.** Float32 vectors stored in the index are reversible-ish: with the same model loaded, an attacker with read access to the .embed.db file can run nearest-neighbor searches against arbitrary queries to recover note content topics. Treat the .embed.db as having the same sensitivity as the .fts5.db (which already stores raw chunk content). If your threat model includes other local users on the same machine, do not use `--persistent-cache` / `--persistent-index` / build-embeddings.
+- **Caveat — silent token truncation.** `paraphrase-multilingual-MiniLM-L12-v2` truncates inputs at 128 tokens; `bge-small-en-v1.5` at 512. The FTS5 chunker produces ~4096-character chunks (~600-1000 tokens), so the multilingual model only sees the first 128 tokens of each chunk. This is a recall ceiling, not a security issue — but it means `obsidian_embeddings_search` may miss content in the tail of long paragraphs. Mitigation: split notes into shorter chunks, or use the `bge` model for longer-context English content. Sub-chunk-level truncation handling is a v2.1 backlog item.
 - **Manual purge.** `enquire-mcp clear-embeddings --vault <path>` removes the `.embed.db`, `.embed.db-wal`, and `.embed.db-shm` files.
 - **`--exclude-glob` / `--read-paths` honored.** The `build-embeddings` subcommand accepts both flags — excluded notes are never embedded, never appear in results.
 

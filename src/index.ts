@@ -43,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-beta.0";
+const VERSION = "2.0.0-beta.1";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -315,19 +315,33 @@ async function startServer(opts: ServeOptions): Promise<void> {
   //
   // Skips are logged to stderr so users can verify the flags are doing what
   // they expect when wiring up an agent with a narrow tool surface.
+  // v2.0.0-beta.1 audit fix: also track which user-supplied names actually
+  // matched a registered tool. After registration, unmatched names are
+  // unknown — typo or stale doc reference. Pre-fix, a typo in
+  // `--disabled-tools obsidan_search` (note the missing `i`) silently
+  // disabled nothing; now we log a warning so the user can correct it.
   const disabledTools = new Set(opts.disabledTools ?? []);
   const enabledTools = new Set(opts.enabledTools ?? []);
+  const usedDisabled = new Set<string>();
+  const usedEnabled = new Set<string>();
+  const registeredNames = new Set<string>();
   if (disabledTools.size > 0 || enabledTools.size > 0) {
     const origRegisterTool = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
     (server as unknown as { registerTool: (name: string, ...rest: unknown[]) => unknown }).registerTool = (
       name: string,
       ...rest: unknown[]
     ) => {
-      if (enabledTools.size > 0 && !enabledTools.has(name)) {
-        process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
-        return undefined;
+      registeredNames.add(name);
+      if (enabledTools.size > 0) {
+        if (enabledTools.has(name)) {
+          usedEnabled.add(name);
+        } else {
+          process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
+          return undefined;
+        }
       }
       if (disabledTools.has(name)) {
+        usedDisabled.add(name);
         process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
         return undefined;
       }
@@ -341,6 +355,28 @@ async function startServer(opts: ServeOptions): Promise<void> {
   registerResources(server, vault);
   if (ftsIndex) registerChunkResource(server, ftsIndex);
   registerPrompts(server);
+
+  // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.
+  // We can't validate at parse time because the canonical list depends on
+  // runtime config (e.g. --persistent-index gates obsidian_full_text_search,
+  // --enable-write gates the 5 write tools). So we wait until everything is
+  // registered, then diff the user's lists against what was actually seen.
+  for (const name of disabledTools) {
+    if (!usedDisabled.has(name)) {
+      const hint = registeredNames.has(name)
+        ? "" // shouldn't happen — would have been used
+        : ` (no such tool registered; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
+      process.stderr.write(`enquire: warning — --disabled-tools "${name}" did not match any tool${hint}\n`);
+    }
+  }
+  for (const name of enabledTools) {
+    if (!usedEnabled.has(name)) {
+      const hint = registeredNames.has(name)
+        ? ""
+        : ` (no such tool; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
+      process.stderr.write(`enquire: warning — --enabled-tools "${name}" did not match any tool${hint}\n`);
+    }
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -1083,7 +1119,10 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
         "Create a new note inside the vault. Refuses to overwrite unless overwrite=true. Frontmatter is rendered as YAML when supplied. WRITE TOOL — only available when the server is started with --enable-write.",
       annotations: { ...WRITE, title: "Create note" },
       inputSchema: {
-        path: z.string().describe("Vault-relative path (e.g. 'Inbox/My Note' or 'Inbox/My Note.md')"),
+        path: z
+          .string()
+          .min(1)
+          .describe("Vault-relative path (e.g. 'Inbox/My Note' or 'Inbox/My Note.md'). Must not be empty or dot-only."),
         content: z.string().describe("Markdown body (frontmatter is supplied separately)"),
         frontmatter: z
           .record(z.string(), z.unknown())

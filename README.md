@@ -13,8 +13,8 @@ Wikilinks resolved with aliases and sections. Backlinks ranked with snippets. Fr
 Read-only by default. No Obsidian plugin required. One command to install.
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![Stable](https://img.shields.io/badge/release-stable-brightgreen.svg)](./CHANGELOG.md)
+[![npm version](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp/latest.svg?label=stable)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
+[![npm beta](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp/beta.svg?label=beta)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp/v/beta)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -23,17 +23,23 @@ Read-only by default. No Obsidian plugin required. One command to install.
 
 ### Quick start (30 seconds)
 
+> **🚧 Two release channels right now.** Stable `npm install … @latest` is **v1.x** (28 tools, no ML embeddings, no hybrid search). The headline `obsidian_search` (BM25 + TF-IDF + ML embeddings via RRF) and `obsidian_embeddings_search` ship under the **`@beta` channel** — opt in with `@oomkapwn/enquire-mcp@beta`. Stable v2.0 promotes once `@beta` proves out.
+
 ```bash
-# Claude Code:
+# Stable (v1.x — 28 tools, hybrid search NOT included):
 claude mcp add --transport stdio obsidian \
   -- npx -y @oomkapwn/enquire-mcp serve --vault ~/path/to/your/vault
+
+# Beta (v2.0 — adds obsidian_search hybrid + obsidian_embeddings_search):
+claude mcp add --transport stdio obsidian \
+  -- npx -y @oomkapwn/enquire-mcp@beta serve --vault ~/path/to/your/vault
 
 # Cursor / OpenClaw / Codex / others — drop this into your MCP config:
 {
   "mcpServers": {
     "obsidian": {
       "command": "npx",
-      "args": ["-y", "@oomkapwn/enquire-mcp", "serve", "--vault", "/path/to/vault"]
+      "args": ["-y", "@oomkapwn/enquire-mcp@beta", "serve", "--vault", "/path/to/vault"]
     }
   }
 }
@@ -91,7 +97,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
 | **ML embeddings search** (`obsidian_embeddings_search` — paraphrase-multilingual-MiniLM-L12-v2, 50+ languages, persistent SQLite vector index) | ❌ usually paywalled (Smart Connections) | ✅ free + offline-capable (v2.0 alpha) |
-| TypeScript strict + Biome lint + 364+ unit tests | varies | ✅ |
+| TypeScript strict + Biome lint + 388+ unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3500 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus two optional (`better-sqlite3` for `--persistent-index` and `--build-embeddings`; `@huggingface/transformers` for ML embeddings — both are no-ops when not invoked).
 
@@ -165,7 +171,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 22 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 24 read tools (always on) + 1 opt-in (`--persistent-index`) — **30 total** with 5 write tools
 
 | Tool | What it does |
 |---|---|

@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.1] — 2026-05-06
+
+**Audit-driven patch.** An independent external audit of v2.0.0-beta.0 surfaced one P0 privacy/security bug, several P1 doc/correctness drifts, and a handful of P2 hardening opportunities. This release closes all 17 findings (1 P0 + 7 P1 + 7 P2 + 2 P3). No new features.
+
+### Fixed — P0: `obsidian_create_note` privacy bypass (`vault.writeNote`)
+
+**Long-standing bug, present since v0.11.** `Vault.writeNote()` used `resolveInside()` (path-traversal check only) and never called `isExcluded()`. So:
+
+```bash
+enquire-mcp serve --vault ~/vault --enable-write --read-paths 'Public/**'
+# → obsidian_create_note({ path: 'Private/secret.md', content: 'leaked' }) succeeded
+```
+
+A server with `--read-paths "Public/**"` allowed writes to `Private/`. With `overwrite: true`, a known excluded path could be clobbered. This violated the SECURITY.md privacy contract that explicitly claimed "the same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote` / `readBinaryFile` / write paths all respect it)."
+
+`writeNote()` now calls `isExcluded()` and surfaces the same allowlist-vs-denylist reason as `resolveSafePath()`. `appendNote()` and `renameFile()` were already safe (verified). Three regression tests added in `tests/security.test.ts`.
+
+### Fixed — P1: `searchHybrid` starves the embeddings ranker
+
+`searchHybrid` called `embeddingsSearch` without `min_score`, picking up the standalone tool's `0.3` default. BM25 (no floor) and TF-IDF (0.05) fan out wider, so RRF received an asymmetric candidate pool from embeddings. The user-facing precision filter belongs *after* fusion (`min_signals`), not before. Now passes `min_score: 0` for fan-out.
+
+### Fixed — P1: `obsidian_create_note({ path: "" })` silently created `.md`
+
+The walker hides dotfiles, so an empty-path create silently produced an invisible file. The MCP-tool schema now requires `path: z.string().min(1)`; `vault.writeNote()` runtime-rejects empty / whitespace / dot-only names. Test in `tests/security.test.ts`.
+
+### Added — P1: `--enabled-tools` / `--disabled-tools` unknown-name validation
+
+The SECURITY.md docs claimed unknown tool names would log a warning. The code didn't actually validate. A typo in `--disabled-tools obsidan_search` (missing `i`) silently disabled nothing. Now we track which user-supplied names matched a registered tool; any unmatched name produces a stderr warning listing the available tools so the user can correct it.
+
+### Docs
+
+- `README.md`: removed misleading "Stable" badge from v2-beta-doc page; added separate `@latest` and `@beta` shields. Quick-start now documents both channels with explicit `@beta` for v2 features.
+- `README.md`: tool counts updated (24 always-on read + 1 opt-in FTS5 + 5 opt-in write = 30 total).
+- `README.md`: test count refreshed (388+).
+- `SECURITY.md`: removed phantom `obsidian_resolve_periodic_alias` tool reference (the resolver is internal to `resolveTarget`, never exposed as its own tool).
+- `SECURITY.md`: documented the `paraphrase-multilingual-MiniLM-L12-v2` 128-token truncation as a known recall caveat (use `bge` for longer-context English).
+- `docs/api.md`: full v2.0 surface — `obsidian_search`, `obsidian_embeddings_search`, and the `install-model` / `build-embeddings` / `clear-embeddings` subcommands now documented (was a 0% delta from v1.x; the audit caught this gap).
+
+### Hardening — P2
+
+- `embed-db.ts:search()` folder filter now uses `substr(rel_path, 1, ?) = ?` instead of `rel_path LIKE ? || '%'`. LIKE expanded `%` and `_` chars — rare but possible in Obsidian folder names. Matches the safe pattern from `fts5.ts:search()`.
+- `embed-db.ts:search()` asserts `byteLength === dim*4` before wrapping a vector BLOB into `Float32Array`. A truncated row (e.g. from an aborted upsert) would otherwise produce a Float32Array reading past the source buffer's end and silently emit garbage scores. Skip + warn instead.
+- `rrf.ts:reciprocalRankFusion()` guards duplicate `(id, signal)` pairs. A buggy ranker emitting the same id twice would have silently double-added the signal's contribution. Now we keep only the best (lowest) rank per id within a single signal.
+- `tests/search-hybrid.test.ts`: BM25 + TF-IDF fusion path now has CI coverage (5 new tests). Pre-fix, every test passed `ftsIndex: null` and skipped the chunk-collapse + rank-renumbering branch — a regression there could have shipped silently.
+- `fts5.ts` + `embed-db.ts`: `loadBetterSqlite()` now probes the native binding via `:memory:` open + close before caching the constructor. Catches the "JS package present but `.node` binary missing" failure mode (e.g. `npm ci --ignore-scripts`, broken native build, unsupported platform). Surface a clean error pointing at `npm rebuild better-sqlite3`, not a raw bindings stack trace.
+- `tests/cli.test.ts`: `canRunFts5` now does the same constructor probe instead of import-only. CI no longer runs FTS5 E2E tests when the binding actually doesn't work.
+
+### Process — P3
+
+- `version-consistency` CI job is now in the `main-protection` ruleset's required status checks. Pre-fix, a PR could theoretically merge with version drift across the 5 surfaces.
+- Lockfile refreshed via `npm audit fix` to resolve `ip-address <=10.1.0` → `10.2.0` (GHSA-v2v4-37r5-5v8g — moderate XSS in HTML-emitting helpers; zero real impact on a stdio MCP server but blocks `npm audit --audit-level=moderate`).
+
+### Tests
+
+393 unit tests pass (was 384, +9 new). +5 hybrid BM25 path, +3 createNote privacy regressions, +1 createNote empty-path validation.
+
+### Migration from v2.0.0-beta.0
+
+**No breaking changes.** This is a pure audit-fix patch.
+
 ## [2.0.0-beta.0] — 2026-05-06
 
 **Theme: Hybrid RRF retrieval.** v2.0.0-alpha.0 shipped ML embeddings as a standalone tool. v2.0.0-beta.0 ships the integration step: a single `obsidian_search` umbrella tool that fuses every available retrieval signal — BM25 (FTS5) + TF-IDF cosine + ML embeddings — via Reciprocal Rank Fusion (Cormack et al, 2009).

@@ -106,8 +106,20 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       "---\ntitle: Apollo\ntags: [project]\n---\n\nApollo project notes\n\nSecond paragraph mentions rocketry.\n"
     );
     await fs.writeFile(path.join(vault, "Hermes.md"), "---\ntitle: Hermes\n---\n\nHermes is unrelated to Apollo.\n");
+    // v2.0.0-beta.1 P2 fix: import success is not enough — the JS package
+    // can resolve while the *.node binary fails to load (--ignore-scripts,
+    // unsupported platform, broken native build). Probe the constructor
+    // against an in-memory DB so canRunFts5 actually reflects whether FTS5
+    // tests will succeed. Pre-fix, FTS5 E2E tests ran and emitted scary
+    // bindings stack traces from the dist binary.
     try {
-      await import("better-sqlite3");
+      const mod = (await import("better-sqlite3")) as { default?: new (file: string) => { close?: () => void } };
+      if (!mod.default) {
+        canRunFts5 = false;
+      } else {
+        const probe = new mod.default(":memory:");
+        probe.close?.();
+      }
     } catch {
       canRunFts5 = false;
     }

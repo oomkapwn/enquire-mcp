@@ -95,7 +95,7 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expectedCount = withFts ? 15 : 14;
+  const expectedCount = withFts ? 18 : 17;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -109,8 +109,11 @@ try {
     "obsidian_get_outbound_links",
     "obsidian_get_recent_edits",
     "obsidian_get_unresolved_wikilinks",
+    "obsidian_lint_wiki",
     "obsidian_list_notes",
     "obsidian_list_tags",
+    "obsidian_open_questions",
+    "obsidian_paper_audit",
     "obsidian_read_note",
     "obsidian_resolve_wikilink",
     "obsidian_search_text",
@@ -262,7 +265,7 @@ try {
   // Prompts.
   const prompts = await rpc("prompts/list", {});
   const promptNames = (prompts.result?.prompts ?? []).map((p) => p.name).sort();
-  check("prompts/list returns 9 prompts", promptNames.length === 9, JSON.stringify(promptNames));
+  check("prompts/list returns 10 prompts", promptNames.length === 10, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
 
   // Sanity-check the new D / E tools.

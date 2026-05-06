@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-05-06
+
+**Karpathy LLM-Wiki `/lint` workflow** — three new read tools + a new prompt that turn enquire-mcp into a reference implementation of the lint command from Karpathy's LLM-Wiki gist (`gist.github.com/karpathy/442a6bf555914893e9891c11519de94f`). The gist names three workflows: `ingest`, `query`, `lint`. enquire-mcp had `ingest` (`create_note` + `validate_note_proposal`) and `query` (`search_text` / `full_text_search` / `find_similar` / `get_note_neighbors` / `dataview_query`) since 0.13. v1.5 ships `lint` and closes the trio.
+
+This release was driven by a 4-agent competitive-research pass (top obsidian-MCP servers, Karpathy + ML-PKM workflows, MCP ecosystem trends, Obsidian community pain). The convergent finding across all four reports: nobody in the obsidian-MCP space ships a hygiene-audit tool, and Karpathy's gist explicitly names the workflow.
+
+### Added — `obsidian_lint_wiki` (read-only)
+Five-bucket vault-hygiene report in **one** call:
+- **Orphans** — notes with no inbound and no outbound wikilinks.
+- **Broken links** — every `[[wikilink]]` that doesn't resolve, with source path and the literal that needs fixing.
+- **Stubs** — notes shorter than `stub_word_threshold` (default 100). Configurable.
+- **Stale** — notes whose frontmatter `last_reviewed` (or mtime if missing) is older than `stale_days` (default 365). Accepts Date / ISO string / numeric epoch.
+- **Concept candidates** — capitalised phrases (1-3 CapitalCase tokens, with stop-word filtering) mentioned by ≥ `concept_min_mentions` (default 3) distinct notes that don't have their own page yet. Matches Karpathy's "concept mentioned in N+ notes but missing its own page" pass.
+
+Each finding ships with `path` + `message` + `suggestion` shaped so the agent can fix via existing tools (`validate_note_proposal` → `create_note` / `append_to_note` / `rename_note`). `max_per_bucket` caps each bucket independently. `folder` narrows the scope.
+
+### Added — `obsidian_open_questions` (read-only)
+Walks every note for deferred-thinking markers — `Open question:` / `Q:` / `TODO?` / `??` (with optional list-bullet, blockquote, or heading prefix). Returns each hit with source path, the heading it lives under, line number, and age in days, sorted oldest-first so threads aging out surface first. Common research-PKM pattern (Karpathy, Eleanor Konik, academic Zettelkasten).
+
+`pattern` lets you override the regex; default matches the markers above. `folder` narrows the scope. `limit` caps results (default 100). Scans `parsed.body` so frontmatter lines don't pollute the results.
+
+### Added — `obsidian_paper_audit` (read-only)
+For each note tagged `#paper` (configurable via `tag`), verifies frontmatter has at least one citable identifier (`arxiv` / `doi` / `url` / `isbn`). Also flags notes whose body contains an arxiv ID (e.g. `arxiv:2401.12345`) or DOI but doesn't carry the same identifier in frontmatter — the common quick-capture-from-chat pattern.
+
+Returns a `proposed_frontmatter_patch` for each flagged note that the agent can pass through `validate_note_proposal` and apply. Scans `parsed.body` so the frontmatter's own keys don't get re-detected as "found in body".
+
+### Added — `lint_wiki` MCP prompt
+Karpathy `/lint` orchestration: the prompt instructs the agent to call `obsidian_lint_wiki` + `obsidian_open_questions` + `obsidian_paper_audit`, then synthesize the **5 highest-leverage fixes** across all three reports with concrete `obsidian_*` calls per fix. Read-only — proposes only, never modifies.
+
+### Repo state
+- **21 MCP tools** (was 18). 17 always-on read + 1 opt-in FTS5 + 3 write.
+- **10 MCP prompts** (was 9). All read-only.
+- **261 unit tests** (was 247, +14 for the lint trio: 7 lint_wiki / 3 open_questions / 3 paper_audit / 1 cross-feature).
+- Smoke updated to expect 17 base read tools / 18 with FTS5 / 10 prompts.
+- README comparison table picks up a new "Karpathy LLM-Wiki `/lint` workflow" row.
+
+### Bugs caught and fixed during implementation (audit-resilient)
+- `lintWiki` initially typed frontmatter `last_reviewed` as `string`-only, but gray-matter (js-yaml) parses ISO dates into `Date` objects — fixed to accept `Date | string | number`.
+- `paperAudit` initially scanned the full file content, which made the regex re-discover the frontmatter's own `arxiv:` key in body — fixed to scan `parsed.body` only.
+- `getOpenQuestions` had a stray `reGlobal` line with malformed flag concatenation (`imgm`) — removed the dead line.
+
 ## [1.4.0] — 2026-05-06
 
 Three new MCP prompts + closes the v1.3.1 audit's last test gap. Pure additions; no breaking changes; embeddings retrieval is still the only outstanding 1.x roadmap item (deferred to 2.x because of the dep-footprint impact).

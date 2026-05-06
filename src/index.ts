@@ -14,12 +14,15 @@ import {
   findSimilar,
   getBacklinks,
   getNoteNeighbors,
+  getOpenQuestions,
   getOutboundLinks,
   getRecentEdits,
   getUnresolvedWikilinks,
   getVaultStats,
+  lintWiki,
   listNotes,
   listTags,
+  paperAudit,
   readNote,
   renameNote,
   resolveWikilink,
@@ -29,7 +32,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.4.0";
+const VERSION = "1.5.0";
 
 interface ServeOptions {
   vault: string;
@@ -589,6 +592,90 @@ function registerReadTools(server: McpServer, vault: Vault): void {
     },
     async (args) => textResult(await getVaultStats(vault, args))
   );
+
+  server.registerTool(
+    "obsidian_lint_wiki",
+    {
+      title: "Lint the wiki (Karpathy LLM-Wiki workflow)",
+      description:
+        "Comprehensive vault-hygiene check inspired by Karpathy's LLM-Wiki gist (gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Returns five buckets of findings in one call: orphans (no inbound + no outbound), broken wikilinks, stub pages (under N words), stale pages (frontmatter `last_reviewed` or mtime older than M days), and concept candidates (capitalised phrases mentioned by ≥ K notes that lack their own page). Each finding carries a path + suggestion shaped so the agent can fix via existing tools (validate_note_proposal → create_note / append_to_note / rename_note). Read-only.",
+      annotations: { ...READ_ONLY, title: "Lint wiki" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the lint to a subfolder (default: whole vault)"),
+        stub_word_threshold: z
+          .number()
+          .int()
+          .positive()
+          .max(10000)
+          .optional()
+          .describe("Notes shorter than this are flagged as stubs (default 100)"),
+        stale_days: z
+          .number()
+          .int()
+          .positive()
+          .max(36500)
+          .optional()
+          .describe("Notes not touched for this many days are flagged as stale (default 365)"),
+        concept_min_mentions: z
+          .number()
+          .int()
+          .positive()
+          .max(100)
+          .optional()
+          .describe(
+            "A capitalised phrase mentioned by ≥ N distinct notes without a page is a concept candidate (default 3)"
+          ),
+        max_per_bucket: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe("Cap per finding bucket so the response stays bounded (default 50)")
+      }
+    },
+    async (args) => textResult(await lintWiki(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_open_questions",
+    {
+      title: "Surface open questions across the vault",
+      description:
+        "Walks every note for lines matching deferred-thinking markers — `Open question:` / `Q:` / `TODO?` / `??` (plus optional list-bullet/quote/heading prefixes). Returns each hit with source, the heading it lives under, line number, and age in days, sorted oldest-first so things aging out surface first. Common research-PKM pattern (Karpathy's wiki, Eleanor Konik, academic Zettelkasten). Read-only.",
+      annotations: { ...READ_ONLY, title: "Open questions" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the scan to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max questions to return (default 100)"),
+        pattern: z
+          .string()
+          .optional()
+          .describe(
+            "Override the regex (case-insensitive). Default matches Open question:/Q:/TODO?/?? at line start with optional list/quote/heading prefix."
+          )
+      }
+    },
+    async (args) => textResult(await getOpenQuestions(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_paper_audit",
+    {
+      title: "Audit paper notes for missing citations",
+      description:
+        "For each note tagged `#paper` (configurable), verify frontmatter has at least one citable identifier (arxiv / doi / url / isbn). Also flag notes whose body contains an arxiv ID (e.g. `arxiv:2401.12345`) or DOI but doesn't carry the same identifier in frontmatter — common after quick-capture from a chat. Returns each flagged note with what was found in body and a proposed frontmatter patch the agent can apply via validate_note_proposal + create_note/append_to_note. Read-only.",
+      annotations: { ...READ_ONLY, title: "Paper audit" },
+      inputSchema: {
+        tag: z
+          .string()
+          .optional()
+          .describe("Tag identifying paper notes — with or without leading # (default 'paper')"),
+        folder: z.string().optional().describe("Restrict the audit to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max flagged notes (default 100)")
+      }
+    },
+    async (args) => textResult(await paperAudit(vault, args))
+  );
 }
 
 function registerWriteTools(server: McpServer, vault: Vault): void {
@@ -996,6 +1083,49 @@ DO NOT modify any notes. This is read-only analysis.`
 5. Output: one block per cluster with member paths, signal scores, and a one-line proposal — \`merge into <best-canonical>\`, \`split into <distinct-topics>\`, or \`leave-they're-genuinely-different\`.
 
 DO NOT modify any notes. Read-only.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "lint_wiki",
+    {
+      title: "Lint the wiki (Karpathy LLM-Wiki workflow)",
+      description:
+        "Run Karpathy's lint workflow over the vault — orchestrate obsidian_lint_wiki + obsidian_open_questions + obsidian_paper_audit, surface every actionable issue, propose fixes the agent can apply via the existing write tools after validate_note_proposal. Read-only — proposes only, never modifies.",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict the lint to a subfolder")
+      }
+    },
+    ({ folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Run a Karpathy-style \`/lint\` pass over my Obsidian vault${folder ? ` (folder \`${folder}\`)` : ""}.
+
+The reference workflow is at https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f — three commands: ingest, query, lint. This is the lint pass.
+
+1. Call \`obsidian_lint_wiki\`${folder ? ` with \`folder=${folder}\`` : ""} to get the five-bucket health report (orphans, broken links, stubs, stale pages, concept candidates). Read the \`summary\` first, then the per-bucket \`findings\`.
+2. Call \`obsidian_open_questions\`${folder ? ` with \`folder=${folder}\`,` : " with"} \`limit=50\` to surface deferred threads.
+3. Call \`obsidian_paper_audit\`${folder ? ` with \`folder=${folder}\`` : ""} to find paper notes missing arxiv/doi/url citations.
+4. Synthesize: pick the **5 highest-leverage fixes** across all three reports. For each, propose a concrete action:
+   - **Broken link**: which note, which target, what to do (\`obsidian_create_note\` the missing target / fix the link with \`obsidian_validate_note_proposal\` + write / \`obsidian_rename_note\` if the target moved).
+   - **Orphan**: which hub note should link to it, OR archive proposal.
+   - **Stub**: develop in-place / merge into / archive (with which existing note).
+   - **Stale**: review checklist (re-read, update frontmatter \`last_reviewed\`, or archive).
+   - **Concept candidate**: which phrase, which sources mention it, propose a stub page (\`obsidian_validate_note_proposal\` first to check the proposed wikilinks resolve).
+   - **Open question**: which note + heading + age, propose pulling it into a "questions/<topic>.md" page or resolving it inline.
+   - **Paper audit**: apply the \`proposed_frontmatter_patch\` to each flagged paper note (\`obsidian_validate_note_proposal\` → \`obsidian_append_to_note\` for the YAML).
+5. Output:
+   - 1-paragraph "state of the wiki" summary (counts per bucket).
+   - 5-item action list with concrete \`obsidian_*\` calls.
+   - Single-sentence pick — the one fix that, if done today, has the most cascade effect.
+
+DO NOT actually modify any notes. This is a proposal pass — the user runs the proposed actions afterwards.`
           }
         }
       ]

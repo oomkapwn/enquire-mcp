@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 18 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 9 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 21 MCP tools (17 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -277,6 +277,46 @@ Vault dashboard. One-shot orientation call — useful as the first call in a ses
 
 **Returns:** `{ total_notes, total_size_bytes, avg_note_words, recently_modified_7d, orphans, broken_wikilinks, total_tags, top_tags: [{ tag, count }], notes_with_frontmatter, generated_at }`. `orphans` = notes with no inbound *and* no outbound wikilinks.
 
+## `obsidian_lint_wiki`
+
+Karpathy LLM-Wiki lint workflow ([gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)). Returns five buckets of findings in one call: orphans, broken wikilinks, stub pages, stale notes, and concept candidates (capitalised phrases mentioned by ≥ K notes that lack their own page). Each finding ships with `path` + `message` + `suggestion` so the agent can fix via existing tools (`validate_note_proposal` → `create_note` / `append_to_note` / `rename_note`).
+
+| Argument                | Type              | Notes                                                                           |
+|-------------------------|-------------------|---------------------------------------------------------------------------------|
+| `folder`                | `string?`         | Restrict to a subfolder. Default: whole vault.                                  |
+| `stub_word_threshold`   | `number?` (≤ 10000) | Notes shorter than this are flagged as stubs. Default 100.                    |
+| `stale_days`            | `number?` (≤ 36500) | Notes not touched for this many days are flagged as stale. Default 365.       |
+| `concept_min_mentions`  | `number?` (≤ 100) | A capitalised phrase mentioned by ≥ N distinct notes without a page is a candidate. Default 3. |
+| `max_per_bucket`        | `number?` (≤ 500) | Cap per finding bucket. Default 50.                                             |
+
+**Returns:** `{ scope, scanned, generated_at, summary: { orphans, broken_links, stubs, stale, concept_candidates }, findings: { orphans[], broken_links[], stubs[], stale[], concept_candidates[] } }`. Each finding: `{ kind, path?, message, suggestion?, details? }`.
+
+The `stale` pass uses frontmatter `last_reviewed` (or `last-reviewed`) when present — Date / ISO string / numeric epoch all accepted. Falls back to mtime when the field is missing.
+
+## `obsidian_open_questions`
+
+Walks every note for deferred-thinking markers — `Open question:` / `Q:` / `TODO?` / `??` (with optional list-bullet, blockquote, or heading prefix). Returns each hit with source path, the heading it lives under, line number, and age in days, sorted oldest-first. Common research-PKM pattern (Karpathy, Eleanor Konik, academic Zettelkasten).
+
+| Argument  | Type             | Notes                                                                          |
+|-----------|------------------|--------------------------------------------------------------------------------|
+| `folder`  | `string?`        | Restrict to a subfolder.                                                       |
+| `limit`   | `number?` (≤ 500)| Max questions to return. Default 100.                                          |
+| `pattern` | `string?`        | Override the default regex (case-insensitive). Default matches the markers above at line start with optional list/quote/heading prefix. |
+
+**Returns:** `Array<{ question, source_path, source_title, context_heading, line, age_days, mtime }>`, sorted oldest-first.
+
+## `obsidian_paper_audit`
+
+For each note tagged `#paper` (configurable), verify frontmatter has at least one citable identifier (`arxiv` / `doi` / `url` / `isbn`). Also flag notes whose body contains an arxiv ID (e.g. `arxiv:2401.12345`) or DOI but doesn't carry the same identifier in frontmatter — common after quick-capture from a chat.
+
+| Argument | Type             | Notes                                                            |
+|----------|------------------|------------------------------------------------------------------|
+| `tag`    | `string?`        | Tag identifying paper notes. Default `paper`. Leading `#` optional. |
+| `folder` | `string?`        | Restrict to a subfolder.                                         |
+| `limit`  | `number?` (≤ 500)| Max flagged notes. Default 100.                                  |
+
+**Returns:** `{ scanned, flagged: Array<{ path, title, has_frontmatter_citation, found_in_body: { arxiv[], doi[], url[] }, proposed_frontmatter_patch, message }> }`. The `proposed_frontmatter_patch` is a `{key: value}` object the agent can pass to `validate_note_proposal` and then `append_to_note` (or rewrite the YAML block).
+
 ## Write tools (opt-in)
 
 All three write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
@@ -338,6 +378,7 @@ The note template implements `list`, so MCP clients with a resource browser will
 | `find_orphans`          | `folder?`                  | Finds notes with zero inbound links — archive candidates. |
 | `weekly_review`         | `folder?`                  | Aggregates the last 7 days of edits; groups by tag; surfaces shipped / open / stuck. |
 | `monthly_review`        | `folder?`                  | 30-day version: themes, what stalled, focus vs stated intent. Calls `obsidian_stats` first. |
+| `lint_wiki`             | `folder?`                  | **Karpathy `/lint`** — orchestrates `obsidian_lint_wiki` + `obsidian_open_questions` + `obsidian_paper_audit`, picks the 5 highest-leverage fixes, proposes concrete `obsidian_*` calls. Read-only. |
 | `extract_todos`         | `folder?`, `tag?`          | Greps TODO / FIXME / QUESTION across the vault, groups by note, picks a top-leverage next action. |
 | `process_inbox`         | `folder` (required)        | Walks an inbox folder, proposes Move / Merge / Promote / Archive for each note. |
 | `consolidate_tags`      | `min_count?`               | Surfaces near-duplicate / inconsistently-cased tags via `obsidian_list_tags` clustering. Proposes canonical merges. Read-only. |

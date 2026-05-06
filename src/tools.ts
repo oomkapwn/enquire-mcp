@@ -1331,6 +1331,385 @@ export async function getVaultStats(vault: Vault, args: { top_tags?: number }): 
   };
 }
 
+// ─── obsidian_lint_wiki (v1.5 — Karpathy LLM-Wiki lint workflow) ─────────────
+// Karpathy's gist (gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+// names three workflows for an LLM-maintained wiki: ingest, query, lint. We had
+// the ingest+query primitives (create_note + search/find_similar/etc.) since
+// 0.13. lint completes the trio in one tool call: orphans, broken links, stub
+// pages, stale claims, and "concept mentioned in N+ notes but missing its own
+// page." Each finding is shaped so the agent can fix it via existing tools
+// (validate_note_proposal → create_note / append_to_note / rename_note).
+
+export interface LintWikiArgs {
+  /** Folder to restrict the lint to (default: whole vault). */
+  folder?: string;
+  /** Word count below which a note is considered a "stub". Default 100. */
+  stub_word_threshold?: number;
+  /** A note is "stale" if its frontmatter `last_reviewed` (or mtime if missing)
+   *  is older than this many days. Default 365. */
+  stale_days?: number;
+  /** A capitalised n-gram mentioned by ≥ N distinct notes but not having its
+   *  own page is flagged as a concept candidate. Default 3. */
+  concept_min_mentions?: number;
+  /** Cap on each finding-bucket so the response stays bounded. Default 50. */
+  max_per_bucket?: number;
+}
+
+export interface LintWikiFinding {
+  kind: "orphan" | "broken-link" | "stub" | "stale" | "concept-without-page";
+  path?: string;
+  message: string;
+  suggestion?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface LintWikiResult {
+  scope: string;
+  scanned: number;
+  generated_at: string;
+  summary: {
+    orphans: number;
+    broken_links: number;
+    stubs: number;
+    stale: number;
+    concept_candidates: number;
+  };
+  findings: {
+    orphans: LintWikiFinding[];
+    broken_links: LintWikiFinding[];
+    stubs: LintWikiFinding[];
+    stale: LintWikiFinding[];
+    concept_candidates: LintWikiFinding[];
+  };
+}
+
+export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWikiResult> {
+  await vault.ensureExists();
+  const stubThreshold = args.stub_word_threshold ?? 100;
+  const staleDays = args.stale_days ?? 365;
+  const conceptMinMentions = args.concept_min_mentions ?? 3;
+  const cap = args.max_per_bucket ?? 50;
+
+  const entries = await vault.listMarkdown(args.folder);
+  const allEntries = await vault.listMarkdown();
+  const staleMs = Date.now() - staleDays * 24 * 3600 * 1000;
+
+  // Single pass: collect inbound counts, outbound presence, broken links,
+  // word counts, last-reviewed times, capitalised-phrase mentions.
+  const inbound = new Map<string, number>();
+  const outboundPresence = new Set<string>();
+  const broken: LintWikiFinding[] = [];
+  const stubs: LintWikiFinding[] = [];
+  const stale: LintWikiFinding[] = [];
+  const titleSet = new Set<string>();
+  for (const e of allEntries) titleSet.add(stripMd(e.basename).toLowerCase());
+
+  // Capitalised-phrase mentions across the whole vault. A phrase is 1-3
+  // CapitalCase tokens (e.g. "Reinforcement Learning", "Attention Heads").
+  // Stop-words: dropped when they appear at the start of a phrase.
+  const conceptStopwords = new Set([
+    "The",
+    "A",
+    "An",
+    "This",
+    "That",
+    "These",
+    "Those",
+    "If",
+    "When",
+    "While",
+    "But",
+    "And",
+    "Or"
+  ]);
+  const capPhraseRe = /\b((?:[A-Z][a-z][a-z]+(?:\s+[A-Z][a-z][a-z]+){0,2}))\b/g;
+  const conceptMentions = new Map<string, Set<string>>(); // phrase → set of source paths
+
+  for (const e of entries) {
+    const { content, parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
+
+    // Outbound + broken pass.
+    if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
+    for (const link of parsed.wikilinks) {
+      const m = findBestMatch(allEntries, link.target, e.relPath);
+      if (m) {
+        inbound.set(m.relPath, (inbound.get(m.relPath) ?? 0) + 1);
+      } else if (broken.length < cap) {
+        broken.push({
+          kind: "broken-link",
+          path: e.relPath,
+          message: `[[${link.target}]] in ${e.relPath} doesn't resolve`,
+          suggestion: "create the missing note, fix the link, or remove it",
+          details: { target: link.target, raw: link.raw }
+        });
+      }
+    }
+
+    // Stub pass.
+    const wordCount = parsed.body.trim() ? parsed.body.trim().split(/\s+/).length : 0;
+    if (wordCount < stubThreshold && stubs.length < cap) {
+      stubs.push({
+        kind: "stub",
+        path: e.relPath,
+        message: `${e.relPath} is ${wordCount} words (threshold ${stubThreshold})`,
+        suggestion: "develop, merge into a hub, or archive",
+        details: { word_count: wordCount, mtime: new Date(mtimeMs).toISOString() }
+      });
+    }
+
+    // Stale pass — frontmatter `last_reviewed` overrides mtime if present.
+    // gray-matter (js-yaml) parses ISO dates into Date objects automatically,
+    // so we accept Date | string | number.
+    const lastReviewedRaw = parsed.frontmatter?.last_reviewed ?? parsed.frontmatter?.["last-reviewed"];
+    let lastTouchedMs = mtimeMs;
+    if (lastReviewedRaw instanceof Date) {
+      const t = lastReviewedRaw.getTime();
+      if (Number.isFinite(t)) lastTouchedMs = t;
+    } else if (typeof lastReviewedRaw === "string") {
+      const t = Date.parse(lastReviewedRaw);
+      if (Number.isFinite(t)) lastTouchedMs = t;
+    } else if (typeof lastReviewedRaw === "number" && Number.isFinite(lastReviewedRaw)) {
+      lastTouchedMs = lastReviewedRaw;
+    }
+    if (lastTouchedMs < staleMs && stale.length < cap) {
+      stale.push({
+        kind: "stale",
+        path: e.relPath,
+        message: `${e.relPath} not touched since ${new Date(lastTouchedMs).toISOString().slice(0, 10)}`,
+        suggestion: "review for accuracy or archive",
+        details: {
+          last_touched: new Date(lastTouchedMs).toISOString(),
+          source: lastReviewedRaw !== undefined ? "frontmatter.last_reviewed" : "mtime"
+        }
+      });
+    }
+
+    // Concept-mention pass — capitalised phrases in the body that aren't
+    // already a wikilink target. Cap at 30 unique phrases per source to
+    // bound memory, but loose enough that real concepts in long notes don't
+    // get truncated.
+    const seenInThisNote = new Set<string>();
+    for (const m of parsed.body.matchAll(capPhraseRe)) {
+      const phrase = m[1];
+      if (!phrase) continue;
+      const firstWord = phrase.split(/\s+/)[0];
+      if (firstWord !== undefined && conceptStopwords.has(firstWord)) continue;
+      if (seenInThisNote.has(phrase)) continue;
+      if (seenInThisNote.size >= 30) break;
+      // Skip phrases that are already a vault note (basename match).
+      if (titleSet.has(phrase.toLowerCase())) continue;
+      seenInThisNote.add(phrase);
+      const set = conceptMentions.get(phrase) ?? new Set<string>();
+      set.add(e.relPath);
+      conceptMentions.set(phrase, set);
+    }
+  }
+
+  // Orphan findings (no inbound AND no outbound).
+  const orphans: LintWikiFinding[] = [];
+  for (const e of entries) {
+    if (orphans.length >= cap) break;
+    if (!inbound.get(e.relPath) && !outboundPresence.has(e.relPath)) {
+      orphans.push({
+        kind: "orphan",
+        path: e.relPath,
+        message: `${e.relPath} has no inbound or outbound wikilinks`,
+        suggestion: "link from a hub note, archive, or delete",
+        details: { mtime: new Date(e.mtimeMs).toISOString() }
+      });
+    }
+  }
+
+  // Concept candidates — phrases mentioned by ≥ N distinct notes.
+  const conceptCandidates: LintWikiFinding[] = [];
+  const ranked = [...conceptMentions.entries()]
+    .filter(([, sources]) => sources.size >= conceptMinMentions)
+    .sort((a, b) => b[1].size - a[1].size);
+  for (const [phrase, sources] of ranked) {
+    if (conceptCandidates.length >= cap) break;
+    conceptCandidates.push({
+      kind: "concept-without-page",
+      message: `"${phrase}" is mentioned by ${sources.size} notes but has no page of its own`,
+      suggestion: `create a page \`${phrase}.md\` and refile the most-developed mentions into it`,
+      details: { phrase, mention_count: sources.size, sources: [...sources].slice(0, 5) }
+    });
+  }
+
+  return {
+    scope: args.folder ?? "(whole vault)",
+    scanned: entries.length,
+    generated_at: new Date().toISOString(),
+    summary: {
+      orphans: orphans.length,
+      broken_links: broken.length,
+      stubs: stubs.length,
+      stale: stale.length,
+      concept_candidates: conceptCandidates.length
+    },
+    findings: {
+      orphans,
+      broken_links: broken,
+      stubs,
+      stale,
+      concept_candidates: conceptCandidates
+    }
+  };
+}
+
+// ─── obsidian_open_questions (v1.5 — surface unresolved threads) ─────────────
+// Karpathy and other ML PKM workflows use "Open question:" / "Q:" / "TODO?" /
+// "??" lines as deferred-thinking markers. This tool returns every such line
+// across the vault with source + context heading + age, sorted oldest-first.
+
+export interface OpenQuestion {
+  question: string;
+  source_path: string;
+  source_title: string;
+  context_heading: string | null;
+  line: number;
+  age_days: number;
+  mtime: string;
+}
+
+export async function getOpenQuestions(
+  vault: Vault,
+  args: { folder?: string; limit?: number; pattern?: string }
+): Promise<OpenQuestion[]> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 100;
+  // Default pattern: "Open question:" / "Open question -" / "Q:" / "TODO?" / "??"
+  // followed by space + question text. Anchored at line start (with optional
+  // list-bullet / quote / heading prefix).
+  // Default pattern matches deferred-thinking markers at line start (with
+  // optional list-bullet / quote / heading prefix). Single-line `i` flag —
+  // we apply it line-by-line below.
+  const defaultPat = "^\\s*(?:[#\\->\\*\\d\\.]+\\s+)?(?:open\\s+question|q|todo\\?|\\?\\?)\\s*[:\\-]?\\s*(.+)$";
+  const re = new RegExp(args.pattern ?? defaultPat, "i");
+
+  const entries = await vault.listMarkdown(args.folder);
+  const out: OpenQuestion[] = [];
+  const now = Date.now();
+  for (const e of entries) {
+    if (out.length >= limit) break;
+    const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
+    // Scan parsed.body so frontmatter lines (which can contain "Q:" -ish
+    // tokens) don't pollute results.
+    const lines = parsed.body.split("\n");
+    let currentHeading: string | null = null;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (headingMatch?.[2]) {
+        currentHeading = headingMatch[2];
+        // A heading line itself isn't a question hit — skip the regex match.
+        continue;
+      }
+      const m = re.exec(line);
+      if (!m || !m[1]) continue;
+      out.push({
+        question: m[1].trim(),
+        source_path: e.relPath,
+        source_title: stripMd(e.basename),
+        context_heading: currentHeading,
+        line: i + 1,
+        age_days: Math.round((now - mtimeMs) / (24 * 3600 * 1000)),
+        mtime: new Date(mtimeMs).toISOString()
+      });
+      if (out.length >= limit) break;
+    }
+  }
+  // Sort oldest-first so things aging out surface first.
+  out.sort((a, b) => b.age_days - a.age_days);
+  return out;
+}
+
+// ─── obsidian_paper_audit (v1.5 — verify #paper notes have citations) ────────
+// For each note tagged #paper (configurable), verify frontmatter has at least
+// one of arxiv/doi/url/isbn. Also flag notes whose body contains an arxiv ID
+// (e.g. "arxiv:2401.12345") but doesn't carry it in frontmatter — common after
+// quick-capture from a chat.
+
+export interface PaperAuditFinding {
+  path: string;
+  title: string;
+  has_frontmatter_citation: boolean;
+  found_in_body: { arxiv: string[]; doi: string[]; url: string[] };
+  proposed_frontmatter_patch: Record<string, string> | null;
+  message: string;
+}
+
+export async function paperAudit(
+  vault: Vault,
+  args: { tag?: string; folder?: string; limit?: number }
+): Promise<{ scanned: number; flagged: PaperAuditFinding[] }> {
+  await vault.ensureExists();
+  const tag = (args.tag ?? "paper").replace(/^#+/, "").toLowerCase();
+  const limit = args.limit ?? 100;
+  const entries = await vault.listMarkdown(args.folder);
+
+  const arxivRe = /\barxiv[:\s]*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/gi;
+  const doiRe = /\bdoi[:\s]*(10\.\d{4,9}\/[\w\-._;()/:]+)/gi;
+  const urlRe = /\bhttps?:\/\/[^\s<>")\]]+/g;
+
+  let scanned = 0;
+  const flagged: PaperAuditFinding[] = [];
+  for (const e of entries) {
+    if (flagged.length >= limit) break;
+    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+    const tagsLower = parsed.tags.map((t) => t.toLowerCase());
+    if (!tagsLower.includes(tag)) continue;
+    scanned += 1;
+
+    const fm = parsed.frontmatter ?? {};
+    const fmKeys = new Set(Object.keys(fm).map((k) => k.toLowerCase()));
+    const hasFmCitation = fmKeys.has("arxiv") || fmKeys.has("doi") || fmKeys.has("url") || fmKeys.has("isbn");
+
+    // Scan parsed.body so the frontmatter's own arxiv/doi keys don't get
+    // re-detected as "found in body".
+    const body = parsed.body;
+    const arxivIds = [...body.matchAll(arxivRe)].map((m) => m[1]).filter((v): v is string => !!v);
+    const doiIds = [...body.matchAll(doiRe)].map((m) => m[1]).filter((v): v is string => !!v);
+    const urls = [...body.matchAll(urlRe)].map((m) => m[0]);
+    const foundInBody = {
+      arxiv: [...new Set(arxivIds)],
+      doi: [...new Set(doiIds)],
+      url: [...new Set(urls)].slice(0, 3)
+    };
+
+    const bodyHasAnyId = foundInBody.arxiv.length > 0 || foundInBody.doi.length > 0 || foundInBody.url.length > 0;
+    // Clean ⇒ has a frontmatter citation. The body might cite OTHER papers,
+    // but this note itself is properly identified.
+    if (hasFmCitation) continue;
+
+    let proposed: Record<string, string> | null = null;
+    if (bodyHasAnyId) {
+      proposed = {};
+      if (foundInBody.arxiv[0]) proposed.arxiv = foundInBody.arxiv[0];
+      if (foundInBody.doi[0]) proposed.doi = foundInBody.doi[0];
+      if (foundInBody.url[0] && !proposed.arxiv && !proposed.doi) proposed.url = foundInBody.url[0];
+    }
+
+    const msg = bodyHasAnyId
+      ? `${e.relPath} has identifiers in body (${[
+          ...foundInBody.arxiv.map((v) => `arxiv:${v}`),
+          ...foundInBody.doi.map((v) => `doi:${v}`)
+        ]
+          .slice(0, 2)
+          .join(", ")}) but missing frontmatter`
+      : `${e.relPath} has #${tag} but no arxiv/doi/url anywhere — citation missing`;
+
+    flagged.push({
+      path: e.relPath,
+      title: stripMd(e.basename),
+      has_frontmatter_citation: hasFmCitation,
+      found_in_body: foundInBody,
+      proposed_frontmatter_patch: proposed,
+      message: msg
+    });
+  }
+  return { scanned, flagged };
+}
+
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
 function jaccard<T>(a: Set<T>, b: Set<T>): number {

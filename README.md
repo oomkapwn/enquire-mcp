@@ -65,7 +65,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | Lists **outbound links** for one note with resolution status | ❌ | ✅ |
 | Built-in **Dataview-style queries** (`LIST` / `TABLE`, `AND`/`OR`, `LIKE`) | only via Obsidian plugin | ✅ first-class |
 | **MCP resources** for browsing the vault as a tree | ❌ | ✅ |
-| **MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`) | ❌ | ✅ 9 prompts |
+| **MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`) | ❌ | ✅ 10 prompts |
 | **Read-only by default** (write tools require explicit flag) | ❌ usually write-default | ✅ `--enable-write` |
 | Symlink-escape safety, realpath-checked reads & writes | rare | ✅ |
 | Persistent on-disk cache for warm cold-starts | ❌ | ✅ `--persistent-cache` |
@@ -78,6 +78,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
 | **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
+| **Karpathy LLM-Wiki `/lint` workflow** (`obsidian_lint_wiki` + `lint_wiki` prompt — orphans, broken links, stubs, stale, concept candidates) | ❌ | ✅ reference impl |
 | TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
@@ -152,7 +153,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 14 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 17 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -170,6 +171,9 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_find_similar` | **Hybrid lexical similarity** — given a note, rank others by tag-Jaccard + title 3-gram + shared-outbound + co-backlink. Each signal returned individually so the caller can re-rank. No embeddings, no native deps. |
 | `obsidian_get_note_neighbors` | **Graph context in one call** — outbound + backlinks + tag-cluster siblings for a note. Replaces 4 round-trips with 1. Designed for "give the LLM enough context to reason about THIS note" RAG. |
 | `obsidian_stats` | **Vault dashboard** — total notes, total bytes, recently-modified count, orphans, broken wikilinks, top tags. One-shot orientation call. |
+| `obsidian_lint_wiki` | **Karpathy LLM-Wiki lint workflow.** Five-bucket vault-hygiene report in one call: orphans, broken links, stub pages, stale notes, and concept candidates (capitalised phrases mentioned by ≥ K notes that lack their own page). Each finding ships with a fix suggestion. Pairs with the `lint_wiki` prompt. |
+| `obsidian_open_questions` | Walks every note for `Open question:` / `Q:` / `TODO?` / `??` markers. Returns each hit with source path, context heading, line, and age — sorted oldest-first so deferred threads aging out surface first. |
+| `obsidian_paper_audit` | For every `#paper` note, verifies frontmatter has at least one of arxiv/doi/url/isbn. Flags notes whose body mentions an arxiv ID or DOI but doesn't carry it in frontmatter — common after quick-capture from a chat. Returns a `proposed_frontmatter_patch` the agent can apply. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 3 write tools (opt-in via `--enable-write`)
@@ -198,6 +202,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `process_inbox` | `folder` | Move / Merge / Promote / Archive proposals for an inbox folder. |
 | `consolidate_tags` | `min_count?` | Surface near-duplicate tags (`#productivity` vs `#productive`) and propose canonical merges. Read-only. |
 | `find_duplicates` | `folder?`, `min_score?` | Walk the vault for clusters of structurally-similar notes via `obsidian_find_similar`. Read-only — outputs merge proposals only. |
+| `lint_wiki` | `folder?` | **Karpathy LLM-Wiki `/lint`** — orchestrates `obsidian_lint_wiki` + `obsidian_open_questions` + `obsidian_paper_audit`, picks the 5 highest-leverage fixes across all three reports, proposes concrete `obsidian_*` calls. Read-only — proposes only. |
 
 ---
 

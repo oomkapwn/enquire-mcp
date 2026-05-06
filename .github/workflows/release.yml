@@ -41,7 +41,24 @@ jobs:
           VAULT="$(node scripts/synthetic-vault.mjs)"
           node scripts/smoke.mjs "$VAULT"
           node scripts/smoke.mjs "$VAULT" --with-fts
+      - name: Resolve npm dist-tag from version
+        id: dist_tag
+        # Stable releases (v1.0.0, v2.3.4) → `latest`. Prereleases use the
+        # SemVer prerelease channel as the dist-tag — `v2.0.0-alpha.0` →
+        # `alpha`, `v2.0.0-beta.1` → `beta`, `v2.0.0-rc.0` → `rc`. Users on
+        # `npm install @oomkapwn/enquire-mcp` (no @-tag) keep getting stable;
+        # alpha/beta testers explicitly opt in via `npm install @oomkapwn/enquire-mcp@alpha`.
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          # Match `<channel>` from `<base>-<channel>.<n>` (e.g. `alpha` from `2.0.0-alpha.0`).
+          if [[ "$VERSION" =~ -([a-z]+)\.[0-9]+$ ]]; then
+            CHANNEL="${BASH_REMATCH[1]}"
+          else
+            CHANNEL="latest"
+          fi
+          echo "tag=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION under dist-tag '$CHANNEL'"
       - name: Publish with provenance
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag "${{ steps.dist_tag.outputs.tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

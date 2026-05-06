@@ -81,6 +81,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Karpathy LLM-Wiki `/lint` workflow** (`obsidian_lint_wiki` + `lint_wiki` prompt — orphans, broken links, stubs, stale, concept candidates) | ❌ | ✅ reference impl |
 | **Multi-hop graph path-finding** (`obsidian_find_path` — BFS shortest path between two notes over the wikilink graph, with alternatives) | ❌ | ✅ |
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
+| **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | TypeScript strict + Biome lint + 246 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~3000 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
@@ -155,7 +156,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 19 read tools (always on) + 1 opt-in (`--persistent-index`)
+### 21 read tools (always on) + 1 opt-in (`--persistent-index`)
 
 | Tool | What it does |
 |---|---|
@@ -178,6 +179,8 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_paper_audit` | For every `#paper` note, verifies frontmatter has at least one of arxiv/doi/url/isbn. Flags notes whose body mentions an arxiv ID or DOI but doesn't carry it in frontmatter — common after quick-capture from a chat. Returns a `proposed_frontmatter_patch` the agent can apply. |
 | `obsidian_find_path` | **Multi-hop graph traversal** — BFS from `from` to `to` over the wikilink graph, returns the shortest path up to `max_depth` hops with the wikilink text used at each step. `include_alternatives=true` returns up to 10 same-length paths so the agent can compare. Embeds (`![[…]]`) followed by default. |
 | `obsidian_open_in_ui` | Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — just URI emission. `new_pane=true` opens the note in a split. |
+| `obsidian_list_canvases` | Lists `.canvas` files (Obsidian's whiteboard / mind-map format) with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. |
+| `obsidian_read_canvas` | Parses one `.canvas` file into typed nodes (text / file / link / group / unknown) + edges (with from/to node IDs, sides, labels, colors). Each `file` node carries a `file_resolved` field (vault-relative path or `null` if broken). Returns a node-kind summary + `broken_file_refs` array. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
 ### 3 write tools (opt-in via `--enable-write`)
@@ -396,6 +399,7 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.7.x** — **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — parses Obsidian's whiteboard format into typed nodes + edges, surfaces broken file refs).
 - **1.6.x** — **Multi-hop graph traversal** (`obsidian_find_path` BFS) + **`obsidian_open_in_ui`** (obsidian:// URI hand-off) + **strict allowlist** (`--read-paths` complement to `--exclude-glob`).
 - **1.5.x** — **Karpathy LLM-Wiki `/lint` workflow** — `obsidian_lint_wiki` (orphans/broken/stubs/stale/concept candidates) + `obsidian_open_questions` + `obsidian_paper_audit` + `lint_wiki` prompt.
 - **1.4.x** — Three new MCP prompts (`consolidate_tags`, `find_duplicates`, `monthly_review`) bringing the total to 9.

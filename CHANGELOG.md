@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-05-06
+
+Canvas (`.canvas`) read tools — green-field per the v1.5 competitive audit. Only obscure forks (`obsidian-mcp-pro`, `aaronsb`'s plugin via Obsidian Bases) had any canvas support, and even those required Obsidian to be running. enquire-mcp now reads Canvas natively from the filesystem like every other vault format.
+
+### Added — `obsidian_list_canvases` (read-only)
+Lists `.canvas` files (Obsidian's whiteboard / mind-map format — JSON nodes + edges) in the vault, with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. Sorted newest-first by mtime. Use this to discover which canvases exist before reading one.
+
+### Added — `obsidian_read_canvas` (read-only)
+Parses one `.canvas` file into typed nodes + edges. Each node carries a `kind` discriminator — `text` / `file` / `link` / `group` / `unknown` (forward-compat: any future Obsidian canvas node type lands as `unknown` with `raw_type` + `raw` so the agent still sees the data).
+
+Each `file` node carries a `file_resolved` field — the vault-relative path the canvas's file reference resolved to (or `null` if broken). The response also includes:
+- `summary`: per-kind node count (`{ text, file, link, group, unknown }`).
+- `broken_file_refs`: canvas `file:` references that don't resolve to any markdown in the vault — surfaces canvas hygiene issues alongside `obsidian_get_unresolved_wikilinks`.
+
+`CanvasEdge` preserves `from_node` / `to_node` IDs, optional `from_side` / `to_side`, optional `label`, optional `color`. Throws on path-traversal, missing file, or invalid JSON.
+
+### Internal — vault primitives for non-markdown formats
+- `Vault.listFilesByExtension(ext, folder?)` — generic walker for any extension. Skip rules + privacy filters match `listMarkdown()`.
+- `Vault.readBinaryFile(rel)` — reads non-markdown files (returns `Buffer`). Same path-safety + size cap as `readNote`.
+
+These primitives unblock future tools for other Obsidian file formats (`.excalidraw`, `.base`, …) without re-implementing the walker each time.
+
+### Repo state
+- **25 MCP tools** (was 23). 21 always-on read + 1 opt-in FTS5 + 3 write.
+- **10 MCP prompts** (unchanged).
+- **285 unit tests** (was 275, +10 for canvas coverage: nodes by kind, broken refs, edge metadata, malformed JSON, path traversal, empty canvas, allowlist filtering, folder filter, .canvas auto-extension, future-type forward-compat).
+
 ## [1.6.0] — 2026-05-06
 
 Three Tier-1 items from the v1.5 competitive audit. Same release: a graph-traversal tool that aaronsb's plugin made into a killer feature, an obsidian:// URI hand-off (cyanheads pattern), and a strict allowlist that pairs with the existing denylist.

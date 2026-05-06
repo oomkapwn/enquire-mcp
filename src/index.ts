@@ -21,10 +21,12 @@ import {
   getUnresolvedWikilinks,
   getVaultStats,
   lintWiki,
+  listCanvases,
   listNotes,
   listTags,
   openInUi,
   paperAudit,
+  readCanvas,
   readNote,
   renameNote,
   resolveWikilink,
@@ -34,7 +36,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
 
 interface ServeOptions {
   vault: string;
@@ -730,6 +732,35 @@ function registerReadTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await openInUi(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_list_canvases",
+    {
+      title: "List Obsidian Canvas (.canvas) files",
+      description:
+        "Lists `.canvas` files (Obsidian's whiteboard / mind-map format — JSON nodes + edges) in the vault, with each canvas's node and edge counts. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which canvases exist before calling `obsidian_read_canvas` to inspect one.",
+      annotations: { ...READ_ONLY, title: "List canvases" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the listing to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max canvases to return (default 100)")
+      }
+    },
+    async (args) => textResult(await listCanvases(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_read_canvas",
+    {
+      title: "Read an Obsidian Canvas (parses .canvas JSON)",
+      description:
+        "Parses one `.canvas` file into typed nodes (text / file / link / group) + edges (with from/to node IDs and optional sides + labels). Each `file` node carries a `file_resolved` field — the vault-relative path that the canvas's file reference resolved to (or null if broken). The response also includes a `summary` of node-kind counts and a `broken_file_refs` array surfacing canvas files that reference non-existent notes. Read-only.",
+      annotations: { ...READ_ONLY, title: "Read canvas" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the .canvas file (with or without .canvas)")
+      }
+    },
+    async (args) => textResult(await readCanvas(vault, args))
   );
 }
 

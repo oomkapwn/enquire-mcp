@@ -280,6 +280,38 @@ export class Vault {
     return out;
   }
 
+  /** Walk the vault and return files ending with the given extension (e.g.
+   *  ".canvas", ".pdf"). Honors --exclude-glob + --read-paths. Used by the
+   *  v1.7 canvas tools and any future file-format-specific tools. */
+  async listFilesByExtension(ext: string, folder?: string): Promise<FileEntry[]> {
+    if (!this.ready) await this.ensureExists();
+    const start = folder ? this.resolveInside(folder) : this.root;
+    if (folder) {
+      const lstat = await fs.lstat(start).catch(() => null);
+      if (!lstat || lstat.isSymbolicLink()) return [];
+      const real = await fs.realpath(start).catch(() => null);
+      if (!real) return [];
+      const rel = path.relative(this.root, real);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
+      if (this.isExcluded(rel)) return [];
+    }
+    const out: FileEntry[] = [];
+    await walkAnyExt(start, this.root, out, ext.toLowerCase());
+    if (this.excludeRegexes.length > 0 || this.readPathRegexes.length > 0) {
+      return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
+    }
+    return out;
+  }
+
+  /** Read a non-markdown file (e.g. `.canvas` JSON). Same path-safety + size
+   *  cap as readFile/readNote, but returns Buffer so callers can decide on
+   *  encoding. */
+  async readBinaryFile(relOrAbs: string): Promise<Buffer> {
+    const abs = await this.resolveSafePath(relOrAbs);
+    await this.assertSize(abs);
+    return fs.readFile(abs);
+  }
+
   async readFile(relOrAbs: string): Promise<string> {
     const abs = await this.resolveSafePath(relOrAbs);
     await this.assertSize(abs);
@@ -549,6 +581,39 @@ async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> 
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
       await walk(full, root, out);
     } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
+      const stat = await fs.stat(full).catch(() => null);
+      if (!stat) continue;
+      out.push({
+        absPath: full,
+        relPath: path.relative(root, full),
+        basename: e.name,
+        mtimeMs: stat.mtimeMs
+      });
+    }
+  }
+}
+
+/** Generic walker — same skip rules as the markdown walker, but matches any
+ *  file extension (lowercase). Used by listFilesByExtension(".canvas") etc. */
+async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: string): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (SKIP_DIRS.has(e.name)) continue;
+    if (e.name.startsWith(".")) continue;
+    if (e.isSymbolicLink()) continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const real = await fs.realpath(full).catch(() => null);
+      if (!real) continue;
+      const rel = path.relative(root, real);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      await walkAnyExt(full, root, out, ext);
+    } else if (e.isFile() && e.name.toLowerCase().endsWith(ext)) {
       const stat = await fs.stat(full).catch(() => null);
       if (!stat) continue;
       out.push({

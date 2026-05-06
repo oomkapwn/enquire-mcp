@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 23 MCP tools (19 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 25 MCP tools (21 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -345,6 +345,38 @@ Returns an `obsidian://open?vault=<v>&file=<f>` URI for hand-off to the running 
 | `new_pane` | `boolean?` | Append `&newpane=true` so Obsidian opens the note in a split. Default `false`. |
 
 **Returns:** `{ uri, vault_name, path, title }`. The `vault_name` is the leaf folder of the vault root path; Obsidian matches on this OR on the absolute file path, so the URI works even if the user's Obsidian instance opened the vault under a different name.
+
+## `obsidian_list_canvases`
+
+Lists `.canvas` files (Obsidian's whiteboard format — JSON nodes + edges) in the vault, with each canvas's node and edge counts. Honors `--exclude-glob` and `--read-paths`. Use this to discover which canvases exist before calling `obsidian_read_canvas`.
+
+| Argument | Type             | Notes                                       |
+|----------|------------------|---------------------------------------------|
+| `folder` | `string?`        | Restrict the listing to a subfolder.        |
+| `limit`  | `number?` (≤ 500)| Max canvases to return. Default 100.        |
+
+**Returns:** `Array<{ path, name, size_bytes, mtime, node_count, edge_count }>`, sorted newest-first.
+
+## `obsidian_read_canvas`
+
+Parses one `.canvas` file into typed nodes + edges. Each node has a `kind` field — `text` / `file` / `link` / `group` / `unknown` (forward-compat for new Obsidian canvas node types). Each `file` node carries a `file_resolved` field — the vault-relative path the canvas's file reference resolved to (or `null` if broken).
+
+| Argument | Type     | Notes                                                  |
+|----------|----------|--------------------------------------------------------|
+| `path`   | `string` | Vault-relative path of the `.canvas` file (`.canvas` extension auto-appended). |
+
+**Returns:** `{ path, name, size_bytes, mtime, nodes: CanvasNode[], edges: CanvasEdge[], summary: { text, file, link, group, unknown }, broken_file_refs: string[] }`. Throws on path-traversal, missing file, or invalid JSON.
+
+`CanvasNode` discriminated union by `kind`:
+- `{ kind: "text", id, x, y, width, height, text, color? }`
+- `{ kind: "file", id, x, y, width, height, file, file_resolved, subpath?, color? }`
+- `{ kind: "link", id, x, y, width, height, url, color? }`
+- `{ kind: "group", id, x, y, width, height, label?, color? }`
+- `{ kind: "unknown", id, raw_type, raw }` — preserves any future canvas node type unchanged.
+
+`CanvasEdge`: `{ id, from_node, from_side?, to_node, to_side?, label?, color? }`.
+
+`broken_file_refs` lists canvas `file:` nodes that didn't resolve to any markdown in the current vault — useful as a vault-hygiene signal alongside `obsidian_get_unresolved_wikilinks`.
 
 ## Write tools (opt-in)
 

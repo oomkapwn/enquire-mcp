@@ -14,7 +14,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#develop)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
-[![tests](https://img.shields.io/badge/tests-228%20passing-brightgreen.svg)](#develop)
+[![tests](https://img.shields.io/badge/tests-239%20passing-brightgreen.svg)](#develop)
 [![coverage](https://img.shields.io/badge/coverage-82%25%20lines-brightgreen.svg)](#develop)
 [![lint](https://img.shields.io/badge/lint-biome-60a5fa.svg)](https://biomejs.dev/)
 
@@ -79,7 +79,8 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Anti-slop write validator** (`obsidian_validate_note_proposal` lints YAML + wikilinks + tags before write) | ❌ | ✅ |
 | **Graph-aware retrieval** (`find_similar` + `get_note_neighbors` — multi-signal lexical hybrid, no embeddings) | ❌ | ✅ |
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
-| TypeScript strict + Biome lint + 228 unit tests | varies | ✅ |
+| **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
+| TypeScript strict + Biome lint + 239 unit tests | varies | ✅ |
 
 That's the gap. enquire closes it in ~2800 lines of TypeScript with four mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3`, only loaded when `--persistent-index` is passed).
 
@@ -173,12 +174,13 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_stats` | **Vault dashboard** — total notes, total bytes, recently-modified count, orphans, broken wikilinks, top tags. One-shot orientation call. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
-### 2 write tools (opt-in via `--enable-write`)
+### 3 write tools (opt-in via `--enable-write`)
 
 | Tool | What it does |
 |---|---|
 | `obsidian_create_note` | Create a note with optional frontmatter. Refuses to overwrite by default. |
 | `obsidian_append_to_note` | Append a markdown block to an existing note. Configurable separator. |
+| `obsidian_rename_note` | **Atomic rename + automatic backlink rewrite.** Renames a note AND rewrites every `[[wikilink]]` / `![[embed]]` in the rest of the vault that resolved to it — preserving alias/section/block + the user's bare-vs-path target convention. Code-fence-aware: wikilinks inside ``` / ~~~ blocks stay verbatim. `dry_run: true` previews the plan without touching disk. |
 
 ### MCP resources
 

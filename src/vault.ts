@@ -343,6 +343,49 @@ export class Vault {
     }
   }
 
+  /** Rename a markdown file inside the vault. Atomic via fs.rename. Refuses if
+   *  source missing, target exists (unless overwrite), either path traverses,
+   *  or the target sits behind a symlink that points outside the vault. Caller
+   *  is responsible for rewriting wikilinks pointing at the old name. */
+  async renameFile(
+    fromRel: string,
+    toRel: string,
+    opts: { overwrite?: boolean } = {}
+  ): Promise<{ from: string; to: string; mtimeMs: number }> {
+    if (!this.writeEnabled) {
+      throw new Error("Vault is read-only — start the server with --enable-write to allow rename");
+    }
+    if (!this.ready) await this.ensureExists();
+    const fromAbs = await this.resolveSafePath(fromRel);
+    const toRelNorm = toRel.toLowerCase().endsWith(".md") ? toRel : `${toRel}.md`;
+    const toAbs = this.resolveInside(toRelNorm);
+    await this.assertParentInsideVault(toAbs);
+    if (this.isExcluded(path.relative(this.root, toAbs))) {
+      throw new Error(`Refusing to rename — destination matches an --exclude-glob pattern: ${toRelNorm}`);
+    }
+    if (!opts.overwrite) {
+      const exists = await fs
+        .stat(toAbs)
+        .then(() => true)
+        .catch(() => false);
+      if (exists) throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
+    }
+    const targetLstat = await fs.lstat(toAbs).catch(() => null);
+    if (targetLstat?.isSymbolicLink()) {
+      throw new Error(`Refusing to rename — destination is a symlink: ${path.relative(this.root, toAbs)}`);
+    }
+    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    await fs.rename(fromAbs, toAbs);
+    this.cache.delete(fromAbs);
+    this.cache.delete(toAbs);
+    const stat = await fs.stat(toAbs);
+    return {
+      from: path.relative(this.root, fromAbs),
+      to: path.relative(this.root, toAbs),
+      mtimeMs: stat.mtimeMs
+    };
+  }
+
   async appendNote(
     relOrAbs: string,
     addition: string

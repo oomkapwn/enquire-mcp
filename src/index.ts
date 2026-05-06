@@ -21,13 +21,14 @@ import {
   listNotes,
   listTags,
   readNote,
+  renameNote,
   resolveWikilink,
   searchText,
   validateNoteProposal
 } from "./tools.js";
 import { Vault } from "./vault.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 interface ServeOptions {
   vault: string;
@@ -610,6 +611,28 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await appendToNote(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_rename_note",
+    {
+      title: "Rename note (with backlink rewrite)",
+      description:
+        "Atomically rename a note AND rewrite every [[wikilink]] / ![[embed]] in the rest of the vault that resolves to it — preserving |alias, #section, ^block, and the user's chosen path-qualification convention (bare basename vs path). Code-fence-aware: wikilinks inside ``` / ~~~ blocks are left verbatim. Use dry_run=true to preview which files would change without touching disk. Returns per-file rewrite counts + total. WRITE TOOL — only available when the server is started with --enable-write.",
+      annotations: { ...WRITE, title: "Rename note" },
+      inputSchema: {
+        from: z.string().describe("Vault-relative path of the existing note (with or without .md)"),
+        to: z
+          .string()
+          .describe("Vault-relative path of the new location (with or without .md). Different folder = move."),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe("Preview the rewrite plan without writing anything to disk (default false)"),
+        overwrite: z.boolean().optional().describe("Allow overwriting an existing note at `to` (default false)")
+      }
+    },
+    async (args) => textResult(await renameNote(vault, args))
   );
 }
 

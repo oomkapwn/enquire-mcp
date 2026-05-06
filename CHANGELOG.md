@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-05-06
+
+First post-1.0 minor — the most-requested 1.x roadmap item lands: **atomic rename with automatic backlink rewrite**.
+
+### Added — `obsidian_rename_note` tool
+Closes the longstanding "rename breaks every link to the note" pain. The tool:
+
+- Walks every other note in the vault, finds wikilinks/embeds whose `findBestMatch` resolves to the source file, and rewrites only those literals.
+- **Preserves** `|alias`, `#section`, `^block`, and the user's chosen path-qualification convention (bare `[[Foo]]` stays bare; `[[Folder/Foo]]` updates to `[[NewFolder/Foo]]` when the destination directory changes).
+- **Code-fence-aware:** wikilinks inside ` ``` ` / `~~~` blocks are left verbatim. The line-walker tracks fence in/out state so example snippets and code documentation aren't mangled.
+- **Rewrites embeds** (`![[…]]`) just like wikilinks.
+- Supports `dry_run: true` to preview which files would change without touching disk.
+- Supports `overwrite: true` to allow the destination to be replaced (rare; default refuses).
+- Refuses if `from` is missing, `to` exists, either path traverses the vault, or `from === to`.
+- Order of operations: writes all the back-link-bearing files first, then `fs.rename`s the source file last — so a mid-run failure leaves backlinks pointing at the still-present old name (worst-case: safe, recoverable).
+
+**WRITE TOOL** — only registered when the server is started with `--enable-write`. Annotated `destructiveHint: true`.
+
+### Repo state
+- 18 MCP tools (was 17). 14 always-on read + 1 opt-in FTS5 read + 3 opt-in write.
+- 239 unit tests (was 228, +11 for the rename surface).
+- Smoke + docs-consistency tests updated. README + `docs/api.md` cover the new tool.
+
 ## [1.0.0] — 2026-05-05
 
 **Stable.** API freeze. Same code as v0.13.0 plus 4 polish commits (perf cleanup in `getVaultStats`, 3 more edge-case tests, full API docs for v0.12 + v0.13 tools, README test counter).

@@ -532,6 +532,198 @@ export async function appendToNote(
   };
 }
 
+// ─── obsidian_rename_note (v1.1 atomic rename + backlink rewrite) ────────────
+// Closes the longstanding "renaming a note breaks all backlinks" pain. Walks
+// every other note in the vault, finds wikilinks/embeds whose findBestMatch
+// resolves to the source file, rewrites only those literals (preserving
+// `|alias`, `#section`, `^block`, and the user's chosen path-qualification),
+// then atomically renames the file. dry_run returns the same plan without
+// touching the disk.
+
+export interface RenameProposal {
+  path: string;
+  rewrites: number;
+  before: string;
+  after: string;
+}
+
+export interface RenameNoteResult {
+  from: string;
+  to: string;
+  dry_run: boolean;
+  files_updated: RenameProposal[];
+  total_links_rewritten: number;
+}
+
+export async function renameNote(
+  vault: Vault,
+  args: { from: string; to: string; dry_run?: boolean; overwrite?: boolean }
+): Promise<RenameNoteResult> {
+  await vault.ensureExists();
+  const dryRun = args.dry_run === true;
+  const fromRelNorm = args.from.toLowerCase().endsWith(".md") ? args.from : `${args.from}.md`;
+  const toRelNorm = args.to.toLowerCase().endsWith(".md") ? args.to : `${args.to}.md`;
+
+  // Resolve from (must exist) — vault.stat() rejects traversal + excluded paths
+  // and confirms the file is real. resolveInside() is the public wrapper for
+  // the same path-normalization logic without an existence check.
+  const fromAbs = vault.resolveInside(fromRelNorm);
+  const fromRel = vault.toRel(fromAbs);
+  await vault.stat(fromAbs); // throws on missing source — fail fast.
+  // Validate to-path early so we don't do O(N) work then fail.
+  const toAbsCheck = vault.resolveInside(toRelNorm);
+  const toRelCheck = vault.toRel(toAbsCheck);
+  if (vault.isExcluded(toRelCheck)) {
+    throw new Error(`Refusing to rename — destination matches --exclude-glob: ${toRelCheck}`);
+  }
+  if (fromRel === toRelCheck) {
+    throw new Error(`from and to are the same path: ${fromRel}`);
+  }
+  if (!args.overwrite) {
+    const exists = await vault
+      .stat(toAbsCheck)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) {
+      throw new Error(`Destination already exists: ${toRelCheck} (pass overwrite=true to replace)`);
+    }
+  }
+
+  const newBasename = stripMd(path.basename(toRelNorm));
+  const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
+  const entries = await vault.listMarkdown();
+
+  // Build the rewrite plan. Skip the source file itself; if it links to itself
+  // those literals stay valid relative to the new name (basename target) but
+  // a path-qualified self-reference would break. We don't rewrite the source —
+  // it gets moved as-is.
+  const plan: RenameProposal[] = [];
+  let totalRewrites = 0;
+  for (const e of entries) {
+    if (e.absPath === fromAbs) continue;
+    const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+
+    // Find every wikilink + embed whose target resolves to fromAbs. Group by
+    // raw inner text — multiple identical literals in the same file rewrite
+    // together.
+    const oldRawsToNew = new Map<string, { kind: "wikilink" | "embed"; newRaw: string }>();
+    const candidates: Array<{ raw: string; target: string; kind: "wikilink" | "embed" }> = [
+      ...parsed.wikilinks.map((l) => ({ raw: l.raw, target: l.target, kind: "wikilink" as const })),
+      ...parsed.embeds.map((l) => ({ raw: l.raw, target: l.target, kind: "embed" as const }))
+    ];
+    for (const c of candidates) {
+      if (oldRawsToNew.has(c.raw)) continue; // already mapped
+      const m = findBestMatch(entries, c.target, e.relPath);
+      if (!m || m.absPath !== fromAbs) continue;
+      const newRaw = rewriteRawTarget(c.raw, c.target, newBasename, newDir);
+      if (newRaw === c.raw) continue; // already correct (e.g., basename happened to match)
+      oldRawsToNew.set(c.raw, { kind: c.kind, newRaw });
+    }
+
+    if (oldRawsToNew.size === 0) continue;
+
+    // Apply the replacements with a code-fence-aware line walker so wikilinks
+    // inside ``` / ~~~ blocks (which the parser ignores) stay verbatim.
+    const { content: newContent, count } = rewriteOutsideCodeFences(content, oldRawsToNew);
+    if (count === 0) continue;
+
+    plan.push({ path: e.relPath, rewrites: count, before: content, after: newContent });
+    totalRewrites += count;
+  }
+
+  if (!dryRun) {
+    // Write all updated files first (so a mid-run failure leaves the rename
+    // un-done and the linked-from files in a consistent half-state at worst —
+    // their backlinks point at the OLD name, which still exists). Order: write
+    // backlink-bearing files, THEN rename the source file last.
+    for (const p of plan) {
+      const abs = vault.resolveInside(p.path);
+      // overwrite=true because the file already exists.
+      await vault.writeNote(p.path, p.after, { overwrite: true });
+      // writeNote invalidates cache for `abs`; double-tap not needed.
+      void abs;
+    }
+    // Atomic file move + cache invalidation.
+    await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
+  }
+
+  // Strip `before`/`after` from the response — the caller doesn't need the
+  // full file contents back, just the per-file count. We kept them for the
+  // pre-write loop; the response trims them.
+  const trimmedPlan = plan.map(({ path, rewrites }) => ({ path, rewrites, before: "", after: "" }));
+
+  return {
+    from: fromRel,
+    to: toRelCheck,
+    dry_run: dryRun,
+    files_updated: trimmedPlan,
+    total_links_rewritten: totalRewrites
+  };
+}
+
+/** Given the raw inner text of a wikilink (`Foo|alias`, `Folder/Foo#sec`, etc.)
+ *  and the resolved target string the parser already extracted, produce the new
+ *  raw text after the file has been renamed. Preserves alias/section/block and
+ *  the user's chosen path-qualification convention (bare-basename vs path). */
+function rewriteRawTarget(raw: string, oldTarget: string, newBasename: string, newDir: string): string {
+  const wasPathQualified = oldTarget.includes("/");
+  const newTargetBare = wasPathQualified
+    ? newDir === "." || newDir === ""
+      ? newBasename
+      : `${newDir}/${newBasename}`
+    : newBasename;
+
+  // The raw text is `<target><suffix>` where suffix starts with the first of
+  // |, #, or ^. Find the boundary.
+  const pipeIdx = raw.indexOf("|");
+  const hashIdx = raw.indexOf("#");
+  const blockIdx = raw.indexOf("^");
+  const idxs = [pipeIdx, hashIdx, blockIdx].filter((i) => i !== -1);
+  const suffixStart = idxs.length === 0 ? raw.length : Math.min(...idxs);
+  const suffix = raw.slice(suffixStart);
+  return `${newTargetBare}${suffix}`;
+}
+
+/** Walk file content line by line. Toggle `inFence` at any line that opens or
+ *  closes a ``` or ~~~ fence. Inside a fence, leave content untouched. Outside,
+ *  replace each old literal with its new literal. Returns { content, count }
+ *  where count is the total number of literal replacements applied. */
+function rewriteOutsideCodeFences(
+  content: string,
+  oldRawsToNew: Map<string, { kind: "wikilink" | "embed"; newRaw: string }>
+): { content: string; count: number } {
+  const lines = content.split("\n");
+  let inFence = false;
+  let count = 0;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    let mutated = line;
+    for (const [oldRaw, { kind, newRaw }] of oldRawsToNew) {
+      const oldLit = `${kind === "embed" ? "![[" : "[["}${oldRaw}]]`;
+      const newLit = `${kind === "embed" ? "![[" : "[["}${newRaw}]]`;
+      if (oldLit === newLit) continue;
+      // Use indexOf-based replacement so we count occurrences accurately.
+      let idx = mutated.indexOf(oldLit);
+      while (idx !== -1) {
+        mutated = mutated.slice(0, idx) + newLit + mutated.slice(idx + oldLit.length);
+        count += 1;
+        idx = mutated.indexOf(oldLit, idx + newLit.length);
+      }
+    }
+    out.push(mutated);
+  }
+  return { content: out.join("\n"), count };
+}
+
 function composeNote(frontmatter: Record<string, unknown> | undefined, content: string): string {
   if (!frontmatter || Object.keys(frontmatter).length === 0) return content;
   // Use gray-matter's stringify (backed by js-yaml) so YAML-special strings —

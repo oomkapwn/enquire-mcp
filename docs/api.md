@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 17 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 2 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 18 MCP tools (14 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 6 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -278,7 +278,7 @@ Vault dashboard. One-shot orientation call — useful as the first call in a ses
 
 ## Write tools (opt-in)
 
-Both write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
+All three write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
 
 ### `obsidian_create_note`
 
@@ -305,6 +305,19 @@ Append a markdown block to an existing note.
 | `separator` | `string?`  | Inserted between existing body and new content (default `"\n\n"`). |
 
 **Returns:** `{ path, mtime, appended_bytes }`. Refuses to grow the file past `--max-file-bytes`.
+
+### `obsidian_rename_note`
+
+Atomically rename a note **and** rewrite every `[[wikilink]]` / `![[embed]]` in the rest of the vault that resolves to it. Code-fence-aware: wikilinks inside ` ``` ` / `~~~` blocks are left verbatim. Preserves alias / section / block (`[[Foo|alias]]` → `[[Bar|alias]]`, `[[Foo#section]]` → `[[Bar#section]]`, `[[Foo^block-id]]` → `[[Bar^block-id]]`) and the user's chosen path-qualification convention (bare `[[Foo]]` stays bare; `[[Folder/Foo]]` becomes `[[NewFolder/Foo]]` when the destination directory changes).
+
+| Argument    | Type       | Notes                                                                |
+|-------------|------------|----------------------------------------------------------------------|
+| `from`      | `string`   | Existing note path (`.md` appended if missing).                      |
+| `to`        | `string`   | New path (`.md` appended if missing). Different folder = move.       |
+| `dry_run`   | `boolean?` | Preview the rewrite plan without touching disk. Default `false`.     |
+| `overwrite` | `boolean?` | Allow overwriting an existing file at `to`. Default `false`.         |
+
+**Returns:** `{ from, to, dry_run, files_updated: [{ path, rewrites, before, after }], total_links_rewritten }`. (`before`/`after` are blank in the response — they're used internally to apply the rewrite atomically.) Throws if `from` is missing, `to` exists without `overwrite`, either path traverses, or `from === to`.
 
 ## MCP resources
 

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendToNote, createNote } from "../src/tools.js";
+import { appendToNote, createNote, renameNote } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -211,5 +211,151 @@ describe("appendToNote", () => {
     await v.ensureExists();
     await fs.writeFile(path.join(root, "Read.md"), "x");
     await expect(appendToNote(v, { path: "Read.md", content: "y" })).rejects.toThrow(/read-only/);
+  });
+});
+
+describe("renameNote (v1.1)", () => {
+  it("refuses to rename when vault is read-only", async () => {
+    const v = new Vault(root, { enableWrite: false });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Foo.md"), "body");
+    await expect(renameNote(v, { from: "Foo.md", to: "Bar.md" })).rejects.toThrow(/read-only/);
+  });
+
+  it("happy path: renames file + rewrites every wikilink to the new name", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Apollo.md"), "Apollo body.\n");
+    await fs.writeFile(path.join(root, "Hub.md"), "See [[Apollo]] for details.\n");
+    await fs.writeFile(path.join(root, "Daily.md"), "Today: [[Apollo]] and [[Apollo|the project]].\n");
+    const out = await renameNote(v, { from: "Apollo.md", to: "Apollo Project.md" });
+    expect(out.from).toBe("Apollo.md");
+    expect(out.to).toBe("Apollo Project.md");
+    expect(out.dry_run).toBe(false);
+    expect(out.total_links_rewritten).toBe(3);
+    expect(out.files_updated.map((p) => p.path).sort()).toEqual(["Daily.md", "Hub.md"]);
+    // File was renamed.
+    expect(await fs.stat(path.join(root, "Apollo Project.md")).catch(() => null)).not.toBeNull();
+    expect(await fs.stat(path.join(root, "Apollo.md")).catch(() => null)).toBeNull();
+    // Wikilinks rewritten correctly.
+    const hub = await fs.readFile(path.join(root, "Hub.md"), "utf8");
+    expect(hub).toContain("[[Apollo Project]]");
+    expect(hub).not.toContain("[[Apollo]]");
+    const daily = await fs.readFile(path.join(root, "Daily.md"), "utf8");
+    expect(daily).toContain("[[Apollo Project]]");
+    expect(daily).toContain("[[Apollo Project|the project]]");
+  });
+
+  it("preserves alias / section / block in the rewritten target", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Old.md"), "## Heading\n\n^block-id\nBody.\n");
+    await fs.writeFile(
+      path.join(root, "Caller.md"),
+      "[[Old]] [[Old|alias]] [[Old#Heading]] [[Old#Heading|H]] [[Old^block-id]]\n"
+    );
+    await renameNote(v, { from: "Old.md", to: "New.md" });
+    const txt = await fs.readFile(path.join(root, "Caller.md"), "utf8");
+    expect(txt).toContain("[[New]]");
+    expect(txt).toContain("[[New|alias]]");
+    expect(txt).toContain("[[New#Heading]]");
+    expect(txt).toContain("[[New#Heading|H]]");
+    expect(txt).toContain("[[New^block-id]]");
+    expect(txt).not.toContain("[[Old");
+  });
+
+  it("rewrites embeds (![[...]]) too", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Embedded.md"), "embed body");
+    await fs.writeFile(path.join(root, "Page.md"), "Here is ![[Embedded]] and [[Embedded]].\n");
+    const out = await renameNote(v, { from: "Embedded.md", to: "Renamed Embed.md" });
+    expect(out.total_links_rewritten).toBe(2);
+    const page = await fs.readFile(path.join(root, "Page.md"), "utf8");
+    expect(page).toContain("![[Renamed Embed]]");
+    expect(page).toContain("[[Renamed Embed]]");
+  });
+
+  it("dry_run returns the plan without touching disk", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Source.md"), "x");
+    await fs.writeFile(path.join(root, "Caller.md"), "Sees [[Source]] here.\n");
+    const out = await renameNote(v, { from: "Source.md", to: "Target.md", dry_run: true });
+    expect(out.dry_run).toBe(true);
+    expect(out.total_links_rewritten).toBe(1);
+    expect(out.files_updated[0]?.path).toBe("Caller.md");
+    // File NOT renamed.
+    expect(await fs.stat(path.join(root, "Source.md")).catch(() => null)).not.toBeNull();
+    expect(await fs.stat(path.join(root, "Target.md")).catch(() => null)).toBeNull();
+    // Caller NOT modified.
+    const caller = await fs.readFile(path.join(root, "Caller.md"), "utf8");
+    expect(caller).toContain("[[Source]]");
+  });
+
+  it("supports moving across folders (rename to a different directory)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Inbox"), { recursive: true });
+    await fs.mkdir(path.join(root, "Archive"), { recursive: true });
+    await fs.writeFile(path.join(root, "Inbox", "Note.md"), "body");
+    // Bare-basename caller — should rewrite to bare-basename target.
+    await fs.writeFile(path.join(root, "Bare.md"), "Bare ref [[Note]]\n");
+    // Path-qualified caller — should rewrite to a path-qualified target pointing at the new folder.
+    await fs.writeFile(path.join(root, "Qualified.md"), "Qualified [[Inbox/Note]]\n");
+    await renameNote(v, { from: "Inbox/Note.md", to: "Archive/Note.md" });
+    const bare = await fs.readFile(path.join(root, "Bare.md"), "utf8");
+    expect(bare).toContain("[[Note]]"); // bare stays bare
+    const qual = await fs.readFile(path.join(root, "Qualified.md"), "utf8");
+    expect(qual).toContain("[[Archive/Note]]"); // path-qualified updated
+  });
+
+  it("does NOT rewrite wikilinks inside fenced code blocks", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Foo.md"), "body");
+    await fs.writeFile(
+      path.join(root, "Doc.md"),
+      "Outside ref [[Foo]].\n\n```\nInside code [[Foo]] should stay verbatim.\n```\n\nAnother outside [[Foo]].\n"
+    );
+    const out = await renameNote(v, { from: "Foo.md", to: "Bar.md" });
+    expect(out.total_links_rewritten).toBe(2); // 2 outside-fence, 1 inside-fence preserved
+    const doc = await fs.readFile(path.join(root, "Doc.md"), "utf8");
+    expect(doc).toContain("Outside ref [[Bar]]");
+    expect(doc).toContain("Inside code [[Foo]] should stay verbatim"); // preserved
+    expect(doc).toContain("Another outside [[Bar]]");
+  });
+
+  it("refuses if `to` already exists (without overwrite)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "A.md"), "a");
+    await fs.writeFile(path.join(root, "B.md"), "b");
+    await expect(renameNote(v, { from: "A.md", to: "B.md" })).rejects.toThrow(/already exists/);
+    // Both files still present.
+    expect(await fs.readFile(path.join(root, "A.md"), "utf8")).toBe("a");
+    expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toBe("b");
+  });
+
+  it("refuses if `from` does not exist", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await expect(renameNote(v, { from: "MissingSource.md", to: "AnyName.md" })).rejects.toThrow();
+  });
+
+  it("auto-appends .md to from/to when missing", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "WithExt.md"), "x");
+    const out = await renameNote(v, { from: "WithExt", to: "Renamed" });
+    expect(out.from).toBe("WithExt.md");
+    expect(out.to).toBe("Renamed.md");
+  });
+
+  it("rejects from == to as a no-op error (don't silently succeed)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Same.md"), "x");
+    await expect(renameNote(v, { from: "Same.md", to: "Same.md" })).rejects.toThrow(/same path/);
   });
 });

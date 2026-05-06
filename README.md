@@ -266,6 +266,26 @@ With `--enable-write`: `obsidian_append_to_note({ title: "2026-05-03", content: 
 - **Parser** — `gray-matter` for YAML, hand-rolled regex for wikilinks / embeds / tags. Fenced code blocks are stripped before tag extraction.
 - **DQL engine** — quote-aware tokenizer for keywords (`FROM`, `WHERE`, `SORT`, `LIMIT`, `AND`); won't mis-split on `WHERE x = "foo SORT bar"`.
 
+### Benchmarks
+
+Latency per tool against synthetic vaults at 1 000 / 10 000 notes (post-1.3 with the basename-indexed `findBestMatch` shipped in v1.3.0). p50 / p99 in milliseconds, 5 runs after warmup. Bench script: [`scripts/bench.mjs`](./scripts/bench.mjs). Full results in [`bench/results.md`](./bench/results.md).
+
+| Tool | 1 000 notes | 10 000 notes |
+|---|---|---|
+| `list_notes` (no filter) | 21 / 22 | 104 / 105 |
+| `search_text` (linear scan) | 30 / 33 | 536 / 542 |
+| `get_recent_edits` | 11 / 12 | 100 / 102 |
+| `list_tags` | 44 / 45 | 1 037 / 1 076 |
+| `get_backlinks` | 54 / 55 | 1 145 / 1 154 |
+| `find_similar` | 45 / 49 | 1 065 / 1 120 |
+| `get_note_neighbors` | 76 / 81 | 2 002 / 2 279 |
+| `vault_stats` | 45 / 45 | 1 058 / 1 319 |
+| `validate_note_proposal` | 79 / 80 | 1 353 / 1 459 |
+
+Read this as: most tools are sub-100ms below 1 000 notes. **For vaults above ~1 000 notes, `--persistent-index` is strongly recommended** — `obsidian_full_text_search` runs sub-100ms on 10k vaults via FTS5 BM25 (37–103× faster than the linear `search_text` on the same data, measured separately in [`scripts/bench-search.mjs`](./scripts/bench-search.mjs)).
+
+The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk the link graph in pure-JS at O(N · avg_outbound), now backed by a basename-indexed lookup that brought 10k-note latencies from 2–4 s down to 1–2 s — about 30–45 % faster across the board. The remaining cost is parse-cache warmup; the second-and-later calls in a session ride the in-memory cache.
+
 ---
 
 ## Configuration

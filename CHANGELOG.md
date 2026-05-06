@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-05-06
+
+Performance + benchmarks. The third 1.x roadmap item lands.
+
+### Added — `scripts/bench.mjs`
+Comprehensive latency benchmark for the read-tool surface. Spins up synthetic vaults at 100 / 1 000 / 10 000 notes (configurable), runs each tool 5× after warmup, reports min / p50 / p99. Writes a markdown table to `bench/results.md` so the README can reference concrete numbers without committing stale ones. Not part of CI — runs slow on 10k vaults. Run: `node scripts/bench.mjs` (default scales) or `node scripts/bench.mjs --quick` (100 + 1 000 only).
+
+### Changed — `findBestMatch` is now O(1) avg via a basename + relPath index
+v1.2's bench data showed `findBestMatch` was the dominant cost in `find_similar` / `get_note_neighbors` / `vault_stats` / `rename_note` at vault scale (10k notes) — every call did `entries.filter(e => stripMd(e.basename).toLowerCase() === target)` which is O(N), and these tools call it inside a loop over all entries (so O(N²) overall, ~2-4s p50 at 10k).
+
+Fix: build two indices once per `entries` array — `byBasename: Map<string, FileEntry[]>` for the common bare-basename case, and `byRelPath: Map<string, FileEntry>` for path-qualified targets. The indices are memoized via a `WeakMap<FileEntry[], EntryIndex>` keyed by the entries-array reference, so a fresh `vault.listMarkdown()` rebuilds them but a hot loop calling `findBestMatch` repeatedly with the same `entries` argument shares one index for free.
+
+Measured impact on a 10 000-note synthetic vault (p50 ms, before → after):
+
+| Tool | Before | After | Δ |
+|---|---|---|---|
+| `get_backlinks` | 1937 | 1145 | −41% |
+| `list_tags` | 1361 | 1037 | −24% |
+| `find_similar` | 1903 | 1065 | −44% |
+| `get_note_neighbors` | 3244 | 2002 | −38% |
+| `vault_stats` | 1968 | 1058 | −46% |
+| `validate_note_proposal` | 1972 | 1353 | −31% |
+
+Pure refactor — no behaviour change, all 246 unit tests still green.
+
+### Repo state
+- 18 MCP tools (unchanged). 14 read + 1 opt-in FTS5 + 3 write.
+- 246 unit tests (unchanged).
+- New `scripts/bench.mjs` + `bench/results.md` — concrete latency numbers in the README's Architecture section now reflect post-1.3 performance.
+- For vaults above ~1 000 notes, `--persistent-index` is still strongly recommended — the FTS5-backed `obsidian_full_text_search` runs sub-100ms on 10k vaults regardless of these graph-tool optimizations.
+
 ## [1.2.0] — 2026-05-06
 
 Watcher mode — the second 1.x roadmap item lands.

@@ -29,7 +29,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 interface ServeOptions {
   vault: string;

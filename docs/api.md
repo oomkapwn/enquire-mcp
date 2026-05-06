@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 26 MCP tools (22 always-on read + 1 opt-in read via `--persistent-index` + 3 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 27 MCP tools (22 always-on read + 1 opt-in read via `--persistent-index` + 4 opt-in write via `--enable-write`), 2 + 1 opt-in MCP resources, 10 MCP prompts. The server speaks stdio JSON-RPC and is launched per-vault.
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
@@ -9,7 +9,7 @@
 | Flag                   | Default | Notes                                      |
 |------------------------|---------|--------------------------------------------|
 | `--vault <path>`       | (required) | Path to the Obsidian vault root.        |
-| `--enable-write`       | off     | Register the three write tools.            |
+| `--enable-write`       | off     | Register the four write tools.             |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
@@ -399,7 +399,7 @@ Pure-JS TF-IDF cosine retrieval. Tokenizes (alphanumeric + hyphen, stop-words fi
 
 ## Write tools (opt-in)
 
-All three write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
+All four write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
 
 ### `obsidian_create_note`
 
@@ -439,6 +439,24 @@ Atomically rename a note **and** rewrite every `[[wikilink]]` / `![[embed]]` in 
 | `overwrite` | `boolean?` | Allow overwriting an existing file at `to`. Default `false`.         |
 
 **Returns:** `{ from, to, dry_run, files_updated: [{ path, rewrites, before, after }], total_links_rewritten }`. (`before`/`after` are blank in the response — they're used internally to apply the rewrite atomically.) Throws if `from` is missing, `to` exists without `overwrite`, either path traverses, or `from === to`.
+
+### `obsidian_replace_in_notes`
+
+Bulk find/replace across the vault, code-fence-aware. Walks every note (or a `folder` subset), substitutes every literal occurrence of `search` with `replace` outside fenced code blocks (` ``` ` / `~~~`), and writes each modified file back. Reuses the same line walker rename_note uses, so example snippets and code documentation stay verbatim.
+
+| Argument         | Type       | Notes                                                                  |
+|------------------|------------|------------------------------------------------------------------------|
+| `search`         | `string`   | Required. Literal substring to find. Empty string is rejected.         |
+| `replace`        | `string`   | Replacement text. Empty string means delete every occurrence.          |
+| `folder`         | `string?`  | Restrict to a subfolder (vault-relative). Default: whole vault.        |
+| `dry_run`        | `boolean?` | Preview the plan without writing. Default `false`.                     |
+| `case_sensitive` | `boolean?` | Default `true`. `false` = case-insensitive substring match. Replace text is inserted verbatim. |
+
+**Returns:** `{ search, replace, case_sensitive, dry_run, scope, files_scanned, files_updated: [{ path, occurrences }], total_replacements }`.
+
+**Footgun guards.** Refuses (a) empty `search` and (b) identical `search` and `replace` (no-op). Honors `--exclude-glob` and `--read-paths`: writes to filtered paths fail at the `Vault.writeNote` layer.
+
+**Use cases.** Vocabulary refactor (e.g. `GPT-3.5` → `GPT-4`). Deprecation cleanup (delete every `DEPRECATED ` prefix). Brand rename (case-insensitive `api` → `REST` in prose, while keeping URLs intact via the code-fence skip).
 
 ## MCP resources
 

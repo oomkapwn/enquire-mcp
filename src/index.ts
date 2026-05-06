@@ -29,6 +29,7 @@ import {
   readCanvas,
   readNote,
   renameNote,
+  replaceInNotes,
   resolveWikilink,
   searchText,
   semanticSearch,
@@ -37,7 +38,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "1.8.1";
+const VERSION = "1.9.0";
 
 interface ServeOptions {
   vault: string;
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option(
       "--enable-write",
-      "Enable the three write tools (create_note, append_to_note, rename_note). Off by default."
+      "Enable the four write tools (create_note, append_to_note, rename_note, replace_in_notes). Off by default."
     )
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
@@ -853,6 +854,27 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await renameNote(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_replace_in_notes",
+    {
+      title: "Bulk find/replace across notes (code-fence-aware)",
+      description:
+        "Walks the vault (or a `folder` subset), substitutes every occurrence of `search` with `replace` outside fenced code blocks (` ``` ` / `~~~`), and writes each modified file back. Reuses the same line-walker rename_note uses, so example snippets and code documentation stay verbatim. Pass `dry_run=true` to preview the plan without touching disk — you get per-file occurrence counts + total. `case_sensitive` defaults to true. Refuses identical search/replace and empty search to prevent footguns. WRITE TOOL — only registered when --enable-write is passed.",
+      annotations: { ...WRITE, title: "Replace in notes" },
+      inputSchema: {
+        search: z.string().min(1).describe("Literal substring to find. Empty string is rejected."),
+        replace: z.string().describe("Replacement text. Empty string means delete every occurrence."),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative). Default: whole vault."),
+        dry_run: z.boolean().optional().describe("Preview the plan without writing anything to disk (default false)"),
+        case_sensitive: z
+          .boolean()
+          .optional()
+          .describe("Default true. Set false for case-insensitive substring match (replace text inserted verbatim).")
+      }
+    },
+    async (args) => textResult(await replaceInNotes(vault, args))
   );
 }
 

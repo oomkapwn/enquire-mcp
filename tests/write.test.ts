@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendToNote, createNote, renameNote } from "../src/tools.js";
+import { appendToNote, createNote, renameNote, replaceInNotes } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -434,5 +434,126 @@ describe("renameNote (v1.1)", () => {
     // Old form is fully gone.
     expect(txt).not.toContain("[[Inbox/Foo]]");
     expect(txt).not.toContain("[[Foo]]");
+  });
+});
+
+describe("replaceInNotes (v1.9 bulk find/replace)", () => {
+  it("refuses to write when vault is read-only", async () => {
+    const v = new Vault(root, { enableWrite: false });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "doc.md"), "alpha\n");
+    await expect(replaceInNotes(v, { search: "alpha", replace: "beta" })).rejects.toThrow(/read-only/);
+  });
+
+  it("happy path: replaces every occurrence outside fenced code blocks", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(
+      path.join(root, "Doc.md"),
+      "Hello GPT-3.5. Refer to GPT-3.5.\n\n```\nInside fence: GPT-3.5 stays.\n```\n\nMore GPT-3.5 mentions.\n"
+    );
+    await fs.writeFile(path.join(root, "Other.md"), "No mention here.\n");
+    const out = await replaceInNotes(v, { search: "GPT-3.5", replace: "GPT-4" });
+    expect(out.dry_run).toBe(false);
+    expect(out.total_replacements).toBe(3); // 3 outside-fence; 1 inside-fence preserved
+    expect(out.files_updated.length).toBe(1);
+    expect(out.files_updated[0]?.path).toBe("Doc.md");
+    expect(out.files_updated[0]?.occurrences).toBe(3);
+    const txt = await fs.readFile(path.join(root, "Doc.md"), "utf8");
+    expect((txt.match(/GPT-4/g) ?? []).length).toBe(3);
+    expect(txt).toContain("Inside fence: GPT-3.5 stays.");
+    // Untouched file unchanged.
+    expect(await fs.readFile(path.join(root, "Other.md"), "utf8")).toBe("No mention here.\n");
+  });
+
+  it("dry_run returns the plan without writing", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Live.md"), "v1 v1 v1\n");
+    const out = await replaceInNotes(v, { search: "v1", replace: "v2", dry_run: true });
+    expect(out.dry_run).toBe(true);
+    expect(out.total_replacements).toBe(3);
+    // File NOT modified.
+    expect(await fs.readFile(path.join(root, "Live.md"), "utf8")).toBe("v1 v1 v1\n");
+  });
+
+  it("case_sensitive=false matches across case but inserts replace verbatim", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Mixed.md"), "API and api and Api\n");
+    const out = await replaceInNotes(v, { search: "api", replace: "REST", case_sensitive: false });
+    expect(out.total_replacements).toBe(3);
+    const txt = await fs.readFile(path.join(root, "Mixed.md"), "utf8");
+    // All three case variants replaced with literal "REST".
+    expect(txt).toBe("REST and REST and REST\n");
+  });
+
+  it("case_sensitive=true (default) only matches exact case", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Mixed.md"), "API and api and Api\n");
+    const out = await replaceInNotes(v, { search: "api", replace: "REST" });
+    expect(out.total_replacements).toBe(1);
+    const txt = await fs.readFile(path.join(root, "Mixed.md"), "utf8");
+    expect(txt).toBe("API and REST and Api\n");
+  });
+
+  it("folder filter narrows the scope", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Sub"), { recursive: true });
+    await fs.writeFile(path.join(root, "RootDoc.md"), "target\n");
+    await fs.writeFile(path.join(root, "Sub", "SubDoc.md"), "target\n");
+    const out = await replaceInNotes(v, { search: "target", replace: "hit", folder: "Sub" });
+    expect(out.total_replacements).toBe(1);
+    expect(out.files_updated[0]?.path).toBe(path.join("Sub", "SubDoc.md"));
+    // Root file untouched.
+    expect(await fs.readFile(path.join(root, "RootDoc.md"), "utf8")).toBe("target\n");
+  });
+
+  it("returns total=0 when no notes match (no error)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "anything.md"), "no relevant text\n");
+    const out = await replaceInNotes(v, { search: "xyzzy", replace: "quux" });
+    expect(out.total_replacements).toBe(0);
+    expect(out.files_updated).toEqual([]);
+    expect(out.files_scanned).toBeGreaterThan(0);
+  });
+
+  it("rejects empty search", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await expect(replaceInNotes(v, { search: "", replace: "x" })).rejects.toThrow(/non-empty/);
+  });
+
+  it("rejects identical search and replace (no-op refused)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await expect(replaceInNotes(v, { search: "same", replace: "same" })).rejects.toThrow(/no-op/);
+  });
+
+  it("can delete every occurrence (replace is empty string, search is non-empty)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "stripme.md"), "Hello DEPRECATED world\nDEPRECATED line\n");
+    const out = await replaceInNotes(v, { search: "DEPRECATED ", replace: "" });
+    expect(out.total_replacements).toBe(2);
+    const txt = await fs.readFile(path.join(root, "stripme.md"), "utf8");
+    expect(txt).toBe("Hello world\nline\n");
+  });
+
+  it("respects --read-paths allowlist (writes outside allowlist refused)", async () => {
+    const v = new Vault(root, { enableWrite: true, readPaths: ["Public/**"] });
+    await v.ensureExists();
+    await fs.mkdir(path.join(root, "Public"), { recursive: true });
+    await fs.mkdir(path.join(root, "Private"), { recursive: true });
+    await fs.writeFile(path.join(root, "Public", "p.md"), "marker\n");
+    await fs.writeFile(path.join(root, "Private", "s.md"), "marker\n");
+    const out = await replaceInNotes(v, { search: "marker", replace: "hit" });
+    // Only Public/p.md is visible — and updated.
+    expect(out.files_updated.map((p) => p.path)).toEqual([path.join("Public", "p.md")]);
+    // Private file untouched.
+    expect(await fs.readFile(path.join(root, "Private", "s.md"), "utf8")).toBe("marker\n");
   });
 });

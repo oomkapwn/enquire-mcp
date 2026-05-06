@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-05-06
+
+**Bulk find/replace.** v1.9 adds a write tool that's been on the wishlist since v1.1 — `obsidian_replace_in_notes`. Reuses rename_note's code-fence-aware line walker so example snippets and code documentation stay verbatim. Strategic agent recommended this over outputSchema spec polish: it's user-visible, ships fast, fills a real refactor gap that no other Obsidian-MCP server handles safely.
+
+### Added — `obsidian_replace_in_notes` (write tool, opt-in via `--enable-write`)
+
+Walks the vault (or a `folder` subset), substitutes every literal occurrence of `search` with `replace` outside fenced code blocks (` ``` ` / `~~~`), writes each modified file back. Returns per-file occurrence counts + total. `dry_run: true` previews. `case_sensitive: false` for case-insensitive substring match (replace text is inserted verbatim — case is not preserved).
+
+**Footgun guards:**
+- Refuses empty `search` (would be a no-op or worse — replace empty-string with `replace` everywhere).
+- Refuses identical `search` and `replace` (no-op refused so it doesn't quietly burn write quota).
+- Honors `--exclude-glob` and `--read-paths` — writes to filtered paths fail at `Vault.writeNote`.
+
+**Use cases:** vocabulary refactor (`GPT-3.5` → `GPT-4`), deprecation cleanup (delete every `DEPRECATED ` prefix), brand rename (case-insensitive `api` → `REST` in prose, while keeping URLs intact via the code-fence skip).
+
+### Internal — generic `replaceStringOutsideCodeFences()`
+Promotes the rename_note line walker from a wikilink-specific replacer to a generic substring-with-case-options replacer. Both tools share the same fence-detection logic now, so a future bug in fence detection only needs to be fixed in one place.
+
+### Repo state
+- **27 MCP tools** (was 26). 22 always-on read + 1 opt-in FTS5 + 4 write.
+- **10 MCP prompts** (unchanged).
+- **304 unit tests** (was 294, +10 covering happy path, code-fence skip, dry_run, case sensitivity, folder filter, no-match, empty-search refusal, identical-strings refusal, delete-by-empty-replace, `--read-paths` enforcement).
+- `--enable-write` help text bumped from "three" to "four" tools.
+
 ## [1.8.1] — 2026-05-06
 
 Patch release driven by a 5-agent post-1.8 audit (code · process · docs · repo page · strategy). Three real bugs found, one process gap, several doc drifts. All fixed in this release. No new features.

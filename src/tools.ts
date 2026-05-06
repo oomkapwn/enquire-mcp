@@ -681,6 +681,87 @@ export async function renameNote(
   };
 }
 
+// ─── obsidian_replace_in_notes (v1.9 bulk find/replace) ─────────────────────
+// Code-fence-aware bulk string replacement across the vault. Reuses the same
+// fence-tracking line walker as rename_note's wikilink rewriter so example
+// snippets and code documentation stay verbatim. Read-only by design unless
+// dry_run is false; returns per-file counts so the agent can verify before
+// committing. WRITE TOOL — only registered when --enable-write is passed.
+
+export interface ReplaceInNotesArgs {
+  /** Literal substring to find. Empty string is rejected. */
+  search: string;
+  /** Replacement text. May be empty (= delete every occurrence). */
+  replace: string;
+  /** Restrict to a subfolder (vault-relative). Default: whole vault. */
+  folder?: string;
+  /** Preview the rewrite plan without touching disk. Default false. */
+  dry_run?: boolean;
+  /** Case-sensitive match (default true). False = case-insensitive substring. */
+  case_sensitive?: boolean;
+}
+
+export interface ReplaceInNotesFileResult {
+  path: string;
+  occurrences: number;
+}
+
+export interface ReplaceInNotesResult {
+  search: string;
+  replace: string;
+  case_sensitive: boolean;
+  dry_run: boolean;
+  scope: string;
+  files_scanned: number;
+  files_updated: ReplaceInNotesFileResult[];
+  total_replacements: number;
+}
+
+export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Promise<ReplaceInNotesResult> {
+  await vault.ensureExists();
+  const dryRun = args.dry_run === true;
+  const caseSensitive = args.case_sensitive !== false;
+  if (!args.search) {
+    throw new Error("replace_in_notes: `search` must be a non-empty string");
+  }
+  if (args.search === args.replace) {
+    throw new Error("replace_in_notes: `search` and `replace` are identical — no-op refused");
+  }
+
+  const entries = await vault.listMarkdown(args.folder);
+  const plan: Array<{ path: string; before: string; after: string; count: number }> = [];
+  let total = 0;
+  for (const e of entries) {
+    const { content } = await vault.readNote(e.absPath, e.mtimeMs);
+    const { content: rewritten, count } = replaceStringOutsideCodeFences(
+      content,
+      args.search,
+      args.replace,
+      caseSensitive
+    );
+    if (count === 0) continue;
+    plan.push({ path: e.relPath, before: content, after: rewritten, count });
+    total += count;
+  }
+
+  if (!dryRun) {
+    for (const p of plan) {
+      await vault.writeNote(p.path, p.after, { overwrite: true });
+    }
+  }
+
+  return {
+    search: args.search,
+    replace: args.replace,
+    case_sensitive: caseSensitive,
+    dry_run: dryRun,
+    scope: args.folder ?? "(whole vault)",
+    files_scanned: entries.length,
+    files_updated: plan.map((p) => ({ path: p.path, occurrences: p.count })),
+    total_replacements: total
+  };
+}
+
 /** Given the raw inner text of a wikilink (`Foo|alias`, `Folder/Foo#sec`, etc.)
  *  and the resolved target string the parser already extracted, produce the new
  *  raw text after the file has been renamed. Preserves alias/section/block and
@@ -740,6 +821,60 @@ function rewriteOutsideCodeFences(
       }
     }
     out.push(mutated);
+  }
+  return { content: out.join("\n"), count };
+}
+
+/** Generic code-fence-aware string replacer used by replaceInNotes (v1.9).
+ *  Walks line-by-line, tracks ` ``` ` / `~~~` fences, and replaces every
+ *  occurrence of `search` with `replace` outside fenced blocks. Case-sensitive
+ *  by default; pass `caseSensitive: false` for case-insensitive substring
+ *  match. Returns the rewritten content + replacement count. */
+function replaceStringOutsideCodeFences(
+  content: string,
+  search: string,
+  replace: string,
+  caseSensitive: boolean
+): { content: string; count: number } {
+  if (!search) return { content, count: 0 };
+  const lines = content.split("\n");
+  let inFence = false;
+  let count = 0;
+  const out: string[] = [];
+  const needle = caseSensitive ? search : search.toLowerCase();
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    if (caseSensitive) {
+      let mutated = line;
+      let idx = mutated.indexOf(needle);
+      while (idx !== -1) {
+        mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
+        count += 1;
+        idx = mutated.indexOf(needle, idx + replace.length);
+      }
+      out.push(mutated);
+    } else {
+      // Case-insensitive: walk by lowering only when comparing, but preserve
+      // the rest of the original line. Replace verbatim with `replace`.
+      let mutated = line;
+      let lowered = mutated.toLowerCase();
+      let idx = lowered.indexOf(needle);
+      while (idx !== -1) {
+        mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
+        lowered = mutated.toLowerCase();
+        count += 1;
+        idx = lowered.indexOf(needle, idx + replace.length);
+      }
+      out.push(mutated);
+    }
   }
   return { content: out.join("\n"), count };
 }

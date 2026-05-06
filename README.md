@@ -77,6 +77,7 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Graph-aware retrieval** (`find_similar` + `get_note_neighbors` — multi-signal lexical hybrid, no embeddings) | ❌ | ✅ |
 | **Vault dashboard** (`obsidian_stats`: orphans, broken links, top tags) | ❌ | ✅ |
 | **Rename + auto-backlink rewrite** (`obsidian_rename_note` — atomic, code-fence-aware, dry-run preview) | ❌ usually breaks links | ✅ |
+| **Bulk find/replace across vault** (`obsidian_replace_in_notes` — code-fence-aware, dry-run, refuses footguns) | ❌ rare or unsafe | ✅ |
 | **Live watcher mode** (`--watch` — incremental cache + FTS5 reindex on file changes) | ❌ usually requires restart | ✅ |
 | **Karpathy LLM-Wiki `/lint` workflow** (`obsidian_lint_wiki` + `lint_wiki` prompt — orphans, broken links, stubs, stale, concept candidates) | ❌ | ✅ reference impl |
 | **Multi-hop graph path-finding** (`obsidian_find_path` — BFS shortest path between two notes over the wikilink graph, with alternatives) | ❌ | ✅ |
@@ -185,13 +186,14 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 | `obsidian_semantic_search` | **TF-IDF cosine retrieval.** Free / offline / no model download. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Catches synonym + related-term matches that `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss. |
 | `obsidian_full_text_search` | _Opt-in via `--persistent-index`._ BM25-ranked full-text search backed by SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Hyphenated tokens (`claude-telegram`) auto-quoted. Returns chunk-level hits with `«…»`-bracketed snippets. |
 
-### 3 write tools (opt-in via `--enable-write`)
+### 4 write tools (opt-in via `--enable-write`)
 
 | Tool | What it does |
 |---|---|
 | `obsidian_create_note` | Create a note with optional frontmatter. Refuses to overwrite by default. |
 | `obsidian_append_to_note` | Append a markdown block to an existing note. Configurable separator. |
 | `obsidian_rename_note` | **Atomic rename + automatic backlink rewrite.** Renames a note AND rewrites every `[[wikilink]]` / `![[embed]]` in the rest of the vault that resolved to it — preserving alias/section/block + the user's bare-vs-path target convention. Code-fence-aware: wikilinks inside ``` / ~~~ blocks stay verbatim. `dry_run: true` previews the plan without touching disk. |
+| `obsidian_replace_in_notes` | **Bulk find/replace across notes, code-fence-aware.** Walks the vault (or a `folder` subset), substitutes every literal occurrence of `search` with `replace` outside fenced code blocks, returns per-file occurrence counts. `dry_run: true` previews. `case_sensitive: false` for case-insensitive substring match. Refuses identical search/replace + empty search (footgun guards). |
 
 ### MCP resources
 
@@ -310,7 +312,7 @@ The graph-aware tools (`find_similar`, `get_note_neighbors`, `vault_stats`) walk
 | Flag | Default | What it does |
 |---|---|---|
 | `--vault <path>` | (required) | Path to the Obsidian vault root. |
-| `--enable-write` | off | Register the three write tools. Server is otherwise strictly read-only. |
+| `--enable-write` | off | Register the four write tools. Server is otherwise strictly read-only. |
 | `--max-file-bytes <n>` | 5 MB | Refuse to read or write any file larger. |
 | `--cache-size <n>` | 1024 | LRU cap for the parsed-note cache. |
 | `--persistent-cache` | off | Persist parsed-note cache to disk; warm cold-starts on large vaults. **Privacy: full note bodies are written to the cache file. See "Cache & privacy" below.** |
@@ -355,7 +357,7 @@ Found a security issue? See [SECURITY.md](./SECURITY.md).
 No. Obsidian's wikilink semantics, frontmatter conventions, and folder structure are baked in. Other tools are out of scope.
 
 **Will it modify my vault?**
-Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the three write tools refuse to overwrite existing notes by default (`obsidian_create_note` and `obsidian_rename_note` both require `overwrite=true` to clobber) and refuse to write outside the vault even if a parent dir is symlinked away.
+Not unless you start it with `--enable-write`. By default the server is strictly read-only. With write enabled, the four write tools refuse to overwrite existing notes by default (`obsidian_create_note` and `obsidian_rename_note` both require `overwrite=true` to clobber; `obsidian_replace_in_notes` refuses identical search/replace + empty search), and all writes refuse to land outside the vault even if a parent dir is symlinked away.
 
 **Does it work over the network?**
 No. It's a local stdio MCP server, designed for one client process per vault. There's no HTTP transport, no auth, no rate limiting — and that's intentional.
@@ -405,6 +407,7 @@ Build runs `tsc` and marks `dist/index.js` executable. CI tests Node 20 / 22 / 2
 
 Semantic versioning. See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
+- **1.9.x** — **Bulk find/replace** (`obsidian_replace_in_notes` — code-fence-aware, dry-run preview, footgun guards). Reuses rename_note's line walker. v1.8.1 patch fixed 3 P1 bugs (findPath O(N²) → O(N), semanticSearch frontmatter leak, exclusion error message accuracy).
 - **1.8.x** — **Semantic search** (`obsidian_semantic_search`) — pure-JS TF-IDF cosine retrieval. Free / offline / no model download. Catches the synonym + related-term matches BM25 misses. Real ML embedding retrieval is the v2.0 follow-up.
 - **1.7.x** — **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — parses Obsidian's whiteboard format into typed nodes + edges, surfaces broken file refs).
 - **1.6.x** — **Multi-hop graph traversal** (`obsidian_find_path` BFS) + **`obsidian_open_in_ui`** (obsidian:// URI hand-off) + **strict allowlist** (`--read-paths` complement to `--exclude-glob`).

@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] — 2026-05-08
+
+**Sprint 4 — Karpathy LLM-Wiki backend positioning.** Four new MCP prompts that implement the [Karpathy LLM-Wiki workflow](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) natively over Obsidian's `.md` + `[[wikilinks]]` substrate. **Strategic claim: enquire-mcp is the open-source backend for Karpathy-style LLM Wikis on top of your existing Obsidian vault.** No competitor sits on this intersection (Search-first / Agentic-first / Wiki-compounding) — we claim it.
+
+### Added — `vault_synth` (LLM-Wiki ingest)
+
+Take raw source content, extract concepts/entities/claims, reconcile with the existing vault (search for prior coverage), propose drafts (new note vs append vs cross-link). Cites every claim with the source location for trust. Lints proposals via `obsidian_validate_note_proposal` before writing. Outputs a transactional plan; user approves before disk writes.
+
+### Added — `vault_wiki_compile` (LLM-Wiki maintenance)
+
+Weekly compile step. Scans recently-changed notes, regenerates `index.md` (top-of-vault TOC + concept clusters by tag/folder), appends to `log.md` (chronological compile history). Surfaces gaps via `obsidian_lint_wiki`. Idempotent.
+
+### Added — `vault_lint_extended`
+
+Beyond structural lint of `obsidian_lint_wiki`: 4-phase deeper inspection.
+1. Structural — same as existing.
+2. **Semantic contradictions** — for each strong claim, search for the negation; flag pairs.
+3. **Stale claims** — date references > 6 months old paired with words like "current"/"latest"/"upcoming".
+4. **Missing cross-references** — wiki page titles mentioned in plain text without `[[brackets]]`. Propose rewrites (validated first).
+
+### Added — `vault_capture` (Mem.ai-style "write don't organize")
+
+Decision-tree for filing a quick thought: continues an existing note? → append. Conversational/time-bound? → today's daily. Distinct concepts? → `vault_synth`. Default: Inbox catch-all. Always shows diff before writing.
+
+### Strategic position
+
+Combined with v2.0-v2.3, the prompt + tool surface now claims **three categories simultaneously**:
+
+- **Search-first** (vs Smart Connections) — covered by `obsidian_search` (hybrid RRF + graph boost).
+- **Agentic-first** (vs Khoj) — covered partially by `vault_capture`/`vault_synth` (full agent personas in v2.5.0).
+- **Wiki-compounding** (vs Karpathy LLM-Wiki) — claimed exclusively by `vault_synth`/`vault_wiki_compile`/`vault_lint_extended`.
+
+**No other open-source PKM-AI tool sits on all three.** This release stakes that claim.
+
+### Tests
+
+431 unit tests pass (no count delta — v2.4.0 adds prompts only, which are pure templates).
+
+### Migration
+
+**No-op.** All additions are new MCP prompts. Existing tool calls behave identically. Prompts work in any MCP client (Claude Code / Cursor / Codex / OpenClaw / Devin / etc.).
+
 ## [2.3.0] — 2026-05-08
 
 **Sprint 3 — Obsidian-native moats.** Two features that exploit primitives no other Obsidian-MCP uses: the wikilink graph + atomic frontmatter manipulation. Result: retrieval quality gap that generic vector stores cannot close.

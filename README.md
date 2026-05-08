@@ -159,7 +159,9 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_chat_thread_append` | **v2.2.0.** Append a user/assistant/system message to a note's `## Chat:` block. Creates note + heading if absent. Threads stored as markdown — searchable, version-controllable, survive sessions. |
 | `obsidian_frontmatter_set` | **v2.3.0.** Surgical YAML manipulation — set/unset keys on a note atomically. Pass `null` as value to delete. Round-trips through gray-matter so YAML formatting stays consistent. `dry_run` supported. |
 
-Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **11 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `search_with_query_expansion`).
+Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **15 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `search_with_query_expansion`, `vault_synth`, `vault_wiki_compile`, `vault_lint_extended`, `vault_capture`).
+
+> **v2.4.0 strategic position:** enquire-mcp is the open-source backend for **Karpathy-style LLM Wikis** on top of your existing Obsidian vault. The `vault_synth` + `vault_wiki_compile` + `vault_lint_extended` prompts implement the [Karpathy LLM-Wiki workflow](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) (ingest → query → lint → compile) natively over Obsidian's `.md` + `[[wikilinks]]` substrate. Knowledge that compounds, traceable to sources.
 
 ---
 

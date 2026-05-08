@@ -49,7 +49,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -1896,6 +1896,205 @@ DO NOT actually modify any notes. This is a proposal pass — the user runs the 
 5. If a hit appears in only ONE paraphrase, mark it as "low-confidence — only retrieved by paraphrase #N" — these are speculative.
 
 The goal is recall + observability: the user sees not just the answer but WHY each note ranked.`
+          }
+        }
+      ]
+    })
+  );
+
+  // v2.4.0 — Karpathy LLM-Wiki workflow prompts.
+  // Reference: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+  // Karpathy named three workflows: ingest, query, lint. We had `query` and
+  // `lint` since v1.5. v2.4.0 adds `ingest`-style workflows + `compile`/
+  // `synth` patterns that close the loop. Position: enquire-mcp = the
+  // open-source backend for Karpathy-style LLM Wikis on top of Obsidian.
+
+  server.registerPrompt(
+    "vault_synth",
+    {
+      title: "Synthesize a vault wiki page from sources (Karpathy-style ingest)",
+      description:
+        "Karpathy LLM-Wiki ingest workflow: take raw source(s), extract entities/concepts/claims, decide which existing notes to update vs which new wiki pages to create, then propose drafts. The agent decides; this prompt sequences the calls. Cites every claim with the source location for trust.",
+      argsSchema: {
+        source: z
+          .string()
+          .describe("Source content to ingest — paste a paragraph, an arXiv abstract, a URL transcript, etc."),
+        target_folder: z
+          .string()
+          .optional()
+          .describe("Where new wiki pages should land (vault-relative, default 'Wiki/')")
+      }
+    },
+    ({ source, target_folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Karpathy LLM-Wiki **ingest** workflow on this source:
+
+\`\`\`
+${source}
+\`\`\`
+
+Steps:
+
+1. **Extract concepts.** Identify 3-7 distinct concepts / entities / claims worth indexing. For each, propose a wiki page title (PascalCase or "Title Case" — match my vault's existing convention; check via \`obsidian_list_notes\` on a few sample folders).
+
+2. **Reconcile with vault.** For each concept, run \`obsidian_search\` (graph_boost ON, default) to find existing notes that ALREADY cover it. Three outcomes per concept:
+   - **EXISTS** (top hit score > 0.04 and same scope) → propose an APPEND to the existing note
+   - **PARTIAL** (related but doesn't cover this angle) → propose a new note that \`[[wikilinks]]\` to the existing one
+   - **NEW** → propose a fresh wiki page in \`${target_folder ?? "Wiki/"}\`
+
+3. **Lint drafts before writing.** For each proposed write, call \`obsidian_validate_note_proposal\` to catch broken \`[[wikilinks]]\` / inconsistent tags / structurally-broken YAML BEFORE creating.
+
+4. **Cite every claim.** Each new note should have a "Source" frontmatter field referencing the input + a "Claims" section with one bullet per extracted claim, each with the source quote.
+
+5. **Output a transactional plan.** Don't write yet. Output a JSON-like list:
+   \`\`\`
+   [
+     { action: "create" | "append", path: "Wiki/Foo.md", reason: "...", body_preview: "..." },
+     ...
+   ]
+   \`\`\`
+   Then ask the user to approve. ONLY write after explicit approval, using \`obsidian_create_note\` / \`obsidian_append_to_note\`.
+
+This is the Karpathy LLM-Wiki ingest loop applied to Obsidian. Goal: knowledge that compounds over time, with every claim traceable to its source.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "vault_wiki_compile",
+    {
+      title: "Compile vault index + log (Karpathy-style maintenance)",
+      description:
+        "The LLM-Wiki maintenance step: scan the vault for new/updated notes since last compile, regenerate the top-level `index.md` (table of contents + concept clusters) and append to `log.md` (a chronological compile-log). Run weekly or after a batch ingest. Idempotent.",
+      argsSchema: {
+        since_minutes: z.string().optional().describe("Window for 'recently changed' notes (default 10080 = 7 days)"),
+        wiki_folder: z.string().optional().describe("Wiki folder root (default 'Wiki/')")
+      }
+    },
+    ({ since_minutes, wiki_folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Karpathy LLM-Wiki **compile** workflow.
+
+Step 1 — Scan recent changes:
+- \`obsidian_get_recent_edits since_minutes=${since_minutes ?? 10080} folder=${wiki_folder ?? "Wiki"}\`
+- For each, \`obsidian_read_note format=map\` to get headings + frontmatter only (cheap).
+
+Step 2 — Regenerate index.md:
+- Group notes by frontmatter \`tags\` and by folder.
+- For each cluster (≥3 notes), produce a heading + bullet list of \`[[wikilinks]]\` to the cluster members.
+- Add a "Recent" section listing the 10 most recently modified.
+- Use \`obsidian_validate_note_proposal\` to catch any broken wikilinks BEFORE writing.
+- Write via \`obsidian_create_note overwrite=true\` to \`${wiki_folder ?? "Wiki"}/index.md\`.
+
+Step 3 — Append to log.md:
+- A bullet per note touched in the window: \`- 2026-05-08 — [[NoteTitle]] (created|updated): one-line summary\`
+- Append via \`obsidian_append_to_note\`. The log accumulates compile history.
+
+Step 4 — Surface gaps:
+- Run \`obsidian_lint_wiki\` to enumerate orphans / broken / stubs / stale.
+- Add the gap summary to the bottom of \`index.md\` so the next compile sees it.
+
+Idempotent. Re-run weekly.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "vault_lint_extended",
+    {
+      title: "Extended vault lint (orphans + contradictions + stale claims + missing cross-refs)",
+      description:
+        "Beyond the structural lint of `obsidian_lint_wiki`: this prompt sequences a deeper inspection — contradictions across notes (semantic search for opposing claims), stale claims (notes with date references > 6mo old), missing cross-references (notes that mention an entity by name without `[[wikilinking]]` to its wiki page).",
+      argsSchema: {
+        folder: z.string().optional().describe("Restrict to a folder (default whole vault)")
+      }
+    },
+    ({ folder }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Extended lint pass on${folder ? ` ${folder}` : " the whole vault"}.
+
+Phase 1 — structural (\`obsidian_lint_wiki${folder ? ` folder=${folder}` : ""}\`):
+- Surface orphans / broken / stubs / stale per the existing tool. Skim the report.
+
+Phase 2 — semantic contradictions:
+- For each top-30 note (by recent-edits window), pick 1-2 strong claims (declarative sentences in the body).
+- For each claim, run \`obsidian_search query="<claim paraphrased to negate>" min_signals=2\` — multi-ranker consensus on the OPPOSITE statement.
+- If a hit comes back with score > 0.04, flag as a potential contradiction. Output: A says X, B says ¬X, suggest reconciliation.
+
+Phase 3 — stale claims:
+- For each note, scan body for date patterns (\`/\\b(20\\d{2})-\\d{2}-\\d{2}\\b/\` or \`/\\b(20\\d{2})\\b/\` with words like "current"/"latest"/"now"/"upcoming").
+- If the date is > 6 months old, surface as "potentially stale: <note> claims X with date Y".
+
+Phase 4 — missing cross-references:
+- For each top-15 note, get its outbound \`[[wikilinks]]\` (via \`obsidian_get_outbound_links\`).
+- Read the body. Check for wiki page TITLES (use \`obsidian_list_notes\` for the list) mentioned in plain text WITHOUT \`[[\` brackets.
+- For each, propose a rewrite that adds the brackets. \`obsidian_validate_note_proposal\` first.
+
+Output: a single markdown report with sections per phase. End with the top 5 highest-leverage fixes.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "vault_capture",
+    {
+      title: "Capture a quick thought into the vault (write don't organize)",
+      description:
+        "Mem.ai-style 'write don't organize' UX: the user pastes a thought; we file it intelligently. Auto-detect destination (today's daily note vs new wiki page vs append to most-relevant existing note via hybrid search) and propose a diff for user approval before writing.",
+      argsSchema: {
+        text: z.string().describe("The thought to capture — free-form text"),
+        target_hint: z
+          .string()
+          .optional()
+          .describe("Optional hint: 'daily', 'new-note', or a path/topic to bias destination")
+      }
+    },
+    ({ text, target_hint }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Capture this thought into my vault, Mem.ai-style: figure out where it goes, propose a diff, ask before writing.
+
+Thought:
+\`\`\`
+${text}
+\`\`\`
+
+Hint: ${target_hint ?? "(none — auto-detect)"}
+
+Decision tree:
+
+1. **Daily?** If thought is conversational / reflective / time-bound (uses words like "today", "yesterday", "I'm thinking about", "TIL"), propose APPEND to today's daily note via \`obsidian_read_note title="today"\` → \`obsidian_append_to_note\`.
+
+2. **Continues an existing note?** Run \`obsidian_search query="<thought first 200 chars>" limit=5\`. If top hit has score > 0.05, propose APPEND to that note. Show the user: "this looks related to [[NoteTitle]] — append there?"
+
+3. **New wiki page?** If thought contains 1-3 distinct concepts that don't have existing notes, run \`vault_synth\` workflow on it.
+
+4. **Inbox catch-all.** If steps 1-3 give nothing high-confidence, propose \`obsidian_create_note path="Inbox/<timestamp>-<3-word-slug>.md"\`.
+
+5. **Show diff, ask, then write.** Always preview the proposed write to the user. Use \`obsidian_validate_note_proposal\` first. Write only after explicit approval.
+
+Goal: zero filing burden on the user. The AI does the indexing.`
           }
         }
       ]

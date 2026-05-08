@@ -98,17 +98,24 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  const expectedCount = withFts ? 25 : 24;
+  // v2.5.0: 28 tools (with --diagnostic-search-tools): 25 always-on read +
+  // 3 single-ranker diagnostic tools. With --persistent-index: + 1
+  // (obsidian_full_text_search) = 29.
+  const expectedCount = withFts ? 29 : 28;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
     `got ${JSON.stringify(names)}`
   );
   const baseTools = [
+    "obsidian_chat_thread_read",
+    "obsidian_context_pack",
     "obsidian_dataview_query",
     "obsidian_embeddings_search",
     "obsidian_find_path",
     "obsidian_find_similar",
+    "obsidian_frontmatter_get",
+    "obsidian_frontmatter_search",
     "obsidian_get_backlinks",
     "obsidian_get_note_neighbors",
     "obsidian_get_outbound_links",
@@ -275,7 +282,10 @@ try {
   // Prompts.
   const prompts = await rpc("prompts/list", {});
   const promptNames = (prompts.result?.prompts ?? []).map((p) => p.name).sort();
-  check("prompts/list returns 10 prompts", promptNames.length === 10, JSON.stringify(promptNames));
+  // v2.5.0: 17 prompts (10 v1.x + search_with_query_expansion + vault_synth +
+  // vault_wiki_compile + vault_lint_extended + vault_capture +
+  // vault_persona_search + vault_automation_setup).
+  check("prompts/list returns 17 prompts", promptNames.length === 17, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
 
   // Sanity-check the new D / E tools.

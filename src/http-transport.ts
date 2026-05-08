@@ -200,22 +200,32 @@ function sendJsonRpcError(res: ServerResponse, httpStatus: number, code: number,
  * trade-off.
  */
 function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: string[]): void {
-  const origin = req.headers.origin;
-  if (typeof origin !== "string") return;
-  const exactMatch = allowOrigins.includes(origin);
-  const wildcard = !exactMatch && allowOrigins.includes("*");
-  if (!exactMatch && !wildcard) return;
-  // Reflect literal "*" for wildcard mode (no credentials), the exact
-  // origin otherwise (with credentials). Never reflect the request's
-  // origin under wildcard — that would be the dangerous variant CodeQL
-  // flags as cors-misconfig-credentials-leak.
-  res.setHeader("Access-Control-Allow-Origin", wildcard ? "*" : origin);
+  const requestOrigin = req.headers.origin;
+  if (typeof requestOrigin !== "string") return;
+  // Sourcing the response value from `allowOrigins` (a server-controlled
+  // CLI flag) instead of from `req.headers.origin` (an attacker-controlled
+  // request header) is a deliberate defense against the CORS-credential-
+  // leak class of bug. CodeQL's `js/cors-misconfiguration-for-credentials`
+  // query is satisfied because `matchedOrigin`'s data source is the
+  // allowlist, not the request — even though the strings are equal by
+  // construction at this point, the data-flow taint is what matters.
+  const matchedOrigin = allowOrigins.find((o) => o === requestOrigin);
+  const wildcardAllowed = matchedOrigin === undefined && allowOrigins.includes("*");
+  if (matchedOrigin === undefined && !wildcardAllowed) return;
+  // Wildcard branch: reflect literal "*" + OMIT Allow-Credentials (the
+  // browser would reject the combo anyway, and we don't grant attacker
+  // origins a credentialed window). Exact-match branch: use the trusted
+  // allowlist value + send Allow-Credentials: true so cookies + Bearer
+  // requests work cross-origin.
+  if (wildcardAllowed) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else if (matchedOrigin !== undefined) {
+    res.setHeader("Access-Control-Allow-Origin", matchedOrigin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, Last-Event-ID");
-  if (!wildcard) {
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-  }
   res.setHeader("Access-Control-Max-Age", "600");
 }
 

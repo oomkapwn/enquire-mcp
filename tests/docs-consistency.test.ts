@@ -85,9 +85,13 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const writeNames = registeredNames(writeBody, "registerTool");
     const ftsNames = registeredNames(ftsBody, "registerTool");
     // v2.0.0-beta.3: tools gated behind `if (diagnosticSearchTools)` are
-    // opt-in, not always-on.
+    // opt-in, not always-on. Use `\s+` (matches newlines) instead of a
+    // single space — Biome's formatter splits `if (...) server.registerTool(`
+    // onto separate lines, which would have escaped a single-line regex.
     const diagnosticGated = new Set(
-      [...indexSrc.matchAll(/if \(diagnosticSearchTools\) server\.registerTool\(\s*"([^"]+)"/g)].map((m) => m[1] ?? "")
+      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
+        (m) => m[1] ?? ""
+      )
     );
     const alwaysOnRead = [...registered].filter(
       (n) => !writeNames.has(n) && !ftsNames.has(n) && !diagnosticGated.has(n)

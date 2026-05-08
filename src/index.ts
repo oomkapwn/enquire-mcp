@@ -43,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-beta.4";
+const VERSION = "2.0.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {

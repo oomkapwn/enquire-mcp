@@ -17,6 +17,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { extractPdfWithOcr, isOcrAvailable } from "../src/ocr.js";
 import { ocrPdf } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
 import { makePdf } from "./helpers/make-pdf.js";
@@ -74,5 +75,25 @@ describe("ocrPdf — path + privacy contract (v2.10.0)", () => {
     // path normalization runs identically for both.
     await expect(ocrPdf(v, { path: "missing" })).rejects.toThrow();
     await expect(ocrPdf(v, { path: "missing.pdf" })).rejects.toThrow();
+  });
+});
+
+describe("ocr.ts module surface (v2.10.0)", () => {
+  it("isOcrAvailable returns true when all 3 optional deps install", async () => {
+    // CI default-installs optionalDependencies (no --omit=optional), so
+    // tesseract.js + @napi-rs/canvas + pdfjs-dist all load successfully.
+    // This exercises the loader code paths for coverage.
+    const ok = await isOcrAvailable();
+    expect(ok).toBe(true);
+  });
+
+  it("extractPdfWithOcr rejects an invalid PDF buffer cleanly", async () => {
+    // Pass random bytes — pdfjs's getDocument will throw with a "stream"
+    // or "InvalidPDF" error, which we surface to the caller. This
+    // exercises the loader chain + the doc-load error path without
+    // actually running Tesseract (we never reach the OCR loop because
+    // doc-load fails first).
+    const bad = Buffer.from("not a pdf, just bytes pretending to be one");
+    await expect(extractPdfWithOcr(bad)).rejects.toThrow();
   });
 });

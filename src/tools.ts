@@ -2499,16 +2499,39 @@ const STOP_WORDS = new Set([
   "how"
 ]);
 
+// v2.1.0: detect Chinese / Japanese / Thai / Khmer / Lao via script ranges.
+// These languages don't use spaces between words, so the Unicode-regex
+// tokenizer falls back to character-level (or huge multi-word tokens),
+// which tanks BM25 + TF-IDF precision. Intl.Segmenter (Node 16+ ICU)
+// gives word-break per language. Detection is per-document, branching the
+// tokenizer.
+const CJK_OR_THAI_RANGES = /[぀-ヿ㐀-䶿一-鿿가-힯฀-๿ༀ-࿿ក-៿]/;
+
 function tokenizeForTfidf(text: string): string[] {
   // v1.11.1: Unicode-aware tokenizer. The previous ASCII-only regex
   // (`/[a-z0-9][a-z0-9_-]*/g`) silently dropped Cyrillic, Greek, CJK,
-  // Hebrew, Arabic, and any non-Latin content from the TF-IDF index —
-  // semantic search returned zero hits for non-English queries on
-  // non-English notes. `\p{L}` matches any Unicode letter; `\p{N}`
-  // matches any Unicode number. The leading-class restriction prevents
-  // tokens that start with `_-` separators.
+  // Hebrew, Arabic, and any non-Latin content from the TF-IDF index.
+  // `\p{L}` matches any Unicode letter; `\p{N}` matches any Unicode number.
+  //
+  // v2.1.0: when the text contains CJK / Thai / Khmer / Lao chars (no-
+  // whitespace scripts), use Intl.Segmenter for proper word-break first,
+  // then run the Unicode regex per-segment. This produces real word tokens
+  // instead of "認可サーバーがアクセストークン" as a single 12-char token
+  // that the length filter would drop.
   const lower = text.toLowerCase();
   const out: string[] = [];
+  if (CJK_OR_THAI_RANGES.test(lower) && typeof Intl !== "undefined" && typeof Intl.Segmenter !== "undefined") {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+    for (const seg of segmenter.segment(lower)) {
+      if (!seg.isWordLike) continue;
+      const t = seg.segment;
+      if (t.length < 1) continue;
+      if (t.length > 40) continue;
+      if (STOP_WORDS.has(t)) continue;
+      out.push(t);
+    }
+    return out;
+  }
   for (const m of lower.matchAll(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)) {
     const t = m[0];
     if (t.length < 2) continue;

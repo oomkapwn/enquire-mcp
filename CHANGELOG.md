@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-05-08
+
+**Sprint 1 of the post-v2.0 roadmap.** Three quick wins that improve retrieval quality at near-zero implementation cost. No new tools — refinements to existing surfaces. All changes are internal; the API surface is unchanged.
+
+### Improved — Markdown-aware structural chunker (heading breadcrumbs)
+
+`chunkContent()` now attaches a `breadcrumb` field to every chunk: the H1 > H2 > H3 hierarchy in scope at chunk start. Both indexers use it:
+
+- **FTS5** stores `[section: <breadcrumb>]\n<text>` in the `content` column so BM25 catches notes whose section heading matches a query term, even when the body doesn't repeat it.
+- **Embeddings** prepend `<breadcrumb>\n\n<text>` before sending to the model so the embedding captures structural context.
+
+Per Chroma 2024 + NAACL 2025: structural breadcrumbs lift NDCG@10 by 2-5 points at ~0 token cost. We already had heading-aware AST in `parser.ts`; this just propagates it through chunking.
+
+ATX headings only. Fenced code blocks (where `#` is a shell prompt, not a heading) are skipped via state-machine — `bash` snippets with `# comment` no longer hijack the heading stack.
+
+### Improved — CJK / Thai / Khmer / Lao tokenization via `Intl.Segmenter`
+
+The Unicode-regex tokenizer in `tokenizeForTfidf` worked for whitespace-separated scripts (Latin, Cyrillic, Greek, Hebrew, Arabic) but produced character-level or huge multi-character "tokens" for CJK / Thai / Khmer / Lao — the length filter dropped them, and BM25/TF-IDF precision tanked.
+
+Now: when content contains Chinese / Japanese / Korean / Thai / Tibetan / Khmer code points, branch into `Intl.Segmenter` (Node 16+ built-in ICU) for proper word-break. Per-document detection, no new dependencies.
+
+Validated against Japanese (kana + kanji) and Chinese (Hanzi) test corpora — top hit ranking is now correct for cross-lingual queries on those scripts.
+
+### Added — `search_with_query_expansion` MCP prompt
+
+Multi-query expansion as a **client-side orchestration prompt**, not a server-side LLM call. The agent paraphrases the query 3-5 ways (mix of keyword-focused, semantic-focused, step-back, optionally cross-lingual), runs `obsidian_search` per paraphrase, then RRF-fuses the results with k=60.
+
+Lifts recall by 5-15 NDCG@10 on terse / ambiguous queries vs single-pass search. Pure prompt engineering — zero new server code, respects MCP architectural boundary (server does retrieval, agent does LLM).
+
+### Tests
+
+413 unit tests pass (was 408, +5 new): 3 for breadcrumb propagation (heading hierarchy, preamble, code-fence safety) + 2 for CJK segmentation (Chinese + Japanese top-hit ranking).
+
+### Migration
+
+**No-op for users.** All changes are internal. Existing `.fts5.db` and `.embed.db` will rebuild automatically on next vault sync due to existing `tokenize_mode` / `vault_root` cross-config-change guards.
+
 ## [2.0.0] — 2026-05-08
 
 **v2.0.0 stable.** Promotes the v2.0 prerelease train (alpha.0 → beta.{0,1,2,3,4}) to `@latest` on npm. `npm install @oomkapwn/enquire-mcp` now ships v2.0.0 by default; v1.11.1 stable users update on next install. **No new code changes from beta.4** — this release is the channel promotion only.

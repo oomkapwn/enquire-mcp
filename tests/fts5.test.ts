@@ -89,6 +89,61 @@ describe("chunkContent", () => {
     expect(chunks[1]?.lineStart).toBeGreaterThan(1);
     expect(chunks[2]?.lineStart).toBeGreaterThan(chunks[1]?.lineStart ?? 0);
   });
+
+  // v2.1.0: heading breadcrumb propagation
+  it("attaches heading breadcrumb (H1 > H2 > H3 in scope) to each chunk", () => {
+    const md = `# Setup
+
+intro paragraph
+
+## Install
+
+run npm install
+
+### Requirements
+
+Node 20+
+
+## Configure
+
+set VAULT env`;
+    const chunks = chunkContent(md);
+    // Find chunk with body "intro paragraph"
+    const intro = chunks.find((c) => c.text === "intro paragraph");
+    expect(intro?.breadcrumb).toBe("Setup");
+    // Find chunk with body "run npm install"
+    const install = chunks.find((c) => c.text === "run npm install");
+    expect(install?.breadcrumb).toBe("Setup > Install");
+    // Find chunk with body "Node 20+"
+    const reqs = chunks.find((c) => c.text === "Node 20+");
+    expect(reqs?.breadcrumb).toBe("Setup > Install > Requirements");
+    // Find chunk with body "set VAULT env" — sibling H2 should pop the H3
+    const cfg = chunks.find((c) => c.text === "set VAULT env");
+    expect(cfg?.breadcrumb).toBe("Setup > Configure");
+  });
+
+  it("breadcrumb is empty for content before any heading (preamble)", () => {
+    const md = "intro line\n\n# First Heading\n\nbody";
+    const chunks = chunkContent(md);
+    const intro = chunks.find((c) => c.text === "intro line");
+    expect(intro?.breadcrumb).toBe("");
+  });
+
+  it("`#` inside a fenced code block is NOT treated as a heading", () => {
+    const md = `# Real Heading
+
+\`\`\`bash
+# this is a shell comment, not a heading
+echo hi
+\`\`\`
+
+after the fence`;
+    const chunks = chunkContent(md);
+    // The "after the fence" chunk should still have breadcrumb "Real Heading"
+    // (the # in the code block must not have hijacked the stack).
+    const after = chunks.find((c) => c.text === "after the fence");
+    expect(after?.breadcrumb).toBe("Real Heading");
+  });
 });
 
 describe("FtsIndex — full lifecycle", () => {

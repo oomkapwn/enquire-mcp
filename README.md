@@ -153,7 +153,7 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_replace_in_notes` | Bulk find/replace. Per-file errors collected; `partial: true` on mid-loop fail. |
 | `obsidian_archive_note` | Wraps rename to `Archive/`. Preserves backlinks. |
 
-Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **10 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`).
+Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **11 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `search_with_query_expansion`).
 
 ---
 

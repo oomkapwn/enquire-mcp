@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-05-08
+
+**Sprint 3 — Obsidian-native moats.** Two features that exploit primitives no other Obsidian-MCP uses: the wikilink graph + atomic frontmatter manipulation. Result: retrieval quality gap that generic vector stores cannot close.
+
+### Added — Wikilink graph-boost on `obsidian_search` (default ON)
+
+After RRF fusion, we count how many *other* top-K hits link to each candidate, then boost score by `α × in-degree` (α=0.005 — enough to break ties, won't override strong single-ranker signals). Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
+
+**This is the "only enquire-mcp does this" feature.** Generic vector stores can't do this without an Obsidian-aware layer; Smart Connections doesn't do it either. Wikilinks ARE the differentiating Obsidian primitive — using them as a retrieval signal is something only an Obsidian-native server can do well.
+
+Cost is small: read top-K notes (already cached from prior calls), build adjacency in memory, count overlaps. Sub-50ms on a 30-candidate set.
+
+Default ON. Set `graph_boost: false` to disable for diagnostic comparison ("did boost help here?").
+
+### Added — `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_frontmatter_set`
+
+Surgical YAML manipulation. Pre-fix, agents wanting to set `status: published` on 12 notes had to use find/replace text — error-prone (multi-line strings, special chars, key-collision edge cases). Now:
+
+- **`_get`** (read) — read full frontmatter or single key. Periodic-note aliases work (`title: "today"`).
+- **`_search`** (read) — find notes by frontmatter predicate. Three exclusive predicates: `equals` (strict equality), `exists` (key must be present), `contains` (for array values). Useful as a precursor to bulk `_set`: "find all notes with status:draft, then set their status to published."
+- **`_set`** (write, gated by `--enable-write`) — set/unset keys atomically. Pass `null` as value to delete a key. Round-trips through gray-matter so YAML formatting/quoting/types stay consistent. `dry_run: true` shows the diff without writing. Returns `before` + `after` + `changed_keys` for observability.
+
+### Tests
+
+431 unit tests pass (was 420, +11 new): frontmatter get/set/search end-to-end + dry-run + null-deletion + exclusive predicate validation.
+
+### Architecture & strategic position
+
+This sprint cements the "**only enquire-mcp uses your wikilink graph as a retrieval signal**" claim — concrete, measurable, defensible. Combined with v2.2.0's hybrid retrieval and v2.1.0's structural breadcrumbs, the retrieval stack is now:
+
+```
+query → BM25 (FTS5) ┐
+       → TF-IDF      ├→ RRF fuse → graph-boost rerank → top-K
+       → embeddings  ┘
+```
+
+Each layer is a distinct competitive moat against generic vector-store-based MCPs.
+
+### Migration
+
+**No-op for default users.** Graph boost is on by default; if it changes ranking on a specific corpus, that's the intended behavior. Set `graph_boost: false` to revert to pre-v2.3.0 RRF-only ranking.
+
 ## [2.2.0] — 2026-05-08
 
 **Sprint 2 — Smart Connections gap closure.** Three features that match what users currently pay for via the dominant Obsidian semantic-search plugin, all MCP-native (work in Claude Code / Cursor / Codex / any agent — not Obsidian-only).

@@ -20,6 +20,9 @@ import {
   embeddingsSearch,
   findPath,
   findSimilar,
+  frontmatterGet,
+  frontmatterSearch,
+  frontmatterSet,
   getBacklinks,
   getNoteNeighbors,
   getOpenQuestions,
@@ -46,7 +49,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -1165,6 +1168,12 @@ function registerReadTools(
           .optional()
           .describe(
             "v2.2.0: 'note' (default) returns one hit per note (best chunk wins). 'block' keeps each chunk as a distinct hit — useful when one note covers a topic in multiple paragraphs and you want the LLM to see all of them."
+          ),
+        graph_boost: z
+          .boolean()
+          .optional()
+          .describe(
+            "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. The 'only enquire-mcp does this' feature: generic vector stores can't do this without an Obsidian-aware layer."
           )
       }
     },
@@ -1224,6 +1233,42 @@ function registerReadTools(
       const embedFile = embedDbPath(vault.root);
       return textResult(await contextPack(vault, args, { ftsIndex, embedFile }));
     }
+  );
+
+  // v2.3.0: frontmatter atomic ops — read.
+  server.registerTool(
+    "obsidian_frontmatter_get",
+    {
+      title: "Read note frontmatter (full or single key)",
+      description:
+        "Return parsed YAML frontmatter for a note. With `key`, returns just that field's value. Without `key`, returns the whole frontmatter object. Read-only.",
+      annotations: { ...READ_ONLY, title: "Get frontmatter" },
+      inputSchema: {
+        path: z.string().optional().describe("Vault-relative path"),
+        title: z.string().optional().describe("Note title (filename without .md, accepts periodic aliases)"),
+        key: z.string().optional().describe("Single key to read; omit for full frontmatter")
+      }
+    },
+    async (args) => textResult(await frontmatterGet(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_frontmatter_search",
+    {
+      title: "Find notes by frontmatter predicate",
+      description:
+        "Find every note where frontmatter.<key> matches a predicate. Useful as a precursor to bulk frontmatter_set: 'find all notes with status:draft and set their status to published'. Predicates are exclusive: pass exactly one of `equals` (strict equality), `exists` (key must be present), `contains` (for array values, member match).",
+      annotations: { ...READ_ONLY, title: "Search frontmatter" },
+      inputSchema: {
+        key: z.string().min(1).describe("Frontmatter key to test"),
+        equals: z.unknown().optional().describe("Strict equality predicate (JSON.stringify comparison)"),
+        exists: z.boolean().optional().describe("Predicate: key must exist (any value)"),
+        contains: z.unknown().optional().describe("For array values, value must be a member"),
+        folder: z.string().optional().describe("Restrict search to a folder"),
+        limit: z.number().int().positive().max(1000).optional().describe("Max matches (default 100)")
+      }
+    },
+    async (args) => textResult(await frontmatterSearch(vault, args))
   );
 }
 
@@ -1361,6 +1406,26 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await chatThreadAppend(vault, args))
+  );
+
+  // v2.3.0: surgical frontmatter writes (set / unset / bulk).
+  server.registerTool(
+    "obsidian_frontmatter_set",
+    {
+      title: "Set/unset frontmatter keys atomically",
+      description:
+        "Surgical YAML manipulation: set one or more keys, or remove them by passing `null` as the value. Round-trips through gray-matter (same parser used at write time) so YAML formatting / quoting / type-coercion stays consistent. Returns `before` + `after` + list of changed keys for observability. `dry_run: true` shows the diff without writing.",
+      annotations: { ...WRITE, title: "Set frontmatter" },
+      inputSchema: {
+        path: z.string().optional().describe("Vault-relative path"),
+        title: z.string().optional().describe("Note title (filename without .md)"),
+        set: z
+          .record(z.string(), z.unknown())
+          .describe("Keys to set. Pass `null` as value to delete a key (e.g. {status: 'published', draft: null})"),
+        dry_run: z.boolean().optional().describe("Preview the diff without writing (default false)")
+      }
+    },
+    async (args) => textResult(await frontmatterSet(vault, args))
   );
 }
 

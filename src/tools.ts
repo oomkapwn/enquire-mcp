@@ -899,6 +899,143 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
   };
 }
 
+// ─── obsidian_frontmatter_{get,set,search} (v2.3.0 — atomic YAML ops) ──────
+// Surgical YAML manipulation. Pre-fix, agents wanting to set `status:
+// published` on 12 notes had to find/replace text — error-prone (multi-line
+// strings, special chars, key-collision). Now: parse via gray-matter, edit,
+// rewrite. Code-fence-aware via gray-matter (frontmatter is delimited
+// strictly by leading `---`, so no fence ambiguity).
+//
+// _get is read-only; _set + _delete are write-gated.
+
+export async function frontmatterGet(
+  vault: Vault,
+  args: { path?: string; title?: string; key?: string }
+): Promise<{ path: string; frontmatter: Record<string, unknown>; value?: unknown }> {
+  await vault.ensureExists();
+  const target = await resolveTarget(vault, args);
+  const note = await vault.readNote(target.absPath, target.mtimeMs);
+  if (args.key) {
+    return {
+      path: target.relPath,
+      frontmatter: note.parsed.frontmatter,
+      value: note.parsed.frontmatter[args.key]
+    };
+  }
+  return { path: target.relPath, frontmatter: note.parsed.frontmatter };
+}
+
+export interface FrontmatterSetArgs {
+  path?: string;
+  title?: string;
+  /** Keys to set. Setting a key to `null` deletes it. */
+  set: Record<string, unknown>;
+  /** Optional: dry_run shows the diff without writing. */
+  dry_run?: boolean;
+}
+
+export async function frontmatterSet(
+  vault: Vault,
+  args: FrontmatterSetArgs
+): Promise<{
+  path: string;
+  changed_keys: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  dry_run: boolean;
+}> {
+  await vault.ensureExists();
+  if (!args.set || Object.keys(args.set).length === 0) {
+    throw new Error("frontmatter_set: `set` must be a non-empty object");
+  }
+  const target = await resolveTarget(vault, args);
+  const note = await vault.readNote(target.absPath, target.mtimeMs);
+  const before = { ...note.parsed.frontmatter };
+  const after: Record<string, unknown> = { ...before };
+  const changed: string[] = [];
+  for (const [k, v] of Object.entries(args.set)) {
+    if (v === null) {
+      if (k in after) {
+        delete after[k];
+        changed.push(`-${k}`);
+      }
+    } else {
+      const prev = after[k];
+      if (JSON.stringify(prev) !== JSON.stringify(v)) {
+        after[k] = v;
+        changed.push(`${k in before ? "~" : "+"}${k}`);
+      }
+    }
+  }
+  if (changed.length === 0 || args.dry_run === true) {
+    return { path: target.relPath, changed_keys: changed, before, after, dry_run: args.dry_run === true };
+  }
+  // Round-trip via gray-matter — same writer pattern as createNote.
+  const newDoc = matter.stringify(note.parsed.body, after);
+  await vault.writeNote(target.relPath, newDoc, { overwrite: true });
+  return { path: target.relPath, changed_keys: changed, before, after, dry_run: false };
+}
+
+/** Find every note where frontmatter.<key> matches a predicate. Useful as
+ *  a precursor to bulk frontmatter_set: "find all notes with status:draft
+ *  and set their status to published".
+ *
+ *  Predicate semantics:
+ *    - `equals: <value>`   — strict equality (JSON.stringify comparison)
+ *    - `exists: true`      — key must exist (any value)
+ *    - `contains: <value>` — for array values, value must be a member
+ *  Exactly one predicate must be set. */
+export interface FrontmatterSearchArgs {
+  key: string;
+  equals?: unknown;
+  exists?: boolean;
+  contains?: unknown;
+  folder?: string;
+  limit?: number;
+}
+
+export async function frontmatterSearch(
+  vault: Vault,
+  args: FrontmatterSearchArgs
+): Promise<{
+  key: string;
+  total_matches: number;
+  matches: Array<{ path: string; value: unknown; mtime: string }>;
+}> {
+  await vault.ensureExists();
+  if (!args.key) throw new Error("frontmatter_search: `key` is required");
+  const predicates = [args.equals !== undefined, args.exists !== undefined, args.contains !== undefined].filter(
+    Boolean
+  );
+  if (predicates.length !== 1) {
+    throw new Error("frontmatter_search: exactly one of `equals` / `exists` / `contains` must be set");
+  }
+  const limit = args.limit ?? 100;
+  const entries = await vault.listMarkdown(args.folder);
+  const matches: Array<{ path: string; value: unknown; mtime: string }> = [];
+  for (const e of entries) {
+    if (matches.length >= limit) break;
+    try {
+      const note = await vault.readNote(e.absPath, e.mtimeMs);
+      const value = note.parsed.frontmatter[args.key];
+      let hit = false;
+      if (args.exists === true) hit = value !== undefined;
+      else if (args.equals !== undefined) hit = JSON.stringify(value) === JSON.stringify(args.equals);
+      else if (args.contains !== undefined) {
+        if (Array.isArray(value)) {
+          hit = value.some((v) => JSON.stringify(v) === JSON.stringify(args.contains));
+        }
+      }
+      if (hit) {
+        matches.push({ path: e.relPath, value, mtime: new Date(e.mtimeMs).toISOString() });
+      }
+    } catch {
+      // skip unparseable notes
+    }
+  }
+  return { key: args.key, total_matches: matches.length, matches };
+}
+
 export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("archive_note: `path` is required");
@@ -3043,6 +3180,10 @@ export async function searchHybrid(
      *  chunk; "block" returns each chunk as a distinct hit so you see the
      *  multiple-paragraph case where one note covers a topic in two places. */
     granularity?: "note" | "block";
+    /** v2.3.0: post-RRF graph boost — rerank by counting how many other
+     *  top-K hits link to each one. Default true; set false to disable for
+     *  diagnostic comparison (e.g. measuring whether boost helped). */
+    graph_boost?: boolean;
   },
   ctx: {
     /** FTS5 index, if `--persistent-index` is enabled at server start. */
@@ -3254,8 +3395,56 @@ export async function searchHybrid(
       tfidf: tfidfRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
       embeddings: embedRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score }))
     },
-    { topK: limit * 2 } // overshoot in case min_signals filter prunes some
+    { topK: Math.max(limit * 4, 30) } // overshoot — graph boost may rerank
   );
+
+  // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
+  // Re-rank top-K by counting how many *other* top-K hits link to each one.
+  // Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
+  // Boost is small (α=0.005) — enough to break ties but won't override
+  // strong single-ranker signals. Requires no new index — uses already-
+  // cached parsed wikilinks per note.
+  // This is the "only enquire-mcp does this" feature: generic vector stores
+  // can't do this without an Obsidian-aware layer; Smart Connections doesn't
+  // do it either. Wikilinks ARE the differentiating Obsidian primitive.
+  const graphBoost = args.graph_boost !== false; // default ON
+  if (graphBoost && fused.length > 1) {
+    const candidatePaths = new Set<string>();
+    for (const f of fused) {
+      candidatePaths.add(f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id);
+    }
+    const outLinks = new Map<string, Set<string>>();
+    for (const candidatePath of candidatePaths) {
+      try {
+        const note = await vault.readNote(vault.resolveInside(candidatePath));
+        const targets = new Set<string>();
+        for (const wl of note.parsed.wikilinks) {
+          if (!wl.target) continue;
+          // Wikilinks can be by basename ("Foo") or relative path ("Sub/Foo").
+          // Normalize both forms so the membership test catches either.
+          targets.add(wl.target);
+          targets.add(stripMd(wl.target));
+        }
+        outLinks.set(candidatePath, targets);
+      } catch {
+        // skip unreadable notes
+      }
+    }
+    const ALPHA = 0.005;
+    for (const f of fused) {
+      const fPath = f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id;
+      const fBasename = stripMd(path.basename(fPath));
+      let inDegree = 0;
+      for (const [otherPath, targets] of outLinks) {
+        if (otherPath === fPath) continue;
+        if (targets.has(fPath) || targets.has(stripMd(fPath)) || targets.has(fBasename)) {
+          inDegree += 1;
+        }
+      }
+      if (inDegree > 0) f.score += ALPHA * inDegree;
+    }
+    fused.sort((a, b) => b.score - a.score);
+  }
 
   // Build snippet/chunk lookup tables for attaching the best evidence per
   // note in the final response.

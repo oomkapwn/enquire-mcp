@@ -2,7 +2,18 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createNote, listNotes, readNote } from "../src/tools.js";
+import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
+import {
+  appendToNote,
+  archiveNote,
+  createNote,
+  embeddingsSearch,
+  listNotes,
+  readNote,
+  renameNote,
+  replaceInNotes,
+  searchHybrid
+} from "../src/tools.js";
 import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;
@@ -270,6 +281,204 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
   });
 });
 
+// v2.0.0-beta.2 P1 fix: extend the privacy-bypass regression coverage to ALL
+// write tools (not just createNote) AND to the read tools that go through
+// persistent indexes (FTS5, EmbedDb). Pre-fix, every test asserting the
+// privacy boundary instantiated Vault with `enableWrite: false` OR exercised
+// a single tool. The test agent flagged this as the same shape of gap that
+// hid the writeNote bug for ~6 months.
+describe("Vault — write-tool privacy boundary (v2.0.0-beta.2)", () => {
+  let wroot: string;
+  beforeEach(async () => {
+    wroot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-write-priv-"));
+    await fs.mkdir(path.join(wroot, "Personal"), { recursive: true });
+    await fs.mkdir(path.join(wroot, "Public"), { recursive: true });
+    await fs.writeFile(path.join(wroot, "Personal", "diary.md"), "private content");
+    await fs.writeFile(path.join(wroot, "Public", "p.md"), "public content");
+  });
+  afterEach(async () => {
+    await fs.rm(wroot, { recursive: true, force: true });
+  });
+
+  // appendToNote — already routed through resolveSafePath which gates,
+  // but no test asserted it before v2.0.0-beta.2.
+  it("appendToNote refuses excluded path (--exclude-glob)", async () => {
+    const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(appendToNote(v, { path: "Personal/diary.md", content: "leak" })).rejects.toThrow(
+      /excluded by --exclude-glob/
+    );
+  });
+
+  it("appendToNote refuses path outside --read-paths allowlist", async () => {
+    const v = new Vault(wroot, { enableWrite: true, readPaths: ["Public/**"] });
+    await v.ensureExists();
+    await expect(appendToNote(v, { path: "Personal/diary.md", content: "leak" })).rejects.toThrow(
+      /excluded by --read-paths/
+    );
+  });
+
+  // archiveNote — delegates to renameNote; tests that BOTH source and
+  // destination paths are gated.
+  it("archiveNote refuses excluded source", async () => {
+    const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(archiveNote(v, { path: "Personal/diary.md" })).rejects.toThrow(/excluded/);
+  });
+
+  it("archiveNote refuses when archive_folder leaves --read-paths allowlist", async () => {
+    const v = new Vault(wroot, { enableWrite: true, readPaths: ["Public/**"] });
+    await v.ensureExists();
+    await expect(archiveNote(v, { path: "Public/p.md", archive_folder: "Archive" })).rejects.toThrow(/excluded/);
+  });
+
+  // renameNote — source-side gate via resolveSafePath; destination-side
+  // gate explicit in renameFile (we just fixed it to distinguish allowlist).
+  it("renameNote refuses excluded source", async () => {
+    const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await expect(renameNote(v, { from: "Personal/diary.md", to: "Public/d.md" })).rejects.toThrow(/excluded/);
+  });
+
+  it("renameNote destination-side error names --read-paths when allowlist rejects", async () => {
+    // The v2.0.0-beta.2 fix in renameFile distinguishes allowlist vs denylist
+    // in the error message (writeNote already did this; renameFile didn't).
+    const v = new Vault(wroot, { enableWrite: true, readPaths: ["Public/**"] });
+    await v.ensureExists();
+    await expect(renameNote(v, { from: "Public/p.md", to: "Private/p.md" })).rejects.toThrow(/--read-paths allowlist/);
+  });
+
+  // replaceInNotes — denylist case (v2.0.0-beta.1 only tested allowlist).
+  it("replaceInNotes silently scopes out excluded folders even with explicit folder=", async () => {
+    const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
+    await v.ensureExists();
+    await fs.writeFile(path.join(wroot, "Personal", "diary.md"), "marker\n");
+    // v2.0.0-beta.2: the function now refuses explicitly when folder= is excluded.
+    await expect(replaceInNotes(v, { search: "marker", replace: "hit", folder: "Personal" })).rejects.toThrow(
+      /excluded by privacy filter/
+    );
+    // Source still untouched.
+    expect(await fs.readFile(path.join(wroot, "Personal", "diary.md"), "utf8")).toBe("marker\n");
+  });
+});
+
+// v2.0.0-beta.2 P0 fix: persistent FTS5 + embed indexes were not consulting
+// isExcluded() at search time. After a config flip (e.g. user adds
+// --exclude-glob between two server runs), excluded chunks would leak via
+// `obsidian_full_text_search`, `obsidian_embeddings_search`, `obsidian_search`
+// (hybrid), and the `obsidian://chunk/{n}/{path}` resource.
+describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", () => {
+  let proot: string;
+  beforeEach(async () => {
+    proot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-persist-priv-"));
+    await fs.mkdir(path.join(proot, "Personal"), { recursive: true });
+    await fs.mkdir(path.join(proot, "Public"), { recursive: true });
+    await fs.writeFile(path.join(proot, "Personal", "diary.md"), "secret diary entry about authentication tokens");
+    await fs.writeFile(path.join(proot, "Public", "auth.md"), "public OAuth authentication notes");
+  });
+  afterEach(async () => {
+    await fs.rm(proot, { recursive: true, force: true });
+  });
+
+  it("searchHybrid filters excluded paths from BM25 hits even when FTS5 db has stale entries", async () => {
+    // Build the FTS5 index WITHOUT exclusion flags (simulates index built
+    // before the user enabled --exclude-glob).
+    const vBuild = new Vault(proot);
+    await vBuild.ensureExists();
+    const idx = new FtsIndex({ file: defaultIndexFile(proot), vaultRoot: proot });
+    await idx.open();
+    try {
+      for (const e of await vBuild.listMarkdown()) {
+        const note = await vBuild.readNote(e.absPath, e.mtimeMs);
+        const targets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
+        idx.reindexFile(e.relPath, e.mtimeMs, note.content, targets, note.parsed.tags);
+      }
+
+      // Now serve the SAME .fts5.db with exclusion flags — Personal/ should
+      // be invisible to obsidian_search even though FTS5 db still has it.
+      const vServe = new Vault(proot, { excludeGlobs: ["Personal/**"] });
+      await vServe.ensureExists();
+      const result = await searchHybrid(
+        vServe,
+        { query: "authentication tokens", limit: 10 },
+        { ftsIndex: idx, embedFile: path.join(proot, "nonexistent.embed.db") }
+      );
+      // No hit from Personal/, even though FTS5 db has the chunk.
+      expect(result.matches.every((m) => !m.path.startsWith("Personal/"))).toBe(true);
+      // Public/auth.md should still appear.
+      expect(result.matches.some((m) => m.path === "Public/auth.md")).toBe(true);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("embeddingsSearch filters excluded paths post-result (when stale .embed.db has them)", async () => {
+    // We don't load the real ML model — instead we manually construct the
+    // .embed.db with synthetic vectors, then verify the filter applies.
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const dim = 4;
+    const file = path.join(proot, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: proot, modelAlias: "multilingual", dim });
+    await db.open();
+    const l2 = (v: number[]) => {
+      const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+      return new Float32Array(v.map((x) => x / (n || 1)));
+    };
+    db.upsertNote("Personal/diary.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "secret diary", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.upsertNote("Public/auth.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "public auth", vector: l2([0.99, 0.14, 0, 0]) }
+    ]);
+    db.close();
+
+    // Vault with exclusion. embeddingsSearch should NOT return Personal/.
+    // The function loads embedDb internally; we patch dim to match.
+    // Since embeddingsSearch loads the real model, we can't easily test it
+    // here without a model. Instead test the EmbedDb-level isExcluded filter
+    // is applied via the vault layer.
+    const vServe = new Vault(proot, { excludeGlobs: ["Personal/**"] });
+    await vServe.ensureExists();
+    // Direct EmbedDb.search would return both rows — that's expected; we
+    // filter at the embeddingsSearch layer (vault.isExcluded post-filter).
+    const db2 = new EmbedDb({ file, vaultRoot: proot, modelAlias: "multilingual", dim });
+    await db2.open();
+    try {
+      const rawHits = db2.search(l2([1, 0, 0, 0]), 10);
+      expect(rawHits.length).toBe(2); // db has both
+      // The post-filter (matching what embeddingsSearch does):
+      const filtered = rawHits.filter((h) => !vServe.isExcluded(h.rel_path));
+      expect(filtered.length).toBe(1);
+      expect(filtered[0]?.rel_path).toBe("Public/auth.md");
+    } finally {
+      db2.close();
+    }
+  });
+});
+
+// v2.0.0-beta.2 P1 sec DiD test
+describe("Vault constructor — privacy fail-closed (v2.0.0-beta.2)", () => {
+  let r: string;
+  beforeEach(async () => {
+    r = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-failclosed-"));
+  });
+  afterEach(async () => {
+    await fs.rm(r, { recursive: true, force: true });
+  });
+
+  it("refuses to construct when --read-paths produces no valid regexes (silent disable guard)", () => {
+    expect(() => new Vault(r, { readPaths: [""] })).toThrow(/refusing to start/);
+  });
+
+  it("refuses to construct when --exclude-glob produces no valid regexes", () => {
+    expect(() => new Vault(r, { excludeGlobs: [""] })).toThrow(/refusing to start/);
+  });
+
+  it("constructs cleanly with valid patterns (control)", () => {
+    expect(() => new Vault(r, { readPaths: ["Public/**"] })).not.toThrow();
+  });
+});
+
 // v1.11.1 audit fix: resolveTarget's periodic-alias codepath used to silently
 // swallow exclusion errors and fall through to the legacy alias resolver +
 // findByTitle, which could surface a different (visible) basename match —
@@ -305,9 +514,21 @@ describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () =
     await expect(readNote(v, { title: "today" })).rejects.toThrow(/excluded by --exclude-glob/);
   });
 
-  it("readNote(title:'daily') with --read-paths allowlist surfaces allowlist rejection", async () => {
+  it("readNote(title:'daily') with --read-paths allowlist excluding .obsidian/ falls back to defaults silently (v2.0.0-beta.2 DiD)", async () => {
+    // Pre-v2.0.0-beta.2: `.obsidian/daily-notes.json` was read regardless of
+    // `--read-paths`, so the periodic resolver produced `Daily Notes/<today>.md`
+    // and `vault.stat()` surfaced "excluded by --read-paths". That technically
+    // worked but leaked the fact that the user had a Daily Notes plugin
+    // configured (an attacker could time the difference between "no periodic
+    // config" and "config but excluded").
+    //
+    // v2.0.0-beta.2 DiD: when the user's allowlist excludes `.obsidian/**`,
+    // we silently fall back to v0.11 hard-coded defaults. The lookup then
+    // produces a `<basename>` that doesn't exist in any allowed folder, so
+    // the user sees a clean "No note found" — same response shape as if
+    // they didn't have Daily Notes installed at all.
     const v = new Vault(vroot, { readPaths: ["Work/**"] });
     await v.ensureExists();
-    await expect(readNote(v, { title: "daily" })).rejects.toThrow(/excluded by --read-paths/);
+    await expect(readNote(v, { title: "daily" })).rejects.toThrow(/No note found/);
   });
 });

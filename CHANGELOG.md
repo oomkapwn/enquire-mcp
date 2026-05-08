@@ -2,6 +2,110 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.2] — 2026-05-06
+
+**Audit-driven patch.** A second deep audit (5 parallel agents covering architecture, tests, docs, CI/CD, security threat model) surfaced one P0 privacy bypass of the same shape as the writeNote bug from beta.1, three release-pipeline P0s, and a long tail of P1 hardening. This release closes 16 findings and adds new architectural invariants to prevent recurrence.
+
+### Fixed — P0: persistent search indexes ignored `isExcluded` after config flip
+
+**Same architectural debt as the writeNote miss in v2.0.0-beta.0.** The audit's root-cause analysis: `Vault.listMarkdown()` is the privacy chokepoint, but new persistent layers (FTS5 db, embed db) introduced their own search paths that bypassed it. Result: if a user built `.fts5.db` / `.embed.db` once, then added `--exclude-glob` later, excluded chunks leaked through:
+
+- `obsidian_full_text_search` — BM25 hits from stale entries
+- `obsidian_embeddings_search` — cosine hits from stale entries
+- `obsidian_search` (the v2.0 default) — both BM25 + embed branches inherited
+- `obsidian://chunk/{n}/{path}` resource — direct chunk fetch ignored exclusion
+
+**Fix:** five new `isExcluded` filters, applied at the right layer:
+1. `embeddingsSearch` post-filters `db.search()` results, with 2× over-fetch to keep top-K stable
+2. `searchHybrid` BM25 branch post-filters `ftsIndex.search()` results
+3. `searchHybrid` embed branch — automatically protected since `embeddingsSearch` now filters
+4. `obsidian_full_text_search` handler post-filters with 2× over-fetch
+5. `vault-chunk` resource refuses with "not found" framing (matches FTS5 search post-filter, so the attacker can't distinguish "doesn't exist" from "exists but excluded")
+
+Architecturally, the indexes themselves can keep stale entries — content filtering happens at search time, mirroring how `Vault.readNote` filters at read time even when the parse cache has the path.
+
+### Fixed — P0: release-pipeline integrity
+
+**`release.yml`** previously trusted any tag pointing at any commit. An attacker who got commit access could `git tag v9.9.9 <evil-sha> && git push --tags` and ship malware bypassing main protections — the workflow re-ran lint/test/audit on the tag's SHA and would happily green-light it. Now release.yml:
+
+1. Asserts the tagged SHA is reachable from `main` (`git merge-base --is-ancestor`)
+2. Polls GitHub's check-runs API to verify all 8 required CI checks (`lint`, `test (20/22/24)`, `smoke`, `audit`, `coverage`, `version-consistency`) reported `success` on this exact SHA, with up to 5-minute tolerance for tag-vs-CI race conditions
+3. Refuses to publish if either check fails
+
+**dist-tag regex** was hand-rolled `/-([a-z]+)\.[0-9]+$/`, which misrouted three valid SemVer prereleases to `latest`:
+
+- `2.0.0-rc` (no `.N` suffix) → previously latest, now `rc`
+- `2.0.0-rc.0+build.1` (build metadata) → previously latest, now `rc`
+- `2.0.0-alpha-3` (dash separator) → previously latest, now `alpha-3`
+
+Replaced with a Node-side parser that extracts the prerelease channel by SemVer rules. Verified against 8-case matrix.
+
+### Fixed — P1 sec DiD: `.obsidian/` plugin config bypassed `--read-paths`
+
+**Defense in depth.** `loadPeriodicConfig()` read `.obsidian/daily-notes.json` and `.obsidian/plugins/periodic-notes/data.json` directly via `fs.readFile`, bypassing the user's privacy filter. Not a content leak (downstream `vault.stat` rejected paths), but the contract `--read-paths "Public/**"` = "ONLY Public/ visible" was technically violated. Now `loadPeriodicConfig` accepts an optional `isExcluded` predicate; when the user's allowlist excludes `.obsidian/**`, we silently fall back to v0.11 hard-coded defaults.
+
+### Fixed — P1 sec DiD: empty exclusion patterns silent-disable
+
+**Privacy fail-closed.** Pre-fix, `--read-paths ""` (empty after shell interpolation of an unset variable) survived as `[""]`. `globToRegex("")` produces `^$` which matches no real paths — so the user's intent ("filter to nothing") functionally meant the readPaths predicate matched nothing → every path treated as excluded. The opposite mistake (whitespace-only) silently disabled. Now the Vault constructor strips empty/whitespace-only patterns and throws if the cleaned list is empty but the user explicitly passed flags — privacy is fail-closed.
+
+### Fixed — P1 architecture: searchHybrid silently swallowed ranker errors
+
+`searchHybrid` wrapped each ranker in `try/catch` with stderr-only logging. The MCP response just showed `signals_used: []` with `matches: []` — a caller couldn't tell "no hits" from "all rankers crashed." New optional `signal_errors: { bm25?, tfidf?, embeddings? }` field surfaces per-signal failures so agents can reason about reliability.
+
+### Fixed — P1 architecture: `replaceInNotes` partial-state on mid-loop write failure
+
+Pre-fix, a throw on file 5 of 20 lost the response — files 1-4 silently committed with no way for the agent to discover. Now per-file errors are collected; response includes `partial: true` flag and `errors: [{path, message}]` array. Systemic failures (read-only vault) still throw fast — they're config errors, not per-file failures.
+
+### Fixed — P1 architecture: `resolveTarget` periodic-alias fallthrough leaked content via basename collision
+
+Pre-fix, when `vault.stat()` returned ENOENT for the configured periodic path (e.g., `Daily Notes/2026-05-08.md` doesn't exist yet), `resolveTarget` fell through to a basename match across the whole vault. With `--exclude-glob 'Daily Notes/**'` AND a `Public/2026-05-08.md`, the basename match silently redirected "today" to the unrelated public note. Now we only fall through if the periodic config produces a folder-less stem (i.e., user keeps periodic notes at vault root); configured-folder cases must hit the configured folder or fail clean.
+
+### Fixed — P1: `renameNote` and `Vault.renameFile` error messages now distinguish allowlist vs denylist
+
+Pre-fix, both always blamed `--exclude-glob` even when `--read-paths` was the reason. New `Vault.exclusionReason()` helper exposes the same logic that writeNote already used; renameNote and renameFile both adopt it.
+
+### Fixed — P1: `replaceInNotes` accepted excluded `folder=` argument
+
+Pre-fix, `replaceInNotes(folder: "Personal")` with `--exclude-glob "Personal/**"` returned `files_scanned: 0, scope: "Personal/"` — confirming the folder name existed in the user's layout. Now the function refuses early: `folder is excluded by privacy filter`. Same pattern applies to other tools that take `folder` arguments — listed as P2 backlog for v2.0.0-beta.3.
+
+### Fixed — P1 docs
+
+- README + SECURITY.md "v2.0 alpha" → "v2.0" (already shipped beta).
+- README "Configure your AI client" section: now shows BOTH `@latest` (v1.x) AND `@beta` (v2.0) install snippets explicitly. Pre-fix, copying the snippet pulled v1.11.1 while the section below described v2.0 features.
+- README source-line-count claim: `~3500 lines` → `~7500 lines` (verified `wc -l src/*.ts`).
+- README test-count claim: `388+` → `405+` (will be `408+` after this release).
+- CHANGELOG v1.11.1 entry: removed phantom `obsidian_resolve_periodic_alias` reference (replaced with `obsidian_read_note({title:"today"})`, the actual MCP-exposed entry-point).
+
+### Added — Architecture invariant: docs-consistency tests for numeric drift
+
+`tests/docs-consistency.test.ts` previously checked tool-name parity. Extended to:
+
+- **Tool-count parity:** README's "N read tools (always on)" must match the actual count of `registerTool()` calls outside `registerWriteTools` and `registerFtsTools`.
+- **`docs/api.md` math:** "M MCP tools (X always-on read + Y opt-in read + Z opt-in write)" must satisfy M = X + Y + Z.
+- **CLI subcommand parity:** every `program.command()` registered must appear in the docs/api.md Subcommands table.
+
+These prevent the kind of drift the audit caught manually. Now caught at CI time.
+
+### Tests
+
+408 unit tests pass (was 393, +15 new):
+- 5 privacy-regression tests for `appendToNote`, `archiveNote`, `renameNote` (source + dest with allowlist), `replaceInNotes` (denylist)
+- 2 search-time isExcluded filter tests (`searchHybrid` BM25 path with stale FTS5 db; `embeddingsSearch` filter post-search)
+- 3 fail-closed Vault constructor tests (empty `--read-paths` / `--exclude-glob` rejection)
+- 3 docs-consistency invariant tests
+- 1 updated periodic-alias test (now expects "No note found" silent fallback instead of "excluded" leak)
+- 1 architecture refactoring (security.test.ts test reordering after lint:fix)
+
+### Migration from v2.0.0-beta.1
+
+**No breaking changes for end users.** All v2.0.0-beta.1 tools and CLI flags continue to work.
+
+**Programmatic callers (rare):** `Vault` now throws on empty `excludeGlobs: [""]` / `readPaths: [""]`. Filter empty strings in the caller before constructing.
+
+**`searchHybrid` response shape:** new optional `signal_errors` field. Existing parsers that ignore unknown fields are unaffected.
+
+**`replaceInNotes` response shape:** new `partial: boolean` field (always present) and `errors?: Array` (only when partial). Existing parsers ignoring unknown fields are unaffected.
+
 ## [2.0.0-beta.1] — 2026-05-06
 
 **Audit-driven patch.** An independent external audit of v2.0.0-beta.0 surfaced one P0 privacy/security bug, several P1 doc/correctness drifts, and a handful of P2 hardening opportunities. This release closes all 17 findings (1 P0 + 7 P1 + 7 P2 + 2 P3). No new features.
@@ -241,7 +345,7 @@ Regression test: `tests/security.test.ts` adds two cases — one for `--exclude-
 
 `scripts/synthetic-vault.mjs` (CI smoke) didn't write `.obsidian/daily-notes.json`, so smoke fell back to the v0.11 hard-coded defaults — leaving `loadPeriodicConfig()` + `formatMoment()` regression-free in CI even when the actual code broke.
 
-Added a 3-line config (`folder: "99_Daily"`, `format: "YYYY-MM-DD"`) so `obsidian_resolve_periodic_alias today` now exercises the lazy-load → cache → format codepath in every CI run.
+Added a 3-line config (`folder: "99_Daily"`, `format: "YYYY-MM-DD"`) so `obsidian_read_note({ title: "today" })` now exercises the lazy-load → cache → format codepath in every CI run.
 
 ### Docs
 

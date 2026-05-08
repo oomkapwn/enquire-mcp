@@ -132,7 +132,7 @@ Posture:
 - **Write-tool gating composes with `--enable-write`.** Disabling `obsidian_create_note` while leaving `obsidian_replace_in_notes` enabled is a valid configuration; the gate is independent of the global write flag.
 - **Posture is "fail closed".** Tools blocked at registration time never appear in `tools/list` and a `tools/call` against a gated name returns a clean MCP-protocol error from the SDK — there's no codepath where a disabled tool can still execute.
 
-## ML embeddings (v2.0 alpha): networked-download + cache posture
+## ML embeddings (v2.0): networked-download + cache posture
 
 The `obsidian_embeddings_search` tool plus the `install-model` and `build-embeddings` subcommands (added v2.0.0-alpha.0) introduce two new surfaces with networked / on-disk implications:
 

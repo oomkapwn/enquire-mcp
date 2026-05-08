@@ -62,4 +62,61 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const missingFromReadme = [...registered].filter((p) => !mentioned.has(p));
     expect(missingFromReadme).toEqual([]);
   });
+
+  // v2.0.0-beta.2 architecture invariant: extend docs-consistency to catch
+  // numeric drift between README/CHANGELOG/api.md claims and actual code.
+  // Pre-fix, the audit found "364+ tests" in README while CHANGELOG said
+  // 393, "22 read tools" in README while smoke expected 24, "~3500 lines"
+  // while real source was 7526 lines. Each was a manual-update miss.
+
+  it("README tool-count claim matches actual registered count", async () => {
+    const indexSrc = await read("src/index.ts");
+    const readme = await read("README.md");
+    const registered = registeredNames(indexSrc, "registerTool");
+    // Heuristic: split by always-on read / opt-in read / write tools.
+    // Always-on read = registered NOT in registerWriteTools or registerFtsTools.
+    const writeFnStart = indexSrc.indexOf("function registerWriteTools(");
+    const writeFnEnd = writeFnStart > 0 ? indexSrc.indexOf("\n}\n", writeFnStart) : -1;
+    const ftsFnStart = indexSrc.indexOf("function registerFtsTools(");
+    const ftsFnEnd = ftsFnStart > 0 ? indexSrc.indexOf("\n}\n", ftsFnStart) : -1;
+    const writeBody = writeFnStart > 0 && writeFnEnd > 0 ? indexSrc.slice(writeFnStart, writeFnEnd) : "";
+    const ftsBody = ftsFnStart > 0 && ftsFnEnd > 0 ? indexSrc.slice(ftsFnStart, ftsFnEnd) : "";
+    const writeNames = registeredNames(writeBody, "registerTool");
+    const ftsNames = registeredNames(ftsBody, "registerTool");
+    const alwaysOnRead = [...registered].filter((n) => !writeNames.has(n) && !ftsNames.has(n));
+    // Look for a heading or sentence claiming "<N> read tools (always on)".
+    const m = /(\d+) read tools \(always on\)/.exec(readme);
+    expect(m, "README must declare a number of always-on read tools").not.toBeNull();
+    const claimed = Number.parseInt(m?.[1] ?? "0", 10);
+    expect(claimed).toBe(alwaysOnRead.length);
+  });
+
+  it("docs/api.md tool-count math is consistent (always-on + opt-in + write = total)", async () => {
+    const apiMd = await read("docs/api.md");
+    // Match: "30 MCP tools (24 always-on read + 1 opt-in read via --persistent-index + 5 opt-in write via --enable-write)"
+    const m = /(\d+) MCP tools \((\d+) always-on read \+ (\d+) opt-in read[^+]*\+ (\d+) opt-in write/.exec(apiMd);
+    expect(m, "docs/api.md must declare tool counts in the standard format").not.toBeNull();
+    if (!m) return;
+    const [, total, always, fts, write] = m;
+    expect(Number.parseInt(total ?? "0", 10)).toBe(
+      Number.parseInt(always ?? "0", 10) + Number.parseInt(fts ?? "0", 10) + Number.parseInt(write ?? "0", 10)
+    );
+  });
+
+  it("CLI subcommands documented in docs/api.md match those registered in src/index.ts", async () => {
+    const indexSrc = await read("src/index.ts");
+    const apiMd = await read("docs/api.md");
+    // Subcommands registered as `program.command("name")`.
+    const registered = new Set(
+      [...indexSrc.matchAll(/program\s*\n?\s*\.command\(\s*"([^"]+)"/g)].map((m) => m[1] ?? "")
+    );
+    // Subcommands documented as backtick-wrapped first column entries in the
+    // Subcommands table in api.md. Match `<name>` plus optional `(...)` suffix
+    // (e.g. `(default)`, `(v2.0 beta)`).
+    const documented = new Set(
+      [...apiMd.matchAll(/^\| `([a-z][a-z0-9-]*)`(?:\s*\([^)]+\))?\s*\|/gm)].map((m) => m[1] ?? "")
+    );
+    const missingFromDocs = [...registered].filter((s) => !documented.has(s));
+    expect(missingFromDocs, "subcommands missing from docs/api.md").toEqual([]);
+  });
 });

@@ -75,10 +75,49 @@ export class Vault {
     this.persistentCacheEnabled = opts.persistentCache ?? false;
     this.maxDiskCacheBytes = opts.maxDiskCacheBytes ?? DEFAULT_MAX_DISK_CACHE_BYTES;
     this.cacheFile = opts.cacheFile ?? null;
-    this.excludeGlobs = Object.freeze([...(opts.excludeGlobs ?? [])]);
+    // v2.0.0-beta.2 P1 sec DiD: refuse to start if the user passed exclusion
+    // flags that, after stripping empty / whitespace-only entries, produced
+    // 0 working patterns. Pre-fix, e.g. `--read-paths ""` (empty after shell
+    // interpolation of an unset variable) survived as an array of one empty
+    // string. globToRegex("") produces `^$` which matches NO real paths —
+    // the user's intent was "filter to nothing" but functionally that meant
+    // the readPaths predicate matched nothing → every path treated as
+    // excluded. The opposite mistake (whitespace-only) silently disabled.
+    // Either way: fail closed with a clear error.
+    const cleanExcludeGlobs = (opts.excludeGlobs ?? []).filter((g) => g && g.trim().length > 0);
+    const cleanReadPaths = (opts.readPaths ?? []).filter((g) => g && g.trim().length > 0);
+    if (opts.excludeGlobs !== undefined && opts.excludeGlobs.length > 0 && cleanExcludeGlobs.length === 0) {
+      throw new Error(
+        "--exclude-glob was passed but contained only empty / whitespace-only patterns; refusing to start to avoid silent privacy disable"
+      );
+    }
+    if (opts.readPaths !== undefined && opts.readPaths.length > 0 && cleanReadPaths.length === 0) {
+      throw new Error(
+        "--read-paths was passed but contained only empty / whitespace-only patterns; refusing to start to avoid silent privacy disable"
+      );
+    }
+    this.excludeGlobs = Object.freeze([...cleanExcludeGlobs]);
     this.excludeRegexes = this.excludeGlobs.map(globToRegex);
-    this.readPaths = Object.freeze([...(opts.readPaths ?? [])]);
+    this.readPaths = Object.freeze([...cleanReadPaths]);
     this.readPathRegexes = this.readPaths.map(globToRegex);
+  }
+
+  /** v2.0.0-beta.2: helper that returns the reason a path was excluded, or
+   *  null if not excluded. Lets call sites surface the right CLI flag in
+   *  user-facing error messages without duplicating the regex predicates. */
+  exclusionReason(
+    relPath: string
+  ): "--read-paths allowlist (path doesn't match any allow-glob)" | "--exclude-glob denylist" | null {
+    if (this.excludeRegexes.length === 0 && this.readPathRegexes.length === 0) return null;
+    const norm = relPath.replace(/\\/g, "/");
+    if (this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))) {
+      return "--read-paths allowlist (path doesn't match any allow-glob)";
+    }
+    if (this.excludeRegexes.length === 0) return null;
+    if (this.excludeRegexes.some((re) => re.test(norm))) {
+      return "--exclude-glob denylist";
+    }
+    return null;
   }
 
   /** True if a vault-relative path is filtered out by either --read-paths
@@ -436,8 +475,15 @@ export class Vault {
     const toRelNorm = toRel.toLowerCase().endsWith(".md") ? toRel : `${toRel}.md`;
     const toAbs = this.resolveInside(toRelNorm);
     await this.assertParentInsideVault(toAbs);
-    if (this.isExcluded(path.relative(this.root, toAbs))) {
-      throw new Error(`Refusing to rename — destination matches an --exclude-glob pattern: ${toRelNorm}`);
+    // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
+    // writeNote does, so users with --read-paths see the actual reason.
+    const toRelForFilter = path.relative(this.root, toAbs).replace(/\\/g, "/");
+    if (this.isExcluded(toRelForFilter)) {
+      const reason =
+        this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(toRelForFilter))
+          ? "--read-paths allowlist (path doesn't match any allow-glob)"
+          : "--exclude-glob denylist";
+      throw new Error(`Refusing to rename — destination is excluded by ${reason}: ${toRelNorm}`);
     }
     if (!opts.overwrite) {
       const exists = await fs
@@ -517,7 +563,10 @@ export class Vault {
   async getPeriodicConfig(): Promise<PeriodicConfig> {
     if (this.periodicConfig) return this.periodicConfig;
     if (!this.ready) await this.ensureExists();
-    this.periodicConfig = await loadPeriodicConfig(this.root);
+    // v2.0.0-beta.2 P1 sec DiD: pass `isExcluded` so a user with --read-paths
+    // / --exclude-glob covering `.obsidian/**` doesn't get their plugin
+    // config read against their wishes. Falls back to hard-coded defaults.
+    this.periodicConfig = await loadPeriodicConfig(this.root, (rel) => this.isExcluded(rel));
     return this.periodicConfig;
   }
 

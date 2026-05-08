@@ -42,27 +42,44 @@ const DEFAULTS: Record<PeriodicKind, PeriodicSpec> = {
  *  if they exist. Returns a unified PeriodicConfig where each key may be
  *  populated from one config or the other. Both configs are best-effort —
  *  missing files / malformed JSON are silently ignored (we fall back to
- *  defaults). */
-export async function loadPeriodicConfig(vaultRoot: string): Promise<PeriodicConfig> {
+ *  defaults).
+ *
+ *  v2.0.0-beta.2 P1 sec DiD: optional `isExcluded` predicate lets the caller
+ *  enforce `--read-paths` / `--exclude-glob` over the `.obsidian/` config
+ *  reads. Without this, the `.obsidian/` directory was implicitly exempted
+ *  from the user's privacy filter — a strict allowlist user got their
+ *  config read regardless. Now the resolver falls back to hard-coded
+ *  defaults when the user's filter would have blocked the read. */
+export async function loadPeriodicConfig(
+  vaultRoot: string,
+  isExcluded?: (relPath: string) => boolean
+): Promise<PeriodicConfig> {
   const out: PeriodicConfig = {};
 
   // Core Daily Notes plugin: { format, folder, template, autorun }
-  const dailyJsonPath = path.join(vaultRoot, ".obsidian", "daily-notes.json");
-  try {
-    const raw = await fs.readFile(dailyJsonPath, "utf8");
-    const json = JSON.parse(raw) as { format?: unknown; folder?: unknown };
-    if (typeof json.format === "string" || typeof json.folder === "string") {
-      out.daily = {
-        format: typeof json.format === "string" && json.format ? json.format : DEFAULTS.daily.format,
-        folder: normaliseFolder(typeof json.folder === "string" ? json.folder : "")
-      };
+  const dailyJsonRel = ".obsidian/daily-notes.json";
+  const dailyJsonPath = path.join(vaultRoot, dailyJsonRel);
+  if (!isExcluded?.(dailyJsonRel)) {
+    try {
+      const raw = await fs.readFile(dailyJsonPath, "utf8");
+      const json = JSON.parse(raw) as { format?: unknown; folder?: unknown };
+      if (typeof json.format === "string" || typeof json.folder === "string") {
+        out.daily = {
+          format: typeof json.format === "string" && json.format ? json.format : DEFAULTS.daily.format,
+          folder: normaliseFolder(typeof json.folder === "string" ? json.folder : "")
+        };
+      }
+    } catch {
+      /* missing or malformed — leave undefined */
     }
-  } catch {
-    /* missing or malformed — leave undefined */
   }
 
   // Periodic Notes community plugin: { daily: {...}, weekly: {...}, ... }
-  const periodicJsonPath = path.join(vaultRoot, ".obsidian", "plugins", "periodic-notes", "data.json");
+  const periodicJsonRel = ".obsidian/plugins/periodic-notes/data.json";
+  const periodicJsonPath = path.join(vaultRoot, periodicJsonRel);
+  if (isExcluded?.(periodicJsonRel)) {
+    return out;
+  }
   try {
     const raw = await fs.readFile(periodicJsonPath, "utf8");
     const json = JSON.parse(raw) as Record<string, unknown>;

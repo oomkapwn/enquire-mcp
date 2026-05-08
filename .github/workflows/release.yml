@@ -23,11 +23,60 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # We need full history so we can verify the tagged SHA is reachable
+          # from `main` (P0 release-pipeline integrity check below).
+          fetch-depth: 0
+      # v2.0.0-beta.2 P0 release-pipeline integrity check.
+      # Pre-fix: a tag pointing at any commit (even one that never landed on
+      # main) would publish, because release.yml only re-ran lint/test/audit
+      # in-job. An attacker with commit access could `git tag v9.9.9 <evil-sha>
+      # && git push --tags` and ship malware bypassing main protections.
+      # Now we assert the tagged SHA is on main AND that CI was green on it.
+      - name: Assert tag is on main and required CI checks passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          SHA=$(git rev-parse HEAD)
+          echo "Tagged SHA: $SHA"
+          git fetch origin main --depth=200
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::Tagged SHA $SHA is not on main — refusing to publish (someone tagged a commit that wasn't merged through PR review)."
+            exit 1
+          fi
+          echo "✓ SHA is on main"
+          # Verify the required CI checks passed on this exact SHA. We query
+          # check-runs (per-job) rather than check-suites (per-workflow) so we
+          # can name the contexts that branch protection requires. Tag pushes
+          # can race with CI on main starting — poll up to 5 minutes.
+          REQUIRED="lint|test \(20\)|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
+            FAILED=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
+            if [ "$FAILED" != "0" ]; then
+              echo "::error::Required CI checks failed on $SHA"
+              echo "$JSON" | jq -r --arg req "$REQUIRED" '.check_runs[] | select(.name | test($req)) | "\(.name): \(.conclusion)"'
+              exit 1
+            fi
+            DONE=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null)] | length')
+            REQ_COUNT=8
+            if [ "$DONE" -ge "$REQ_COUNT" ]; then
+              echo "✓ All $DONE required checks passed on $SHA"
+              break
+            fi
+            if [ $attempt -eq 10 ]; then
+              echo "::error::Timed out waiting for CI on $SHA after 5 minutes"
+              exit 1
+            fi
+            echo "CI still running ($DONE/$REQ_COUNT required checks complete; attempt $attempt/10) — waiting 30s..."
+            sleep 30
+          done
       - uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
           cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -43,19 +92,21 @@ jobs:
           node scripts/smoke.mjs "$VAULT" --with-fts
       - name: Resolve npm dist-tag from version
         id: dist_tag
-        # Stable releases (v1.0.0, v2.3.4) → `latest`. Prereleases use the
-        # SemVer prerelease channel as the dist-tag — `v2.0.0-alpha.0` →
-        # `alpha`, `v2.0.0-beta.1` → `beta`, `v2.0.0-rc.0` → `rc`. Users on
-        # `npm install @oomkapwn/enquire-mcp` (no @-tag) keep getting stable;
-        # alpha/beta testers explicitly opt in via `npm install @oomkapwn/enquire-mcp@alpha`.
+        # v2.0.0-beta.2 P0 fix: use Node's semver parser instead of a hand-
+        # rolled regex. The previous regex `-([a-z]+)\.[0-9]+$` misrouted
+        # several valid SemVer prereleases to `latest`:
+        #   - `2.0.0-rc` (no .N suffix)        → previously latest, now `rc`
+        #   - `2.0.0-rc.0+build.1` (build meta) → previously latest, now `rc`
+        #   - `2.0.0-alpha-3` (dash separator)  → previously latest, now `alpha-3`
+        # Stable releases (no prerelease segment) still publish under `latest`.
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          # Match `<channel>` from `<base>-<channel>.<n>` (e.g. `alpha` from `2.0.0-alpha.0`).
-          if [[ "$VERSION" =~ -([a-z]+)\.[0-9]+$ ]]; then
-            CHANNEL="${BASH_REMATCH[1]}"
-          else
-            CHANNEL="latest"
-          fi
+          CHANNEL=$(node -e "
+            const v = require('./package.json').version;
+            const m = v.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)/);
+            console.log(m ? m[1].replace(/\..*$/, '') : 'latest');
+          ")
+          if [ -z "$CHANNEL" ]; then CHANNEL="latest"; fi
           echo "tag=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Publishing $VERSION under dist-tag '$CHANNEL'"
       - name: Publish with provenance

@@ -574,8 +574,12 @@ export async function renameNote(
   // Validate to-path early so we don't do O(N) work then fail.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
-  if (vault.isExcluded(toRelCheck)) {
-    throw new Error(`Refusing to rename — destination matches --exclude-glob: ${toRelCheck}`);
+  const renameReason = vault.exclusionReason(toRelCheck);
+  if (renameReason) {
+    // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
+    // writeNote and Vault.renameFile do. Pre-fix the message always blamed
+    // --exclude-glob even when --read-paths was the reason.
+    throw new Error(`Refusing to rename — destination is excluded by ${renameReason}: ${toRelCheck}`);
   }
   if (fromRel === toRelCheck) {
     throw new Error(`from and to are the same path: ${fromRel}`);
@@ -751,6 +755,15 @@ export interface ReplaceInNotesResult {
   files_scanned: number;
   files_updated: ReplaceInNotesFileResult[];
   total_replacements: number;
+  /** v2.0.0-beta.2 P1: when true, the apply pass aborted partway through.
+   *  `files_updated` only contains files that DID write successfully. Files
+   *  in `errors` (if present) failed mid-write — caller should retry just
+   *  those and verify state. Always false on dry_run. */
+  partial: boolean;
+  /** v2.0.0-beta.2 P1: per-file write errors collected during apply. Only
+   *  populated when the apply phase encountered errors (so happy-path
+   *  responses stay narrow). */
+  errors?: Array<{ path: string; message: string }>;
 }
 
 export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Promise<ReplaceInNotesResult> {
@@ -762,6 +775,21 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   }
   if (args.search === args.replace) {
     throw new Error("replace_in_notes: `search` and `replace` are identical — no-op refused");
+  }
+  // v2.0.0-beta.2 P2 fix: reject early if `args.folder` itself is excluded.
+  // Pre-fix, listMarkdown(excludedFolder) returned [] and the response said
+  // "scope: 02_Personal/, files_scanned: 0" — confirming the folder name
+  // existed in the user's vault layout. Now we refuse, returning a clean
+  // error that doesn't reveal whether the folder is real-but-empty,
+  // real-but-excluded, or nonexistent.
+  // Test both `<folder>` (folder itself excluded) and `<folder>/_probe.md`
+  // (a representative path inside) — the user's glob may use `**` which
+  // matches subpaths but not the bare folder name.
+  if (args.folder) {
+    const folderTrim = args.folder.replace(/\/+$/, "");
+    if (vault.isExcluded(folderTrim) || vault.isExcluded(`${folderTrim}/_probe.md`)) {
+      throw new Error(`replace_in_notes: folder is excluded by privacy filter: ${args.folder}`);
+    }
   }
 
   const entries = await vault.listMarkdown(args.folder);
@@ -780,22 +808,47 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
     total += count;
   }
 
+  // v2.0.0-beta.2 P1 fix: per-file error collection on apply. Pre-fix, a
+  // throw on file 5 of 20 would lose the response — files 1-4 silently
+  // committed, agent had no way to discover which. Now we continue past
+  // failures, collect errors, and return both `files_updated` (committed)
+  // and `errors` (uncommitted) with `partial: true` flag.
+  //
+  // Systemic-error fast-path: if the vault is read-only OR the first write
+  // fails synchronously (e.g. all paths excluded by --read-paths), throw
+  // immediately rather than returning a "partial: true" with N errors —
+  // that's a config problem, not a per-file failure.
+  const updated: ReplaceInNotesFileResult[] = [];
+  const errors: Array<{ path: string; message: string }> = [];
   if (!dryRun) {
-    for (const p of plan) {
-      await vault.writeNote(p.path, p.after, { overwrite: true });
+    if (!vault.writeEnabled) {
+      throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
     }
+    for (const p of plan) {
+      try {
+        await vault.writeNote(p.path, p.after, { overwrite: true });
+        updated.push({ path: p.path, occurrences: p.count });
+      } catch (err) {
+        errors.push({ path: p.path, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  } else {
+    for (const p of plan) updated.push({ path: p.path, occurrences: p.count });
   }
 
-  return {
+  const result: ReplaceInNotesResult = {
     search: args.search,
     replace: args.replace,
     case_sensitive: caseSensitive,
     dry_run: dryRun,
     scope: args.folder ?? "(whole vault)",
     files_scanned: entries.length,
-    files_updated: plan.map((p) => ({ path: p.path, occurrences: p.count })),
-    total_replacements: total
+    files_updated: updated,
+    total_replacements: total,
+    partial: errors.length > 0
   };
+  if (errors.length > 0) result.errors = errors;
+  return result;
 }
 
 /** Given the raw inner text of a wikilink (`Foo|alias`, `Folder/Foo#sec`, etc.)
@@ -1047,8 +1100,20 @@ async function resolveTarget(vault: Vault, args: { path?: string; title?: string
         }
         // Fall through to basename match on ENOENT-class errors only.
       }
-      const basenameMatch = await vault.findByTitle(path.basename(periodicResolved.relPath));
-      if (basenameMatch) return basenameMatch;
+      // v2.0.0-beta.2 P1 fix: only fall through to basename match if the
+      // user's periodic config produces a folder-less stem (i.e., they keep
+      // periodic notes at the vault root). If they configured a specific
+      // folder, returning a same-basename note from a DIFFERENT folder is a
+      // privacy/correctness hazard — silently redirects "today" to a note
+      // the user never configured. The architecture audit (P1-4) traced an
+      // exploit: with `--exclude-glob 'Daily Notes/**'` set AND a Public/
+      // file named `2026-05-08.md`, basename match would surface that
+      // unrelated note as "today".
+      const periodicHasFolder = periodicResolved.relPath.includes("/");
+      if (!periodicHasFolder) {
+        const basenameMatch = await vault.findByTitle(path.basename(periodicResolved.relPath));
+        if (basenameMatch) return basenameMatch;
+      }
     }
     // Last-resort: legacy v0.11 hard-coded alias resolver, in case the user
     // has neither plugin configured but expects the default formats to work.
@@ -2672,7 +2737,16 @@ export async function embeddingsSearch(
     const embedder = await loadEmbedder(args.model);
     const [qVec] = await embedder.embed([args.query]);
     if (!qVec) throw new Error("Embedder returned no vectors for the query");
-    const hits = db.search(qVec, limit, { folder: args.folder, minScore });
+    // v2.0.0-beta.2 P0 fix: filter excluded paths from the embedding-index
+    // hits BEFORE returning. The persistent .embed.db is built once and may
+    // contain entries for paths now excluded by --exclude-glob / --read-paths
+    // (added between build-embeddings and serve, or between two serve runs).
+    // Pre-fix, those entries leaked through `text_preview` and `rel_path`,
+    // bypassing the privacy contract — same shape as the writeNote bug.
+    // We over-fetch by 2× to keep top-K stable when many hits get filtered.
+    const overFetch = limit * 2;
+    const rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
+    const hits = rawHits.filter((h) => !vault.isExcluded(h.rel_path)).slice(0, limit);
     const matches: EmbedHit[] = hits.map((h) => ({
       path: h.rel_path,
       title: stripMd(path.basename(h.rel_path)),
@@ -2728,6 +2802,12 @@ export interface SearchHybridResponse {
   method: "rrf";
   k: number;
   signals_used: ("bm25" | "tfidf" | "embeddings")[];
+  /** v2.0.0-beta.2: per-signal failure reasons. Pre-fix, ranker exceptions
+   *  were silently swallowed (only stderr-logged). The MCP response just
+   *  showed `signals_used: []` with `matches: []` — caller couldn't tell
+   *  "no hits" from "all rankers crashed". Now any catch'ed exception
+   *  surfaces here as a string so agents can reason about reliability. */
+  signal_errors?: { bm25?: string; tfidf?: string; embeddings?: string };
   total_candidates: number;
   matches: SearchHybridHit[];
 }
@@ -2752,6 +2832,9 @@ export async function searchHybrid(
 
   const [{ reciprocalRankFusion, RRF_K }, { existsSync }] = await Promise.all([import("./rrf.js"), import("node:fs")]);
 
+  // v2.0.0-beta.2 P1 fix: collect per-signal errors for response-side observability.
+  const signalErrors: { bm25?: string; tfidf?: string; embeddings?: string } = {};
+
   const signalsUsed: ("bm25" | "tfidf" | "embeddings")[] = [];
 
   // ─── BM25 (FTS5) ────────────────────────────────────────────────────────
@@ -2767,7 +2850,12 @@ export async function searchHybrid(
   }> = [];
   if (ctx.ftsIndex) {
     try {
-      const ftsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
+      // v2.0.0-beta.2 P0 fix: filter excluded paths from FTS5 hits BEFORE
+      // chunk-collapse + RRF. The .fts5.db can contain entries from when the
+      // index was built without exclusion flags (or with different flags).
+      // Pre-fix, BM25 search returned excluded chunks via the hybrid pipeline.
+      const rawFtsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
+      const ftsHits = rawFtsHits.filter((h) => !vault.isExcluded(h.rel_path));
       const bestPerNote = new Map<
         string,
         { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
@@ -2802,9 +2890,9 @@ export async function searchHybrid(
       }
       if (bm25Ranked.length > 0) signalsUsed.push("bm25");
     } catch (err) {
-      process.stderr.write(
-        `obsidian_search: BM25 ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      signalErrors.bm25 = msg;
+      process.stderr.write(`obsidian_search: BM25 ranker failed — ${msg}\n`);
     }
   }
 
@@ -2826,9 +2914,9 @@ export async function searchHybrid(
     }));
     if (tfidfRanked.length > 0) signalsUsed.push("tfidf");
   } catch (err) {
-    process.stderr.write(
-      `obsidian_search: TF-IDF ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    signalErrors.tfidf = msg;
+    process.stderr.write(`obsidian_search: TF-IDF ranker failed — ${msg}\n`);
   }
 
   // ─── ML embeddings (if .embed.db exists) ────────────────────────────────
@@ -2888,9 +2976,9 @@ export async function searchHybrid(
       }
       if (embedRanked.length > 0) signalsUsed.push("embeddings");
     } catch (err) {
-      process.stderr.write(
-        `obsidian_search: embeddings ranker failed — ${err instanceof Error ? err.message : String(err)}\n`
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      signalErrors.embeddings = msg;
+      process.stderr.write(`obsidian_search: embeddings ranker failed — ${msg}\n`);
     }
   }
 
@@ -2943,7 +3031,10 @@ export async function searchHybrid(
     if (matches.length >= limit) break;
   }
 
-  return {
+  // v2.0.0-beta.2 P1 fix: surface signal_errors only when at least one
+  // ranker actually failed. Omit the key when all signals ran cleanly so
+  // happy-path responses stay narrow.
+  const response: SearchHybridResponse = {
     query: args.query,
     method: "rrf",
     k: RRF_K,
@@ -2951,6 +3042,10 @@ export async function searchHybrid(
     total_candidates: fused.length,
     matches
   };
+  if (Object.keys(signalErrors).length > 0) {
+    response.signal_errors = signalErrors;
+  }
+  return response;
 }
 
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─

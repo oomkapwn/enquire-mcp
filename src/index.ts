@@ -43,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-beta.1";
+const VERSION = "2.0.0-beta.2";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -351,9 +351,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
 
   registerReadTools(server, vault, ftsIndex);
   if (vault.writeEnabled) registerWriteTools(server, vault);
-  if (ftsIndex) registerFtsTools(server, ftsIndex);
+  if (ftsIndex) registerFtsTools(server, ftsIndex, vault);
   registerResources(server, vault);
-  if (ftsIndex) registerChunkResource(server, ftsIndex);
+  if (ftsIndex) registerChunkResource(server, ftsIndex, vault);
   registerPrompts(server);
 
   // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.
@@ -545,7 +545,7 @@ async function syncFtsIndex(
   };
 }
 
-function registerFtsTools(server: McpServer, idx: FtsIndex): void {
+function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
   server.registerTool(
     "obsidian_full_text_search",
@@ -580,6 +580,20 @@ function registerFtsTools(server: McpServer, idx: FtsIndex): void {
         if (Number.isFinite(t)) sinceMtimeMs = t;
         else throw new Error(`Invalid 'since' value (expected ISO date): ${args.since}`);
       }
+      // v2.0.0-beta.2 P0 fix: filter excluded paths from FTS5 hits before
+      // returning. The .fts5.db can contain entries from when the index was
+      // built without exclusion flags. Pre-fix, BM25 search leaked excluded
+      // chunks through `rel_path` and `snippet` (which contains the matched
+      // chunk text bracketed with «…»).
+      const userLimit = args.limit ?? 25;
+      const overFetch = userLimit * 2;
+      const rawMatches = idx.search(args.query, {
+        limit: overFetch,
+        folder: args.folder,
+        tag: args.tag,
+        sinceMtimeMs
+      });
+      const matches = rawMatches.filter((m) => !vault.isExcluded(m.rel_path)).slice(0, userLimit);
       return textResult({
         query: args.query,
         total_chunks: idx.totalChunks(),
@@ -589,12 +603,7 @@ function registerFtsTools(server: McpServer, idx: FtsIndex): void {
           tag: args.tag ?? null,
           since: args.since ?? null
         },
-        matches: idx.search(args.query, {
-          limit: args.limit,
-          folder: args.folder,
-          tag: args.tag,
-          sinceMtimeMs
-        })
+        matches
       });
     }
   );
@@ -1221,7 +1230,7 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
   );
 }
 
-function registerChunkResource(server: McpServer, idx: FtsIndex): void {
+function registerChunkResource(server: McpServer, idx: FtsIndex, vault: Vault): void {
   // Chunk-level addressing — closes the v0.10 roadmap item from issue #10
   // suggestion 1. URI shape: obsidian://chunk/{chunkIndex}/{+notePath}.
   // Index FIRST so the {+notePath} can greedily eat slash-bearing paths.
@@ -1250,6 +1259,15 @@ function registerChunkResource(server: McpServer, idx: FtsIndex): void {
       }
       const notePathRaw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
       const decoded = decodeNotePath(notePathRaw);
+      // v2.0.0-beta.2 P0 fix: enforce --read-paths / --exclude-glob on the
+      // chunk resource. The .fts5.db can contain entries from before the user
+      // added a privacy filter, so a stale URI returned earlier in the
+      // session would otherwise serve excluded content. We refuse with the
+      // same "not found" framing the FTS5 search uses post-filter, so the
+      // attacker can't distinguish "doesn't exist" from "exists but excluded".
+      if (vault.isExcluded(decoded)) {
+        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
+      }
       const chunk = idx.getChunk(decoded, chunkIndex);
       if (!chunk) throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
       const payload = {

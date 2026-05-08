@@ -96,10 +96,10 @@ There are several Obsidian-MCP servers out there. enquire differentiates on thre
 | **Strict path allowlist** (`--read-paths '01_Projects/**'` — only paths matching one of these globs are visible; complement to `--exclude-glob` denylist) | ❌ | ✅ |
 | **Canvas (`.canvas`) read tools** (`obsidian_list_canvases` + `obsidian_read_canvas` — typed nodes + edges, broken-ref detection) | ❌ rare / partial | ✅ first-class |
 | **Semantic search** (`obsidian_semantic_search` — TF-IDF cosine, free / offline / no model download) | ❌ usually paywalled (Smart Connections) | ✅ in-tree |
-| **ML embeddings search** (`obsidian_embeddings_search` — paraphrase-multilingual-MiniLM-L12-v2, 50+ languages, persistent SQLite vector index) | ❌ usually paywalled (Smart Connections) | ✅ free + offline-capable (v2.0 alpha) |
-| TypeScript strict + Biome lint + 388+ unit tests | varies | ✅ |
+| **ML embeddings search** (`obsidian_embeddings_search` — paraphrase-multilingual-MiniLM-L12-v2, 50+ languages, persistent SQLite vector index) | ❌ usually paywalled (Smart Connections) | ✅ free + offline-capable (v2.0 beta) |
+| TypeScript strict + Biome lint + 405+ unit tests | varies | ✅ |
 
-That's the gap. enquire closes it in ~3500 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus two optional (`better-sqlite3` for `--persistent-index` and `--build-embeddings`; `@huggingface/transformers` for ML embeddings — both are no-ops when not invoked).
+That's the gap. enquire closes it in ~7500 lines of TypeScript with five mandatory runtime dependencies (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus two optional (`better-sqlite3` for `--persistent-index` and the `build-embeddings` subcommand; `@huggingface/transformers` for ML embeddings — both are no-ops when not invoked).
 
 > **Not affiliated with Obsidian.md.** Obsidian and the Obsidian logo are trademarks of Dynalist Inc. enquire-mcp is an independent open-source project that reads Obsidian-format vaults. The name «enquire» is a tribute to Tim Berners-Lee's 1980 hypertext system, not a trademark claim against any party.
 
@@ -115,14 +115,27 @@ That's the gap. enquire closes it in ~3500 lines of TypeScript with five mandato
 
 ## Configure your AI client
 
-**Recommended: zero-install via `npx` — no clone, no build.** Drop this into your MCP client's config:
+**Recommended: zero-install via `npx` — no clone, no build.** Drop this into your MCP client's config.
+
+> **Pick a channel.** `@oomkapwn/enquire-mcp` (no `@beta`) → stable **v1.11.1** with 28 tools — no `obsidian_search` umbrella, no ML embeddings. Add `@beta` for the v2.0 surface (30 tools, hybrid retrieval). Stable `@latest` will move to v2.0 once beta proves out.
 
 ```json
+// Stable v1.x — 28 tools, no hybrid search
 {
   "mcpServers": {
     "obsidian": {
       "command": "npx",
       "args": ["-y", "@oomkapwn/enquire-mcp", "serve", "--vault", "/Users/you/Documents/Obsidian Vault"]
+    }
+  }
+}
+
+// Beta v2.0 — adds obsidian_search (BM25 + TF-IDF + ML embeddings via RRF)
+{
+  "mcpServers": {
+    "obsidian": {
+      "command": "npx",
+      "args": ["-y", "@oomkapwn/enquire-mcp@beta", "serve", "--vault", "/Users/you/Documents/Obsidian Vault"]
     }
   }
 }

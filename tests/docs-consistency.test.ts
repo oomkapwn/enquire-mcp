@@ -74,7 +74,8 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const readme = await read("README.md");
     const registered = registeredNames(indexSrc, "registerTool");
     // Heuristic: split by always-on read / opt-in read / write tools.
-    // Always-on read = registered NOT in registerWriteTools or registerFtsTools.
+    // Always-on read = registered NOT in registerWriteTools or registerFtsTools
+    // AND NOT gated behind `if (diagnosticSearchTools) server.registerTool(`.
     const writeFnStart = indexSrc.indexOf("function registerWriteTools(");
     const writeFnEnd = writeFnStart > 0 ? indexSrc.indexOf("\n}\n", writeFnStart) : -1;
     const ftsFnStart = indexSrc.indexOf("function registerFtsTools(");
@@ -83,7 +84,18 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const ftsBody = ftsFnStart > 0 && ftsFnEnd > 0 ? indexSrc.slice(ftsFnStart, ftsFnEnd) : "";
     const writeNames = registeredNames(writeBody, "registerTool");
     const ftsNames = registeredNames(ftsBody, "registerTool");
-    const alwaysOnRead = [...registered].filter((n) => !writeNames.has(n) && !ftsNames.has(n));
+    // v2.0.0-beta.3: tools gated behind `if (diagnosticSearchTools)` are
+    // opt-in, not always-on. Use `\s+` (matches newlines) instead of a
+    // single space — Biome's formatter splits `if (...) server.registerTool(`
+    // onto separate lines, which would have escaped a single-line regex.
+    const diagnosticGated = new Set(
+      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
+        (m) => m[1] ?? ""
+      )
+    );
+    const alwaysOnRead = [...registered].filter(
+      (n) => !writeNames.has(n) && !ftsNames.has(n) && !diagnosticGated.has(n)
+    );
     // Look for a heading or sentence claiming "<N> read tools (always on)".
     const m = /(\d+) read tools \(always on\)/.exec(readme);
     expect(m, "README must declare a number of always-on read tools").not.toBeNull();

@@ -184,7 +184,7 @@ Restart your client. The server logs `enquire <version> ready (read-only, vault=
 
 ## What you get
 
-### 24 read tools (always on) + 1 opt-in (`--persistent-index`) — **30 total** with 5 write tools
+### 21 read tools (always on) + 4 opt-in (`--persistent-index` adds 1 BM25 / `--diagnostic-search-tools` adds 3 single-ranker) — **30 total** with 5 write tools
 
 | Tool | What it does |
 |---|---|
@@ -481,4 +481,4 @@ Other ways to help:
 
 [MIT](./LICENSE). Built by Alex — [GitHub `@oomkapwn`](https://github.com/oomkapwn) · [X `@OomkaBear`](https://x.com/OomkaBear). Powered by [Model Context Protocol](https://modelcontextprotocol.io/), [`gray-matter`](https://github.com/jonschlinkert/gray-matter), [`commander`](https://github.com/tj/commander.js), and the patience of one specific Obsidian vault that didn't deserve to be parsed by hand.
 
-Named after [ENQUIRE](https://en.wikipedia.org/wiki/ENQUIRE) — the program Tim Berners-Lee wrote at CERN in 1980 to track «the complex web of relationships between people, programs, machines and ideas». ENQUIRE was the direct prototype of the World Wide Web. enquire-mcp brings the same idea to your AI: hyperlinked notes, structured access, no plugin required.
+Named after [ENQUIRE](https://en.wikipedia.org/wiki/ENQUIRE) — the 1980 hypertext prototype of the World Wide Web (see the inline note above for the longer story).

@@ -27,6 +27,8 @@ jobs:
       - run: npm run lint
 
   test:
+    # Required gate. Runs on Linux to keep check-run names stable for the
+    # branch protection ruleset (ruleset hardcodes "test (20)" etc.).
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -39,6 +41,27 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  test-macos:
+    # v2.0.0-beta.3: cross-platform advisory job (not required by branch
+    # protection, doesn't block merges). Catches macOS-specific path /
+    # symlink / chmod regressions on Apple silicon. The user dogfoods on
+    # macOS arm64 — bugs that only show up there used to ship until manual
+    # smoke caught them.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run build
       - run: npm test
@@ -82,6 +105,11 @@ jobs:
         run: node scripts/smoke.mjs "${{ steps.vault.outputs.path }}" --with-fts
 
   audit:
+    # v2.0.0-beta.3: elevate from --audit-level=high to moderate for prod
+    # deps. Pre-fix, the ip-address moderate XSS advisory sat undetected
+    # between Dependabot scans because audit didn't gate on it. Production
+    # transitive deps are usually safe, but elevating closes that gap.
+    # Dev deps stay at high (test/build tooling, less surface, more noise).
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -91,7 +119,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm audit --include=dev --audit-level=high
 
   version-consistency:
     runs-on: ubuntu-latest

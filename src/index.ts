@@ -43,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-beta.2";
+const VERSION = "2.0.0-beta.3";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -67,6 +67,7 @@ interface ServeOptions {
   watch?: boolean;
   disabledTools?: string[];
   enabledTools?: string[];
+  diagnosticSearchTools?: boolean;
 }
 
 async function main(): Promise<void> {
@@ -116,6 +117,10 @@ async function main(): Promise<void> {
     .option(
       "--enabled-tools <name...>",
       "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
+    )
+    .option(
+      "--diagnostic-search-tools",
+      "Register the four single-ranker search tools (obsidian_search_text, obsidian_full_text_search, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool. Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -349,9 +354,9 @@ async function startServer(opts: ServeOptions): Promise<void> {
     };
   }
 
-  registerReadTools(server, vault, ftsIndex);
+  registerReadTools(server, vault, ftsIndex, opts.diagnosticSearchTools ?? false);
   if (vault.writeEnabled) registerWriteTools(server, vault);
-  if (ftsIndex) registerFtsTools(server, ftsIndex, vault);
+  if (ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, ftsIndex, vault);
   registerResources(server, vault);
   if (ftsIndex) registerChunkResource(server, ftsIndex, vault);
   registerPrompts(server);
@@ -609,7 +614,12 @@ function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault): void 
   );
 }
 
-function registerReadTools(server: McpServer, vault: Vault, ftsIndex: FtsIndex | null): void {
+function registerReadTools(
+  server: McpServer,
+  vault: Vault,
+  ftsIndex: FtsIndex | null,
+  diagnosticSearchTools: boolean
+): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
 
   server.registerTool(
@@ -670,28 +680,34 @@ function registerReadTools(server: McpServer, vault: Vault, ftsIndex: FtsIndex |
     async (args) => textResult(await resolveWikilink(vault, args))
   );
 
-  server.registerTool(
-    "obsidian_search_text",
-    {
-      title: "Search text",
-      description:
-        "Case-insensitive token search across all notes. Default mode `all` requires every whitespace-separated token to appear in a note (AND-tokenizer); `any` requires at least one (OR); `phrase` does the old contiguous-substring match. Returns a structured response with `query`, `mode`, `scanned_notes`, and ranked `matches` (each with snippet, line, score, matched_terms) — empty matches are explicit, not ambiguous with a broken call.",
-      annotations: { ...READ_ONLY, title: "Search text" },
-      inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .describe('Search string. With mode=all/any, whitespace tokenizes ("foo bar" → ["foo","bar"]).'),
-        folder: z.string().optional().describe("Restrict to a subfolder"),
-        limit: z.number().int().positive().max(200).optional().describe("Max results (default 25)"),
-        mode: z
-          .enum(["all", "any", "phrase"])
-          .optional()
-          .describe('"all" (default, AND), "any" (OR), or "phrase" (literal substring — pre-v0.9 behavior)')
-      }
-    },
-    async (args) => textResult(await searchText(vault, args))
-  );
+  // v2.0.0-beta.3: obsidian_search_text is now a DIAGNOSTIC tool — gated
+  // behind --diagnostic-search-tools. Default search surface is the umbrella
+  // obsidian_search which auto-detects + fuses signals. Pre-fix, agents
+  // routinely picked the wrong single-ranker tool; consolidation reduces
+  // tool-list bloat and produces consistent recall.
+  if (diagnosticSearchTools)
+    server.registerTool(
+      "obsidian_search_text",
+      {
+        title: "Search text",
+        description:
+          "Case-insensitive token search across all notes. Default mode `all` requires every whitespace-separated token to appear in a note (AND-tokenizer); `any` requires at least one (OR); `phrase` does the old contiguous-substring match. Returns a structured response with `query`, `mode`, `scanned_notes`, and ranked `matches` (each with snippet, line, score, matched_terms) — empty matches are explicit, not ambiguous with a broken call.",
+        annotations: { ...READ_ONLY, title: "Search text" },
+        inputSchema: {
+          query: z
+            .string()
+            .min(1)
+            .describe('Search string. With mode=all/any, whitespace tokenizes ("foo bar" → ["foo","bar"]).'),
+          folder: z.string().optional().describe("Restrict to a subfolder"),
+          limit: z.number().int().positive().max(200).optional().describe("Max results (default 25)"),
+          mode: z
+            .enum(["all", "any", "phrase"])
+            .optional()
+            .describe('"all" (default, AND), "any" (OR), or "phrase" (literal substring — pre-v0.9 behavior)')
+        }
+      },
+      async (args) => textResult(await searchText(vault, args))
+    );
 
   server.registerTool(
     "obsidian_get_recent_edits",
@@ -1023,57 +1039,61 @@ function registerReadTools(server: McpServer, vault: Vault, ftsIndex: FtsIndex |
     async (args) => textResult(await readCanvas(vault, args))
   );
 
-  server.registerTool(
-    "obsidian_semantic_search",
-    {
-      title: "Semantic search (TF-IDF cosine)",
-      description:
-        "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free / offline / no model download — closes the gap to Smart Connections without paywall, ML deps, or HTTP. Use this when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first).",
-      annotations: { ...READ_ONLY, title: "Semantic search" },
-      inputSchema: {
-        query: z.string().min(1).describe("Free-form query — multi-word, natural language is fine"),
-        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
-        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
-        min_score: z
-          .number()
-          .min(0)
-          .max(1)
-          .optional()
-          .describe("Drop hits below this cosine score (default 0.05). Cosine ranges 0–1.")
-      }
-    },
-    async (args) => textResult(await semanticSearch(vault, args))
-  );
+  // v2.0.0-beta.3: gated — see comment on obsidian_search_text above.
+  if (diagnosticSearchTools)
+    server.registerTool(
+      "obsidian_semantic_search",
+      {
+        title: "Semantic search (TF-IDF cosine)",
+        description:
+          "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free / offline / no model download — closes the gap to Smart Connections without paywall, ML deps, or HTTP. Use this when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first).",
+        annotations: { ...READ_ONLY, title: "Semantic search" },
+        inputSchema: {
+          query: z.string().min(1).describe("Free-form query — multi-word, natural language is fine"),
+          folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+          limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+          min_score: z
+            .number()
+            .min(0)
+            .max(1)
+            .optional()
+            .describe("Drop hits below this cosine score (default 0.05). Cosine ranges 0–1.")
+        }
+      },
+      async (args) => textResult(await semanticSearch(vault, args))
+    );
 
   // v2.0 alpha — ML-embeddings retrieval. Reads a persistent vector index
   // built by `enquire-mcp build-embeddings`. Returns clean error if the index
   // doesn't exist (rather than silently downloading a model).
-  server.registerTool(
-    "obsidian_embeddings_search",
-    {
-      title: "Embeddings search (ML, paraphrase-multilingual)",
-      description:
-        "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index (~1ms/chunk on M1). Subsequent queries are sub-100ms top-10. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
-      annotations: { ...READ_ONLY, title: "Embeddings search" },
-      inputSchema: {
-        query: z.string().min(1).describe("Free-form query — multi-word, natural language, any supported language"),
-        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
-        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
-        min_score: z
-          .number()
-          .min(0)
-          .max(1)
-          .optional()
-          .describe(
-            "Drop hits below this cosine score (default 0.3). Cosine ranges -1 to 1; embeddings cluster ~0.4-0.9."
-          )
+  // v2.0.0-beta.3: gated — see comment on obsidian_search_text above.
+  if (diagnosticSearchTools)
+    server.registerTool(
+      "obsidian_embeddings_search",
+      {
+        title: "Embeddings search (ML, paraphrase-multilingual)",
+        description:
+          "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index (~1ms/chunk on M1). Subsequent queries are sub-100ms top-10. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
+        annotations: { ...READ_ONLY, title: "Embeddings search" },
+        inputSchema: {
+          query: z.string().min(1).describe("Free-form query — multi-word, natural language, any supported language"),
+          folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+          limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+          min_score: z
+            .number()
+            .min(0)
+            .max(1)
+            .optional()
+            .describe(
+              "Drop hits below this cosine score (default 0.3). Cosine ranges -1 to 1; embeddings cluster ~0.4-0.9."
+            )
+        }
+      },
+      async (args) => {
+        const embedFile = embedDbPath(vault.root);
+        return textResult(await embeddingsSearch(vault, args, embedFile));
       }
-    },
-    async (args) => {
-      const embedFile = embedDbPath(vault.root);
-      return textResult(await embeddingsSearch(vault, args, embedFile));
-    }
-  );
+    );
 
   // v2.0 beta — hybrid RRF over BM25 + TF-IDF + embeddings. Single umbrella
   // tool that auto-detects which signals are available and gracefully

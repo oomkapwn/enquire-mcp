@@ -18,7 +18,10 @@ const positional = args.filter((a) => !a.startsWith("--"));
 const vault = positional[0] ?? path.join(os.homedir(), "Documents", "Obsidian Vault");
 const withFts = args.includes("--with-fts");
 
-const serveArgs = [bin, "serve", "--vault", vault];
+// v2.0.0-beta.3: enable --diagnostic-search-tools so smoke exercises the
+// full historical surface (5 search tools, including the 4 single-ranker
+// diagnostics gated behind the new flag in v2.0.0-beta.3+).
+const serveArgs = [bin, "serve", "--vault", vault, "--diagnostic-search-tools"];
 if (withFts) serveArgs.push("--persistent-index");
 
 if (withFts) {

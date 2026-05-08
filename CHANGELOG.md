@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.3] — 2026-05-08
+
+**Backlog cleanup + tool-surface consolidation.** All audit-driven P0/P1 work landed in beta.2; this release closes the long tail of P2/P3 backlog items the same audits surfaced. No new features, no breaking changes for default users — but the default tool list is now narrower (21 read tools instead of 24) because the four single-ranker search tools moved behind a new opt-in flag.
+
+### Changed — `obsidian_search` is the headline; single-ranker tools moved behind `--diagnostic-search-tools`
+
+The audit's recurring observation: agents routinely picked the wrong single-ranker search tool from the five options (`search_text`, `full_text_search`, `semantic_search`, `embeddings_search`, `search`). The umbrella `obsidian_search` (added v2.0.0-beta.0) auto-detects available signals and produces consistent recall — five-tool surface is now bloat.
+
+- **Default surface (v2.0.0-beta.3+):** 21 always-on read tools. The single search tool is `obsidian_search`. Hybrid retrieval auto-detects what's available (BM25 if `--persistent-index`, ML embeddings if `build-embeddings` ran) and falls back gracefully.
+- **Diagnostic surface:** add `--diagnostic-search-tools` to register `obsidian_search_text`, `obsidian_semantic_search`, `obsidian_embeddings_search` (and `obsidian_full_text_search` if `--persistent-index` is also set). Use these for A/B benchmarking or when you specifically need single-ranker output.
+
+This is **not breaking** for clients calling `obsidian_search` (the v2.0 default). It IS a change for clients hard-coded to call `obsidian_search_text` / `obsidian_semantic_search` / `obsidian_embeddings_search` / `obsidian_full_text_search` — they need to either switch to `obsidian_search` (recommended) or add the flag.
+
+### Added — Cross-platform CI: macOS advisory job
+
+CI test matrix was Linux-only. `Vault` does cross-platform path work (`vault.ts:631` has a Windows separator normalization), symlink handling, and `chmod` operations — all of which behave differently on non-Linux platforms. Pre-fix, regressions only surfaced on user reports.
+
+New `test-macos` job runs the same suite on `macos-latest` × Node 22. **Advisory only** (`continue-on-error: true`) so it doesn't block merges, but failures appear in the PR check list. Required CI gate stays Linux × {Node 20, 22, 24} for ruleset stability.
+
+### Added — Coverage threshold gates in vitest
+
+Pre-fix: the `coverage` CI job uploaded an HTML report and exited 0 regardless of the numbers. A regression that dropped coverage 90% → 40% would ship green. New `vitest.config.ts` thresholds:
+
+- lines: ≥86%
+- statements: ≥82%
+- functions: ≥75%
+- branches: ≥73%
+
+All ~5pp below current. Excludes `src/index.ts` (registration boilerplate; line-count doesn't reflect quality) and test files. Fails CI if any threshold drops below.
+
+### Changed — `npm audit` elevated to `moderate` for production deps
+
+Pre-fix: `--audit-level=high` everywhere. The recently-resolved `ip-address` advisory (CVE-2026-42338, moderate severity) sat undetected between Dependabot scans because no audit gate caught it. Now production deps gate at `moderate`, dev deps stay at `high` (more noise, less surface).
+
+### Process — branch-protection ruleset bypass mode hardened
+
+`bypass_actors` for the admin role was `bypass_mode: always`. Changed to `bypass_mode: pull_request`. The maintainer's own pushes now go through PR (auto-mergeable), creating an audit trail. Combined with the v2.0.0-beta.2 release-pipeline integrity check, this means every change shipped to npm has a reviewable diff.
+
+### Docs
+
+- README "Configure your AI client" tool count: `24 read + 1 opt-in` → `21 read + 4 opt-in` (3 diagnostic + 1 FTS) reflecting the consolidation above.
+- `docs/api.md` header updated with the new tool-count math + opt-in flag breakdown.
+- README footer ENQUIRE paragraph deduplicated (was repeated near-verbatim at lines 59 and 484; footer now just references the inline note).
+- GitHub repo About description shortened from 340 → 195 chars to fit OpenGraph truncation.
+
+### Tests
+
+408 unit tests pass (was 408 in beta.2 — no test count delta; tests exercise the same surfaces with the new gating reflected in `tests/docs-consistency.test.ts` to count diagnostic-gated tools as opt-in, not always-on).
+
+`scripts/smoke.mjs` adds `--diagnostic-search-tools` to its server invocation so smoke continues to exercise all 5 search tools (was: 4, post-consolidation default surface is 1).
+
+### Migration from v2.0.0-beta.2
+
+**No-op for clients of `obsidian_search`** (the v2.0 hybrid default). Recommended path forward.
+
+**Clients calling per-ranker tools directly:**
+- Either switch to `obsidian_search` (preferred — auto-fuses signals)
+- Or pass `--diagnostic-search-tools` to your `enquire-mcp serve` invocation
+
+**Programmatic API surface unchanged.** The 4 gated tools have identical schemas + behavior when registered.
+
 ## [2.0.0-beta.2] — 2026-05-06
 
 **Audit-driven patch.** A second deep audit (5 parallel agents covering architecture, tests, docs, CI/CD, security threat model) surfaced one P0 privacy bypass of the same shape as the writeNote bug from beta.1, three release-pipeline P0s, and a long tail of P1 hardening. This release closes 16 findings and adds new architectural invariants to prevent recurrence.

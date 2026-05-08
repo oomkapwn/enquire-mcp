@@ -49,7 +49,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -2095,6 +2095,104 @@ Decision tree:
 5. **Show diff, ask, then write.** Always preview the proposed write to the user. Use \`obsidian_validate_note_proposal\` first. Write only after explicit approval.
 
 Goal: zero filing burden on the user. The AI does the indexing.`
+          }
+        }
+      ]
+    })
+  );
+
+  // v2.5.0 — agentic prompts (Khoj parity, lite scope).
+  // Agent personas + scheduled automations as prompts that orchestrate
+  // existing tools. Pure agent-side: no server-side state, no LLM calls.
+  // HTTP transport is a separate larger-scope sprint (planned post v2.5).
+
+  server.registerPrompt(
+    "vault_persona_search",
+    {
+      title: "Search the vault as a named persona (folder-scoped + tuned)",
+      description:
+        "Khoj-style agent persona pattern: scope retrieval to a folder + apply a persona-specific lens to the response. Useful when you want 'research-assistant' behavior over `Research/` distinct from 'editor' over `Drafts/`. Pure prompt template — orchestrates existing search tools with a fixed scope/instructions.",
+      argsSchema: {
+        persona: z
+          .string()
+          .describe("Persona name + traits (e.g. 'research-assistant: cite sources, ignore drafts, tldr first')"),
+        folder: z.string().describe("Folder to scope retrieval to (vault-relative)"),
+        query: z.string().describe("The user's question")
+      }
+    },
+    ({ persona, folder, query }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Acting as **${persona}**, with retrieval scoped to \`${folder}\`.
+
+User question: ${query}
+
+Steps:
+
+1. \`obsidian_search query="${query}" folder="${folder}" limit=15\` — hybrid retrieval inside the persona's scope.
+2. For each top-3 hit, \`obsidian_read_note\` to load the body.
+3. Synthesize the answer through the persona's lens (e.g. research-assistant cites every claim with \`[[wikilinks]]\`; editor flags contradictions; project-PM extracts deliverables).
+4. End with **3 follow-up questions** the user might ask next (use the persona's intent — research-assistant: "should I cite paper X?"; editor: "want me to flag the inconsistency between A and B?").
+
+Stay in the persona for the entire response. If asked something out-of-scope (e.g. research-assistant asked about cooking), politely redirect.`
+          }
+        }
+      ]
+    })
+  );
+
+  server.registerPrompt(
+    "vault_automation_setup",
+    {
+      title: "Set up a scheduled vault query (Khoj-style automations)",
+      description:
+        "Walks you through creating a cron'd vault query whose results land as a daily note or get appended to a digest. Bridges enquire-mcp tools + the host's `scheduled-tasks` MCP (or any cron tool the agent has access to). Pure orchestration — no server-side state.",
+      argsSchema: {
+        intent: z
+          .string()
+          .describe(
+            "What you want automated (e.g. 'every Monday 9am, show me all notes touched last week and highlight unresolved questions')"
+          )
+      }
+    },
+    ({ intent }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `User wants this automation: "${intent}"
+
+Steps:
+
+1. **Parse the intent.** Identify:
+   - **Cadence:** cron expression (daily/weekly/monthly + time)
+   - **Source:** which obsidian tool answers this? (\`get_recent_edits\`, \`obsidian_search\`, \`lint_wiki\`, \`paper_audit\`, etc.)
+   - **Sink:** how does the user want results? (a) append to today's daily note via \`append_to_note\`; (b) create a new note in \`Automations/\`; (c) just notify
+
+2. **Propose the automation as a JSON spec.** Example:
+   \`\`\`json
+   {
+     "name": "weekly-review",
+     "cron": "0 9 * * 1",
+     "tool_sequence": [
+       { "tool": "obsidian_get_recent_edits", "args": { "since_minutes": 10080 } },
+       { "tool": "obsidian_open_questions", "args": { "limit": 20 } }
+     ],
+     "sink": { "type": "append_to_note", "path": "Daily/{{today}}.md", "header": "## Weekly review" }
+   }
+   \`\`\`
+
+3. **Show the spec, ask user to confirm.**
+
+4. **Register via the host's scheduled-tasks MCP** (if available) or output the cron config for manual paste. \`mcp__scheduled-tasks__create_scheduled_task\` is the standard target.
+
+5. **Smoke once.** Before the first scheduled run, execute the tool sequence ONCE manually so the user verifies output shape. Show the produced markdown.
+
+This is the Khoj automation pattern translated to MCP: research that comes to you instead of you remembering to ask for it.`
           }
         }
       ]

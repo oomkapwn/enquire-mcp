@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-05-08
+
+**Sprint 5 — agentic prompts (Khoj parity, lite scope).** Two new MCP prompts that bring named-persona retrieval and scheduled-query automation to enquire-mcp. Pure orchestration over existing tools — no new server-side state, no LLM calls.
+
+### Added — `vault_persona_search`
+
+Khoj-style agent persona pattern: scope retrieval to a folder + apply a persona-specific lens to the response. Useful when you want `research-assistant` behavior over `Research/` distinct from `editor` over `Drafts/`. Pure prompt template — orchestrates existing search tools with a fixed scope/instructions. Compatible with any MCP client.
+
+### Added — `vault_automation_setup`
+
+Walks the user through creating a cron'd vault query whose results land as a daily-note append, a new note, or a notification. Bridges enquire-mcp tools + the host's `scheduled-tasks` MCP (or any cron tool the agent has access to). Includes a smoke-once step before first scheduled run.
+
+This is the Khoj automation pattern translated to MCP: research that comes to you instead of you remembering to ask for it.
+
+### Note on HTTP transport
+
+The remote-MCP HTTP transport (the third Sprint 5 feature in our roadmap) is deferred to a separate focused sprint. It's an architectural change that warrants standalone PR review (auth model, rate-limit, CORS, Tailscale Funnel docs). Tracked as v2.6.0.
+
+### Tests
+
+431 unit tests pass (no count delta — prompts are pure templates).
+
+### Migration
+
+**No-op.** All additions are new MCP prompts. Existing tool calls behave identically.
+
 ## [2.4.0] — 2026-05-08
 
 **Sprint 4 — Karpathy LLM-Wiki backend positioning.** Four new MCP prompts that implement the [Karpathy LLM-Wiki workflow](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) natively over Obsidian's `.md` + `[[wikilinks]]` substrate. **Strategic claim: enquire-mcp is the open-source backend for Karpathy-style LLM Wikis on top of your existing Obsidian vault.** No competitor sits on this intersection (Search-first / Agentic-first / Wiki-compounding) — we claim it.

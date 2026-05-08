@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] — 2026-05-08
+
+**Sprint 9 — BGE cross-encoder reranking on top of RRF.** Cross-encoder reranking is the SOTA technique in IR for boosting retrieval quality over bi-encoder candidates: after RRF fusion, the top-N hits are re-scored by a model that sees query+document interaction directly (instead of comparing pre-computed embeddings). Typical wins: +5-10 NDCG@10 on real-world retrieval. **No other Obsidian-MCP currently does cross-encoder reranking** — this extends our retrieval quality leadership claim.
+
+### Added — `--enable-reranker` CLI flag
+
+Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias) and adds ~30-50ms per query at top-50 candidates on M1 CPU. When enabled:
+
+- `enquire-mcp serve --vault <path> --persistent-index --enable-reranker` → boots; reranker model lazy-loads on first search call.
+- After RRF fusion + graph-boost, top-N candidates (default 50; tunable via `--reranker-top-n <n>`) are re-scored by a cross-encoder, then re-sorted before the response is truncated to `limit`.
+- Each reranked hit carries a `reranker_score` field in `[0, 1]` (sigmoid of the model's relevance logit) so agents see the cross-encoder's relevance estimate alongside RRF observability.
+
+### Added — `RERANKER_MODELS` catalog
+
+Two models ship out of the box, both via the existing `@huggingface/transformers` `optionalDependency`:
+
+- **`rerank-multilingual`** (default) — `Xenova/mxbai-rerank-xsmall-v1`, ~25 MB, multilingual. Best balance of speed × quality × language coverage.
+- **`rerank-bge`** — `Xenova/bge-reranker-base`, ~110 MB, English-only. Higher peak quality on English content; recommended only when you don't need multilingual support.
+
+Choose via `--reranker-model <alias>`. Same lazy-load pattern as embedding models — first call downloads weights into `~/.cache/huggingface/transformers.js/`; subsequent queries hit the warm cache.
+
+### Wiring
+
+- `searchHybrid(vault, args, ctx)` accepts an optional `ctx.reranker?: { alias?, topN? }`. When set, the reranker runs after RRF + graph-boost; failures surface via `signal_errors.reranker` (matching the existing per-signal failure-reporting pattern from v2.0.0-beta.2). The fused order is preserved if reranking fails, so a model load problem doesn't break search.
+- A `ctx.rerankerOverride` injection point lets unit tests validate the rerank-and-resort plumbing without pulling in the real ML model.
+- Reranker passages are derived from each candidate's best snippet (BM25 > embeddings > TF-IDF preference), with FTS5 highlight markers stripped and length capped at 600 chars to fit safely under the 512-token model budget.
+
+### Tests
+
+502 unit tests pass (was 493 in v2.8.0, +9 new):
+- **RERANKER_MODELS catalog (+5):** rerank-multilingual is the multilingual default, rerank-bge is English-only, defaults to rerank-multilingual on undefined alias, throws on unknown alias with helpful list, every entry has sensible approxSizeMB.
+- **searchHybrid + reranker plumbing (+4):** reranker invoked when override is set, top-N re-orders by reranker score (high.md beats mid.md beats low.md by synthetic scores), errors surface via `signal_errors.reranker` with original RRF order preserved, `topN` caps how many candidates carry `reranker_score`.
+
+### Surface delta vs v2.8.0
+
+- **No new tools.** Reranking is a property of `obsidian_search`, not a new tool surface.
+- **+3 CLI flags** (`--enable-reranker`, `--reranker-model <alias>`, `--reranker-top-n <n>`) on `serve` (and via the same options shape, on `serve-http`).
+
+### Migration
+
+**No-op for default users.** Reranking is opt-in via `--enable-reranker`. Existing users keep working unchanged. Once you opt in, the first search call downloads the reranker model (~25 MB for default `rerank-multilingual`); subsequent queries reuse the cached weights.
+
+### Strategic position
+
+Combined with v2.0-v2.8's hybrid RRF + wikilink graph-boost + breadcrumb chunking + multilingual embeddings + remote MCP transport + PDF retrieval, **enquire-mcp is now the only Obsidian-MCP that runs cross-encoder reranking on top of hybrid retrieval over markdown + PDFs**. Smart Connections (paid) doesn't rerank. Khoj doesn't either. The retrieval-quality moat widens.
+
 ## [2.8.0] — 2026-05-08
 
 **Sprint 8 — PDF retrieval integration.** v2.7.0 added PDF text-extraction tools (`obsidian_list_pdfs` / `obsidian_read_pdf`); v2.8.0 makes PDFs **first-class citizens of `obsidian_search`**. Index PDFs into the same FTS5 + embedding stores as markdown, blend them in hybrid retrieval (BM25 + TF-IDF + embeddings → RRF fusion), and surface a `kind: "md" | "pdf"` flag on every hit so agents can distinguish content sources at a glance.

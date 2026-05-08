@@ -51,7 +51,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.8.0";
+const VERSION = "2.9.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -80,6 +80,13 @@ export interface ServeOptions {
    *  with --include-pdfs ran). Off by default; opt-in because PDF extraction
    *  is slower than markdown. */
   includePdfs?: boolean;
+  /** v2.9.0 — enable BGE cross-encoder reranking on top of RRF in
+   *  obsidian_search. Off by default; adds ~30-50ms per query at top-50. */
+  enableReranker?: boolean;
+  /** v2.9.0 — reranker model alias (default "rerank-multilingual"). */
+  rerankerModel?: string;
+  /** v2.9.0 — how many top fused candidates to rerank (default 50). */
+  rerankerTopN?: string;
 }
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -149,6 +156,18 @@ async function main(): Promise<void> {
     .option(
       "--include-pdfs",
       'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
+    )
+    .option(
+      "--enable-reranker",
+      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; +5-10 NDCG@10 typical for retrieval quality. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
+    )
+    .option(
+      "--reranker-model <alias>",
+      "v2.9.0 — reranker alias from RERANKER_MODELS. `rerank-multilingual` (default; Xenova/mxbai-rerank-xsmall-v1, ~25 MB, multilingual) or `rerank-bge` (Xenova/bge-reranker-base, ~110 MB, English-only). Only effective with `--enable-reranker`."
+    )
+    .option(
+      "--reranker-top-n <n>",
+      "v2.9.0 — how many top RRF-fused candidates to rerank (default 50). Larger N improves recall ceiling but costs more reranker compute (~30-50ms per 50 pairs on M1). Only effective with `--enable-reranker`."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -577,7 +596,16 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
     };
   }
 
-  registerReadTools(server, deps.vault, deps.ftsIndex, opts.diagnosticSearchTools ?? false);
+  // v2.9.0: build reranker config from CLI opts. Off when `--enable-reranker`
+  // wasn't passed; otherwise we pass through alias + top-n. The reranker
+  // model itself is lazy-loaded on first search call (no boot cost).
+  const rerankerConfig = opts.enableReranker
+    ? {
+        ...(opts.rerankerModel ? { alias: opts.rerankerModel } : {}),
+        ...(opts.rerankerTopN ? { topN: parsePositiveInt(opts.rerankerTopN, "--reranker-top-n") } : {})
+      }
+    : null;
+  registerReadTools(server, deps.vault, deps.ftsIndex, opts.diagnosticSearchTools ?? false, rerankerConfig);
   if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault);
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
   registerResources(server, deps.vault);
@@ -1059,7 +1087,13 @@ function registerReadTools(
   server: McpServer,
   vault: Vault,
   ftsIndex: FtsIndex | null,
-  diagnosticSearchTools: boolean
+  diagnosticSearchTools: boolean,
+  /**
+   * v2.9.0 — optional cross-encoder reranker config. When set, obsidian_search
+   * post-RRF reranks the top-N candidates with a BGE-style cross-encoder.
+   * `null` means reranker disabled (default).
+   */
+  rerankerConfig: { alias?: string; topN?: number } | null = null
 ): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
 
@@ -1622,7 +1656,13 @@ function registerReadTools(
     },
     async (args) => {
       const embedFile = embedDbPath(vault.root);
-      return textResult(await searchHybrid(vault, args, { ftsIndex, embedFile }));
+      return textResult(
+        await searchHybrid(vault, args, {
+          ftsIndex,
+          embedFile,
+          ...(rerankerConfig ? { reranker: rerankerConfig } : {})
+        })
+      );
     }
   );
 

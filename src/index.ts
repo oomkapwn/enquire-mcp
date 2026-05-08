@@ -35,6 +35,7 @@ import {
   listNotes,
   listPdfs,
   listTags,
+  ocrPdf,
   openInUi,
   paperAudit,
   readCanvas,
@@ -51,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.9.0";
+const VERSION = "2.10.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -1540,7 +1541,7 @@ function registerReadTools(
     {
       title: "Extract text from a PDF (page-by-page)",
       description:
-        "Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title/author/subject/etc). Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend OCR. Optional `pages` slice (1-indexed inclusive range) for partial reads of long documents. Read-only. Same path-safety + privacy filter as `obsidian_read_note`. Powered by Mozilla's PDF.js (Apache-2.0).",
+        "Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title/author/subject/etc). Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend OCR via `obsidian_ocr_pdf` (v2.10.0). Optional `pages` slice (1-indexed inclusive range) for partial reads of long documents. Read-only. Same path-safety + privacy filter as `obsidian_read_note`. Powered by Mozilla's PDF.js (Apache-2.0).",
       annotations: { ...READ_ONLY, title: "Read PDF" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
@@ -1552,6 +1553,43 @@ function registerReadTools(
       }
     },
     async (args) => textResult(await readPdf(vault, args))
+  );
+
+  // v2.10.0 — OCR for image-only / scanned PDFs. Completes the v2.7-v2.8
+  // PDF retrieval story: when `obsidian_read_pdf` returns `has_text: false`,
+  // the agent calls `obsidian_ocr_pdf` to extract text via Tesseract.js.
+  // Tesseract.js + @napi-rs/canvas are optionalDependencies — clean
+  // install-hint error if missing. ~1-2s per page on M1 CPU.
+  server.registerTool(
+    "obsidian_ocr_pdf",
+    {
+      title: "OCR a scanned/image-only PDF (Tesseract.js)",
+      description:
+        "Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as `obsidian_read_pdf`. Use this when `obsidian_read_pdf` returns `has_text: false` (typical for scans, photographed paper, image-only PDFs). Multilingual via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'`). Optional `pages` range and `scale` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU. Read-only. Powered by Tesseract.js (Apache-2.0; trained-data files download on first use into the local cache, ~10 MB per language) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to `optionalDependencies` so the markdown-only path stays zero-cost.",
+      annotations: { ...READ_ONLY, title: "OCR PDF" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
+        lang: z
+          .string()
+          .optional()
+          .describe(
+            "Tesseract language pack(s). Default 'eng'. Multi-lang via '+': 'eng+rus' for English+Russian mixed scans. Common: 'eng', 'rus', 'jpn', 'chi_sim', 'fra', 'deu'."
+          ),
+        pages: z
+          .tuple([z.number().int().positive(), z.number().int().positive()])
+          .optional()
+          .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] OCRs pages 2..5"),
+        scale: z
+          .number()
+          .min(0.5)
+          .max(4)
+          .optional()
+          .describe(
+            "Render scale (DPI multiplier). Default 2 (~150 DPI). Higher = better OCR on small text but slower."
+          )
+      }
+    },
+    async (args) => textResult(await ocrPdf(vault, args))
   );
 
   // v2.0.0-beta.3: gated — see comment on obsidian_search_text above.

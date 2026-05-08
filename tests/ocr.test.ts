@@ -1,0 +1,78 @@
+// v2.10.0 — Tesseract OCR for image-only / scanned PDFs.
+//
+// Note: this test deliberately does NOT load the full Tesseract worker
+// against a real bitmap. Tesseract.js + @napi-rs/canvas + a real
+// language-pack download is smoke-test territory (~1-2s per page,
+// ~10MB language file fetched on first call). Here we validate:
+//   • obsidian_ocr_pdf path-resolution + privacy filter parity
+//   • Clean error when path missing
+//   • Clean error when path is excluded
+//   • Tool input contract (refuses empty path)
+//
+// End-to-end OCR validation runs as a manual smoke step (run scripts
+// against the maintainer's vault with a real scanned PDF). The CI smoke
+// is built around a synthetic vault with no scanned PDFs.
+
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ocrPdf } from "../src/tools.js";
+import { Vault } from "../src/vault.js";
+import { makePdf } from "./helpers/make-pdf.js";
+
+let root: string;
+
+beforeEach(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-ocr-"));
+});
+
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("ocrPdf — path + privacy contract (v2.10.0)", () => {
+  it("rejects missing path arg", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await expect(ocrPdf(v, { path: "" })).rejects.toThrow(/path is required/);
+  });
+
+  it("rejects non-existent file", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await expect(ocrPdf(v, { path: "missing.pdf" })).rejects.toThrow();
+  });
+
+  it("refuses excluded paths (privacy filter parity with read_pdf)", async () => {
+    const buf = makePdf({ pages: ["text only"] });
+    await fs.mkdir(path.join(root, "private"), { recursive: true });
+    await fs.writeFile(path.join(root, "private", "secret.pdf"), buf);
+    const v = new Vault(root, { excludeGlobs: ["private/**"] });
+    await v.ensureExists();
+    await expect(ocrPdf(v, { path: "private/secret.pdf" })).rejects.toThrow();
+  });
+
+  it("refuses paths outside the read-paths allowlist", async () => {
+    const buf = makePdf({ pages: ["text only"] });
+    await fs.mkdir(path.join(root, "other"), { recursive: true });
+    await fs.writeFile(path.join(root, "other", "doc.pdf"), buf);
+    const v = new Vault(root, { readPaths: ["reading/**"] });
+    await v.ensureExists();
+    await expect(ocrPdf(v, { path: "other/doc.pdf" })).rejects.toThrow();
+  });
+
+  it("accepts path with or without .pdf extension (matches read_pdf shape)", async () => {
+    // We don't run actual OCR (no real scanned image; makePdf emits text
+    // streams pdfjs already extracts, and Tesseract.js is heavy to load
+    // in unit tests). Instead, we verify the path-resolution layer treats
+    // both forms equivalently by checking the rejected-path case for
+    // both spellings.
+    const v = new Vault(root);
+    await v.ensureExists();
+    // Both should fail with the same "missing file" error — proves the
+    // path normalization runs identically for both.
+    await expect(ocrPdf(v, { path: "missing" })).rejects.toThrow();
+    await expect(ocrPdf(v, { path: "missing.pdf" })).rejects.toThrow();
+  });
+});

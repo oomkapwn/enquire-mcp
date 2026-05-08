@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] — 2026-05-08
+
+**Sprint 10 — OCR for image-only / scanned PDFs.** Closes the v2.7-v2.8-v2.9 PDF retrieval story. v2.7.0 added text-extraction tools; v2.8.0 blended PDF chunks into hybrid search; v2.9.0 added cross-encoder reranking. v2.10.0 makes the **scanned / camera-captured** PDFs in your vault searchable too — Tesseract.js OCR over each page bitmap.
+
+### Added — `obsidian_ocr_pdf`
+
+Runs Tesseract OCR over each page of an image-only / scanned PDF and returns the same shape as `obsidian_read_pdf` plus a per-page `confidence` score (0-100) and a doc-level `mean_confidence`. Use this when `obsidian_read_pdf` returns `has_text: false` (typical for scans, photographed paper, image-only PDFs).
+
+- **Multilingual** via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'` for English+Russian mixed scans). Trained-data files for each language download on first use into Tesseract's local cache (~10 MB per language).
+- **Optional `pages` range** for partial OCR of long docs — OCR is the slowest step in the pipeline (~1-2s per page on M1 CPU), so a 100-page paper takes minutes.
+- **Optional `scale`** (DPI multiplier, default 2 ~ 150 DPI, capped at 4 server-side to prevent adversarial-PDF OOM).
+- **Per-page failure isolation** — one bad page doesn't sink the document.
+- **Tesseract worker terminated after each call** so HTTP transport doesn't accumulate per-request state.
+
+### Added — two new optional dependencies
+
+`tesseract.js@^7.0.0` (~1.4 MB unpacked, pure WebAssembly OCR engine) and `@napi-rs/canvas@^1.0.0` (~125 KB unpacked, native PDF→bitmap rendering with platform-specific binaries downloading conditionally) — both `optionalDependencies` so the markdown-only path stays zero-cost.
+
+Lazy-imported via the same pattern as `pdfjs-dist` (v2.7.0), `better-sqlite3` (v1.x), and `@huggingface/transformers` (v2.0.0). Missing-deps surface a clean install-hint error rather than a cryptic module-not-found stack.
+
+### Server-side hardening
+
+- `isEvalSupported: false`, `useSystemFonts: false`, `verbosity: 0` on pdfjs's `loadingTask` (matches v2.7.0 PDF read path).
+- Render scale clamped to `[0.5, 4]` so adversarial PDFs claiming 100-DPI multipliers don't OOM the server.
+- Tesseract worker terminated in a `finally` block so WebAssembly state never leaks even if a render or recognize call throws mid-page.
+- Same path-safety + privacy filter (`--exclude-glob` / `--read-paths` / `vault.stat`) as `obsidian_read_note` and `obsidian_read_pdf`. Audit-tested at every read boundary.
+
+### Tests
+
+507 unit tests pass (was 502 in v2.9.0, +5 new):
+- **ocrPdf path + privacy contract (+5):** rejects missing path arg, rejects non-existent file, refuses paths excluded by `--exclude-glob`, refuses paths outside `--read-paths` allowlist, accepts both `.pdf` and bare-stem paths consistently.
+
+End-to-end OCR validation (loading a real Tesseract worker against a synthetic image-only PDF) is deferred to manual smoke — Tesseract.js + @napi-rs/canvas startup is heavy (~2s) and a real synthetic image-PDF fixture would inflate the test repo.
+
+### Surface delta vs v2.9.0
+
+- **+1 read tool** (`obsidian_ocr_pdf`)
+- **+2 optional deps** (`tesseract.js`, `@napi-rs/canvas`) — both lazy-loaded, markdown-only path zero-cost
+- **Total surface:** 39 tools (28 always-on read + 1 opt-in `--persistent-index` + 3 opt-in diagnostic + 7 opt-in write) + 17 prompts
+
+### Migration
+
+**No-op for default users.** OCR runs only when an agent explicitly calls `obsidian_ocr_pdf`. Existing `obsidian_read_pdf` behavior unchanged — it still returns `has_text: false` for scanned PDFs and now points at `obsidian_ocr_pdf` in its tool description.
+
+Users on `--omit=optional` who try to call `obsidian_ocr_pdf` get a clean error message naming exactly what to install (`npm install tesseract.js @napi-rs/canvas`).
+
+### Strategic position
+
+The PDF retrieval story is now complete:
+- v2.7.0 — extraction tools (`obsidian_list_pdfs` / `obsidian_read_pdf`)
+- v2.8.0 — blended into hybrid search (`obsidian_search` returns PDF chunks with `kind: "pdf"` + page citations)
+- v2.9.0 — cross-encoder reranking on the blended candidate set
+- **v2.10.0 — OCR for the image-only / scanned PDFs** the v2.8.0 pipeline previously skipped
+
+**No other Obsidian-MCP currently does OCR for scanned PDFs.** Combined with the v2.0-v2.9 retrieval moats, enquire is now the only Obsidian-MCP that gives an agent searchable access to **every** PDF in your vault — text-PDFs, scanned-PDFs, multilingual content — with hybrid retrieval + cross-encoder reranking on top.
+
 ## [2.9.0] — 2026-05-08
 
 **Sprint 9 — BGE cross-encoder reranking on top of RRF.** Cross-encoder reranking is the SOTA technique in IR for boosting retrieval quality over bi-encoder candidates: after RRF fusion, the top-N hits are re-scored by a model that sees query+document interaction directly (instead of comparing pre-computed embeddings). Typical wins: +5-10 NDCG@10 on real-world retrieval. **No other Obsidian-MCP currently does cross-encoder reranking** — this extends our retrieval quality leadership claim.

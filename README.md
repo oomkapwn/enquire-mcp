@@ -57,6 +57,7 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 - ✅ **Hybrid retrieval** (BM25 + TF-IDF + ML embeddings, RRF-fused)
 - ✅ **Cross-encoder reranking** on top of RRF (+5-10 NDCG@10) — `v2.9.0`
 - ✅ **PDFs blended into hybrid search** with `[page: N]` citation markers — `v2.8.0`
+- ✅ **OCR for scanned / image-only PDFs** (Tesseract.js, multilingual) — `v2.10.0`
 - ✅ **Wikilink graph-boost** as a retrieval signal (1-step personalised PageRank seeded by RRF top-K)
 - ✅ **Remote MCP** over HTTP with bearer auth + rate-limit + CORS — `v2.6.0`
 - ✅ **Multilingual** semantic search (50+ languages, runs on CPU, free)
@@ -110,6 +111,7 @@ graph LR
 | **Hybrid (BM25+TF-IDF+embeddings, RRF)** | ❌ | ❌ | ✅ **only here** |
 | **Wikilink graph-boost retrieval signal** | ❌ | ❌ | ✅ **only here** |
 | **PDFs blended into hybrid search** | ❌ | ❌ | ✅ **only here** |
+| **OCR for scanned / image-only PDFs** | ❌ | ❌ | ✅ **only here** |
 | **Cross-encoder reranking** | ❌ | ❌ | ✅ **only here** |
 | **Remote MCP (HTTP + bearer auth)** | ❌ | ❌ | ✅ **only here** |
 | Per-signal observability per hit | ❌ | ❌ | ✅ |
@@ -117,20 +119,20 @@ graph LR
 | Standalone (no Obsidian plugin) | varies | ❌ requires Obsidian | ✅ direct vault read |
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio + HTTP |
 | SLSA-3 release provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 502 unit tests |
+| Test suite | rare | n/a | ✅ 507 unit tests |
 
 > **Strategic claim:** enquire is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. The `vault_synth` / `vault_wiki_compile` / `vault_lint_extended` prompts implement the ingest → query → lint → compile workflow natively over `.md` + `[[wikilinks]]`. Knowledge that compounds, traceable to sources.
 
 ---
 
-## 🛠️ All 38 tools at a glance
+## 🛠️ All 39 tools at a glance
 
-The umbrella `obsidian_search` plus 37 specialized tools for wikilinks, backlinks, Dataview, frontmatter, canvas, PDFs, vault stats, graph navigation, and writes.
+The umbrella `obsidian_search` plus 38 specialized tools for wikilinks, backlinks, Dataview, frontmatter, canvas, PDFs, OCR, vault stats, graph navigation, and writes.
 
 <details>
-<summary><b>27 always-on read tools</b> — click to expand</summary>
+<summary><b>28 always-on read tools</b> — click to expand</summary>
 
-`obsidian_search` · `obsidian_context_pack` · `obsidian_chat_thread_read` · `obsidian_frontmatter_get` · `obsidian_frontmatter_search` · `obsidian_read_note` · `obsidian_list_notes` · `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_unresolved_wikilinks` · `obsidian_get_recent_edits` · `obsidian_list_tags` · `obsidian_dataview_query` · `obsidian_find_path` · `obsidian_find_similar` · `obsidian_get_note_neighbors` · `obsidian_stats` · `obsidian_lint_wiki` · `obsidian_open_questions` · `obsidian_paper_audit` · `obsidian_validate_note_proposal` · `obsidian_list_canvases` · `obsidian_read_canvas` · `obsidian_list_pdfs` · `obsidian_read_pdf` · `obsidian_open_in_ui`
+`obsidian_search` · `obsidian_context_pack` · `obsidian_chat_thread_read` · `obsidian_frontmatter_get` · `obsidian_frontmatter_search` · `obsidian_read_note` · `obsidian_list_notes` · `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_unresolved_wikilinks` · `obsidian_get_recent_edits` · `obsidian_list_tags` · `obsidian_dataview_query` · `obsidian_find_path` · `obsidian_find_similar` · `obsidian_get_note_neighbors` · `obsidian_stats` · `obsidian_lint_wiki` · `obsidian_open_questions` · `obsidian_paper_audit` · `obsidian_validate_note_proposal` · `obsidian_list_canvases` · `obsidian_read_canvas` · `obsidian_list_pdfs` · `obsidian_read_pdf` · `obsidian_ocr_pdf` · `obsidian_open_in_ui`
 
 </details>
 
@@ -198,7 +200,7 @@ enquire-mcp serve-http \
 
 | Surface | Posture |
 |---|---|
-| Tests | 502 unit tests across 24 files, 8 required CI gates per PR |
+| Tests | 507 unit tests across 25 files, 8 required CI gates per PR |
 | Coverage | Lines ≥86%, statements ≥82%, functions ≥75%, branches ≥73% (gated) |
 | Audit | `npm audit --audit-level=moderate` for prod; high for dev |
 | CI | Ubuntu × {Node 20, 22, 24} required + macOS advisory job |

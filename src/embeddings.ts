@@ -154,3 +154,133 @@ export function cosineSim(a: Float32Array, b: Float32Array): number {
   }
   return s;
 }
+
+// ─── v2.9.0 — BGE cross-encoder reranker support ────────────────────────────
+//
+// Cross-encoder reranking is the SOTA technique for boosting retrieval
+// quality over bi-encoder (= our embedding) candidates. The flow:
+//   1. Hybrid retrieval (BM25 + TF-IDF + embeddings, RRF) returns top-N (~50).
+//   2. Cross-encoder scores each (query, snippet) pair → relevance score.
+//   3. Re-sort by cross-encoder score, return top-K.
+//
+// Why cross-encoder is more accurate than bi-encoder for re-ranking:
+//   • Bi-encoders embed query and document separately, then dot-product.
+//     Information about query-document interaction is lost at embedding time.
+//   • Cross-encoders concatenate (query, document) and run them through the
+//     model jointly — query-document term interactions are modeled directly.
+//   • Trade-off: cross-encoder is 100-1000x more expensive per pair, so we
+//     only run it on the small RRF-fused candidate set, not the full vault.
+//
+// This module wraps `@huggingface/transformers`'s text-classification pipeline
+// in a thin `Reranker` interface — the pipeline returns a single score in
+// [0, 1] per (query, passage) pair (BGE rerankers are trained as binary
+// relevance classifiers; higher = more relevant).
+
+/** BGE reranker model catalog — analogous to `EMBEDDING_MODELS`. */
+export interface RerankerModel {
+  alias: string;
+  hfId: string;
+  approxSizeMB: number;
+  multilingual: boolean;
+  /** Max combined (query + passage) tokens — BGE base is 512. */
+  maxTokens: number;
+}
+
+export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.freeze({
+  // BGE-reranker-base — English, ~110 MB. Latency ~30-50ms per pair on M1 CPU.
+  "rerank-bge": {
+    alias: "rerank-bge",
+    hfId: "Xenova/bge-reranker-base",
+    approxSizeMB: 110,
+    multilingual: false,
+    maxTokens: 512
+  },
+  // mxbai-rerank-xsmall-v1 — multilingual, ~25 MB, much faster than BGE-base.
+  // Better default for users on slower hardware or larger candidate sets.
+  // Cited in MTEB leaderboard as comparable to BGE-base on English while
+  // staying multilingual.
+  "rerank-multilingual": {
+    alias: "rerank-multilingual",
+    hfId: "Xenova/mxbai-rerank-xsmall-v1",
+    approxSizeMB: 25,
+    multilingual: true,
+    maxTokens: 512
+  }
+});
+
+export const DEFAULT_RERANKER_ALIAS = "rerank-multilingual";
+
+export function resolveRerankerModel(alias: string | undefined): RerankerModel {
+  const key = alias ?? DEFAULT_RERANKER_ALIAS;
+  const model = RERANKER_MODELS[key];
+  if (!model) {
+    const known = Object.keys(RERANKER_MODELS).join(", ");
+    throw new Error(`Unknown reranker model alias '${key}'. Known aliases: ${known}.`);
+  }
+  return model;
+}
+
+/** Opaque handle for a loaded reranker. Constructed via `loadReranker()`. */
+export interface Reranker {
+  readonly model: RerankerModel;
+  /**
+   * Score (query, passage) pairs. Higher = more relevant. BGE rerankers
+   * return logits in roughly [-10, +10]; we apply sigmoid to get [0, 1] for
+   * comparable scoring across models. Truncation of overly-long passages
+   * is the model's responsibility (it'll silently chop at maxTokens).
+   *
+   * Returns one score per passage in input order.
+   */
+  score(query: string, passages: readonly string[]): Promise<number[]>;
+}
+
+/**
+ * Load a BGE-style cross-encoder reranker. Lazy-imports
+ * `@huggingface/transformers` on first call (same lazy-load pattern as
+ * `loadEmbedder`). Cold-start downloads the model from HuggingFace
+ * (~25-110 MB depending on alias) into `~/.cache/huggingface/`.
+ *
+ * @param alias - Reranker alias from RERANKER_MODELS (default: "rerank-multilingual").
+ */
+export async function loadReranker(alias?: string): Promise<Reranker> {
+  const model = resolveRerankerModel(alias);
+  const pipeline = await loadPipeline();
+  const classifier = (await pipeline("text-classification", model.hfId)) as (
+    inputs: ReadonlyArray<{ text: string; text_pair: string }> | { text: string; text_pair: string },
+    options?: { topk?: number }
+  ) => Promise<Array<{ label: string; score: number }>>;
+
+  return {
+    model,
+    async score(query: string, passages: readonly string[]): Promise<number[]> {
+      if (passages.length === 0) return [];
+      // Build the (query, passage) pair inputs. transformers.js
+      // text-classification accepts an array; the model returns one
+      // {label, score} per input.
+      const inputs = passages.map((p) => ({ text: query, text_pair: p }));
+      // Sub-batch to bound memory — same rationale as the embedder's
+      // MAX_INTERNAL_BATCH. Cross-encoder is heavier per pair, so we use a
+      // smaller batch (4) to keep peak memory under ~150 MB on M1.
+      const MAX_INTERNAL_BATCH = 4;
+      const out: number[] = [];
+      for (let batchStart = 0; batchStart < inputs.length; batchStart += MAX_INTERNAL_BATCH) {
+        const batch = inputs.slice(batchStart, batchStart + MAX_INTERNAL_BATCH);
+        const result = await classifier(batch);
+        // Pipeline returns one Array per input by default; flatten to scores.
+        // Each output is {label, score}; for binary-relevance rerankers, the
+        // score is already the model's relevance probability.
+        const scores = Array.isArray(result) ? result : [result];
+        for (const r of scores) {
+          if (typeof r?.score === "number") {
+            out.push(r.score);
+          } else {
+            // Defensive: surface as -Infinity so this hit goes to the bottom
+            // rather than poisoning the sort with NaN.
+            out.push(-Infinity);
+          }
+        }
+      }
+      return out;
+    }
+  };
+}

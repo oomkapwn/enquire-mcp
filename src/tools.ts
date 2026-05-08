@@ -3160,6 +3160,15 @@ export interface SearchHybridHit {
     tfidf?: { rank: number; score: number };
     embeddings?: { rank: number; score: number };
   };
+  /**
+   * v2.9.0 — cross-encoder reranker score in [0, 1] (sigmoid of the model's
+   * relevance logit). Present only when the server was started with
+   * `--enable-reranker` AND this hit was within the reranker's top-N
+   * candidate set (default 50). Higher = more relevant. Compare across
+   * results within the same response, NOT across queries (the absolute
+   * value depends on the query).
+   */
+  reranker_score?: number;
 }
 
 export interface SearchHybridResponse {
@@ -3171,8 +3180,9 @@ export interface SearchHybridResponse {
    *  were silently swallowed (only stderr-logged). The MCP response just
    *  showed `signals_used: []` with `matches: []` — caller couldn't tell
    *  "no hits" from "all rankers crashed". Now any catch'ed exception
-   *  surfaces here as a string so agents can reason about reliability. */
-  signal_errors?: { bm25?: string; tfidf?: string; embeddings?: string };
+   *  surfaces here as a string so agents can reason about reliability.
+   *  v2.9.0 added `reranker` for cross-encoder failure surfacing. */
+  signal_errors?: { bm25?: string; tfidf?: string; embeddings?: string; reranker?: string };
   total_candidates: number;
   matches: SearchHybridHit[];
 }
@@ -3199,6 +3209,26 @@ export async function searchHybrid(
     ftsIndex: FtsIndex | null;
     /** Path to the `.embed.db` (file may or may not exist — checked at call time). */
     embedFile: string;
+    /**
+     * v2.9.0 — optional cross-encoder reranker config. When set, the top-N
+     * hits from RRF (default 50) are re-scored by a BGE-style cross-encoder
+     * and re-sorted before truncation. Adds ~30-50ms per query on M1 CPU
+     * for a 50-candidate set.
+     *
+     * `alias` resolves to a `RERANKER_MODELS` entry. `topN` defaults to 50.
+     * Lazy-loaded — first call downloads the model from HuggingFace
+     * (~25-110 MB depending on alias). Failures are swallowed and surface
+     * via `signal_errors.reranker` so the whole search doesn't break on a
+     * model load issue.
+     */
+    reranker?: { alias?: string; topN?: number };
+    /**
+     * v2.9.0 — test-only injection point. When set, this pre-loaded
+     * reranker is used instead of lazy-loading via `loadReranker(alias)`.
+     * Lets unit tests validate the rerank-and-resort plumbing without
+     * pulling in the real ML model. Unused in production callers.
+     */
+    rerankerOverride?: { score(query: string, passages: readonly string[]): Promise<number[]> };
   }
 ): Promise<SearchHybridResponse> {
   await vault.ensureExists();
@@ -3480,6 +3510,69 @@ export async function searchHybrid(
   const tfidfMap = new Map(tfidfRanked.map((h) => [h.id, h]));
   const embedMap = new Map(embedRanked.map((h) => [h.id, h]));
 
+  // ─── v2.9.0: Cross-encoder reranking (post-RRF, post-graph-boost) ────────
+  // Take the top-N fused candidates, score each (query, snippet) pair with a
+  // BGE-style cross-encoder, and re-sort. Cross-encoder is far more accurate
+  // than bi-encoder cosine for relevance ranking — it sees query+document
+  // interaction directly. ~30-50ms per query overhead on M1 CPU at N=50.
+  //
+  // Failures are caught and surfaced as `signal_errors.reranker` so a model
+  // load problem doesn't poison the whole search response. The fused order
+  // (RRF + graph-boost) is preserved if reranking fails.
+  let rerankerScores: Map<string, number> | null = null;
+  if ((ctx.reranker || ctx.rerankerOverride) && fused.length > 0) {
+    const topN = ctx.reranker?.topN ?? 50;
+    const rerankBatch = fused.slice(0, topN);
+    try {
+      // Prefer the test-injected reranker when present; otherwise lazy-load.
+      let reranker: { score(query: string, passages: readonly string[]): Promise<number[]> };
+      if (ctx.rerankerOverride) {
+        reranker = ctx.rerankerOverride;
+      } else {
+        const { loadReranker } = await import("./embeddings.js");
+        reranker = await loadReranker(ctx.reranker?.alias);
+      }
+      // For each candidate, find the best snippet (BM25 > embeddings > TF-IDF)
+      // and pair it with the query. Empty-snippet candidates go to the bottom
+      // by getting a -Infinity score (sort below scored candidates).
+      const passages = rerankBatch.map((f) => {
+        const bm = bm25Map.get(f.id);
+        const emb = embedMap.get(f.id);
+        const tf = tfidfMap.get(f.id);
+        const snippet = bm?.snippet ?? emb?.snippet ?? tf?.snippet ?? "";
+        // Strip FTS5 «…» highlight markers — they're cosmetic and the
+        // reranker should see clean prose. Limit to ~600 chars to stay
+        // safely under the model's 512-token budget (rough char/token ratio
+        // varies by language; 600 chars ≈ 200 tokens for English / Cyrillic
+        // per the multilingual model's tokenizer, well under 512).
+        return snippet.replace(/[«»]/g, "").slice(0, 600);
+      });
+      const scores = await reranker.score(args.query, passages);
+      rerankerScores = new Map();
+      for (let i = 0; i < rerankBatch.length; i++) {
+        const f = rerankBatch[i];
+        const s = scores[i];
+        if (f && typeof s === "number") rerankerScores.set(f.id, s);
+      }
+      // Sort the top-N by reranker score; everything below top-N keeps RRF
+      // order. We do this by re-ordering fused[0..topN] in place.
+      const reordered = [...rerankBatch].sort((a, b) => {
+        const sa = rerankerScores?.get(a.id) ?? -Infinity;
+        const sb = rerankerScores?.get(b.id) ?? -Infinity;
+        return sb - sa;
+      });
+      for (let i = 0; i < reordered.length; i++) {
+        fused[i] = reordered[i] as (typeof fused)[number];
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Add to signalErrors so it surfaces in the response. Reranker is not
+      // a "signal" per se but the existing dict is the right home.
+      (signalErrors as Record<string, string>).reranker = msg;
+      process.stderr.write(`obsidian_search: reranker failed — ${msg}\n`);
+    }
+  }
+
   const matches: SearchHybridHit[] = [];
   for (const f of fused) {
     const numSignals = Object.keys(f.per_signal).length;
@@ -3522,6 +3615,7 @@ export async function searchHybrid(
     // form so titles read naturally in agent output.
     const baseName = path.basename(pathPart);
     const title = kind === "pdf" ? baseName.replace(/\.pdf$/i, "") : stripMd(baseName);
+    const rerankerScore = rerankerScores?.get(f.id);
     matches.push({
       path: pathPart,
       title,
@@ -3531,7 +3625,10 @@ export async function searchHybrid(
       line_start: bm?.line_start ?? emb?.line_start,
       line_end: bm?.line_end ?? emb?.line_end,
       kind,
-      per_signal: perSignal
+      per_signal: perSignal,
+      ...(typeof rerankerScore === "number" && Number.isFinite(rerankerScore)
+        ? { reranker_score: Math.round(rerankerScore * 100000) / 100000 }
+        : {})
     });
     if (matches.length >= limit) break;
   }

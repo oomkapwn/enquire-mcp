@@ -106,13 +106,15 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 
 ---
 
-## Tools (30 total)
+## Tools (33 total)
 
-### 21 always-on read tools
+### 23 always-on read tools
 
 | Tool | What it does |
 |---|---|
-| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. |
+| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. v2.2.0: `granularity: "block"` arg returns chunks instead of notes. |
+| `obsidian_context_pack` | **v2.2.0.** Token-budgeted context bundling: takes a question, runs hybrid search, gathers note bodies + backlinks + optionally recent dailies, returns one ready-to-paste markdown bundle. Saves ~5 tool calls. |
+| `obsidian_chat_thread_read` | **v2.2.0.** Parse a note's `## Chat: <title>` block into structured messages (role/timestamp/content/line-range). Pair with `_append` (write) for note-tethered AI conversations. |
 | `obsidian_read_note` | Full content + frontmatter + wikilinks + embeds + tags. Also accepts periodic-note aliases (`title: "today"` / `"weekly"` / `"monthly"`). |
 | `obsidian_list_notes` | Vault-wide or folder-scoped. Includes title + tags + mtime + counts. |
 | `obsidian_resolve_wikilink` | Resolves `[[Note]]`, `[[Note\|Alias]]`, `[[Note#Section]]`, `[[Note#^block]]`, with did-you-mean on near-miss. |
@@ -143,7 +145,7 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_semantic_search` | `--diagnostic-search-tools` | TF-IDF cosine standalone. |
 | `obsidian_embeddings_search` | `--diagnostic-search-tools` | ML embeddings standalone. |
 
-### 5 opt-in write tools (`--enable-write`)
+### 6 opt-in write tools (`--enable-write`)
 
 | Tool | Notes |
 |---|---|
@@ -152,6 +154,7 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_rename_note` | Rewrites every wikilink across vault. Code-fence-aware. `dry_run` available. |
 | `obsidian_replace_in_notes` | Bulk find/replace. Per-file errors collected; `partial: true` on mid-loop fail. |
 | `obsidian_archive_note` | Wraps rename to `Archive/`. Preserves backlinks. |
+| `obsidian_chat_thread_append` | **v2.2.0.** Append a user/assistant/system message to a note's `## Chat:` block. Creates note + heading if absent. Threads stored as markdown — searchable, version-controllable, survive sessions. |
 
 Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **11 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `search_with_query_expansion`).
 

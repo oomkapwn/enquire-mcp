@@ -12,6 +12,9 @@ import { chunkContent, defaultIndexFile, FtsIndex } from "./fts5.js";
 import {
   appendToNote,
   archiveNote,
+  chatThreadAppend,
+  chatThreadRead,
+  contextPack,
   createNote,
   dataviewQuery,
   embeddingsSearch,
@@ -43,7 +46,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -1156,12 +1159,70 @@ function registerReadTools(
           .optional()
           .describe(
             "Override the embedding model alias (default 'multilingual'). Only consulted if a .embed.db exists."
+          ),
+        granularity: z
+          .enum(["note", "block"])
+          .optional()
+          .describe(
+            "v2.2.0: 'note' (default) returns one hit per note (best chunk wins). 'block' keeps each chunk as a distinct hit — useful when one note covers a topic in multiple paragraphs and you want the LLM to see all of them."
           )
       }
     },
     async (args) => {
       const embedFile = embedDbPath(vault.root);
       return textResult(await searchHybrid(vault, args, { ftsIndex, embedFile }));
+    }
+  );
+
+  server.registerTool(
+    "obsidian_chat_thread_read",
+    {
+      title: "Read parsed chat thread from a note",
+      description:
+        "Parse a note's `## Chat: <title>` block into structured messages with role/timestamp/content/line-range. Non-chat content in the same note is ignored. Read-only.",
+      annotations: { ...READ_ONLY, title: "Read chat thread" },
+      inputSchema: {
+        note_path: z.string().min(1).describe("Vault-relative path to the note hosting the thread")
+      }
+    },
+    async (args) => textResult(await chatThreadRead(vault, args))
+  );
+
+  // v2.2.0: context pack — Smart Connections "Send to Smart Context" pattern,
+  // MCP-native (works with any AI client, not just Obsidian).
+  server.registerTool(
+    "obsidian_context_pack",
+    {
+      title: "Pack vault context for an AI question (token-budgeted)",
+      description:
+        "Given a question, retrieve the top relevant notes (via hybrid search), gather backlinks summaries + optionally recent dailies, deduplicate, pack to a token budget, return a single ready-to-paste markdown bundle. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.",
+      annotations: { ...READ_ONLY, title: "Context pack" },
+      inputSchema: {
+        query: z.string().min(1).describe("Topic or question to gather context for"),
+        budget_tokens: z
+          .number()
+          .int()
+          .positive()
+          .max(32000)
+          .optional()
+          .describe("Approximate token budget (default 4000, ~4 chars/token)"),
+        folder: z.string().optional().describe("Restrict retrieval to this folder (vault-relative)"),
+        include_backlinks: z
+          .boolean()
+          .optional()
+          .describe("Include 1-line backlink summaries for top-3 notes (default true)"),
+        recent_dailies: z
+          .number()
+          .int()
+          .min(0)
+          .max(30)
+          .optional()
+          .describe("Include the last N daily-format notes (YYYY-MM-DD basenames). Default 0 (off).")
+      }
+    },
+    async (args) => {
+      const embedFile = embedDbPath(vault.root);
+      return textResult(await contextPack(vault, args, { ftsIndex, embedFile }));
     }
   );
 }
@@ -1279,6 +1340,27 @@ function registerWriteTools(server: McpServer, vault: Vault): void {
       }
     },
     async (args) => textResult(await archiveNote(vault, args))
+  );
+
+  // v2.2.0: append message to a note's chat thread.
+  server.registerTool(
+    "obsidian_chat_thread_append",
+    {
+      title: "Append message to note-tethered chat thread",
+      description:
+        "Add a user/assistant/system message to a note's `## Chat: <title>` block. Creates the note + heading if absent. Threads are stored as markdown so they're searchable, version-controllable, and survive across sessions / clients. Pair with `obsidian_chat_thread_read` to load past context. WRITE TOOL — only registered with --enable-write.",
+      annotations: { ...WRITE, title: "Append chat thread" },
+      inputSchema: {
+        note_path: z.string().min(1).describe("Vault-relative path to the note hosting the thread"),
+        role: z.enum(["user", "assistant", "system"]).describe("Role of the message being appended"),
+        content: z.string().min(1).describe("Message body (markdown allowed)"),
+        thread_title: z
+          .string()
+          .optional()
+          .describe("Optional thread title — used when the note is created from scratch")
+      }
+    },
+    async (args) => textResult(await chatThreadAppend(vault, args))
   );
 }
 

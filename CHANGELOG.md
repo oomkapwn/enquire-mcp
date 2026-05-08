@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-05-08
+
+**Sprint 2 — Smart Connections gap closure.** Three features that match what users currently pay for via the dominant Obsidian semantic-search plugin, all MCP-native (work in Claude Code / Cursor / Codex / any agent — not Obsidian-only).
+
+### Added — `obsidian_chat_thread_append` + `obsidian_chat_thread_read`
+
+Note-tethered AI conversations. Smart Connections' #1 paid feature: AI chat threads bound to a specific note, persisted as markdown so they're searchable, version-controllable, and survive across sessions / clients.
+
+Wire format: `## Chat: <title>` heading at the top, with `### <role> · <ISO timestamp>` blocks per message. Human-readable, parseable, and feeds back into our retrieval index — agents can search past chat threads by content.
+
+```md
+## Chat: research session — 2026-05-08
+
+### user · 2026-05-08T10:00:00Z
+What did I write last week about RLHF?
+
+### assistant · 2026-05-08T10:00:01Z
+Three notes: ...
+```
+
+`_append` is a write tool (gated by `--enable-write`); `_read` is read-only.
+
+### Added — `obsidian_search` `granularity: "block"` argument
+
+The default `note` mode collapses multi-chunk hits to one per note (best chunk wins). New `block` mode keeps each chunk as a distinct hit — useful when a note covers a topic in multiple paragraphs and you want the LLM to see all of them. RRF fuses on `path#chunk_index` keys instead of just `path`.
+
+This is what Smart Connections paywalls as "block-level connections" in their Pro tier. Free here.
+
+### Added — `obsidian_context_pack`
+
+Token-budgeted context bundling. Takes a question, runs hybrid search, gathers note bodies + 1-line backlink summaries + optionally recent daily notes, deduplicates, packs to a token budget, returns one ready-to-paste markdown bundle. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into ANY AI chat (not just Obsidian — that's the MCP-native edge over Smart Connections' "Send to Smart Context").
+
+### Tests
+
+420 unit tests pass (was 413, +7 new): chat thread create/append/read end-to-end, multi-line content preservation, regex multi-line flag for thread-title detection, write-permission enforcement.
+
+### Migration
+
+**No-op for users.** All additions are new tools / new optional argument. Existing tool calls behave identically.
+
 ## [2.1.0] — 2026-05-08
 
 **Sprint 1 of the post-v2.0 roadmap.** Three quick wins that improve retrieval quality at near-zero implementation cost. No new tools — refinements to existing surfaces. All changes are internal; the API surface is unchanged.

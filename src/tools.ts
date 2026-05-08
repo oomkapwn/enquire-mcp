@@ -3765,3 +3765,157 @@ function stripMd(name: string): string {
 function normalizeTag(t: string): string {
   return t.replace(/^#+/, "").toLowerCase();
 }
+
+// ─── obsidian_list_pdfs (v2.7.0) ────────────────────────────────────────────
+// PDFs are the #1 non-markdown content kind in real research vaults. No other
+// Obsidian-MCP indexes them — `serve` (stdio) and `serve-http` (remote) both
+// surface the same list/read tools when pdfjs-dist is installed. Same privacy
+// filter (--exclude-glob / --read-paths) as listFilesByExtension applies.
+
+export interface PdfSummary {
+  /** Vault-relative path. */
+  path: string;
+  /** Filename minus the `.pdf` extension. */
+  name: string;
+  /** File size in bytes. */
+  size_bytes: number;
+  /** Last-modified ISO timestamp. */
+  mtime: string;
+}
+
+export async function listPdfs(vault: Vault, args: { folder?: string; limit?: number }): Promise<PdfSummary[]> {
+  await vault.ensureExists();
+  const limit = args.limit ?? 100;
+  const all = await vault.listFilesByExtension(".pdf", args.folder);
+  const out: PdfSummary[] = [];
+  for (const e of all) {
+    if (out.length >= limit) break;
+    let size = 0;
+    try {
+      const buf = await vault.readBinaryFile(e.absPath);
+      size = buf.byteLength;
+    } catch {
+      // Unreadable PDF — skip without poisoning the listing.
+      continue;
+    }
+    out.push({
+      path: e.relPath,
+      name: e.basename.replace(/\.pdf$/i, ""),
+      size_bytes: size,
+      mtime: new Date(e.mtimeMs).toISOString()
+    });
+  }
+  out.sort((a, b) => b.mtime.localeCompare(a.mtime));
+  return out;
+}
+
+// ─── obsidian_read_pdf (v2.7.0) ─────────────────────────────────────────────
+// Extract text from a single PDF, page-by-page. Image-only / scanned PDFs
+// surface `has_text: false` so agents can detect-and-recommend OCR (deferred
+// to v2.8+). Supports an optional `pages` slice (1-indexed inclusive range)
+// for partial reads of long documents.
+
+export interface ReadPdfArgs {
+  /** Vault-relative path to the .pdf file. */
+  path: string;
+  /** Optional 1-indexed inclusive page range: `[2, 5]` reads pages 2..5. */
+  pages?: [number, number];
+  /** When true, include doc-level metadata (title/author/etc) in the result. Default true. */
+  include_metadata?: boolean;
+}
+
+export interface ReadPdfPage {
+  page_number: number;
+  text: string;
+  is_empty: boolean;
+  char_count: number;
+}
+
+export interface ReadPdfResult {
+  path: string;
+  name: string;
+  size_bytes: number;
+  mtime: string;
+  page_count: number;
+  has_text: boolean;
+  pages: ReadPdfPage[];
+  full_text: string;
+  metadata?: {
+    title?: string;
+    author?: string;
+    subject?: string;
+    keywords?: string;
+    creator?: string;
+    producer?: string;
+    creation_date?: string;
+    mod_date?: string;
+  };
+  /** When `pages` slicing was applied, this carries the original page count
+   *  for callers that need to know how much they didn't read. */
+  total_page_count: number;
+}
+
+export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfResult> {
+  await vault.ensureExists();
+  if (!args.path) throw new Error("path is required");
+  const normalized = args.path.toLowerCase().endsWith(".pdf") ? args.path : `${args.path}.pdf`;
+  const abs = vault.resolveInside(normalized);
+  const stat = await vault.stat(abs); // throws if missing or excluded
+  const rel = vault.toRel(abs);
+
+  const buf = await vault.readBinaryFile(abs);
+  // Lazy import — keeps the markdown-only path zero-cost when pdfjs-dist
+  // isn't installed (--omit=optional users).
+  const { extractPdfText } = await import("./pdf.js");
+  const result = await extractPdfText(buf);
+
+  // Optional page-range slice (1-indexed inclusive). Validated lightly —
+  // out-of-range bounds clamp rather than throw, matching how `slice()`
+  // behaves elsewhere in the toolkit.
+  let pages = result.pages;
+  if (args.pages && args.pages.length === 2) {
+    const [from, to] = args.pages;
+    if (typeof from === "number" && typeof to === "number" && from > 0 && to >= from) {
+      pages = result.pages.slice(from - 1, to);
+    }
+  }
+
+  const out: ReadPdfResult = {
+    path: rel,
+    name:
+      rel
+        .split("/")
+        .pop()
+        ?.replace(/\.pdf$/i, "") ?? rel,
+    size_bytes: buf.byteLength,
+    mtime: new Date(stat.mtimeMs).toISOString(),
+    page_count: pages.length,
+    has_text: pages.some((p) => !p.isEmpty),
+    pages: pages.map((p) => ({
+      page_number: p.pageNumber,
+      text: p.text,
+      is_empty: p.isEmpty,
+      char_count: p.charCount
+    })),
+    full_text: pages
+      .map((p) => p.text)
+      .filter((t) => t.length > 0)
+      .join("\n\n"),
+    total_page_count: result.pageCount
+  };
+
+  if (args.include_metadata !== false && Object.keys(result.metadata).length > 0) {
+    out.metadata = {
+      title: result.metadata.title,
+      author: result.metadata.author,
+      subject: result.metadata.subject,
+      keywords: result.metadata.keywords,
+      creator: result.metadata.creator,
+      producer: result.metadata.producer,
+      creation_date: result.metadata.creationDate,
+      mod_date: result.metadata.modDate
+    };
+  }
+
+  return out;
+}

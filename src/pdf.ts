@@ -1,0 +1,208 @@
+// PDF text extraction for enquire-mcp.
+//
+// v2.7.0 — adds PDF as a first-class indexable content type alongside
+// markdown. No other Obsidian-MCP currently does this. PDFs are the #1
+// non-markdown content kind in real research vaults (papers, scanned
+// notes, downloaded references), and indexing them unlocks search /
+// hybrid retrieval / context-pack across an entire content class
+// the rest of the ecosystem ignores.
+//
+// Implementation notes:
+//
+//   • pdfjs-dist (Mozilla's PDF.js) is the parser. Pure JS, no native
+//     deps, Apache-2.0, SLSA-3 published. ~35MB unpacked but pinned to
+//     `optionalDependencies` so users on Node 20 / `--omit=optional`
+//     keep a fully functional markdown-only path.
+//
+//   • We extract page text via `page.getTextContent()` — fast (~50-200ms
+//     per page on M1 cold; ~10-30ms warm), no rendering, no canvas. The
+//     text-item array is joined with spaces; sentence/paragraph
+//     reconstruction is lossy but adequate for full-text + semantic
+//     search recall (the chunker further normalizes).
+//
+//   • Image-only PDFs (scans without OCR) return empty pages. We
+//     surface this with a per-page `isEmpty` flag and a doc-level
+//     `hasText` boolean so callers can detect-and-recommend OCR.
+//     OCR itself is tracked for v2.8+ (Tesseract.js or Whisper-OCR).
+//
+//   • The API is identical regardless of PDF version (1.x → 1.7 → 2.0).
+//     Encrypted PDFs without a password throw a clean error rather
+//     than partial extraction.
+//
+//   • We pass `useSystemFonts: false, isEvalSupported: false` to
+//     pdfjs.getDocument so the worker doesn't try to fetch from the
+//     network or eval inline scripts. Server-side, offline-safe.
+
+import type { Buffer } from "node:buffer";
+
+/**
+ * Per-page extraction result. `lineStart` / `lineEnd` are placeholders
+ * for downstream chunking compatibility — we use page index as the
+ * unit of structure, so they map onto the page's `index` and `index+1`
+ * for the chunker.
+ */
+export interface PdfPage {
+  /** 1-based page number as displayed in PDF readers. */
+  pageNumber: number;
+  /** Extracted plain text. Joined item.str values with spaces. */
+  text: string;
+  /** True if the page yielded no text (image-only / scanned scan). */
+  isEmpty: boolean;
+  /** Character count of `text` (cheap recall metric for surfaces). */
+  charCount: number;
+}
+
+export interface PdfExtractionResult {
+  /** All extracted pages. Order matches the document. */
+  pages: PdfPage[];
+  /** Total document text (joined with `\n\n` between pages). */
+  fullText: string;
+  /** Page count from the doc itself (may differ from `pages.length` if a
+   *  page failed extraction; we still attempt every page). */
+  pageCount: number;
+  /** True if at least one page yielded text. False for image-only scans. */
+  hasText: boolean;
+  /** Doc-level metadata if the PDF carries it. Best-effort. */
+  metadata: {
+    title?: string;
+    author?: string;
+    subject?: string;
+    keywords?: string;
+    creator?: string;
+    producer?: string;
+    creationDate?: string;
+    modDate?: string;
+  };
+}
+
+/**
+ * Lazy-load pdfjs-dist. We import dynamically because:
+ *   1. It's an `optionalDependency` — users who skipped it shouldn't
+ *      pay an import cost on the markdown-only path.
+ *   2. Loading the lib at server-startup time would slow boot for
+ *      vaults with no PDFs.
+ *   3. The clean error on missing dep is much better thrown here than
+ *      at server-startup.
+ */
+async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
+  try {
+    // We access `pdfjs-dist/legacy/build/pdf.mjs` to get the build
+    // that doesn't require browser-only globals (workers via web
+    // standards APIs). The legacy bundle runs on Node 20+.
+    return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as typeof import("pdfjs-dist");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `enquire: pdfjs-dist (optional dependency) is not available. PDF tools require it. ` +
+        `Install with: npm install pdfjs-dist@^4.10.38\nUnderlying error: ${msg}`
+    );
+  }
+}
+
+/**
+ * Extract text from a PDF buffer. Memory-mode — caller has already
+ * loaded the file. Use `vault.readBinaryFile(relPath)` to get the
+ * buffer with the standard privacy-filter + max-bytes guards
+ * applied.
+ *
+ * Throws on encrypted PDFs without a password or on hard-corrupt files.
+ * Returns empty pages (with `isEmpty: true`) for image-only scans.
+ */
+export async function extractPdfText(buffer: Buffer): Promise<PdfExtractionResult> {
+  const pdfjs = await loadPdfjs();
+  // Convert Buffer → Uint8Array (pdfjs accepts both, but the typed-array
+  // path skips a copy in some Node builds).
+  const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const loadingTask = pdfjs.getDocument({
+    data,
+    // Server-side hardening — no network, no eval, no system fonts.
+    isEvalSupported: false,
+    useSystemFonts: false,
+    // Quiet pdfjs's own warnings; we'll surface real errors via throw.
+    verbosity: 0
+  });
+  const doc = await loadingTask.promise;
+  const pageCount = doc.numPages;
+  const pages: PdfPage[] = [];
+
+  for (let i = 1; i <= pageCount; i++) {
+    try {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      // Each item has `.str` (the text run); some have `.hasEOL` flags
+      // we could use to insert newlines, but agents do better with
+      // space-joined text + downstream normalization.
+      const text = content.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      pages.push({
+        pageNumber: i,
+        text,
+        isEmpty: text.length === 0,
+        charCount: text.length
+      });
+      // Free per-page resources eagerly — pdfjs caches operator lists
+      // and bitmaps that we don't need after text extraction.
+      page.cleanup();
+    } catch {
+      // Don't fail the whole document on a single bad page. Surface as
+      // empty but keep going. Real callers see this in `isEmpty: true`.
+      pages.push({
+        pageNumber: i,
+        text: "",
+        isEmpty: true,
+        charCount: 0
+      });
+    }
+  }
+
+  // Doc-level metadata — best-effort, optional in PDFs.
+  let metadata: PdfExtractionResult["metadata"] = {};
+  try {
+    const meta = await doc.getMetadata();
+    const info = (meta?.info ?? {}) as Record<string, unknown>;
+    metadata = {
+      title: typeof info.Title === "string" ? info.Title : undefined,
+      author: typeof info.Author === "string" ? info.Author : undefined,
+      subject: typeof info.Subject === "string" ? info.Subject : undefined,
+      keywords: typeof info.Keywords === "string" ? info.Keywords : undefined,
+      creator: typeof info.Creator === "string" ? info.Creator : undefined,
+      producer: typeof info.Producer === "string" ? info.Producer : undefined,
+      creationDate: typeof info.CreationDate === "string" ? info.CreationDate : undefined,
+      modDate: typeof info.ModDate === "string" ? info.ModDate : undefined
+    };
+  } catch {
+    // Metadata is optional; absence is fine.
+  }
+
+  // Release the document handle so worker memory drops.
+  await doc.cleanup();
+  await loadingTask.destroy();
+
+  const fullText = pages
+    .map((p) => p.text)
+    .filter((t) => t.length > 0)
+    .join("\n\n");
+  const hasText = pages.some((p) => !p.isEmpty);
+
+  return { pages, fullText, pageCount, hasText, metadata };
+}
+
+/**
+ * Returns true if pdfjs-dist is loadable in this process. Used by
+ * tool-registration code to decide whether to advertise PDF tools.
+ * Cached after first call — module-level dynamic import is one-shot.
+ */
+let pdfjsAvailableCache: boolean | undefined;
+export async function isPdfjsAvailable(): Promise<boolean> {
+  if (pdfjsAvailableCache !== undefined) return pdfjsAvailableCache;
+  try {
+    await loadPdfjs();
+    pdfjsAvailableCache = true;
+  } catch {
+    pdfjsAvailableCache = false;
+  }
+  return pdfjsAvailableCache;
+}

@@ -98,10 +98,10 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  // v2.5.0: 28 tools (with --diagnostic-search-tools): 25 always-on read +
+  // v2.7.0: 30 tools (with --diagnostic-search-tools): 27 always-on read +
   // 3 single-ranker diagnostic tools. With --persistent-index: + 1
-  // (obsidian_full_text_search) = 29.
-  const expectedCount = withFts ? 29 : 28;
+  // (obsidian_full_text_search) = 31.
+  const expectedCount = withFts ? 31 : 30;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -124,12 +124,14 @@ try {
     "obsidian_lint_wiki",
     "obsidian_list_canvases",
     "obsidian_list_notes",
+    "obsidian_list_pdfs",
     "obsidian_list_tags",
     "obsidian_open_in_ui",
     "obsidian_open_questions",
     "obsidian_paper_audit",
     "obsidian_read_canvas",
     "obsidian_read_note",
+    "obsidian_read_pdf",
     "obsidian_resolve_wikilink",
     "obsidian_search",
     "obsidian_search_text",

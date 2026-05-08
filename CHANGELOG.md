@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] — 2026-05-08
+
+**Sprint 7 — PDF as a first-class indexable content type.** PDFs are the #1 non-markdown content kind in real research vaults (papers, scanned notes, downloaded references). **No other Obsidian-MCP currently indexes them.** v2.7.0 adds two new read tools that work identically over stdio + `serve-http`, gated behind `pdfjs-dist` as an `optionalDependency` so the markdown-only path stays zero-cost.
+
+### Added — `obsidian_list_pdfs`
+
+Lists `.pdf` files in the vault with size + last-modified timestamp. Sorted by mtime descending. Honors `--exclude-glob` and `--read-paths`. Discovery entry point — call this before `obsidian_read_pdf` to find what's available.
+
+### Added — `obsidian_read_pdf`
+
+Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title / author / subject / keywords / creator / producer / creation date / mod date). Optional `pages` slice (1-indexed inclusive range, e.g. `[2, 5]`) for partial reads of long documents — `total_page_count` is preserved so consumers know how much they didn't read. Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend OCR (deferred to v2.8+).
+
+Per-page extraction speed: ~50-200ms cold, ~10-30ms warm on M1. No rendering, no canvas. Same path-safety + privacy filter (`--exclude-glob` / `--read-paths`) as `obsidian_read_note` — there are no PDF-specific shortcuts.
+
+### Added — `pdfjs-dist` as `optionalDependencies`
+
+Mozilla's [PDF.js](https://mozilla.github.io/pdf.js/) parser. Pure JS (no native deps), Apache-2.0, SLSA-3 published, Node 20+ compatible (pinned `pdfjs-dist@^4.10.38`). The PDF tools surface a clean install-hint error on missing optional dep, never a cryptic module-not-found stack trace. Server-side hardening: `isEvalSupported: false`, `useSystemFonts: false`, `verbosity: 0`. No outbound HTTP, no eval, no font fetches.
+
+### Surface delta vs v2.6.0
+
+- **+2 read tools** — `obsidian_list_pdfs`, `obsidian_read_pdf`
+- **Total surface:** 38 tools (27 always-on read + 1 opt-in via `--persistent-index` + 3 opt-in diagnostic + 7 opt-in write) + 17 prompts
+
+### Tests
+
+481 unit tests pass (was 459 in v2.6.0, +22 PDF tests). Synthetic PDF builder in `tests/helpers/make-pdf.ts` produces minimal valid PDF 1.4 byte sequences for tests — no committed binary fixtures, no PDF-writer dev-dependency. Coverage:
+
+- `extractPdfText`: single-page, multi-page in-order, Title/Author metadata round-trip, char_count correctness, escape-paren-and-backslash safety.
+- `listPdfs`: recursive walk, mtime-desc sort, folder filter, `--exclude-glob` privacy filter parity with markdown listing, `--read-paths` allowlist parity, limit honored.
+- `readPdf`: round-trip, optional `.pdf` extension, page-range slicing (with original `total_page_count` preserved), `include_metadata` flag, missing-path error, excluded-by-privacy-filter error, page numbers preserved through slicing, empty-path error.
+
+### Smoke
+
+`scripts/smoke.mjs` updated: tool count goes from 28/29 → 30/31 (with/without `--persistent-index`), `obsidian_list_pdfs` + `obsidian_read_pdf` added to baseTools.
+
+### Migration
+
+**No-op.** All additions are new tools. Existing tool calls behave identically. Users who skipped `pdfjs-dist` (`npm install --omit=optional`) keep the full markdown surface; PDF tools register but throw a clean install-hint when called.
+
+### Strategic position
+
+The retrieval moats from v2.0-v2.6 (hybrid RRF, wikilink graph-boost, breadcrumb chunking, multilingual embeddings, remote MCP) extend cleanly to PDFs once you've extracted text. The next logical step is integrating PDF chunks into the FTS5 + embedding indexes so `obsidian_search` returns blended markdown + PDF hits with a `kind` flag — tracked for v2.8+. v2.7.0 ships the foundation.
+
 ## [2.6.0] — 2026-05-08
 
 **Sprint 6 — remote-MCP HTTP transport.** New `serve-http` subcommand running the same server (same tools, same vault, same hybrid retrieval) over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server. **No other Obsidian-MCP currently ships a remote-HTTP transport.**

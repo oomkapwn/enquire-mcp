@@ -30,6 +30,8 @@
 | Subcommand | Args | What it does |
 |---|---|---|
 | `serve` (default) | see flags above | Start the MCP server over stdio. |
+| `serve-http` (v2.6.0) | `--vault <path>` `--bearer-token <token>` (or `--bearer-token-env <name>`) `[--port <n>]` `[--host <host>]` `[--mcp-path <path>]` `[--rate-limit <n>]` `[--cors-origin <origin...>]` `[--health-path <path>]` plus all `serve` flags | Start the MCP server over HTTP (Streamable HTTP transport). Required for remote-MCP use with claude.ai web, ChatGPT, Cursor HTTP mode, mobile clients. Bearer auth + per-token rate-limit + CORS allowlist. Default bind `127.0.0.1:3000` — front with Tailscale Funnel / Cloudflare Tunnel for remote access. See [`docs/http-transport.md`](http-transport.md). |
+| `gen-token` (v2.6.0) | none | Print a fresh 32-byte base64url bearer token suitable for `serve-http --bearer-token`. |
 | `clear-cache` | `--vault <path>` `[--cache-file <path>]` | Delete the persistent-cache file for the given vault. Useful for purging stale or sensitive content. Returns 0 even if no cache file exists. |
 | `clear-index` | `--vault <path>` `[--index-file <path>]` | Delete the FTS5 search-index files (`.fts5.db` + WAL/SHM sidecar) for the given vault. Privacy purge for `--persistent-index` users. Returns 0 even if no files exist. |
 | `index` | `--vault <path>` `[--tokenize <mode>]` `[--index-file <path>]` | Cold-build (or refresh) the FTS5 search index for a vault. Useful before first `--persistent-index serve`. Reports `added`/`updated`/`deleted`/`unchanged` chunk counts. |

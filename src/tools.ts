@@ -4054,3 +4054,95 @@ export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfR
 
   return out;
 }
+
+// ─── obsidian_ocr_pdf (v2.10.0) ─────────────────────────────────────────────
+// Image-only / scanned PDFs return `has_text: false` from obsidian_read_pdf
+// (v2.7.0+). This tool runs Tesseract OCR over each page bitmap, completing
+// the PDF retrieval story. Tesseract.js + @napi-rs/canvas are
+// optionalDependencies — clean install-hint error if missing.
+
+export interface OcrPdfArgs {
+  /** Vault-relative path to the .pdf file. */
+  path: string;
+  /**
+   * Tesseract language pack(s). Default `'eng'`. Multi-lang via `'+'`,
+   * e.g. `'eng+rus'` for English+Russian mixed scans.
+   */
+  lang?: string;
+  /** Optional 1-indexed inclusive page range, e.g. [2, 5] runs OCR on pages 2..5. */
+  pages?: [number, number];
+  /**
+   * Render scale (DPI multiplier). Higher = better OCR accuracy on small
+   * text but more memory + slower render. Default 2 (~150 DPI). Capped at
+   * 4 server-side.
+   */
+  scale?: number;
+}
+
+export interface OcrPdfPage {
+  page_number: number;
+  text: string;
+  is_empty: boolean;
+  char_count: number;
+  /** Tesseract's mean confidence for this page, 0-100. */
+  confidence: number;
+}
+
+export interface OcrPdfResult {
+  path: string;
+  name: string;
+  size_bytes: number;
+  mtime: string;
+  page_count: number;
+  total_page_count: number;
+  has_text: boolean;
+  pages: OcrPdfPage[];
+  full_text: string;
+  /** Mean confidence across pages with text. NaN if all pages empty. */
+  mean_confidence: number;
+  /** Languages used for OCR (whatever the caller passed). */
+  langs: string;
+}
+
+export async function ocrPdf(vault: Vault, args: OcrPdfArgs): Promise<OcrPdfResult> {
+  await vault.ensureExists();
+  if (!args.path) throw new Error("path is required");
+  const normalized = args.path.toLowerCase().endsWith(".pdf") ? args.path : `${args.path}.pdf`;
+  const abs = vault.resolveInside(normalized);
+  const stat = await vault.stat(abs); // throws if missing or excluded
+  const rel = vault.toRel(abs);
+
+  const buf = await vault.readBinaryFile(abs);
+  // Lazy import — keeps the markdown-only path zero-cost when tesseract /
+  // canvas optionalDeps aren't installed.
+  const { extractPdfWithOcr } = await import("./ocr.js");
+  const result = await extractPdfWithOcr(buf, {
+    ...(args.lang ? { langs: args.lang } : {}),
+    ...(args.pages ? { pages: args.pages } : {}),
+    ...(typeof args.scale === "number" ? { scale: args.scale } : {})
+  });
+
+  return {
+    path: rel,
+    name:
+      rel
+        .split("/")
+        .pop()
+        ?.replace(/\.pdf$/i, "") ?? rel,
+    size_bytes: buf.byteLength,
+    mtime: new Date(stat.mtimeMs).toISOString(),
+    page_count: result.pages.length,
+    total_page_count: result.pageCount,
+    has_text: result.hasText,
+    pages: result.pages.map((p) => ({
+      page_number: p.pageNumber,
+      text: p.text,
+      is_empty: p.isEmpty,
+      char_count: p.charCount,
+      confidence: Math.round(p.confidence * 10) / 10
+    })),
+    full_text: result.fullText,
+    mean_confidence: Number.isFinite(result.meanConfidence) ? Math.round(result.meanConfidence * 10) / 10 : Number.NaN,
+    langs: result.langs
+  };
+}

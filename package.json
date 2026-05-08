@@ -1,6 +1,6 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "description": "Drop-in MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + ML embeddings via RRF), wikilinks resolved with aliases and sections, backlinks ranked with snippets, frontmatter typed, Dataview-style queries first-class. Read-only by default; opt-in writes. Works with Claude Code, Cursor, OpenClaw, Codex, Devin, and any MCP-compatible client.",
   "type": "module",
   "bin": {
@@ -90,7 +90,9 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@napi-rs/canvas": "^1.0.0",
     "better-sqlite3": "^12.9.0",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^7.0.0"
   }
 }

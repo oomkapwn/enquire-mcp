@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-05-08
+
+**v2.0.0 stable.** Promotes the v2.0 prerelease train (alpha.0 → beta.{0,1,2,3,4}) to `@latest` on npm. `npm install @oomkapwn/enquire-mcp` now ships v2.0.0 by default; v1.11.1 stable users update on next install. **No new code changes from beta.4** — this release is the channel promotion only.
+
+### What you get vs v1.11.1
+
+**Hybrid retrieval (the headline):**
+- `obsidian_search` — single umbrella tool that fuses BM25 (FTS5) + TF-IDF cosine + ML embeddings via Reciprocal Rank Fusion (Cormack et al, 2009). Auto-detects available signals, gracefully degrades. Returns per-signal observability so agents see which rankers contributed each hit.
+- `obsidian_embeddings_search` (opt-in, behind `--diagnostic-search-tools`) — standalone ML-embedding retrieval via `@huggingface/transformers` + `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages, 384-dim). Free, offline-capable, multilingual. Closes the gap to Smart Connections without the paywall.
+
+**New CLI subcommands:**
+- `enquire-mcp install-model [alias]` — pre-download embedding model (`multilingual` default, ~120MB; or `bge` English-only, ~33MB).
+- `enquire-mcp build-embeddings --vault <path>` — cold-build the persistent SQLite vector index. Same paragraph-level chunking as the FTS5 index — chunk identity matches across BM25 and embeddings.
+- `enquire-mcp clear-embeddings --vault <path>` — purge the embedding index.
+
+**New CLI flag:**
+- `--diagnostic-search-tools` — register the four single-ranker search tools (`obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, `obsidian_embeddings_search`) for diagnostic / A/B benchmarking. Off by default in v2.0+ since `obsidian_search` produces consistent recall.
+
+**Default tool surface:**
+- 21 always-on read tools (was 22 in v1.11.1: `obsidian_search` replaces the four single-ranker tools as the headline)
+- 4 opt-in: 1 via `--persistent-index` (`obsidian_full_text_search`), 3 via `--diagnostic-search-tools`
+- 5 write tools (unchanged) via `--enable-write`
+- **30 tools total**, same as v1.11.1's count but consolidated for clarity
+
+### Verified end-to-end
+
+Maintainer's 128-note bilingual (Russian + English) real vault:
+- Build: 8854 chunks embedded in 8m 16s (with progress visibility)
+- Query "Claude Code subscription migration": top hit fuses all 3 signals (BM25 rank 1 + TF-IDF rank 3 + embeddings rank 1)
+- Embeddings retrieve Russian content for English queries (multilingual model working as designed)
+
+### Tests, CI/CD, security
+
+- 408 unit tests pass across 19 test files
+- CI: ubuntu × {Node 20, 22, 24} required + macOS advisory job
+- Coverage thresholds enforced (lines ≥86, statements ≥82, functions ≥75, branches ≥73)
+- `npm audit --audit-level=moderate` for production deps; high for dev
+- Branch protection ruleset: `bypass_mode: pull_request` (every change goes through PR with audit trail)
+- Release pipeline integrity: tagged SHA must be reachable from `main` AND all 8 required CI checks must have reported `success` on it
+- Privacy boundary verified across all write paths AND persistent-index search paths (filtering at search time even if user adds `--exclude-glob` between runs)
+
+### Migration from v1.11.1
+
+**Default tool list narrowed.** Clients hard-coded to call `obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, or `obsidian_embeddings_search` directly need to either:
+1. Switch to `obsidian_search` (recommended — auto-fuses signals), or
+2. Pass `--diagnostic-search-tools` to `enquire-mcp serve`
+
+**Optional new dependency:** `@huggingface/transformers` is in `optionalDependencies`. Read-only / TF-IDF / FTS5 paths stay zero-cost. Embedding tools/subcommands surface a clean error if optional deps were skipped (`npm install --omit=optional`).
+
+**No breaking changes to:** `obsidian_read_note`, `obsidian_list_notes`, `obsidian_search_text` (now opt-in), `obsidian_get_backlinks`, `obsidian_dataview_query`, write tools, MCP resources, MCP prompts, or any v1.x CLI flag.
+
+### Migration from v2.0.0-beta.4
+
+**No-op.** This release is the channel promotion (npm `beta` → `latest`). Code is identical to beta.4.
+
+### Acknowledgments
+
+The v2.0 prerelease train (alpha.0 → beta.4) closed 100+ audit findings across two deep five-agent audits and one external auditor pass. Architecture invariants added at CI time prevent recurrence of the patterns that caused the privacy bypasses. End-to-end validation on a real bilingual vault confirms the v2.0 thesis: hybrid retrieval > any single ranker, with consistent recall across languages.
+
 ## [2.0.0-beta.4] — 2026-05-08
 
 **ML build-embeddings UX + throughput fix.** v2.0.0-beta.3 manual smoke on the maintainer's 128-note real vault revealed that `enquire-mcp build-embeddings` was *silent* for 13+ minutes when processing notes with many chunks. Investigation: not actually hung — just very slow on large notes (8,854 chunks total, several notes with 100+ chunks each), with zero feedback to the user. This release fixes both the speed AND the visibility.

@@ -15,7 +15,13 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+// v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
+// embedding index as markdown — `obsidian_search` returns blended hits with
+// the kind flag exposed to agents. Schema bump auto-rebuilds.
+
+/** Content-source kind. Mirrors ChunkKind in src/fts5.ts. */
+export type EmbedChunkKind = "md" | "pdf";
 
 export interface EmbedSearchHit {
   rel_path: string;
@@ -26,6 +32,8 @@ export interface EmbedSearchHit {
   text_preview: string;
   /** Cosine similarity (since vectors are L2-normalized at insert time). */
   score: number;
+  /** v2.8.0 — content-source kind. Defaults to "md" for backward compat. */
+  kind: EmbedChunkKind;
 }
 
 export interface EmbedSyncReport {
@@ -181,6 +189,7 @@ export class EmbedDb {
         line_end INTEGER NOT NULL,
         text_preview TEXT NOT NULL,
         vector BLOB NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
         UNIQUE(rel_path, chunk_index)
       );
       CREATE INDEX IF NOT EXISTS embeddings_rel_path ON embeddings(rel_path);
@@ -188,6 +197,7 @@ export class EmbedDb {
         rel_path TEXT PRIMARY KEY,
         mtime_ms INTEGER NOT NULL,
         n_chunks INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
         indexed_at TEXT NOT NULL
       );
     `);
@@ -219,7 +229,11 @@ export class EmbedDb {
     return this.db;
   }
 
-  /** Replace all embeddings for a single note. Caller computes vectors. */
+  /**
+   * Replace all embeddings for a single note. Caller computes vectors.
+   * v2.8.0: optional `kind` parameter ("md" | "pdf"); defaults to "md" so
+   * existing callers (markdown indexing path) need no changes.
+   */
   upsertNote(
     relPath: string,
     mtimeMs: number,
@@ -229,7 +243,8 @@ export class EmbedDb {
       lineEnd: number;
       textPreview: string;
       vector: Float32Array;
-    }>
+    }>,
+    kind: EmbedChunkKind = "md"
   ): void {
     const db = this.requireDb();
     const dim = this.dim;
@@ -237,8 +252,8 @@ export class EmbedDb {
       const rows = args[0] as typeof chunks;
       db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
       const insert = db.prepare(
-        `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       );
       for (const c of rows) {
         if (c.vector.length !== dim) {
@@ -252,13 +267,14 @@ export class EmbedDb {
           c.lineStart,
           c.lineEnd,
           c.textPreview,
-          Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength)
+          Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength),
+          kind
         );
       }
       db.prepare(
-        `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at)
-         VALUES (?, ?, ?, datetime('now'))`
-      ).run(relPath, mtimeMs, rows.length);
+        `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+         VALUES (?, ?, ?, ?, datetime('now'))`
+      ).run(relPath, mtimeMs, rows.length, kind);
     });
     tx(chunks);
   }
@@ -270,10 +286,17 @@ export class EmbedDb {
     db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
   }
 
-  /** Read the source-state table — caller compares mtimes to decide what to
-   *  re-embed. */
-  getSourceStates(): SourceStateRow[] {
+  /**
+   * Read the source-state table — caller compares mtimes to decide what to
+   * re-embed. v2.8.0: optional `kind` filter — when set, only rows of that
+   * kind are returned. Lets the markdown-sync and PDF-sync paths run
+   * independently without one's "missing files" being deleted by the other.
+   */
+  getSourceStates(kind?: EmbedChunkKind): SourceStateRow[] {
     const db = this.requireDb();
+    if (kind !== undefined) {
+      return db.prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ?").all<SourceStateRow>(kind);
+    }
     return db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
   }
 
@@ -295,9 +318,9 @@ export class EmbedDb {
     const rows = db
       .prepare(
         folderPrefix
-          ? `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector
+          ? `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind
              FROM embeddings WHERE substr(rel_path, 1, ?) = ?`
-          : `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector FROM embeddings`
+          : `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind FROM embeddings`
       )
       .all<{
         rel_path: string;
@@ -306,6 +329,7 @@ export class EmbedDb {
         line_end: number;
         text_preview: string;
         vector: Buffer;
+        kind: string | null;
       }>(...(folderPrefix ? [folderPrefix.length, folderPrefix] : []));
 
     const expectedBytes = this.dim * 4; // Float32 = 4 bytes
@@ -333,7 +357,8 @@ export class EmbedDb {
         line_start: r.line_start,
         line_end: r.line_end,
         text_preview: r.text_preview,
-        score
+        score,
+        kind: (r.kind === "pdf" ? "pdf" : "md") as EmbedChunkKind
       });
     }
     heap.sort((a, b) => b.score - a.score);

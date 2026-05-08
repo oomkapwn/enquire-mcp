@@ -3040,6 +3040,8 @@ export interface EmbedHit {
   chunk_index: number;
   line_start: number;
   line_end: number;
+  /** v2.8.0 — content-source kind ("md" | "pdf"). */
+  kind: "md" | "pdf";
 }
 
 export interface EmbedSearchResponse {
@@ -3110,7 +3112,8 @@ export async function embeddingsSearch(
       snippet: h.text_preview.slice(0, 240),
       chunk_index: h.chunk_index,
       line_start: h.line_start,
-      line_end: h.line_end
+      line_end: h.line_end,
+      kind: h.kind
     }));
     return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: total, matches };
   } finally {
@@ -3145,6 +3148,12 @@ export interface SearchHybridHit {
   chunk_index?: number;
   line_start?: number;
   line_end?: number;
+  /**
+   * v2.8.0 — content-source kind. Lets agents distinguish markdown notes
+   * from PDF chunks when both are indexed. Defaults to "md" for backward
+   * compatibility (legacy DBs and TF-IDF hits have no kind metadata).
+   */
+  kind: "md" | "pdf";
   /** Per-signal observability — which signals contributed at what rank/score. */
   per_signal: {
     bm25?: { rank: number; score: number };
@@ -3218,6 +3227,8 @@ export async function searchHybrid(
     chunk_index?: number;
     line_start?: number;
     line_end?: number;
+    /** v2.8.0: content-source kind ("md" | "pdf"). */
+    kind: "md" | "pdf";
   }> = [];
   if (ctx.ftsIndex) {
     try {
@@ -3239,12 +3250,21 @@ export async function searchHybrid(
           snippet: h.snippet,
           chunk_index: h.chunk_index,
           line_start: h.line_start,
-          line_end: h.line_end
+          line_end: h.line_end,
+          kind: h.kind
         }));
       } else {
         const bestPerNote = new Map<
           string,
-          { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
+          {
+            score: number;
+            rank: number;
+            snippet: string;
+            chunk_index: number;
+            line_start: number;
+            line_end: number;
+            kind: "md" | "pdf";
+          }
         >();
         ftsHits.forEach((h, i) => {
           const existing = bestPerNote.get(h.rel_path);
@@ -3255,7 +3275,8 @@ export async function searchHybrid(
               snippet: h.snippet,
               chunk_index: h.chunk_index,
               line_start: h.line_start,
-              line_end: h.line_end
+              line_end: h.line_end,
+              kind: h.kind
             });
           }
         });
@@ -3266,7 +3287,8 @@ export async function searchHybrid(
           snippet: b.snippet,
           chunk_index: b.chunk_index,
           line_start: b.line_start,
-          line_end: b.line_end
+          line_end: b.line_end,
+          kind: b.kind
         }));
         // Re-sort to ensure 1-based ranks are consecutive after dedup.
         bm25Ranked.sort((a, b) => a.rank - b.rank);
@@ -3315,6 +3337,8 @@ export async function searchHybrid(
     chunk_index?: number;
     line_start?: number;
     line_end?: number;
+    /** v2.8.0: content-source kind ("md" | "pdf"). */
+    kind: "md" | "pdf";
   }> = [];
   if (existsSync(ctx.embedFile)) {
     try {
@@ -3338,7 +3362,8 @@ export async function searchHybrid(
           snippet: m.snippet,
           chunk_index: m.chunk_index,
           line_start: m.line_start,
-          line_end: m.line_end
+          line_end: m.line_end,
+          kind: m.kind
         }));
       } else {
         const bestPerNote = new Map<
@@ -3350,6 +3375,7 @@ export async function searchHybrid(
             chunk_index: number;
             line_start: number;
             line_end: number;
+            kind: "md" | "pdf";
           }
         >();
         embed.matches.forEach((m, i) => {
@@ -3361,7 +3387,8 @@ export async function searchHybrid(
               snippet: m.snippet,
               chunk_index: m.chunk_index,
               line_start: m.line_start,
-              line_end: m.line_end
+              line_end: m.line_end,
+              kind: m.kind
             });
           }
         });
@@ -3372,7 +3399,8 @@ export async function searchHybrid(
           snippet: b.snippet,
           chunk_index: b.chunk_index,
           line_start: b.line_start,
-          line_end: b.line_end
+          line_end: b.line_end,
+          kind: b.kind
         }));
         embedRanked.sort((a, b) => a.rank - b.rank);
         for (let i = 0; i < embedRanked.length; i++) {
@@ -3485,14 +3513,24 @@ export async function searchHybrid(
         if (Number.isInteger(parsed) && parsed >= 0) chunkFromId = parsed;
       }
     }
+    // v2.8.0: derive content-source kind. BM25 / embeddings hits carry it
+    // explicitly; TF-IDF doesn't (it only runs over markdown). Either
+    // ranker reporting "pdf" wins; otherwise fall back to "md".
+    const kind: "md" | "pdf" = bm?.kind === "pdf" || emb?.kind === "pdf" ? "pdf" : "md";
+    // For PDFs, the title is best derived from the filename without
+    // `.md`-stripping (PDFs don't have that extension); use the .pdf-stripped
+    // form so titles read naturally in agent output.
+    const baseName = path.basename(pathPart);
+    const title = kind === "pdf" ? baseName.replace(/\.pdf$/i, "") : stripMd(baseName);
     matches.push({
       path: pathPart,
-      title: stripMd(path.basename(pathPart)),
+      title,
       score: Math.round(f.score * 100000) / 100000,
       snippet: bestEvidence?.snippet ?? "",
       chunk_index: chunkFromId ?? bm?.chunk_index ?? emb?.chunk_index,
       line_start: bm?.line_start ?? emb?.line_start,
       line_end: bm?.line_end ?? emb?.line_end,
+      kind,
       per_signal: perSignal
     });
     if (matches.length >= limit) break;

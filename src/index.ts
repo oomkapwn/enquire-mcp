@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.10.0";
+const VERSION = "2.11.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -442,6 +442,115 @@ async function main(): Promise<void> {
         process.stdout.write(`enquire: no embedding index files at ${file}\n`);
       }
     });
+
+  // v2.11.0 — diagnostic + zero-touch onboarding. `doctor` is read-only and
+  // returns 0 if everything is ready, 1 if any critical setup is missing.
+  // `setup` runs the install + build sequence in order, idempotent.
+  program
+    .command("doctor")
+    .description(
+      "Run a read-only health check: verify the vault path, optional deps (better-sqlite3 / transformers / pdfjs / tesseract / canvas), embedding-model cache, FTS5 index, and embed-db. Returns 0 if everything is ready for full hybrid retrieval, 1 if any critical piece is missing. Color-coded ✓ / ⚠ / ✗ output. Use this when you're unsure what's set up vs not."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--json", "Emit machine-readable JSON instead of the colored banner")
+    .action(async (opts: { vault: string; json?: boolean }) => {
+      const { runDoctor, formatDoctorResult } = await import("./doctor.js");
+      const result = await runDoctor({
+        vault: opts.vault,
+        modelEntry: EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]
+      });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        process.stdout.write(`${formatDoctorResult(result)}\n`);
+      }
+      if (!result.ready) process.exit(1);
+    });
+
+  program
+    .command("setup")
+    .description(
+      "Zero-touch onboarding: run `install-model` + `index` + `build-embeddings` in sequence so a fresh vault is fully indexed for hybrid retrieval (BM25 + TF-IDF + ML embeddings) in a single command. Idempotent — re-running on a fully set-up vault is a fast no-op pass that just reports the existing state."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
+    .option(
+      "--include-pdfs",
+      "Also index PDFs (FTS5 + embeddings). Off by default; opt-in because PDF extraction is slower."
+    )
+    .option("--skip-embeddings", "Skip the install-model + build-embeddings steps (only build FTS5)")
+    .action(
+      async (opts: { vault: string; embeddingModel?: string; includePdfs?: boolean; skipEmbeddings?: boolean }) => {
+        const v = new Vault(opts.vault);
+        await v.ensureExists();
+        process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
+
+        // Step 1: FTS5 index.
+        process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
+        const indexFile = defaultIndexFile(v.root);
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+        await idx.open();
+        try {
+          const ftsReport = await syncFtsIndex(v, idx);
+          process.stdout.write(
+            `   FTS5 (md): added=${ftsReport.added} updated=${ftsReport.updated} unchanged=${ftsReport.unchanged} chunks=${ftsReport.total_chunks}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfFtsIndex(v, idx);
+            process.stdout.write(
+              `   FTS5 (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          idx.close();
+        }
+
+        if (opts.skipEmbeddings) {
+          process.stdout.write("\n>> Step 2-3 skipped (--skip-embeddings)\n");
+          process.stdout.write("\nSetup partial. Run without --skip-embeddings to enable ML hybrid retrieval.\n");
+          return;
+        }
+
+        // Step 2: Install-model.
+        process.stdout.write("\n>> Step 2/3: Install embedding model\n");
+        const model = resolveModel(opts.embeddingModel);
+        const t0 = Date.now();
+        const embedder = await loadEmbedder(opts.embeddingModel);
+        const [smokeVec] = await embedder.embed(["hello"]);
+        if (!smokeVec || smokeVec.length !== model.dim) {
+          throw new Error(`Model ${model.alias} loaded but dim mismatch: ${smokeVec?.length} vs ${model.dim}`);
+        }
+        process.stdout.write(
+          `   model ${model.alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+        );
+
+        // Step 3: build-embeddings.
+        process.stdout.write("\n>> Step 3/3: Build embedding index\n");
+        const embedFile = embedDbPath(v.root);
+        const db = new EmbedDb({ file: embedFile, vaultRoot: v.root, modelAlias: model.alias, dim: model.dim });
+        await db.open();
+        try {
+          const embReport = await syncEmbedDb(v, db, embedder);
+          process.stdout.write(
+            `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfEmbedDb(v, db, embedder);
+            process.stdout.write(
+              `   embed-db (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          db.close();
+        }
+
+        process.stdout.write("\n✓ Setup complete. Now run:\n");
+        process.stdout.write(`   enquire-mcp serve --vault ${opts.vault} --persistent-index`);
+        if (opts.includePdfs) process.stdout.write(" --include-pdfs");
+        process.stdout.write("\n");
+        process.stdout.write(`Or check status: enquire-mcp doctor --vault ${opts.vault}\n`);
+      }
+    );
 
   await program.parseAsync(process.argv);
 }

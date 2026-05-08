@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-05-08
+
+**Sprint 11 — zero-touch onboarding (`doctor` + `setup`).** Closes the biggest UX gap in the project: setup friction. Before this, getting full hybrid retrieval required 3 separate commands (`install-model` → `build-embeddings` → `serve --persistent-index`), and there was no quick way to see "is everything ready?" without triggering each codepath.
+
+### Added — `enquire-mcp doctor --vault <path>`
+
+Read-only health check. Verifies every prerequisite for full hybrid retrieval:
+- Vault path exists + is readable, with note/PDF/canvas counts (privacy filter applied)
+- All 5 optional deps load cleanly: `better-sqlite3` (FTS5 + embed-db), `@huggingface/transformers` (ML embeddings + reranker), `pdfjs-dist` (PDF read + indexing), `tesseract.js` + `@napi-rs/canvas` (OCR for scanned PDFs)
+- Embedding model cache — probes 5+ candidate paths (transformers.js v3 default `node_modules/@huggingface/transformers/.cache/Xenova/`, HF_HOME, TRANSFORMERS_CACHE env vars, `~/.cache/huggingface/`, macOS XDG `~/Library/Caches/huggingface/`)
+- FTS5 BM25 index existence + per-vault file/chunk counts
+- Embed-db existence + size
+
+Color-coded ✓ / ⚠ / ✗ output (auto-detects TTY so piped output stays clean). Returns 0 if everything is ready, 1 if any critical piece is missing. `--json` flag for machine-readable output (useful for CI / scripted setup checks).
+
+### Added — `enquire-mcp setup --vault <path>`
+
+Zero-touch onboarding. Runs the install + build sequence in one command:
+
+1. **Step 1/3:** Cold-build FTS5 BM25 index (`syncFtsIndex` + optional `syncPdfFtsIndex` if `--include-pdfs`)
+2. **Step 2/3:** Install embedding model (downloads ~120 MB for `multilingual` default, cached for reuse)
+3. **Step 3/3:** Build embedding index (`syncEmbedDb` + optional `syncPdfEmbedDb`)
+
+Idempotent — re-running on a fully set-up vault is a fast no-op pass that just reports the existing state. `--skip-embeddings` for users who only want BM25. `--include-pdfs` for vaults with PDFs.
+
+After successful setup, prints the exact `serve` command to run.
+
+### Surface delta vs v2.10.0
+
+- **+2 CLI subcommands** (`doctor`, `setup`)
+- **+1 source module** (`src/doctor.ts`, ~310 lines)
+- **No new tools, no new prompts, no schema changes, no new deps.**
+
+### Tests
+
+522 unit tests pass (was 509 in v2.10.0, +13 new):
+- **runDoctor (+8):** result shape contract, vault check ok-vs-error, optional-dep checks (5 deps), model-cache check missing-vs-ok with synthetic Xenova dir, FTS5 + embed-db checks not-built status, ready boolean correctness against summary tally.
+- **formatCheck + formatDoctorResult (+5):** non-empty output for each status, detail + hint inclusion, hint omission for ok status, banner shape, NOT-READY verdict on failures.
+
+### Migration
+
+**No-op for default users.** Both new subcommands are opt-in. Existing `serve` / `serve-http` / `index` / `build-embeddings` behavior unchanged.
+
+### Strategic position
+
+v2.11.0 is a UX-focused sprint, not a capability sprint. The retrieval moats (hybrid RRF, graph-boost, PDF + OCR, cross-encoder reranking) all stayed put. What changed: the **time-to-first-useful-result** drops from ~5 minutes (figure out 3 commands, paste them, wait) to ~30 seconds (`enquire-mcp setup --vault <path>` and you're done).
+
+Demo flow:
+
+```bash
+$ enquire-mcp doctor --vault ~/Obsidian
+NOT READY — 1 missing/error, 0 warnings, 7 ok
+   ✗ Embedding model cache → enquire-mcp install-model multilingual
+
+$ enquire-mcp setup --vault ~/Obsidian
+>> Step 1/3: Cold-build FTS5 index ...
+>> Step 2/3: Install embedding model ...
+>> Step 3/3: Build embedding index ...
+✓ Setup complete. Now run:
+   enquire-mcp serve --vault ~/Obsidian --persistent-index
+
+$ enquire-mcp doctor --vault ~/Obsidian
+READY — all critical checks pass (8 ok, 0 warnings)
+```
+
 ## [2.10.0] — 2026-05-08
 
 **Sprint 10 — OCR for image-only / scanned PDFs.** Closes the v2.7-v2.8-v2.9 PDF retrieval story. v2.7.0 added text-extraction tools; v2.8.0 blended PDF chunks into hybrid search; v2.9.0 added cross-encoder reranking. v2.10.0 makes the **scanned / camera-captured** PDFs in your vault searchable too — Tesseract.js OCR over each page bitmap.

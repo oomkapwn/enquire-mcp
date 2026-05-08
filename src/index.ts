@@ -49,7 +49,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.5.0";
+const VERSION = "2.6.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -58,7 +58,7 @@ function embedDbPath(vaultRoot: string): string {
   return defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db");
 }
 
-interface ServeOptions {
+export interface ServeOptions {
   vault: string;
   enableWrite?: boolean;
   maxFileBytes?: string;
@@ -74,6 +74,18 @@ interface ServeOptions {
   disabledTools?: string[];
   enabledTools?: string[];
   diagnosticSearchTools?: boolean;
+}
+
+/** Raw `serve-http` flags as parsed by commander (string-typed). */
+interface HttpServeCli extends ServeOptions {
+  port?: string;
+  host?: string;
+  bearerToken?: string;
+  bearerTokenEnv?: string;
+  mcpPath?: string;
+  rateLimit?: string;
+  corsOrigin?: string[];
+  healthPath?: string;
 }
 
 async function main(): Promise<void> {
@@ -130,6 +142,101 @@ async function main(): Promise<void> {
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
+    });
+
+  // v2.6.0 — remote-MCP HTTP transport. Mirrors `serve` flags + adds HTTP
+  // surface (bearer auth, rate-limit, CORS). See docs/http-transport.md.
+  program
+    .command("serve-http")
+    .description(
+      "Start the MCP server over HTTP (Streamable HTTP transport). For remote-MCP use with claude.ai web, ChatGPT, Cursor HTTP mode, mobile clients. Requires --bearer-token (or --bearer-token-env). Bind to 127.0.0.1 by default — front with Tailscale Funnel / Cloudflare Tunnel for remote access."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--port <n>", "TCP port (default 3000)", "3000")
+    .option(
+      "--host <host>",
+      "Bind host (default 127.0.0.1 — explicit because 0.0.0.0 must be opt-in for remote-MCP)",
+      "127.0.0.1"
+    )
+    .option(
+      "--bearer-token <token>",
+      "Bearer token clients must present in the Authorization header. Generate with `enquire-mcp gen-token`. Required."
+    )
+    .option(
+      "--bearer-token-env <name>",
+      "Read the bearer token from this env var instead of --bearer-token (cleaner for systemd / .env / process listings). Either flag is required."
+    )
+    .option("--mcp-path <path>", "URL path for the MCP endpoint (default /mcp)", "/mcp")
+    .option("--rate-limit <n>", "Max requests per minute per bearer token (default 120). Pass 0 to disable.", "120")
+    .option(
+      "--cors-origin <origin...>",
+      "CORS allowlist (repeatable). Default empty — no Access-Control-Allow-Origin sent. Use '*' as a single entry to allow any origin (not compatible with credentialed Bearer requests; you almost always want explicit origins like https://claude.ai)."
+    )
+    .option("--health-path <path>", "URL path for the unauthenticated health probe (default /health)", "/health")
+    .option("--enable-write", "Enable the write tools (gated identically to stdio mode). Off by default.")
+    .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
+    .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
+    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--persistent-index", "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search")
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
+    .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
+    .option("--watch", "Watch the vault for .md changes and refresh indexes incrementally.")
+    .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
+    .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
+    .option("--diagnostic-search-tools", "Register the four single-ranker search tools alongside obsidian_search.")
+    .action(async (opts: HttpServeCli) => {
+      const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
+      const tokenFromEnv =
+        typeof opts.bearerTokenEnv === "string" ? (process.env[opts.bearerTokenEnv] ?? "").trim() : "";
+      const bearerToken = tokenFromArg.length > 0 ? tokenFromArg : tokenFromEnv;
+      if (!bearerToken) {
+        process.stderr.write(
+          "enquire serve-http: --bearer-token (or --bearer-token-env <name>) is required.\n" +
+            "  Generate one with: enquire-mcp gen-token\n"
+        );
+        process.exit(1);
+      }
+      // --port accepts 0 as "kernel-assigned ephemeral" — useful for tests
+      // and for scenarios where the user binds via a tunnel and doesn't
+      // care which local port. So we use a non-negative-integer check
+      // here, NOT parsePositiveInt (which would reject 0).
+      const portNum = Number(opts.port ?? "3000");
+      if (!Number.isFinite(portNum) || !Number.isInteger(portNum) || portNum < 0 || portNum > 65535) {
+        throw new Error(`--port must be an integer in [0, 65535]; got "${opts.port}"`);
+      }
+      const httpOpts = {
+        ...(opts as ServeOptions),
+        port: portNum,
+        host: opts.host ?? "127.0.0.1",
+        bearerToken,
+        mcpPath: opts.mcpPath ?? "/mcp",
+        rateLimitPerMinute: opts.rateLimit !== undefined ? Number(opts.rateLimit) : 120,
+        corsOrigins: opts.corsOrigin ?? [],
+        healthPath: opts.healthPath ?? "/health"
+      } as const;
+      if (
+        !Number.isFinite(httpOpts.rateLimitPerMinute) ||
+        httpOpts.rateLimitPerMinute < 0 ||
+        !Number.isInteger(httpOpts.rateLimitPerMinute)
+      ) {
+        throw new Error(`--rate-limit must be a non-negative integer; got "${opts.rateLimit}"`);
+      }
+      const { startHttpServer } = await import("./http-transport.js");
+      await startHttpServer(httpOpts);
+    });
+
+  // v2.6.0 — convenience helper. Same as `node -e
+  // 'console.log(require("crypto").randomBytes(32).toString("base64url"))'`
+  // but discoverable in --help.
+  program
+    .command("gen-token")
+    .description("Generate a fresh 32-byte base64url bearer token suitable for `serve-http --bearer-token`.")
+    .action(async () => {
+      const { generateBearerToken } = await import("./http-transport.js");
+      process.stdout.write(`${generateBearerToken()}\n`);
     });
 
   program
@@ -281,7 +388,33 @@ async function main(): Promise<void> {
   await program.parseAsync(process.argv);
 }
 
-async function startServer(opts: ServeOptions): Promise<void> {
+/**
+ * Heavyweight resources shared across every MCP-server instance: the vault
+ * (parsed-note cache + privacy filter), the FTS5 index handle, the optional
+ * filesystem watcher. v2.6.0 split this out so the HTTP transport can spin up
+ * a fresh `McpServer` per session over the SAME vault/index — opening the
+ * SQLite handle once and reusing it across thousands of remote-MCP calls.
+ *
+ * `warningTracker` is a single-fire latch for the `--disabled-tools` /
+ * `--enabled-tools` typo warnings: stdio prints them once at boot; HTTP
+ * prints them on the first session build, then never again.
+ */
+export interface ServerDeps {
+  vault: Vault;
+  ftsIndex: FtsIndex | null;
+  watcher: VaultWatcher | null;
+  disabledTools: Set<string>;
+  enabledTools: Set<string>;
+  warningTracker: { printed: boolean };
+}
+
+/**
+ * One-time bootstrap of the heavy deps (vault open + FTS5 sync + watcher).
+ * Idempotent on a per-call basis but NOT designed to be called multiple
+ * times in one process — the FTS5 sync would double-index. Stdio + HTTP
+ * each call this exactly once at startup.
+ */
+export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps> {
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
     maxFileBytes: opts.maxFileBytes !== undefined ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes") : undefined,
@@ -311,6 +444,30 @@ async function startServer(opts: ServeOptions): Promise<void> {
     }
   }
 
+  // Optional watcher — only when --watch is passed. Starts AFTER the initial
+  // FTS5 sync so we don't double-index files during boot.
+  let watcher: VaultWatcher | null = null;
+  if (opts.watch) {
+    watcher = new VaultWatcher({ vault, ftsIndex });
+    await watcher.start();
+  }
+
+  return {
+    vault,
+    ftsIndex,
+    watcher,
+    disabledTools: new Set(opts.disabledTools ?? []),
+    enabledTools: new Set(opts.enabledTools ?? []),
+    warningTracker: { printed: false }
+  };
+}
+
+/**
+ * Build a fresh `McpServer` over already-prepared deps. Cheap (just
+ * registers tool handlers — no I/O, no SQLite open). Stdio calls this once;
+ * HTTP calls it per session.
+ */
+export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer {
   const server = new McpServer({
     name: "enquire",
     version: VERSION
@@ -331,40 +488,42 @@ async function startServer(opts: ServeOptions): Promise<void> {
   // unknown — typo or stale doc reference. Pre-fix, a typo in
   // `--disabled-tools obsidan_search` (note the missing `i`) silently
   // disabled nothing; now we log a warning so the user can correct it.
-  const disabledTools = new Set(opts.disabledTools ?? []);
-  const enabledTools = new Set(opts.enabledTools ?? []);
   const usedDisabled = new Set<string>();
   const usedEnabled = new Set<string>();
   const registeredNames = new Set<string>();
-  if (disabledTools.size > 0 || enabledTools.size > 0) {
+  // v2.6.0: only print skip-logging on the first build (stdio: once at boot;
+  // HTTP: once on first session). Subsequent HTTP sessions reuse the same
+  // gating decisions silently — no need to spam logs per request.
+  const verbose = !deps.warningTracker.printed;
+  if (deps.disabledTools.size > 0 || deps.enabledTools.size > 0) {
     const origRegisterTool = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
     (server as unknown as { registerTool: (name: string, ...rest: unknown[]) => unknown }).registerTool = (
       name: string,
       ...rest: unknown[]
     ) => {
       registeredNames.add(name);
-      if (enabledTools.size > 0) {
-        if (enabledTools.has(name)) {
+      if (deps.enabledTools.size > 0) {
+        if (deps.enabledTools.has(name)) {
           usedEnabled.add(name);
         } else {
-          process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
+          if (verbose) process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
           return undefined;
         }
       }
-      if (disabledTools.has(name)) {
+      if (deps.disabledTools.has(name)) {
         usedDisabled.add(name);
-        process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
+        if (verbose) process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
         return undefined;
       }
       return origRegisterTool(name, ...rest);
     };
   }
 
-  registerReadTools(server, vault, ftsIndex, opts.diagnosticSearchTools ?? false);
-  if (vault.writeEnabled) registerWriteTools(server, vault);
-  if (ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, ftsIndex, vault);
-  registerResources(server, vault);
-  if (ftsIndex) registerChunkResource(server, ftsIndex, vault);
+  registerReadTools(server, deps.vault, deps.ftsIndex, opts.diagnosticSearchTools ?? false);
+  if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault);
+  if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
+  registerResources(server, deps.vault);
+  if (deps.ftsIndex) registerChunkResource(server, deps.ftsIndex, deps.vault);
   registerPrompts(server);
 
   // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.
@@ -372,22 +531,33 @@ async function startServer(opts: ServeOptions): Promise<void> {
   // runtime config (e.g. --persistent-index gates obsidian_full_text_search,
   // --enable-write gates the 5 write tools). So we wait until everything is
   // registered, then diff the user's lists against what was actually seen.
-  for (const name of disabledTools) {
-    if (!usedDisabled.has(name)) {
-      const hint = registeredNames.has(name)
-        ? "" // shouldn't happen — would have been used
-        : ` (no such tool registered; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
-      process.stderr.write(`enquire: warning — --disabled-tools "${name}" did not match any tool${hint}\n`);
+  if (verbose) {
+    for (const name of deps.disabledTools) {
+      if (!usedDisabled.has(name)) {
+        const hint = registeredNames.has(name)
+          ? "" // shouldn't happen — would have been used
+          : ` (no such tool registered; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
+        process.stderr.write(`enquire: warning — --disabled-tools "${name}" did not match any tool${hint}\n`);
+      }
     }
-  }
-  for (const name of enabledTools) {
-    if (!usedEnabled.has(name)) {
-      const hint = registeredNames.has(name)
-        ? ""
-        : ` (no such tool; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
-      process.stderr.write(`enquire: warning — --enabled-tools "${name}" did not match any tool${hint}\n`);
+    for (const name of deps.enabledTools) {
+      if (!usedEnabled.has(name)) {
+        const hint = registeredNames.has(name)
+          ? ""
+          : ` (no such tool; check spelling; available: ${[...registeredNames].sort().join(", ")})`;
+        process.stderr.write(`enquire: warning — --enabled-tools "${name}" did not match any tool${hint}\n`);
+      }
     }
+    deps.warningTracker.printed = true;
   }
+
+  return server;
+}
+
+async function startServer(opts: ServeOptions): Promise<void> {
+  const deps = await prepareServerDeps(opts);
+  const { vault, ftsIndex, watcher } = deps;
+  const server = buildMcpServer(deps, opts);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -419,12 +589,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
     });
   }
 
-  // Optional watcher — only when --watch is passed. Starts AFTER the initial
-  // FTS5 sync so we don't double-index files during boot.
-  let watcher: VaultWatcher | null = null;
-  if (opts.watch) {
-    watcher = new VaultWatcher({ vault, ftsIndex });
-    await watcher.start();
+  if (watcher) {
     const closeWatcher = () => {
       void watcher?.close();
     };
@@ -433,6 +598,23 @@ async function startServer(opts: ServeOptions): Promise<void> {
     process.on("beforeExit", closeWatcher);
   }
 
+  process.stderr.write(`${formatReadyBanner(deps)} (transport=stdio)\n`);
+
+  if (ftsIndex) {
+    const closeFts = () => ftsIndex?.close();
+    process.once("SIGINT", closeFts);
+    process.once("SIGTERM", closeFts);
+    process.on("beforeExit", closeFts);
+  }
+}
+
+/**
+ * Shared "ready" banner used by stdio + HTTP startup paths so the runtime
+ * configuration summary is identical regardless of transport. Transport
+ * suffix is appended by the caller.
+ */
+export function formatReadyBanner(deps: ServerDeps): string {
+  const { vault, ftsIndex, watcher, disabledTools, enabledTools } = deps;
   const writeMode = vault.writeEnabled ? "WRITE-ENABLED" : "read-only";
   const cacheMode = vault.persistentCacheEnabled ? `, persistent-cache=${vault.cacheFile}` : "";
   const ftsMode = ftsIndex ? `, fts5-index (${ftsIndex.totalFiles()} files / ${ftsIndex.totalChunks()} chunks)` : "";
@@ -442,16 +624,7 @@ async function startServer(opts: ServeOptions): Promise<void> {
   const watchMode = watcher ? ", watch=on" : "";
   const disabledMode = disabledTools.size > 0 ? `, disabled-tools=${disabledTools.size}` : "";
   const enabledMode = enabledTools.size > 0 ? `, enabled-tools=${enabledTools.size}` : "";
-  process.stderr.write(
-    `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode}${enabledMode})\n`
-  );
-
-  if (ftsIndex) {
-    const closeFts = () => ftsIndex?.close();
-    process.once("SIGINT", closeFts);
-    process.once("SIGTERM", closeFts);
-    process.on("beforeExit", closeFts);
-  }
+  return `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode}${enabledMode})`;
 }
 
 // v2.0 alpha — sync the persistent embedding index. Same incremental-rebuild

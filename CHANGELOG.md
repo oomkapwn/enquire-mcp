@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-05-08
+
+**Sprint 6 — remote-MCP HTTP transport.** New `serve-http` subcommand running the same server (same tools, same vault, same hybrid retrieval) over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server. **No other Obsidian-MCP currently ships a remote-HTTP transport.**
+
+### Added — `enquire-mcp serve-http`
+
+Stateless [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) with three layers in front of the SDK transport:
+
+1. **Bearer auth** — required at startup (fail-closed, refuses to bind without `--bearer-token` ≥16 chars). Constant-time compare via SHA-256 + `crypto.timingSafeEqual` on equal-length buffers — no length-leak oracle. Token never appears in logs (rate-limit key is the SHA-256 prefix).
+2. **Per-token rate-limit** — sliding 60-second window, default 120 req/min, tunable via `--rate-limit` (`0` disables). 429 + `Retry-After: 60` on overflow.
+3. **Strict CORS allowlist** — `--cors-origin` (repeatable). Default empty (no `Access-Control-Allow-Origin` sent — same-origin still works). Disallowed origins get 204 preflight with no CORS headers, browsers refuse the actual request. `*` is supported but warned-against (incompatible with credentialed Bearer requests).
+
+Plus an unauthenticated `/health` probe (`GET → 200 ok`) for tunnels/uptime monitors.
+
+The HTTP server uses **stateless mode** — fresh `McpServer` per request over the **shared** vault + FTS5 + embedding handles. SQLite stays open across thousands of requests; only the per-request server class is recreated. This matters because `prepareServerDeps()` (vault open + FTS5 sync) takes seconds on a real vault, while `buildMcpServer()` (registering tool handlers) is sub-millisecond.
+
+### Added — `enquire-mcp gen-token`
+
+Convenience helper that prints a fresh 32-byte base64url bearer token (256 bits of entropy, URL/header-safe). Equivalent to `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` but discoverable in `--help`.
+
+### Added — `--bearer-token-env <name>`
+
+Read the bearer token from an env var instead of a flag. Cleaner for systemd / `.env` / shared shells where flags would leak via `ps aux` or shell history.
+
+### Added — comprehensive deployment docs
+
+[`docs/http-transport.md`](docs/http-transport.md) — security model, threat model, all flags, five deployment recipes (Tailscale Funnel, Cloudflare Tunnel, ngrok, direct-LAN, systemd), client configuration for Claude.ai web / Cursor HTTP / ChatGPT custom GPT / Khoj mobile, troubleshooting, manual `curl` examples.
+
+### Refactored — extracted `prepareServerDeps()` + `buildMcpServer()` from `startServer()`
+
+Stdio and HTTP now share the same dependency-prep + server-build code. Stdio calls `buildMcpServer()` once; HTTP calls it per request over the same `ServerDeps`. Skip-tool warnings (`--disabled-tools "foo" did not match any tool`) print only on the first build via a single-fire latch — HTTP doesn't spam logs per request. `formatReadyBanner()` is shared so the runtime configuration summary is identical regardless of transport.
+
+### Added — 26 new unit tests + 6 smoke checks
+
+`tests/http-transport.test.ts` (26 tests):
+- `verifyBearer` — missing/wrong/right token, case-sensitive Bearer prefix, length-leak resistance, rate-limit-key stability/uniqueness.
+- `RateLimiter` — under-budget passes, over-budget rejects, sliding window trims old entries, per-key isolation, `perMinute=0` disables.
+- `generateBearerToken` — 43-char base64url shape, uniqueness across 100 tokens.
+- `startHttpServer` end-to-end — 401 missing/wrong, 200 init, 405 GET, 200 `/health`, 404 unknown paths, 429 rate-limit, OPTIONS preflight (allowed/disallowed origin), refuses startup without `--bearer-token` or with `<16 chars`.
+
+`scripts/smoke.mjs` — added an HTTP smoke variant that spawns `serve-http` on port 0, hits `/health` unauthenticated, verifies 401 on missing-bearer, completes an authenticated initialize, then cleans up.
+
+**Total: 457 unit tests pass** (was 431 in v2.5.0). All previous tests preserved unchanged.
+
+### Tool / prompt surface
+
+**No change.** All 36 tools + 17 prompts work identically over HTTP. The transport is a wrapper, not a new feature surface.
+
+### Migration
+
+**No-op.** All existing `serve` users keep working unchanged. New `serve-http` subcommand is opt-in. The internal refactor (extracting `prepareServerDeps` / `buildMcpServer`) preserved every previous behavior — verified by all 431 prior tests passing on the new code path.
+
+### Verified
+
+- Maintainer's 128-note bilingual real vault: stdio + HTTP smoke variants both green.
+- 457 / 457 tests on every required CI matrix node.
+- Zero new prod dependencies — uses `node:http` directly (no Express).
+
+### Note on stateful sessions / SSE
+
+Stateful `Mcp-Session-Id` sessions with persistent SSE streams are tracked for **v2.7+** if there's demand. Stateless is the right default for our tools (search, read, frontmatter ops are all short-running) and avoids the persistence-aware shutdown complexity.
+
 ## [2.5.0] — 2026-05-08
 
 **Sprint 5 — agentic prompts (Khoj parity, lite scope).** Two new MCP prompts that bring named-persona retrieval and scheduled-query automation to enquire-mcp. Pure orchestration over existing tools — no new server-side state, no LLM calls.

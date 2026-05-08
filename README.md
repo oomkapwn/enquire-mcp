@@ -42,8 +42,9 @@ That's it. Your AI now has structured access to wikilinks, backlinks, frontmatte
 | Privacy filter (`--exclude-glob` / `--read-paths`) | ❌ | n/a | ✅ verified at search + write paths |
 | Standalone (no Obsidian plugin) | varies | ❌ requires Obsidian | ✅ direct vault read |
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio JSON-RPC |
+| **Remote MCP (HTTP transport, bearer auth)** | ❌ | ❌ | ✅ **only here** (v2.6.0) |
 | SLSA-3 provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 408 unit tests |
+| Test suite | rare | n/a | ✅ 457 unit tests |
 
 ---
 
@@ -68,6 +69,10 @@ graph LR
 Tier 1: serve --vault <path>                      → TF-IDF (zero setup, instant)
 Tier 2: serve --vault <path> --persistent-index   → + BM25 (sub-100ms top-10)
 Tier 3: + install-model + build-embeddings        → + ML embeddings (multilingual)
+Tier 4: serve-http --bearer-token <token>         → remote MCP (v2.6.0)
+        same retrieval stack, exposed over HTTP for Claude.ai web,
+        ChatGPT, Cursor HTTP, mobile. Tailscale Funnel / Cloudflare
+        Tunnel for HTTPS. See docs/http-transport.md.
 ```
 
 ---
@@ -103,6 +108,20 @@ enquire-mcp install-model multilingual          # ~120MB, 50+ languages
 enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 # Add --persistent-index to your serve invocation for BM25.
 ```
+
+**Remote MCP** (v2.6.0 — Claude.ai web, ChatGPT, Cursor HTTP, mobile):
+
+```bash
+enquire-mcp gen-token > ~/.enquire/token        # 256-bit bearer
+enquire-mcp serve-http \
+  --vault ~/Obsidian \
+  --bearer-token "$(cat ~/.enquire/token)" \
+  --persistent-index
+# Front with Tailscale Funnel / Cloudflare Tunnel for HTTPS — see
+# docs/http-transport.md.
+```
+
+No other Obsidian-MCP currently ships a remote-HTTP transport. Same vault, same tools, same hybrid retrieval — just over HTTPS instead of stdio.
 
 ---
 
@@ -182,9 +201,9 @@ Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-in
 | `--max-file-bytes <n>` | 5 MB | Per-file read/write cap. |
 | `--cache-size <n>` | 1024 | LRU cap for parsed-note cache. |
 
-Subcommands: `serve` · `clear-cache` · `clear-index` · `index` (cold-build FTS5) · `install-model` · `build-embeddings` · `clear-embeddings`.
+Subcommands: `serve` · `serve-http` (v2.6.0 — remote MCP) · `gen-token` (v2.6.0) · `clear-cache` · `clear-index` · `index` (cold-build FTS5) · `install-model` · `build-embeddings` · `clear-embeddings`.
 
-Full reference: [docs/api.md](./docs/api.md).
+Full reference: [docs/api.md](./docs/api.md). Remote-MCP deployment guide: [docs/http-transport.md](./docs/http-transport.md).
 
 ---
 

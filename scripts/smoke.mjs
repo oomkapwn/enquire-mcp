@@ -508,9 +508,135 @@ try {
 
 if (stderr) console.error(`--- server stderr ---\n${stderr}`);
 
+// v2.6.0 — HTTP transport smoke. Spawns `enquire-mcp serve-http` on a
+// kernel-assigned port, hits /health (no auth), then exercises 401 on
+// missing-bearer + a successful authenticated initialize. Skipped on
+// --skip-http for stdio-only smoke runs (e.g. corporate networks where
+// binding even 127.0.0.1 is blocked).
+if (!args.includes("--skip-http")) {
+  console.log("\n=== smoke variant: serve-http (Streamable HTTP transport) ===");
+  const httpFailures = await smokeHttp(vault, bin);
+  for (const f of httpFailures) failures.push(f);
+}
+
 if (failures.length) {
   console.log(`\n${failures.length} failure(s)`);
   process.exit(1);
 } else {
   console.log("\nAll smoke checks passed.");
+}
+
+async function smokeHttp(vaultPath, binPath) {
+  const localFailures = [];
+  function httpCheck(label, ok, detail) {
+    if (ok) console.log(`PASS  ${label}`);
+    else {
+      console.log(`FAIL  ${label} — ${detail}`);
+      localFailures.push(label);
+    }
+  }
+  // Generate a strong test token via the gen-token subcommand (smoke for
+  // the helper too) instead of hardcoding.
+  const genProc = spawn("node", [binPath, "gen-token"], { stdio: ["ignore", "pipe", "pipe"] });
+  let tokenOut = "";
+  for await (const chunk of genProc.stdout) tokenOut += chunk.toString();
+  await new Promise((resolve) => genProc.once("exit", resolve));
+  const TOKEN = tokenOut.trim();
+  httpCheck(
+    "gen-token produces a 43-char base64url string",
+    /^[A-Za-z0-9_-]{43}$/.test(TOKEN),
+    `got ${TOKEN.length} chars`
+  );
+
+  // Bind to ephemeral port via --port 0; capture the assigned port from
+  // the ready banner.
+  const httpProc = spawn(
+    "node",
+    [binPath, "serve-http", "--vault", vaultPath, "--port", "0", "--bearer-token", TOKEN, "--rate-limit", "0"],
+    { stdio: ["ignore", "pipe", "pipe"] }
+  );
+  let httpStderr = "";
+  let port = 0;
+  const portKnown = new Promise((resolve) => {
+    httpProc.stderr.on("data", (d) => {
+      const text = d.toString();
+      httpStderr += text;
+      const m = /bound=http:\/\/[^:]+:(\d+)/.exec(text);
+      if (m && !port) {
+        port = Number.parseInt(m[1], 10);
+        resolve();
+      }
+    });
+  });
+  // Bound the wait so we don't hang the smoke if startup fails.
+  await Promise.race([
+    portKnown,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("serve-http startup timeout")), 8000))
+  ]).catch((err) => {
+    localFailures.push(err.message);
+    console.log(`FAIL  serve-http startup — ${err.message}\n${httpStderr}`);
+  });
+  if (port) {
+    try {
+      // /health (unauthenticated) — should be 200.
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      httpCheck(
+        "/health returns 200 ok",
+        health.status === 200 && (await health.text()) === "ok",
+        `status=${health.status}`
+      );
+
+      // Missing token → 401.
+      const noauth = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      httpCheck("missing-bearer returns 401", noauth.status === 401, `status=${noauth.status}`);
+      httpCheck(
+        "401 response carries WWW-Authenticate header",
+        (noauth.headers.get("WWW-Authenticate") ?? "").includes("Bearer"),
+        noauth.headers.get("WWW-Authenticate") ?? "(none)"
+      );
+
+      // Auth'd initialize → 200.
+      const init = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "smoke-http", version: "0.0.1" }
+          }
+        })
+      });
+      httpCheck("authenticated initialize returns 200", init.status === 200, `status=${init.status}`);
+      const initText = await init.text();
+      httpCheck("initialize response mentions enquire", initText.includes("enquire"), initText.slice(0, 200));
+    } catch (err) {
+      console.log(`FAIL  http smoke — ${err.message}`);
+      localFailures.push(err.message);
+    }
+  }
+  // The process may have already exited (e.g. startup error). Guard the
+  // exit listener so we don't hang if the exit event already fired.
+  if (httpProc.exitCode === null && httpProc.signalCode === null) {
+    httpProc.kill("SIGTERM");
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 2000); // hard cap — never block smoke
+      httpProc.once("exit", () => {
+        clearTimeout(t);
+        resolve();
+      });
+    });
+  }
+  return localFailures;
 }

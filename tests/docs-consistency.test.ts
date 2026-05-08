@@ -96,10 +96,12 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const alwaysOnRead = [...registered].filter(
       (n) => !writeNames.has(n) && !ftsNames.has(n) && !diagnosticGated.has(n)
     );
-    // Look for a heading or sentence claiming "<N> read tools (always on)".
-    const m = /(\d+) read tools \(always on\)/.exec(readme);
+    // Look for a heading or sentence claiming an always-on read tool count.
+    // Accept "<N> read tools (always on)" (legacy phrasing) or "<N> always-on
+    // read tools" (current heading-style phrasing in v2.0.0+ README).
+    const m = /(\d+) read tools \(always on\)|(\d+) always-on read tools/.exec(readme);
     expect(m, "README must declare a number of always-on read tools").not.toBeNull();
-    const claimed = Number.parseInt(m?.[1] ?? "0", 10);
+    const claimed = Number.parseInt(m?.[1] ?? m?.[2] ?? "0", 10);
     expect(claimed).toBe(alwaysOnRead.length);
   });
 

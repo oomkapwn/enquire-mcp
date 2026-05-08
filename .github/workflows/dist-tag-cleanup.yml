@@ -1,0 +1,48 @@
+name: Cleanup stale npm dist-tags
+
+# One-shot workflow to remove the `alpha` and `beta` dist-tags that were left
+# pointing at the v2.0 prerelease train (`alpha → 2.0.0-alpha.0`,
+# `beta → 2.0.0-beta.4`). After v2.0.0 stable shipped, these channels stopped
+# moving — the maintainer doesn't ship from prerelease tracks anymore.
+#
+# Trigger manually via the Actions tab. Uses the same NPM_TOKEN secret the
+# release-to-npm workflow uses, so no separate auth setup. Idempotent —
+# `npm dist-tag rm` returns 0 even if the tag is already gone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "REMOVE" to confirm dist-tag deletion'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ inputs.confirm == 'REMOVE' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - name: Show current dist-tags (before)
+        run: npm view @oomkapwn/enquire-mcp dist-tags
+      - name: Remove stale alpha tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # `|| true` because npm dist-tag rm exits non-zero when the tag
+        # doesn't exist; we want this idempotent.
+        run: npm dist-tag rm @oomkapwn/enquire-mcp alpha || true
+      - name: Remove stale beta tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm dist-tag rm @oomkapwn/enquire-mcp beta || true
+      - name: Show current dist-tags (after)
+        run: npm view @oomkapwn/enquire-mcp dist-tags

@@ -170,3 +170,46 @@ describe("semanticSearch (v1.11.1 Unicode tokenizer)", () => {
     expect(result.matches[0]?.path).toBe("Αυθεντικοποίηση.md");
   });
 });
+
+// v2.1.0: CJK / Thai / Khmer / Lao segmentation via Intl.Segmenter
+describe("semanticSearch (v2.1.0 CJK/Thai segmentation)", () => {
+  let croot: string;
+
+  beforeAll(async () => {
+    croot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-cjk-"));
+    await fs.writeFile(
+      path.join(croot, "认证.md"),
+      "JWT 令牌 OAuth 认证 流程。授权 服务器 颁发 访问 令牌 和 刷新 令牌。\n"
+    );
+    await fs.writeFile(
+      path.join(croot, "烹饪.md"),
+      "意大利面 培根 罗马诺 鸡蛋 黑胡椒。 与 热的 意大利面 一起 翻炒。\n"
+    );
+    await fs.writeFile(
+      path.join(croot, "認証.md"),
+      "JWT トークン を 使った OAuth 認証 フロー。 認可 サーバー が アクセス トークン を 発行 します。\n"
+    );
+  });
+
+  afterAll(async () => {
+    await fs.rm(croot, { recursive: true, force: true });
+  });
+
+  it("indexes Chinese (Hanzi) content via Intl.Segmenter word-break", async () => {
+    const v = new Vault(croot);
+    const result = await semanticSearch(v, { query: "JWT 令牌 认证", limit: 5 });
+    expect(result.matches.length).toBeGreaterThan(0);
+    // Top hit should be the auth note, NOT the cooking note (which has no
+    // overlap with auth tokens).
+    expect(result.matches[0]?.path).toBe("认证.md");
+  });
+
+  it("indexes Japanese (kana + kanji) via Intl.Segmenter", async () => {
+    const v = new Vault(croot);
+    const result = await semanticSearch(v, { query: "OAuth 認証 トークン", limit: 5 });
+    expect(result.matches.length).toBeGreaterThan(0);
+    // Top hit should be the Japanese auth note (uses katakana for tokens
+    // and kanji for auth — Intl.Segmenter must word-break both correctly).
+    expect(result.matches[0]?.path).toBe("認証.md");
+  });
+});

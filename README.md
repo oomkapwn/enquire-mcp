@@ -106,13 +106,17 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 
 ---
 
-## Tools (30 total)
+## Tools (36 total)
 
-### 21 always-on read tools
+### 25 always-on read tools
 
 | Tool | What it does |
 |---|---|
-| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. |
+| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. v2.2.0: `granularity: "block"` arg returns chunks instead of notes. |
+| `obsidian_context_pack` | **v2.2.0.** Token-budgeted context bundling: takes a question, runs hybrid search, gathers note bodies + backlinks + optionally recent dailies, returns one ready-to-paste markdown bundle. Saves ~5 tool calls. |
+| `obsidian_chat_thread_read` | **v2.2.0.** Parse a note's `## Chat: <title>` block into structured messages (role/timestamp/content/line-range). Pair with `_append` (write) for note-tethered AI conversations. |
+| `obsidian_frontmatter_get` | **v2.3.0.** Read parsed YAML frontmatter for a note. With `key`, returns just that field. |
+| `obsidian_frontmatter_search` | **v2.3.0.** Find notes by frontmatter predicate (`equals` / `exists` / `contains`). Useful as a precursor to bulk `_set`. |
 | `obsidian_read_note` | Full content + frontmatter + wikilinks + embeds + tags. Also accepts periodic-note aliases (`title: "today"` / `"weekly"` / `"monthly"`). |
 | `obsidian_list_notes` | Vault-wide or folder-scoped. Includes title + tags + mtime + counts. |
 | `obsidian_resolve_wikilink` | Resolves `[[Note]]`, `[[Note\|Alias]]`, `[[Note#Section]]`, `[[Note#^block]]`, with did-you-mean on near-miss. |
@@ -143,7 +147,7 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_semantic_search` | `--diagnostic-search-tools` | TF-IDF cosine standalone. |
 | `obsidian_embeddings_search` | `--diagnostic-search-tools` | ML embeddings standalone. |
 
-### 5 opt-in write tools (`--enable-write`)
+### 7 opt-in write tools (`--enable-write`)
 
 | Tool | Notes |
 |---|---|
@@ -152,8 +156,12 @@ enquire-mcp build-embeddings --vault <path>     # ~30ms/chunk on M1
 | `obsidian_rename_note` | Rewrites every wikilink across vault. Code-fence-aware. `dry_run` available. |
 | `obsidian_replace_in_notes` | Bulk find/replace. Per-file errors collected; `partial: true` on mid-loop fail. |
 | `obsidian_archive_note` | Wraps rename to `Archive/`. Preserves backlinks. |
+| `obsidian_chat_thread_append` | **v2.2.0.** Append a user/assistant/system message to a note's `## Chat:` block. Creates note + heading if absent. Threads stored as markdown — searchable, version-controllable, survive sessions. |
+| `obsidian_frontmatter_set` | **v2.3.0.** Surgical YAML manipulation — set/unset keys on a note atomically. Pass `null` as value to delete. Round-trips through gray-matter so YAML formatting stays consistent. `dry_run` supported. |
 
-Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **10 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`).
+Plus **2 + 1 opt-in MCP resources** (`obsidian://note/...`, `obsidian://vault-info`, `obsidian://chunk/...`) and **17 MCP prompts** (`summarize_recent_edits`, `weekly_review`, `monthly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `search_with_query_expansion`, `vault_synth`, `vault_wiki_compile`, `vault_lint_extended`, `vault_capture`, `vault_persona_search`, `vault_automation_setup`).
+
+> **v2.4.0 strategic position:** enquire-mcp is the open-source backend for **Karpathy-style LLM Wikis** on top of your existing Obsidian vault. The `vault_synth` + `vault_wiki_compile` + `vault_lint_extended` prompts implement the [Karpathy LLM-Wiki workflow](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) (ingest → query → lint → compile) natively over Obsidian's `.md` + `[[wikilinks]]` substrate. Knowledge that compounds, traceable to sources.
 
 ---
 

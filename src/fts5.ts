@@ -283,11 +283,14 @@ export class FtsIndex {
       // FTS5 column `content` carries an enriched form: original text + a
       // synthetic `[wikilink_targets: …]` meta-line so a search for a link
       // target name recalls notes that link out without naming it inline.
-      // The unindexed `raw_content` keeps the *original* chunk so the
-      // `obsidian://chunk/{n}/{path}` resource can return verbatim text
-      // (the audit P1 — without raw_content the resource was leaking the
-      // synthetic line into MCP-client view, breaking quoting).
-      const enriched = wikilinkTargets.length ? `${c.text}\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : c.text;
+      // v2.1.0: also prepend the heading breadcrumb so BM25 search hits
+      // notes where the section heading matches a query term even when the
+      // body doesn't repeat it. The unindexed `raw_content` keeps the
+      // *original* chunk so the `obsidian://chunk/{n}/{path}` resource
+      // can return verbatim text.
+      const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
+      const linksSuffix = wikilinkTargets.length ? `\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : "";
+      const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
       insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
     });
     db.prepare(
@@ -410,6 +413,12 @@ interface ContentChunk {
   text: string;
   lineStart: number;
   lineEnd: number;
+  /** v2.1.0: heading breadcrumb (e.g. "## Setup > ### Install") in effect at
+   *  chunk start. Empty if chunk is in the preamble (before first heading).
+   *  Callers concerned with retrieval quality can prepend this to chunk.text
+   *  before embedding/indexing — Chroma 2024 + NAACL 2025 both show
+   *  structural breadcrumbs lift NDCG@10 by 2-5 points at near-zero cost. */
+  breadcrumb: string;
 }
 
 const MAX_CHUNK_CHARS = 4096;
@@ -417,17 +426,33 @@ const MAX_CHUNK_CHARS = 4096;
 /**
  * Paragraph-first chunker with `\n\n → \n → hardcut` fallback. Each chunk
  * carries 1-based line offsets so callers can quote precise locations.
+ *
+ * v2.1.0: also attaches a heading breadcrumb to each chunk (the H1>H2>H3
+ * path in effect at chunk start). Preserves Obsidian markdown structure
+ * for downstream retrievers without a custom parser. ATX headings only —
+ * fenced code blocks (where `#` is shell prompt, not heading) are skipped.
  */
 export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): ContentChunk[] {
   if (!content) return [];
+
+  // v2.1.0: pre-compute heading hierarchy per line. Walk the source once,
+  // tracking ATX headings and code-fence state, so each line gets the
+  // "Section > Subsection" breadcrumb in scope at that line.
+  const breadcrumbByLine = computeBreadcrumbsByLine(content);
+
   const paragraphs = splitWithLines(content, /\n{2,}/);
   const chunks: ContentChunk[] = [];
   for (const p of paragraphs) {
+    if (!p.breadcrumb) {
+      p.breadcrumb = breadcrumbByLine[p.lineStart - 1] ?? "";
+    }
     if (p.text.length <= maxChars) {
       chunks.push(p);
       continue;
     }
-    // Paragraph too big — try line splits.
+    // Paragraph too big — try line splits. Each split inherits the
+    // paragraph's breadcrumb (a single oversize paragraph stays under one
+    // section by definition — paragraph boundaries don't span headings).
     const lines = splitWithLines(p.text, /\n/, p.lineStart);
     let buf: ContentChunk | null = null;
     for (const ln of lines) {
@@ -441,19 +466,20 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
           chunks.push({
             text: ln.text.slice(i, i + maxChars),
             lineStart: ln.lineStart,
-            lineEnd: ln.lineEnd
+            lineEnd: ln.lineEnd,
+            breadcrumb: p.breadcrumb
           });
         }
         continue;
       }
       if (!buf) {
-        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd };
+        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd, breadcrumb: p.breadcrumb };
         continue;
       }
       const tentative = `${buf.text}\n${ln.text}`;
       if (tentative.length > maxChars) {
         chunks.push(buf);
-        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd };
+        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd, breadcrumb: p.breadcrumb };
       } else {
         buf.text = tentative;
         buf.lineEnd = ln.lineEnd;
@@ -462,6 +488,54 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
     if (buf) chunks.push(buf);
   }
   return chunks.filter((c) => c.text.trim().length > 0);
+}
+
+/**
+ * v2.1.0: walk content line-by-line, tracking the H1>H2>H3 stack at each
+ * point. Returns a per-line breadcrumb (joined with " > ") in effect AT
+ * that line — i.e., the heading the line lives under.
+ *
+ * Skips heading-style chars inside fenced code blocks (``` and ~~~).
+ */
+function computeBreadcrumbsByLine(content: string): string[] {
+  const lines = content.split("\n");
+  const out: string[] = new Array(lines.length).fill("");
+  const stack: string[] = []; // index = depth-1, value = heading text
+  let inFence = false;
+  let fenceMarker = "";
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i] ?? "";
+    const fenceMatch = /^(```|~~~)/.exec(ln);
+    if (fenceMatch?.[1]) {
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = fenceMatch[1];
+      } else if (fenceMatch[1] === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      out[i] = stack.join(" > ");
+      continue;
+    }
+    if (inFence) {
+      out[i] = stack.join(" > ");
+      continue;
+    }
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(ln);
+    if (headingMatch?.[1] && headingMatch[2]) {
+      const depth = headingMatch[1].length;
+      const text = headingMatch[2].trim();
+      // Trim stack to current depth - 1, then push at depth.
+      stack.length = depth - 1;
+      stack.push(text);
+      // Heading line itself gets its OWN breadcrumb (the heading is part of
+      // its section's identity).
+      out[i] = stack.join(" > ");
+      continue;
+    }
+    out[i] = stack.join(" > ");
+  }
+  return out;
 }
 
 function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentChunk[] {
@@ -473,14 +547,14 @@ function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentC
     const start = match.index ?? 0;
     const slice = text.slice(lastIndex, start);
     const linesInSlice = (slice.match(/\n/g) ?? []).length;
-    out.push({ text: slice, lineStart: lastLine, lineEnd: lastLine + linesInSlice });
+    out.push({ text: slice, lineStart: lastLine, lineEnd: lastLine + linesInSlice, breadcrumb: "" });
     lastLine += linesInSlice + (match[0].match(/\n/g) ?? []).length;
     lastIndex = start + match[0].length;
   }
   const tail = text.slice(lastIndex);
   if (tail) {
     const linesInTail = (tail.match(/\n/g) ?? []).length;
-    out.push({ text: tail, lineStart: lastLine, lineEnd: lastLine + linesInTail });
+    out.push({ text: tail, lineStart: lastLine, lineEnd: lastLine + linesInTail, breadcrumb: "" });
   }
   return out;
 }

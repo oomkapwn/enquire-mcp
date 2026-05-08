@@ -703,6 +703,339 @@ export interface ArchiveNoteArgs {
   overwrite?: boolean;
 }
 
+// ─── obsidian_chat_thread (v2.2.0 — note-tethered AI conversations) ─────────
+// Smart Connections' #1 paid feature: AI conversations bound to a specific
+// note, persisted as markdown so they're searchable, version-controllable,
+// and survive across sessions / clients. We ship the same UX MCP-native
+// (works with Claude / Cursor / Codex / any agent), free.
+//
+// Wire format: messages stored as second-level headings under a parent
+// `## Chat: <title>` heading, with role tag in the heading and timestamp.
+//   ```md
+//   ## Chat: research session — 2026-05-08T10:00Z
+//
+//   ### user · 2026-05-08T10:00Z
+//   What did I write last week about RLHF?
+//
+//   ### assistant · 2026-05-08T10:00Z
+//   You wrote three things: ...
+//   ```
+// This format is human-readable, parseable, and feeds back into our
+// retrieval index — agents can search past chat threads by content.
+
+export interface ChatThreadAppendArgs {
+  /** Vault-relative path to the note hosting the thread. Created if absent. */
+  note_path: string;
+  /** Role of the message being appended. */
+  role: "user" | "assistant" | "system";
+  /** Message body (markdown allowed). */
+  content: string;
+  /** Optional thread title — used when the note is created from scratch. */
+  thread_title?: string;
+}
+
+export interface ChatThreadMessage {
+  role: "user" | "assistant" | "system";
+  timestamp: string;
+  content: string;
+  /** 1-based start line in the source note (for jumping to that point). */
+  line_start: number;
+  line_end: number;
+}
+
+export interface ChatThreadReadResult {
+  note_path: string;
+  thread_title: string | null;
+  messages: ChatThreadMessage[];
+  message_count: number;
+}
+
+const CHAT_HEADING_RE = /^### (user|assistant|system) · (.+?)\s*$/;
+// Multi-line flag: `## Chat:` heading can appear anywhere in the body, not
+// only at string start. The append codepath uses .test(body); the read
+// codepath uses .exec(line) per-line so the flag is harmless there.
+const CHAT_THREAD_TITLE_RE = /^## Chat: (.+?)\s*$/m;
+
+/** Append a message to a note's chat thread. Creates the note (and the
+ *  `## Chat: <title>` heading) if absent. Idempotent in the sense that
+ *  appending always creates a fresh `### <role> · <timestamp>` block — no
+ *  silent overwrites. */
+export async function chatThreadAppend(
+  vault: Vault,
+  args: ChatThreadAppendArgs
+): Promise<{ note_path: string; line_start: number; line_end: number }> {
+  await vault.ensureExists();
+  if (!args.note_path?.trim()) throw new Error("chat_thread_append: `note_path` is required");
+  if (!args.content?.trim()) throw new Error("chat_thread_append: `content` is required");
+  const role = args.role;
+  if (role !== "user" && role !== "assistant" && role !== "system") {
+    throw new Error(`chat_thread_append: invalid role "${role}" (must be user|assistant|system)`);
+  }
+  const targetRel = args.note_path.toLowerCase().endsWith(".md") ? args.note_path : `${args.note_path}.md`;
+  const abs = vault.resolveInside(targetRel);
+  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const messageBlock = `\n### ${role} · ${timestamp}\n\n${args.content.trim()}\n`;
+
+  // Read existing or create new with thread heading.
+  let existed = true;
+  let body = "";
+  try {
+    body = await vault.readFile(abs);
+  } catch {
+    existed = false;
+  }
+  let toAppend: string;
+  if (existed && CHAT_THREAD_TITLE_RE.test(body)) {
+    // Existing thread — just append message.
+    toAppend = messageBlock;
+  } else if (existed) {
+    // Existing note without a chat heading — add heading first.
+    const title = args.thread_title?.trim() || `chat — ${timestamp.slice(0, 10)}`;
+    toAppend = `\n\n## Chat: ${title}\n${messageBlock}`;
+  } else {
+    // New note from scratch.
+    const title = args.thread_title?.trim() || `chat — ${timestamp.slice(0, 10)}`;
+    const initial = `# ${title}\n\n## Chat: ${title}\n${messageBlock}`;
+    const result = await vault.writeNote(targetRel, initial, { overwrite: false });
+    return {
+      note_path: result.relPath,
+      line_start: 4,
+      line_end: 4 + messageBlock.split("\n").length
+    };
+  }
+  const before = body.length;
+  const newBody = body.replace(/\n+$/, "") + toAppend;
+  await vault.writeNote(targetRel, newBody, { overwrite: true });
+  const lineStart = (body.slice(0, before).match(/\n/g) ?? []).length + 1;
+  return {
+    note_path: vault.toRel(abs),
+    line_start: lineStart,
+    line_end: lineStart + toAppend.split("\n").length
+  };
+}
+
+/** Parse a note's chat thread into structured messages. Non-chat content
+ *  (anything outside the `## Chat: <title>` block) is ignored. */
+export async function chatThreadRead(vault: Vault, args: { note_path: string }): Promise<ChatThreadReadResult> {
+  await vault.ensureExists();
+  const targetRel = args.note_path.toLowerCase().endsWith(".md") ? args.note_path : `${args.note_path}.md`;
+  const abs = vault.resolveInside(targetRel);
+  const body = await vault.readFile(abs);
+  const lines = body.split("\n");
+  let threadTitle: string | null = null;
+  let inThread = false;
+  const messages: ChatThreadMessage[] = [];
+  let current: { role: ChatThreadMessage["role"]; timestamp: string; line_start: number; lines: string[] } | null =
+    null;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i] ?? "";
+    const titleMatch = CHAT_THREAD_TITLE_RE.exec(ln);
+    if (titleMatch) {
+      if (current) {
+        messages.push({
+          role: current.role,
+          timestamp: current.timestamp,
+          content: current.lines.join("\n").trim(),
+          line_start: current.line_start,
+          line_end: i
+        });
+        current = null;
+      }
+      threadTitle = (titleMatch[1] ?? "").trim();
+      inThread = true;
+      continue;
+    }
+    if (!inThread) continue;
+    // Higher-level heading or a different `## Chat:` block ends the thread.
+    if (/^# /.test(ln) || (/^## /.test(ln) && !CHAT_THREAD_TITLE_RE.test(ln))) {
+      if (current) {
+        messages.push({
+          role: current.role,
+          timestamp: current.timestamp,
+          content: current.lines.join("\n").trim(),
+          line_start: current.line_start,
+          line_end: i
+        });
+        current = null;
+      }
+      inThread = false;
+      continue;
+    }
+    const headingMatch = CHAT_HEADING_RE.exec(ln);
+    if (headingMatch?.[1] && headingMatch[2]) {
+      if (current) {
+        messages.push({
+          role: current.role,
+          timestamp: current.timestamp,
+          content: current.lines.join("\n").trim(),
+          line_start: current.line_start,
+          line_end: i
+        });
+      }
+      current = {
+        role: headingMatch[1] as ChatThreadMessage["role"],
+        timestamp: headingMatch[2].trim(),
+        line_start: i + 1,
+        lines: []
+      };
+      continue;
+    }
+    if (current) current.lines.push(ln);
+  }
+  if (current) {
+    messages.push({
+      role: current.role,
+      timestamp: current.timestamp,
+      content: current.lines.join("\n").trim(),
+      line_start: current.line_start,
+      line_end: lines.length
+    });
+  }
+  return {
+    note_path: vault.toRel(abs),
+    thread_title: threadTitle,
+    messages,
+    message_count: messages.length
+  };
+}
+
+// ─── obsidian_frontmatter_{get,set,search} (v2.3.0 — atomic YAML ops) ──────
+// Surgical YAML manipulation. Pre-fix, agents wanting to set `status:
+// published` on 12 notes had to find/replace text — error-prone (multi-line
+// strings, special chars, key-collision). Now: parse via gray-matter, edit,
+// rewrite. Code-fence-aware via gray-matter (frontmatter is delimited
+// strictly by leading `---`, so no fence ambiguity).
+//
+// _get is read-only; _set + _delete are write-gated.
+
+export async function frontmatterGet(
+  vault: Vault,
+  args: { path?: string; title?: string; key?: string }
+): Promise<{ path: string; frontmatter: Record<string, unknown>; value?: unknown }> {
+  await vault.ensureExists();
+  const target = await resolveTarget(vault, args);
+  const note = await vault.readNote(target.absPath, target.mtimeMs);
+  if (args.key) {
+    return {
+      path: target.relPath,
+      frontmatter: note.parsed.frontmatter,
+      value: note.parsed.frontmatter[args.key]
+    };
+  }
+  return { path: target.relPath, frontmatter: note.parsed.frontmatter };
+}
+
+export interface FrontmatterSetArgs {
+  path?: string;
+  title?: string;
+  /** Keys to set. Setting a key to `null` deletes it. */
+  set: Record<string, unknown>;
+  /** Optional: dry_run shows the diff without writing. */
+  dry_run?: boolean;
+}
+
+export async function frontmatterSet(
+  vault: Vault,
+  args: FrontmatterSetArgs
+): Promise<{
+  path: string;
+  changed_keys: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  dry_run: boolean;
+}> {
+  await vault.ensureExists();
+  if (!args.set || Object.keys(args.set).length === 0) {
+    throw new Error("frontmatter_set: `set` must be a non-empty object");
+  }
+  const target = await resolveTarget(vault, args);
+  const note = await vault.readNote(target.absPath, target.mtimeMs);
+  const before = { ...note.parsed.frontmatter };
+  const after: Record<string, unknown> = { ...before };
+  const changed: string[] = [];
+  for (const [k, v] of Object.entries(args.set)) {
+    if (v === null) {
+      if (k in after) {
+        delete after[k];
+        changed.push(`-${k}`);
+      }
+    } else {
+      const prev = after[k];
+      if (JSON.stringify(prev) !== JSON.stringify(v)) {
+        after[k] = v;
+        changed.push(`${k in before ? "~" : "+"}${k}`);
+      }
+    }
+  }
+  if (changed.length === 0 || args.dry_run === true) {
+    return { path: target.relPath, changed_keys: changed, before, after, dry_run: args.dry_run === true };
+  }
+  // Round-trip via gray-matter — same writer pattern as createNote.
+  const newDoc = matter.stringify(note.parsed.body, after);
+  await vault.writeNote(target.relPath, newDoc, { overwrite: true });
+  return { path: target.relPath, changed_keys: changed, before, after, dry_run: false };
+}
+
+/** Find every note where frontmatter.<key> matches a predicate. Useful as
+ *  a precursor to bulk frontmatter_set: "find all notes with status:draft
+ *  and set their status to published".
+ *
+ *  Predicate semantics:
+ *    - `equals: <value>`   — strict equality (JSON.stringify comparison)
+ *    - `exists: true`      — key must exist (any value)
+ *    - `contains: <value>` — for array values, value must be a member
+ *  Exactly one predicate must be set. */
+export interface FrontmatterSearchArgs {
+  key: string;
+  equals?: unknown;
+  exists?: boolean;
+  contains?: unknown;
+  folder?: string;
+  limit?: number;
+}
+
+export async function frontmatterSearch(
+  vault: Vault,
+  args: FrontmatterSearchArgs
+): Promise<{
+  key: string;
+  total_matches: number;
+  matches: Array<{ path: string; value: unknown; mtime: string }>;
+}> {
+  await vault.ensureExists();
+  if (!args.key) throw new Error("frontmatter_search: `key` is required");
+  const predicates = [args.equals !== undefined, args.exists !== undefined, args.contains !== undefined].filter(
+    Boolean
+  );
+  if (predicates.length !== 1) {
+    throw new Error("frontmatter_search: exactly one of `equals` / `exists` / `contains` must be set");
+  }
+  const limit = args.limit ?? 100;
+  const entries = await vault.listMarkdown(args.folder);
+  const matches: Array<{ path: string; value: unknown; mtime: string }> = [];
+  for (const e of entries) {
+    if (matches.length >= limit) break;
+    try {
+      const note = await vault.readNote(e.absPath, e.mtimeMs);
+      const value = note.parsed.frontmatter[args.key];
+      let hit = false;
+      if (args.exists === true) hit = value !== undefined;
+      else if (args.equals !== undefined) hit = JSON.stringify(value) === JSON.stringify(args.equals);
+      else if (args.contains !== undefined) {
+        if (Array.isArray(value)) {
+          hit = value.some((v) => JSON.stringify(v) === JSON.stringify(args.contains));
+        }
+      }
+      if (hit) {
+        matches.push({ path: e.relPath, value, mtime: new Date(e.mtimeMs).toISOString() });
+      }
+    } catch {
+      // skip unparseable notes
+    }
+  }
+  return { key: args.key, total_matches: matches.length, matches };
+}
+
 export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("archive_note: `path` is required");
@@ -2499,16 +2832,39 @@ const STOP_WORDS = new Set([
   "how"
 ]);
 
+// v2.1.0: detect Chinese / Japanese / Thai / Khmer / Lao via script ranges.
+// These languages don't use spaces between words, so the Unicode-regex
+// tokenizer falls back to character-level (or huge multi-word tokens),
+// which tanks BM25 + TF-IDF precision. Intl.Segmenter (Node 16+ ICU)
+// gives word-break per language. Detection is per-document, branching the
+// tokenizer.
+const CJK_OR_THAI_RANGES = /[぀-ヿ㐀-䶿一-鿿가-힯฀-๿ༀ-࿿ក-៿]/;
+
 function tokenizeForTfidf(text: string): string[] {
   // v1.11.1: Unicode-aware tokenizer. The previous ASCII-only regex
   // (`/[a-z0-9][a-z0-9_-]*/g`) silently dropped Cyrillic, Greek, CJK,
-  // Hebrew, Arabic, and any non-Latin content from the TF-IDF index —
-  // semantic search returned zero hits for non-English queries on
-  // non-English notes. `\p{L}` matches any Unicode letter; `\p{N}`
-  // matches any Unicode number. The leading-class restriction prevents
-  // tokens that start with `_-` separators.
+  // Hebrew, Arabic, and any non-Latin content from the TF-IDF index.
+  // `\p{L}` matches any Unicode letter; `\p{N}` matches any Unicode number.
+  //
+  // v2.1.0: when the text contains CJK / Thai / Khmer / Lao chars (no-
+  // whitespace scripts), use Intl.Segmenter for proper word-break first,
+  // then run the Unicode regex per-segment. This produces real word tokens
+  // instead of "認可サーバーがアクセストークン" as a single 12-char token
+  // that the length filter would drop.
   const lower = text.toLowerCase();
   const out: string[] = [];
+  if (CJK_OR_THAI_RANGES.test(lower) && typeof Intl !== "undefined" && typeof Intl.Segmenter !== "undefined") {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+    for (const seg of segmenter.segment(lower)) {
+      if (!seg.isWordLike) continue;
+      const t = seg.segment;
+      if (t.length < 1) continue;
+      if (t.length > 40) continue;
+      if (STOP_WORDS.has(t)) continue;
+      out.push(t);
+    }
+    return out;
+  }
   for (const m of lower.matchAll(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)) {
     const t = m[0];
     if (t.length < 2) continue;
@@ -2814,7 +3170,21 @@ export interface SearchHybridResponse {
 
 export async function searchHybrid(
   vault: Vault,
-  args: { query: string; folder?: string; limit?: number; min_signals?: number; embedding_model?: string },
+  args: {
+    query: string;
+    folder?: string;
+    limit?: number;
+    min_signals?: number;
+    embedding_model?: string;
+    /** v2.2.0: "note" (default) returns 1 hit per note, picking the best
+     *  chunk; "block" returns each chunk as a distinct hit so you see the
+     *  multiple-paragraph case where one note covers a topic in two places. */
+    granularity?: "note" | "block";
+    /** v2.3.0: post-RRF graph boost — rerank by counting how many other
+     *  top-K hits link to each one. Default true; set false to disable for
+     *  diagnostic comparison (e.g. measuring whether boost helped). */
+    graph_boost?: boolean;
+  },
   ctx: {
     /** FTS5 index, if `--persistent-index` is enabled at server start. */
     ftsIndex: FtsIndex | null;
@@ -2826,6 +3196,7 @@ export async function searchHybrid(
   if (!args.query.trim()) throw new Error("query must not be empty");
   const limit = args.limit ?? 10;
   const minSignals = args.min_signals ?? 1;
+  const granularity = args.granularity ?? "note";
   // Fan-out per-ranker top-K. Bigger than user's `limit` so RRF has room
   // to surface a doc that's mid-rank in one signal but top in another.
   const fanOutK = Math.max(50, limit * 5);
@@ -2856,37 +3227,53 @@ export async function searchHybrid(
       // Pre-fix, BM25 search returned excluded chunks via the hybrid pipeline.
       const rawFtsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
       const ftsHits = rawFtsHits.filter((h) => !vault.isExcluded(h.rel_path));
-      const bestPerNote = new Map<
-        string,
-        { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
-      >();
-      ftsHits.forEach((h, i) => {
-        const existing = bestPerNote.get(h.rel_path);
-        if (!existing || i < existing.rank) {
-          bestPerNote.set(h.rel_path, {
-            score: h.score,
-            rank: i + 1,
-            snippet: h.snippet,
-            chunk_index: h.chunk_index,
-            line_start: h.line_start,
-            line_end: h.line_end
-          });
+      // v2.2.0: granularity branch.
+      //   "note"  → collapse multi-chunk hits per note (best-rank wins),
+      //             RRF fuses on path key.
+      //   "block" → keep each chunk distinct, RRF fuses on `path#chunk_index`.
+      if (granularity === "block") {
+        bm25Ranked = ftsHits.map((h, i) => ({
+          id: `${h.rel_path}#${h.chunk_index}`,
+          rank: i + 1,
+          score: h.score,
+          snippet: h.snippet,
+          chunk_index: h.chunk_index,
+          line_start: h.line_start,
+          line_end: h.line_end
+        }));
+      } else {
+        const bestPerNote = new Map<
+          string,
+          { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
+        >();
+        ftsHits.forEach((h, i) => {
+          const existing = bestPerNote.get(h.rel_path);
+          if (!existing || i < existing.rank) {
+            bestPerNote.set(h.rel_path, {
+              score: h.score,
+              rank: i + 1,
+              snippet: h.snippet,
+              chunk_index: h.chunk_index,
+              line_start: h.line_start,
+              line_end: h.line_end
+            });
+          }
+        });
+        bm25Ranked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
+          id,
+          rank: b.rank,
+          score: b.score,
+          snippet: b.snippet,
+          chunk_index: b.chunk_index,
+          line_start: b.line_start,
+          line_end: b.line_end
+        }));
+        // Re-sort to ensure 1-based ranks are consecutive after dedup.
+        bm25Ranked.sort((a, b) => a.rank - b.rank);
+        for (let i = 0; i < bm25Ranked.length; i++) {
+          const hit = bm25Ranked[i];
+          if (hit) hit.rank = i + 1;
         }
-      });
-      bm25Ranked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
-        id,
-        rank: b.rank,
-        score: b.score,
-        snippet: b.snippet,
-        chunk_index: b.chunk_index,
-        line_start: b.line_start,
-        line_end: b.line_end
-      }));
-      // Re-sort to ensure 1-based ranks are consecutive after dedup.
-      bm25Ranked.sort((a, b) => a.rank - b.rank);
-      for (let i = 0; i < bm25Ranked.length; i++) {
-        const hit = bm25Ranked[i];
-        if (hit) hit.rank = i + 1;
       }
       if (bm25Ranked.length > 0) signalsUsed.push("bm25");
     } catch (err) {
@@ -2942,37 +3329,56 @@ export async function searchHybrid(
         { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model, min_score: 0 },
         ctx.embedFile
       );
-      // Same chunk-collapse as BM25.
-      const bestPerNote = new Map<
-        string,
-        { score: number; rank: number; snippet: string; chunk_index: number; line_start: number; line_end: number }
-      >();
-      embed.matches.forEach((m, i) => {
-        const existing = bestPerNote.get(m.path);
-        if (!existing || i < existing.rank) {
-          bestPerNote.set(m.path, {
-            score: m.score,
-            rank: i + 1,
-            snippet: m.snippet,
-            chunk_index: m.chunk_index,
-            line_start: m.line_start,
-            line_end: m.line_end
-          });
+      // v2.2.0: granularity branch — same shape as BM25 above.
+      if (granularity === "block") {
+        embedRanked = embed.matches.map((m, i) => ({
+          id: `${m.path}#${m.chunk_index ?? 0}`,
+          rank: i + 1,
+          score: m.score,
+          snippet: m.snippet,
+          chunk_index: m.chunk_index,
+          line_start: m.line_start,
+          line_end: m.line_end
+        }));
+      } else {
+        const bestPerNote = new Map<
+          string,
+          {
+            score: number;
+            rank: number;
+            snippet: string;
+            chunk_index: number;
+            line_start: number;
+            line_end: number;
+          }
+        >();
+        embed.matches.forEach((m, i) => {
+          const existing = bestPerNote.get(m.path);
+          if (!existing || i < existing.rank) {
+            bestPerNote.set(m.path, {
+              score: m.score,
+              rank: i + 1,
+              snippet: m.snippet,
+              chunk_index: m.chunk_index,
+              line_start: m.line_start,
+              line_end: m.line_end
+            });
+          }
+        });
+        embedRanked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
+          id,
+          rank: b.rank,
+          score: b.score,
+          snippet: b.snippet,
+          chunk_index: b.chunk_index,
+          line_start: b.line_start,
+          line_end: b.line_end
+        }));
+        embedRanked.sort((a, b) => a.rank - b.rank);
+        for (let i = 0; i < embedRanked.length; i++) {
+          const hit = embedRanked[i];
+          if (hit) hit.rank = i + 1;
         }
-      });
-      embedRanked = Array.from(bestPerNote.entries()).map(([id, b]) => ({
-        id,
-        rank: b.rank,
-        score: b.score,
-        snippet: b.snippet,
-        chunk_index: b.chunk_index,
-        line_start: b.line_start,
-        line_end: b.line_end
-      }));
-      embedRanked.sort((a, b) => a.rank - b.rank);
-      for (let i = 0; i < embedRanked.length; i++) {
-        const hit = embedRanked[i];
-        if (hit) hit.rank = i + 1;
       }
       if (embedRanked.length > 0) signalsUsed.push("embeddings");
     } catch (err) {
@@ -2989,8 +3395,56 @@ export async function searchHybrid(
       tfidf: tfidfRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
       embeddings: embedRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score }))
     },
-    { topK: limit * 2 } // overshoot in case min_signals filter prunes some
+    { topK: Math.max(limit * 4, 30) } // overshoot — graph boost may rerank
   );
+
+  // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
+  // Re-rank top-K by counting how many *other* top-K hits link to each one.
+  // Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
+  // Boost is small (α=0.005) — enough to break ties but won't override
+  // strong single-ranker signals. Requires no new index — uses already-
+  // cached parsed wikilinks per note.
+  // This is the "only enquire-mcp does this" feature: generic vector stores
+  // can't do this without an Obsidian-aware layer; Smart Connections doesn't
+  // do it either. Wikilinks ARE the differentiating Obsidian primitive.
+  const graphBoost = args.graph_boost !== false; // default ON
+  if (graphBoost && fused.length > 1) {
+    const candidatePaths = new Set<string>();
+    for (const f of fused) {
+      candidatePaths.add(f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id);
+    }
+    const outLinks = new Map<string, Set<string>>();
+    for (const candidatePath of candidatePaths) {
+      try {
+        const note = await vault.readNote(vault.resolveInside(candidatePath));
+        const targets = new Set<string>();
+        for (const wl of note.parsed.wikilinks) {
+          if (!wl.target) continue;
+          // Wikilinks can be by basename ("Foo") or relative path ("Sub/Foo").
+          // Normalize both forms so the membership test catches either.
+          targets.add(wl.target);
+          targets.add(stripMd(wl.target));
+        }
+        outLinks.set(candidatePath, targets);
+      } catch {
+        // skip unreadable notes
+      }
+    }
+    const ALPHA = 0.005;
+    for (const f of fused) {
+      const fPath = f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id;
+      const fBasename = stripMd(path.basename(fPath));
+      let inDegree = 0;
+      for (const [otherPath, targets] of outLinks) {
+        if (otherPath === fPath) continue;
+        if (targets.has(fPath) || targets.has(stripMd(fPath)) || targets.has(fBasename)) {
+          inDegree += 1;
+        }
+      }
+      if (inDegree > 0) f.score += ALPHA * inDegree;
+    }
+    fused.sort((a, b) => b.score - a.score);
+  }
 
   // Build snippet/chunk lookup tables for attaching the best evidence per
   // note in the final response.
@@ -3018,12 +3472,25 @@ export async function searchHybrid(
     if (f.per_signal.embeddings) {
       perSignal.embeddings = { rank: f.per_signal.embeddings.rank, score: f.per_signal.embeddings.score };
     }
+    // v2.2.0: when granularity is "block", f.id is "path#chunk_index" — split
+    // back into path + chunk_index for the response. When "note", f.id is
+    // just the path.
+    let pathPart = f.id;
+    let chunkFromId: number | undefined;
+    if (granularity === "block") {
+      const hashIdx = f.id.lastIndexOf("#");
+      if (hashIdx > 0) {
+        pathPart = f.id.slice(0, hashIdx);
+        const parsed = Number.parseInt(f.id.slice(hashIdx + 1), 10);
+        if (Number.isInteger(parsed) && parsed >= 0) chunkFromId = parsed;
+      }
+    }
     matches.push({
-      path: f.id,
-      title: stripMd(path.basename(f.id)),
+      path: pathPart,
+      title: stripMd(path.basename(pathPart)),
       score: Math.round(f.score * 100000) / 100000,
       snippet: bestEvidence?.snippet ?? "",
-      chunk_index: bm?.chunk_index ?? emb?.chunk_index,
+      chunk_index: chunkFromId ?? bm?.chunk_index ?? emb?.chunk_index,
       line_start: bm?.line_start ?? emb?.line_start,
       line_end: bm?.line_end ?? emb?.line_end,
       per_signal: perSignal
@@ -3046,6 +3513,149 @@ export async function searchHybrid(
     response.signal_errors = signalErrors;
   }
   return response;
+}
+
+// ─── obsidian_context_pack (v2.2.0 — token-budgeted vault context export) ───
+// Smart Connections' "Send to Smart Context" pattern, MCP-native. Takes a
+// query, runs hybrid retrieval, gathers note bodies + 1-line backlink
+// summaries + recent daily notes, deduplicates, packs to a token budget,
+// returns one ready-to-paste markdown string. The agent doesn't have to
+// orchestrate 5 separate tool calls — one tool, one context blob.
+//
+// Why MCP-native > Obsidian-only: Smart Context only works inside Obsidian.
+// This tool works in Claude Code, Cursor, Codex, anywhere — copy the result
+// into ANY chat.
+
+export interface ContextPackArgs {
+  /** Topic / question to gather context for. */
+  query: string;
+  /** Approximate token budget for the bundle. ~4 chars/token assumption. Default 4000. */
+  budget_tokens?: number;
+  /** Restrict retrieval to this folder. */
+  folder?: string;
+  /** Include backlinks of top-K notes (1-line each)? Default true. */
+  include_backlinks?: boolean;
+  /** Include the last N daily notes? Default 0 (off). Set to 3 for "what was I doing recently". */
+  recent_dailies?: number;
+}
+
+export interface ContextPackResult {
+  query: string;
+  /** The packed markdown bundle ready to paste into an AI chat. */
+  bundle: string;
+  /** Approximate token count (chars / 4). */
+  estimated_tokens: number;
+  budget_tokens: number;
+  /** Per-section byte counts for observability. */
+  sections: {
+    notes: number;
+    backlinks: number;
+    dailies: number;
+  };
+  /** Top-K hit paths included in the bundle. */
+  included_notes: string[];
+}
+
+export async function contextPack(
+  vault: Vault,
+  args: ContextPackArgs,
+  ctx: { ftsIndex: FtsIndex | null; embedFile: string }
+): Promise<ContextPackResult> {
+  await vault.ensureExists();
+  if (!args.query?.trim()) throw new Error("context_pack: `query` is required");
+  const budget = args.budget_tokens ?? 4000;
+  const charBudget = budget * 4; // ~4 chars/token
+  const includeBacklinks = args.include_backlinks !== false;
+  const recentN = Math.max(0, args.recent_dailies ?? 0);
+
+  // 1) Hybrid retrieval — top-K notes
+  const search = await searchHybrid(
+    vault,
+    { query: args.query, folder: args.folder, limit: 10 },
+    { ftsIndex: ctx.ftsIndex, embedFile: ctx.embedFile }
+  );
+
+  const sections: string[] = [`# Context for: ${args.query}\n`];
+  const includedNotes: string[] = [];
+  let charsUsed = sections[0]?.length ?? 0;
+  let notesBytes = 0;
+  let backlinksBytes = 0;
+  let dailiesBytes = 0;
+
+  // 2) Pack note bodies until budget exhausted
+  sections.push("## Top notes");
+  for (const m of search.matches) {
+    if (charsUsed >= charBudget) break;
+    try {
+      const note = await vault.readNote(vault.resolveInside(m.path), undefined);
+      const body = note.parsed.body.trim();
+      const headerLen = m.path.length + 5;
+      const remaining = charBudget - charsUsed;
+      // Truncate body to fit remaining budget for THIS note (~50% of remainder
+      // so we leave room for backlinks + dailies).
+      const noteCap = Math.min(body.length, Math.max(500, Math.floor(remaining * 0.5)));
+      const trimmed = body.length <= noteCap ? body : `${body.slice(0, noteCap)}\n\n[…truncated…]`;
+      const block = `### ${m.path}\n\n${trimmed}\n`;
+      sections.push(block);
+      charsUsed += block.length + headerLen;
+      notesBytes += block.length;
+      includedNotes.push(m.path);
+    } catch {
+      // skip unreadable notes
+    }
+  }
+
+  // 3) 1-line backlink summaries for top-3
+  if (includeBacklinks && includedNotes.length > 0 && charsUsed < charBudget) {
+    sections.push("## Backlinks");
+    let backlinksAdded = 0;
+    for (const notePath of includedNotes.slice(0, 3)) {
+      if (charsUsed >= charBudget) break;
+      try {
+        const links = await getBacklinks(vault, { path: notePath, limit: 5 });
+        if (links.length > 0) {
+          const block = `### → ${notePath}\n${links.map((l) => `- ${l.path} : ${(l.snippets[0] ?? "").slice(0, 80)}`).join("\n")}\n`;
+          sections.push(block);
+          charsUsed += block.length;
+          backlinksBytes += block.length;
+          backlinksAdded += links.length;
+        }
+      } catch {
+        // skip
+      }
+    }
+    if (backlinksAdded === 0) sections.pop(); // remove empty heading
+  }
+
+  // 4) Recent daily notes
+  if (recentN > 0 && charsUsed < charBudget) {
+    try {
+      const recent = await getRecentEdits(vault, { since_minutes: 60 * 24 * 7, limit: recentN, folder: args.folder });
+      const dailies = recent.filter((r) => /\d{4}-\d{2}-\d{2}/.test(r.path));
+      if (dailies.length > 0) {
+        sections.push(`## Recent (${dailies.length} dailies, last 7 days)`);
+        for (const d of dailies) {
+          if (charsUsed >= charBudget) break;
+          const block = `- ${d.path} (${d.mtime})`;
+          sections.push(block);
+          charsUsed += block.length;
+          dailiesBytes += block.length;
+        }
+      }
+    } catch {
+      // skip
+    }
+  }
+
+  const bundle = sections.join("\n");
+  return {
+    query: args.query,
+    bundle,
+    estimated_tokens: Math.ceil(bundle.length / 4),
+    budget_tokens: budget,
+    sections: { notes: notesBytes, backlinks: backlinksBytes, dailies: dailiesBytes },
+    included_notes: includedNotes
+  };
 }
 
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─

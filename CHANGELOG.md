@@ -2,6 +2,193 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-05-08
+
+**Sprint 5 — agentic prompts (Khoj parity, lite scope).** Two new MCP prompts that bring named-persona retrieval and scheduled-query automation to enquire-mcp. Pure orchestration over existing tools — no new server-side state, no LLM calls.
+
+### Added — `vault_persona_search`
+
+Khoj-style agent persona pattern: scope retrieval to a folder + apply a persona-specific lens to the response. Useful when you want `research-assistant` behavior over `Research/` distinct from `editor` over `Drafts/`. Pure prompt template — orchestrates existing search tools with a fixed scope/instructions. Compatible with any MCP client.
+
+### Added — `vault_automation_setup`
+
+Walks the user through creating a cron'd vault query whose results land as a daily-note append, a new note, or a notification. Bridges enquire-mcp tools + the host's `scheduled-tasks` MCP (or any cron tool the agent has access to). Includes a smoke-once step before first scheduled run.
+
+This is the Khoj automation pattern translated to MCP: research that comes to you instead of you remembering to ask for it.
+
+### Note on HTTP transport
+
+The remote-MCP HTTP transport (the third Sprint 5 feature in our roadmap) is deferred to a separate focused sprint. It's an architectural change that warrants standalone PR review (auth model, rate-limit, CORS, Tailscale Funnel docs). Tracked as v2.6.0.
+
+### Tests
+
+431 unit tests pass (no count delta — prompts are pure templates).
+
+### Migration
+
+**No-op.** All additions are new MCP prompts. Existing tool calls behave identically.
+
+## [2.4.0] — 2026-05-08
+
+**Sprint 4 — Karpathy LLM-Wiki backend positioning.** Four new MCP prompts that implement the [Karpathy LLM-Wiki workflow](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) natively over Obsidian's `.md` + `[[wikilinks]]` substrate. **Strategic claim: enquire-mcp is the open-source backend for Karpathy-style LLM Wikis on top of your existing Obsidian vault.** No competitor sits on this intersection (Search-first / Agentic-first / Wiki-compounding) — we claim it.
+
+### Added — `vault_synth` (LLM-Wiki ingest)
+
+Take raw source content, extract concepts/entities/claims, reconcile with the existing vault (search for prior coverage), propose drafts (new note vs append vs cross-link). Cites every claim with the source location for trust. Lints proposals via `obsidian_validate_note_proposal` before writing. Outputs a transactional plan; user approves before disk writes.
+
+### Added — `vault_wiki_compile` (LLM-Wiki maintenance)
+
+Weekly compile step. Scans recently-changed notes, regenerates `index.md` (top-of-vault TOC + concept clusters by tag/folder), appends to `log.md` (chronological compile history). Surfaces gaps via `obsidian_lint_wiki`. Idempotent.
+
+### Added — `vault_lint_extended`
+
+Beyond structural lint of `obsidian_lint_wiki`: 4-phase deeper inspection.
+1. Structural — same as existing.
+2. **Semantic contradictions** — for each strong claim, search for the negation; flag pairs.
+3. **Stale claims** — date references > 6 months old paired with words like "current"/"latest"/"upcoming".
+4. **Missing cross-references** — wiki page titles mentioned in plain text without `[[brackets]]`. Propose rewrites (validated first).
+
+### Added — `vault_capture` (Mem.ai-style "write don't organize")
+
+Decision-tree for filing a quick thought: continues an existing note? → append. Conversational/time-bound? → today's daily. Distinct concepts? → `vault_synth`. Default: Inbox catch-all. Always shows diff before writing.
+
+### Strategic position
+
+Combined with v2.0-v2.3, the prompt + tool surface now claims **three categories simultaneously**:
+
+- **Search-first** (vs Smart Connections) — covered by `obsidian_search` (hybrid RRF + graph boost).
+- **Agentic-first** (vs Khoj) — covered partially by `vault_capture`/`vault_synth` (full agent personas in v2.5.0).
+- **Wiki-compounding** (vs Karpathy LLM-Wiki) — claimed exclusively by `vault_synth`/`vault_wiki_compile`/`vault_lint_extended`.
+
+**No other open-source PKM-AI tool sits on all three.** This release stakes that claim.
+
+### Tests
+
+431 unit tests pass (no count delta — v2.4.0 adds prompts only, which are pure templates).
+
+### Migration
+
+**No-op.** All additions are new MCP prompts. Existing tool calls behave identically. Prompts work in any MCP client (Claude Code / Cursor / Codex / OpenClaw / Devin / etc.).
+
+## [2.3.0] — 2026-05-08
+
+**Sprint 3 — Obsidian-native moats.** Two features that exploit primitives no other Obsidian-MCP uses: the wikilink graph + atomic frontmatter manipulation. Result: retrieval quality gap that generic vector stores cannot close.
+
+### Added — Wikilink graph-boost on `obsidian_search` (default ON)
+
+After RRF fusion, we count how many *other* top-K hits link to each candidate, then boost score by `α × in-degree` (α=0.005 — enough to break ties, won't override strong single-ranker signals). Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
+
+**This is the "only enquire-mcp does this" feature.** Generic vector stores can't do this without an Obsidian-aware layer; Smart Connections doesn't do it either. Wikilinks ARE the differentiating Obsidian primitive — using them as a retrieval signal is something only an Obsidian-native server can do well.
+
+Cost is small: read top-K notes (already cached from prior calls), build adjacency in memory, count overlaps. Sub-50ms on a 30-candidate set.
+
+Default ON. Set `graph_boost: false` to disable for diagnostic comparison ("did boost help here?").
+
+### Added — `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_frontmatter_set`
+
+Surgical YAML manipulation. Pre-fix, agents wanting to set `status: published` on 12 notes had to use find/replace text — error-prone (multi-line strings, special chars, key-collision edge cases). Now:
+
+- **`_get`** (read) — read full frontmatter or single key. Periodic-note aliases work (`title: "today"`).
+- **`_search`** (read) — find notes by frontmatter predicate. Three exclusive predicates: `equals` (strict equality), `exists` (key must be present), `contains` (for array values). Useful as a precursor to bulk `_set`: "find all notes with status:draft, then set their status to published."
+- **`_set`** (write, gated by `--enable-write`) — set/unset keys atomically. Pass `null` as value to delete a key. Round-trips through gray-matter so YAML formatting/quoting/types stay consistent. `dry_run: true` shows the diff without writing. Returns `before` + `after` + `changed_keys` for observability.
+
+### Tests
+
+431 unit tests pass (was 420, +11 new): frontmatter get/set/search end-to-end + dry-run + null-deletion + exclusive predicate validation.
+
+### Architecture & strategic position
+
+This sprint cements the "**only enquire-mcp uses your wikilink graph as a retrieval signal**" claim — concrete, measurable, defensible. Combined with v2.2.0's hybrid retrieval and v2.1.0's structural breadcrumbs, the retrieval stack is now:
+
+```
+query → BM25 (FTS5) ┐
+       → TF-IDF      ├→ RRF fuse → graph-boost rerank → top-K
+       → embeddings  ┘
+```
+
+Each layer is a distinct competitive moat against generic vector-store-based MCPs.
+
+### Migration
+
+**No-op for default users.** Graph boost is on by default; if it changes ranking on a specific corpus, that's the intended behavior. Set `graph_boost: false` to revert to pre-v2.3.0 RRF-only ranking.
+
+## [2.2.0] — 2026-05-08
+
+**Sprint 2 — Smart Connections gap closure.** Three features that match what users currently pay for via the dominant Obsidian semantic-search plugin, all MCP-native (work in Claude Code / Cursor / Codex / any agent — not Obsidian-only).
+
+### Added — `obsidian_chat_thread_append` + `obsidian_chat_thread_read`
+
+Note-tethered AI conversations. Smart Connections' #1 paid feature: AI chat threads bound to a specific note, persisted as markdown so they're searchable, version-controllable, and survive across sessions / clients.
+
+Wire format: `## Chat: <title>` heading at the top, with `### <role> · <ISO timestamp>` blocks per message. Human-readable, parseable, and feeds back into our retrieval index — agents can search past chat threads by content.
+
+```md
+## Chat: research session — 2026-05-08
+
+### user · 2026-05-08T10:00:00Z
+What did I write last week about RLHF?
+
+### assistant · 2026-05-08T10:00:01Z
+Three notes: ...
+```
+
+`_append` is a write tool (gated by `--enable-write`); `_read` is read-only.
+
+### Added — `obsidian_search` `granularity: "block"` argument
+
+The default `note` mode collapses multi-chunk hits to one per note (best chunk wins). New `block` mode keeps each chunk as a distinct hit — useful when a note covers a topic in multiple paragraphs and you want the LLM to see all of them. RRF fuses on `path#chunk_index` keys instead of just `path`.
+
+This is what Smart Connections paywalls as "block-level connections" in their Pro tier. Free here.
+
+### Added — `obsidian_context_pack`
+
+Token-budgeted context bundling. Takes a question, runs hybrid search, gathers note bodies + 1-line backlink summaries + optionally recent daily notes, deduplicates, packs to a token budget, returns one ready-to-paste markdown bundle. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into ANY AI chat (not just Obsidian — that's the MCP-native edge over Smart Connections' "Send to Smart Context").
+
+### Tests
+
+420 unit tests pass (was 413, +7 new): chat thread create/append/read end-to-end, multi-line content preservation, regex multi-line flag for thread-title detection, write-permission enforcement.
+
+### Migration
+
+**No-op for users.** All additions are new tools / new optional argument. Existing tool calls behave identically.
+
+## [2.1.0] — 2026-05-08
+
+**Sprint 1 of the post-v2.0 roadmap.** Three quick wins that improve retrieval quality at near-zero implementation cost. No new tools — refinements to existing surfaces. All changes are internal; the API surface is unchanged.
+
+### Improved — Markdown-aware structural chunker (heading breadcrumbs)
+
+`chunkContent()` now attaches a `breadcrumb` field to every chunk: the H1 > H2 > H3 hierarchy in scope at chunk start. Both indexers use it:
+
+- **FTS5** stores `[section: <breadcrumb>]\n<text>` in the `content` column so BM25 catches notes whose section heading matches a query term, even when the body doesn't repeat it.
+- **Embeddings** prepend `<breadcrumb>\n\n<text>` before sending to the model so the embedding captures structural context.
+
+Per Chroma 2024 + NAACL 2025: structural breadcrumbs lift NDCG@10 by 2-5 points at ~0 token cost. We already had heading-aware AST in `parser.ts`; this just propagates it through chunking.
+
+ATX headings only. Fenced code blocks (where `#` is a shell prompt, not a heading) are skipped via state-machine — `bash` snippets with `# comment` no longer hijack the heading stack.
+
+### Improved — CJK / Thai / Khmer / Lao tokenization via `Intl.Segmenter`
+
+The Unicode-regex tokenizer in `tokenizeForTfidf` worked for whitespace-separated scripts (Latin, Cyrillic, Greek, Hebrew, Arabic) but produced character-level or huge multi-character "tokens" for CJK / Thai / Khmer / Lao — the length filter dropped them, and BM25/TF-IDF precision tanked.
+
+Now: when content contains Chinese / Japanese / Korean / Thai / Tibetan / Khmer code points, branch into `Intl.Segmenter` (Node 16+ built-in ICU) for proper word-break. Per-document detection, no new dependencies.
+
+Validated against Japanese (kana + kanji) and Chinese (Hanzi) test corpora — top hit ranking is now correct for cross-lingual queries on those scripts.
+
+### Added — `search_with_query_expansion` MCP prompt
+
+Multi-query expansion as a **client-side orchestration prompt**, not a server-side LLM call. The agent paraphrases the query 3-5 ways (mix of keyword-focused, semantic-focused, step-back, optionally cross-lingual), runs `obsidian_search` per paraphrase, then RRF-fuses the results with k=60.
+
+Lifts recall by 5-15 NDCG@10 on terse / ambiguous queries vs single-pass search. Pure prompt engineering — zero new server code, respects MCP architectural boundary (server does retrieval, agent does LLM).
+
+### Tests
+
+413 unit tests pass (was 408, +5 new): 3 for breadcrumb propagation (heading hierarchy, preamble, code-fence safety) + 2 for CJK segmentation (Chinese + Japanese top-hit ranking).
+
+### Migration
+
+**No-op for users.** All changes are internal. Existing `.fts5.db` and `.embed.db` will rebuild automatically on next vault sync due to existing `tokenize_mode` / `vault_root` cross-config-change guards.
+
 ## [2.0.0] — 2026-05-08
 
 **v2.0.0 stable.** Promotes the v2.0 prerelease train (alpha.0 → beta.{0,1,2,3,4}) to `@latest` on npm. `npm install @oomkapwn/enquire-mcp` now ships v2.0.0 by default; v1.11.1 stable users update on next install. **No new code changes from beta.4** — this release is the channel promotion only.

@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 30 MCP tools (21 always-on read + 4 opt-in read + 5 opt-in write); the 4 opt-ins are: 1 via `--persistent-index` (`obsidian_full_text_search`) + 3 via `--diagnostic-search-tools` (the single-ranker `obsidian_search_text` / `obsidian_semantic_search` / `obsidian_embeddings_search` — gated by default in v2.0+ since `obsidian_search` auto-detects + fuses signals). 2 + 1 opt-in MCP resources, 10 MCP prompts. Server speaks stdio JSON-RPC, launched per-vault.
+**enquire is an MCP server for Obsidian vaults.** 36 MCP tools (25 always-on read + 4 opt-in read + 7 opt-in write); the 4 opt-ins are: 1 via `--persistent-index` (`obsidian_full_text_search`) + 3 via `--diagnostic-search-tools` (the single-ranker `obsidian_search_text` / `obsidian_semantic_search` / `obsidian_embeddings_search` — gated by default in v2.0+ since `obsidian_search` auto-detects + fuses signals). 2 + 1 opt-in MCP resources, 17 MCP prompts. Server speaks stdio JSON-RPC, launched per-vault.
 
 > **Channels:** stable v1.x (`@latest` on npm) ships 28 tools — no ML embeddings, no hybrid search. **v2.0 beta** (`@beta` on npm) adds `obsidian_search` (hybrid RRF) + `obsidian_embeddings_search` + the `install-model` / `build-embeddings` / `clear-embeddings` subcommands. This document covers the **v2.0 beta** surface.
 

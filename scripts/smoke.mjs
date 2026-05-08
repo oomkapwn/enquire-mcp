@@ -592,11 +592,17 @@ async function smokeHttp(vaultPath, binPath) {
         headers: { "Content-Type": "application/json" },
         body: "{}"
       });
-      httpCheck("missing-bearer returns 401", noauth.status === 401, `status=${noauth.status}`);
+      // CodeQL guard: don't echo response bodies/headers from auth-related
+      // requests into log output. The detail messages here describe what
+      // we expected, not what we got, so a smoke fail doesn't leak any
+      // server-controlled data into CI logs.
+      const noauthOk = noauth.status === 401;
+      httpCheck("missing-bearer returns 401", noauthOk, "expected HTTP 401 on POST /mcp without Authorization header");
+      const wwwAuth = noauth.headers.get("WWW-Authenticate") ?? "";
       httpCheck(
         "401 response carries WWW-Authenticate header",
-        (noauth.headers.get("WWW-Authenticate") ?? "").includes("Bearer"),
-        noauth.headers.get("WWW-Authenticate") ?? "(none)"
+        wwwAuth.includes("Bearer"),
+        "expected WWW-Authenticate header to start with 'Bearer'"
       );
 
       // Auth'd initialize → 200.
@@ -618,9 +624,17 @@ async function smokeHttp(vaultPath, binPath) {
           }
         })
       });
-      httpCheck("authenticated initialize returns 200", init.status === 200, `status=${init.status}`);
+      httpCheck(
+        "authenticated initialize returns 200",
+        init.status === 200,
+        "expected HTTP 200 on authenticated initialize"
+      );
       const initText = await init.text();
-      httpCheck("initialize response mentions enquire", initText.includes("enquire"), initText.slice(0, 200));
+      httpCheck(
+        "initialize response mentions enquire",
+        initText.includes("enquire"),
+        "expected response body to contain server name 'enquire'"
+      );
     } catch (err) {
       console.log(`FAIL  http smoke — ${err.message}`);
       localFailures.push(err.message);

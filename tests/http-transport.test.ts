@@ -156,6 +156,8 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       healthPath: "/health",
       rateLimitPerMinute: 0, // disabled by default for e2e — opt in per-test
       corsOrigins: [],
+      // Don't accumulate signal listeners across many test servers.
+      installSignalHandlers: false,
       ...over
     });
     const addr = httpServer.address() as AddressInfo;
@@ -315,6 +317,46 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://claude.ai");
       expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
       expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("OPTIONS preflight with wildcard origin reflects '*' and OMITS Allow-Credentials (CodeQL cors-credential-leak guard)", async () => {
+    const s = await spawn({ corsOrigins: ["*"] });
+    try {
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://anything.example.com",
+          "Access-Control-Request-Method": "POST"
+        }
+      });
+      expect(res.status).toBe(204);
+      // Wildcard reflects literal "*", NOT the request's origin (avoids
+      // credential-bearing CORS grant to attacker-controlled origins).
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+      // Allow-Credentials must be absent under wildcard (browsers reject
+      // the combo, and we want it absent in headers regardless).
+      expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("OPTIONS preflight with explicit origin reflects exact origin AND sends Allow-Credentials", async () => {
+    const s = await spawn({ corsOrigins: ["https://claude.ai"] });
+    try {
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://claude.ai",
+          "Access-Control-Request-Method": "POST"
+        }
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://claude.ai");
+      expect(res.headers.get("Access-Control-Allow-Credentials")).toBe("true");
     } finally {
       await s.close();
     }

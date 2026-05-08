@@ -66,6 +66,15 @@ export interface HttpServeOptions extends ServeOptions {
   corsOrigins?: string[];
   /** Optional path-prefix to match a /health probe under (e.g. for Tailscale). Default `/health`. */
   healthPath?: string;
+  /**
+   * When `true` (default), registers SIGINT/SIGTERM/beforeExit listeners
+   * for graceful shutdown of the HTTP server, vault, FTS5 index, watcher,
+   * and persistent cache. Tests pass `false` to avoid leaking listeners
+   * when spawning many `startHttpServer()` instances in one process —
+   * cleanup happens via `httpServer.close()` which still triggers the
+   * underlying resource cleanup.
+   */
+  installSignalHandlers?: boolean;
 }
 
 /**
@@ -164,23 +173,49 @@ function sendJsonRpcError(res: ServerResponse, httpStatus: number, code: number,
   );
 }
 
-/** Apply CORS headers if the request's Origin is allowed. */
+/**
+ * Apply CORS headers if the request's Origin is allowed.
+ *
+ * Defense-in-depth against the CORS-credentials-misconfig class of bugs:
+ *
+ *   • For an explicit allowlisted origin (e.g. https://claude.ai), we
+ *     reflect ONLY that exact origin in `Access-Control-Allow-Origin` and
+ *     emit `Vary: Origin` so caches don't cross-pollinate across origins.
+ *     Pair with `Access-Control-Allow-Credentials: true` so cookies +
+ *     credentialed Bearer requests work as expected.
+ *
+ *   • For the wildcard `*` allowlist entry, we reflect `*` literally (NOT
+ *     the request's origin) and DO NOT send `Allow-Credentials: true`.
+ *     Browsers reject the combo of wildcard-origin + credentials anyway,
+ *     so this matches what they enforce. Equally important: it kills the
+ *     CORS-credential-leak attack surface where a misconfigured wildcard
+ *     could otherwise hand attacker.com a credential-bearing CORS grant.
+ *
+ *   • Disallowed origins get nothing — no Allow-Origin header → browser
+ *     blocks the actual request even if we 200.
+ *
+ * Documented as a deliberate behavior split for users who pass `*`: with
+ * `*` you get an unauthenticated public CORS endpoint (still bearer-gated
+ * server-side, just no credentialed-cookie path). That's the right
+ * trade-off.
+ */
 function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: string[]): void {
   const origin = req.headers.origin;
   if (typeof origin !== "string") return;
-  // Wildcard support: a single "*" entry permits any origin (still requires
-  // the user to explicitly opt in via --cors-origin '*'; we don't allow it
-  // by default). Note: with credentialed Bearer requests, browsers reject
-  // Access-Control-Allow-Origin: * — so wildcard works for token-less APIs
-  // (which we don't have) but not for the standard claude.ai/ChatGPT path.
-  // In practice users will list the specific origins (e.g. claude.ai).
-  const allowed = allowOrigins.includes("*") || allowOrigins.includes(origin);
-  if (!allowed) return;
-  res.setHeader("Access-Control-Allow-Origin", origin);
+  const exactMatch = allowOrigins.includes(origin);
+  const wildcard = !exactMatch && allowOrigins.includes("*");
+  if (!exactMatch && !wildcard) return;
+  // Reflect literal "*" for wildcard mode (no credentials), the exact
+  // origin otherwise (with credentials). Never reflect the request's
+  // origin under wildcard — that would be the dangerous variant CodeQL
+  // flags as cors-misconfig-credentials-leak.
+  res.setHeader("Access-Control-Allow-Origin", wildcard ? "*" : origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, Last-Event-ID");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (!wildcard) {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
   res.setHeader("Access-Control-Max-Age", "600");
 }
 
@@ -327,52 +362,56 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
   });
 
   // Persistent-cache flush + watcher cleanup on signal. Same hooks as
-  // stdio mode — the deps own the lifecycle.
-  if (deps.vault.persistentCacheEnabled) {
-    let saving = false;
-    let saved = false;
-    const flush = async () => {
-      if (saving || saved) return;
-      saving = true;
-      try {
-        await deps.vault.saveDiskCache();
-        saved = true;
-      } catch (err) {
-        process.stderr.write(`enquire: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
-      } finally {
-        saving = false;
-      }
+  // stdio mode — the deps own the lifecycle. Skipped under
+  // installSignalHandlers=false so tests can spawn many servers in one
+  // process without accumulating SIGINT/SIGTERM listeners.
+  if (opts.installSignalHandlers !== false) {
+    if (deps.vault.persistentCacheEnabled) {
+      let saving = false;
+      let saved = false;
+      const flush = async () => {
+        if (saving || saved) return;
+        saving = true;
+        try {
+          await deps.vault.saveDiskCache();
+          saved = true;
+        } catch (err) {
+          process.stderr.write(`enquire: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
+        } finally {
+          saving = false;
+        }
+      };
+      process.once("SIGINT", () => {
+        flush().finally(() => process.exit(0));
+      });
+      process.once("SIGTERM", () => {
+        flush().finally(() => process.exit(0));
+      });
+      process.on("beforeExit", () => {
+        if (!saved && !saving) void flush();
+      });
+    }
+    if (deps.watcher) {
+      const closeWatcher = () => void deps.watcher?.close();
+      process.once("SIGINT", closeWatcher);
+      process.once("SIGTERM", closeWatcher);
+      process.on("beforeExit", closeWatcher);
+    }
+    if (deps.ftsIndex) {
+      const closeFts = () => deps.ftsIndex?.close();
+      process.once("SIGINT", closeFts);
+      process.once("SIGTERM", closeFts);
+      process.on("beforeExit", closeFts);
+    }
+    // Graceful HTTP-server shutdown on signal.
+    const shutdown = () => {
+      httpServer.close(() => {
+        // Cascade-close happens via beforeExit hooks.
+      });
     };
-    process.once("SIGINT", () => {
-      flush().finally(() => process.exit(0));
-    });
-    process.once("SIGTERM", () => {
-      flush().finally(() => process.exit(0));
-    });
-    process.on("beforeExit", () => {
-      if (!saved && !saving) void flush();
-    });
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
   }
-  if (deps.watcher) {
-    const closeWatcher = () => void deps.watcher?.close();
-    process.once("SIGINT", closeWatcher);
-    process.once("SIGTERM", closeWatcher);
-    process.on("beforeExit", closeWatcher);
-  }
-  if (deps.ftsIndex) {
-    const closeFts = () => deps.ftsIndex?.close();
-    process.once("SIGINT", closeFts);
-    process.once("SIGTERM", closeFts);
-    process.on("beforeExit", closeFts);
-  }
-  // Graceful HTTP-server shutdown on signal.
-  const shutdown = () => {
-    httpServer.close(() => {
-      // Cascade-close happens via beforeExit hooks.
-    });
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);

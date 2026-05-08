@@ -121,7 +121,7 @@ function extractHeadings(body: string): Array<{ level: number; text: string; lin
     }
     if (inFence) continue;
     const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (m && m[1] && m[2]) {
+    if (m?.[1] && m[2]) {
       out.push({ level: m[1].length, text: m[2], line: i + 1 });
     }
   }
@@ -1877,7 +1877,7 @@ export async function getOpenQuestions(
         continue;
       }
       const m = re.exec(line);
-      if (!m || !m[1]) continue;
+      if (!m?.[1]) continue;
       out.push({
         question: m[1].trim(),
         source_path: e.relPath,

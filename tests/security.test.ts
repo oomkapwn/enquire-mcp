@@ -7,7 +7,6 @@ import {
   appendToNote,
   archiveNote,
   createNote,
-  embeddingsSearch,
   listNotes,
   readNote,
   renameNote,

@@ -33,11 +33,13 @@ import {
   lintWiki,
   listCanvases,
   listNotes,
+  listPdfs,
   listTags,
   openInUi,
   paperAudit,
   readCanvas,
   readNote,
+  readPdf,
   renameNote,
   replaceInNotes,
   resolveWikilink,
@@ -49,7 +51,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -1248,6 +1250,46 @@ function registerReadTools(
       }
     },
     async (args) => textResult(await readCanvas(vault, args))
+  );
+
+  // v2.7.0 — PDF tools. PDFs are the #1 non-markdown content kind in real
+  // research vaults; no other Obsidian-MCP indexes them. Both tools work
+  // identically over stdio + serve-http transports. Underlying parser
+  // (pdfjs-dist) is an optionalDependency — `obsidian_read_pdf` surfaces a
+  // clean install-hint error on missing optional dep, never a cryptic
+  // module-not-found stack trace.
+  server.registerTool(
+    "obsidian_list_pdfs",
+    {
+      title: "List PDF files in the vault",
+      description:
+        "Lists `.pdf` files in the vault with size + last-modified timestamp. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which PDFs exist before calling `obsidian_read_pdf` to extract text. Sorted by mtime descending (newest first). PDFs are the #1 non-markdown content kind in real research vaults; this is the discovery entry point.",
+      annotations: { ...READ_ONLY, title: "List PDFs" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the listing to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max PDFs to return (default 100)")
+      }
+    },
+    async (args) => textResult(await listPdfs(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_read_pdf",
+    {
+      title: "Extract text from a PDF (page-by-page)",
+      description:
+        "Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title/author/subject/etc). Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend OCR. Optional `pages` slice (1-indexed inclusive range) for partial reads of long documents. Read-only. Same path-safety + privacy filter as `obsidian_read_note`. Powered by Mozilla's PDF.js (Apache-2.0).",
+      annotations: { ...READ_ONLY, title: "Read PDF" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
+        pages: z
+          .tuple([z.number().int().positive(), z.number().int().positive()])
+          .optional()
+          .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] reads pages 2..5"),
+        include_metadata: z.boolean().optional().describe("Include doc-level metadata in result (default true)")
+      }
+    },
+    async (args) => textResult(await readPdf(vault, args))
   );
 
   // v2.0.0-beta.3: gated — see comment on obsidian_search_text above.

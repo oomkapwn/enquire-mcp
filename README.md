@@ -44,7 +44,7 @@ That's it. Your AI now has structured access to wikilinks, backlinks, frontmatte
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio JSON-RPC |
 | **Remote MCP (HTTP transport, bearer auth)** | ❌ | ❌ | ✅ **only here** (v2.6.0) |
 | SLSA-3 provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 459 unit tests |
+| Test suite | rare | n/a | ✅ 481 unit tests |
 
 ---
 
@@ -125,9 +125,9 @@ No other Obsidian-MCP currently ships a remote-HTTP transport. Same vault, same 
 
 ---
 
-## Tools (36 total)
+## Tools (38 total)
 
-### 25 always-on read tools
+### 27 always-on read tools
 
 | Tool | What it does |
 |---|---|
@@ -155,6 +155,8 @@ No other Obsidian-MCP currently ships a remote-HTTP transport. Same vault, same 
 | `obsidian_validate_note_proposal` | Lint a draft note before writing (closes the #1 LLM-write pain). |
 | `obsidian_list_canvases` | List `.canvas` files with node + edge counts. |
 | `obsidian_read_canvas` | Parse `.canvas` into typed nodes (text/file/link/group) + edges. |
+| `obsidian_list_pdfs` | **v2.7.0.** List `.pdf` files with size + mtime. PDFs are the #1 non-markdown content kind in real vaults; no other Obsidian-MCP indexes them. |
+| `obsidian_read_pdf` | **v2.7.0.** Extract page-by-page text + doc metadata (title/author/etc) from a PDF. Optional 1-indexed page-range slice. Image-only / scanned PDFs surface `has_text: false`. Powered by Mozilla PDF.js (Apache-2.0, pinned to `optionalDependencies` so the markdown-only path stays zero-cost). |
 | `obsidian_open_in_ui` | Emit `obsidian://open?vault=...` URI. |
 
 ### 4 opt-in read tools
@@ -228,7 +230,7 @@ Full posture: [SECURITY.md](./SECURITY.md). Report vulnerabilities to `oomkapwn@
 |---|---|
 | Language | TypeScript strict + `noUncheckedIndexedAccess` |
 | Lint | Biome 2 (zero-warning policy) |
-| Tests | 459 unit tests across 22 files |
+| Tests | 481 unit tests across 23 files |
 | CI | ubuntu × {Node 20, 22, 24} required + macOS advisory job |
 | Coverage | Lines ≥86%, statements ≥82%, functions ≥75%, branches ≥73% (gated) |
 | Audit | `npm audit --audit-level=moderate` for prod; high for dev |

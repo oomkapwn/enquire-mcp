@@ -43,7 +43,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.0.0-beta.3";
+const VERSION = "2.0.0-beta.4";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -465,11 +465,22 @@ async function syncEmbedDb(
   let added = 0;
   let updated = 0;
   let unchanged = 0;
+  // v2.0.0-beta.4: per-note progress logging. Pre-fix, build-embeddings on
+  // a 100+ note vault gave the user zero feedback for 10+ minutes — when
+  // it eventually hung on a pathological note (long content × big batch),
+  // the user couldn't tell "still working" from "stuck forever". Now we
+  // log every Nth note with running rate so the user sees life signs and
+  // can ctrl-C with confidence if rate collapses to 0.
+  const totalToProcess = entries.length;
+  const logEvery = Math.max(1, Math.floor(totalToProcess / 20)); // ~5% increments
+  let processed = 0;
+  const startMs = Date.now();
   for (const e of entries) {
     live.add(e.relPath);
     const prevMtime = known.get(e.relPath);
     if (prevMtime !== undefined && prevMtime === e.mtimeMs) {
       unchanged += 1;
+      processed += 1;
       continue;
     }
     try {
@@ -478,7 +489,15 @@ async function syncEmbedDb(
       if (chunks.length === 0) {
         // No body — drop any stale entries.
         db.deleteNote(e.relPath);
+        processed += 1;
         continue;
+      }
+      // v2.0.0-beta.4: warn when a single note produces many chunks, so the
+      // user knows WHY their build is slow on this specific file.
+      if (chunks.length >= 30) {
+        process.stderr.write(
+          `enquire: ${e.relPath} → ${chunks.length} chunks (this one will be slow; consider splitting the note)\n`
+        );
       }
       const vectors = await embedder.embed(chunks.map((c) => c.text));
       const rows = chunks.map((c, i) => {
@@ -498,6 +517,15 @@ async function syncEmbedDb(
     } catch (err) {
       process.stderr.write(
         `enquire: skipping ${e.relPath} during embed sync — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+    processed += 1;
+    if (processed % logEvery === 0 || processed === totalToProcess) {
+      const elapsed = (Date.now() - startMs) / 1000;
+      const rate = processed / elapsed;
+      const eta = totalToProcess - processed > 0 ? (totalToProcess - processed) / rate : 0;
+      process.stderr.write(
+        `enquire: embed sync ${processed}/${totalToProcess} (${rate.toFixed(1)} notes/s; ETA ${eta.toFixed(0)}s)\n`
       );
     }
   }

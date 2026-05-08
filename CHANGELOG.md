@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-beta.4] — 2026-05-08
+
+**ML build-embeddings UX + throughput fix.** v2.0.0-beta.3 manual smoke on the maintainer's 128-note real vault revealed that `enquire-mcp build-embeddings` was *silent* for 13+ minutes when processing notes with many chunks. Investigation: not actually hung — just very slow on large notes (8,854 chunks total, several notes with 100+ chunks each), with zero feedback to the user. This release fixes both the speed AND the visibility.
+
+### Fixed — internal sub-batching cap on `embedder.embed()`
+
+Pre-fix: `embed(chunks)` passed the entire batch to ONNX Runtime in one call. A note with 175 chunks (e.g., maintainer's `CLAUDE.md` had 176) created a single 175-element batch, which ONNX Runtime processes pathologically slowly on CPU (memory pressure + lack of intra-batch parallelism).
+
+Now caps internal batch size at 8. Same total work, but throughput on large notes improves dramatically (~3-10× on maintainer's vault). Caller still receives a flat `Float32Array[]` so the API is unchanged.
+
+### Added — per-note progress logging in `build-embeddings`
+
+Pre-fix: `build-embeddings --vault <path>` printed nothing until completion. On a 128-note vault that meant 8+ minutes of silence followed by "added=128 total_chunks=8854". Indistinguishable from a hang.
+
+Now logs every ~5% with running rate + ETA, plus a per-note warning for notes producing 30+ chunks (so the user knows WHY a specific note is slow):
+
+```
+enquire: 99_Ilon/deep-dives/archive/013-... → 161 chunks (this one will be slow; consider splitting the note)
+enquire: embed sync 102/128 (0.2 notes/s; ETA 105s)
+```
+
+### Verified — hybrid retrieval on real bilingual vault
+
+End-to-end test on the maintainer's 128-note Russian/English vault:
+
+```json
+{
+  "query": "Claude Code subscription migration",
+  "signals_used": ["bm25", "tfidf", "embeddings"],
+  "matches": [{
+    "path": "99_Ilon/pipeline/cards/archive/claude-code-pro-to-max-migration-...",
+    "score": 0.04866,
+    "per_signal": {
+      "bm25": { "rank": 1, "score": 14.18 },
+      "tfidf": { "rank": 3, "score": 0.0898 },
+      "embeddings": { "rank": 1, "score": 0.5885 }
+    }
+  }]
+}
+```
+
+All three rankers fuse. Embeddings retrieve Russian content for English queries. Per-signal observability works. **First production-style validation of the v2.0 thesis.**
+
+### Migration
+
+**No-op for users.** The fix is purely internal — same API, same on-disk format, same response shape.
+
 ## [2.0.0-beta.3] — 2026-05-08
 
 **Backlog cleanup + tool-surface consolidation.** All audit-driven P0/P1 work landed in beta.2; this release closes the long tail of P2/P3 backlog items the same audits surfaced. No new features, no breaking changes for default users — but the default tool list is now narrower (21 read tools instead of 24) because the four single-ranker search tools moved behind a new opt-in flag.

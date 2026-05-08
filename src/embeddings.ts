@@ -108,26 +108,35 @@ export async function loadEmbedder(alias?: string): Promise<Embedder> {
     options: { pooling: "mean"; normalize: boolean }
   ) => Promise<{ data: Float32Array; dims: readonly number[] }>;
 
+  // v2.0.0-beta.4: cap internal batch size to avoid pathological embedder
+  // hangs on notes with many chunks. Real-vault smoke (128 notes) hung at
+  // 75% CPU for 13+ minutes when an unbounded batch of ~50 chunks was sent
+  // in one extractor() call. ONNX runtime can degrade catastrophically on
+  // large input batches. 8 keeps memory bounded (~3KB per L2-normed Float32
+  // dim=384 vector + token-tensor scratch space) and progress smoothly.
+  const MAX_INTERNAL_BATCH = 8;
+
+  const dim = model.dim;
   return {
     model,
     async embed(texts: readonly string[]): Promise<Float32Array[]> {
       if (texts.length === 0) return [];
-      // transformers.js batches when given an array. Mean-pool over the token
-      // axis + L2-normalize so cosine == dot product downstream.
-      const tensor = await extractor([...texts], { pooling: "mean", normalize: true });
-      // tensor.dims = [batchSize, dim]. Slice into per-row Float32Arrays.
-      const dim = model.dim;
-      if (tensor.dims[1] !== dim) {
-        throw new Error(
-          `Model ${model.hfId} produced dim=${tensor.dims[1]}, expected ${dim}. ` +
-            `EMBEDDING_MODELS catalog is stale — file an issue.`
-        );
-      }
       const out: Float32Array[] = [];
-      for (let i = 0; i < texts.length; i++) {
-        const start = i * dim;
-        // Copy the slice — the underlying buffer is reused by transformers.js.
-        out.push(new Float32Array(tensor.data.slice(start, start + dim)));
+      // Sub-batch internally so a single note with N chunks doesn't stall
+      // the entire pipeline. Caller still gets a flat Float32Array[].
+      for (let batchStart = 0; batchStart < texts.length; batchStart += MAX_INTERNAL_BATCH) {
+        const batch = texts.slice(batchStart, batchStart + MAX_INTERNAL_BATCH);
+        const tensor = await extractor([...batch], { pooling: "mean", normalize: true });
+        if (tensor.dims[1] !== dim) {
+          throw new Error(
+            `Model ${model.hfId} produced dim=${tensor.dims[1]}, expected ${dim}. EMBEDDING_MODELS catalog is stale.`
+          );
+        }
+        for (let i = 0; i < batch.length; i++) {
+          const start = i * dim;
+          // Copy the slice — the underlying buffer is reused by transformers.js.
+          out.push(new Float32Array(tensor.data.slice(start, start + dim)));
+        }
       }
       return out;
     }

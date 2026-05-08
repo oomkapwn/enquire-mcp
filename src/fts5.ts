@@ -16,13 +16,19 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
 // v3 added `raw_content` UNINDEXED so the chunk resource can return the
 // original note text, while FTS5's `content` column keeps the enriched
 // version (with appended wikilink_targets) for recall.
+// v4 added the `kind` UNINDEXED column ("md" | "pdf") so PDF chunks live
+// in the same index as markdown — `obsidian_search` returns blended hits
+// with the kind flag exposed to agents. Schema bump auto-rebuilds.
 
 export type TokenizeMode = "unicode61" | "trigram";
+
+/** Content-source kind. v2.7.0 added `pdf`; v2.8.0 indexes them. */
+export type ChunkKind = "md" | "pdf";
 
 export interface FtsSearchHit {
   rel_path: string;
@@ -31,6 +37,8 @@ export interface FtsSearchHit {
   line_end: number;
   snippet: string;
   score: number;
+  /** v2.8.0 — content-source kind. Defaults to "md" for backward compat. */
+  kind: ChunkKind;
 }
 
 export interface FtsSyncReport {
@@ -186,12 +194,14 @@ export class FtsIndex {
         line_end UNINDEXED,
         tags UNINDEXED,
         raw_content UNINDEXED,
+        kind UNINDEXED,
         tokenize='${tokenizeArg}'
       );
       CREATE TABLE IF NOT EXISTS source_state (
         rel_path TEXT PRIMARY KEY,
         mtime_ms INTEGER NOT NULL,
         n_chunks INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
         indexed_at TEXT NOT NULL
       );
     `);
@@ -226,15 +236,28 @@ export class FtsIndex {
    * Diff the on-disk source_state against the live vault snapshot. Returns
    * categorized lists; caller is expected to feed `added` + `updated` paths
    * back into reindexFile() and pass `deleted` to dropFile().
+   *
+   * v2.8.0: optional `kind` filter — when set, the diff only considers
+   * source_state rows of that kind. Lets the markdown-sync and PDF-sync
+   * paths run independently against the same DB without one's "missing
+   * files" being mistakenly deleted by the other. Default `undefined`
+   * means "all kinds" (used by older callers + diff queries that want
+   * a global view).
    */
-  diff(liveEntries: Array<{ relPath: string; mtimeMs: number }>): {
+  diff(
+    liveEntries: Array<{ relPath: string; mtimeMs: number }>,
+    kind?: ChunkKind
+  ): {
     added: string[];
     updated: string[];
     deleted: string[];
     unchanged: string[];
   } {
     const db = this.requireDb();
-    const stored = db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
+    const stored =
+      kind !== undefined
+        ? db.prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ?").all<SourceStateRow>(kind)
+        : db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
     const storedMap = new Map<string, number>();
     for (const r of stored) storedMap.set(r.rel_path, r.mtime_ms);
     const live = new Map<string, number>();
@@ -262,7 +285,7 @@ export class FtsIndex {
     db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
   }
 
-  /** Re-chunk a single file, replacing its existing chunks atomically. */
+  /** Re-chunk a single markdown file, replacing its existing chunks atomically. */
   reindexFile(
     relPath: string,
     mtimeMs: number,
@@ -274,7 +297,7 @@ export class FtsIndex {
     const chunks = chunkContent(content);
     db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
     const insert = db.prepare(
-      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, 'md')"
     );
     // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
     // with leading/trailing commas for exact-tag matching at query time.
@@ -294,7 +317,41 @@ export class FtsIndex {
       insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
     });
     db.prepare(
-      "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at) VALUES (?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'md', ?)"
+    ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
+    return chunks.length;
+  }
+
+  /**
+   * v2.8.0 — re-chunk a single PDF, replacing its existing chunks atomically.
+   * Caller pre-extracts page text via `extractPdfText` (src/pdf.ts) so this
+   * method stays decoupled from pdfjs-dist (which is an optionalDependency).
+   *
+   * Page boundaries are preserved as `[page: N]` markers in the joined text
+   * before chunking — the chunker may split a page across chunks or merge
+   * short pages, but the markers travel with the text so search snippets
+   * carry page citations. Same `chunkContent` pipeline as markdown so chunk
+   * IDs match across the BM25 / TF-IDF / embeddings rankers (RRF requires
+   * stable IDs).
+   */
+  reindexPdfFile(relPath: string, mtimeMs: number, pages: ReadonlyArray<{ pageNumber: number; text: string }>): number {
+    const db = this.requireDb();
+    // Join pages with explicit `[page: N]` markers so the chunker can carry
+    // page provenance through. Empty pages (image-only / scanned) still get
+    // a marker so chunks downstream of them can still cite the right page.
+    const joined = pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
+    const chunks = chunkContent(joined);
+    db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+    const insert = db.prepare(
+      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, '', ?, 'pdf')"
+    );
+    chunks.forEach((c, i) => {
+      // No wikilink/tag enrichment for PDFs (they don't have either). The
+      // page marker is already in c.text so it shows up in snippets.
+      insert.run(c.text, relPath, i, c.lineStart, c.lineEnd, c.text);
+    });
+    db.prepare(
+      "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
     ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
     return chunks.length;
   }
@@ -332,6 +389,7 @@ export class FtsIndex {
     const sql = `
       SELECT chunks.rel_path AS rel_path, chunks.chunk_index AS chunk_index,
              chunks.line_start AS line_start, chunks.line_end AS line_end,
+             chunks.kind AS kind,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
              bm25(chunks) AS score
       FROM chunks
@@ -346,6 +404,7 @@ export class FtsIndex {
       chunk_index: number;
       line_start: number;
       line_end: number;
+      kind: string | null;
       snippet: string;
       score: number;
     }>(...params);
@@ -354,6 +413,10 @@ export class FtsIndex {
       chunk_index: r.chunk_index,
       line_start: r.line_start,
       line_end: r.line_end,
+      // v2.8.0: kind defaults to "md" for chunks indexed before the schema
+      // bump (legacy DBs auto-rebuild via SCHEMA_VERSION mismatch, but the
+      // null fallback is defense-in-depth).
+      kind: (r.kind === "pdf" ? "pdf" : "md") as ChunkKind,
       snippet: r.snippet,
       score: -r.score // BM25 is negative; flip so higher = better for callers
     }));

@@ -51,7 +51,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.7.0";
+const VERSION = "2.8.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -76,6 +76,10 @@ export interface ServeOptions {
   disabledTools?: string[];
   enabledTools?: string[];
   diagnosticSearchTools?: boolean;
+  /** v2.8.0 — also index PDFs into FTS5 (and embeddings, if a build-embeddings
+   *  with --include-pdfs ran). Off by default; opt-in because PDF extraction
+   *  is slower than markdown. */
+  includePdfs?: boolean;
 }
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -141,6 +145,10 @@ async function main(): Promise<void> {
     .option(
       "--diagnostic-search-tools",
       "Register the four single-ranker search tools (obsidian_search_text, obsidian_full_text_search, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool. Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking."
+    )
+    .option(
+      "--include-pdfs",
+      'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -283,22 +291,39 @@ async function main(): Promise<void> {
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--index-file <path>", "Override the FTS5 index file location")
     .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
-    .action(async (opts: { vault: string; indexFile?: string; tokenize?: "unicode61" | "trigram" }) => {
-      const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
-      const vault = new Vault(opts.vault);
-      await vault.ensureExists();
-      const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
-      const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
-      await idx.open();
-      try {
-        const report = await syncFtsIndex(vault, idx);
-        process.stdout.write(
-          `enquire: index ${indexFile} — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
-        );
-      } finally {
-        idx.close();
+    .option(
+      "--include-pdfs",
+      "v2.8.0 — also index PDFs into the FTS5 index. Off by default; PDF extraction is slower than markdown."
+    )
+    .action(
+      async (opts: {
+        vault: string;
+        indexFile?: string;
+        tokenize?: "unicode61" | "trigram";
+        includePdfs?: boolean;
+      }) => {
+        const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
+        const vault = new Vault(opts.vault);
+        await vault.ensureExists();
+        const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
+        await idx.open();
+        try {
+          const report = await syncFtsIndex(vault, idx);
+          process.stdout.write(
+            `enquire: index ${indexFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfFtsIndex(vault, idx);
+            process.stdout.write(
+              `enquire: index ${indexFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          idx.close();
+        }
       }
-    });
+    );
 
   // v2.0 alpha — ML embeddings subcommands.
   program
@@ -340,6 +365,10 @@ async function main(): Promise<void> {
     .option("--embed-file <path>", "Override the .embed.db file location")
     .option("--exclude-glob <pattern...>", "Exclude paths matching glob (repeatable)")
     .option("--read-paths <pattern...>", "Strict allowlist of glob patterns (repeatable)")
+    .option(
+      "--include-pdfs",
+      "v2.8.0 — also embed PDF chunks. Off by default; PDF extraction + embedding is ~10-30x slower than markdown per file."
+    )
     .action(
       async (opts: {
         vault: string;
@@ -347,6 +376,7 @@ async function main(): Promise<void> {
         embedFile?: string;
         excludeGlob?: string[];
         readPaths?: string[];
+        includePdfs?: boolean;
       }) => {
         const model = resolveModel(opts.embeddingModel);
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
@@ -359,8 +389,14 @@ async function main(): Promise<void> {
           const embedder = await loadEmbedder(opts.embeddingModel);
           const report = await syncEmbedDb(vault, db, embedder);
           process.stdout.write(
-            `enquire: embed db ${embedFile} — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
           );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfEmbedDb(vault, db, embedder);
+            process.stdout.write(
+              `enquire: embed db ${embedFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
+            );
+          }
         } finally {
           db.close();
         }
@@ -439,6 +475,26 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     try {
       await ftsIndex.open();
       await syncFtsIndex(vault, ftsIndex);
+      // v2.8.0: opt-in PDF indexing. Runs after the markdown sync so
+      // partial-progress logs interleave naturally. PDF extraction is
+      // ~10-30x slower than markdown chunk-and-index, so we surface a
+      // separate progress line for each .pdf processed.
+      if (opts.includePdfs) {
+        try {
+          const pdfReport = await syncPdfFtsIndex(vault, ftsIndex);
+          if (pdfReport.added + pdfReport.updated + pdfReport.deleted > 0) {
+            process.stderr.write(
+              `enquire: pdf-fts5 sync — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged}\n`
+            );
+          }
+        } catch (err) {
+          // Bad PDF / missing pdfjs-dist — don't take down the markdown
+          // index path. Markdown search keeps working without PDFs.
+          process.stderr.write(
+            `enquire: pdf-fts5 sync skipped — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+        }
+      }
     } catch (err) {
       // Don't leak the SQLite handle if open() succeeded but sync threw.
       ftsIndex.close();
@@ -640,7 +696,9 @@ async function syncEmbedDb(
 ): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
   const entries = await vault.listMarkdown();
   const known = new Map<string, number>();
-  for (const s of db.getSourceStates()) known.set(s.rel_path, s.mtime_ms);
+  // v2.8.0: scope to kind="md" so the markdown-sync path doesn't see (and
+  // potentially delete) PDF rows added by syncPdfEmbedDb.
+  for (const s of db.getSourceStates("md")) known.set(s.rel_path, s.mtime_ms);
 
   const live = new Set<string>();
   let added = 0;
@@ -739,7 +797,9 @@ async function syncFtsIndex(
 ): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
   const entries = await vault.listMarkdown();
   const live = entries.map((e) => ({ relPath: e.relPath, mtimeMs: e.mtimeMs }));
-  const diff = idx.diff(live);
+  // v2.8.0: scope to kind="md" so markdown-sync doesn't try to delete PDF
+  // rows added by syncPdfFtsIndex.
+  const diff = idx.diff(live, "md");
   for (const relPath of diff.deleted) idx.dropFile(relPath);
   for (const relPath of [...diff.added, ...diff.updated]) {
     const entry = entries.find((e) => e.relPath === relPath);
@@ -760,6 +820,174 @@ async function syncFtsIndex(
     deleted: diff.deleted.length,
     unchanged: diff.unchanged.length,
     total_chunks: idx.totalChunks()
+  };
+}
+
+/**
+ * v2.8.0 — sync PDF chunks into the FTS5 index. Same incremental-mtime
+ * pattern as syncFtsIndex but for PDFs: list .pdf files, diff against
+ * source_state rows where kind="pdf", reindex the changed ones via
+ * `extractPdfText` + `reindexPdfFile`.
+ *
+ * pdfjs-dist is an optionalDependency — extraction failures (missing dep
+ * / corrupt PDF / encrypted without password) are caught per-file and
+ * surfaced via stderr so one bad PDF doesn't poison the whole index.
+ */
+async function syncPdfFtsIndex(
+  vault: Vault,
+  idx: FtsIndex
+): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const pdfEntries = await vault.listFilesByExtension(".pdf");
+  const live = pdfEntries.map((e) => ({ relPath: e.relPath, mtimeMs: e.mtimeMs }));
+  const diff = idx.diff(live, "pdf");
+  for (const relPath of diff.deleted) idx.dropFile(relPath);
+  if (diff.added.length + diff.updated.length === 0) {
+    return {
+      added: diff.added.length,
+      updated: diff.updated.length,
+      deleted: diff.deleted.length,
+      unchanged: diff.unchanged.length,
+      total_chunks: idx.totalChunks()
+    };
+  }
+  // Lazy import — keeps the markdown-only path zero-cost when pdfjs-dist
+  // isn't installed (--omit=optional users).
+  const { extractPdfText } = await import("./pdf.js");
+  for (const relPath of [...diff.added, ...diff.updated]) {
+    const entry = pdfEntries.find((e) => e.relPath === relPath);
+    if (!entry) continue;
+    try {
+      const buf = await vault.readBinaryFile(entry.absPath);
+      const result = await extractPdfText(buf);
+      // Skip image-only PDFs (no extractable text). They'd produce a chunk
+      // with only `[page: N]` markers and waste index space.
+      if (!result.hasText) {
+        process.stderr.write(
+          `enquire: skipping ${relPath} during pdf-fts5 sync — image-only / scanned (no extractable text; use OCR via v2.9+)\n`
+        );
+        continue;
+      }
+      idx.reindexPdfFile(relPath, entry.mtimeMs, result.pages);
+    } catch (err) {
+      process.stderr.write(
+        `enquire: skipping ${relPath} during pdf-fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
+  return {
+    added: diff.added.length,
+    updated: diff.updated.length,
+    deleted: diff.deleted.length,
+    unchanged: diff.unchanged.length,
+    total_chunks: idx.totalChunks()
+  };
+}
+
+/**
+ * v2.8.0 — sync PDF chunks into the embedding index. Mirrors syncEmbedDb
+ * but for PDFs. Page boundaries are preserved as `[page: N]` markers
+ * before chunking so embeddings carry page-citation context.
+ */
+async function syncPdfEmbedDb(
+  vault: Vault,
+  db: EmbedDb,
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>
+): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const pdfEntries = await vault.listFilesByExtension(".pdf");
+  const known = new Map<string, number>();
+  for (const s of db.getSourceStates("pdf")) known.set(s.rel_path, s.mtime_ms);
+
+  const live = new Set<string>();
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let skipped = 0;
+  const totalToProcess = pdfEntries.length;
+  if (totalToProcess === 0) {
+    // Still need to handle deletions — PDFs that vanished from disk.
+    let deleted = 0;
+    for (const relPath of known.keys()) {
+      db.deleteNote(relPath);
+      deleted += 1;
+    }
+    return { added: 0, updated: 0, deleted, unchanged: 0, total_chunks: db.totalChunks() };
+  }
+  const { extractPdfText } = await import("./pdf.js");
+  const logEvery = Math.max(1, Math.floor(totalToProcess / 20));
+  let processed = 0;
+  const startMs = Date.now();
+  for (const e of pdfEntries) {
+    live.add(e.relPath);
+    const prevMtime = known.get(e.relPath);
+    if (prevMtime !== undefined && prevMtime === e.mtimeMs) {
+      unchanged += 1;
+      processed += 1;
+      continue;
+    }
+    try {
+      const buf = await vault.readBinaryFile(e.absPath);
+      const extracted = await extractPdfText(buf);
+      if (!extracted.hasText) {
+        process.stderr.write(`enquire: skipping ${e.relPath} during pdf-embed sync — image-only / scanned\n`);
+        skipped += 1;
+        processed += 1;
+        continue;
+      }
+      // Reuse the same chunker as markdown so chunk identity matches across
+      // BM25 / TF-IDF / embeddings rankers. Page markers travel inline.
+      const joined = extracted.pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
+      const chunks = chunkContent(joined);
+      if (chunks.length === 0) {
+        db.deleteNote(e.relPath);
+        processed += 1;
+        continue;
+      }
+      // Same breadcrumb-prepending logic as syncEmbedDb (no-op for PDFs
+      // since chunkContent returns no breadcrumb on non-markdown).
+      const vectors = await embedder.embed(chunks.map((c) => (c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text)));
+      const rows = chunks.map((c, i) => {
+        const vector = vectors[i];
+        if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);
+        return {
+          chunkIndex: i,
+          lineStart: c.lineStart,
+          lineEnd: c.lineEnd,
+          textPreview: c.text.slice(0, 480),
+          vector
+        };
+      });
+      db.upsertNote(e.relPath, e.mtimeMs, rows, "pdf");
+      if (prevMtime === undefined) added += 1;
+      else updated += 1;
+    } catch (err) {
+      process.stderr.write(
+        `enquire: skipping ${e.relPath} during pdf-embed sync — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      skipped += 1;
+    }
+    processed += 1;
+    if (processed % logEvery === 0 || processed === totalToProcess) {
+      const elapsed = (Date.now() - startMs) / 1000;
+      const rate = processed / elapsed;
+      const eta = totalToProcess - processed > 0 ? (totalToProcess - processed) / rate : 0;
+      process.stderr.write(
+        `enquire: pdf-embed sync ${processed}/${totalToProcess} (${rate.toFixed(2)} pdfs/s; ETA ${eta.toFixed(0)}s${skipped > 0 ? `; ${skipped} skipped` : ""})\n`
+      );
+    }
+  }
+  let deleted = 0;
+  for (const relPath of known.keys()) {
+    if (!live.has(relPath)) {
+      db.deleteNote(relPath);
+      deleted += 1;
+    }
+  }
+  return {
+    added,
+    updated,
+    deleted,
+    unchanged,
+    total_chunks: db.totalChunks()
   };
 }
 
@@ -1357,7 +1585,7 @@ function registerReadTools(
     {
       title: "Hybrid search (BM25 + TF-IDF + embeddings, RRF-fused)",
       description:
-        "**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it matches Smart Connections-quality retrieval — free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics.",
+        '**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it matches Smart Connections-quality retrieval — free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. **v2.8.0:** when `--include-pdfs` was passed to `serve` (or `enquire-mcp index --include-pdfs` ran), PDF chunks are blended into results — each hit carries a `kind: "md" | "pdf"` flag and PDF chunks include `[page: N]` markers in snippets so agents can cite the right page. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics.',
       annotations: { ...READ_ONLY, title: "Hybrid search" },
       inputSchema: {
         query: z.string().min(1).describe("Free-form query — multi-word natural language is the sweet spot"),

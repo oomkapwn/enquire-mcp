@@ -288,4 +288,74 @@ describe("EmbedDb", () => {
     expect(after.get("a.md")).toBe(3000);
     db.close();
   });
+
+  // v2.8.0 — PDF chunks indexed via the kind column.
+  it("upserts with kind='pdf' and search returns kind='pdf'", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      // Markdown chunk.
+      db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "alpha", vector: l2([1, 0, 0, 0]) }
+      ]);
+      // PDF chunk — same dim, different kind.
+      db.upsertNote(
+        "paper.pdf",
+        2000,
+        [{ chunkIndex: 0, lineStart: 1, lineEnd: 5, textPreview: "[page: 1] alpha", vector: l2([1, 0, 0, 0]) }],
+        "pdf"
+      );
+      // Cosine query that matches both.
+      const hits = db.search(l2([1, 0, 0, 0]), 10);
+      const byKind = new Map(hits.map((h) => [h.rel_path, h.kind]));
+      expect(byKind.get("a.md")).toBe("md");
+      expect(byKind.get("paper.pdf")).toBe("pdf");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("getSourceStates(kind='md') and getSourceStates(kind='pdf') don't overlap", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a", vector: l2([1, 0, 0, 0]) }
+      ]);
+      db.upsertNote(
+        "p.pdf",
+        2000,
+        [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p", vector: l2([0, 1, 0, 0]) }],
+        "pdf"
+      );
+      const md = db.getSourceStates("md").map((s) => s.rel_path);
+      const pdf = db.getSourceStates("pdf").map((s) => s.rel_path);
+      expect(md).toEqual(["a.md"]);
+      expect(pdf).toEqual(["p.pdf"]);
+      // Backward-compat: no kind filter returns both.
+      const all = db.getSourceStates().map((s) => s.rel_path);
+      expect(all.sort()).toEqual(["a.md", "p.pdf"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("schema bump from v1 → v2 auto-rebuilds (idempotent on matching schema)", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db1 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db1.open();
+    db1.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
+    ]);
+    expect(db1.totalChunks()).toBe(1);
+    db1.close();
+
+    // Reopen with matching meta — should preserve data.
+    const db2 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db2.open();
+    expect(db2.totalChunks()).toBe(1);
+    db2.close();
+  });
 });

@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-05-08
+
+**Sprint 8 — PDF retrieval integration.** v2.7.0 added PDF text-extraction tools (`obsidian_list_pdfs` / `obsidian_read_pdf`); v2.8.0 makes PDFs **first-class citizens of `obsidian_search`**. Index PDFs into the same FTS5 + embedding stores as markdown, blend them in hybrid retrieval (BM25 + TF-IDF + embeddings → RRF fusion), and surface a `kind: "md" | "pdf"` flag on every hit so agents can distinguish content sources at a glance.
+
+### Added — `--include-pdfs` flag on `serve`, `index`, `build-embeddings`
+
+Off by default — opt-in because PDF extraction is ~10-30× slower per file than markdown chunking. When enabled:
+
+- `enquire-mcp serve --vault <path> --persistent-index --include-pdfs` → boots and incrementally syncs PDFs into the FTS5 index alongside markdown.
+- `enquire-mcp index --vault <path> --include-pdfs` → cold-build / refresh the FTS5 index for both markdown and PDFs.
+- `enquire-mcp build-embeddings --vault <path> --include-pdfs` → embed PDF chunks too.
+
+Bad PDFs (encrypted without password / corrupt / image-only / scanned) are caught per-file and surfaced via stderr without taking down the markdown index path. Image-only / scanned PDFs are skipped with a clear log line — OCR is tracked for v2.9+ (Tesseract.js).
+
+### Schema migration — FTS5 v3 → v4, embed-db v1 → v2
+
+Both indexes added a `kind` column (`'md' | 'pdf'`, default `'md'`). Schema bump auto-rebuilds the index on first open after upgrade — same pattern as the `tokenize_mode` / `vault_root` cross-config-change guards. Existing markdown indexes are preserved (they re-sync from the markdown source as kind=md).
+
+### `obsidian_search` returns `kind` on every hit
+
+Both `note` and `block` granularity propagate the kind flag. PDF hits use the filename without the `.pdf` extension as the title (so titles read naturally in agent output). The tool description was updated to flag the v2.8.0 capability so MCP clients introspecting `tools/list` see it immediately.
+
+### Page-citation markers in PDF chunks
+
+When indexing PDFs, page boundaries are preserved as `[page: N]\n` markers in the joined text before chunking. The chunker may split a page across chunks or merge short pages, but the markers travel with the text — so search snippets carry page citations the agent can extract. Same `chunkContent` pipeline as markdown, so chunk identity matches across BM25 / TF-IDF / embeddings (RRF requires stable IDs).
+
+### Independent sync paths via kind-aware diff()
+
+`FtsIndex.diff(live, kind?)` and `EmbedDb.getSourceStates(kind?)` now accept an optional kind filter. Lets the markdown-sync path run independently from the PDF-sync path against the same DB without one's "missing files" being mistakenly deleted by the other. Backward-compat: omitting the kind arg returns all rows (legacy behavior).
+
+### Tests
+
+493 unit tests pass (was 481 in v2.7.0, +12 new):
+- **FTS5 PDF (+6):** indexes PDF chunks with kind='pdf' alongside markdown, page markers travel through chunks for snippets, kind-scoped diff() doesn't see other-kind rows, kind-undefined diff() shows both, reindexPdfFile is atomically idempotent, schema bump v3→v4 auto-rebuilds.
+- **Embed-db PDF (+3):** upserts with kind='pdf' and search returns kind='pdf', getSourceStates(kind=…) doesn't overlap, schema bump v1→v2 idempotent on matching schema.
+- **searchHybrid kind (+3):** blended hits with both kind='md' and kind='pdf', PDF hits use .pdf-stripped titles, kind defaults to 'md' on TF-IDF-only matches.
+
+### Surface delta vs v2.7.0
+
+- **No new tools.** The 38 from v2.7.0 stay. PDF retrieval is a property of `obsidian_search` (and the diagnostic single-ranker tools), not a new tool surface.
+- **+1 CLI flag** (`--include-pdfs`) wired on three subcommands (`serve`, `index`, `build-embeddings`).
+- **Schema bumps** auto-rebuild legacy indexes on first open.
+
+### Migration
+
+**No-op for default users.** PDF indexing is opt-in via `--include-pdfs`. Existing `serve` / `serve-http` / `index` / `build-embeddings` users keep working unchanged. Once you opt in, the FTS5 + embed-db files auto-rebuild on first open (same one-time cost as `tokenize_mode` change in earlier versions).
+
+### Strategic position
+
+v2.7.0 added the foundation (PDF extraction tools); v2.8.0 makes them retrievable. Combined with v2.0-v2.6's hybrid RRF + wikilink graph-boost + breadcrumb chunking + multilingual embeddings + remote MCP transport, **enquire-mcp is the only Obsidian-MCP that searches markdown and PDFs in a unified hybrid retrieval surface**. Smart Connections (paid) doesn't index PDFs. Khoj indexes PDFs but doesn't run on Obsidian's substrate (separate app, separate vault). The intersection is uniquely ours.
+
 ## [2.7.0] — 2026-05-08
 
 **Sprint 7 — PDF as a first-class indexable content type.** PDFs are the #1 non-markdown content kind in real research vaults (papers, scanned notes, downloaded references). **No other Obsidian-MCP currently indexes them.** v2.7.0 adds two new read tools that work identically over stdio + `serve-http`, gated behind `pdfjs-dist` as an `optionalDependency` so the markdown-only path stays zero-cost.

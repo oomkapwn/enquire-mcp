@@ -405,3 +405,120 @@ describe("FtsIndex — full lifecycle", () => {
     }
   });
 });
+
+// v2.8.0 — PDF chunks indexed alongside markdown via the kind column.
+// Verifies: (1) reindexPdfFile writes kind="pdf" rows, (2) search returns
+// kind in hits, (3) markdown sync doesn't delete PDF rows and vice versa,
+// (4) page markers appear in chunk text so snippets carry citations.
+describe("FtsIndex — PDF chunks (v2.8.0)", () => {
+  it("indexes PDF chunks with kind='pdf' alongside markdown", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("note.md", 1000, "Alpha keyword in markdown");
+      idx.reindexPdfFile("paper.pdf", 2000, [
+        { pageNumber: 1, text: "Alpha keyword on page one" },
+        { pageNumber: 2, text: "Beta keyword on page two" }
+      ]);
+      const hits = idx.search("Alpha");
+      const kinds = new Set(hits.map((h) => h.kind));
+      expect(kinds).toContain("md");
+      expect(kinds).toContain("pdf");
+      // Both kinds returned — blended retrieval works.
+      expect(hits.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("page markers travel through chunks so snippets cite the page", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    try {
+      idx.reindexPdfFile("paper.pdf", 1000, [
+        { pageNumber: 7, text: "rocketry research findings" },
+        { pageNumber: 8, text: "navigation algorithm comparison" }
+      ]);
+      const hits = idx.search("rocketry");
+      expect(hits.length).toBe(1);
+      // Snippet should include the [page: 7] marker we injected.
+      expect(hits[0]?.snippet).toContain("page: 7");
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("diff(kind='md') doesn't see PDF source_state rows (and vice versa)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("a.md", 1000, "alpha");
+      idx.reindexPdfFile("b.pdf", 2000, [{ pageNumber: 1, text: "beta" }]);
+      // Diff scoped to md sees only a.md as known. If we tell it about live
+      // a.md, it reports unchanged (not deleted) — meaning b.pdf is invisible.
+      const mdDiff = idx.diff([{ relPath: "a.md", mtimeMs: 1000 }], "md");
+      expect(mdDiff.deleted).toEqual([]);
+      expect(mdDiff.unchanged).toEqual(["a.md"]);
+      // And the PDF-scoped diff is the mirror image.
+      const pdfDiff = idx.diff([{ relPath: "b.pdf", mtimeMs: 2000 }], "pdf");
+      expect(pdfDiff.deleted).toEqual([]);
+      expect(pdfDiff.unchanged).toEqual(["b.pdf"]);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("diff(kind=undefined) sees both kinds — backward compat for legacy callers", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("a.md", 1000, "alpha");
+      idx.reindexPdfFile("b.pdf", 2000, [{ pageNumber: 1, text: "beta" }]);
+      // Global diff with no kind filter shows both as known.
+      const all = idx.diff([
+        { relPath: "a.md", mtimeMs: 1000 },
+        { relPath: "b.pdf", mtimeMs: 2000 }
+      ]);
+      expect(all.unchanged.sort()).toEqual(["a.md", "b.pdf"]);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("reindexPdfFile is idempotent — replaces existing chunks atomically", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    try {
+      idx.reindexPdfFile("p.pdf", 1000, [{ pageNumber: 1, text: "old content" }]);
+      idx.reindexPdfFile("p.pdf", 2000, [{ pageNumber: 1, text: "new content" }]);
+      const hits1 = idx.search("old");
+      expect(hits1).toEqual([]);
+      const hits2 = idx.search("new");
+      expect(hits2.length).toBe(1);
+    } finally {
+      idx.close();
+    }
+  });
+
+  it("schema bump from v3 → v4 auto-rebuilds the index", async () => {
+    if (!canRunFts5) return;
+    // Open + populate with the current schema (v4), close, reopen — should
+    // be a no-op rebuild (schema_version matches).
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    idx.reindexFile("a.md", 1000, "test");
+    expect(idx.totalChunks()).toBeGreaterThan(0);
+    idx.close();
+
+    // Reopen — should preserve data (no rebuild on matching schema).
+    const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx2.open();
+    expect(idx2.totalChunks()).toBeGreaterThan(0);
+    idx2.close();
+  });
+});

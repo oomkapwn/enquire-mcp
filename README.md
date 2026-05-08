@@ -38,13 +38,14 @@ That's it. Your AI now has structured access to wikilinks, backlinks, frontmatte
 | TF-IDF semantic search | ❌ | ❌ | ✅ |
 | **ML embeddings (multilingual)** | ❌ | ✅ paid | ✅ **free** |
 | **Hybrid (BM25+TF-IDF+embeddings, RRF)** | ❌ | ❌ | ✅ **only here** |
+| **PDFs blended into hybrid search** | ❌ | ❌ | ✅ **only here** (v2.8.0) |
 | Per-signal observability on each hit | ❌ | ❌ | ✅ |
 | Privacy filter (`--exclude-glob` / `--read-paths`) | ❌ | n/a | ✅ verified at search + write paths |
 | Standalone (no Obsidian plugin) | varies | ❌ requires Obsidian | ✅ direct vault read |
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio JSON-RPC |
 | **Remote MCP (HTTP transport, bearer auth)** | ❌ | ❌ | ✅ **only here** (v2.6.0) |
 | SLSA-3 provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 481 unit tests |
+| Test suite | rare | n/a | ✅ 493 unit tests |
 
 ---
 
@@ -131,7 +132,7 @@ No other Obsidian-MCP currently ships a remote-HTTP transport. Same vault, same 
 
 | Tool | What it does |
 |---|---|
-| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. v2.2.0: `granularity: "block"` arg returns chunks instead of notes. |
+| `obsidian_search` | **Hybrid retrieval** — fuses BM25 + TF-IDF + ML embeddings via RRF. The default search tool. Auto-detects available signals. v2.2.0: `granularity: "block"` arg returns chunks instead of notes. **v2.8.0:** with `--include-pdfs`, PDF chunks blend in alongside markdown — every hit carries `kind: "md" \| "pdf"` and PDF snippets include `[page: N]` markers for citation. |
 | `obsidian_context_pack` | **v2.2.0.** Token-budgeted context bundling: takes a question, runs hybrid search, gathers note bodies + backlinks + optionally recent dailies, returns one ready-to-paste markdown bundle. Saves ~5 tool calls. |
 | `obsidian_chat_thread_read` | **v2.2.0.** Parse a note's `## Chat: <title>` block into structured messages (role/timestamp/content/line-range). Pair with `_append` (write) for note-tethered AI conversations. |
 | `obsidian_frontmatter_get` | **v2.3.0.** Read parsed YAML frontmatter for a note. With `key`, returns just that field. |
@@ -230,7 +231,7 @@ Full posture: [SECURITY.md](./SECURITY.md). Report vulnerabilities to `oomkapwn@
 |---|---|
 | Language | TypeScript strict + `noUncheckedIndexedAccess` |
 | Lint | Biome 2 (zero-warning policy) |
-| Tests | 481 unit tests across 23 files |
+| Tests | 493 unit tests across 23 files |
 | CI | ubuntu × {Node 20, 22, 24} required + macOS advisory job |
 | Coverage | Lines ≥86%, statements ≥82%, functions ≥75%, branches ≥73% (gated) |
 | Audit | `npm audit --audit-level=moderate` for prod; high for dev |

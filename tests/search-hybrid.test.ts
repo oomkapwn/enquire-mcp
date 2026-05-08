@@ -236,3 +236,78 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
     expect(result.matches.every((m) => m.path.startsWith("Cooking/"))).toBe(true);
   });
 });
+
+// v2.8.0 — verify the kind flag propagates from FTS5 hits through searchHybrid
+// to the MCP response, and that markdown + PDF hits coexist in the same
+// blended retrieval.
+describe("searchHybrid — kind flag (v2.8.0)", () => {
+  let blendRoot: string;
+  let blendIdx: FtsIndex;
+
+  beforeAll(async () => {
+    blendRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-kind-"));
+    // One markdown note + one synthetic PDF — both contain "Apollo".
+    await fs.writeFile(path.join(blendRoot, "notes.md"), "Apollo program notes from 1969.\n");
+    blendIdx = new FtsIndex({
+      file: path.join(blendRoot, ".cache", "test.fts5.db"),
+      vaultRoot: blendRoot,
+      tokenize: "unicode61"
+    });
+    await fs.mkdir(path.dirname(blendIdx.file), { recursive: true });
+    await blendIdx.open();
+    blendIdx.reindexFile("notes.md", Date.now(), "Apollo program notes from 1969.");
+    blendIdx.reindexPdfFile("apollo.pdf", Date.now(), [
+      { pageNumber: 1, text: "Apollo guidance computer architecture" },
+      { pageNumber: 2, text: "Saturn V launch sequence" }
+    ]);
+  });
+
+  afterAll(async () => {
+    blendIdx?.close();
+    await fs.rm(blendRoot, { recursive: true, force: true });
+  });
+
+  it("returns blended hits with kind='md' and kind='pdf'", async () => {
+    const v = new Vault(blendRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "Apollo", limit: 10 },
+      { ftsIndex: blendIdx, embedFile: path.join(blendRoot, "nonexistent.embed.db") }
+    );
+    const kinds = new Set(result.matches.map((m) => m.kind));
+    expect(kinds).toContain("md");
+    expect(kinds).toContain("pdf");
+  });
+
+  it("kind='pdf' hits use a .pdf-stripped title (no .md-strip)", async () => {
+    const v = new Vault(blendRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "Apollo", limit: 10 },
+      { ftsIndex: blendIdx, embedFile: path.join(blendRoot, "nonexistent.embed.db") }
+    );
+    const pdfHit = result.matches.find((m) => m.kind === "pdf");
+    expect(pdfHit).toBeDefined();
+    if (pdfHit) {
+      expect(pdfHit.title).toBe("apollo");
+      expect(pdfHit.path.endsWith(".pdf")).toBe(true);
+    }
+    const mdHit = result.matches.find((m) => m.kind === "md");
+    expect(mdHit).toBeDefined();
+    if (mdHit) {
+      expect(mdHit.title).toBe("notes");
+    }
+  });
+
+  it("kind defaults to 'md' on TF-IDF-only matches (no FTS5 / embedding hit)", async () => {
+    // No FTS5 index → only TF-IDF (in-memory, scans markdown). No PDF hits possible.
+    const v = new Vault(blendRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "Apollo", limit: 10 },
+      { ftsIndex: null, embedFile: path.join(blendRoot, "nonexistent.embed.db") }
+    );
+    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.matches.every((m) => m.kind === "md")).toBe(true);
+  });
+});

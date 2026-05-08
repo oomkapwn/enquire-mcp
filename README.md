@@ -44,7 +44,7 @@ That's it. Your AI now has structured access to wikilinks, backlinks, frontmatte
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio JSON-RPC |
 | **Remote MCP (HTTP transport, bearer auth)** | ❌ | ❌ | ✅ **only here** (v2.6.0) |
 | SLSA-3 provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 457 unit tests |
+| Test suite | rare | n/a | ✅ 459 unit tests |
 
 ---
 
@@ -228,7 +228,7 @@ Full posture: [SECURITY.md](./SECURITY.md). Report vulnerabilities to `oomkapwn@
 |---|---|
 | Language | TypeScript strict + `noUncheckedIndexedAccess` |
 | Lint | Biome 2 (zero-warning policy) |
-| Tests | 408 unit tests across 19 files |
+| Tests | 459 unit tests across 22 files |
 | CI | ubuntu × {Node 20, 22, 24} required + macOS advisory job |
 | Coverage | Lines ≥86%, statements ≥82%, functions ≥75%, branches ≥73% (gated) |
 | Audit | `npm audit --audit-level=moderate` for prod; high for dev |

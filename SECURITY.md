@@ -167,3 +167,37 @@ When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts
 - Cross-vault contamination guard: a `meta` table stores `vault_root` and `tokenize_mode`; if either changes between runs, the index is dropped and rebuilt with a stderr warning.
 - Manual purge: `enquire-mcp clear-index --vault <path>` removes the `.fts5.db`, `.fts5.db-wal`, and `.fts5.db-shm` files.
 - **Caveat:** SQLite WAL mode keeps the most-recent uncommitted writes in `<file>-wal`. If you delete only `<file>` manually (not via `clear-index`), some recently-indexed chunks may persist in the sidecar. Always use `clear-index` for full removal.
+
+## HTTP transport (v2.6.0): bearer auth + remote-MCP posture
+
+The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) so claude.ai web, ChatGPT, Cursor HTTP mode, and mobile MCP clients can reach a remote vault. It introduces a network-exposed endpoint that the default stdio path doesn't have. The threat model + deployment recipes are documented at length in [`docs/http-transport.md`](docs/http-transport.md); this section is the canonical security posture.
+
+### What we protect against
+
+- **Unauthenticated read.** Wrong/missing token → 401, fail-closed at the auth middleware before any tool dispatch. The startup itself refuses to bind without `--bearer-token` (or `--bearer-token-env`) of length ≥16 chars.
+- **Token timing leaks.** Bearer compare hashes both presented and expected token with SHA-256 first, then `crypto.timingSafeEqual` on the equal-length 32-byte digests. No length oracle; equal-length compare is constant-time.
+- **Token logging.** Stderr / log output uses the SHA-256 prefix as the rate-limit key — the raw bearer token never appears in logs, error messages, or rate-limit state.
+- **Rate-limit abuse.** Per-token sliding 60-second window, default 120 requests/minute. Tunable via `--rate-limit` (`0` disables for trusted private LANs). 429 + `Retry-After: 60` on overflow.
+- **CORS-based credential leakage.** `--cors-origin` is a strict allowlist. Default empty (no `Access-Control-Allow-Origin` sent — same-origin works regardless). With explicit origins, we send `Access-Control-Allow-Credentials: true` so cookies + bearer requests work cross-origin. With the `*` wildcard, we deliberately OMIT `Allow-Credentials` (browsers reject the combo anyway, and reflecting credentialed CORS to attacker-controlled origins is the [CodeQL `js/cors-misconfiguration-for-credentials` class of bug](https://codeql.github.com/codeql-query-help/javascript/js-cors-misconfiguration-for-credentials/)). The response value is sourced from the allowlist itself, not from `req.headers.origin`, so static-analysis taint flows from a server-controlled root.
+- **Body bombs.** Per-request body size cap (4 MB), enforced as we accumulate chunks. Bigger requests get `400 Parse error` before we attempt JSON.parse.
+- **Privacy filter (`--exclude-glob` / `--read-paths`)** applies identically to HTTP and stdio paths. The same audit-tested filter runs at every search/read/walker boundary; there are no HTTP-specific shortcuts. v2.0.0-beta.2 P0 fixes for FTS5 + embed-index search apply here.
+- **Tag-deletion / write-tool gating.** All write tools (chat-thread-append, frontmatter-set, create/append/rename/replace/archive) remain gated by `--enable-write` regardless of transport. HTTP doesn't lower the bar.
+
+### What we do NOT protect against (deliberate non-goals)
+
+- **TLS termination.** We bind plain HTTP and assume a tunnel (Tailscale Funnel / Cloudflare Tunnel / nginx + Let's Encrypt) handles HTTPS. We deliberately default `--host 127.0.0.1` so direct internet exposure is opt-in via `0.0.0.0`. Recipes in `docs/http-transport.md` walk through the tunneled deployments.
+- **Compromised client.** A user who pastes their bearer token into a malicious chat or who lets it leak via `ps aux` / shell history is owned. Hence `--bearer-token-env <name>` (read from env) and `enquire-mcp gen-token` (32-byte base64url generator). Treat the token like a password.
+- **DoS from a single token.** A malicious client can fire rate-limit-budget worth of requests indefinitely; we just answer 429 once over budget. Use the tunnel's WAF for upstream DoS protection. Single-process — for shared limits use a reverse proxy with its own rate-limit module.
+- **Multi-tenant cross-token attacks.** This is a single-tenant tool. A small team should run **one process per user** (e.g. systemd template unit) and not share tokens. We don't do tenant isolation in-process beyond the per-token rate-limit.
+- **OAuth.** No OAuth flow, no token minting, no refresh logic. Static long-lived bearer is by design — generated with `enquire-mcp gen-token`, rotated manually. OAuth is tracked for v2.7+ if a user explicitly needs it.
+
+### Stateful sessions
+
+v2.6.0 ships **stateless** mode only (`sessionIdGenerator: undefined`) — fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles. No long-lived session map; no SSE persistent streams. This is the right default for our short-running tools (search, read, frontmatter ops) and avoids the persistence-aware shutdown complexity. Stateful sessions with `Mcp-Session-Id` + persistent SSE streams are tracked for v2.7+ if there's demand.
+
+### Observability
+
+- Ready banner on stderr: `enquire <version> ready (read-only|WRITE-ENABLED, vault=…) (transport=http, bound=…)`.
+- Transport errors written to stderr with no token / no credential leakage.
+- `/health` endpoint (`GET /health → 200 ok`) is **unauthenticated** and exists specifically for tunnel/uptime monitors. It returns the literal string `ok` — no version info, no vault path, no operational metadata. Health probes can't be used to fingerprint the deployment.
+- `OPTIONS` preflight requests are unauthenticated (per CORS spec) but only emit CORS headers when the request's `Origin` is in the allowlist.

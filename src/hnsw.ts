@@ -50,6 +50,46 @@ export interface LabeledVector {
   vector: Float32Array;
 }
 
+/**
+ * v2.16.0 — sidecar metadata persisted alongside the .hnsw.bin index. Used
+ * for staleness detection on boot: if `signature` matches the current
+ * embed-db's signature (computed by `EmbedDb.computeSignature()`), the
+ * pre-built HNSW is loaded; otherwise it's rebuilt from scratch.
+ *
+ * Stored as JSON next to the binary index (`<file>.meta.json`). Keep this
+ * format stable — bumping `formatVersion` invalidates all on-disk
+ * indexes for users on the new version (they'll rebuild on next boot,
+ * which is harmless but visible).
+ */
+export interface HnswPersistedMeta {
+  formatVersion: 1;
+  /** Embedder dim — must match the corpus the index will be queried with. */
+  dim: number;
+  /** Vector count at write time. */
+  size: number;
+  /**
+   * Embed-db signature at write time — when this differs from the current
+   * embed-db's signature, the persisted index is stale and should be
+   * rebuilt. We use rowcount + max-id + dim as a tractable signature
+   * (full content-hash would require reading every vector).
+   */
+  signature: string;
+  /** Row label → source row map needed to reconstruct hits. JSON-friendly. */
+  rowsByLabel: Record<
+    string,
+    {
+      rel_path: string;
+      chunk_index: number;
+      line_start: number;
+      line_end: number;
+      text_preview: string;
+      kind: "md" | "pdf";
+    }
+  >;
+  /** ISO timestamp of the write — informational. */
+  writtenAt: string;
+}
+
 /** Build-time HNSW parameters. Defaults tuned for 384-dim cosine on PKM data. */
 export interface HnswBuildOptions {
   /** Embedding dimensionality (must match the corpus). */
@@ -95,6 +135,32 @@ export interface HnswIndex {
    * `LabeledVector.label` they used at build time.
    */
   searchKnn(queryVec: Float32Array, k: number, opts?: HnswQueryOptions): { labels: number[]; distances: number[] };
+  /**
+   * v2.16.0 — persist the index to disk for fast reload on next serve
+   * start. Writes the binary index to `<file>.bin` and a JSON meta
+   * sidecar to `<file>.meta.json` containing the embed-db signature,
+   * dim, size, and label→row map. Returns true on successful write.
+   *
+   * Caller is responsible for choosing `file` (typically alongside the
+   * embed-db with `.hnsw` suffix). We separate binary + meta files so
+   * a partial write (e.g. crash mid-flush) leaves the meta missing,
+   * which the loader treats as "no usable index" → rebuild from scratch.
+   */
+  saveTo(
+    file: string,
+    rowsByLabel: ReadonlyMap<
+      number,
+      {
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        text_preview: string;
+        kind: "md" | "pdf";
+      }
+    >,
+    signature: string
+  ): Promise<boolean>;
 }
 
 /**
@@ -118,6 +184,9 @@ interface HnswNativeIndex {
     filter?: (label: number) => boolean
   ): { distances: number[]; neighbors: number[] };
   setEf(ef: number): void;
+  /** v2.16.0 — persistence (hnswlib-node@^3 API). */
+  writeIndex(filename: string): Promise<boolean>;
+  readIndex(filename: string, allowReplaceDeleted?: boolean): Promise<boolean>;
 }
 
 let cachedModule: HnswlibNodeModule | null = null;
@@ -190,9 +259,18 @@ export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: Hns
     ctor.addPoint(Array.from(v.vector), v.label);
   }
 
+  return wrapNativeIndex(ctor, dim, vectors.length);
+}
+
+/**
+ * v2.16.0 — wrap a native hnswlib-node index (built fresh OR loaded from
+ * disk) as our `HnswIndex` type. Factored out of `buildHnsw` so the
+ * load-from-disk path returns the same shape without re-running addPoint.
+ */
+function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): HnswIndex {
   return {
     dim,
-    size: vectors.length,
+    size,
     searchKnn(queryVec: Float32Array, k: number, qOpts?: HnswQueryOptions): { labels: number[]; distances: number[] } {
       if (queryVec.length !== dim) {
         throw new Error(`HnswIndex.searchKnn: query dim ${queryVec.length} ≠ index dim ${dim}`);
@@ -203,8 +281,105 @@ export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: Hns
       ctor.setEf(ef);
       const result = ctor.searchKnn(Array.from(queryVec), k, undefined);
       return { labels: result.neighbors, distances: result.distances };
+    },
+    async saveTo(file, rowsByLabel, signature): Promise<boolean> {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      // Write the binary index to <file>.bin and the JSON meta sidecar
+      // to <file>.meta.json. We separate them so a partial-write (e.g.
+      // crash mid-flush) leaves meta missing → loader rebuilds.
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      const binFile = `${file}.bin`;
+      const metaFile = `${file}.meta.json`;
+      // hnswlib-node's writeIndex writes to a host filesystem path
+      // directly — much simpler than the WASM Emscripten FS plumbing.
+      await ctor.writeIndex(binFile);
+      const meta: HnswPersistedMeta = {
+        formatVersion: 1,
+        dim,
+        size,
+        signature,
+        rowsByLabel: Object.fromEntries(rowsByLabel),
+        writtenAt: new Date().toISOString()
+      };
+      await fs.writeFile(metaFile, JSON.stringify(meta, null, 2), "utf8");
+      return true;
     }
   };
+}
+
+/**
+ * v2.16.0 — load a previously-persisted HNSW index from disk. Returns
+ * `null` (with a stderr warning) if:
+ *   • Either the .bin or .meta.json file is missing
+ *   • The meta's `signature` doesn't match the caller's current signature
+ *   • The meta's `formatVersion` doesn't match
+ *   • The native lib fails to load the .bin (corrupt / dim mismatch)
+ *
+ * On success returns `{ index, rowsByLabel }` so the caller can wire
+ * both into `searchHybrid`'s `hnsw` context without rebuilding from
+ * scratch. Typical boot-time win: ~25s rebuild → ~50ms load on a
+ * 50K-chunk vault.
+ */
+export async function loadHnswFromDisk(
+  file: string,
+  expectedSignature: string
+): Promise<{ index: HnswIndex; rowsByLabel: Map<number, HnswPersistedMeta["rowsByLabel"][string]> } | null> {
+  const fs = await import("node:fs/promises");
+  const binFile = `${file}.bin`;
+  const metaFile = `${file}.meta.json`;
+  let metaRaw: string;
+  try {
+    metaRaw = await fs.readFile(metaFile, "utf8");
+  } catch {
+    return null; // No meta → no persisted index (or partial write).
+  }
+  let meta: HnswPersistedMeta;
+  try {
+    meta = JSON.parse(metaRaw) as HnswPersistedMeta;
+  } catch (err) {
+    process.stderr.write(
+      `enquire: HNSW meta at ${metaFile} is malformed; rebuilding — ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return null;
+  }
+  if (meta.formatVersion !== 1) {
+    process.stderr.write(
+      `enquire: HNSW meta format ${meta.formatVersion} ≠ expected 1; rebuilding (this happens on enquire-mcp upgrade)\n`
+    );
+    return null;
+  }
+  if (meta.signature !== expectedSignature) {
+    process.stderr.write(
+      `enquire: HNSW persisted index is stale (signature mismatch — embed-db changed since last write); rebuilding\n`
+    );
+    return null;
+  }
+  // Bin file present?
+  try {
+    await fs.access(binFile);
+  } catch {
+    process.stderr.write(`enquire: HNSW meta exists but ${binFile} is missing; rebuilding\n`);
+    return null;
+  }
+  // Load the native binary.
+  const lib = await loadHnswlib();
+  const ctor = new lib.HierarchicalNSW("cosine", meta.dim);
+  try {
+    await ctor.readIndex(binFile);
+  } catch (err) {
+    process.stderr.write(
+      `enquire: HNSW readIndex failed at ${binFile}; rebuilding — ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return null;
+  }
+  const index = wrapNativeIndex(ctor, meta.dim, meta.size);
+  // Reconstruct the row map.
+  const rowsByLabel = new Map<number, HnswPersistedMeta["rowsByLabel"][string]>();
+  for (const [labelStr, row] of Object.entries(meta.rowsByLabel)) {
+    rowsByLabel.set(Number.parseInt(labelStr, 10), row);
+  }
+  return { index, rowsByLabel };
 }
 
 /**

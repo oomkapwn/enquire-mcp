@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.15.0";
+const VERSION = "2.16.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -97,6 +97,10 @@ export interface ServeOptions {
   hnswEf?: string;
   /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
   lateChunkContext?: string;
+  /** v2.16.0 — persist HNSW index to disk for fast reload on next serve.
+   *  Default true (the persistence is a pure optimization; corrupt files
+   *  fall back to rebuild gracefully). Pass `--no-hnsw-persist` to opt out. */
+  hnswPersist?: boolean;
 }
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -194,6 +198,10 @@ async function main(): Promise<void> {
     .option(
       "--late-chunk-context <chars>",
       "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
+    )
+    .option(
+      "--no-hnsw-persist",
+      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -881,16 +889,16 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         await db.open();
         try {
           const startMs = Date.now();
-          const rows = db.getAllVectors();
-          if (rows.length === 0) {
-            process.stderr.write(`enquire: --use-hnsw passed but embed-db is empty; skipping HNSW build.\n`);
-          } else {
-            const { buildHnsw } = await import("./hnsw.js");
-            const index = await buildHnsw(
-              rows.map((r) => ({ label: r.label, vector: r.vector })),
-              { dim: model.dim, maxElements: rows.length }
-            );
-            const rowByLabel = new Map<
+          // v2.16.0 — try to load from disk first if persistence is enabled.
+          // Skip-rebuild path: ~50ms read vs ~25s build for 50K-chunk
+          // vault when nothing changed since last serve. Staleness
+          // detected via `EmbedDb.computeSignature()` mismatch.
+          const persistFile = `${embedFile.replace(/\.embed\.db$/, "")}.hnsw`;
+          const signature = db.computeSignature();
+          const efOverride = opts.hnswEf ? parsePositiveInt(opts.hnswEf, "--hnsw-ef") : undefined;
+          let loaded: {
+            index: import("./hnsw.js").HnswIndex;
+            rowByLabel: Map<
               number,
               {
                 rel_path: string;
@@ -900,22 +908,72 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                 text_preview: string;
                 kind: "md" | "pdf";
               }
-            >();
-            for (const r of rows) {
-              rowByLabel.set(r.label, {
-                rel_path: r.rel_path,
-                chunk_index: r.chunk_index,
-                line_start: r.line_start,
-                line_end: r.line_end,
-                text_preview: r.text_preview,
-                kind: r.kind
-              });
+            >;
+          } | null = null;
+          if (opts.hnswPersist !== false) {
+            const { loadHnswFromDisk } = await import("./hnsw.js");
+            const loadResult = await loadHnswFromDisk(persistFile, signature);
+            if (loadResult) {
+              loaded = { index: loadResult.index, rowByLabel: loadResult.rowsByLabel };
+              process.stderr.write(
+                `enquire: HNSW index loaded from disk (${loadResult.index.size} vectors, dim=${loadResult.index.dim}, ${Date.now() - startMs}ms — signature matched)\n`
+              );
             }
-            const efOverride = opts.hnswEf ? parsePositiveInt(opts.hnswEf, "--hnsw-ef") : undefined;
-            hnswContext = { index, rowByLabel, ...(efOverride !== undefined ? { ef: efOverride } : {}) };
-            process.stderr.write(
-              `enquire: HNSW index built (${rows.length} vectors, dim=${model.dim}, ${Date.now() - startMs}ms)\n`
-            );
+          }
+          if (loaded) {
+            hnswContext = {
+              index: loaded.index,
+              rowByLabel: loaded.rowByLabel,
+              ...(efOverride !== undefined ? { ef: efOverride } : {})
+            };
+          } else {
+            const rows = db.getAllVectors();
+            if (rows.length === 0) {
+              process.stderr.write(`enquire: --use-hnsw passed but embed-db is empty; skipping HNSW build.\n`);
+            } else {
+              const { buildHnsw } = await import("./hnsw.js");
+              const index = await buildHnsw(
+                rows.map((r) => ({ label: r.label, vector: r.vector })),
+                { dim: model.dim, maxElements: rows.length }
+              );
+              const rowByLabel = new Map<
+                number,
+                {
+                  rel_path: string;
+                  chunk_index: number;
+                  line_start: number;
+                  line_end: number;
+                  text_preview: string;
+                  kind: "md" | "pdf";
+                }
+              >();
+              for (const r of rows) {
+                rowByLabel.set(r.label, {
+                  rel_path: r.rel_path,
+                  chunk_index: r.chunk_index,
+                  line_start: r.line_start,
+                  line_end: r.line_end,
+                  text_preview: r.text_preview,
+                  kind: r.kind
+                });
+              }
+              hnswContext = { index, rowByLabel, ...(efOverride !== undefined ? { ef: efOverride } : {}) };
+              process.stderr.write(
+                `enquire: HNSW index built (${rows.length} vectors, dim=${model.dim}, ${Date.now() - startMs}ms)\n`
+              );
+              // v2.16.0 — persist the freshly-built index for next serve start.
+              if (opts.hnswPersist !== false) {
+                try {
+                  await index.saveTo(persistFile, rowByLabel, signature);
+                  process.stderr.write(`enquire: HNSW index persisted to ${persistFile}.bin (+ .meta.json)\n`);
+                } catch (err) {
+                  // Non-fatal — persistence is an optimization. Log + continue.
+                  process.stderr.write(
+                    `enquire: HNSW persist failed (continuing with in-memory index) — ${err instanceof Error ? err.message : String(err)}\n`
+                  );
+                }
+              }
+            }
           }
         } finally {
           db.close();

@@ -24,7 +24,7 @@
 
 A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion, reranks with a **BGE cross-encoder**, scales to millions of chunks via **HNSW**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**44 tools · 650 unit tests · v3.0 semver-bound · MIT · SLSA-3.**
+**44 tools · 19 MCP prompts · 664 unit tests · v3.5 · semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -82,7 +82,7 @@ The **leading Obsidian-MCP server — the only one shipping all of these capabil
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
 | **44 production tools** (33 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
-| **606 unit tests · 12 required CI gates per PR** | ✅ | n/a | rare |
+| **664 unit tests · 8 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -126,7 +126,7 @@ graph LR
 
 ## 🛠️ All 44 tools
 
-The umbrella `obsidian_search` plus 38 specialized tools. Full reference: **[docs/api.md](./docs/api.md)**.
+The umbrella `obsidian_search` plus 43 specialized tools (33 always-on read + 4 opt-in + 7 gated writes). Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|
@@ -152,7 +152,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `gray-matter` (`js-yaml` safeLoad) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **CI** | 12 required gates per PR (lint · test ×3 · test-macos · smoke · audit · coverage · version-consistency · CodeQL ×2) |
+| **CI** | **8 required** branch-protection gates (lint · test ×3 [Node 20/22/24] · smoke · audit · coverage · version-consistency) + **4 advisory** (test-macos · CodeQL ×2 · Analyze actions). Release workflow re-verifies all 8 required passed on tagged SHA before npm publish. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥73% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **SLSA-3** build provenance |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
@@ -192,7 +192,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: 
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (606 tests, ~5s)
+npm test       # full suite (664 tests, ~5s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

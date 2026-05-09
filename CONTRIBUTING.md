@@ -28,7 +28,19 @@ node scripts/smoke.mjs ~/Documents/MyVault
 ## What we don't accept
 
 - Lockstep cross-cutting refactors (e.g. swapping the tool registration pattern). Open an issue first.
-- New runtime dependencies unless the case is overwhelming. We currently ship five (`@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`) plus one optional (`better-sqlite3` — only loaded with `--persistent-index`).
+- New runtime dependencies unless the case is overwhelming. We currently ship **5 mandatory** and **6 optional** (each opt-in via a CLI flag and lazy-loaded — markdown-only path stays zero-cost):
+
+  **Mandatory:** `@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`.
+
+  **Optional (feature-gated):**
+  - `better-sqlite3` — required by `--persistent-index` (FTS5) and `build-embeddings` (embed-db).
+  - `@huggingface/transformers` — required by ML embeddings + cross-encoder reranker (`build-embeddings`, `--enable-reranker`).
+  - `pdfjs-dist` — required by PDF tools (`obsidian_read_pdf`, `--include-pdfs`).
+  - `tesseract.js` — required by `obsidian_ocr_pdf` for scanned/image-only PDFs.
+  - `hnswlib-node` — required by `--use-hnsw` (sub-10ms top-K vector search).
+  - `@napi-rs/canvas` — used by Tesseract OCR + social-preview render script.
+
+  Adding a new **mandatory** dep is a high-bar PR (tickets the markdown-only happy path with size + audit-surface costs). Adding a new **optional** dep is OK if it's gated behind a flag and the failure mode on missing-dep is a clean error message pointing at the flag.
 - Code that lowers the security floor (skipping path safety, removing size limits, etc.).
 - Markdown / YAML rendering that aims to round-trip every Obsidian quirk. If a write tool can't faithfully preserve some user input, the right move is to refuse the write, not best-effort it.
 

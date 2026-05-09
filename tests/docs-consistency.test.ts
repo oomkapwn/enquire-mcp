@@ -134,3 +134,124 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     expect(missingFromDocs, "subcommands missing from docs/api.md").toEqual([]);
   });
 });
+
+// v3.5.1 — guard against the recurring drift the audit identified: README
+// says "44 tools / 656 tests" in one place, "606 tests" in another, "39
+// tools" in a third. Extend the existing per-tool/prompt mention check
+// with number-level invariants. Pull the source of truth from package.json
+// (description) + actual src counts, fail loudly on drift.
+describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {
+  async function getActualCounts(): Promise<{
+    allTools: number;
+    alwaysOn: number;
+    ftsOptIn: number;
+    diagnostic: number;
+    writes: number;
+    prompts: number;
+  }> {
+    const indexSrc = await read("src/index.ts");
+    const allTools = registeredNames(indexSrc, "registerTool");
+    const writeStart = indexSrc.indexOf("function registerWriteTools(");
+    const writeEnd = writeStart > 0 ? indexSrc.indexOf("\n}\n", writeStart) : -1;
+    const ftsStart = indexSrc.indexOf("function registerFtsTools(");
+    const ftsEnd = ftsStart > 0 ? indexSrc.indexOf("\n}\n", ftsStart) : -1;
+    const writeBody = writeStart > 0 && writeEnd > 0 ? indexSrc.slice(writeStart, writeEnd) : "";
+    const ftsBody = ftsStart > 0 && ftsEnd > 0 ? indexSrc.slice(ftsStart, ftsEnd) : "";
+    const writes = registeredNames(writeBody, "registerTool").size;
+    const ftsOptIn = registeredNames(ftsBody, "registerTool").size;
+    const diagnostic = new Set(
+      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
+        (m) => m[1] ?? ""
+      )
+    ).size;
+    const writeNames = registeredNames(writeBody, "registerTool");
+    const ftsNames = registeredNames(ftsBody, "registerTool");
+    const diagSet = new Set(
+      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
+        (m) => m[1] ?? ""
+      )
+    );
+    const alwaysOn = [...allTools].filter((n) => !writeNames.has(n) && !ftsNames.has(n) && !diagSet.has(n)).length;
+    const prompts = registeredNames(indexSrc, "registerPrompt").size;
+    return { allTools: allTools.size, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
+  }
+
+  it("README total-tool-count badge matches actual registered tool count", async () => {
+    const readme = await read("README.md");
+    const counts = await getActualCounts();
+    // Match e.g. "44 tools · 19 MCP prompts · 656 unit tests"
+    const m = /\*\*(\d+) tools?\b/.exec(readme);
+    expect(m, "README must declare a total tool count in **N tools** form near the top").not.toBeNull();
+    const claimed = Number.parseInt(m?.[1] ?? "0", 10);
+    expect(claimed).toBe(counts.allTools);
+  });
+
+  it("README write-tool-count claim matches actual write count", async () => {
+    const readme = await read("README.md");
+    const counts = await getActualCounts();
+    // Find the pattern "+ N gated writes" anywhere in README.
+    const m = /\+\s+(\d+)\s+gated writes/.exec(readme);
+    expect(m, "README must declare write count in '+ N gated writes' form").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.writes);
+  });
+
+  it("README prompt-count claim matches actual prompt count (where claimed)", async () => {
+    const readme = await read("README.md");
+    const counts = await getActualCounts();
+    // The first occurrence of "N **MCP prompts**" — that's the canonical claim.
+    const m = /\b(\d+) \*\*MCP prompts\*\*/.exec(readme);
+    if (m) expect(Number.parseInt(m[1] ?? "0", 10)).toBe(counts.prompts);
+  });
+
+  it("STABILITY.md tool-count header matches actual registered tool count", async () => {
+    const stability = await read("STABILITY.md");
+    const counts = await getActualCounts();
+    // Match e.g. "### MCP tool names (44 tools)"
+    const m = /MCP tool names \((\d+) tools?\)/.exec(stability);
+    expect(m, "STABILITY.md must declare tool count in '### MCP tool names (N tools)' form").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.allTools);
+  });
+
+  it("STABILITY.md MCP prompts header matches actual prompt count", async () => {
+    const stability = await read("STABILITY.md");
+    const counts = await getActualCounts();
+    // Match e.g. "### MCP prompts (19)"
+    const m = /### MCP prompts \((\d+)\)/.exec(stability);
+    expect(m, "STABILITY.md must declare prompts count in '### MCP prompts (N)' form").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
+  });
+
+  it("package.json description tool-count matches actual count", async () => {
+    const pkgRaw = await read("package.json");
+    const pkg = JSON.parse(pkgRaw) as { description?: string };
+    const counts = await getActualCounts();
+    const desc = pkg.description ?? "";
+    const m = /(\d+) tools/.exec(desc);
+    expect(m, "package.json description must include 'N tools'").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.allTools);
+  });
+
+  it("package.json description prompt-count matches actual count", async () => {
+    const pkgRaw = await read("package.json");
+    const pkg = JSON.parse(pkgRaw) as { description?: string };
+    const counts = await getActualCounts();
+    const desc = pkg.description ?? "";
+    const m = /(\d+) MCP prompts/.exec(desc);
+    expect(m, "package.json description must include 'N MCP prompts'").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
+  });
+
+  it("CLI --enable-write help text mentions seven (not five) write tools", async () => {
+    // The audit found the help text said "five write tools" while reality is 7.
+    // Pin it to "seven" so adding/removing writes forces a help-text update.
+    const indexSrc = await read("src/index.ts");
+    const counts = await getActualCounts();
+    expect(counts.writes).toBe(7); // sanity check on our parsing
+    const helpMatch = /Enable the (\w+) write tools/.exec(indexSrc);
+    expect(
+      helpMatch,
+      "--enable-write help text must follow 'Enable the <count-word> write tools' format"
+    ).not.toBeNull();
+    expect(helpMatch?.[1]).toBe("seven");
+  });
+});

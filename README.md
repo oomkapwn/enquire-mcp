@@ -24,7 +24,7 @@
 
 A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion, reranks with a **BGE cross-encoder**, scales to millions of chunks via **HNSW**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**43 tools · 633 unit tests · v3.0 semver-bound · MIT · SLSA-3.**
+**44 tools · 650 unit tests · v3.0 semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -80,7 +80,8 @@ The **leading Obsidian-MCP server — the only one shipping all of these capabil
 | **Per-signal observability** per hit | ✅ | ❌ | ❌ |
 | **MCP-native** (Claude · Cursor · ChatGPT · Codex · any client) | ✅ | ❌ Obsidian-only | varies |
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **43 production tools** (32 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **44 production tools** (33 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **606 unit tests · 12 required CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
@@ -123,14 +124,14 @@ graph LR
 
 ---
 
-## 🛠️ All 43 tools
+## 🛠️ All 44 tools
 
 The umbrella `obsidian_search` plus 38 specialized tools. Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|
 | **Search & retrieval** | `obsidian_search` (umbrella, RRF-fused) · `obsidian_hyde_search` (HyDE-augmented, v3.1.0) · `obsidian_search_text` · `obsidian_full_text_search` · `obsidian_semantic_search` · `obsidian_embeddings_search` · `obsidian_find_similar` |
-| **Wikilinks & graph** | `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_note_neighbors` · `obsidian_get_unresolved_wikilinks` · `obsidian_find_path` |
+| **Wikilinks & graph** | `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_note_neighbors` · `obsidian_get_unresolved_wikilinks` · `obsidian_find_path` · `obsidian_get_communities` (v3.4.0, GraphRAG-light) |
 | **Frontmatter & Dataview** | `obsidian_frontmatter_get` · `obsidian_frontmatter_search` · `obsidian_dataview_query` · `obsidian_list_tags` |
 | **Read & navigate** | `obsidian_read_note` · `obsidian_list_notes` · `obsidian_get_recent_edits` · `obsidian_open_questions` · `obsidian_context_pack` · `obsidian_chat_thread_read` · `obsidian_open_in_ui` · `obsidian_stats` |
 | **PDFs, Canvas & Bases** | `obsidian_read_pdf` · `obsidian_list_pdfs` · `obsidian_ocr_pdf` · `obsidian_read_canvas` · `obsidian_list_canvases` · `obsidian_list_bases` (v3.2.0) · `obsidian_read_base` (v3.2.0) · `obsidian_query_base` (v3.2.0) |

@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.3.0";
+const VERSION = "3.4.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -2099,6 +2099,61 @@ function registerReadTools(
       }
     },
     async (args) => textResult(await listCanvases(vault, args))
+  );
+
+  // v3.4.0 — Wikilink community detection (GraphRAG-light). Builds an
+  // undirected graph from the vault's wikilinks and partitions notes
+  // into structural communities via greedy modularity optimization
+  // (single-phase Louvain). Pure structural signal — no embeddings,
+  // no LLM calls. The agent can summarize communities itself with the
+  // member list this tool returns.
+  server.registerTool(
+    "obsidian_get_communities",
+    {
+      title: "Detect wikilink-graph communities (GraphRAG-light)",
+      description:
+        "v3.4.0 — Computes structural communities over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). Returns `community_count`, `modularity` (∈ [-0.5, 1] — higher = stronger structure), `iterations` until convergence, `communities[]` (each with id/size/sorted-members/representative — the highest-in-community-degree note), and `membership` (path → id). Pure structural — no embeddings consulted. Server stays LLM-free; the agent can summarize a community by reading its representative + sample members. Computation is O(passes × edges); typical 8K-note vault completes in <500ms. The result is NOT cached — call once per session and reuse. First MCP server with native vault community detection.",
+      annotations: { ...READ_ONLY, title: "Get communities" },
+      inputSchema: {
+        min_size: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(1000)
+          .optional()
+          .describe(
+            "Drop communities with fewer than N members from the response (default 1 — keep singletons). Useful for filtering dust."
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(500)
+          .optional()
+          .describe("Max communities to return (default 50, sorted by size descending)")
+      }
+    },
+    async (args) => {
+      const { buildWikilinkGraph, detectCommunities } = await import("./communities.js");
+      const graph = await buildWikilinkGraph(vault);
+      const result = detectCommunities(graph);
+      const minSize = args.min_size ?? 1;
+      const limit = args.limit ?? 50;
+      const filtered = result.communities.filter((c) => c.size >= minSize).slice(0, limit);
+      const keptIds = new Set(filtered.map((c) => c.id));
+      const membershipObj: Record<string, number> = {};
+      for (const [k, v] of result.membership.entries()) {
+        if (keptIds.has(v)) membershipObj[k] = v;
+      }
+      return textResult({
+        community_count: result.community_count,
+        modularity: result.modularity,
+        iterations: result.iterations,
+        node_count: result.membership.size,
+        communities: filtered,
+        membership: membershipObj
+      });
+    }
   );
 
   // v3.2.0 — Obsidian Bases (`.base`) support. Bases are Obsidian's

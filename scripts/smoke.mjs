@@ -98,12 +98,13 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  // v3.2.0: 35 tools (with --diagnostic-search-tools): 32 always-on read +
+  // v3.4.0: 36 tools (with --diagnostic-search-tools): 33 always-on read +
   // 3 single-ranker diagnostic tools. With --persistent-index: + 1
-  // (obsidian_full_text_search) = 36.
+  // (obsidian_full_text_search) = 37.
   // v3.1.0 added obsidian_hyde_search (HyDE retrieval) to always-on.
   // v3.2.0 added 3 .base file tools: list_bases / read_base / query_base.
-  const expectedCount = withFts ? 36 : 35;
+  // v3.4.0 added obsidian_get_communities (GraphRAG-light).
+  const expectedCount = withFts ? 37 : 36;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -119,6 +120,7 @@ try {
     "obsidian_frontmatter_get",
     "obsidian_frontmatter_search",
     "obsidian_get_backlinks",
+    "obsidian_get_communities",
     "obsidian_get_note_neighbors",
     "obsidian_get_outbound_links",
     "obsidian_get_recent_edits",

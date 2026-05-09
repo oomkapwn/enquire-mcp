@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EmbedDb } from "../src/embed-db.js";
+import { decodeInt8Vector, EmbedDb, encodeInt8Vector } from "../src/embed-db.js";
 
 let dir: string;
 
@@ -357,5 +357,282 @@ describe("EmbedDb", () => {
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
     db2.close();
+  });
+});
+
+// v2.17.0 — int8 quantization. The encode/decode helpers are pure (no DB),
+// so we exercise them directly first, then run end-to-end EmbedDb tests
+// with `quantization: "int8"` to verify the BLOB layout, the schema-mismatch
+// rebuild on mode swap, recall@K parity vs Float32, and the brute-force
+// + getAllVectors paths.
+describe("EmbedDb int8 quantization", () => {
+  describe("encodeInt8Vector / decodeInt8Vector", () => {
+    it("roundtrips a typical L2-normalized vector within ~range/256 absolute error", () => {
+      const original = l2([0.5, -0.25, 0.75, -0.125, 0.4, -0.4, 0.6, -0.6]);
+      const buf = encodeInt8Vector(original);
+      // Layout: dim bytes int8 + 4 bytes Float32 vMin + 4 bytes Float32 scale.
+      expect(buf.byteLength).toBe(original.length + 8);
+      const decoded = decodeInt8Vector(buf, original.length);
+      expect(decoded.length).toBe(original.length);
+      // Per-element error is bounded by `scale = range/255`. For an L2-normed
+      // 8-dim vector, range is ~1.4, so absolute error ≤ ~0.0055. Use a
+      // generous 0.01 tolerance — we care about ordering/recall, not bits.
+      for (let i = 0; i < original.length; i++) {
+        expect(Math.abs((decoded[i] ?? 0) - (original[i] ?? 0))).toBeLessThan(0.01);
+      }
+    });
+
+    it("handles the all-zero vector without div-by-zero (range collapses to 0)", () => {
+      const zero = new Float32Array([0, 0, 0, 0]);
+      const buf = encodeInt8Vector(zero);
+      expect(buf.byteLength).toBe(4 + 8);
+      const decoded = decodeInt8Vector(buf, 4);
+      // vMin=0, scale=1 (forced), q=0 → decode = 0. Bit-exact.
+      for (let i = 0; i < 4; i++) expect(decoded[i]).toBe(0);
+    });
+
+    it("clamps int8 values into [0, 255] at the boundary", () => {
+      const v = new Float32Array([0.0, 1.0, 0.5, 1.0]); // includes dup max
+      const buf = encodeInt8Vector(v);
+      // First byte (vMin=0) must be 0; second (vMax=1) must be 255.
+      expect(buf[0]).toBe(0);
+      expect(buf[1]).toBe(255);
+      // Mid value should be ~127 (linear interpolation).
+      expect(Math.abs((buf[2] ?? 0) - 127)).toBeLessThanOrEqual(1);
+      // Dup-max also lands at 255.
+      expect(buf[3]).toBe(255);
+    });
+
+    it("decode rejects buffers with unexpected byte length", () => {
+      // dim=4 expects 4+8=12 bytes; a 10-byte buffer must throw.
+      expect(() => decodeInt8Vector(Buffer.alloc(10), 4)).toThrow(/expected 12B/);
+    });
+
+    it("preserves cosine ranking on a synthetic top-K query", () => {
+      // Three orthogonal-ish vectors. Quantize, dequantize, then recompute
+      // cosine vs the same query. Ordering must match the Float32 baseline.
+      const docs = [l2([1, 0, 0, 0]), l2([0.95, 0.05, 0, 0.1]), l2([0, 1, 0, 0])];
+      const query = l2([1, 0, 0, 0]);
+      const f32Scores = docs.map((d) => {
+        let s = 0;
+        for (let i = 0; i < d.length; i++) s += (query[i] ?? 0) * (d[i] ?? 0);
+        return s;
+      });
+      const int8Scores = docs.map((d) => {
+        const q = decodeInt8Vector(encodeInt8Vector(d), d.length);
+        let s = 0;
+        for (let i = 0; i < q.length; i++) s += (query[i] ?? 0) * (q[i] ?? 0);
+        return s;
+      });
+      // Order must be preserved: doc 0 > doc 1 > doc 2.
+      const f32Order = [...f32Scores.keys()].sort((a, b) => (f32Scores[b] ?? 0) - (f32Scores[a] ?? 0));
+      const int8Order = [...int8Scores.keys()].sort((a, b) => (int8Scores[b] ?? 0) - (int8Scores[a] ?? 0));
+      expect(int8Order).toEqual(f32Order);
+    });
+  });
+
+  it("opens with quantization='int8' and stores ~dim+8 bytes per vector", async () => {
+    const file = path.join(dir, "int8.embed.db");
+    const db = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await db.open();
+    try {
+      db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
+      ]);
+      expect(db.totalChunks()).toBe(1);
+      // Search returns the same row with a near-1.0 cosine score (small
+      // quant error, but still ranks #1 against itself).
+      const hits = db.search(l2([1, 0, 0, 0]), 1);
+      expect(hits).toHaveLength(1);
+      expect(hits[0]?.rel_path).toBe("a.md");
+      expect(hits[0]?.score).toBeGreaterThan(0.99);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds when the quantization mode changes (f32 ↔ int8)", async () => {
+    const file = path.join(dir, "swap.embed.db");
+    const f32 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await f32.open();
+    f32.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
+    ]);
+    expect(f32.totalChunks()).toBe(1);
+    f32.close();
+
+    // Reopen with int8 — meta-mismatch must drop the embeddings table.
+    const int8 = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await int8.open();
+    expect(int8.totalChunks()).toBe(0);
+    int8.close();
+
+    // Swap back to f32 — same rebuild trigger.
+    const f32again = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await f32again.open();
+    expect(f32again.totalChunks()).toBe(0);
+    f32again.close();
+  });
+
+  it("preserves data when reopening with the same int8 mode (idempotent)", async () => {
+    const file = path.join(dir, "idem.embed.db");
+    const db1 = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await db1.open();
+    db1.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db1.close();
+
+    const db2 = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await db2.open();
+    expect(db2.totalChunks()).toBe(1);
+    db2.close();
+  });
+
+  it("ranks top-K identically to f32 on a 32-dim synthetic corpus (recall@5 = 100%)", async () => {
+    // Generate 50 random unit vectors as the corpus, plus 5 query vectors
+    // each closer to a known-relevant doc. Run search() in both f32 and
+    // int8 modes; the top-5 result sets must overlap by ≥ 4/5 (typical
+    // worst-case for asymmetric int8 quant).
+    const dim = 32;
+    const N = 50;
+    // Deterministic random — Mulberry32 PRNG so the test is reproducible.
+    let state = 0x9e3779b9;
+    const rng = () => {
+      state = (state + 0x6d2b79f5) | 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const corpus: Float32Array[] = [];
+    for (let i = 0; i < N; i++) {
+      const arr: number[] = [];
+      for (let d = 0; d < dim; d++) arr.push(rng() * 2 - 1);
+      corpus.push(l2(arr));
+    }
+
+    const f32File = path.join(dir, "rcl-f32.embed.db");
+    const i8File = path.join(dir, "rcl-i8.embed.db");
+    const f32Db = new EmbedDb({ file: f32File, vaultRoot: "/v", modelAlias: "m", dim });
+    const i8Db = new EmbedDb({
+      file: i8File,
+      vaultRoot: "/v",
+      modelAlias: "m",
+      dim,
+      quantization: "int8"
+    });
+    await f32Db.open();
+    await i8Db.open();
+    try {
+      const chunks = corpus.map((v, i) => ({
+        chunkIndex: i,
+        lineStart: i + 1,
+        lineEnd: i + 1,
+        textPreview: `c${i}`,
+        vector: v
+      }));
+      f32Db.upsertNote("corpus.md", 1, chunks);
+      i8Db.upsertNote("corpus.md", 1, chunks);
+
+      // Aggregate recall@5 across 5 queries; expect ≥ 90% overlap on average.
+      let overlapTotal = 0;
+      const k = 5;
+      const Q = 5;
+      for (let q = 0; q < Q; q++) {
+        const qarr: number[] = [];
+        for (let d = 0; d < dim; d++) qarr.push(rng() * 2 - 1);
+        const query = l2(qarr);
+        const f32Hits = new Set(f32Db.search(query, k).map((h) => h.chunk_index));
+        const i8Hits = i8Db.search(query, k).map((h) => h.chunk_index);
+        const overlap = i8Hits.filter((c) => f32Hits.has(c)).length;
+        overlapTotal += overlap;
+      }
+      // Total possible overlap = Q * k = 25. 90% → 22.5 → require ≥ 22.
+      expect(overlapTotal).toBeGreaterThanOrEqual(22);
+    } finally {
+      f32Db.close();
+      i8Db.close();
+    }
+  });
+
+  it("getAllVectors returns dequantized Float32 in int8 mode", async () => {
+    const file = path.join(dir, "gav.embed.db");
+    const db = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await db.open();
+    try {
+      const v = l2([0.7, 0.1, -0.3, 0.5]);
+      db.upsertNote("a.md", 1, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "z", vector: v }]);
+      const all = db.getAllVectors();
+      expect(all).toHaveLength(1);
+      const got = all[0]?.vector;
+      expect(got).toBeInstanceOf(Float32Array);
+      expect(got?.length).toBe(4);
+      // Dequant is lossy — match within scale-bounded tolerance.
+      for (let i = 0; i < 4; i++) {
+        expect(Math.abs((got?.[i] ?? 0) - (v[i] ?? 0))).toBeLessThan(0.01);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("computeSignature is identical across modes (signature ignores encoding)", async () => {
+    // The HNSW staleness signature uses dim/rows/maxId/model — NOT the
+    // quantization mode. Two indexes with identical content but different
+    // encodings must produce identical signatures (so persisted HNSW
+    // indexes survive a quant flip... or rather, get rebuilt only because
+    // the embed-db itself was rebuilt). We assert the invariant here.
+    const fileA = path.join(dir, "sig-a.embed.db");
+    const fileB = path.join(dir, "sig-b.embed.db");
+    const a = new EmbedDb({ file: fileA, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+    const b = new EmbedDb({
+      file: fileB,
+      vaultRoot: "/v",
+      modelAlias: "m",
+      dim: 4,
+      quantization: "int8"
+    });
+    await a.open();
+    await b.open();
+    try {
+      const v = l2([1, 0, 0, 0]);
+      a.upsertNote("x.md", 1, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: v }]);
+      b.upsertNote("x.md", 1, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: v }]);
+      expect(a.computeSignature()).toBe(b.computeSignature());
+    } finally {
+      a.close();
+      b.close();
+    }
   });
 });

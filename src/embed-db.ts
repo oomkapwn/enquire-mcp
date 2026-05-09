@@ -15,13 +15,23 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 // v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
 // embedding index as markdown — `obsidian_search` returns blended hits with
 // the kind flag exposed to agents. Schema bump auto-rebuilds.
+// v3 (v2.17.0) added int8 vector quantization. The `quantization` meta key
+// records the BLOB encoding. When "f32" (default), each vector is stored
+// as `dim × 4` bytes Float32. When "int8", each vector is stored as
+// `dim × 1` bytes int8 + 8 bytes (Float32 vMin + Float32 scale) for
+// per-vector dequantization. ~4× storage reduction, ~1-2% recall@10 loss.
+// Mode is per-database; mixing rows is unsupported (a mode change
+// triggers full rebuild via the bootstrap-schema check).
 
 /** Content-source kind. Mirrors ChunkKind in src/fts5.ts. */
 export type EmbedChunkKind = "md" | "pdf";
+
+/** v2.17.0 — vector storage encoding. */
+export type EmbedQuantization = "f32" | "int8";
 
 export interface EmbedSearchHit {
   rel_path: string;
@@ -103,6 +113,75 @@ export interface EmbedDbOptions {
   modelAlias: string;
   /** Vector dimensionality (must match the model). */
   dim: number;
+  /**
+   * v2.17.0 — vector storage encoding.
+   * - `"f32"` (default) — Float32 BLOB, 4 bytes per dim.
+   * - `"int8"` — int8 BLOB + per-vector Float32 min + Float32 scale,
+   *   ~1 byte per dim + 8 bytes overhead. ~4× storage reduction at
+   *   ~1-2% recall@10 cost.
+   *
+   * Mode is per-database; switching modes triggers a full rebuild
+   * via the schema-mismatch path in `bootstrapSchema`.
+   */
+  quantization?: EmbedQuantization;
+}
+
+/**
+ * v2.17.0 — encode a Float32 vector for storage as int8 + (vMin, scale).
+ * Asymmetric scalar quantization: the smallest Float32 component maps
+ * to int8 0; the largest maps to int8 255; intermediate values are
+ * linearly interpolated. Dequantization: `f[i] ≈ q[i] * scale + vMin`.
+ *
+ * BLOB layout (dim × 1 + 8 bytes):
+ *   bytes [0 .. dim)         int8 quantized values
+ *   bytes [dim .. dim+4)     Float32 vMin (little-endian)
+ *   bytes [dim+4 .. dim+8)   Float32 scale (little-endian)
+ *
+ * For a 384-dim vector this is 392 bytes vs 1536 for Float32 — a
+ * 3.92× reduction at the storage layer.
+ */
+export function encodeInt8Vector(vec: Float32Array): Buffer {
+  let vMin = Infinity;
+  let vMax = -Infinity;
+  for (let i = 0; i < vec.length; i++) {
+    const x = vec[i] ?? 0;
+    if (x < vMin) vMin = x;
+    if (x > vMax) vMax = x;
+  }
+  // Edge case: all-equal vector (e.g. all zeros). vMax === vMin, scale=0
+  // would div-zero in dequant. Force scale to 1 and rely on the int8 0s
+  // representing the constant.
+  const range = vMax - vMin;
+  const scale = range > 0 ? range / 255 : 1;
+  const buf = Buffer.allocUnsafe(vec.length + 8);
+  for (let i = 0; i < vec.length; i++) {
+    const x = vec[i] ?? 0;
+    const q = scale > 0 ? Math.round((x - vMin) / scale) : 0;
+    // Clamp into [0, 255] so floating-point round-up at the boundary
+    // doesn't escape the byte range.
+    buf[i] = q < 0 ? 0 : q > 255 ? 255 : q;
+  }
+  buf.writeFloatLE(vMin, vec.length);
+  buf.writeFloatLE(scale, vec.length + 4);
+  return buf;
+}
+
+/**
+ * v2.17.0 — decode an int8-quantized vector buffer back to Float32.
+ * Inverse of `encodeInt8Vector`. Caller passes `dim` so we know how
+ * many bytes are int8 vs the trailing min/scale tuple.
+ */
+export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
+  if (buf.byteLength !== dim + 8) {
+    throw new Error(`decodeInt8Vector: buf has ${buf.byteLength}B, expected ${dim + 8}B (dim=${dim})`);
+  }
+  const vMin = buf.readFloatLE(dim);
+  const scale = buf.readFloatLE(dim + 4);
+  const out = new Float32Array(dim);
+  for (let i = 0; i < dim; i++) {
+    out[i] = (buf[i] ?? 0) * scale + vMin;
+  }
+  return out;
 }
 
 export class EmbedDb {
@@ -111,12 +190,18 @@ export class EmbedDb {
   private readonly vaultRoot: string;
   private readonly modelAlias: string;
   private readonly dim: number;
+  /** v2.17.0 — vector storage encoding. */
+  private readonly quantization: EmbedQuantization;
+  /** Bytes per encoded vector — pre-computed once for hot-path checks. */
+  private readonly encodedBytes: number;
 
   constructor(opts: EmbedDbOptions) {
     this.file = opts.file;
     this.vaultRoot = opts.vaultRoot;
     this.modelAlias = opts.modelAlias;
     this.dim = opts.dim;
+    this.quantization = opts.quantization ?? "f32";
+    this.encodedBytes = this.quantization === "int8" ? this.dim + 8 : this.dim * 4;
   }
 
   async open(): Promise<void> {
@@ -170,12 +255,18 @@ export class EmbedDb {
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
     const modelMatch = meta.model_alias === undefined || meta.model_alias === this.modelAlias;
     const dimMatch = meta.dim === undefined || meta.dim === String(this.dim);
-    if (!versionMatch || !rootMatch || !modelMatch || !dimMatch) {
+    // v2.17.0 — quantization mode is part of the contamination guard.
+    // Existing pre-v2.17 dbs have no `quantization` meta key; treat as
+    // "f32" (the only mode v2.16- supported) for backward compatibility.
+    const existingQuant = meta.quantization ?? "f32";
+    const quantMatch = existingQuant === this.quantization;
+    if (!versionMatch || !rootMatch || !modelMatch || !dimMatch || !quantMatch) {
       const reason: string[] = [];
       if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
       if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
       if (!modelMatch) reason.push(`model ${meta.model_alias} → ${this.modelAlias}`);
       if (!dimMatch) reason.push(`dim ${meta.dim} → ${this.dim}`);
+      if (!quantMatch) reason.push(`quantization ${existingQuant} → ${this.quantization}`);
       process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
       db.exec("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS source_state;");
     }
@@ -206,7 +297,8 @@ export class EmbedDb {
       schema_version: String(SCHEMA_VERSION),
       vault_root: this.vaultRoot,
       model_alias: this.modelAlias,
-      dim: String(this.dim)
+      dim: String(this.dim),
+      quantization: this.quantization
     });
   }
 
@@ -261,15 +353,14 @@ export class EmbedDb {
             `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${dim}`
           );
         }
-        insert.run(
-          relPath,
-          c.chunkIndex,
-          c.lineStart,
-          c.lineEnd,
-          c.textPreview,
-          Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength),
-          kind
-        );
+        // v2.17.0 — encode per the configured quantization mode.
+        // f32: zero-copy slice over the source buffer (matches v2.16- behavior).
+        // int8: per-vector quantize + 8-byte (vMin, scale) tuple.
+        const blob =
+          this.quantization === "int8"
+            ? encodeInt8Vector(c.vector)
+            : Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength);
+        insert.run(relPath, c.chunkIndex, c.lineStart, c.lineEnd, c.textPreview, blob, kind);
       }
       db.prepare(
         `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
@@ -332,7 +423,7 @@ export class EmbedDb {
         kind: string | null;
       }>(...(folderPrefix ? [folderPrefix.length, folderPrefix] : []));
 
-    const expectedBytes = this.dim * 4; // Float32 = 4 bytes
+    const expectedBytes = this.encodedBytes;
     const heap: EmbedSearchHit[] = [];
     for (const r of rows) {
       // v2.0.0-beta.1 P2 fix: assert byteLength before wrapping. A truncated
@@ -341,11 +432,15 @@ export class EmbedDb {
       // emits garbage scores. Skip + warn rather than poison results.
       if (r.vector.byteLength !== expectedBytes) {
         process.stderr.write(
-          `enquire: skipping ${r.rel_path}#${r.chunk_index} — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
+          `enquire: skipping ${r.rel_path}#${r.chunk_index} — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}, mode=${this.quantization}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
         );
         continue;
       }
-      const vec = new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim);
+      // v2.17.0 — decode per the configured quantization mode.
+      const vec =
+        this.quantization === "int8"
+          ? decodeInt8Vector(r.vector, this.dim)
+          : new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim);
       let score = 0;
       for (let i = 0; i < this.dim; i++) {
         score += (queryVec[i] ?? 0) * (vec[i] ?? 0);
@@ -432,23 +527,30 @@ export class EmbedDb {
         vector: Buffer;
         kind: string | null;
       }>();
-    const expectedBytes = this.dim * 4;
+    const expectedBytes = this.encodedBytes;
     const out: ReturnType<EmbedDb["getAllVectors"]> = [];
     for (const r of rows) {
       // Match the corruption guard from search() — skip rows with
       // mis-sized vectors so a partial DB doesn't poison the HNSW build.
       if (r.vector.byteLength !== expectedBytes) {
         process.stderr.write(
-          `enquire: skipping ${r.rel_path}#${r.chunk_index} during getAllVectors — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
+          `enquire: skipping ${r.rel_path}#${r.chunk_index} during getAllVectors — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}, mode=${this.quantization}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
         );
         continue;
       }
-      // Copy (don't share the underlying buffer). HNSW takes ownership of
-      // the Float32Array slice for the lifetime of the index; sharing
-      // the SQLite row buffer would risk use-after-free if the row is
-      // GC'd or the cursor advances.
-      const vec = new Float32Array(this.dim);
-      vec.set(new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim));
+      // v2.17.0 — decode + always copy. HNSW takes ownership of the
+      // Float32Array slice for the lifetime of the index; sharing the
+      // SQLite row buffer would risk use-after-free if the row is GC'd
+      // or the cursor advances. For int8, decode produces a fresh
+      // Float32Array already. For f32, copy from the SQLite buffer.
+      const vec =
+        this.quantization === "int8"
+          ? decodeInt8Vector(r.vector, this.dim)
+          : (() => {
+              const v = new Float32Array(this.dim);
+              v.set(new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim));
+              return v;
+            })();
       out.push({
         label: r.id,
         vector: vec,

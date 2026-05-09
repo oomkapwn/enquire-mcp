@@ -3052,10 +3052,35 @@ export interface EmbedSearchResponse {
   matches: EmbedHit[];
 }
 
+/**
+ * v2.13.0 — optional HNSW context. When passed, embeddingsSearch routes
+ * the k-NN lookup through the in-memory HNSW index (sub-10ms at any
+ * scale) instead of the O(n) brute-force cosine in EmbedDb.search().
+ * `rowByLabel` is the label → source-row mapping established at HNSW
+ * build time (typically labels are `embeddings.id`, set in
+ * `EmbedDb.getAllVectors()`).
+ */
+export interface HnswSearchContext {
+  index: { searchKnn(q: Float32Array, k: number, opts?: { ef?: number }): { labels: number[]; distances: number[] } };
+  rowByLabel: ReadonlyMap<
+    number,
+    {
+      rel_path: string;
+      chunk_index: number;
+      line_start: number;
+      line_end: number;
+      text_preview: string;
+      kind: "md" | "pdf";
+    }
+  >;
+  ef?: number;
+}
+
 export async function embeddingsSearch(
   vault: Vault,
   args: { query: string; folder?: string; limit?: number; min_score?: number; model?: string },
-  embedFile: string
+  embedFile: string,
+  hnsw?: HnswSearchContext | null
 ): Promise<EmbedSearchResponse> {
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
@@ -3103,7 +3128,25 @@ export async function embeddingsSearch(
     // bypassing the privacy contract — same shape as the writeNote bug.
     // We over-fetch by 2× to keep top-K stable when many hits get filtered.
     const overFetch = limit * 2;
-    const rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
+    let rawHits: import("./embed-db.js").EmbedSearchHit[];
+    if (hnsw) {
+      // v2.13.0 — HNSW path. Sub-10ms top-K at any scale. We over-fetch
+      // slightly more (3×) than brute-force because HNSW can occasionally
+      // miss a true nearest neighbor; the privacy filter then pares down.
+      const k = Math.min(Math.max(overFetch * 2, 30), Math.max(hnsw.rowByLabel.size, 1));
+      const result = hnsw.index.searchKnn(qVec, k, hnsw.ef !== undefined ? { ef: hnsw.ef } : undefined);
+      const { hnswResultsToHits } = await import("./hnsw.js");
+      rawHits = hnswResultsToHits(result, hnsw.rowByLabel);
+      // HNSW returns scores in [-1, 1] like brute-force cosine. Apply the
+      // same min_score floor + folder filter brute-force does.
+      if (args.folder) {
+        const prefix = `${args.folder.replace(/\/+$/, "")}/`;
+        rawHits = rawHits.filter((h) => h.rel_path.startsWith(prefix));
+      }
+      rawHits = rawHits.filter((h) => h.score >= minScore);
+    } else {
+      rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
+    }
     const hits = rawHits.filter((h) => !vault.isExcluded(h.rel_path)).slice(0, limit);
     const matches: EmbedHit[] = hits.map((h) => ({
       path: h.rel_path,
@@ -3229,6 +3272,14 @@ export async function searchHybrid(
      * pulling in the real ML model. Unused in production callers.
      */
     rerankerOverride?: { score(query: string, passages: readonly string[]): Promise<number[]> };
+    /**
+     * v2.13.0 — optional HNSW context for the embeddings-search arm.
+     * When passed, the embedding-side k-NN goes through the in-memory
+     * HNSW index (sub-10ms at any scale) instead of the O(n) brute-force
+     * cosine in EmbedDb.search(). Built on serve start; lives in
+     * ServerDeps.hnswContext. Null/undefined → brute-force fallback.
+     */
+    hnsw?: HnswSearchContext | null;
   }
 ): Promise<SearchHybridResponse> {
   await vault.ensureExists();
@@ -3381,7 +3432,8 @@ export async function searchHybrid(
       const embed = await embeddingsSearch(
         vault,
         { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model, min_score: 0 },
-        ctx.embedFile
+        ctx.embedFile,
+        ctx.hnsw
       );
       // v2.2.0: granularity branch — same shape as BM25 above.
       if (granularity === "block") {

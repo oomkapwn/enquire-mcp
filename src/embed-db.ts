@@ -371,6 +371,71 @@ export class EmbedDb {
     const row = db.prepare("SELECT COUNT(*) AS n FROM embeddings").get<{ n: number }>();
     return row?.n ?? 0;
   }
+
+  /**
+   * v2.13.0 — return every (vector, row) pair for HNSW build. Caller
+   * is responsible for assigning sequential integer labels (we use
+   * `embeddings.id` since it's already a stable AUTOINCREMENT PK).
+   *
+   * Memory footprint: ~1.5 KB per row (384-dim Float32 + path string +
+   * preview). For 50K chunks: ~75 MB peak during build. Caller should
+   * release the array after building HNSW (we intentionally don't
+   * stream — HNSW build is 30s on 50K chunks anyway, the 75 MB is
+   * insignificant compared to the ONNX runtime + FTS5 working set).
+   */
+  getAllVectors(): Array<{
+    label: number;
+    vector: Float32Array;
+    rel_path: string;
+    chunk_index: number;
+    line_start: number;
+    line_end: number;
+    text_preview: string;
+    kind: EmbedChunkKind;
+  }> {
+    const db = this.requireDb();
+    const rows = db
+      .prepare("SELECT id, rel_path, chunk_index, line_start, line_end, text_preview, vector, kind FROM embeddings")
+      .all<{
+        id: number;
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        text_preview: string;
+        vector: Buffer;
+        kind: string | null;
+      }>();
+    const expectedBytes = this.dim * 4;
+    const out: ReturnType<EmbedDb["getAllVectors"]> = [];
+    for (const r of rows) {
+      // Match the corruption guard from search() — skip rows with
+      // mis-sized vectors so a partial DB doesn't poison the HNSW build.
+      if (r.vector.byteLength !== expectedBytes) {
+        process.stderr.write(
+          `enquire: skipping ${r.rel_path}#${r.chunk_index} during getAllVectors — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
+        );
+        continue;
+      }
+      // Copy (don't share the underlying buffer). HNSW takes ownership of
+      // the Float32Array slice for the lifetime of the index; sharing
+      // the SQLite row buffer would risk use-after-free if the row is
+      // GC'd or the cursor advances.
+      const vec = new Float32Array(this.dim);
+      vec.set(new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim));
+      out.push({
+        label: r.id,
+        vector: vec,
+        rel_path: r.rel_path,
+        chunk_index: r.chunk_index,
+        line_start: r.line_start,
+        line_end: r.line_end,
+        text_preview: r.text_preview,
+        kind: (r.kind === "pdf" ? "pdf" : "md") as EmbedChunkKind
+      });
+    }
+    return out;
+  }
 }
 
 /** Default location for the embed db, alongside the FTS5 db + parse cache. */

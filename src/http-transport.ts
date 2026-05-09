@@ -67,6 +67,30 @@ export interface HttpServeOptions extends ServeOptions {
   /** Optional path-prefix to match a /health probe under (e.g. for Tailscale). Default `/health`. */
   healthPath?: string;
   /**
+   * v2.14.0 — when `true`, the HTTP transport runs in stateful mode:
+   * sessions are keyed by the `Mcp-Session-Id` header, each session has
+   * its own `McpServer` + `StreamableHTTPServerTransport` pair, and
+   * server-initiated notifications stream over a long-lived `GET /mcp`
+   * SSE connection. Required for ChatGPT custom GPT actions and other
+   * clients that expect persistent state across requests. Off by default
+   * (stateless mode is the right choice for short-running tools and
+   * minimizes attack surface).
+   */
+  stateful?: boolean;
+  /**
+   * v2.14.0 — when stateful, evict sessions idle longer than this many
+   * milliseconds. Default 30 minutes. Sweep runs lazily on every
+   * request (no separate timer). Idle = time since the last
+   * `handleRequest` for that session.
+   */
+  sessionIdleTimeoutMs?: number;
+  /**
+   * v2.14.0 — max concurrent sessions. New sessions beyond this cap are
+   * rejected with 503 + `Retry-After`. Default 100; protects against
+   * memory exhaustion under adversarial create-and-abandon traffic.
+   */
+  maxSessions?: number;
+  /**
    * When `true` (default), registers SIGINT/SIGTERM/beforeExit listeners
    * for graceful shutdown of the HTTP server, vault, FTS5 index, watcher,
    * and persistent cache. Tests pass `false` to avoid leaking listeners
@@ -233,6 +257,55 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
  * Build the request handler. Factored out of the listener-creation path
  * so tests can drive it without binding a TCP port.
  */
+/**
+ * v2.14.0 — one entry in the stateful-session map. Each session pairs an
+ * `McpServer` instance with a `StreamableHTTPServerTransport` (in
+ * stateful mode the SDK keys requests by the session id we assign at
+ * `initialize` time) and tracks the last activity timestamp for
+ * idle-eviction.
+ */
+interface StatefulSession {
+  server: ReturnType<typeof buildMcpServer>;
+  transport: InstanceType<typeof StreamableHTTPServerTransport>;
+  /** Epoch-ms of the last `handleRequest` for this session. */
+  lastActivityMs: number;
+}
+
+/**
+ * v2.14.0 — exported for tests so they can poke at the session map
+ * directly (idle eviction, max-cap, etc.) without spinning up a real
+ * HTTP server.
+ */
+export interface SessionRegistry {
+  readonly sessions: Map<string, StatefulSession>;
+  /** Sweep idle sessions older than `idleTimeoutMs`. Returns evicted count. */
+  sweepIdle(nowMs?: number): number;
+  /** Total sessions currently tracked. */
+  size(): number;
+}
+
+export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
+  const sessions = new Map<string, StatefulSession>();
+  return {
+    sessions,
+    sweepIdle(nowMs = Date.now()): number {
+      const cutoff = nowMs - idleTimeoutMs;
+      let evicted = 0;
+      for (const [sid, session] of sessions) {
+        if (session.lastActivityMs < cutoff) {
+          // Best-effort cleanup — don't block on slow close.
+          void session.transport.close().catch(() => {});
+          void session.server.close().catch(() => {});
+          sessions.delete(sid);
+          evicted += 1;
+        }
+      }
+      return evicted;
+    },
+    size: () => sessions.size
+  };
+}
+
 export function createHttpHandler(
   deps: ServerDeps,
   opts: HttpServeOptions
@@ -242,6 +315,12 @@ export function createHttpHandler(
   const corsOrigins = opts.corsOrigins ?? [];
   const limiter = new RateLimiter(opts.rateLimitPerMinute ?? 120);
   const maxBodyBytes = 4 * 1024 * 1024; // 4MB — generous for tools/list with 36 tools
+
+  // v2.14.0 stateful-mode state.
+  const stateful = opts.stateful === true;
+  const idleTimeoutMs = opts.sessionIdleTimeoutMs ?? 30 * 60 * 1000; // 30 min default
+  const maxSessions = opts.maxSessions ?? 100;
+  const registry = stateful ? createSessionRegistry(idleTimeoutMs) : null;
 
   return async (req, res) => {
     try {
@@ -293,15 +372,82 @@ export function createHttpHandler(
         return;
       }
 
-      // Method gating. POST is the main MCP entry; GET is for SSE
-      // streams (we're stateless, so we don't expose a long-lived GET
-      // — stub it with 405); DELETE is for stateful session termination
-      // (also 405 in stateless mode).
+      // Stateless mode (default) — POST only; fresh server+transport
+      // per request. Same path as v2.6.0.
+      if (!stateful || !registry) {
+        if (req.method !== "POST") {
+          sendJsonRpcError(res, 405, -32000, `Method ${req.method} not allowed for ${mcpPath}`);
+          return;
+        }
+        await handleStatelessRequest(req, res, deps, opts, maxBodyBytes);
+        return;
+      }
+
+      // ─── v2.14.0 stateful mode ─────────────────────────────────────────
+      // Lazy idle-sweep on every request. Bounded work — at most O(|sessions|)
+      // and cheap (Date compare per entry).
+      registry.sweepIdle();
+
+      const sessionIdHeader = req.headers["mcp-session-id"];
+      const sessionId = typeof sessionIdHeader === "string" ? sessionIdHeader : undefined;
+
+      // DELETE /mcp — explicit session termination. SDK's transport
+      // handles the protocol-level details; we just route it.
+      if (req.method === "DELETE") {
+        if (!sessionId) {
+          sendJsonRpcError(res, 400, -32000, "DELETE requires Mcp-Session-Id header");
+          return;
+        }
+        const session = registry.sessions.get(sessionId);
+        if (!session) {
+          // Idempotent — if the session is already gone, treat as success.
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        // Let the transport's handleRequest run the protocol shutdown,
+        // then drop our entry.
+        try {
+          await session.transport.handleRequest(req, res);
+        } catch {
+          /* shutdown errors don't matter — we're killing the session anyway */
+        }
+        void session.transport.close().catch(() => {});
+        void session.server.close().catch(() => {});
+        registry.sessions.delete(sessionId);
+        return;
+      }
+
+      // GET /mcp — long-lived SSE stream for server-initiated
+      // notifications. The transport handles the SSE framing; we just
+      // route the request to the right session.
+      if (req.method === "GET") {
+        if (!sessionId) {
+          sendJsonRpcError(res, 400, -32000, "GET requires Mcp-Session-Id header (initialize first)");
+          return;
+        }
+        const session = registry.sessions.get(sessionId);
+        if (!session) {
+          sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId}`);
+          return;
+        }
+        session.lastActivityMs = Date.now();
+        try {
+          await session.transport.handleRequest(req, res);
+        } catch (err) {
+          process.stderr.write(`enquire http: SSE error — ${err instanceof Error ? err.message : String(err)}\n`);
+        }
+        return;
+      }
+
       if (req.method !== "POST") {
         sendJsonRpcError(res, 405, -32000, `Method ${req.method} not allowed for ${mcpPath}`);
         return;
       }
 
+      // POST /mcp — either an existing session (Mcp-Session-Id header)
+      // or a new initialize. Read the body once; we'll need it to
+      // detect initialize and to feed handleRequest.
       let body: unknown;
       try {
         body = await readJsonBody(req, maxBodyBytes);
@@ -310,28 +456,73 @@ export function createHttpHandler(
         return;
       }
 
-      // Build a fresh McpServer + transport for this request. The
-      // McpServer registers tool handlers (closures over the SHARED
-      // deps.vault / deps.ftsIndex), so this is cheap — no SQLite open,
-      // no embedder load. The transport handles a single request and
-      // closes.
+      if (sessionId) {
+        // Existing session — route to its transport.
+        const session = registry.sessions.get(sessionId);
+        if (!session) {
+          sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId} (it may have expired)`);
+          return;
+        }
+        session.lastActivityMs = Date.now();
+        try {
+          await session.transport.handleRequest(req, res, body);
+        } catch (err) {
+          process.stderr.write(
+            `enquire http: stateful transport error — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+          if (!res.headersSent) {
+            sendJsonRpcError(res, 500, -32603, "Internal server error");
+          }
+        }
+        return;
+      }
+
+      // No session id — must be a fresh `initialize`. Cap before allocating.
+      if (registry.size() >= maxSessions) {
+        res.statusCode = 503;
+        res.setHeader("Retry-After", "60");
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            error: "max sessions reached",
+            current: registry.size(),
+            max: maxSessions
+          })
+        );
+        return;
+      }
+
+      // Allocate session: server + transport with a fresh session id.
+      // The SDK's `sessionIdGenerator` returns a UUID; the transport
+      // sets the `Mcp-Session-Id` response header automatically on
+      // initialize.
       const server = buildMcpServer(deps, opts);
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomBytes(16).toString("hex"),
+        onsessioninitialized: (sid: string) => {
+          // The SDK guarantees this fires before initialize's response
+          // ships, so the entry exists when subsequent requests arrive.
+          registry.sessions.set(sid, { server, transport, lastActivityMs: Date.now() });
+        }
+      });
+      // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
+      transport.onclose = () => {
+        const sid = transport.sessionId;
+        if (sid) registry.sessions.delete(sid);
+      };
       try {
         await server.connect(transport);
-        // Wire up cleanup so we never leak a transport on early
-        // client-disconnect. Both server and transport are per-request
-        // disposable — `server.close()` releases the connection, the
-        // transport's `close()` flushes any pending stream.
-        const cleanup = () => {
-          void transport.close();
-          void server.close();
-        };
-        res.on("close", cleanup);
         await transport.handleRequest(req, res, body);
       } catch (err) {
-        process.stderr.write(`enquire http: transport error — ${err instanceof Error ? err.message : String(err)}\n`);
-        sendJsonRpcError(res, 500, -32603, "Internal server error");
+        process.stderr.write(
+          `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
+        );
+        // Best-effort: free resources we allocated.
+        void transport.close().catch(() => {});
+        void server.close().catch(() => {});
+        if (!res.headersSent) {
+          sendJsonRpcError(res, 500, -32603, "Internal server error");
+        }
       }
     } catch (err) {
       // Final safety net — if anything in the outer block throws (URL
@@ -344,6 +535,44 @@ export function createHttpHandler(
       }
     }
   };
+}
+
+/**
+ * Stateless POST handler — extracted from createHttpHandler so the
+ * stateful path can keep using fresh server+transport per non-session
+ * request when we want to (we don't currently). Identical to the
+ * v2.6.0 default flow.
+ */
+async function handleStatelessRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ServerDeps,
+  opts: HttpServeOptions,
+  maxBodyBytes: number
+): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req, maxBodyBytes);
+  } catch (err) {
+    sendJsonRpcError(res, 400, -32700, err instanceof Error ? err.message : "Parse error");
+    return;
+  }
+  const server = buildMcpServer(deps, opts);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  try {
+    await server.connect(transport);
+    const cleanup = () => {
+      void transport.close();
+      void server.close();
+    };
+    res.on("close", cleanup);
+    await transport.handleRequest(req, res, body);
+  } catch (err) {
+    process.stderr.write(`enquire http: transport error — ${err instanceof Error ? err.message : String(err)}\n`);
+    if (!res.headersSent) {
+      sendJsonRpcError(res, 500, -32603, "Internal server error");
+    }
+  }
 }
 
 /**

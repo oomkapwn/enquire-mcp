@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] — 2026-05-09
+
+**Sprint 22 — closes the v3.2 Bases DSL deferral.** v3.4.0's wikilink-graph infrastructure unlocks `linksTo()` evaluation in `.base` files. v3.5.0 also adds two related shorthand predicates Obsidian's canonical syntax uses (`file.path`, `file.name`).
+
+### Why this release exists
+
+When v3.2.0 shipped Bases support, the README and tool description listed `linksTo(file.file, "Target")` as **unevaluated** — treated as `true` (most permissive) and surfaced in `unevaluated_predicates`. Reason: the structural wikilink-graph code didn't exist yet. v3.4.0 shipped that infrastructure for community detection. v3.5.0 connects them.
+
+This is **not feature padding** — it's a documented deferral being closed correctly.
+
+### Added — `linksTo(file.file, "Target")`
+
+```yaml
+filters:
+  and:
+    - 'tag == "research"'
+    - 'linksTo(file.file, "Hub Note")'
+```
+
+Resolution mirrors Obsidian's: basename match, case-insensitive, `.md` stripped, section/block refs (`#heading`, `^block`) ignored. Implementation: per-note outbound set computed during `queryBase`'s walk (we already extract `[[wikilinks]]` for tag detection).
+
+Was: `unevaluated_predicates: ["linksTo(file.file, ...)"]`.
+Now: precise membership check.
+
+### Added — `file.path` / `file.name` shorthands
+
+Obsidian's canonical syntax uses the `file.` prefix. v3.5 accepts:
+
+- `file.path startsWith "Notes/"` — alias for `path startsWith "Notes/"`
+- `file.path contains "research"` — alias for `path contains "research"`
+- `file.name == "RAG"` — basename equality, case-insensitive, `.md` stripped
+- `file.name != "Inbox"` — basename inequality
+
+All four are alias-only — they don't change the behavior of the existing `path` / unprefixed predicates. Closes a small UX papercut where a user copying a `.base` file from another vault would see `file.path` predicates fall into `unevaluated`.
+
+### API changes
+
+`src/bases.ts`:
+- `EvalContext.outbound: Set<string>` — new field, populated during `queryBase` per-note walk
+- `evalPredicate` extended to handle `linksTo`, `file.path`, `file.name`
+
+No public API breakage. `EvalContext` is internal.
+
+### Tests
+
+656 unit tests pass (was 650 in v3.4.0, +6 new in `tests/bases.test.ts`):
+- `linksTo` is case-insensitive, strips `.md` / sections / blocks
+- `linksTo` returns false on no-link
+- `file.path startsWith` aliases `path startsWith`
+- `file.path contains` aliases `path contains`
+- `file.name ==` matches basename case-insensitively (no .md)
+- `file.name !=` excludes the basename
+
+Plus the existing v3.2 test that asserted `linksTo` was unevaluated has been **flipped** — it now locks in that `linksTo` IS evaluated and `unevaluated_predicates` is empty for the closed case.
+
+### Migration
+
+**No-op for default users.** A `.base` file that previously got `linksTo` over-included will now get an exact match (which is what the user intended). If anyone built a workflow that relied on `linksTo` being permissively-true, they'd see fewer matches now — but this is a correctness improvement, not a regression.
+
+### Surface counts
+
+44 tools, 19 prompts, 3 resources — unchanged. No new tools/prompts/resources; v3.5 deepens an existing tool's capability.
+
+### Backlog status
+
+Bases DSL closures so far:
+- ✅ `tag` / `taggedWith` predicates (v3.2)
+- ✅ `path startsWith` / `path contains` (v3.2)
+- ✅ Frontmatter equality + contains (v3.2)
+- ✅ `and` / `or` / `not` combinators (v3.2)
+- ✅ `linksTo(file.file, ...)` (v3.5)
+- ✅ `file.path` / `file.name` shorthands (v3.5)
+- ⏳ Date arithmetic (`inDate`, etc) — needs date parser
+- ⏳ Formula evaluator (`concat`, arithmetic) — needs expression engine
+- ⏳ Summaries — would require aggregation pass
+
+The remaining 3 deferrals each need their own focused sprint and are explicitly tracked.
+
 ## [3.4.0] — 2026-05-09
 
 **Sprint 21 — GraphRAG-light: wikilink community detection.** Closes the v3.0 audit's largest deferred item. Adds structural community detection over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). **First MCP server with native vault community detection.**

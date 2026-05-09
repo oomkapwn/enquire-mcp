@@ -496,7 +496,13 @@ describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () =
       JSON.stringify({ folder: "Daily Notes", format: "YYYY-MM-DD" })
     );
     // Today's daily note exists but is excluded by the user's filter.
-    const today = new Date().toISOString().slice(0, 10);
+    // The periodic-alias resolver in src/periodic.ts uses LOCAL date
+    // methods (getFullYear/getMonth/getDate), not UTC. Test must match
+    // that to be timezone-stable — pre-fix used `toISOString().slice(0, 10)`
+    // which is UTC and flakes during the few hours per day when local
+    // and UTC dates disagree.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     await fs.writeFile(path.join(vroot, "Daily Notes", `${today}.md`), "private daily entry");
   });
   afterEach(async () => {

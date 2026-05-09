@@ -6,7 +6,7 @@
       <stop offset="50%" stop-color="#0f172a"/>
       <stop offset="100%" stop-color="#1e1b3a"/>
     </linearGradient>
-    <radialGradient id="glow" cx="80%" cy="20%" r="60%">
+    <radialGradient id="glow1" cx="80%" cy="20%" r="60%">
       <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.25"/>
       <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
     </radialGradient>
@@ -22,90 +22,119 @@
   <!-- Background layers -->
   <rect width="1280" height="640" fill="url(#bg)"/>
   <rect width="1280" height="640" fill="url(#dots)"/>
-  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect width="1280" height="640" fill="url(#glow1)"/>
   <rect width="1280" height="640" fill="url(#glow2)"/>
 
   <!-- Accent corner bar -->
   <rect x="0" y="0" width="6" height="640" fill="#8b5cf6"/>
 
-  <!-- Title block (left) -->
-  <g transform="translate(72, 110)">
+  <!-- LEFT: Brand block -->
+  <g transform="translate(72, 88)">
     <!-- prefix tag -->
-    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="20" fill="#8b5cf6" font-weight="600">
-      [[mcp · since 1980]]
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="18" fill="#8b5cf6" font-weight="600">
+      [[mcp · v3.5 · stable · semver-bound]]
     </text>
+
     <!-- main brand -->
-    <text x="0" y="98" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="124" fill="#f8fafc" font-weight="700" letter-spacing="-3">
-      enquire
+    <text x="0" y="86" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="86" fill="#f8fafc" font-weight="700" letter-spacing="-1">
+      enquire-mcp
     </text>
+
     <!-- divider -->
-    <line x1="0" y1="132" x2="120" y2="132" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
-    <!-- explicit Obsidian-MCP subtitle for SEO + clarity -->
-    <text x="0" y="178" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="32" fill="#06b6d4" font-weight="600">
-      MCP server for Obsidian vaults — stable 🦞
+    <line x1="0" y1="110" x2="90" y2="110" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
+
+    <!-- subtitle: bold positioning -->
+    <text x="0" y="156" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="30" fill="#06b6d4" font-weight="700">
+      The most advanced MCP server for Obsidian.
     </text>
-    <!-- value-prop tagline -->
-    <text x="0" y="218" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
-      Stop your AI guessing at vault paths. Wikilinks
+
+    <!-- 3-line tagline showing the unique stack -->
+    <text x="0" y="220" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="19" fill="#cbd5e1" font-weight="500">
+      Hybrid retrieval (BM25 + ML + BGE reranker, RRF-fused).
     </text>
-    <text x="0" y="248" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" fill="#cbd5e1" font-weight="500">
-      resolved, backlinks ranked, Dataview first-class.
+    <text x="0" y="247" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="19" fill="#cbd5e1" font-weight="500">
+      HNSW · int8 quantization · GraphRAG-light · standalone .base.
     </text>
-    <!-- features row -->
-    <text x="0" y="296" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="17" fill="#94a3b8">
-      Claude Code · Cursor · OpenClaw · Codex · stdio · MIT
+    <text x="0" y="274" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="19" fill="#cbd5e1" font-weight="500">
+      HyDE · PDFs + OCR · stateful remote MCP. Free. MIT.
+    </text>
+
+    <!-- proof-points row: bold numbers, monospace -->
+    <g transform="translate(0, 326)" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="20">
+      <text x="0" y="0" font-weight="700" fill="#f8fafc">44</text>
+      <text x="32" y="0" fill="#94a3b8">tools</text>
+      <text x="100" y="0" fill="#475569">·</text>
+      <text x="118" y="0" font-weight="700" fill="#f8fafc">19</text>
+      <text x="150" y="0" fill="#94a3b8">prompts</text>
+      <text x="240" y="0" fill="#475569">·</text>
+      <text x="258" y="0" font-weight="700" fill="#f8fafc">664</text>
+      <text x="298" y="0" fill="#94a3b8">tests</text>
+      <text x="362" y="0" fill="#475569">·</text>
+      <text x="380" y="0" font-weight="700" fill="#10b981">SLSA-3</text>
+      <text x="466" y="0" fill="#475569">·</text>
+      <text x="484" y="0" font-weight="700" fill="#06b6d4">MIT</text>
+    </g>
+
+    <!-- clients row -->
+    <text x="0" y="378" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="16" fill="#64748b">
+      Claude Code · Claude Desktop · Cursor · ChatGPT · Codex
     </text>
   </g>
 
-  <!-- Terminal mockup (right) -->
-  <g transform="translate(720, 175)">
+  <!-- RIGHT: Terminal mockup -->
+  <g transform="translate(770, 110)">
     <!-- window chrome -->
-    <rect x="0" y="0" width="496" height="290" rx="10" ry="10" fill="#0b1020" stroke="#1e293b" stroke-width="1"/>
-    <rect x="0" y="0" width="496" height="32" rx="10" ry="10" fill="#111827"/>
-    <rect x="0" y="22" width="496" height="10" fill="#111827"/>
+    <rect x="0" y="0" width="446" height="430" rx="10" ry="10" fill="#0b1020" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="446" height="32" rx="10" ry="10" fill="#111827"/>
+    <rect x="0" y="22" width="446" height="10" fill="#111827"/>
     <circle cx="18" cy="16" r="5" fill="#ef4444" opacity="0.85"/>
     <circle cx="36" cy="16" r="5" fill="#f59e0b" opacity="0.85"/>
     <circle cx="54" cy="16" r="5" fill="#10b981" opacity="0.85"/>
-    <text x="240" y="20" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="12" fill="#64748b" text-anchor="middle">claude — enquire</text>
+    <text x="223" y="20" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="12" fill="#64748b" text-anchor="middle">agent · enquire-mcp v3.5</text>
 
-    <!-- terminal lines -->
-    <g font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14">
+    <!-- terminal content -->
+    <g font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="13">
+      <!-- user query -->
       <text x="20" y="64" fill="#06b6d4">›</text>
-      <text x="38" y="64" fill="#e2e8f0">What was I working on yesterday?</text>
+      <text x="36" y="64" fill="#e2e8f0">"summarize what I know about RAG"</text>
 
-      <text x="20" y="104" fill="#8b5cf6">→</text>
-      <text x="38" y="104" fill="#94a3b8">obsidian_get_recent_edits(</text>
-      <text x="38" y="124" fill="#94a3b8">  since_minutes=1440)</text>
+      <!-- step 1: GraphRAG-light -->
+      <text x="20" y="106" fill="#8b5cf6">→</text>
+      <text x="36" y="106" fill="#94a3b8">obsidian_get_communities()</text>
+      <text x="36" y="124" fill="#475569">  // Louvain · 17 clusters · Q=0.48</text>
 
-      <text x="20" y="160" fill="#8b5cf6">→</text>
-      <text x="38" y="160" fill="#94a3b8">obsidian_get_backlinks(</text>
-      <text x="38" y="180" fill="#94a3b8">  title=</text>
-      <text x="76" y="180" fill="#f59e0b">"Apollo"</text>
-      <text x="132" y="180" fill="#94a3b8">)</text>
+      <!-- step 2: HyDE-augmented hybrid search -->
+      <text x="20" y="166" fill="#8b5cf6">→</text>
+      <text x="36" y="166" fill="#94a3b8">obsidian_hyde_search(</text>
+      <text x="36" y="184" fill="#94a3b8">  query=</text>
+      <text x="92" y="184" fill="#f59e0b">"RAG"</text>
+      <text x="124" y="184" fill="#94a3b8">,</text>
+      <text x="36" y="202" fill="#94a3b8">  hypothetical_answer=</text>
+      <text x="226" y="202" fill="#f59e0b">"RAG fuses..."</text>
+      <text x="36" y="220" fill="#94a3b8">)</text>
 
-      <text x="20" y="224" fill="#10b981">✓</text>
-      <text x="38" y="224" fill="#e2e8f0">"You shipped the spec yesterday.</text>
-      <text x="38" y="244" fill="#e2e8f0">3 open threads in </text>
-      <text x="178" y="244" fill="#8b5cf6">[[Apollo/Open Threads]]</text>
-      <text x="38" y="264" fill="#e2e8f0">2 daily notes link back."</text>
+      <!-- result -->
+      <text x="20" y="262" fill="#10b981">✓</text>
+      <text x="36" y="262" fill="#e2e8f0">5 hits · BM25 + ML + rerank fused</text>
+      <text x="36" y="284" fill="#94a3b8">  community_id: 0 (largest cluster)</text>
+      <text x="36" y="304" fill="#94a3b8">  representative:</text>
+      <text x="36" y="324" fill="#8b5cf6">  [[Reference/RAG.md]]</text>
+      <text x="36" y="346" fill="#94a3b8">  per_signal:</text>
+      <text x="36" y="366" fill="#94a3b8">    bm25: 0.84 · embeddings: 0.91</text>
+      <text x="36" y="384" fill="#94a3b8">    rerank: 0.96 · graph: 0.72</text>
+      <text x="36" y="406" fill="#94a3b8">  hyde: true · kind: md</text>
     </g>
   </g>
 
   <!-- Footer strip -->
-  <g transform="translate(72, 555)">
-    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="16" fill="#64748b" font-weight="500">
-      <tspan fill="#cbd5e1">MCP server</tspan>
+  <g transform="translate(72, 580)">
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14" fill="#475569">
+      <tspan fill="#cbd5e1">github.com/oomkapwn/enquire-mcp</tspan>
       <tspan> · </tspan>
-      <tspan fill="#cbd5e1">stdio</tspan>
-      <tspan> · </tspan>
-      <tspan fill="#cbd5e1">read-only by default</tspan>
-      <tspan> · </tspan>
-      <tspan fill="#cbd5e1">TypeScript</tspan>
-      <tspan> · </tspan>
-      <tspan fill="#cbd5e1">MIT</tspan>
+      <tspan fill="#cbd5e1">npm i -g @oomkapwn/enquire-mcp</tspan>
     </text>
-    <text x="0" y="32" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="14" fill="#475569">
-      github.com/oomkapwn/enquire-mcp
+    <text x="0" y="22" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace" font-size="12" fill="#475569" font-style="italic">
+      Named after Tim Berners-Lee's 1980 ENQUIRE prototype — the original hypertext system.
     </text>
   </g>
 </svg>

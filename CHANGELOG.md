@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] — 2026-05-09
+
+**Sprint 20 — extended reranker registry.** Adds 3 new cross-encoder reranker models to `RERANKER_MODELS` so users can pick the size/quality/language tradeoff that fits their workload. No new tools, no schema changes, no breaking changes — purely additive. Combined with the existing `reranker_score` per-hit observability (v2.9.0+), users now have a complete spectrum of rerankers to A/B test in `enquire-mcp eval --matrix --reranker-model <alias>`.
+
+### Added — 3 new reranker model aliases
+
+| Alias | HF model | Size | Multilingual | When to use |
+|---|---|---|---|---|
+| `rerank-bge-large` | `Xenova/bge-reranker-large` | ~560 MB | ❌ English | Higher quality than `rerank-bge` (typically +1-2 NDCG@10). Trade memory for retrieval quality. |
+| `rerank-jina-tiny` | `Xenova/jina-reranker-v1-tiny-en` | ~33 MB | ❌ English | Latency-optimized — faster than `rerank-bge`, comparable quality on short passages. |
+| `rerank-multilingual-large` | `Xenova/mxbai-rerank-large-v2` | ~280 MB | ✅ 50+ langs | Higher quality than the default `rerank-multilingual` (xsmall). Trade download size for accuracy. |
+
+Existing aliases unchanged: `rerank-multilingual` (default, multilingual, xsmall) + `rerank-bge` (English, base).
+
+**Registry size: 5 reranker models** (was 2 in v2.9.0+).
+
+Pick via `--reranker-model <alias>` on `serve` / `serve-http` / `eval`.
+
+### Reranker observability (existing, surfaced)
+
+Already present since v2.9.0 but worth highlighting now that the registry is large enough to A/B-test meaningfully: every hit returned by `obsidian_search` (with `--enable-reranker`) carries a `reranker_score` field — the raw cross-encoder score (sigmoid-mapped to `[0, 1]`). Lets you debug "why did this hit win?" or run pair-wise A/B comparisons via `enquire-mcp eval --matrix`.
+
+### Tests
+
+637 unit tests pass (was 633 in v3.2.0, +4 new in `tests/reranker.test.ts`):
+- `rerank-bge-large` registered with sensible English/large profile
+- `rerank-jina-tiny` registered with sensible English/tiny profile
+- `rerank-multilingual-large` registered with sensible multilingual/medium profile
+- Registry size pinned at 5 (deliberate-change invariant)
+
+### Migration
+
+**No-op.** No CLI / response shape / schema changes. Existing `--reranker-model` values keep working.
+
+### Deferred — full SPLADE / ColBERT integration
+
+The v3.0 audit shortlisted SPLADE (learned sparse retrieval, +2-5 NDCG@10 as a third orthogonal signal in RRF) and ColBERT (token-level late-interaction reranker) as "medium effort." On detailed scoping:
+
+- **SPLADE** requires a sparse-vector storage column in SQLite (we currently store dense `Float32` BLOBs only) + a separate SPLADE embedder model + new build subcommand + retrieval + RRF integration. Multi-day work; needs a proper schema-evolution sprint.
+- **ColBERT** requires a real late-interaction model (ColBERT-v2 ONNX) + token-level dot-product scoring + memory-aware mode (token vectors are 100×+ larger than single-vector embeddings) + integration alongside cross-encoder. Multi-day work.
+
+Shipping either rushed = buggy. **Both deferred to dedicated future sprints with proper design rounds.** Tracking in the v3.x roadmap.
+
+### Strategic position
+
+v3.3 closes the audit's "expand the cross-encoder registry" recommendation. Combined with `enquire-mcp eval --matrix`, users now have:
+- 5 rerankers spanning ~25 MB (xsmall multilingual) → ~560 MB (large English)
+- 2 latency tiers (tiny / xsmall vs base / large)
+- Both English-only and multilingual options
+- Built-in NDCG@K / Recall@K / MRR benchmark to pick the right one for their vault
+
+This is the most thorough cross-encoder registry exposed by any Obsidian-MCP server (most ship 0; SmartCompose-style plugins ship at most 1).
+
 ## [3.2.0] — 2026-05-09
 
 **Sprint 19 — Obsidian Bases (`.base`) support.** Closes the v3.0 audit gap "Bases is the new structured-data primitive in Obsidian; competitors are starting to support it." Three new always-on read tools that parse, introspect, and execute `.base` files against vault notes — without requiring Obsidian itself to be running. **First MCP server with native `.base` query execution.**

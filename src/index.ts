@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.2.0";
+const VERSION = "3.3.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
     )
     .option(
       "--reranker-model <alias>",
-      "v2.9.0 — reranker alias from RERANKER_MODELS. `rerank-multilingual` (default; Xenova/mxbai-rerank-xsmall-v1, ~25 MB, multilingual) or `rerank-bge` (Xenova/bge-reranker-base, ~110 MB, English-only). Only effective with `--enable-reranker`."
+      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-multilingual` (Xenova/mxbai-rerank-xsmall-v1, ~25 MB, multilingual). Other options: `rerank-bge` (~110 MB, English), `rerank-bge-large` (~560 MB, English, +1-2 NDCG@10), `rerank-jina-tiny` (~33 MB, English, latency-optimized), `rerank-multilingual-large` (~280 MB, 50+ langs). Only effective with `--enable-reranker`."
     )
     .option(
       "--reranker-top-n <n>",

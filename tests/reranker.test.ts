@@ -49,6 +49,34 @@ describe("RERANKER_MODELS catalog (v2.9.0)", () => {
       expect(m.approxSizeMB).toBeLessThan(2000);
     }
   });
+
+  // v3.3.0 — extended registry with 3 more aliases for size/quality/lang
+  // tradeoffs. Pin the registry so adding/removing entries is a deliberate
+  // schema change.
+  it("v3.3.0 exposes rerank-bge-large (English, larger, higher quality)", () => {
+    const m = resolveRerankerModel("rerank-bge-large");
+    expect(m.alias).toBe("rerank-bge-large");
+    expect(m.multilingual).toBe(false);
+    expect(m.approxSizeMB).toBeGreaterThan(200);
+  });
+
+  it("v3.3.0 exposes rerank-jina-tiny (English, smallest, latency-optimized)", () => {
+    const m = resolveRerankerModel("rerank-jina-tiny");
+    expect(m.alias).toBe("rerank-jina-tiny");
+    expect(m.multilingual).toBe(false);
+    expect(m.approxSizeMB).toBeLessThan(50);
+  });
+
+  it("v3.3.0 exposes rerank-multilingual-large (50+ langs, higher quality)", () => {
+    const m = resolveRerankerModel("rerank-multilingual-large");
+    expect(m.alias).toBe("rerank-multilingual-large");
+    expect(m.multilingual).toBe(true);
+    expect(m.approxSizeMB).toBeGreaterThan(200);
+  });
+
+  it("registry size matches v3.3.0 expectation (5 aliases)", () => {
+    expect(Object.keys(RERANKER_MODELS).length).toBe(5);
+  });
 });
 
 // End-to-end reranker plumbing test against a real FtsIndex with synthetic

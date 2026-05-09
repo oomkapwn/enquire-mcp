@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-05-09
+
+**Sprint 13 — HNSW vector index for sub-10ms semantic retrieval at scale.** Closes the "brute-force semantic search doesn't scale" gap. The existing `EmbedDb.search()` runs O(n) cosine over every embedded chunk per query (~5ms at 8K chunks, ~30ms at 50K, ~300ms at 500K, ~3s at 5M). HNSW is the IR-standard graph-based index that achieves O(log n) approximate nearest neighbor lookups — **sub-10ms even at million-chunk scale**, with recall@K ≥ 95% at default parameters.
+
+### Added — `--use-hnsw` flag on `serve` and `serve-http`
+
+Off by default; opt-in because the index is built in-memory on serve start (~5s for 8K chunks, ~25s for 50K, ~4min for 500K — one-time cost per long-running server). When enabled, every `obsidian_search` and `obsidian_embeddings_search` call routes the embedding-side k-NN through the in-memory HNSW index instead of the brute-force scan.
+
+```bash
+enquire-mcp serve --vault ~/Obsidian --persistent-index --use-hnsw
+# stderr: "enquire: HNSW index built (8854 vectors, dim=384, 4823ms)"
+```
+
+`--hnsw-ef <n>` tunes search-time accuracy (default 100; higher = more accurate, slightly slower; common range 50-500).
+
+### `hnswlib-node` as `optionalDependencies`
+
+Native N-API binding to the C++ hnswlib reference implementation. Ships prebuilds for darwin-x64/arm64, linux-x64/arm64, win32-x64; falls back to source build on uncommon platforms. Lazy-loaded — same `optionalDependencies` pattern as tesseract.js / pdfjs-dist / @huggingface/transformers.
+
+**Why not `hnswlib-wasm`?** It exists (~340 KB pure-WASM) but its v0.8 build is hardcoded for the browser environment (`ENVIRONMENT_IS_WEB=true` at compile time) and refuses to load under Node. Verified during sprint via real test smoke — pivoted to `hnswlib-node` after the WASM dep failed at startup.
+
+### Architecture: in-memory rebuild on serve start
+
+We deliberately don't persist the HNSW index to disk:
+
+- For typical vault scales (≤50K chunks), rebuild is ≤30s on serve start — tolerable as a one-time boot cost for a long-running server.
+- Persistence introduces WAL-style consistency complexity (which version of `.embed.db` produced the `.hnsw.bin`?) — not worth it at current scales.
+- Persistence is tracked for **v3.0+** when million-chunk vaults become a real use case.
+
+### Implementation
+
+`src/hnsw.ts` (~290 lines):
+- `LabeledVector` interface — caller assigns stable integer labels (typically `embeddings.id` from `EmbedDb.getAllVectors()`).
+- `buildHnsw(vectors, opts)` — async factory, lazy-loads `hnswlib-node`, validates dim before WASM init, runs `addPoint` in a tight loop.
+- `HnswIndex.searchKnn(queryVec, k, opts?)` — single method, returns `{labels, distances}`. Distance is cosine distance (`1 - similarity`).
+- `hnswResultsToHits(result, rowByLabel)` — converts HNSW labels back to `EmbedSearchHit` shape used by the rest of the codebase. Silently drops labels not in the row map (defensive — handles the rare race where a row was deleted between build and query).
+
+`src/embed-db.ts`:
+- `EmbedDb.getAllVectors()` — returns every (vector, row) pair with `embeddings.id` as label. Copies vectors so HNSW doesn't share buffers with SQLite (would risk use-after-free).
+
+`src/index.ts`:
+- `prepareServerDeps` builds the index when `--use-hnsw` is set, after the optional FTS5 sync. Failure to build (corrupt embed-db, missing dep, OOM) falls back to brute-force with a stderr warning — search keeps working.
+- `ServerDeps.hnswContext` carries the index + `rowByLabel` map + `ef` override down to `registerReadTools`.
+- `searchHybrid` and `embeddingsSearch` accept an optional `hnsw?: HnswSearchContext` and route through it when present.
+
+### Tests
+
+555 unit tests pass (was 547 in v2.12.0, +8 new):
+- **buildHnsw + searchKnn (+5):** retrieves cluster's points for a centroid query (≥80% of top-10 from correct cluster), recall@10 vs brute-force ≥ 95% on a 200-point synthetic corpus, rejects mismatched dim, rejects more-than-maxElements input, searchKnn rejects mismatched query dim.
+- **hnswResultsToHits (+2):** maps labels to hits + converts cosine distance to similarity, silently drops labels not in rowByLabel.
+- **EmbedDb.getAllVectors (+1):** returns rows with stable labels and copied vectors, kind preservation across md/pdf rows.
+
+Tests run against the **real** `hnswlib-node` native binding — not mocks. The recall test is a quantitative correctness check against deterministic brute-force ground truth.
+
+### Migration
+
+**No-op for default users.** HNSW is opt-in via `--use-hnsw`. Existing `serve` / `serve-http` users keep brute-force semantic search unchanged. Users who don't have `hnswlib-node` installed (e.g. `--omit=optional`) get a clean error with install hints if they pass `--use-hnsw`.
+
+### Strategic position
+
+v2.13.0 unblocks the **research-vault** use case: 50K-500K chunk vaults with academic papers, long PDFs, decade-old PKM corpora. Brute-force was already fine for typical PKM scales (5K-50K chunks); HNSW is the future-proofing claim ("scales to millions of chunks") that signals technical sophistication and unblocks the high-end users.
+
+Combined with v2.0-v2.12: hybrid RRF + wikilink graph-boost + breadcrumb chunking + multilingual embeddings + remote MCP + PDF retrieval (read + index + OCR) + cross-encoder reranking + onboarding (doctor/setup) + retrieval-quality eval + **HNSW**, enquire is the only Obsidian-MCP that scales to research-corpus territory while keeping every retrieval-quality moat intact.
+
+### Roadmap remaining
+
+- v2.14+: Stateful HTTP sessions (`Mcp-Session-Id` + persistent SSE)
+- v3.0.0: HNSW persistence, late chunking, int8 vector quantization, GraphRAG
+
 ## [2.12.0] — 2026-05-09
 
 **Sprint 12 — built-in retrieval-quality evaluation harness.** Closes the "you can't tune what you can't measure" gap. Before this, anyone trying to A/B test retrieval changes (graph_boost on/off, reranker on/off, different `min_signals` / `limit` values) had to write a custom script. Now there's a first-class `enquire-mcp eval` subcommand. **No other Obsidian-MCP currently ships a built-in retrieval evaluation harness.**

@@ -6,11 +6,12 @@
 
 ### The most advanced Obsidian MCP server. Period.
 
-**Hybrid retrieval. Cross-encoder reranking. HNSW. int8 quantization. PDFs. OCR. Multilingual. Remote MCP. SLSA-3. Free.**
+**Every modern IR primitive. In one tool. For free.**
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp/latest.svg?label=npm%20%40latest&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-606%20passing-brightgreen.svg)](#trust)
+[![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
+[![tests](https://img.shields.io/badge/tests-664%20passing-brightgreen.svg)](#trust)
 [![stable](https://img.shields.io/badge/v3.0-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -20,11 +21,13 @@
 
 ---
 
+> **First and only Obsidian-MCP that ships hybrid retrieval, cross-encoder reranking, HNSW, int8 quantization, late-chunking, HyDE, GraphRAG-light community detection, standalone `.base` query execution, PDFs + OCR, and stateful remote MCP — together. In one binary. Under MIT. SLSA-3 signed.**
+
 ## What it is
 
-A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion, reranks with a **BGE cross-encoder**, scales to millions of chunks via **HNSW**, and returns blended markdown + PDF hits with `[page: N]` citations.
+A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion (Cormack et al, 2009), reranks with a **BGE cross-encoder** (5 model options), scales to millions of chunks via **HNSW with int8 quantization**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**44 tools · 19 MCP prompts · 664 unit tests · v3.5 · semver-bound · MIT · SLSA-3.**
+**44 tools · 19 MCP prompts · 664 unit tests · 50+ languages · v3.5 · semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -62,7 +65,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 ## 🏆 Why it's the best
 
-The **leading Obsidian-MCP server — the only one shipping all of these capabilities together:**
+**Six features no other Obsidian-MCP has at all** (GraphRAG-light, standalone `.base` execution, HyDE, int8 quantization, late-chunking, built-in eval harness). **Plus the entire modern IR stack** (BM25 + ML embeddings + cross-encoder reranking + HNSW) that competitors ship at most one or two of. Side-by-side:
 
 | Capability | enquire-mcp | Smart Connections | Other Obsidian-MCPs |
 |---|:---:|:---:|:---:|
@@ -82,6 +85,8 @@ The **leading Obsidian-MCP server — the only one shipping all of these capabil
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
 | **44 production tools** (33 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
+| **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
+| **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
 | **664 unit tests · 8 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |

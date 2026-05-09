@@ -2,13 +2,12 @@
 
 ## Reporting a vulnerability
 
-If you've found a security issue in enquire, **please don't open a public GitHub issue**. Instead:
+If you've found a security issue in enquire, **please don't open a public GitHub issue**. You have two equally-valid private channels:
 
-1. Email the maintainer at `oomkapwn@gmail.com` with the subject `enquire security`.
-2. Include a reproducer if you have one — vault layout, exact CLI flags, the operation that triggered the issue.
-3. Expect an acknowledgement within 72 hours.
+1. **Preferred — GitHub Private Vulnerability Reporting.** Open a [private security advisory](https://github.com/oomkapwn/enquire-mcp/security/advisories/new) directly on the repo. GitHub keeps the report private until you and I jointly publish it; collaboration on the fix happens in the same advisory thread.
+2. **Fallback — email.** `oomkapwn@gmail.com` with subject `enquire security`. Include a reproducer if you have one — vault layout, exact CLI flags, the operation that triggered the issue.
 
-I'll work on a fix in private, cut a patch release, and then publicly disclose with credit (or anonymously, your call).
+Either channel: expect an acknowledgement within **72 hours**. I work on a fix in private, cut a patch release, and then publicly disclose with credit (or anonymously, your call).
 
 ## Scope
 

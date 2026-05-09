@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2] — 2026-05-09
+
+**Patch — README marketing boost + SECURITY.md PVR mention.** Companion to v3.5.1. No code changes.
+
+### Changed — README leads with a punchier value claim
+
+- Hero callout (`> First and only Obsidian-MCP that ships hybrid retrieval, cross-encoder reranking, HNSW, int8 quantization, late-chunking, HyDE, GraphRAG-light, standalone .base, PDFs + OCR, and stateful remote MCP — together. In one binary. Under MIT. SLSA-3 signed.`) replaces the prior generic `What it is` lead. The factual claims are individually defensible from the v3.0 competitive audit + each subsequent sprint's CHANGELOG.
+- Comparison table preamble: `Six features no other Obsidian-MCP has at all (GraphRAG-light, standalone .base execution, HyDE, int8 quantization, late-chunking, built-in eval harness). Plus the entire modern IR stack...` — quantifies the lead instead of generic superlatives.
+- New comparison rows: **Standalone `.base` query execution** (✅ only here), **HyDE retrieval + sub-question decomposition** (✅ only here). These two were already in the feature inventory but weren't called out in the comparison table.
+- Added npm-downloads badge for live discoverability signal.
+
+### Changed — SECURITY.md leads with GitHub Private Vulnerability Reporting
+
+Reporting a vulnerability now offers two channels: **GitHub PVR (preferred)** with a direct link to the advisory submission flow, plus the existing email fallback. Aligns with the GitHub Code Security recommendation for public repos.
+
+### Tests
+
+664 unit tests pass (unchanged from v3.5.1). Marketing-copy + security-doc changes don't affect the CI surface.
+
+### Migration
+
+**No-op for default users.** No CLI / response shape / schema changes.
+
+### Repo About + topics + security settings (separate, admin-only)
+
+The matching repo-level admin actions (description sync, topic rotation, Dependabot/secret-scanning/PVR/branch-protection enablement) require maintainer admin access and were performed out-of-band where possible. See PR description for the remaining checklist of items the maintainer needs to confirm via GitHub Settings UI.
+
 ## [3.5.1] — 2026-05-09
 
 **Patch — audit-driven public-claim sync.** No behavior changes. External audit identified drift between README, STABILITY.md, CONTRIBUTING.md, CLI help, and `package.json` numeric claims (tools, tests, gates, write tools, prompts, dependencies). Production-grade projects can't ship inconsistent public surfaces — this release fixes that and pins it under CI.

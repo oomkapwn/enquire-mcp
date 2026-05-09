@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.3] — 2026-05-09
+
+**Patch — CHANGELOG cleanup.** No code or config changes. Removes references to internal operational notes from the v3.5.1 / v3.5.2 entries that are not relevant to consumers of the package. Repository-level admin items are tracked privately, not in the public CHANGELOG.
+
 ## [3.5.2] — 2026-05-09
 
 **Patch — README marketing boost + SECURITY.md PVR mention.** Companion to v3.5.1. No code changes.
@@ -25,9 +29,9 @@ Reporting a vulnerability now offers two channels: **GitHub PVR (preferred)** wi
 
 **No-op for default users.** No CLI / response shape / schema changes.
 
-### Repo About + topics + security settings (separate, admin-only)
+### Repo About + topics
 
-The matching repo-level admin actions (description sync, topic rotation, Dependabot/secret-scanning/PVR/branch-protection enablement) require maintainer admin access and were performed out-of-band where possible. See PR description for the remaining checklist of items the maintainer needs to confirm via GitHub Settings UI.
+Repo About description synced to current v3.x feature set; topics rotated for discovery (high-signal additions: `obsidian-mcp`, `mcp-server`, `claude-desktop`, `chatgpt`, `rag`, `vector-search`, `hnsw`, `pdf`, `ocr`).
 
 ## [3.5.1] — 2026-05-09
 
@@ -81,7 +85,7 @@ The audit also flagged three structural issues that need their own focused work,
 
 1. **`src/index.ts` is 3,673 lines + excluded from coverage.** Splitting it into `cli.ts` / `server.ts` / `tool-registry.ts` / `prompts.ts` / `options.ts` is a multi-day refactor. Tracking for v3.6+.
 2. **Machine-readable tool registry** (`tools.json` or similar) as single source of truth for README + docs/api.md + STABILITY.md + CLI help generation. Would replace the current invariant-tests-as-defense pattern with generation. Tracking for v3.6+.
-3. **Admin GitHub settings** (private vulnerability reporting, CodeQL default-setup confirmation, branch protection ruleset audit) require maintainer admin access — provided as a checklist in the v3.5.1 PR description, not code-shippable.
+3. **Repo-level configuration items** that require maintainer admin access (separate from code changes — handled out-of-band).
 
 ## [3.5.0] — 2026-05-09
 

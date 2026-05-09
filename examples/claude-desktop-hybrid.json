@@ -1,0 +1,22 @@
+{
+  "_comment_purpose": "Full hybrid retrieval config for Claude Desktop — BM25 (FTS5) + TF-IDF + ML embeddings (multilingual MiniLM) fused via RRF, plus BGE cross-encoder reranking and HNSW vector index for sub-10ms top-K queries at million-chunk scale.",
+  "_comment_setup": "Before this works you must run setup once: `enquire-mcp setup --vault /ABS/PATH/TO/Obsidian Vault` (downloads ~120MB embedding model + builds FTS5 + embed-db). Idempotent — re-running on a fully indexed vault is a fast no-op.",
+  "_comment_flags": "Flags explained: --persistent-index = BM25 via SQLite FTS5; --enable-reranker = BGE cross-encoder on top of RRF (+5-10 NDCG@10, ~30-50ms latency); --use-hnsw = sub-10ms semantic top-K, persisted to disk after first build (v2.16+); --include-pdfs = blend PDF chunks into hybrid search with [page: N] citation markers (requires pdfjs-dist optionalDependency); --watch = incremental rebuild on .md changes so you don't restart after editing in Obsidian.",
+  "mcpServers": {
+    "enquire": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@oomkapwn/enquire-mcp@latest",
+        "serve",
+        "--vault", "/ABSOLUTE/PATH/TO/YOUR/Obsidian Vault",
+        "--persistent-index",
+        "--enable-reranker",
+        "--use-hnsw",
+        "--include-pdfs",
+        "--watch"
+      ],
+      "env": {}
+    }
+  }
+}

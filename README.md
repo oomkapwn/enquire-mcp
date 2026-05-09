@@ -10,7 +10,8 @@ The most advanced Obsidian-MCP you can run today — drop into Claude Code, Clau
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp/latest.svg?label=npm%20%40latest&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-502%20passing-brightgreen.svg)](#trust)
+[![tests](https://img.shields.io/badge/tests-606%20passing-brightgreen.svg)](#trust)
+[![stable](https://img.shields.io/badge/v3.0-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -41,6 +42,8 @@ That's it. Your AI now has structured access to wikilinks, backlinks, frontmatte
   }
 }
 ```
+
+📂 Drop-in configs in [`examples/`](./examples/) — Claude Desktop (TF-IDF and full-hybrid variants), Cursor, ChatGPT custom GPT actions over remote MCP, plus a sample query set for the eval harness.
 
 **Want hybrid retrieval at full power?** One command (v2.11.0):
 
@@ -221,8 +224,9 @@ enquire-mcp serve-http \
 | Language | TypeScript strict + `noUncheckedIndexedAccess` |
 | Runtime deps | 5 mandatory, 3 optional (FTS5 + ML embeddings + PDF parser — markdown-only path stays zero-cost) |
 | Releases | npm + GitHub release per tag · semver · SLSA-3 provenance |
+| Stability | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, and exported symbol is contract |
 
-Full posture: **[SECURITY.md](./SECURITY.md)**. Report vulnerabilities to `oomkapwn@gmail.com`.
+Full posture: **[SECURITY.md](./SECURITY.md)**. Stability promise: **[STABILITY.md](./STABILITY.md)**. Report vulnerabilities to `oomkapwn@gmail.com`.
 
 ---
 
@@ -253,9 +257,11 @@ Yes. `serve-http` exposes the same server over [Streamable HTTP](https://modelco
 
 ## 🚀 Releases
 
-`v2.0.0` (stable) · `v2.5.0` (5-sprint roadmap consolidated) · `v2.6.0` (remote MCP) · `v2.7.0` (PDF read tools) · `v2.8.0` (PDFs blended into hybrid search) · `v2.9.0` (BGE cross-encoder reranking) · `v2.13.0` (HNSW vector index) · `v2.14.0` (stateful HTTP sessions) · `v2.15.0` (late-chunking) · `v2.16.0` (HNSW persistence) · `v2.17.0` (int8 quantization)
+**v3.0.0 — stable channel** (the v2.x retrieval roadmap is complete and the public surface is now [semver-bound](./STABILITY.md)). Highlight reel of the v2.x line that landed in v3.0:
 
-Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: [CHANGELOG.md](./CHANGELOG.md).
+- `v2.0` hybrid retrieval (BM25 + TF-IDF + ML embeddings, RRF) · `v2.6` remote MCP / HTTP · `v2.7-2.8` PDFs blended into hybrid search · `v2.9` BGE cross-encoder reranking · `v2.10` OCR for scanned PDFs · `v2.11` doctor + setup zero-touch onboarding · `v2.12` built-in retrieval-quality eval harness · `v2.13` HNSW vector index · `v2.14` stateful HTTP sessions · `v2.15` late-chunking embeddings · `v2.16` HNSW persistence (~50ms boot) · `v2.17` int8 vector quantization (~4× smaller embed-db)
+
+Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: [CHANGELOG.md](./CHANGELOG.md). Stability surface: [STABILITY.md](./STABILITY.md).
 
 ---
 

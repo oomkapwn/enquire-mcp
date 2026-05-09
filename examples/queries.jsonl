@@ -1,0 +1,10 @@
+{"id": "q01", "query": "Apollo program", "relevant": ["Reference/Apollo Program.md", "Reference/NASA history.md"]}
+{"id": "q02", "query": "obsidian plugin development", "relevant": ["Notes/Plugin Dev Notes.md", "Reference/Obsidian API.md"]}
+{"id": "q03", "query": "wikilink graph algorithms", "relevant": ["Reference/PageRank.md", "Notes/Graph Boost Retrieval.md"]}
+{"id": "q04", "query": "BM25 ranking explained", "relevant": ["Reference/BM25.md", "Notes/IR Basics.md"]}
+{"id": "q05", "query": "cross-encoder reranking BGE", "relevant": ["Reference/Reranker Models.md", "Notes/RRF Pipeline.md"]}
+{"id": "q06", "query": "HNSW approximate nearest neighbor", "relevant": ["Reference/HNSW Paper.md", "Notes/Vector Index Choices.md"]}
+{"id": "q07", "query": "late chunking embeddings", "relevant": ["Reference/Late Chunking.md", "Notes/Context Windowing.md"]}
+{"id": "q08", "query": "int8 vector quantization", "relevant": ["Reference/Scalar Quantization.md", "Notes/Storage Optimization.md"]}
+{"id": "q09", "query": "MCP stateful sessions", "relevant": ["Reference/MCP Spec.md", "Notes/Streamable HTTP.md"]}
+{"id": "q10", "query": "Reciprocal Rank Fusion", "relevant": ["Reference/RRF Cormack.md", "Notes/Hybrid Retrieval.md"]}

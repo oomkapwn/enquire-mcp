@@ -1,0 +1,18 @@
+{
+  "_comment_purpose": "Cursor MCP config (stdio transport). Place at ~/.cursor/mcp.json (or your editor's MCP config location). Cursor reloads MCP servers automatically when this file changes.",
+  "_comment_docs": "https://docs.cursor.com/context/model-context-protocol",
+  "mcpServers": {
+    "enquire": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@oomkapwn/enquire-mcp@latest",
+        "serve",
+        "--vault", "/ABSOLUTE/PATH/TO/YOUR/Obsidian Vault",
+        "--persistent-index",
+        "--enable-reranker",
+        "--use-hnsw"
+      ]
+    }
+  }
+}

@@ -39,6 +39,8 @@
 **v2.13.0 — `serve` / `serve-http` flags:** `--use-hnsw` builds an in-memory HNSW vector index on serve start (sub-10ms top-K queries vs O(n) brute-force). `--hnsw-ef <n>` tunes search-time accuracy (default 100). Requires the `hnswlib-node` optionalDependency. See changelog for details.
 
 **v2.14.0 — `serve-http` stateful sessions:** `--stateful` enables Mcp-Session-Id keyed session reuse + SSE GET handler + DELETE termination. `--max-sessions <n>` (default 100) caps concurrent sessions. `--session-idle-timeout-ms <n>` (default 1800000 = 30 min) sweeps idle sessions. Required for ChatGPT custom GPT actions. Off by default — stateless minimizes attack surface.
+
+**v2.15.0 — late-chunking-style context-windowed embeddings:** `--late-chunk-context <chars>` on `serve` and `build-embeddings`. When > 0, prepends doc title + heading breadcrumb + neighbor-chunk tails of N chars to embedding text. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Word-boundary-trimmed at neighbor slices.
 | `clear-cache` | `--vault <path>` `[--cache-file <path>]` | Delete the persistent-cache file for the given vault. Useful for purging stale or sensitive content. Returns 0 even if no cache file exists. |
 | `clear-index` | `--vault <path>` `[--index-file <path>]` | Delete the FTS5 search-index files (`.fts5.db` + WAL/SHM sidecar) for the given vault. Privacy purge for `--persistent-index` users. Returns 0 even if no files exist. |
 | `index` | `--vault <path>` `[--tokenize <mode>]` `[--index-file <path>]` | Cold-build (or refresh) the FTS5 search index for a vault. Useful before first `--persistent-index serve`. Reports `added`/`updated`/`deleted`/`unchanged` chunk counts. |

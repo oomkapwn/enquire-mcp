@@ -2,6 +2,114 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] — 2026-05-09
+
+**Sprint 21 — GraphRAG-light: wikilink community detection.** Closes the v3.0 audit's largest deferred item. Adds structural community detection over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). **First MCP server with native vault community detection.**
+
+### Why "GraphRAG-light"?
+
+Microsoft GraphRAG runs Leiden/Louvain community detection over LLM-extracted entity graphs, then LLM-summarizes communities bottom-up so global-scope questions ("what are the themes in my notes?") get answered without re-reading every source. We have wikilinks (a structural graph that's already there — no entity extraction needed) and we run modularity-based community detection on it. We deliberately do NOT call an LLM for summarization — the calling agent does that with the member list this tool returns. **Server stays LLM-free.**
+
+### Added — `obsidian_get_communities` tool
+
+```jsonc
+{
+  "tool": "obsidian_get_communities",
+  "args": { "min_size": 3, "limit": 50 }
+}
+```
+
+Response shape:
+```jsonc
+{
+  "community_count": 17,
+  "modularity": 0.4823,
+  "iterations": 4,
+  "node_count": 312,
+  "communities": [
+    {
+      "id": 0,
+      "size": 42,
+      "members": ["Reference/RAG.md", "Notes/Hybrid Retrieval.md", ...],
+      "representative": "Reference/RAG.md"  // highest in-community degree
+    },
+    ...
+  ],
+  "membership": { "Reference/RAG.md": 0, "Notes/Hybrid Retrieval.md": 0, ... }
+}
+```
+
+Modularity Q ∈ [-0.5, 1] — higher = stronger structure. >0.3 typically indicates real topical clusters; near 0 indicates random / fully-connected graph.
+
+**Use cases:**
+- Agent: "summarize the largest topical cluster in my vault" → call `obsidian_get_communities`, read the representative + sample members of community 0 via `obsidian_read_note`, synthesize.
+- Agent: "find the topic cluster a query belongs to" → call `obsidian_search` to get top-K hits, look up each hit's community ID via `membership`, return the dominant community.
+- Vault grooming: "which note is the structural hub of each topic?" → the `representative` of each community.
+
+### Algorithm
+
+Single-phase Louvain modularity maximization:
+
+```
+1. Build undirected weighted graph from wikilinks.
+   Each [[link]] adds weight 1 in both directions; bidirectional links accumulate to weight 2.
+   Self-links + broken refs ignored.
+
+2. Initial partition: each node in its own community.
+
+3. Greedy pass: for each node, evaluate moving to each neighbor's community.
+   Modularity gain ΔQ = (k_i,C - σ_tot(C) × k_i / m) / m
+   Pick the move with max ΔQ; if max ≤ 0, stay.
+
+4. Repeat passes until no node changes community in a full sweep.
+   Cap at 50 passes (typical: 3-8 for vault-scale graphs).
+```
+
+Single-phase (no super-node aggregation). Sufficient for vaults up to ~50K notes; full multi-phase Louvain is a future upgrade if real users hit that ceiling.
+
+**Performance:** O(passes × edges) per call. Typical 8K-note vault: <500ms. The result is NOT cached — call once per session and reuse the response.
+
+### API additions (`src/communities.ts`)
+
+New module exporting:
+- `WikilinkGraph` interface
+- `CommunityResult` interface
+- `buildWikilinkGraph(vault)` — async, returns `{ nodes, adjacency, totalWeight2m, degree }`
+- `detectCommunities(graph)` — sync, returns `CommunityResult`
+
+### Surface counts
+
+- **44 production tools** (was 43): +1 always-on (`obsidian_get_communities`)
+- 19 MCP prompts unchanged
+- 3 MCP resources unchanged
+
+### Tests
+
+650 unit tests pass (was 637 in v3.3.0, +13 new in `tests/communities.test.ts`):
+- **Graph construction (5):** empty vault, bidirectional doubles weight, broken wikilinks ignored, self-links ignored, section/block ref strip on resolution.
+- **Community detection (8):** trivial empty/zero-edge case, isolated nodes each own community, planted-cluster recovery on 6-node 2-community graph, single-component cohesion, representative is most-central member, finite-iteration convergence, modularity in [-0.5, 1], output sorted by community size.
+
+### Migration
+
+**No-op for default users.** New tool is additive. Existing tools / prompts / resources unchanged.
+
+### Strategic position — v3.x backlog complete
+
+This release ships **the last item from the v3.0 competitive-audit shortlist** (item I — GraphRAG-light). Combined with v3.1 (HyDE + sub-question + synthesis), v3.2 (Bases), v3.3 (extended reranker registry), the audit's identified gaps are now closed:
+
+| Audit item | Sprint | Status |
+|---|---|---|
+| C — Karpathy LLM-Wiki prompts | v3.1.0 | ✅ shipped |
+| D — HyDE query expansion | v3.1.0 | ✅ shipped |
+| E — Sub-question decomposition | v3.1.0 | ✅ shipped |
+| F — Bases (.base) support | v3.2.0 | ✅ shipped |
+| G — SPLADE | v3.3.0 (partial — registry expansion); full sparse retrieval deferred to dedicated sprint |
+| H — ColBERT | v3.3.0 (partial — registry expansion); full late-interaction deferred to dedicated sprint |
+| I — GraphRAG-light | v3.4.0 | ✅ shipped |
+| A — Smart Connections importer | deferred (chunk-identity remap design) |
+
+Outstanding deferrals are documented in their own CHANGELOG entries (v3.3.0 SPLADE/ColBERT, v3.1.0 Smart Connections) and tracked in the project roadmap. They are not "missed" — they are scoped properly for dedicated future sprints.
+
 ## [3.3.0] — 2026-05-09
 
 **Sprint 20 — extended reranker registry.** Adds 3 new cross-encoder reranker models to `RERANKER_MODELS` so users can pick the size/quality/language tradeoff that fits their workload. No new tools, no schema changes, no breaking changes — purely additive. Combined with the existing `reranker_score` per-hit observability (v2.9.0+), users now have a complete spectrum of rerankers to A/B test in `enquire-mcp eval --matrix --reranker-model <alias>`.

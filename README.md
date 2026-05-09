@@ -63,6 +63,7 @@ enquire-mcp doctor --vault <path>     # color-coded ✓/⚠/✗ health check
 - ✅ **Cross-encoder reranking** on top of RRF (+5-10 NDCG@10) — `v2.9.0`
 - ✅ **PDFs blended into hybrid search** with `[page: N]` citation markers — `v2.8.0`
 - ✅ **OCR for scanned / image-only PDFs** (Tesseract.js, multilingual) — `v2.10.0`
+- ✅ **Built-in retrieval-quality eval** (`enquire-mcp eval` — NDCG@K, Recall@K, MRR, A/B matrix) — `v2.12.0`
 - ✅ **Wikilink graph-boost** as a retrieval signal (1-step personalised PageRank seeded by RRF top-K)
 - ✅ **Remote MCP** over HTTP with bearer auth + rate-limit + CORS — `v2.6.0`
 - ✅ **Multilingual** semantic search (50+ languages, runs on CPU, free)
@@ -118,13 +119,14 @@ graph LR
 | **PDFs blended into hybrid search** | ❌ | ❌ | ✅ **only here** |
 | **OCR for scanned / image-only PDFs** | ❌ | ❌ | ✅ **only here** |
 | **Cross-encoder reranking** | ❌ | ❌ | ✅ **only here** |
+| **Built-in retrieval-quality eval** (NDCG@K + matrix) | ❌ | ❌ | ✅ **only here** |
 | **Remote MCP (HTTP + bearer auth)** | ❌ | ❌ | ✅ **only here** |
 | Per-signal observability per hit | ❌ | ❌ | ✅ |
 | Privacy filter (exclude/allow globs) | ❌ | n/a | ✅ verified at search + write paths |
 | Standalone (no Obsidian plugin) | varies | ❌ requires Obsidian | ✅ direct vault read |
 | MCP-native (any agent) | varies | ❌ Obsidian-only | ✅ stdio + HTTP |
 | SLSA-3 release provenance | ❌ | n/a | ✅ |
-| Test suite | rare | n/a | ✅ 522 unit tests |
+| Test suite | rare | n/a | ✅ 547 unit tests |
 
 > **Strategic claim:** enquire is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. The `vault_synth` / `vault_wiki_compile` / `vault_lint_extended` prompts implement the ingest → query → lint → compile workflow natively over `.md` + `[[wikilinks]]`. Knowledge that compounds, traceable to sources.
 
@@ -177,7 +179,7 @@ The flags you'll actually use:
 | `--watch` | off | Live invalidation on `.md` add/change/unlink |
 | `--persistent-cache` | off | Survive cold starts |
 
-Subcommands: `serve` · `serve-http` · `gen-token` · `doctor` (v2.11) · `setup` (v2.11) · `clear-cache` · `clear-index` · `clear-embeddings` · `index` · `install-model` · `build-embeddings`.
+Subcommands: `serve` · `serve-http` · `gen-token` · `doctor` (v2.11) · `setup` (v2.11) · `eval` (v2.12) · `clear-cache` · `clear-index` · `clear-embeddings` · `index` · `install-model` · `build-embeddings`.
 
 **Remote MCP** for Claude.ai web / ChatGPT / Cursor HTTP / mobile:
 
@@ -205,7 +207,7 @@ enquire-mcp serve-http \
 
 | Surface | Posture |
 |---|---|
-| Tests | 522 unit tests across 26 files, 8 required CI gates per PR |
+| Tests | 547 unit tests across 27 files, 8 required CI gates per PR |
 | Coverage | Lines ≥86%, statements ≥82%, functions ≥75%, branches ≥73% (gated) |
 | Audit | `npm audit --audit-level=moderate` for prod; high for dev |
 | CI | Ubuntu × {Node 20, 22, 24} required + macOS advisory job |

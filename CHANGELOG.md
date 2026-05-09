@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] — 2026-05-09
+
+**Patch release: npm registry metadata refresh** so the most advanced Obsidian MCP server actually surfaces in AI/agent search and on npmjs.com.
+
+No code changes. No behavior changes. Identical to v3.0.0 functionally.
+
+### Changed
+
+- **`package.json` description rewritten** to lead with positioning ("The most advanced MCP server for Obsidian vaults") plus the concrete capability stack (BM25 + TF-IDF + multilingual ML embeddings via RRF + BGE cross-encoder reranking + HNSW + int8 quantization + late-chunking + PDFs + OCR + wikilinks + backlinks + Dataview + frontmatter + canvas). Includes the proof-points (39 tools, 606 tests, SLSA-3, semver-bound) and the client matrix (Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, any MCP client).
+- **npm keywords expanded 20 → 50** so AI agents and npm searchers actually find the package on every relevant query: `bm25`, `fts5`, `tf-idf`, `rrf`, `reciprocal-rank-fusion`, `hnsw`, `cross-encoder`, `bge`, `reranker`, `embeddings`, `vector-search`, `vector-database`, `rag`, `retrieval-augmented-generation`, `semantic-search`, `multilingual`, `pdf`, `ocr`, `tesseract`, `streamable-http`, `remote-mcp`, `slsa-3`, `obsidian-mcp`, `mcp-server`, `claude-desktop`, `chatgpt`, `canvas`, `ai-search`, `huggingface`, `transformers` (plus the existing 20 since v1.x).
+- **README.md** rewritten for AI-search indexability: 284 → 203 lines, leads with bold positioning, structured comparison table vs Smart Connections + other Obsidian-MCPs across 18 capabilities, 7-tier setup table, full 17-prompt list (satisfies docs-consistency invariant), `examples/` callout. Already merged into main pre-v3.0.1; this release is the matching npm publish so `npmjs.com` reflects the new metadata.
+
+### Why this exists
+
+v3.0.0 stable shipped to npm with the v2.x-era description + keyword set. AI agents and npm search look at the **registry** metadata, not the GitHub README. v3.0.1 is the registry refresh — same code, same behavior, just visible to discovery.
+
 ## [3.0.0] — 2026-05-09
 
 **v3.0.0 — stable channel.** The v2.x retrieval roadmap is complete. v3.0 promotes the v2.17 codebase to the v3.x stable line and commits to extended semver guarantees on every CLI flag, MCP tool name, MCP resource URI, MCP prompt, and exported TypeScript symbol — see [STABILITY.md](./STABILITY.md) for the full contract. **No new features and no breaking code changes vs v2.17.0** — this release is the semantic milestone confirming the retrieval API has stabilized.

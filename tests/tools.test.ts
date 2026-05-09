@@ -11,6 +11,7 @@ import {
   getUnresolvedWikilinks,
   getVaultStats,
   listNotes,
+  pickEmbedTextForHyde,
   readNote,
   resolveWikilink,
   searchText,
@@ -721,5 +722,58 @@ describe("findSimilar / getNoteNeighbors / getVaultStats (v0.13)", () => {
     expect(out.outbound.length).toBeLessThanOrEqual(1);
     expect(out.inbound.length).toBeLessThanOrEqual(1);
     expect(out.tag_siblings.length).toBeLessThanOrEqual(1);
+  });
+});
+
+// v3.1.0 — HyDE (Hypothetical Document Embeddings) helper. The decision
+// "what text gets embedded" is the only thing the agent actually controls;
+// the rest of the pipeline (embedder + cosine + rerank + privacy filter)
+// is unchanged. We test the decision in isolation so the contract is
+// pinned even if loadEmbedder() is unavailable in CI.
+describe("pickEmbedTextForHyde — v3.1.0", () => {
+  it("returns the raw query when hypothetical_answer is undefined", () => {
+    const out = pickEmbedTextForHyde({ query: "what is RRF" });
+    expect(out).toEqual({ text: "what is RRF", usedHyde: false });
+  });
+
+  it("returns the raw query when hypothetical_answer is empty string", () => {
+    const out = pickEmbedTextForHyde({ query: "what is RRF", hypothetical_answer: "" });
+    expect(out).toEqual({ text: "what is RRF", usedHyde: false });
+  });
+
+  it("returns the raw query when hypothetical_answer is whitespace-only", () => {
+    const out = pickEmbedTextForHyde({ query: "what is RRF", hypothetical_answer: "   \n\t  " });
+    expect(out).toEqual({ text: "what is RRF", usedHyde: false });
+  });
+
+  it("returns the trimmed hypothetical answer when it has content", () => {
+    const out = pickEmbedTextForHyde({
+      query: "what is RRF",
+      hypothetical_answer:
+        "  Reciprocal Rank Fusion is an unsupervised method for combining ranked lists by summing 1/(k+rank).  "
+    });
+    expect(out.usedHyde).toBe(true);
+    expect(out.text).toBe(
+      "Reciprocal Rank Fusion is an unsupervised method for combining ranked lists by summing 1/(k+rank)."
+    );
+  });
+
+  it("hypothetical answer takes precedence over a non-empty query (the whole point of HyDE)", () => {
+    const out = pickEmbedTextForHyde({
+      query: "X",
+      hypothetical_answer: "X is a real long answer-shaped explanation that is more topically dense than X alone."
+    });
+    expect(out.usedHyde).toBe(true);
+    expect(out.text.startsWith("X is a real long answer-shaped")).toBe(true);
+  });
+
+  it("query is preserved verbatim (no trim applied) when no HyDE", () => {
+    // Legacy callers send `query` directly to the embedder. We must NOT
+    // accidentally trim user-supplied whitespace because that would
+    // change embeddings on edge cases (rare but real for code blocks /
+    // CJK queries that intentionally start with whitespace).
+    const out = pickEmbedTextForHyde({ query: "  has-leading-space" });
+    expect(out.text).toBe("  has-leading-space");
+    expect(out.usedHyde).toBe(false);
   });
 });

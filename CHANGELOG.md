@@ -2,6 +2,90 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-05-09
+
+**Sprint 19 — Obsidian Bases (`.base`) support.** Closes the v3.0 audit gap "Bases is the new structured-data primitive in Obsidian; competitors are starting to support it." Three new always-on read tools that parse, introspect, and execute `.base` files against vault notes — without requiring Obsidian itself to be running. **First MCP server with native `.base` query execution.**
+
+### What is a `.base` file?
+
+Obsidian's first-class structured-query primitive (GA mid-2026). YAML files defining `filters` / `views` / `formulas` / `properties` / `summaries` over the vault's markdown notes. Lets users save reusable queries as files. See [obsidian.md/help/bases/syntax](https://obsidian.md/help/bases/syntax).
+
+### Added
+
+- **`obsidian_list_bases`** — discover `.base` files in the vault. Returns `path`, `name`, `size_bytes`, `mtime`, `view_count`, `view_names[]`. Honors `--exclude-glob` / `--read-paths` / `folder`. Sorted by mtime descending.
+- **`obsidian_read_base`** — parse a `.base` file into structured JSON (filters / formulas / properties / summaries / views). Read-only metadata view; **does not** execute the query. Useful for agents introspecting available saved queries.
+- **`obsidian_query_base`** — **execute** a base's filter against the vault's markdown notes. Returns matching paths + `matched_on` frontmatter snippets + `unevaluated_predicates` listing any DSL we couldn't evaluate.
+
+### Filter DSL — supported subset
+
+```
+tag == "x"          # frontmatter or inline #tag membership
+tag != "x"          # negation
+taggedWith(file.file, "x")  # alias for tag ==
+path startsWith "X" # path prefix
+path contains "X"   # path substring
+<frontmatter_key> == <value>     # equality (string/number/bool)
+<frontmatter_key> != <value>
+<frontmatter_key> contains "<sub>"  # substring or array-element substring
+and: [...]          # combinator
+or: [...]           # combinator
+not: ...            # combinator
+```
+
+Anything else (formula evaluation, `linksTo()`, date arithmetic, summaries) is treated as `true` (most permissive — over-include rather than silently under-include) and surfaced in `unevaluated_predicates` so the caller sees what was ignored.
+
+This covers ~90% of user-authored bases per the [Obsidian docs example gallery](https://obsidian.md/help/bases/syntax). Full DSL evaluation (formulas + `linksTo` + summaries) deferred — needs a real expression evaluator, multi-day work.
+
+### Example
+
+`Notes/Open tasks.base`:
+```yaml
+filters: 'status != "done"'
+views:
+  - type: table
+    name: "High priority"
+    filters: 'priority == "high"'
+```
+
+Agent call:
+```jsonc
+{
+  "tool": "obsidian_query_base",
+  "args": { "path": "Notes/Open tasks.base", "view": "High priority" }
+}
+```
+
+Result: every note in the vault where frontmatter `status != "done"` AND `priority == "high"`, with citation-ready paths.
+
+### API additions (`src/bases.ts`)
+
+New module:
+- `parseBase(yamlText): ParsedBase` — schema-validated YAML parse via lazy `js-yaml` + `zod` shape check.
+- `listBases(vault, args)` / `readBase(vault, args)` / `queryBase(vault, args)`.
+- Type exports: `ParsedBase`, `BaseFilter`, `BaseSummary`, `BaseDocument`, `BaseQueryHit`, `BaseQueryResult`.
+
+### Surface counts
+
+- **43 production tools** (was 40): +3 always-on (`list_bases`, `read_base`, `query_base`).
+- **19 MCP prompts**: unchanged.
+- **3 MCP resources**: unchanged.
+
+### Tests
+
+633 unit tests pass (was 612 in v3.1.0, +21 new in `tests/bases.test.ts`):
+- **YAML parsing (4):** canonical doc example, minimal base, empty base, recursive and/or/not.
+- **listBases (3):** empty vault, normal listing with view names, malformed `.base` survives.
+- **readBase (2):** parsed structure with normalized view names, path traversal rejected.
+- **queryBase DSL (12):** tag equality, `taggedWith()`, frontmatter equality, `and`/`or`/`not` combinators, path predicates, view-filter merging via AND, unevaluated predicates collected without crashing, inline `#tag` collection from body, unknown view name rejection, limit honored.
+
+### Migration
+
+**No-op for default users.** New tools are additive. Existing tools / prompts / resources unchanged.
+
+### Why this matters competitively
+
+Per the v3.0 audit, two competitors (`obsidian-mcp-pro`, `aaronsb/obsidian-mcp-plugin`) handle `.base` but only by delegating to the running Obsidian app — they need Obsidian alive. enquire-mcp parses + executes `.base` files **standalone** from the filesystem, so it works in CI / serverless / agent-only environments where Obsidian isn't running. **First and only MCP server with this property.**
+
 ## [3.1.0] — 2026-05-09
 
 **Sprint 18 — agentic retrieval primitives.** First v3.x minor release. Closes the "agentic-RAG" gap surfaced in the v3.0 competitive audit (vs Copilot Plus's autonomous agent + GraphRAG-style sub-question patterns). Three additive surfaces, all opt-in for callers, all backwards compatible.

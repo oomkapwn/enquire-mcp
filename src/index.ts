@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.1.0";
+const VERSION = "3.2.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -2099,6 +2099,73 @@ function registerReadTools(
       }
     },
     async (args) => textResult(await listCanvases(vault, args))
+  );
+
+  // v3.2.0 — Obsidian Bases (`.base`) support. Bases are Obsidian's
+  // first-class structured-data primitive (GA mid-2026): YAML files
+  // defining filters/views/formulas over the vault's notes. We expose
+  // 3 tools — list, read (metadata-only), query (executes the filter
+  // subset against vault notes). NO formula evaluation (deferred); the
+  // query DSL covers tag / path / frontmatter / and/or/not — the ~90%
+  // case of user-authored bases.
+  server.registerTool(
+    "obsidian_list_bases",
+    {
+      title: "List Obsidian Bases (.base) files",
+      description:
+        "v3.2.0 — Lists `.base` files (Obsidian's structured-query primitive — YAML files defining filters/views over the vault) with each base's view count and view names. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which bases exist before calling `obsidian_read_base` (metadata) or `obsidian_query_base` (execute filters). Sorted by mtime descending.",
+      annotations: { ...READ_ONLY, title: "List bases" },
+      inputSchema: {
+        folder: z.string().optional().describe("Restrict the listing to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max bases to return (default 100)")
+      }
+    },
+    async (args) => {
+      const { listBases } = await import("./bases.js");
+      return textResult(await listBases(vault, args));
+    }
+  );
+
+  server.registerTool(
+    "obsidian_read_base",
+    {
+      title: "Read an Obsidian Base — parsed YAML metadata",
+      description:
+        "v3.2.0 — Parses a `.base` file into structured JSON (filters, formulas, properties, summaries, views). Does NOT execute the query — use `obsidian_query_base` for that. Useful when an agent wants to introspect the structure of a base before deciding which view to run, or to surface the base's saved queries to the user. Read-only.",
+      annotations: { ...READ_ONLY, title: "Read base" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the .base file (with or without .base)")
+      }
+    },
+    async (args) => {
+      const { readBase } = await import("./bases.js");
+      return textResult(await readBase(vault, args));
+    }
+  );
+
+  server.registerTool(
+    "obsidian_query_base",
+    {
+      title: "Execute an Obsidian Base — return matching notes",
+      description:
+        'v3.2.0 — Runs a `.base` file\'s filter against the vault\'s markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supports a SUBSET of the Obsidian DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `path startsWith "X"`, `path contains "X"`, `<frontmatter_key> == <value>`, `<key> != <value>`, `<key> contains "<substr>"`, plus `and` / `or` / `not` combinators. Anything else (formula calls, `linksTo`, date arithmetic) is treated as `true` (most permissive) and returned in `unevaluated_predicates` so callers know what was ignored. Pair with `obsidian_search` for retrieval-quality search; this is for explicit saved queries.',
+      annotations: { ...READ_ONLY, title: "Query base" },
+      inputSchema: {
+        path: z.string().describe("Vault-relative path of the .base file"),
+        view: z
+          .string()
+          .optional()
+          .describe(
+            "Optional view name. When set, the view's filters are concat'd with the global filter via AND (matching Obsidian semantics). Defaults to the global filter only."
+          ),
+        folder: z.string().optional().describe("Extra folder scope on top of the base's filters"),
+        limit: z.number().int().positive().max(500).optional().describe("Max matches to return (default 50)")
+      }
+    },
+    async (args) => {
+      const { queryBase } = await import("./bases.js");
+      return textResult(await queryBase(vault, args));
+    }
   );
 
   server.registerTool(

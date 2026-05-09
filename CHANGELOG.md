@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] — 2026-05-09
+
+**Sprint 12 — built-in retrieval-quality evaluation harness.** Closes the "you can't tune what you can't measure" gap. Before this, anyone trying to A/B test retrieval changes (graph_boost on/off, reranker on/off, different `min_signals` / `limit` values) had to write a custom script. Now there's a first-class `enquire-mcp eval` subcommand. **No other Obsidian-MCP currently ships a built-in retrieval evaluation harness.**
+
+### Added — `enquire-mcp eval --vault <path> --queries <file>`
+
+Reads a JSONL file of queries with known-relevant doc paths, runs `obsidian_search` for each, computes standard IR metrics, reports per-query + aggregate scores.
+
+**Input format** (one JSON object per line; tolerates blank lines and `//` comments):
+
+```jsonl
+{"id": "rkt", "query": "Apollo program rocket", "relevant": ["apollo.md", "saturn.md"]}
+{"id": "food", "query": "carbonara recipe", "relevant": ["pasta.md"]}
+```
+
+**Metrics** (from Manning et al, "Introduction to Information Retrieval", Chapter 8):
+- **NDCG@K** (Normalized Discounted Cumulative Gain) — penalizes relevant docs found low in the ranking; 1.0 perfect, 0.0 worst.
+- **Recall@K** — fraction of relevant docs found in top-K.
+- **MRR** (Mean Reciprocal Rank) — 1/rank of the first relevant doc; 0 if none.
+
+Binary-relevance ground truth (each path in `relevant` is gain=1, others gain=0) — most users won't label graded relevance, so this is the practical default.
+
+**Flags:**
+- `--k <n>` — top-K cutoff (default 10)
+- `--matrix` — 2×2 sweep of (graph_boost ± reranker), printed as a comparison table with the best-NDCG config highlighted
+- `--reranker` — enable cross-encoder reranking (same as `serve --enable-reranker`)
+- `--reranker-model <alias>` / `--reranker-top-n <n>` — pass-through reranker config
+- `--persistent-index` — open the FTS5 BM25 index for the eval (recommended; without it, the eval runs over TF-IDF only)
+- `--per-query` — print per-query scores in addition to aggregates
+- `--json` — emit machine-readable JSON (useful for piping into a comparison tool, dashboard, or CI gate)
+
+**Example output:**
+
+```
+enquire eval — default
+  12 queries · k=10 · wall=2483ms
+
+aggregate:
+  mean NDCG@10   = 0.7621
+  mean Recall@10 = 0.8333
+  mean MRR        = 0.8125
+  mean latency    = 187ms (per query)
+```
+
+**Matrix mode example:**
+
+```
+enquire eval matrix (4 configs)
+
+label                      NDCG@10  Recall@10  MRR     latency
+baseline (RRF only)        0.6420   0.7500     0.6250  142ms
++graph-boost               0.7150   0.8333     0.7083  148ms
++reranker                  0.8210   0.8333     0.9583  421ms
++graph-boost +reranker     0.8345   0.9167     0.9583  428ms
+
+best NDCG@10: +graph-boost +reranker (0.8345)
+```
+
+### Implementation
+
+`src/eval.ts` (~340 lines):
+- Pure-function metrics (`ndcgAtK`, `recallAtK`, `reciprocalRank`) — exact log2-based formulas, fully testable without I/O.
+- `readQueriesJsonl(file)` — tolerates blank lines + `//` comments, throws with line numbers on malformed input.
+- `runEval(opts)` — orchestrates per-query searchHybrid calls with per-query latency tracking and per-query failure isolation (one bad query doesn't sink the eval).
+- `formatEvalResult` / `formatEvalMatrix` — TTY-aware ANSI rendering, plain text on pipes.
+
+### Surface delta vs v2.11.0
+
+- **+1 CLI subcommand** (`eval`)
+- **+1 source module** (`src/eval.ts`)
+- **No new MCP tools, no new prompts, no schema changes, no new prod deps.**
+
+### Tests
+
+547 unit tests pass (was 522 in v2.11.0, +25 new):
+- **Pure metrics (+11):** ndcgAtK / recallAtK / reciprocalRank — empty relevant set, no overlap, perfect ranking, partial overlap, K-cutoff truncation, first-relevant-only MRR semantics.
+- **readQueriesJsonl (+5):** valid input, blank lines + comments tolerated, malformed JSON throws with line number, missing required fields throws with field name, type-incorrect `relevant` rejected.
+- **runEval end-to-end (+3):** single-query scoring against real FtsIndex, multi-query aggregation, per-query failure isolation.
+- **format helpers (+6):** non-empty output, per-query mode includes table, matrix highlights best NDCG, empty matrix handles gracefully.
+
+### Migration
+
+**No-op for default users.** Eval is opt-in via the new subcommand. Existing `serve` / `serve-http` / `setup` / `doctor` behavior is unchanged.
+
+### Strategic position
+
+v2.12.0 is the **measurement** sprint that pairs with v2.11.0's onboarding sprint. Together they form a "tune-while-you-build" feedback loop: `setup` indexes your vault, `eval` scores your retrieval, you adjust flags + re-eval until NDCG plateaus. Karpathy-style LLM Wiki users get systematic quality tuning for free. The retrieval-quality moat (hybrid RRF, graph-boost, PDF blending, cross-encoder reranking, OCR) gets a quantitative ruler bundled in the box.
+
+### Bonus (PR #31)
+
+Patched 3 fresh `hono` advisories that landed in the GHSA database overnight (CSS injection in JSX SSR, JWT NumericDate validation, Cache Middleware Vary handling). Transitive via `@modelcontextprotocol/sdk → @hono/node-server → hono`. Lockfile-only diff via `npm audit fix`.
+
 ## [2.11.0] — 2026-05-08
 
 **Sprint 11 — zero-touch onboarding (`doctor` + `setup`).** Closes the biggest UX gap in the project: setup friction. Before this, getting full hybrid retrieval required 3 separate commands (`install-model` → `build-embeddings` → `serve --persistent-index`), and there was no quick way to see "is everything ready?" without triggering each codepath.

@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.11.0";
+const VERSION = "2.12.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -549,6 +549,141 @@ async function main(): Promise<void> {
         if (opts.includePdfs) process.stdout.write(" --include-pdfs");
         process.stdout.write("\n");
         process.stdout.write(`Or check status: enquire-mcp doctor --vault ${opts.vault}\n`);
+      }
+    );
+
+  // v2.12.0 — retrieval-quality evaluation harness. Reads a JSONL file of
+  // queries with known-relevant doc paths, runs obsidian_search for each,
+  // computes NDCG@K + Recall@K + MRR. Pretty table by default, --json for
+  // machine output, --matrix to A/B several flag combinations.
+  program
+    .command("eval")
+    .description(
+      "Built-in retrieval-quality benchmark harness. Reads a JSONL file of queries with known-relevant doc paths, runs `obsidian_search` for each, computes NDCG@K + Recall@K + MRR + per-query latency. Pretty table output by default; `--json` for machine-readable output. `--matrix` runs all combinations of (graph_boost on/off × reranker on/off) side-by-side for systematic tuning. The only Obsidian-MCP with built-in retrieval evaluation."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .requiredOption("--queries <file>", "JSONL file with {query, relevant: ['path1', ...], id?} per line")
+    .option("--k <n>", "Top-K cutoff for NDCG / Recall (default 10)", "10")
+    .option("--matrix", "Run a 2x2 matrix of (graph_boost ± reranker) and print a comparison table")
+    .option("--reranker", "Enable cross-encoder reranking (same as serve --enable-reranker)")
+    .option("--reranker-model <alias>", `Reranker alias (default rerank-multilingual)`, "rerank-multilingual")
+    .option("--reranker-top-n <n>", "How many top RRF candidates to rerank (default 50)", "50")
+    .option("--persistent-index", "Open the FTS5 index for BM25 retrieval (recommended)")
+    .option("--per-query", "Print per-query scores in addition to aggregates (verbose)")
+    .option("--json", "Emit machine-readable JSON instead of the pretty table")
+    .action(
+      async (opts: {
+        vault: string;
+        queries: string;
+        k?: string;
+        matrix?: boolean;
+        reranker?: boolean;
+        rerankerModel?: string;
+        rerankerTopN?: string;
+        persistentIndex?: boolean;
+        perQuery?: boolean;
+        json?: boolean;
+      }) => {
+        const { readQueriesJsonl, runEval, formatEvalResult, formatEvalMatrix } = await import("./eval.js");
+        const k = parsePositiveInt(opts.k ?? "10", "--k");
+        const queries = await readQueriesJsonl(opts.queries);
+        if (queries.length === 0) {
+          process.stderr.write(`enquire eval: ${opts.queries} contains no queries\n`);
+          process.exit(1);
+        }
+        process.stderr.write(`enquire eval: loaded ${queries.length} queries from ${opts.queries}\n`);
+
+        const v = new Vault(opts.vault);
+        await v.ensureExists();
+
+        // Optional FTS5 index.
+        let ftsIndex: FtsIndex | null = null;
+        if (opts.persistentIndex) {
+          const indexFile = defaultIndexFile(v.root);
+          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+          try {
+            await ftsIndex.open();
+            await syncFtsIndex(v, ftsIndex);
+          } catch (err) {
+            ftsIndex.close();
+            throw err;
+          }
+        }
+        const embedFile = embedDbPath(v.root);
+
+        try {
+          if (opts.matrix) {
+            // 2x2 matrix: (graph_boost ± reranker)
+            const configs: Array<{
+              label: string;
+              searchOpts: { graph_boost: boolean };
+              reranker?: { alias: string; topN: number };
+            }> = [
+              { label: "baseline (RRF only)", searchOpts: { graph_boost: false } },
+              { label: "+graph-boost", searchOpts: { graph_boost: true } },
+              {
+                label: "+reranker",
+                searchOpts: { graph_boost: false },
+                reranker: {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              },
+              {
+                label: "+graph-boost +reranker",
+                searchOpts: { graph_boost: true },
+                reranker: {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              }
+            ];
+            const results = [];
+            for (const cfg of configs) {
+              process.stderr.write(`enquire eval: running config "${cfg.label}"...\n`);
+              const r = await runEval({
+                vault: v,
+                queries,
+                ftsIndex,
+                embedFile,
+                k,
+                label: cfg.label,
+                searchOpts: cfg.searchOpts,
+                ...(cfg.reranker ? { reranker: cfg.reranker } : {})
+              });
+              results.push(r);
+            }
+            if (opts.json) {
+              process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+            } else {
+              process.stdout.write(`${formatEvalMatrix(results)}\n`);
+            }
+          } else {
+            // Single-config run.
+            const reranker = opts.reranker
+              ? {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              : undefined;
+            const result = await runEval({
+              vault: v,
+              queries,
+              ftsIndex,
+              embedFile,
+              k,
+              label: reranker ? `with-reranker(${reranker.alias})` : "default",
+              ...(reranker ? { reranker } : {})
+            });
+            if (opts.json) {
+              process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            } else {
+              process.stdout.write(`${formatEvalResult(result, { perQuery: opts.perQuery ?? false })}\n`);
+            }
+          }
+        } finally {
+          if (ftsIndex) ftsIndex.close();
+        }
       }
     );
 

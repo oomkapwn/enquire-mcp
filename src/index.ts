@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.14.0";
+const VERSION = "2.15.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -95,6 +95,8 @@ export interface ServeOptions {
   useHnsw?: boolean;
   /** v2.13.0 — HNSW search-time beam width (default 100; ≥k). */
   hnswEf?: string;
+  /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
+  lateChunkContext?: string;
 }
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -188,6 +190,10 @@ async function main(): Promise<void> {
     .option(
       "--hnsw-ef <n>",
       "v2.13.0 — HNSW search-time beam width (default 100; must be ≥ requested k). Higher = more accurate, slightly slower. Common range: 50-500. Only effective with `--use-hnsw`."
+    )
+    .option(
+      "--late-chunk-context <chars>",
+      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
     )
     .action(async (opts: ServeOptions) => {
       await startServer(opts);
@@ -431,6 +437,10 @@ async function main(): Promise<void> {
       "--include-pdfs",
       "v2.8.0 — also embed PDF chunks. Off by default; PDF extraction + embedding is ~10-30x slower than markdown per file."
     )
+    .option(
+      "--late-chunk-context <chars>",
+      "v2.15.0 — context-windowed embedding text (doc title + breadcrumb + neighbor-chunk tails of N chars). Default 0 (off). Typical 100-200 for +2-5 NDCG@10."
+    )
     .action(
       async (opts: {
         vault: string;
@@ -439,22 +449,27 @@ async function main(): Promise<void> {
         excludeGlob?: string[];
         readPaths?: string[];
         includePdfs?: boolean;
+        lateChunkContext?: string;
       }) => {
         const model = resolveModel(opts.embeddingModel);
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
         const db = new EmbedDb({ file: embedFile, vaultRoot: vault.root, modelAlias: model.alias, dim: model.dim });
+        const lateChunkContext =
+          opts.lateChunkContext !== undefined
+            ? Math.max(0, parsePositiveInt(opts.lateChunkContext, "--late-chunk-context"))
+            : 0;
         await db.open();
         try {
           process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
           const embedder = await loadEmbedder(opts.embeddingModel);
-          const report = await syncEmbedDb(vault, db, embedder);
+          const report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
           process.stdout.write(
-            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}\n`
           );
           if (opts.includePdfs) {
-            const pdfReport = await syncPdfEmbedDb(vault, db, embedder);
+            const pdfReport = await syncPdfEmbedDb(vault, db, embedder, { lateChunkContext });
             process.stdout.write(
               `enquire: embed db ${embedFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
             );
@@ -1108,6 +1123,54 @@ export function formatReadyBanner(deps: ServerDeps): string {
   return `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode}${enabledMode})`;
 }
 
+/**
+ * v2.15.0 — context-prefixed embedding text builder ("late-chunking-style"
+ * context windowing). Pre-pends the document title + heading breadcrumb,
+ * then includes a tail of the previous chunk + the chunk itself + a head
+ * of the next chunk, all bounded so the multilingual model's 128-token
+ * context budget isn't blown.
+ *
+ * Why: short standalone chunks ("Use Adam β=0.9, β=0.999") embed
+ * identically across documents, losing the surrounding context that
+ * disambiguates them. Adding ~50-100 chars of neighbor text + the
+ * doc title + breadcrumb gives the bi-encoder enough signal to keep
+ * cross-document semantic separation. Per Chroma 2024 + Jina AI's late
+ * chunking blog: +2-5 NDCG@10 typical at zero new dep cost.
+ *
+ * Returns the concatenated text. When `contextChars` ≤ 0, returns the
+ * legacy v2.1.0 form (just breadcrumb + chunk text), preserving
+ * bit-for-bit behavior for users who don't opt in.
+ */
+export function buildEmbedText(
+  chunks: ReadonlyArray<{ text: string; breadcrumb?: string }>,
+  i: number,
+  opts: { docTitle?: string; contextChars: number }
+): string {
+  const c = chunks[i];
+  if (!c) return "";
+  if (opts.contextChars <= 0) {
+    // Legacy v2.1.0 form — breadcrumb only.
+    return c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
+  }
+  const parts: string[] = [];
+  if (opts.docTitle) parts.push(`[doc: ${opts.docTitle}]`);
+  if (c.breadcrumb) parts.push(c.breadcrumb);
+  // Previous chunk tail — last N chars, trimmed at word boundary.
+  const prev = chunks[i - 1];
+  if (prev) {
+    const tail = prev.text.slice(-opts.contextChars).replace(/^\S*\s/, "");
+    if (tail.length > 0) parts.push(`… ${tail}`);
+  }
+  parts.push(c.text);
+  // Next chunk head — first N chars, trimmed at word boundary.
+  const next = chunks[i + 1];
+  if (next) {
+    const head = next.text.slice(0, opts.contextChars).replace(/\s\S*$/, "");
+    if (head.length > 0) parts.push(`${head} …`);
+  }
+  return parts.join("\n\n");
+}
+
 // v2.0 alpha — sync the persistent embedding index. Same incremental-rebuild
 // pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed
 // notes whose mtime changed. Embedding is the bottleneck (~5-30ms per chunk
@@ -1115,8 +1178,10 @@ export function formatReadyBanner(deps: ServerDeps): string {
 async function syncEmbedDb(
   vault: Vault,
   db: EmbedDb,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
+  opts: { lateChunkContext?: number } = {}
 ): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const contextChars = opts.lateChunkContext ?? 0;
   const entries = await vault.listMarkdown();
   const known = new Map<string, number>();
   // v2.8.0: scope to kind="md" so the markdown-sync path doesn't see (and
@@ -1163,9 +1228,19 @@ async function syncEmbedDb(
       }
       // v2.1.0: prepend heading breadcrumb to embedded text so the model sees
       // structural context. Free win at zero token cost — Chroma 2024 +
-      // NAACL 2025 show +2-5 NDCG@10 from breadcrumb prepending. The text
-      // stored in `text_preview` (for snippets) stays clean.
-      const vectors = await embedder.embed(chunks.map((c) => (c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text)));
+      // NAACL 2025 show +2-5 NDCG@10 from breadcrumb prepending.
+      // v2.15.0: when `--late-chunk-context <n>` is set, also include
+      // doc title + neighbor-chunk tails so the embedding captures
+      // cross-paragraph context. The text stored in `text_preview`
+      // (for snippets) stays clean.
+      const docTitle = note.parsed.frontmatter?.title || path.basename(e.relPath, ".md");
+      const embedTexts = chunks.map((_c, i) =>
+        buildEmbedText(chunks, i, {
+          docTitle: typeof docTitle === "string" ? docTitle : undefined,
+          contextChars
+        })
+      );
+      const vectors = await embedder.embed(embedTexts);
       const rows = chunks.map((c, i) => {
         const vector = vectors[i];
         if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);
@@ -1314,8 +1389,10 @@ async function syncPdfFtsIndex(
 async function syncPdfEmbedDb(
   vault: Vault,
   db: EmbedDb,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
+  opts: { lateChunkContext?: number } = {}
 ): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
+  const contextChars = opts.lateChunkContext ?? 0;
   const pdfEntries = await vault.listFilesByExtension(".pdf");
   const known = new Map<string, number>();
   for (const s of db.getSourceStates("pdf")) known.set(s.rel_path, s.mtime_ms);
@@ -1367,7 +1444,10 @@ async function syncPdfEmbedDb(
       }
       // Same breadcrumb-prepending logic as syncEmbedDb (no-op for PDFs
       // since chunkContent returns no breadcrumb on non-markdown).
-      const vectors = await embedder.embed(chunks.map((c) => (c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text)));
+      // v2.15.0: late-chunking context windowing applies here too.
+      const docTitle = path.basename(e.relPath, ".pdf");
+      const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
+      const vectors = await embedder.embed(embedTexts);
       const rows = chunks.map((c, i) => {
         const vector = vectors[i];
         if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);

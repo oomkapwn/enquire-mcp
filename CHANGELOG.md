@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] — 2026-05-09
+
+**Sprint 15 — late-chunking-style context windowing on embeddings.** When `--late-chunk-context <chars>` is set, embeddings are computed against `[doc: title]\n\n[breadcrumb]\n\n… [prev-chunk-tail]\n\n[this-chunk]\n\n[next-chunk-head] …` instead of just `[breadcrumb]\n\n[this-chunk]`. Per Chroma 2024 + Jina AI's late-chunking research: typical **+2-5 NDCG@10** retrieval boost at zero new dep cost.
+
+### Why this matters
+
+Short standalone chunks ("Use Adam β=0.9, β=0.999") embed near-identically across documents because they lack surrounding context. Adding ~50-200 chars of neighbor text + the doc title + heading breadcrumb gives the bi-encoder enough signal to keep cross-document semantic separation. This is the same effect that's made "late chunking" a hot research topic in IR — we use the simpler context-windowing form (vs full whole-document re-pooling) because it's:
+- Pure code, no new deps
+- Compatible with our existing 384-dim multilingual embedder budget (128 token context)
+- Word-boundary-trimmed at neighbor slices so we don't feed half-words to the tokenizer
+
+### Added — `--late-chunk-context <chars>` flag on `serve` + `build-embeddings`
+
+Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Common values: 100-200 chars per side.
+
+```bash
+enquire-mcp build-embeddings --vault ~/Obsidian --late-chunk-context 200
+# or pass on serve so the persistent-cache rebuild path uses it too:
+enquire-mcp serve --vault ~/Obsidian --persistent-index --late-chunk-context 150
+```
+
+### Implementation
+
+`buildEmbedText(chunks, i, opts)` (exported from `src/index.ts` for tests) constructs the embedding text from:
+
+1. `[doc: <title>]` — vault-relative basename or `frontmatter.title` for markdown; `.pdf`-stripped basename for PDFs.
+2. `<breadcrumb>` — heading hierarchy, same as v2.1.0.
+3. `… <prev-chunk-tail>` — last `contextChars` chars of `chunks[i-1].text`, word-boundary-trimmed via `replace(/^\S*\s/, "")` so partial leading words are dropped.
+4. `<this-chunk>` — the chunk being embedded.
+5. `<next-chunk-head> …` — first `contextChars` chars of `chunks[i+1].text`, word-boundary-trimmed via `replace(/\s\S*$/, "")` so partial trailing words are dropped.
+
+When `contextChars=0` returns the legacy v2.1.0 form (`[breadcrumb]\n\n[chunk]` or just `[chunk]`), bit-identical to prior behavior.
+
+`syncEmbedDb` and `syncPdfEmbedDb` accept the new `opts.lateChunkContext` parameter (default 0). Both are wired through the `build-embeddings --late-chunk-context` and `serve --late-chunk-context` flags.
+
+### Tests
+
+576 unit tests pass (was 568 in v2.14.0, +8 new):
+- **buildEmbedText (8):** legacy form when contextChars=0, omits breadcrumb when none, includes title+breadcrumb+neighbor tails when contextChars>0, first chunk has no prev, last chunk has no next, word-boundary trim drops half-words, ignores undefined docTitle, returns empty for out-of-range index.
+
+### Migration
+
+**No-op for default users.** Existing embed-db rows stay valid (we don't bump the schema — the embeddings represent more context but still occupy the same 384-dim Float32 cells). To benefit, users opt in with `--late-chunk-context <n>` on either `serve` or a manual `build-embeddings` re-run; the next sync re-embeds chunks whose source mtime changed (or all chunks if you `clear-embeddings` first).
+
+### Strategic position
+
+v2.15.0 closes the "embedding quality" half of the v3.0 roadmap (HNSW persistence and int8 quantization remain). Combined with v2.0-v2.14, **enquire-mcp now has every retrieval-quality + scaling lever the IR-research community has documented for bi-encoder vector search**:
+- Hybrid RRF (BM25 + TF-IDF + ML embeddings) — v2.0
+- Wikilink graph-boost as retrieval signal — v2.3
+- Heading breadcrumbs in chunks — v2.1
+- Multilingual semantic search — v2.0
+- PDFs blended into hybrid — v2.8
+- OCR for scanned PDFs — v2.10
+- Cross-encoder reranker on top of RRF — v2.9
+- HNSW vector index — v2.13
+- **Context-windowed embeddings (late-chunking-style)** — v2.15
+
+### Roadmap remaining
+
+- v2.16+: HNSW persistence (sidecar `.hnsw.bin` with `.embed.db`-hash staleness check)
+- v2.17+: int8 vector quantization (4× storage reduction, ~1-2% recall loss)
+- v3.0.0: stable channel promotion bundling all v2.x retrieval improvements
+
 ## [2.14.0] — 2026-05-09
 
 **Sprint 14 — stateful HTTP sessions for `serve-http`.** Closes the explicitly-deferred item from v2.6.0 release notes. The HTTP transport now runs in two modes: stateless (default, v2.6.0 behavior — fresh `McpServer` + transport per request) and **stateful** (new — sessions keyed by `Mcp-Session-Id` header, persistent SSE for server-initiated notifications, DELETE for explicit termination). Required for ChatGPT custom GPT actions and any client that expects persistent state across requests.

@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.5.0";
+const VERSION = "3.5.1";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option(
       "--enable-write",
-      "Enable the five write tools (create_note, append_to_note, rename_note, replace_in_notes, archive_note). Off by default."
+      "Enable the seven write tools (create_note, append_to_note, rename_note, replace_in_notes, archive_note, frontmatter_set, chat_thread_append). Off by default."
     )
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
@@ -1145,7 +1145,7 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
   // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.
   // We can't validate at parse time because the canonical list depends on
   // runtime config (e.g. --persistent-index gates obsidian_full_text_search,
-  // --enable-write gates the 5 write tools). So we wait until everything is
+  // --enable-write gates the 7 write tools). So we wait until everything is
   // registered, then diff the user's lists against what was actually seen.
   if (verbose) {
     for (const name of deps.disabledTools) {

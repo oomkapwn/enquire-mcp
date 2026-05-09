@@ -8,17 +8,19 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 
 ## v3.x stable surfaces
 
-### MCP tool names (39 tools)
+### MCP tool names (44 tools)
 
-The umbrella search tool plus 38 specialized tools. Names + argument shapes are stable:
+44 tools total = **33 always-on read** + **1 opt-in via `--persistent-index`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`**. Names + argument shapes are stable in v3.x.
 
-**Read (28 always-on):**
+**Read — always-on (33):**
 
-`obsidian_search`, `obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, `obsidian_embeddings_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_recent_edits`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`.
+`obsidian_search`, `obsidian_hyde_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_list_bases`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_communities`, `obsidian_get_recent_edits`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
 
-**Read (4 opt-in via `--diagnostic-search-tools`):** registered alongside `obsidian_search` for diagnostic / A/B benchmarking.
+**Read — opt-in via `--persistent-index` (1):** `obsidian_full_text_search`.
 
-**Write (7, gated by `--enable-write`):** `obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_replace_in_notes`, `obsidian_archive_note`, `obsidian_frontmatter_set`, `obsidian_chat_thread_append`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
+**Read — opt-in via `--diagnostic-search-tools` (3):** `obsidian_search_text`, `obsidian_semantic_search`, `obsidian_embeddings_search`. Registered alongside `obsidian_search` for diagnostic / A/B benchmarking.
+
+**Write — gated by `--enable-write` (7):** `obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_replace_in_notes`, `obsidian_archive_note`, `obsidian_frontmatter_set`, `obsidian_chat_thread_append`.
 
 ### MCP resource URIs
 
@@ -26,9 +28,9 @@ The umbrella search tool plus 38 specialized tools. Names + argument shapes are 
 - `obsidian://note/{path}`
 - `obsidian://chunk/{n}/{path}` (FTS5-backed; only registered when `--persistent-index` is set)
 
-### MCP prompts
+### MCP prompts (19)
 
-`summarize_recent_edits`, `weekly_review`, `find_orphans`, `extract_todos`, `process_inbox`, `review_tag`, plus the v2.x additions for vault wiki workflows.
+`summarize_recent_edits`, `review_tag`, `find_orphans`, `weekly_review`, `extract_todos`, `process_inbox`, `consolidate_tags`, `find_duplicates`, `lint_wiki`, `monthly_review`, `search_with_query_expansion`, `vault_synth`, `vault_wiki_compile`, `vault_lint_extended`, `vault_capture`, `vault_persona_search`, `vault_automation_setup`, `vault_research` (v3.1.0), `vault_synthesis_page` (v3.1.0).
 
 ### CLI flags
 

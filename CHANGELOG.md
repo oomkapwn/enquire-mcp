@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1] — 2026-05-09
+
+**Patch — audit-driven public-claim sync.** No behavior changes. External audit identified drift between README, STABILITY.md, CONTRIBUTING.md, CLI help, and `package.json` numeric claims (tools, tests, gates, write tools, prompts, dependencies). Production-grade projects can't ship inconsistent public surfaces — this release fixes that and pins it under CI.
+
+### Fixed — synchronized public claims
+
+- **Tool counts:** README + STABILITY.md now both say **44 tools** (was 39 in STABILITY.md, mixed in README). Breakdown: 33 always-on read + 1 FTS opt-in + 3 diagnostic opt-in + 7 gated writes.
+- **Test counts:** all surfaces say **656 tests** (was 606/650 in different places).
+- **Prompt counts:** all surfaces say **19 prompts** (was 17 in some places, missing in others).
+- **Write tool count:** README, STABILITY.md, and CLI `--enable-write` help text all say **7** (CLI help previously said "five"). STABILITY.md previously misclassified 4 lint/diagnostic tools as writes (`lint_wiki`, `open_in_ui`, `paper_audit`, `validate_note_proposal` — they're always-on read).
+- **CI gates:** README now says **8 required + 4 advisory** (was "12 required" — release.yml's regex requires 8; `test-macos` is `continue-on-error: true` per `ci.yml`; CodeQL ×2 + Analyze actions are GitHub default-setup, not in branch-protection regex). Honest framing replaces overclaim.
+
+### Added — package.json `exports` map + `types` field
+
+`STABILITY.md` promises stable exported TypeScript symbols (`EmbedDb`, `FtsIndex`, `Vault`, `HnswIndex`, etc.). `package.json` now declares them properly:
+
+- `"main": "./dist/index.js"`, `"types": "./dist/index.d.ts"`
+- `"exports"` map for the entrypoint + 6 stable subpaths (`./embed-db`, `./fts5`, `./vault`, `./hnsw`, `./bases`, `./communities`) so consumers can `import { EmbedDb } from "@oomkapwn/enquire-mcp/embed-db"` with proper type resolution.
+- `STABILITY.md` is now in the published tarball (was missing from `files`).
+
+### Added — docs-consistency invariants for numeric claims
+
+`tests/docs-consistency.test.ts` extended with **8 new tests** that pin numeric claims against the actual source counts. Future drift fails CI:
+
+- README total tool count matches `registerTool()` count
+- README write count matches actual writes
+- README prompt count matches `registerPrompt()` count
+- STABILITY.md tool/prompt counts match
+- `package.json` description tool/prompt counts match
+- CLI `--enable-write` help text uses "seven" (locks in current truth; adding/removing a write forces a help-text update)
+
+### Updated — CONTRIBUTING.md dependency policy
+
+Was: "we currently ship five plus one optional `better-sqlite3`."
+Now: **5 mandatory + 6 optional** with each optional dep explicitly tied to its enabling flag (`--persistent-index` → `better-sqlite3`, `--enable-reranker` → `@huggingface/transformers`, `--include-pdfs` → `pdfjs-dist`, `obsidian_ocr_pdf` → `tesseract.js`, `--use-hnsw` → `hnswlib-node`, social-preview render → `@napi-rs/canvas`).
+
+### Tests
+
+664 unit tests pass (was 656 in v3.5.0, +8 new docs-consistency invariants). 12 CI gates green. SLSA-3 provenance unchanged.
+
+### Migration
+
+**No-op for default users.** No CLI / response shape / schema changes. Pure docs + manifest sync.
+
+For programmatic consumers using TypeScript: subpath imports (`@oomkapwn/enquire-mcp/embed-db`) now resolve types correctly with `"moduleResolution": "node16" | "bundler"` configurations. Default entrypoint behavior unchanged.
+
+### Deferred (audit P1 items requiring dedicated sprints)
+
+The audit also flagged three structural issues that need their own focused work, not a docs PR:
+
+1. **`src/index.ts` is 3,673 lines + excluded from coverage.** Splitting it into `cli.ts` / `server.ts` / `tool-registry.ts` / `prompts.ts` / `options.ts` is a multi-day refactor. Tracking for v3.6+.
+2. **Machine-readable tool registry** (`tools.json` or similar) as single source of truth for README + docs/api.md + STABILITY.md + CLI help generation. Would replace the current invariant-tests-as-defense pattern with generation. Tracking for v3.6+.
+3. **Admin GitHub settings** (private vulnerability reporting, CodeQL default-setup confirmation, branch protection ruleset audit) require maintainer admin access — provided as a checklist in the v3.5.1 PR description, not code-shippable.
+
 ## [3.5.0] — 2026-05-09
 
 **Sprint 22 — closes the v3.2 Bases DSL deferral.** v3.4.0's wikilink-graph infrastructure unlocks `linksTo()` evaluation in `.base` files. v3.5.0 also adds two related shorthand predicates Obsidian's canonical syntax uses (`file.path`, `file.name`).

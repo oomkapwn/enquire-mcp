@@ -205,6 +205,39 @@ export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.f
     approxSizeMB: 25,
     multilingual: true,
     maxTokens: 512
+  },
+  // v3.3.0 — additional reranker options for users who want different
+  // size/quality/language tradeoffs.
+  //
+  // BGE-reranker-large — English, ~560 MB. Larger than rerank-bge with
+  // higher quality (often +1-2 NDCG@10 vs base). Use when retrieval
+  // quality matters more than memory.
+  "rerank-bge-large": {
+    alias: "rerank-bge-large",
+    hfId: "Xenova/bge-reranker-large",
+    approxSizeMB: 560,
+    multilingual: false,
+    maxTokens: 512
+  },
+  // jina-reranker-v1-tiny-en — English, ~33 MB. Faster than rerank-bge
+  // (the "tiny" reranker), comparable quality on shorter passages.
+  // Good when reranker latency is the bottleneck.
+  "rerank-jina-tiny": {
+    alias: "rerank-jina-tiny",
+    hfId: "Xenova/jina-reranker-v1-tiny-en",
+    approxSizeMB: 33,
+    multilingual: false,
+    maxTokens: 512
+  },
+  // mxbai-rerank-large-v2 — multilingual, ~280 MB. Higher quality than
+  // the xsmall variant (rerank-multilingual default). Multi-language
+  // benchmark performance is solid; cost is the larger download.
+  "rerank-multilingual-large": {
+    alias: "rerank-multilingual-large",
+    hfId: "Xenova/mxbai-rerank-large-v2",
+    approxSizeMB: 280,
+    multilingual: true,
+    maxTokens: 512
   }
 });
 

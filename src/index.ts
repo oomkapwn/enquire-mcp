@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.4.0";
+const VERSION = "3.5.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -2203,7 +2203,7 @@ function registerReadTools(
     {
       title: "Execute an Obsidian Base — return matching notes",
       description:
-        'v3.2.0 — Runs a `.base` file\'s filter against the vault\'s markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supports a SUBSET of the Obsidian DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `path startsWith "X"`, `path contains "X"`, `<frontmatter_key> == <value>`, `<key> != <value>`, `<key> contains "<substr>"`, plus `and` / `or` / `not` combinators. Anything else (formula calls, `linksTo`, date arithmetic) is treated as `true` (most permissive) and returned in `unevaluated_predicates` so callers know what was ignored. Pair with `obsidian_search` for retrieval-quality search; this is for explicit saved queries.',
+        'v3.2.0 (extended in v3.5.0) — Runs a `.base` file\'s filter against the vault\'s markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (v3.5.0 — outbound wikilink check, basename-resolved, case-insensitive), `path startsWith "X"` / `path contains "X"` / `file.path startsWith "X"` (v3.5.0 — `file.` prefix accepted), `file.name == "X"` / `file.name != "X"` (v3.5.0 — basename equality, .md stripped), `<frontmatter_key> == <value>`, `<key> != <value>`, `<key> contains "<substr>"`, plus `and` / `or` / `not` combinators. Anything else (formula evaluation, date arithmetic, summaries) is treated as `true` (most permissive) and returned in `unevaluated_predicates`. Pair with `obsidian_search` for retrieval-quality search; this is for explicit saved queries.',
       annotations: { ...READ_ONLY, title: "Query base" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .base file"),

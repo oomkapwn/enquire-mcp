@@ -299,8 +299,16 @@ views:
     expect(allBooks.view).toBe("All books");
   });
 
-  it("collects unevaluated predicates without crashing (e.g. linksTo)", async () => {
+  // v3.5.0 — linksTo() is now evaluated (no longer in unevaluated_predicates).
+  // We keep this test to lock in the closed deferral.
+  it("v3.5.0 evaluates linksTo() (no longer unevaluated)", async () => {
     const { root, vault } = await makeBaseVault();
+    // Add a note that explicitly links to Textbook + a Textbook target.
+    await fs.writeFile(
+      path.join(root, "links-textbook.md"),
+      "---\nstatus: open\ntags: [book]\n---\nsee [[Textbook]] for details\n"
+    );
+    await fs.writeFile(path.join(root, "Textbook.md"), "the textbook\n");
     await fs.writeFile(
       path.join(root, "q.base"),
       `filters:
@@ -312,9 +320,11 @@ views:
 `
     );
     const out = await queryBase(vault, { path: "q.base" });
-    expect(out.unevaluated_predicates).toContain('linksTo(file.file, "Textbook")');
-    // linksTo treated as `true` (most permissive) → matches both books.
-    expect(out.matches.length).toBeGreaterThanOrEqual(2);
+    expect(out.unevaluated_predicates).toEqual([]); // linksTo is now evaluated
+    const paths = out.matches.map((m) => m.path);
+    expect(paths).toContain("links-textbook.md");
+    // open.md has tag=book but does NOT link to Textbook → excluded.
+    expect(paths).not.toContain("open.md");
   });
 
   it("collects inline #tags from body for taggedWith() matching", async () => {
@@ -352,5 +362,93 @@ views:
     );
     const out = await queryBase(vault, { path: "q.base", limit: 2 });
     expect(out.matches.length).toBeLessThanOrEqual(2);
+  });
+
+  // v3.5.0 — newly-supported predicates. Lock in closed deferrals.
+  describe("v3.5.0 — linksTo + file.path/file.name", () => {
+    it("linksTo is case-insensitive and strips .md / sections / blocks", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "linker.md"),
+        "links to [[TEXTBOOK#chapter-1]] and [[textbook.md|alias]] and [[textbook^block]]\n"
+      );
+      await fs.writeFile(path.join(root, "Textbook.md"), "the book");
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'linksTo(file.file, "Textbook")'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches.map((m) => m.path)).toContain("linker.md");
+    });
+
+    it("linksTo returns false when no outbound link to target", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'linksTo(file.file, "NonExistentTarget")'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches).toHaveLength(0);
+    });
+
+    it("file.path startsWith is an alias for path startsWith", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'file.path startsWith "Notes/"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches.map((m) => m.path)).toEqual(["Notes/inline.md"]);
+    });
+
+    it("file.path contains is an alias for path contains", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'file.path contains "inline"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches.map((m) => m.path)).toEqual(["Notes/inline.md"]);
+    });
+
+    it("file.name == matches basename case-insensitively (no .md)", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'file.name == "Inline"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches.map((m) => m.path)).toEqual(["Notes/inline.md"]);
+    });
+
+    it("file.name != excludes the basename", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'file.name != "open"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      const paths = out.matches.map((m) => m.path);
+      expect(paths).not.toContain("open.md");
+      expect(paths).toContain("done.md");
+    });
   });
 });

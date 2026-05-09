@@ -8,14 +8,19 @@
 //   - Parse .base YAML files (read-only).
 //   - Execute a SUBSET of the filter DSL against vault notes:
 //       * tag predicates: `tag == "x"`, `tag != "x"`, `taggedWith(file.file, "x")`
-//       * path predicates: `path startsWith "X"`, `path contains "X"`
+//       * path predicates: `path startsWith "X"`, `path contains "X"`,
+//         `file.path startsWith "X"`, `file.name == "X"` (v3.5.0)
+//       * link predicates: `linksTo(file.file, "Target")` (v3.5.0 — uses
+//         the per-note outbound wikilink set; basename-resolved, case-insensitive)
 //       * frontmatter equality: `<key> == <value>`, `<key> != <value>`,
 //         `<key> contains "<substr>"`
 //       * combinators: `and`, `or`, `not`
 //       * boolean literals + bare-word property paths
 //
 // Out of scope (deferred):
-//   - Full DSL (linksTo / inDate range / formula evaluator / summaries)
+//   - Date arithmetic (`inDate`, `> 6mo`, etc) — needs a date parser
+//   - Formula evaluator (`concat`, `price / age`) — needs an expression engine
+//   - Summaries — would require aggregation pass
 //   - View rendering (we surface views as metadata, agent decides how to use them)
 //
 // Why this scope: covers the ~90% case (most user-authored .base filters
@@ -24,6 +29,7 @@
 
 import * as path from "node:path";
 import { z } from "zod";
+import { extractWikilinks } from "./parser.js";
 import type { Vault } from "./vault.js";
 
 /** Top-level shape of a parsed `.base` file. Mirrors the Obsidian schema. */
@@ -280,10 +286,24 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       continue;
     }
     const tags = collectTags(fm, body);
+    // v3.5.0 — collect outbound wikilink targets (basename-normalized,
+    // lowercased) for `linksTo()` predicate evaluation. We don't resolve
+    // against the vault's basename index here — `linksTo("Foo")` just
+    // checks whether the note has a `[[Foo]]` (or `[[foo]]`, `[[Foo.md]]`,
+    // `[[Foo#section]]`) outbound link; matching the basename is the
+    // semantic Obsidian uses too.
+    const outbound = new Set<string>();
+    for (const link of extractWikilinks(body)) {
+      const t = link.target.split(/[#^]/)[0]?.trim();
+      if (!t) continue;
+      const norm = (t.split("/").pop() ?? t).replace(/\.md$/i, "").toLowerCase();
+      if (norm) outbound.add(norm);
+    }
     const ctx: EvalContext = {
       path: e.relPath.replace(/\\/g, "/"),
       tags,
       frontmatter: fm,
+      outbound,
       unevaluated
     };
     const matched = effectiveFilter === undefined ? true : evalFilter(effectiveFilter, ctx);
@@ -309,6 +329,13 @@ interface EvalContext {
   path: string;
   tags: string[];
   frontmatter: Record<string, unknown>;
+  /**
+   * v3.5.0 — outbound wikilink targets (basename, lowercased, no .md
+   * extension, no section/block refs). Powers the `linksTo(file.file, "X")`
+   * predicate. Set rather than array because membership lookup is the
+   * only operation we need.
+   */
+  outbound: Set<string>;
   /** Predicates we couldn't evaluate get pushed here. Treated as `true`
    *  (most permissive) so the rest of the filter still works. */
   unevaluated: Set<string>;
@@ -325,7 +352,10 @@ function evalFilter(f: BaseFilter, ctx: EvalContext): boolean {
 /**
  * Evaluate a single predicate string against the eval context. Subset:
  *   - `taggedWith(file.file, "x")` / `tag == "x"` / `tag != "x"`
+ *   - v3.5.0: `linksTo(file.file, "Target")` (basename, case-insensitive)
  *   - `path startsWith "X"` / `path contains "X"`
+ *   - v3.5.0: `file.path startsWith "X"` / `file.path contains "X"` (alias)
+ *   - v3.5.0: `file.name == "X"` / `file.name != "X"` (basename eq, case-insensitive)
  *   - `<key> == <value>` / `<key> != <value>` / `<key> contains "<substr>"`
  *   - boolean literals: `true`, `false`
  *
@@ -347,6 +377,17 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
     return ctx.tags.includes(tag);
   }
 
+  // v3.5.0 — linksTo(file.file, "Target") — outbound wikilink check.
+  // Resolution mirrors Obsidian: basename match (case-insensitive),
+  // strips .md extension and section/block refs from the target.
+  const linksTo = /^linksTo\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/.exec(expr);
+  if (linksTo) {
+    const target = (linksTo[2] ?? "").trim();
+    if (!target) return false;
+    const norm = (target.split("/").pop() ?? target).split(/[#^]/)[0]?.replace(/\.md$/i, "").toLowerCase();
+    return norm ? ctx.outbound.has(norm) : false;
+  }
+
   // tag == "x" / tag != "x"
   const tagEq = /^tag\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
   if (tagEq) {
@@ -357,11 +398,24 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   }
 
   // path startsWith "X" / path contains "X"
-  const pathOp = /^path\s+(startsWith|contains)\s+(["'])([^"']+)\2$/.exec(expr);
+  // v3.5.0 — also accept `file.path startsWith` / `file.path contains` as
+  // aliases (Obsidian's canonical syntax uses the `file.` prefix).
+  const pathOp = /^(?:file\.)?path\s+(startsWith|contains)\s+(["'])([^"']+)\2$/.exec(expr);
   if (pathOp) {
     const op = pathOp[1];
     const needle = pathOp[3] ?? "";
     return op === "startsWith" ? ctx.path.startsWith(needle) : ctx.path.includes(needle);
+  }
+
+  // v3.5.0 — file.name == "X" / file.name != "X". Basename equality
+  // (case-insensitive, .md stripped).
+  const fileNameEq = /^file\.name\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
+  if (fileNameEq) {
+    const op = fileNameEq[1];
+    const want = (fileNameEq[3] ?? "").replace(/\.md$/i, "").toLowerCase();
+    const got = (ctx.path.split("/").pop() ?? ctx.path).replace(/\.md$/i, "").toLowerCase();
+    const eq = got === want;
+    return op === "==" ? eq : !eq;
   }
 
   // <key> contains "<substr>"  — e.g. `status contains "doing"`

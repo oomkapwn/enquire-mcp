@@ -62,7 +62,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 ## 🏆 Why it's the best
 
-The **only Obsidian-MCP — and the only Obsidian retrieval system at all — with all of:**
+The **leading Obsidian-MCP server — the only one shipping all of these capabilities together:**
 
 | Capability | enquire-mcp | Smart Connections | Other Obsidian-MCPs |
 |---|:---:|:---:|:---:|
@@ -86,6 +86,8 @@ The **only Obsidian-MCP — and the only Obsidian retrieval system at all — wi
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
 | License | MIT, free | proprietary, paid | varies |
+
+<sub>Comparison based on each project's public capabilities as documented at v3.0 release (2026-05-09). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing.</sub>
 
 > Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 

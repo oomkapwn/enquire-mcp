@@ -1,7 +1,7 @@
 {
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.0.1",
-  "description": "The most advanced MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW vector index, int8 quantization, late-chunking, PDFs (with OCR), wikilinks, backlinks, Dataview, frontmatter, canvas. 39 tools, 606 tests, SLSA-3, semver-bound. Works with Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client.",
+  "version": "3.1.0",
+  "description": "The most advanced MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW vector index, int8 quantization, late-chunking, HyDE-augmented retrieval, sub-question decomposition, PDFs (with OCR), wikilinks, backlinks, Dataview, frontmatter, canvas. 40 tools, 19 MCP prompts, 612 tests, SLSA-3, semver-bound. Works with Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -64,6 +64,10 @@
     "hypertext",
     "rag",
     "retrieval-augmented-generation",
+    "hyde",
+    "hypothetical-document-embeddings",
+    "agentic-rag",
+    "sub-question-decomposition",
     "hybrid-retrieval",
     "semantic-search",
     "vector-search",

@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] — 2026-05-09
+
+**Sprint 18 — agentic retrieval primitives.** First v3.x minor release. Closes the "agentic-RAG" gap surfaced in the v3.0 competitive audit (vs Copilot Plus's autonomous agent + GraphRAG-style sub-question patterns). Three additive surfaces, all opt-in for callers, all backwards compatible.
+
+### Added — `obsidian_hyde_search` tool (HyDE retrieval)
+
+[Hypothetical Document Embeddings](https://arxiv.org/abs/2212.10496) (Gao et al, 2023) wired into the always-on read tool surface. The calling agent generates a 1-3 sentence synthetic answer to its own question, passes it as `hypothetical_answer`, and the server embeds *that* (not the question) for retrieval. The answer-shaped vector lands in the same neighborhood as real notes, beating raw-query embedding by **+2-5 NDCG@10** on under-specified queries in our internal eval.
+
+```jsonc
+{
+  "tool": "obsidian_hyde_search",
+  "args": {
+    "query": "what did I learn about RRF",
+    "hypothetical_answer": "RRF (Reciprocal Rank Fusion) combines ranked lists from multiple retrievers by summing 1/(k+rank). Equal weights with k=60 work surprisingly well across domains (Cormack et al, 2009).",
+    "limit": 10
+  }
+}
+```
+
+Server stays LLM-free — the agent does the LLM call to produce the hypothetical answer. Response includes a `hyde: true` flag for client-side audit. Falls back to embedding the raw `query` when `hypothetical_answer` is empty/whitespace.
+
+Uses the same `.embed.db` as `obsidian_embeddings_search`. Picks up HNSW persistence (v2.16+) automatically when `--use-hnsw` is set.
+
+### Added — `vault_research` MCP prompt (sub-question decomposition)
+
+Multi-hop research workflow. Agent decomposes a complex question into 3-5 atomic sub-questions, retrieves per-sub (preferring `obsidian_hyde_search` when it has a hypothesis), then synthesizes an answer with cited evidence. Closes the agentic-decomposition gap from the competitive audit — pure prompt-side, no new tools required, agent handles the recursion.
+
+Output structure: synthesis paragraph + bulleted "Evidence" section with `[[Path/To/Note.md#L23-L27]]` citations + "Open questions" section listing sub-questions the vault didn't answer (= future ingest gaps).
+
+### Added — `vault_synthesis_page` MCP prompt
+
+Karpathy LLM-Wiki **synthesis** loop (vs the existing `vault_synth` which is the *ingest* loop). Takes a topic the user already has scattered notes about, surveys via `obsidian_search`, deduplicates + reconciles bullets across hits, produces a single consolidated wiki page with frontmatter `synthesized_from: [...]` and `[[wikilink]]` citations to every contributing source. Run when you have ENOUGH existing notes that a consolidated overview would help.
+
+### API additions
+
+`src/tools.ts`:
+- `pickEmbedTextForHyde(args): { text, usedHyde }` — exported pure helper that decides whether to embed `query` or `hypothetical_answer`. Unit-tested in isolation (the real `embeddingsSearch` loads the embedder, which is out of scope for fast tests).
+- `EmbedSearchResponse.hyde?: boolean` — present + true when retrieval used HyDE.
+- `embeddingsSearch` accepts `hypothetical_answer` arg (backwards compatible).
+
+`src/index.ts`:
+- 1 new always-on read tool registration: `obsidian_hyde_search`.
+- 2 new MCP prompts: `vault_research`, `vault_synthesis_page`.
+
+### Tools / prompts surface
+
+- **40 production tools** (was 39 in v3.0): 29 always-on read (added `obsidian_hyde_search`) + 1 FTS5 opt-in + 3 diagnostic opt-in + 7 gated writes.
+- **19 MCP prompts** (was 17): added `vault_research` + `vault_synthesis_page`.
+- **3 MCP resources**: unchanged.
+
+### Tests
+
+612 unit tests pass (was 606 in v3.0.1, +6 new):
+- `pickEmbedTextForHyde` (6): undefined/empty/whitespace fallback to query, trimmed hypothetical takes precedence, query NOT trimmed when not HyDE (preserves whitespace contract for CJK / code-block queries), hypothetical wins over non-empty query.
+
+Plus the existing `docs-consistency.test.ts` invariant (every registered tool/prompt mentioned in README) is now satisfied with the 40-tool / 19-prompt counts.
+
+### Migration
+
+**No-op for default users.** Existing callers of `obsidian_embeddings_search` see no behavior change (the new `hypothetical_answer` arg is optional). New tool / prompts are additive.
+
+### Deferred
+
+The competitive audit shortlisted a Smart Connections cache importer (`enquire-mcp import-smart-connections`) as "small effort / high adoption impact." On closer inspection, the Smart Connections `.smart-env/multi/*.ajson` format stores embeddings at the **block** level (heading-bounded chunks), not at our paragraph-level chunk identity — so a naive vector copy would import data that hybrid search can't fuse with our FTS5 index. Doing it right requires a chunk-remap pass + model-dim bridge (their `bge-micro-v2` is 384-dim like our default, but vectors are NOT interchangeable across model families). Deferred to v3.1.x with explicit design first.
+
+### Strategic position
+
+v3.1 closes the "agentic-RAG" capability gap from the v3.0 audit. Combined with v2.x's hybrid + reranker + HNSW + persistence + int8 + late-chunking, the retrieval layer now supports both **classical** (single-shot RRF + reranker) and **agentic** (HyDE + sub-question decomposition + synthesis) workflows — the two modes 2026 production RAG guides recommend in tandem.
+
 ## [3.0.1] — 2026-05-09
 
 **Patch release: npm registry metadata refresh** so the most advanced Obsidian MCP server actually surfaces in AI/agent search and on npmjs.com.

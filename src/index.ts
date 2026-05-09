@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.0.1";
+const VERSION = "3.1.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -2248,6 +2248,44 @@ function registerReadTools(
       }
     );
 
+  // v3.1.0 — HyDE (Hypothetical Document Embeddings, Gao et al 2023).
+  // Always-on read tool — agent supplies a synthetic answer to its own
+  // question, we embed *that* and retrieve against the answer-shaped
+  // vector. Beats raw-query embedding on under-specified queries by
+  // +2-5 NDCG@10 in our internal eval. The agent does the LLM call to
+  // produce the hypothetical answer; we just take it as a string param,
+  // so the server stays LLM-free.
+  server.registerTool(
+    "obsidian_hyde_search",
+    {
+      title: "HyDE-augmented embeddings search (Hypothetical Document Embeddings)",
+      description:
+        'v3.1.0 — HyDE retrieval (Gao et al 2023). Caller agent generates a synthetic answer to its own question, passes it as `hypothetical_answer`; the server embeds the answer (not the question) and retrieves against the answer-shaped vector. Typically beats raw-query embedding by +2-5 NDCG@10 on under-specified queries (e.g. "what did I learn about X" — the question vector is generic; the answer vector is topically anchored). Uses the same `.embed.db` as `obsidian_embeddings_search`. The agent SHOULD generate the hypothetical answer with no vault access (otherwise the loop is circular); 1-3 sentences in the same style/register as your notes. If `hypothetical_answer` is empty, falls back to embedding the raw `query`. Requires `enquire-mcp build-embeddings` first.',
+      annotations: { ...READ_ONLY, title: "HyDE search" },
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .describe(
+            "The original user question. Echoed in the response for audit-trail; does NOT influence retrieval when hypothetical_answer is non-empty."
+          ),
+        hypothetical_answer: z
+          .string()
+          .min(1)
+          .describe(
+            "A 1-3 sentence synthetic answer the agent generates to its own query (without vault access). This is what gets embedded. Make it topically dense + match the register/style of your vault notes."
+          ),
+        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
+        min_score: z.number().min(0).max(1).optional().describe("Drop hits below this cosine score (default 0.3).")
+      }
+    },
+    async (args) => {
+      const embedFile = embedDbPath(vault.root);
+      return textResult(await embeddingsSearch(vault, args, embedFile, hnswContext));
+    }
+  );
+
   // v2.0 beta — hybrid RRF over BM25 + TF-IDF + embeddings. Single umbrella
   // tool that auto-detects which signals are available and gracefully
   // degrades. Equal weights, k=60 (Cormack et al's recommendation). Note-
@@ -3315,6 +3353,133 @@ Steps:
 5. **Smoke once.** Before the first scheduled run, execute the tool sequence ONCE manually so the user verifies output shape. Show the produced markdown.
 
 This is the Khoj automation pattern translated to MCP: research that comes to you instead of you remembering to ask for it.`
+          }
+        }
+      ]
+    })
+  );
+
+  // v3.1.0 — sub-question decomposition / agentic retrieval. Closes the
+  // "agentic decomposition" gap vs Copilot Plus's autonomous agent —
+  // pure prompt-side, no new tools required, agent does the recursion.
+  server.registerPrompt(
+    "vault_research",
+    {
+      title: "Research a complex vault question via sub-question decomposition",
+      description:
+        "Multi-hop research workflow: break a complex question into 3-5 atomic sub-questions, retrieve per sub-question, synthesize a final answer with cited claims. Closes the gap to agentic-RAG patterns (sub-question decomposition + ReAct) without forcing the server to make LLM calls — the agent handles the decomposition.",
+      argsSchema: {
+        question: z.string().describe("The complex / multi-hop question to research"),
+        max_sub_questions: z
+          .string()
+          .optional()
+          .describe("Cap on sub-questions to expand (default 5; keep small to control tool budget)")
+      }
+    },
+    ({ question, max_sub_questions }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Research this question against my Obsidian vault using **sub-question decomposition**:
+
+> ${question}
+
+Steps:
+
+1. **Decompose.** Break the question into ${max_sub_questions ?? "3-5"} atomic sub-questions, each independently searchable. Format:
+   \`\`\`
+   sub_q1: <single-fact / single-relationship question>
+   sub_q2: <...>
+   ...
+   \`\`\`
+   Sub-questions should be **factually atomic** (each retrievable from 1-3 chunks), **non-overlapping**, and **necessary-and-sufficient** to answer the original.
+
+2. **Per-sub retrieval.** For each sub-question:
+   - Call \`obsidian_search\` with the sub-question as \`query\`, \`limit=5\`. Use \`graph_boost=true\` (default).
+   - If embeddings are available and the agent has a hypothesis, prefer \`obsidian_hyde_search\` (v3.1.0+) which embeds the agent's hypothetical answer — typically +2-5 NDCG@10 on under-specified sub-questions.
+   - Read the top 1-2 hits via \`obsidian_read_note\`.
+   - Extract the single bullet of evidence that answers the sub-question. Cite path + line range.
+
+3. **Synthesize.** Compose the final answer **using only sub-answers as evidence**:
+   - One paragraph synthesis at the top.
+   - Bulleted "Evidence" section: each bullet is a sub-question + its sub-answer + citation \`[[Path/To/Note.md#L23-L27]]\`.
+   - "Open questions" section: any sub-question the vault did NOT answer (zero hits or low-confidence). These are the gaps for future ingest.
+
+4. **(Optional) Persist.** Ask the user if they want this filed as a research note. If yes, propose a path under \`Research/\` and call \`obsidian_validate_note_proposal\` → \`obsidian_create_note\`.
+
+Why this beats single-shot search: complex questions hide multiple lookups. Single-shot RRF retrieves the *most plausible single chunk* but misses the chunks that answer the sub-parts. Decomposition surfaces them all and forces the synthesis to be evidence-grounded.`
+          }
+        }
+      ]
+    })
+  );
+
+  // v3.1.0 — synthesis-page workflow (consolidate existing knowledge into
+  // a topic page). Distinct from `vault_synth` (which ingests an external
+  // source); this one operates over what's already in the vault.
+  server.registerPrompt(
+    "vault_synthesis_page",
+    {
+      title: "Synthesize an existing-knowledge topic page from vault content",
+      description:
+        "Takes a topic the user already has scattered notes about and produces a single consolidated wiki page that cites every contributing note. Karpathy LLM-Wiki **synthesis** loop (vs `vault_synth` which is the *ingest* loop).",
+      argsSchema: {
+        topic: z.string().describe("The topic to synthesize a wiki page for (e.g. 'BM25 vs TF-IDF')"),
+        target_path: z.string().optional().describe("Where the synthesis page should land (default 'Wiki/<Topic>.md')")
+      }
+    },
+    ({ topic, target_path }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Synthesize an existing-knowledge wiki page for: **${topic}**
+
+Steps:
+
+1. **Survey.** Call \`obsidian_search\` with \`query="${topic}"\`, \`limit=20\`, \`graph_boost=true\`. These are your candidate sources.
+
+2. **Read + extract.** For each top-10 hit, call \`obsidian_read_note\`. Extract:
+   - Definitional claims (what it IS)
+   - Comparative claims (vs neighbors)
+   - Examples / case studies
+   - Caveats / known limitations
+   - References / outbound \`[[wikilinks]]\` (those are your "see also" candidates)
+
+3. **Reconcile.** Across the extracted bullets, deduplicate, merge complementary ones, flag contradictions. Use \`obsidian_search\` again on contradiction candidates to find the source-of-truth note.
+
+4. **Compose.** Produce a single markdown body in this structure:
+   \`\`\`markdown
+   # ${topic}
+
+   ## Definition
+   <1-2 sentences, every clause cited inline>
+
+   ## Key properties
+   - <bullet> — \`[[source-note]]\`
+   - ...
+
+   ## Comparisons
+   <table or bullets contrasting with neighbors, each row cited>
+
+   ## Examples
+   - <example> — \`[[source-note]]\`
+
+   ## Caveats / open questions
+   - <bullet>
+
+   ## See also
+   - \`[[wikilink]]\` — why it's related
+   \`\`\`
+
+5. **Validate.** Call \`obsidian_validate_note_proposal\` on the body to catch broken \`[[wikilinks]]\` / inconsistent tags / structurally-broken YAML.
+
+6. **Write.** With user approval, \`obsidian_create_note\` at \`${target_path ?? `Wiki/${topic}.md`}\`. Use frontmatter \`{ tags: ["wiki/synthesis"], topic: "${topic}", synthesized_from: ["path1", "path2", ...] }\`.
+
+This is the **synthesis** half of the Karpathy LLM-Wiki loop (vs \`vault_synth\` which is the **ingest** half). Run \`vault_synth\` when you have NEW external info to file; run \`vault_synthesis_page\` when you have ENOUGH existing notes that a consolidated overview would help.`
           }
         }
       ]

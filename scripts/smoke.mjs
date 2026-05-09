@@ -98,10 +98,11 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  // v2.10.0: 31 tools (with --diagnostic-search-tools): 28 always-on read +
+  // v3.1.0: 32 tools (with --diagnostic-search-tools): 29 always-on read +
   // 3 single-ranker diagnostic tools. With --persistent-index: + 1
-  // (obsidian_full_text_search) = 32.
-  const expectedCount = withFts ? 32 : 31;
+  // (obsidian_full_text_search) = 33.
+  // v3.1.0 added obsidian_hyde_search (HyDE retrieval) to always-on.
+  const expectedCount = withFts ? 33 : 32;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -121,6 +122,7 @@ try {
     "obsidian_get_outbound_links",
     "obsidian_get_recent_edits",
     "obsidian_get_unresolved_wikilinks",
+    "obsidian_hyde_search",
     "obsidian_lint_wiki",
     "obsidian_list_canvases",
     "obsidian_list_notes",
@@ -285,10 +287,12 @@ try {
   // Prompts.
   const prompts = await rpc("prompts/list", {});
   const promptNames = (prompts.result?.prompts ?? []).map((p) => p.name).sort();
-  // v2.5.0: 17 prompts (10 v1.x + search_with_query_expansion + vault_synth +
-  // vault_wiki_compile + vault_lint_extended + vault_capture +
-  // vault_persona_search + vault_automation_setup).
-  check("prompts/list returns 17 prompts", promptNames.length === 17, JSON.stringify(promptNames));
+  // v3.1.0: 19 prompts (17 from v2.5.0 + vault_research + vault_synthesis_page).
+  // 10 v1.x base + search_with_query_expansion + vault_synth + vault_wiki_compile
+  // + vault_lint_extended + vault_capture + vault_persona_search + vault_automation_setup
+  // + vault_research (v3.1.0 sub-question decomposition)
+  // + vault_synthesis_page (v3.1.0 Karpathy synthesis loop).
+  check("prompts/list returns 19 prompts", promptNames.length === 19, JSON.stringify(promptNames));
   console.log(`      → prompts: ${promptNames.join(", ")}`);
 
   // Sanity-check the new D / E tools.

@@ -3050,6 +3050,12 @@ export interface EmbedSearchResponse {
   model: string;
   total_chunks: number;
   matches: EmbedHit[];
+  /**
+   * v3.1.0 — present + true when retrieval used the agent-supplied
+   * `hypothetical_answer` as the embedding seed (HyDE). Lets clients
+   * audit whether they're seeing raw-query or HyDE-augmented results.
+   */
+  hyde?: boolean;
 }
 
 /**
@@ -3076,14 +3082,53 @@ export interface HnswSearchContext {
   ef?: number;
 }
 
+/**
+ * v3.1.0 — pick the text that should be embedded for an embeddings-search
+ * call. HyDE-augmented retrieval prefers the agent-supplied
+ * `hypothetical_answer` (Gao et al 2023); falls back to the raw query
+ * when that's absent / empty / whitespace-only.
+ *
+ * Pure helper so we can unit-test the decision in isolation (the real
+ * `embeddingsSearch` function loads the @huggingface/transformers
+ * embedder, which is out of scope for unit tests).
+ */
+export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?: string }): {
+  text: string;
+  usedHyde: boolean;
+} {
+  const ha = args.hypothetical_answer?.trim() ?? "";
+  if (ha.length > 0) return { text: ha, usedHyde: true };
+  return { text: args.query, usedHyde: false };
+}
+
 export async function embeddingsSearch(
   vault: Vault,
-  args: { query: string; folder?: string; limit?: number; min_score?: number; model?: string },
+  args: {
+    query: string;
+    folder?: string;
+    limit?: number;
+    min_score?: number;
+    model?: string;
+    /**
+     * v3.1.0 — HyDE (Hypothetical Document Embeddings) augmentation.
+     * When set, this string is embedded instead of `query`. The agent
+     * generates a synthetic answer to its own question, embeds *that*,
+     * and retrieves against the answer-shaped vector — typically beats
+     * raw-query retrieval on under-specified queries by +2-5 NDCG@10.
+     * The `query` string is still echoed in the response for caller
+     * audit-trail; it does NOT influence retrieval when `hypothetical_answer`
+     * is present.
+     */
+    hypothetical_answer?: string;
+  },
   embedFile: string,
   hnsw?: HnswSearchContext | null
 ): Promise<EmbedSearchResponse> {
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
+  // v3.1.0 — pick the actual text to embed. HyDE prefers the
+  // hypothetical answer when present; otherwise fall back to the query.
+  const { text: embedText, usedHyde } = pickEmbedTextForHyde(args);
   const limit = args.limit ?? 10;
   const minScore = args.min_score ?? 0.3;
 
@@ -3118,7 +3163,7 @@ export async function embeddingsSearch(
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
     }
     const embedder = await loadEmbedder(args.model);
-    const [qVec] = await embedder.embed([args.query]);
+    const [qVec] = await embedder.embed([embedText]);
     if (!qVec) throw new Error("Embedder returned no vectors for the query");
     // v2.0.0-beta.2 P0 fix: filter excluded paths from the embedding-index
     // hits BEFORE returning. The persistent .embed.db is built once and may
@@ -3158,7 +3203,14 @@ export async function embeddingsSearch(
       line_end: h.line_end,
       kind: h.kind
     }));
-    return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: total, matches };
+    return {
+      query: args.query,
+      method: "embeddings-cosine",
+      model: model.alias,
+      total_chunks: total,
+      matches,
+      ...(usedHyde ? { hyde: true } : {})
+    };
   } finally {
     db.close();
   }

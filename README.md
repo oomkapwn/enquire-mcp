@@ -24,7 +24,7 @@
 
 A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion, reranks with a **BGE cross-encoder**, scales to millions of chunks via **HNSW**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**39 tools · 606 unit tests · v3.0 semver-bound · MIT · SLSA-3.**
+**40 tools · 606 unit tests · v3.0 semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -80,7 +80,7 @@ The **leading Obsidian-MCP server — the only one shipping all of these capabil
 | **Per-signal observability** per hit | ✅ | ❌ | ❌ |
 | **MCP-native** (Claude · Cursor · ChatGPT · Codex · any client) | ✅ | ❌ Obsidian-only | varies |
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **39 production tools** (28 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **40 production tools** (29 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
 | **606 unit tests · 12 required CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
@@ -123,13 +123,13 @@ graph LR
 
 ---
 
-## 🛠️ All 39 tools
+## 🛠️ All 40 tools
 
 The umbrella `obsidian_search` plus 38 specialized tools. Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|
-| **Search & retrieval** | `obsidian_search` (umbrella, RRF-fused) · `obsidian_search_text` · `obsidian_full_text_search` · `obsidian_semantic_search` · `obsidian_embeddings_search` · `obsidian_find_similar` |
+| **Search & retrieval** | `obsidian_search` (umbrella, RRF-fused) · `obsidian_hyde_search` (HyDE-augmented, v3.1.0) · `obsidian_search_text` · `obsidian_full_text_search` · `obsidian_semantic_search` · `obsidian_embeddings_search` · `obsidian_find_similar` |
 | **Wikilinks & graph** | `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_note_neighbors` · `obsidian_get_unresolved_wikilinks` · `obsidian_find_path` |
 | **Frontmatter & Dataview** | `obsidian_frontmatter_get` · `obsidian_frontmatter_search` · `obsidian_dataview_query` · `obsidian_list_tags` |
 | **Read & navigate** | `obsidian_read_note` · `obsidian_list_notes` · `obsidian_get_recent_edits` · `obsidian_open_questions` · `obsidian_context_pack` · `obsidian_chat_thread_read` · `obsidian_open_in_ui` · `obsidian_stats` |
@@ -137,7 +137,7 @@ The umbrella `obsidian_search` plus 38 specialized tools. Full reference: **[doc
 | **Writes** (gated by `--enable-write`) | `obsidian_create_note` · `obsidian_append_to_note` · `obsidian_rename_note` · `obsidian_replace_in_notes` · `obsidian_archive_note` · `obsidian_frontmatter_set` · `obsidian_chat_thread_append` |
 | **Diagnostic / lint** | `obsidian_lint_wiki` · `obsidian_paper_audit` · `obsidian_validate_note_proposal` |
 
-Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidian://chunk/{n}/{path}`) and 17 **MCP prompts** (`summarize_recent_edits` · `review_tag` · `find_orphans` · `weekly_review` · `extract_todos` · `process_inbox` · `consolidate_tags` · `find_duplicates` · `lint_wiki` · `monthly_review` · `search_with_query_expansion` · `vault_synth` · `vault_wiki_compile` · `vault_lint_extended` · `vault_capture` · `vault_persona_search` · `vault_automation_setup`) for common vault workflows.
+Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidian://chunk/{n}/{path}`) and 19 **MCP prompts** (`summarize_recent_edits` · `review_tag` · `find_orphans` · `weekly_review` · `extract_todos` · `process_inbox` · `consolidate_tags` · `find_duplicates` · `lint_wiki` · `monthly_review` · `search_with_query_expansion` · `vault_synth` · `vault_wiki_compile` · `vault_lint_extended` · `vault_capture` · `vault_persona_search` · `vault_automation_setup` · `vault_research` · `vault_synthesis_page`) for common vault workflows.
 
 ---
 

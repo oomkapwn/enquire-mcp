@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
-import { buildHnsw, hnswResultsToHits } from "../src/hnsw.js";
+import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
 function l2(v: Float32Array): Float32Array {
@@ -274,6 +274,222 @@ describe("EmbedDb.getAllVectors (v2.13.0)", () => {
       expect(pdfRow?.kind).toBe("pdf");
       const mdRow = rows.find((r) => r.rel_path === "a.md");
       expect(mdRow?.kind).toBe("md");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// v2.16.0 — HNSW persistence: writeIndex/readIndex roundtrip + staleness
+// detection via the embed-db signature.
+describe("HNSW persistence (v2.16.0)", () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hnsw-persist-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("saveTo + loadHnswFromDisk roundtrip preserves search results", async () => {
+    const dim = 8;
+    const n = 30;
+    // Reuse the cluster-corpus generator via a tiny inline replica.
+    const vectors: Float32Array[] = [];
+    for (let i = 0; i < n; i++) {
+      const v = new Float32Array(dim);
+      for (let d = 0; d < dim; d++) v[d] = Math.sin(i * 0.7 + d * 1.3);
+      // L2-normalize.
+      let s = 0;
+      for (let d = 0; d < dim; d++) s += (v[d] ?? 0) ** 2;
+      const norm = Math.sqrt(s) || 1;
+      for (let d = 0; d < dim; d++) v[d] = (v[d] ?? 0) / norm;
+      vectors.push(v);
+    }
+    const labeled = vectors.map((v, i) => ({ label: i + 100, vector: v }));
+    const index = await buildHnsw(labeled, { dim, maxElements: n });
+    const queryVec = vectors[5];
+    if (!queryVec) throw new Error("test setup");
+    const beforePersist = index.searchKnn(queryVec, 5);
+
+    const persistFile = path.join(dir, "test.hnsw");
+    const rowsByLabel = new Map<
+      number,
+      {
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        text_preview: string;
+        kind: "md" | "pdf";
+      }
+    >();
+    for (let i = 0; i < n; i++) {
+      rowsByLabel.set(i + 100, {
+        rel_path: `note-${i}.md`,
+        chunk_index: 0,
+        line_start: 1,
+        line_end: 1,
+        text_preview: `chunk ${i}`,
+        kind: "md"
+      });
+    }
+    const ok = await index.saveTo(persistFile, rowsByLabel, "sig-v1");
+    expect(ok).toBe(true);
+
+    // Both files should exist.
+    await expect(fs.access(`${persistFile}.bin`)).resolves.toBeUndefined();
+    await expect(fs.access(`${persistFile}.meta.json`)).resolves.toBeUndefined();
+
+    // Load with matching signature.
+    const loaded = await loadHnswFromDisk(persistFile, "sig-v1");
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    expect(loaded.index.dim).toBe(dim);
+    expect(loaded.index.size).toBe(n);
+    expect(loaded.rowsByLabel.size).toBe(n);
+    expect(loaded.rowsByLabel.get(105)?.rel_path).toBe("note-5.md");
+
+    // Loaded index should produce the same top-5 as the original.
+    const afterLoad = loaded.index.searchKnn(queryVec, 5);
+    expect(afterLoad.labels).toEqual(beforePersist.labels);
+  });
+
+  it("returns null when signature doesn't match (stale index)", async () => {
+    const persistFile = path.join(dir, "stale.hnsw");
+    const v = new Float32Array(4).fill(0.5);
+    let s = 0;
+    for (const x of v) s += x * x;
+    const norm = Math.sqrt(s);
+    for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
+
+    const index = await buildHnsw([{ label: 0, vector: v }], { dim: 4, maxElements: 1 });
+    await index.saveTo(persistFile, new Map(), "old-signature");
+
+    const loaded = await loadHnswFromDisk(persistFile, "new-signature");
+    expect(loaded).toBeNull();
+  });
+
+  it("returns null when meta file is missing", async () => {
+    const loaded = await loadHnswFromDisk(path.join(dir, "nonexistent.hnsw"), "any-sig");
+    expect(loaded).toBeNull();
+  });
+
+  it("returns null when meta is malformed JSON", async () => {
+    const persistFile = path.join(dir, "malformed.hnsw");
+    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    await fs.writeFile(`${persistFile}.meta.json`, "{not valid json");
+    const loaded = await loadHnswFromDisk(persistFile, "any-sig");
+    expect(loaded).toBeNull();
+  });
+
+  it("returns null when meta exists but bin file missing", async () => {
+    const persistFile = path.join(dir, "no-bin.hnsw");
+    const meta = {
+      formatVersion: 1,
+      dim: 4,
+      size: 0,
+      signature: "match",
+      rowsByLabel: {},
+      writtenAt: new Date().toISOString()
+    };
+    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
+    const loaded = await loadHnswFromDisk(persistFile, "match");
+    expect(loaded).toBeNull();
+  });
+
+  it("returns null on formatVersion mismatch (future-proof)", async () => {
+    const persistFile = path.join(dir, "future.hnsw");
+    const meta = {
+      formatVersion: 99,
+      dim: 4,
+      size: 0,
+      signature: "match",
+      rowsByLabel: {},
+      writtenAt: new Date().toISOString()
+    };
+    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
+    const loaded = await loadHnswFromDisk(persistFile, "match");
+    expect(loaded).toBeNull();
+  });
+});
+
+// v2.16.0 — embed-db signature for HNSW staleness checks.
+describe("EmbedDb.computeSignature (v2.16.0)", () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-sig-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("changes when a row is added (max-id moves up)", async () => {
+    const file = path.join(dir, "sig-add.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const sigEmpty = db.computeSignature();
+      expect(sigEmpty).toBe("dim=4;rows=0;maxId=0;model=multilingual");
+
+      db.upsertNote("a.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2(new Float32Array([1, 0, 0, 0])) }
+      ]);
+      const sig1 = db.computeSignature();
+      expect(sig1).toBe("dim=4;rows=1;maxId=1;model=multilingual");
+      expect(sig1).not.toBe(sigEmpty);
+
+      db.upsertNote("b.md", 2, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2(new Float32Array([0, 1, 0, 0])) }
+      ]);
+      const sig2 = db.computeSignature();
+      expect(sig2).toBe("dim=4;rows=2;maxId=2;model=multilingual");
+      expect(sig2).not.toBe(sig1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("changes when a row is updated (max-id advances because upsert deletes+inserts)", async () => {
+    const file = path.join(dir, "sig-update.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("a.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2(new Float32Array([1, 0, 0, 0])) }
+      ]);
+      const sig1 = db.computeSignature();
+      // Update the same note.
+      db.upsertNote("a.md", 2, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2(new Float32Array([0, 1, 0, 0])) }
+      ]);
+      const sig2 = db.computeSignature();
+      // Both rows=1 because upsert deleted then inserted, but maxId advanced.
+      expect(sig2).not.toBe(sig1);
+      expect(sig2).toMatch(/rows=1/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("changes when a row is deleted (rowcount drops)", async () => {
+    const file = path.join(dir, "sig-delete.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("a.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2(new Float32Array([1, 0, 0, 0])) }
+      ]);
+      const sig1 = db.computeSignature();
+      db.deleteNote("a.md");
+      const sig2 = db.computeSignature();
+      expect(sig2).not.toBe(sig1);
+      expect(sig2).toMatch(/rows=0/);
     } finally {
       db.close();
     }

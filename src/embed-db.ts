@@ -373,6 +373,32 @@ export class EmbedDb {
   }
 
   /**
+   * v2.16.0 — compute a tractable signature of the embedding index for
+   * HNSW staleness detection. Format: `dim=<n>;rows=<n>;maxId=<n>;model=<alias>`.
+   *
+   * Why this composite (vs full content hash)?
+   *   • Full hash would require reading every BLOB on every serve start —
+   *     wastes the I/O savings the persisted HNSW is supposed to give us.
+   *   • Rowcount + max-id catches every common change pattern: insert
+   *     (max-id moves up), delete (rowcount drops), update (max-id moves
+   *     up because we DELETE+INSERT). Edge case: updating in-place
+   *     without changing max-id (rare in our codebase — upsertNote always
+   *     deletes+reinserts so max-id always advances).
+   *   • dim + model alias guard against a model swap that re-embeds with
+   *     a different vector space.
+   */
+  computeSignature(): string {
+    const db = this.requireDb();
+    const row = db.prepare("SELECT COUNT(*) AS n, MAX(id) AS maxId FROM embeddings").get<{
+      n: number;
+      maxId: number | null;
+    }>();
+    const rows = row?.n ?? 0;
+    const maxId = row?.maxId ?? 0;
+    return `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias}`;
+  }
+
+  /**
    * v2.13.0 — return every (vector, row) pair for HNSW build. Caller
    * is responsible for assigning sequential integer labels (we use
    * `embeddings.id` since it's already a stable AUTOINCREMENT PK).

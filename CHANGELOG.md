@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] — 2026-05-09
+
+**Sprint 16 — HNSW persistence (skip rebuild on subsequent serve starts).** v2.13.0 introduced HNSW with the explicit caveat that the index is built in-memory on every serve start (~25s for 50K chunks). v2.16.0 closes that — the index now persists to disk after first build and reloads on subsequent serves when the embed-db hasn't changed. **Boot-time win: ~25s → ~50ms** on a 50K-chunk vault.
+
+### Architecture
+
+Two sidecar files alongside `.embed.db`:
+- **`<vault-hash>.hnsw.bin`** — the native hnswlib-node binary index (the actual graph)
+- **`<vault-hash>.hnsw.meta.json`** — JSON sidecar with `formatVersion`, `dim`, `size`, `signature`, `rowsByLabel` map
+
+**Staleness detection** via the embed-db `signature`:
+
+```
+dim=384;rows=8854;maxId=8854;model=multilingual
+```
+
+Composite of (dim, rowcount, max-id, model alias). When this differs from the persisted `signature`, the index is treated as stale and rebuilt. We deliberately don't full-content-hash the vectors — that would require reading every BLOB on every serve start, defeating the purpose. The composite catches every common mutation pattern:
+- Insert → `maxId` advances
+- Delete → `rowcount` drops
+- Update → `maxId` advances (`upsertNote` is `DELETE + INSERT`)
+- Model swap → `model` differs
+- Dim swap → `dim` differs (also auto-rebuilds the embed-db itself)
+
+**Failure paths fall back to rebuild** with a stderr warning: missing meta JSON, malformed JSON, missing bin file, formatVersion mismatch (future-proofing for cross-version upgrades), readIndex throws (corrupt bin), signature mismatch. Every path is non-fatal — search keeps working, you just pay the rebuild cost.
+
+### Added — `--no-hnsw-persist` flag (off-switch)
+
+Persistence is **on by default** when `--use-hnsw` is passed (no behavior change for users not opting into HNSW). Pass `--no-hnsw-persist` to disable; useful when:
+- The cache directory isn't writable
+- You want diagnostic-fresh builds for benchmarking
+- Disk space is critically constrained (the bin file is roughly the same size as the .embed.db it indexes)
+
+### API additions
+
+`src/hnsw.ts`:
+- `HnswPersistedMeta` — typed sidecar format (`formatVersion: 1`)
+- `HnswIndex.saveTo(file, rowsByLabel, signature)` — write bin + meta
+- `loadHnswFromDisk(file, expectedSignature)` — returns `{index, rowsByLabel} | null`. Validates formatVersion, signature, file presence, native readIndex success.
+
+`src/embed-db.ts`:
+- `EmbedDb.computeSignature()` — returns the composite signature string. Used by both the loader (to detect staleness on boot) and the saver (to record what the bin was built against).
+
+### Tests
+
+585 unit tests pass (was 576 in v2.15.0, +9 new):
+- **HNSW persistence (6):** saveTo + loadHnswFromDisk roundtrip preserves search results, returns null on signature mismatch, returns null on missing meta, returns null on malformed JSON, returns null on missing bin, returns null on formatVersion mismatch (future-proof).
+- **EmbedDb.computeSignature (3):** changes when row added (maxId advances), changes when row updated (upsert deletes+reinserts so maxId advances), changes when row deleted (rowcount drops).
+
+### Migration
+
+**No-op for default users.** Persistence is on by default for `--use-hnsw` users; first serve start after upgrade builds + persists, subsequent starts load from disk. The persisted format version is `1`; future bumps will invalidate v1 files (visible-but-harmless rebuild on first serve after upgrade).
+
+### Strategic position
+
+v2.16.0 closes the v2.13.0 caveat ("rebuild on every serve start") and removes the last performance objection to HNSW for production deployments. Combined with v2.15.0's late-chunking embedding-quality boost, the v2.x retrieval stack is now feature-complete:
+- v2.13.0 + v2.16.0: **scales to millions of chunks** with sub-10ms top-K AND fast restarts
+- v2.15.0: **+2-5 NDCG@10** at zero new dep cost
+- v2.0-v2.14: hybrid RRF, graph-boost, PDFs, OCR, reranker, eval harness, doctor/setup, stateful HTTP
+
+### Roadmap remaining
+
+- v2.17+: int8 vector quantization (4× storage reduction, ~1-2% recall loss)
+- v3.0.0: stable channel promotion bundling all v2.x retrieval improvements
+
 ## [2.15.0] — 2026-05-09
 
 **Sprint 15 — late-chunking-style context windowing on embeddings.** When `--late-chunk-context <chars>` is set, embeddings are computed against `[doc: title]\n\n[breadcrumb]\n\n… [prev-chunk-tail]\n\n[this-chunk]\n\n[next-chunk-head] …` instead of just `[breadcrumb]\n\n[this-chunk]`. Per Chroma 2024 + Jina AI's late-chunking research: typical **+2-5 NDCG@10** retrieval boost at zero new dep cost.

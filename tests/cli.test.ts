@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parsePositiveInt } from "../src/index.js";
+import { parsePositiveInt, parseQuantizationMode } from "../src/index.js";
 
 describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => {
   it("accepts a positive integer string", () => {
@@ -48,6 +48,53 @@ describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => 
 
   it("includes the flag name in the error", () => {
     expect(() => parsePositiveInt("oops", "--cache-size")).toThrow(/--cache-size/);
+  });
+});
+
+describe("parseQuantizationMode — v2.17.0 --quantize-embeddings validation", () => {
+  it("returns undefined for undefined input (CLI flag absent)", () => {
+    expect(parseQuantizationMode(undefined)).toBeUndefined();
+  });
+
+  it("normalizes 'f32' to f32", () => {
+    expect(parseQuantizationMode("f32")).toBe("f32");
+  });
+
+  it("accepts 'float32' and 'none' as f32 aliases", () => {
+    expect(parseQuantizationMode("float32")).toBe("f32");
+    expect(parseQuantizationMode("none")).toBe("f32");
+  });
+
+  it("normalizes 'int8' to int8", () => {
+    expect(parseQuantizationMode("int8")).toBe("int8");
+  });
+
+  it("accepts 'q8' and 'i8' as int8 aliases", () => {
+    expect(parseQuantizationMode("q8")).toBe("int8");
+    expect(parseQuantizationMode("i8")).toBe("int8");
+  });
+
+  it("is case-insensitive", () => {
+    expect(parseQuantizationMode("INT8")).toBe("int8");
+    expect(parseQuantizationMode("F32")).toBe("f32");
+    expect(parseQuantizationMode("Float32")).toBe("f32");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseQuantizationMode("  int8  ")).toBe("int8");
+  });
+
+  it("treats empty string as default f32 (commander emits '' for `--flag ''`)", () => {
+    expect(parseQuantizationMode("")).toBe("f32");
+  });
+
+  it("rejects unknown modes with the accepted-values list in the error", () => {
+    expect(() => parseQuantizationMode("int4")).toThrow(/--quantize-embeddings must be "f32" or "int8"/);
+    expect(() => parseQuantizationMode("fp16")).toThrow(/got "fp16"/);
+  });
+
+  it("rejects nonsense input", () => {
+    expect(() => parseQuantizationMode("yes please")).toThrow(/--quantize-embeddings/);
   });
 });
 

@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.16.0";
+const VERSION = "2.17.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -101,6 +101,15 @@ export interface ServeOptions {
    *  Default true (the persistence is a pure optimization; corrupt files
    *  fall back to rebuild gracefully). Pass `--no-hnsw-persist` to opt out. */
   hnswPersist?: boolean;
+  /** v2.17.0 — vector storage encoding for the persistent embed db.
+   *  - `"f32"` (default) — Float32 BLOB, identical to v2.16- behavior.
+   *  - `"int8"` — int8-quantized BLOB + per-vector (vMin, scale) Float32
+   *    tuple. ~4× storage reduction at ~1-2% recall@10 cost.
+   *  Mode is per-database; switching modes triggers a full rebuild
+   *  (the meta-table contamination guard treats it as a schema change).
+   *  Must match the mode used at build-embeddings time — serving with a
+   *  different mode would auto-rebuild the index. */
+  quantizeEmbeddings?: "f32" | "int8";
 }
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -203,7 +212,13 @@ async function main(): Promise<void> {
       "--no-hnsw-persist",
       "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
     )
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
+    )
     .action(async (opts: ServeOptions) => {
+      // Validate up-front so a bad value fails before we touch the vault.
+      parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
       await startServer(opts);
     });
 
@@ -262,6 +277,10 @@ async function main(): Promise<void> {
     .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
     .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
     .option("--diagnostic-search-tools", "Register the four single-ranker search tools alongside obsidian_search.")
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the persistent embed db (`f32` default, `int8` for ~4× smaller BLOBs). Must match the mode used at `build-embeddings` time."
+    )
     .action(async (opts: HttpServeCli) => {
       const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
       const tokenFromEnv =
@@ -290,8 +309,11 @@ async function main(): Promise<void> {
           : 30 * 60 * 1000;
       const maxSessionsCap =
         opts.maxSessions !== undefined ? parsePositiveInt(opts.maxSessions, "--max-sessions") : 100;
+      // v2.17.0 — fail fast on a typo'd quantization mode.
+      const quantMode = parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
       const httpOpts = {
         ...(opts as ServeOptions),
+        ...(quantMode !== undefined ? { quantizeEmbeddings: quantMode } : {}),
         port: portNum,
         host: opts.host ?? "127.0.0.1",
         bearerToken,
@@ -449,6 +471,10 @@ async function main(): Promise<void> {
       "--late-chunk-context <chars>",
       "v2.15.0 — context-windowed embedding text (doc title + breadcrumb + neighbor-chunk tails of N chars). Default 0 (off). Typical 100-200 for +2-5 NDCG@10."
     )
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding. `f32` (default) is identical to v2.16- behavior. `int8` uses asymmetric scalar quantization (per-vector min + scale + int8 bytes) for ~4× smaller BLOBs at ~1-2% recall@10 cost. Switching modes triggers a full rebuild via the schema-mismatch path. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
+    )
     .action(
       async (opts: {
         vault: string;
@@ -458,12 +484,20 @@ async function main(): Promise<void> {
         readPaths?: string[];
         includePdfs?: boolean;
         lateChunkContext?: string;
+        quantizeEmbeddings?: string;
       }) => {
         const model = resolveModel(opts.embeddingModel);
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
-        const db = new EmbedDb({ file: embedFile, vaultRoot: vault.root, modelAlias: model.alias, dim: model.dim });
+        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        const db = new EmbedDb({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
         const lateChunkContext =
           opts.lateChunkContext !== undefined
             ? Math.max(0, parsePositiveInt(opts.lateChunkContext, "--late-chunk-context"))
@@ -474,7 +508,7 @@ async function main(): Promise<void> {
           const embedder = await loadEmbedder(opts.embeddingModel);
           const report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
           process.stdout.write(
-            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}\n`
+            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
           );
           if (opts.includePdfs) {
             const pdfReport = await syncPdfEmbedDb(vault, db, embedder, { lateChunkContext });
@@ -544,8 +578,18 @@ async function main(): Promise<void> {
       "Also index PDFs (FTS5 + embeddings). Off by default; opt-in because PDF extraction is slower."
     )
     .option("--skip-embeddings", "Skip the install-model + build-embeddings steps (only build FTS5)")
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the embed db (`f32` default, `int8` for ~4× smaller BLOBs). Same semantics as the `build-embeddings` flag."
+    )
     .action(
-      async (opts: { vault: string; embeddingModel?: string; includePdfs?: boolean; skipEmbeddings?: boolean }) => {
+      async (opts: {
+        vault: string;
+        embeddingModel?: string;
+        includePdfs?: boolean;
+        skipEmbeddings?: boolean;
+        quantizeEmbeddings?: string;
+      }) => {
         const v = new Vault(opts.vault);
         await v.ensureExists();
         process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
@@ -592,12 +636,19 @@ async function main(): Promise<void> {
         // Step 3: build-embeddings.
         process.stdout.write("\n>> Step 3/3: Build embedding index\n");
         const embedFile = embedDbPath(v.root);
-        const db = new EmbedDb({ file: embedFile, vaultRoot: v.root, modelAlias: model.alias, dim: model.dim });
+        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        const db = new EmbedDb({
+          file: embedFile,
+          vaultRoot: v.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
         await db.open();
         try {
           const embReport = await syncEmbedDb(v, db, embedder);
           process.stdout.write(
-            `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}\n`
+            `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
           );
           if (opts.includePdfs) {
             const pdfReport = await syncPdfEmbedDb(v, db, embedder);
@@ -612,6 +663,7 @@ async function main(): Promise<void> {
         process.stdout.write("\n✓ Setup complete. Now run:\n");
         process.stdout.write(`   enquire-mcp serve --vault ${opts.vault} --persistent-index`);
         if (opts.includePdfs) process.stdout.write(" --include-pdfs");
+        if (quantization !== "f32") process.stdout.write(` --quantize-embeddings ${quantization}`);
         process.stdout.write("\n");
         process.stdout.write(`Or check status: enquire-mcp doctor --vault ${opts.vault}\n`);
       }
@@ -885,7 +937,17 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         // the meta directly without reopening. For now we accept the
         // over-default-fallback risk and recommend doctor's output.
         const model = resolveModel(undefined);
-        const db = new EmbedDb({ file: embedFile, vaultRoot: vault.root, modelAlias: model.alias, dim: model.dim });
+        // v2.17.0 — pass through the quantization mode from CLI so the
+        // schema check matches what build-embeddings wrote. Default
+        // "f32" matches v2.16- behavior for users who don't set it.
+        const quantization = opts.quantizeEmbeddings ?? "f32";
+        const db = new EmbedDb({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
         await db.open();
         try {
           const startMs = Date.now();
@@ -3268,6 +3330,23 @@ function parsePositiveInt(raw: string, flag: string): number {
   return n;
 }
 
+/**
+ * v2.17.0 — validate a `--quantize-embeddings <mode>` value. Accepts the
+ * canonical `"f32"` / `"int8"` plus a few user-friendly aliases (`"none"`
+ * for f32; `"q8"` for int8). Anything else throws with the exact list of
+ * accepted values so the user can fix the typo immediately.
+ */
+function parseQuantizationMode(raw: string | undefined): "f32" | "int8" | undefined {
+  if (raw === undefined) return undefined;
+  const norm = raw.trim().toLowerCase();
+  if (norm === "" || norm === "f32" || norm === "float32" || norm === "none") return "f32";
+  if (norm === "int8" || norm === "i8" || norm === "q8") return "int8";
+  throw new Error(
+    `--quantize-embeddings must be "f32" or "int8" (got "${raw}"). ` +
+      `Aliases: "none"/"float32" → f32, "q8"/"i8" → int8.`
+  );
+}
+
 function encodeNotePath(relPath: string): string {
   return relPath.split(path.sep).map(encodeURIComponent).join("/");
 }
@@ -3304,4 +3383,4 @@ if (isCliEntry) {
   });
 }
 
-export { main, parsePositiveInt, startServer };
+export { main, parsePositiveInt, parseQuantizationMode, startServer };

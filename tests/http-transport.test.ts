@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createSessionRegistry,
   generateBearerToken,
   type HttpServeOptions,
   RateLimiter,
@@ -83,6 +84,37 @@ describe("verifyBearer (v2.6.0)", () => {
     // Length-resistant compare: even though the input contains `expected`
     // as a suffix, the full string is hashed and won't match.
     expect(verifyBearer(`Bearer x${expected}`, expected)).toBeNull();
+  });
+});
+
+describe("SessionRegistry (v2.14.0)", () => {
+  it("starts empty", () => {
+    const r = createSessionRegistry(60_000);
+    expect(r.size()).toBe(0);
+  });
+
+  it("sweepIdle evicts entries older than idleTimeoutMs", () => {
+    const r = createSessionRegistry(60_000);
+    // Synthetic entries — we only need a `lastActivityMs` field for
+    // sweep semantics; transport/server can be stubs that don't trigger
+    // close logic for this unit test.
+    const stub = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} }
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    r.sessions.set("fresh", { ...stub, lastActivityMs: Date.now() });
+    r.sessions.set("stale", { ...stub, lastActivityMs: Date.now() - 90_000 });
+    expect(r.size()).toBe(2);
+    const evicted = r.sweepIdle();
+    expect(evicted).toBe(1);
+    expect(r.sessions.has("fresh")).toBe(true);
+    expect(r.sessions.has("stale")).toBe(false);
+  });
+
+  it("sweepIdle is idempotent on a clean registry", () => {
+    const r = createSessionRegistry(60_000);
+    expect(r.sweepIdle()).toBe(0);
+    expect(r.sweepIdle()).toBe(0);
   });
 });
 
@@ -401,5 +433,300 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
         bearerToken: "short"
       })
     ).rejects.toThrow(/16 chars/);
+  });
+});
+
+// v2.14.0 — stateful sessions: Mcp-Session-Id keyed transport reuse,
+// idle eviction, max-sessions cap, SSE GET, DELETE termination.
+describe("startHttpServer stateful sessions (v2.14.0)", () => {
+  const TOKEN = "stateful-test-token-1234567890abcdef";
+
+  async function spawnStateful(
+    over: Partial<HttpServeOptions> = {}
+  ): Promise<{ url: string; close: () => Promise<void> }> {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      healthPath: "/health",
+      rateLimitPerMinute: 0,
+      corsOrigins: [],
+      stateful: true,
+      maxSessions: 100,
+      sessionIdleTimeoutMs: 30 * 60 * 1000,
+      installSignalHandlers: false,
+      ...over
+    });
+    const addr = httpServer.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+    return {
+      url,
+      close: async () => {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      }
+    };
+  }
+
+  /** Initialize a fresh session and return its session id from the response header. */
+  async function initSession(baseUrl: string): Promise<{ sessionId: string; rawResponse: Response }> {
+    const initResp = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${TOKEN}`
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "vitest-stateful", version: "0.0.0" }
+        }
+      })
+    });
+    const sessionId = initResp.headers.get("Mcp-Session-Id") ?? "";
+    return { sessionId, rawResponse: initResp };
+  }
+
+  it("initialize allocates a Mcp-Session-Id header on the response", async () => {
+    const s = await spawnStateful();
+    try {
+      const { sessionId, rawResponse } = await initSession(s.url);
+      expect(rawResponse.status).toBe(200);
+      expect(sessionId).toMatch(/^[0-9a-f]{32}$/i);
+      // Drain so the connection closes cleanly.
+      await rawResponse.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("subsequent POST with the same session id reuses the transport", async () => {
+    const s = await spawnStateful();
+    try {
+      const { sessionId, rawResponse } = await initSession(s.url);
+      await rawResponse.text();
+      // Send a second request (notifications/initialized) with the
+      // session id; should be accepted (200 / 202).
+      const r2 = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized"
+        })
+      });
+      // Accepted is 200 or 202; 4xx/5xx would mean the session id wasn't found.
+      expect(r2.status).toBeLessThan(300);
+      await r2.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("POST with unknown session id returns 404", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": "bogus-session-id"
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 99 })
+      });
+      expect(r.status).toBe(404);
+      await r.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("DELETE with unknown session id returns 204 (idempotent)", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": "no-such-session"
+        }
+      });
+      expect(r.status).toBe(204);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("DELETE without session id returns 400", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      });
+      expect(r.status).toBe(400);
+      await r.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("DELETE on a real session terminates it (subsequent POST → 404)", async () => {
+    const s = await spawnStateful();
+    try {
+      const { sessionId, rawResponse } = await initSession(s.url);
+      await rawResponse.text();
+      const del = await fetch(`${s.url}/mcp`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        }
+      });
+      // The SDK's transport handles the protocol-level shutdown; status
+      // is 200 (transport handled it) or 204 (we short-circuited because
+      // the session was already gone). Either is fine.
+      expect([200, 204]).toContain(del.status);
+      await del.text();
+      // Next POST with that session id should now miss.
+      const after = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      });
+      expect(after.status).toBe(404);
+      await after.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("GET without session id returns 400", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      });
+      expect(r.status).toBe(400);
+      await r.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("GET with unknown session id returns 404", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": "no-such"
+        }
+      });
+      expect(r.status).toBe(404);
+      await r.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("max-sessions cap rejects new initialize with 503 + Retry-After", async () => {
+    // Cap at 1 so we can exhaust it with a single init.
+    const s = await spawnStateful({ maxSessions: 1 });
+    try {
+      const { sessionId: sid1, rawResponse: r1 } = await initSession(s.url);
+      expect(sid1).toMatch(/^[0-9a-f]{32}$/i);
+      await r1.text();
+      // Second init (no session id, no DELETE) — should hit the cap.
+      const r2 = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "second", version: "0" }
+          }
+        })
+      });
+      expect(r2.status).toBe(503);
+      expect(r2.headers.get("Retry-After")).toBe("60");
+      const body = (await r2.json()) as { error: string; max: number };
+      expect(body.error).toMatch(/max sessions/);
+      expect(body.max).toBe(1);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("stateless mode is unchanged (default, no Mcp-Session-Id on init response)", async () => {
+    // Same as v2.6.0 stateless behavior: no Mcp-Session-Id header.
+    // Reuse the existing spawn() helper from the v2.6.0 suite by
+    // instantiating with stateful=false explicitly.
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      healthPath: "/health",
+      rateLimitPerMinute: 0,
+      stateful: false,
+      installSignalHandlers: false
+    });
+    const addr = httpServer.address() as AddressInfo;
+    try {
+      const r = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "stateless-check", version: "0" }
+          }
+        })
+      });
+      expect(r.status).toBe(200);
+      // Stateless transport should NOT set the Mcp-Session-Id response header.
+      expect(r.headers.get("Mcp-Session-Id")).toBeNull();
+      await r.text();
+    } finally {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
   });
 });

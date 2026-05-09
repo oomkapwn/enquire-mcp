@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] — 2026-05-09
+
+**Sprint 14 — stateful HTTP sessions for `serve-http`.** Closes the explicitly-deferred item from v2.6.0 release notes. The HTTP transport now runs in two modes: stateless (default, v2.6.0 behavior — fresh `McpServer` + transport per request) and **stateful** (new — sessions keyed by `Mcp-Session-Id` header, persistent SSE for server-initiated notifications, DELETE for explicit termination). Required for ChatGPT custom GPT actions and any client that expects persistent state across requests.
+
+### Added — `--stateful` flag on `serve-http`
+
+```bash
+enquire-mcp serve-http --vault ~/Obsidian \
+  --bearer-token-env ENQUIRE_TOKEN \
+  --stateful \
+  --max-sessions 100 \
+  --session-idle-timeout-ms 1800000  # 30 min
+```
+
+When `--stateful` is set, the transport handles three flows:
+
+1. **POST /mcp** — first request without `Mcp-Session-Id` is the `initialize` handshake; the SDK assigns a new 16-byte hex session id (returned via the `Mcp-Session-Id` response header). Subsequent POSTs with that header are routed to the same `McpServer` + `StreamableHTTPServerTransport` pair, which retains conversation state across requests.
+2. **GET /mcp** — long-lived SSE stream for server-initiated notifications (the SDK's `sendLoggingMessage` and similar). Requires `Mcp-Session-Id` header from a prior `initialize`.
+3. **DELETE /mcp** — explicit session termination. Idempotent (returns 204 if the session is already gone). Frees both transport and server resources immediately.
+
+### Lifecycle controls
+
+- **`--session-idle-timeout-ms <n>`** — sweep idle sessions older than this many ms. Default 1,800,000 (30 min). Sweep runs lazily on every request — no separate timer thread.
+- **`--max-sessions <n>`** — concurrent-session cap. Default 100. New `initialize` requests beyond the cap return **503 + `Retry-After: 60`**, protecting against memory exhaustion under adversarial create-and-abandon traffic.
+- **Session cleanup on transport close** — wired via `transport.onclose`, so client disconnects mid-stream don't leak entries.
+
+### Architecture
+
+`createSessionRegistry(idleTimeoutMs)` returns a registry with:
+- `sessions: Map<string, StatefulSession>` — keyed by SDK-assigned id
+- `sweepIdle(nowMs?)` — evicts entries with `lastActivityMs < nowMs - idleTimeoutMs`, calls `transport.close()` + `server.close()` per evicted entry, returns evicted count
+- `size()` — for max-cap checks
+
+The handler in `createHttpHandler` branches on `opts.stateful`:
+- **Stateless** (default) — extracted into `handleStatelessRequest()` to keep the v2.6.0 path bit-identical. Same fresh-server-per-request flow.
+- **Stateful** — runs `registry.sweepIdle()` first (bounded O(|sessions|) work, cheap timestamp compare per entry), then dispatches by method:
+  - DELETE without `Mcp-Session-Id` → 400; with unknown id → 204 (idempotent); with valid id → transport handles + we drop the entry.
+  - GET without id → 400; with unknown id → 404; with valid id → transport handles SSE.
+  - POST with id → route to the existing transport (404 if id is unknown — likely expired).
+  - POST without id → must be `initialize`; if `registry.size() >= maxSessions` → 503 + Retry-After; else allocate a new server+transport pair, register on `onsessioninitialized`, run `transport.handleRequest(req, res, body)`.
+
+### Tests
+
+568 unit tests pass (was 555 in v2.13.0, +13 new):
+- **SessionRegistry (3):** starts empty, `sweepIdle` evicts entries older than `idleTimeoutMs`, idempotent on a clean registry.
+- **Stateful end-to-end (10):**
+  - Initialize allocates a `Mcp-Session-Id` response header
+  - Subsequent POST with same session id reuses the transport
+  - POST with unknown session id → 404
+  - DELETE with unknown session id → 204 (idempotent)
+  - DELETE without session id → 400
+  - DELETE on a real session terminates it; subsequent POST → 404
+  - GET without session id → 400
+  - GET with unknown session id → 404
+  - Max-sessions cap rejects new initialize with 503 + `Retry-After`
+  - Stateless mode is unchanged (no `Mcp-Session-Id` on init response)
+
+### Migration
+
+**No-op for default users.** The HTTP transport stays stateless by default (matches v2.6.0 - v2.13.0 behavior). Opt-in to stateful via `--stateful`. Existing claude.ai / Cursor HTTP / Khoj clients keep working unchanged.
+
+### Strategic position
+
+v2.14.0 unblocks the **ChatGPT custom GPT actions** use case, which requires persistent session state across the actions' OAuth + tool-invocation lifecycle. Combined with v2.6.0's bearer auth + rate-limit + CORS hardening, enquire-mcp now supports the full set of remote-MCP client expectations.
+
+### Roadmap remaining
+
+- v2.15+: Late chunking (whole-document context-prefixed embeddings, +2-5 NDCG@10)
+- v2.16+: HNSW persistence (writeIndex/readIndex with `.embed.db`-hash staleness check)
+- v2.17+: int8 vector quantization (4× storage reduction, ~1-2% recall loss)
+- v3.0.0: stable channel promotion bundling all v2.x retrieval improvements
+
 ## [2.13.0] — 2026-05-09
 
 **Sprint 13 — HNSW vector index for sub-10ms semantic retrieval at scale.** Closes the "brute-force semantic search doesn't scale" gap. The existing `EmbedDb.search()` runs O(n) cosine over every embedded chunk per query (~5ms at 8K chunks, ~30ms at 50K, ~300ms at 500K, ~3s at 5M). HNSW is the IR-standard graph-based index that achieves O(log n) approximate nearest neighbor lookups — **sub-10ms even at million-chunk scale**, with recall@K ≥ 95% at default parameters.

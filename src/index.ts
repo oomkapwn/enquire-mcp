@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "2.13.0";
+const VERSION = "2.14.0";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -107,6 +107,10 @@ interface HttpServeCli extends ServeOptions {
   rateLimit?: string;
   corsOrigin?: string[];
   healthPath?: string;
+  /** v2.14.0 — stateful mode flags. */
+  stateful?: boolean;
+  sessionIdleTimeoutMs?: string;
+  maxSessions?: string;
 }
 
 async function main(): Promise<void> {
@@ -218,6 +222,18 @@ async function main(): Promise<void> {
       "CORS allowlist (repeatable). Default empty — no Access-Control-Allow-Origin sent. Use '*' as a single entry to allow any origin (not compatible with credentialed Bearer requests; you almost always want explicit origins like https://claude.ai)."
     )
     .option("--health-path <path>", "URL path for the unauthenticated health probe (default /health)", "/health")
+    .option(
+      "--stateful",
+      "v2.14.0 — run in stateful mode: sessions keyed by `Mcp-Session-Id`, persistent SSE for server-initiated notifications, DELETE /mcp for explicit termination. Required for ChatGPT custom GPT actions and other clients expecting persistent state across requests. Off by default (stateless minimizes attack surface and is the right choice for short-running tools)."
+    )
+    .option(
+      "--session-idle-timeout-ms <n>",
+      "v2.14.0 — evict stateful sessions idle longer than this many milliseconds. Default 1800000 (30 min). Only effective with --stateful."
+    )
+    .option(
+      "--max-sessions <n>",
+      "v2.14.0 — max concurrent stateful sessions. New sessions beyond this cap return 503 + Retry-After. Default 100. Only effective with --stateful."
+    )
     .option("--enable-write", "Enable the write tools (gated identically to stdio mode). Off by default.")
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
@@ -252,6 +268,14 @@ async function main(): Promise<void> {
       if (!Number.isFinite(portNum) || !Number.isInteger(portNum) || portNum < 0 || portNum > 65535) {
         throw new Error(`--port must be an integer in [0, 65535]; got "${opts.port}"`);
       }
+      // v2.14.0 — stateful-mode opts. Tolerate missing flags (default to
+      // standard values) and validate parsed integers.
+      const sessionIdleMs =
+        opts.sessionIdleTimeoutMs !== undefined
+          ? parsePositiveInt(opts.sessionIdleTimeoutMs, "--session-idle-timeout-ms")
+          : 30 * 60 * 1000;
+      const maxSessionsCap =
+        opts.maxSessions !== undefined ? parsePositiveInt(opts.maxSessions, "--max-sessions") : 100;
       const httpOpts = {
         ...(opts as ServeOptions),
         port: portNum,
@@ -260,7 +284,10 @@ async function main(): Promise<void> {
         mcpPath: opts.mcpPath ?? "/mcp",
         rateLimitPerMinute: opts.rateLimit !== undefined ? Number(opts.rateLimit) : 120,
         corsOrigins: opts.corsOrigin ?? [],
-        healthPath: opts.healthPath ?? "/health"
+        healthPath: opts.healthPath ?? "/health",
+        stateful: opts.stateful === true,
+        sessionIdleTimeoutMs: sessionIdleMs,
+        maxSessions: maxSessionsCap
       } as const;
       if (
         !Number.isFinite(httpOpts.rateLimitPerMinute) ||

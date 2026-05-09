@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] — 2026-05-09
+
+**v3.0.0 — stable channel.** The v2.x retrieval roadmap is complete. v3.0 promotes the v2.17 codebase to the v3.x stable line and commits to extended semver guarantees on every CLI flag, MCP tool name, MCP resource URI, MCP prompt, and exported TypeScript symbol — see [STABILITY.md](./STABILITY.md) for the full contract. **No new features and no breaking code changes vs v2.17.0** — this release is the semantic milestone confirming the retrieval API has stabilized.
+
+### What landed across v2.0 → v2.17 (now v3.0)
+
+The v2.x line shipped 18 minor releases over ~3 days that turned the project from a v1-era keyword-search server into a feature-complete hybrid retrieval stack. Four pillars:
+
+| Pillar | Sprints | What it gives you |
+|---|---|---|
+| **Quality** | v2.0 (RRF) · v2.9 (reranker) · v2.15 (late chunking) | +5-10 NDCG@10 vs single-ranker / vanilla embeddings |
+| **Latency** | v2.13 (HNSW) · v2.16 (HNSW persistence) | sub-10ms top-K at million-chunk scale, ~50ms serve boot |
+| **Storage** | v2.17 (int8 quantization) | ~4× smaller embed-db (~12 MB → ~3.4 MB on real 8K-chunk vault) |
+| **Operability** | v2.6 (HTTP) · v2.7-2.10 (PDFs + OCR) · v2.11 (doctor/setup) · v2.12 (eval harness) · v2.14 (stateful sessions) | Remote MCP, PDFs blended into search, zero-touch onboarding, built-in retrieval benchmarking, ChatGPT custom GPT support |
+
+### Added — examples directory
+
+[`examples/`](./examples/) ships drop-in MCP configs for the most common clients:
+
+- `claude-desktop.json` / `claude-desktop-hybrid.json` — Claude Desktop stdio configs (TF-IDF and full-hybrid)
+- `cursor-mcp.json` — Cursor MCP stdio config
+- `chatgpt-actions.md` — ChatGPT custom GPT actions over remote MCP (HTTP + bearer + tunnel)
+- `queries.jsonl` — sample query set for `enquire-mcp eval`
+
+### Added — STABILITY.md
+
+The exact list of semver-bound surfaces, what's not covered, deprecation policy, and how to report unintentional compatibility breaks. See [STABILITY.md](./STABILITY.md).
+
+### Migration from v2.17.0
+
+**No-op.** The code is identical to v2.17.0. The major bump signals the stability commitment, not a breaking change. `npm install @oomkapwn/enquire-mcp` continues to resolve to the latest version exactly as before.
+
+### Migration from v2.16- (any earlier v2.x)
+
+You'll see one stderr line on first open of an existing embed-db: `enquire: rebuilding embed index (schema_version 2 → 3)` — that's the v2.17 schema bump auto-rebuilding incrementally. No manual migration. Default `--quantize-embeddings f32` is bit-identical to your prior storage layout.
+
+### Tests, CI/CD, security
+
+- **606 unit tests** pass across 29 test files (was 408 at v2.0.0 stable).
+- **12 required CI gates per PR**: lint · test ×3 (Node 20/22/24) · test-macos · smoke · audit · coverage · version-consistency · CodeQL × 2.
+- Coverage thresholds enforced (lines ≥86, statements ≥82, functions ≥75, branches ≥73).
+- Branch protection: `bypass_mode: pull_request` — every change goes through PR with audit trail.
+- Release pipeline integrity: tagged SHA must be reachable from `main` AND all 12 CI checks must have reported `success` on it.
+- SLSA-3 provenance attached to every npm release.
+
+### Roadmap
+
+The v2.x retrieval-stack roadmap is complete. Future v3.x minor releases will be **additive** (new tools, new flags, performance improvements). The next major (v4.0) is reserved for any future breaking change — none currently planned.
+
+Possible v3.x minor directions (not committed):
+- Multi-vault federation (single MCP server fronting >1 vault)
+- LLM-augmented retrieval (sub-question decomposition, query rewriting)
+- GraphRAG (community detection on the wikilink graph + hierarchical summaries)
+- Additional MCP prompts for vault wiki workflows
+
+### Acknowledgments
+
+The v2.x line was 18 minor releases of compounding work — every sprint built on the prior one's invariants. The CI gates that grew alongside (privacy boundary at every search path, version consistency across 5 surfaces, contamination guard on the embed-db meta table) are what made it possible to ship daily without regressions. Everyone who tried alphas / betas, filed audit findings, and stress-tested the privacy filter on real vaults — thank you.
+
 ## [2.17.0] — 2026-05-09
 
 **Sprint 17 — int8 vector quantization (~4× storage, ≈1-2% recall@10 cost).** v2.16.0 cut HNSW boot to ~50ms. v2.17.0 cuts the on-disk size of the embed-db itself: each Float32 vector (1536 bytes for 384-dim multilingual) becomes a per-vector `(min, scale)` Float32 tuple plus dim×int8 bytes (392 bytes for 384-dim) — **3.92× smaller** at the storage layer. Retrieval quality drops by ≈1-2% recall@10 in our internal eval and is invisible at K=20+; the order of the top hits is preserved on >99% of queries.

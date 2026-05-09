@@ -1,0 +1,12 @@
+{
+  "_comment_purpose": "Drop-in MCP server config for Claude Desktop. Edit the absolute paths to point at your enquire-mcp install + your Obsidian vault, then merge this into ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %AppData%\\Claude\\claude_desktop_config.json (Windows).",
+  "_comment_tier1": "Tier 1 — TF-IDF only, zero setup. Just point at the vault and go. Recall is fine for ~1k-note vaults; sub-200ms typical query latency.",
+  "_comment_tier3": "For the full hybrid stack (BM25 + TF-IDF + ML embeddings + HNSW + reranker), see `claude-desktop-hybrid.json` next to this file.",
+  "mcpServers": {
+    "enquire": {
+      "command": "npx",
+      "args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/ABSOLUTE/PATH/TO/YOUR/Obsidian Vault"],
+      "env": {}
+    }
+  }
+}

@@ -31,8 +31,8 @@
         "useNodejsImportProtocol": "error"
       },
       "correctness": {
-        "noUnusedVariables": "warn",
-        "noUnusedImports": "warn"
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error"
       },
       "complexity": {
         "noUselessConstructor": "off"

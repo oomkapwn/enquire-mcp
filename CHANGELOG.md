@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.4] — 2026-05-10
+
+**Patch — quick wins from external review.** Two single-line config tightenings, no behavior changes.
+
+### Changed
+
+- **Biome:** `noUnusedVariables` and `noUnusedImports` upgraded from `warn` → `error`. Lint already passes with the stricter level (no dead code currently in tree); the upgrade is purely defensive to prevent future drift past CI. Catches unused imports / variables before they accumulate.
+- **`package.json`:** added `$schema: "https://json.schemastore.org/package.json"`. Enables IDE validation + autocomplete on the manifest. No effect on npm publish or runtime.
+
+### Tests
+
+664 unit tests pass (unchanged). Lint still clean under stricter rules.
+
+### Migration
+
+**No-op.** Pure config tightening.
+
 ## [3.5.3] — 2026-05-09
 
 **Patch — CHANGELOG cleanup.** No code or config changes. Removes references to internal operational notes from the v3.5.1 / v3.5.2 entries that are not relevant to consumers of the package. Repository-level admin items are tracked privately, not in the public CHANGELOG.

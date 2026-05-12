@@ -22,6 +22,8 @@
 ---
 
 > **First and only Obsidian-MCP that ships hybrid retrieval, cross-encoder reranking, HNSW, int8 quantization, late-chunking, HyDE, GraphRAG-light community detection, standalone `.base` query execution, PDFs + OCR, and stateful remote MCP — together. In one binary. Under MIT. SLSA-3 signed.**
+>
+> **Zero outbound network calls during serve.** Embedding + reranker models cached locally (one-time `install-model` from HuggingFace). Your vault content never leaves your machine. The privacy-conscious complement to Obsidian plugins that hit cloud APIs for retrieval.
 
 ## What it is
 

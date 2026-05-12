@@ -4,6 +4,10 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // v3.5.6 — warm native + heavy optional deps once per process so
+    // individual tests don't pay the cold-import cost. See
+    // tests/setup.ts for the rationale + which deps + cost analysis.
+    setupFiles: ["./tests/setup.ts"],
     // v2.0.0-beta.3: coverage thresholds set ~5pp BELOW current (lines
     // 91.35, statements 87.03, functions 80.6, branches 77.85) so a real
     // regression has to skip a meaningful chunk before CI fails. The

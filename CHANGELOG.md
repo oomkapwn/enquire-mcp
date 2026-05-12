@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.6] — 2026-05-10
+
+**Patch — root-cause fixes for two issue classes surfaced by external reviews.** Closes the systemic gaps, not just the individual symptoms. No behavior changes.
+
+### Root-cause #1 — cold-import test flakes (class fix)
+
+v3.5.5 fixed ONE symptom (`tests/doctor.test.ts` timeout) with a per-test 30s timeout. Audit of the wider codebase found the same pattern in **3 more test files**:
+
+- `pdf.test.ts` (~20 tests) — `extractPdfText()` triggers `pdfjs-dist` cold load
+- `ocr.test.ts` (`isOcrAvailable` + `extractPdfWithOcr`) — loads tesseract.js + canvas + pdfjs (combined ~30 MB WASM/native)
+- `hnsw.test.ts` (24 tests) — `buildHnsw()` loads hnswlib-node native binding
+
+Per-test timeout bumps don't address the class. The systemic fix: **`tests/setup.ts`** that warms every native / heavy optional dep ONCE per Vitest process via `setupFiles` in `vitest.config.ts`. The first test process startup pays the cumulative cold-import cost (~10 s in our environment); every subsequent test in every file sees a fully cached module.
+
+Cost: +10 s to the first process; saved ad-hoc timeout bumps for every future test that touches optional deps. Net win.
+
+### Root-cause #2 — security-doc drift (selective fix)
+
+v3.5.5 fixed ONE symptom (SECURITY.md stale on stateful HTTP from v2.14.0). Audit of doc-vs-feature drift found that v3.2.0+ tools (`obsidian_list_bases` / `read_base` / `query_base` / `get_communities` / `hyde_search`) introduced **new attack surfaces** that SECURITY.md didn't cover:
+
+- `.base` file parsing — malformed YAML, DSL predicate ReDoS risk, path traversal via base file path, filter-against-private-paths concern
+- GraphRAG-light community detection — vault-wide read amplification, memory bounds on dense vaults, Louvain compute cap (50 passes), no LLM call surface
+
+Added two new SECURITY.md sections covering these. Out-of-scope items called out explicitly (formula evaluation deferred; adversarial graph construction = user-owns-vault non-threat).
+
+### Known remaining gap (tracking for v3.6+)
+
+`docs/api.md` is missing entries for 12 tools (the 5 v3.x ones plus 7 that pre-date v3 — `chat_thread_read/append`, `context_pack`, `frontmatter_get/search/set`, `list_pdfs`, `read_pdf`). This drift pre-dates v3.5 and would need a substantial backfill + a new docs-consistency invariant to prevent recurrence. Tracked for the v3.6 docs-completion sprint, not blocking this release. The existing `tests/docs-consistency.test.ts` invariant catches drift in **README** only (where every tool IS mentioned).
+
+### Tests
+
+664 unit tests pass (unchanged). Setup time +10 s once per process, individual tests faster (no cold-load cost).
+
+### Migration
+
+**No-op for default users.** Pure test stability + docs additions.
+
 ## [3.5.5] — 2026-05-10
 
 **Patch — fixes from external review #2.** Two issues: test flakiness on cold I/O + a documentation drift between SECURITY.md and the v2.14.0 stateful-HTTP code path. No behavior changes.

@@ -214,3 +214,35 @@ Out of scope (stateful mode specifically):
 - Transport errors written to stderr with no token / no credential leakage.
 - `/health` endpoint (`GET /health → 200 ok`) is **unauthenticated** and exists specifically for tunnel/uptime monitors. It returns the literal string `ok` — no version info, no vault path, no operational metadata. Health probes can't be used to fingerprint the deployment.
 - `OPTIONS` preflight requests are unauthenticated (per CORS spec) but only emit CORS headers when the request's `Origin` is in the allowlist.
+
+## Obsidian Bases (`.base`) execution (v3.2.0+): parser + DSL posture
+
+`obsidian_list_bases` / `obsidian_read_base` / `obsidian_query_base` parse user-authored YAML files and evaluate a filter-DSL subset against the vault's markdown notes. New attack surfaces vs the markdown-only v1.x baseline:
+
+**Threat model:**
+- **Malformed YAML / YAML bombs.** Parsed via `js-yaml`'s `SAFE_SCHEMA` (the same engine and schema `gray-matter` uses for frontmatter). No anchor-expansion, no `!!js/function` tag, no code execution path. A YAML bomb (deeply nested anchors) is rejected at parse time before our zod schema validation runs.
+- **ReDoS in DSL predicate regexes.** Each predicate is matched against a small set of fixed, non-backtracking regexes (`^tag\s*(==|!=)\s*..." literal "$"` style). No user-controlled regex compilation. Predicate strings that don't match any pattern fall into `unevaluated_predicates` and are treated as `true` (permissive) — they don't cause regex evaluation against user content.
+- **Path traversal via `.base` file path.** `obsidian_read_base({ path })` and `obsidian_query_base({ path })` resolve through `vault.readBinaryFile` → `vault.resolveSafePath` — the same realpath + `--exclude-glob` + `--read-paths` chain as `readNote`. Symlinks-out-of-vault rejected; excluded paths refuse to load.
+- **Filter against private paths.** `queryBase`'s vault walk goes through `vault.listFilesByExtension(".md", folder)`, which respects `--exclude-glob` / `--read-paths`. A `.base` filter cannot surface content that the privacy filter would block from `readNote`.
+- **Outbound wikilink-set materialization.** v3.5.0 added `linksTo()` predicate evaluation; the per-note outbound set is computed from `extractWikilinks(body)` — same parser as the read-only `obsidian_get_outbound_links` tool. No new file reads or path resolution beyond what's already exposed.
+
+**Out of scope (deferred):**
+- **Formula evaluation** (`formulas:` section). Our DSL is filters-only; formulas are surfaced as metadata via `obsidian_read_base` but never evaluated. Until a formula evaluator ships (separate sprint), there is no code execution path through `.base` formulas — they're inert strings.
+- **Summaries / aggregations.** Same — surfaced as metadata, not evaluated. No SQL-injection-class concern since there's no executable backend.
+- **Date arithmetic** (`inDate` etc). Falls into `unevaluated_predicates`, permissive. No date-parser surface yet.
+
+When formula evaluation lands, this section gets an "Expression engine sandbox" subsection covering the threat model for that.
+
+## GraphRAG-light: wikilink community detection (v3.4.0+): graph-build posture
+
+`obsidian_get_communities` builds an in-memory undirected graph from every resolved `[[wikilink]]` in the vault, then runs single-phase Louvain modularity optimization. New attack surfaces:
+
+**Threat model:**
+- **Vault-wide read amplification.** Where a single `obsidian_read_note` call reads one file, `obsidian_get_communities` reads ALL markdown files in the vault (or under `--folder` if specified) to extract their wikilinks. Privacy filter is honored: excluded/disallowed paths are never in `listFilesByExtension(".md")`'s output, so they don't contribute nodes or edges to the graph. The graph is also bounded by the vault: nodes are vault-relative paths only, no off-vault leakage.
+- **Memory bounds on huge vaults.** The adjacency map is `Map<path, Map<path, weight>>` — O(|V| + |E|). For a vault with 50K notes and average degree 10, that's ~250 KB of node strings plus ~3 MB of edge weights — comfortably bounded. Pathologically dense vaults (every note links every other note) hit O(|V|²) memory; this is acceptable since the dense case is implausible and the user controls the vault.
+- **Modularity-optimization compute bounds.** Louvain is capped at 50 passes per `detectCommunities` call; each pass is O(|E|). On a 50K-node vault with 500K edges this is ~25M ops × 50 = ~1.3B ops, ~5-10 s wall time. The tool is read-only and per-call (we don't cache), so cost is paid only when the agent explicitly invokes the tool. No persistent background work.
+- **No LLM call surface.** The server stays LLM-free for this tool — the agent is expected to summarize communities itself with the member list we return. There is no code path where `obsidian_get_communities` makes outbound HTTP or invokes an embedding model.
+
+**Out of scope:**
+- **Multi-phase Louvain refinement.** Single-phase is "good enough up to ~50K notes" by design; the trade-off is documented in `src/communities.ts`. Vault > 50K notes may see lower modularity quality, but never an unbounded compute spike (the 50-pass cap holds).
+- **Adversarial graph construction.** A vault author could construct a graph designed to be slow to partition (e.g. specific dense bipartite structures). Acceptable — the user owns the vault; there is no "attacker writes a vault" threat model.

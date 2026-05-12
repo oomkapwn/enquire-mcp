@@ -190,9 +190,23 @@ The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Str
 - **Multi-tenant cross-token attacks.** This is a single-tenant tool. A small team should run **one process per user** (e.g. systemd template unit) and not share tokens. We don't do tenant isolation in-process beyond the per-token rate-limit.
 - **OAuth.** No OAuth flow, no token minting, no refresh logic. Static long-lived bearer is by design — generated with `enquire-mcp gen-token`, rotated manually. OAuth is tracked for v2.7+ if a user explicitly needs it.
 
-### Stateful sessions
+### Stateful sessions (v2.14.0+)
 
-v2.6.0 ships **stateless** mode only (`sessionIdGenerator: undefined`) — fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles. No long-lived session map; no SSE persistent streams. This is the right default for our short-running tools (search, read, frontmatter ops) and avoids the persistence-aware shutdown complexity. Stateful sessions with `Mcp-Session-Id` + persistent SSE streams are tracked for v2.7+ if there's demand.
+v2.6.0 initially shipped **stateless** mode only (fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles). v2.14.0 added an **opt-in stateful** mode via `--stateful` for clients that need persistent state across requests (notably ChatGPT custom GPT actions). Stateful posture:
+
+- **Off by default.** `--stateful` is explicit opt-in; stateless remains the default for minimum attack surface. Short-running tools (search, read, frontmatter ops) work fine stateless and don't need the persistence-aware shutdown complexity.
+- **Session ID generation.** `Mcp-Session-Id` is `randomBytes(16).toString("hex")` — 128 bits, allocated at `initialize` time, returned in response header. Clients must echo it on subsequent requests; unknown IDs return 404 (no info leak about whether the ID was ever valid).
+- **Per-token + per-session rate limit.** The bearer-token rate limit still applies. Sessions are anchored to a bearer token; one token holding multiple sessions is allowed, but each session is bound to the token that initialized it.
+- **Max concurrent sessions cap.** `--max-sessions <n>` (default **100**). New sessions beyond the cap return **503 + `Retry-After`**. Prevents memory exhaustion via session-spam.
+- **Idle eviction.** `--session-idle-timeout-ms <n>` (default **1,800,000 ms = 30 min**). A periodic sweep terminates transports idle longer than the timeout. Memory bounded.
+- **Explicit termination.** `DELETE /mcp` with a valid `Mcp-Session-Id` tears down the transport immediately. Idempotent — repeat DELETE on a no-longer-existing ID returns 404, not 500.
+- **GET /mcp for persistent SSE.** A `GET /mcp` with a valid `Mcp-Session-Id` opens a server-sent-events stream for server-initiated notifications. Same auth + rate-limit predicates as POST. Stream closes on DELETE or idle eviction.
+- **Privacy filter parity.** `--exclude-glob` / `--read-paths` apply identically to stateful and stateless paths. There is no codepath where a stateful session bypasses the privacy filter.
+- **Graceful shutdown.** SIGINT / SIGTERM / `beforeExit` trigger session-map drain — all transports are closed before the process exits. No leaked SSE streams.
+
+Out of scope (stateful mode specifically):
+- **Session takeover** if a bearer token leaks. The session-id is in a response header, not a secret — possession of the bearer token is sufficient to initialize new sessions OR (if the attacker captured a previous `Mcp-Session-Id`) re-attach to an existing one. Treat the bearer token as the trust boundary; don't share it.
+- **Cross-session leakage.** Each session has its own `McpServer` instance but shares the vault + FTS5 + embedding handles. A misbehaving tool that mutates shared state could affect other sessions. Write tools (`--enable-write`) are still atomic per-file; read tools don't mutate. We don't run per-session sandboxing — single-tenant tool, see "Multi-tenant cross-token attacks" above.
 
 ### Observability
 

@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.5] — 2026-05-10
+
+**Patch — fixes from external review #2.** Two issues: test flakiness on cold I/O + a documentation drift between SECURITY.md and the v2.14.0 stateful-HTTP code path. No behavior changes.
+
+### Fixed — `tests/doctor.test.ts` cold-import flake
+
+The first test in `runDoctor (v2.11.0)` calls `runDoctor()`, which probes optional deps via `await import(...)` — including `@huggingface/transformers` (~100 MB + ONNX runtime). On a slow disk / cold module cache, the first import in a fresh Vitest process can take 5-30 seconds, tripping the default 5 s test timeout. Subsequent tests in the same describe block reuse Node's module cache and finish in <100 ms each — the flake only ever hits the first test.
+
+Fix: per-test `30_000 ms` timeout on the offending case, with a comment explaining why. Lighter than mocking the import (which would hide real "transformers actually loads" regressions), heavier than wishing-it-away.
+
+### Fixed — SECURITY.md: stateful-HTTP posture (v2.14.0+) now documented
+
+Pre-v3.5.5 `SECURITY.md` said:
+
+> v2.6.0 ships **stateless** mode only [...] Stateful sessions with `Mcp-Session-Id` + persistent SSE streams are tracked for v2.7+ if there's demand.
+
+That document hadn't been updated since v2.6 — but v2.14.0 (2026-05-09) shipped the stateful path with `Mcp-Session-Id` + persistent SSE via `GET /mcp` + `DELETE /mcp` termination + idle eviction + max-sessions cap. The security posture was real in code but missing from SECURITY.md, leaving consumers without the threat model for a path they could already enable via `--stateful`.
+
+Fix: rewrote the `### Stateful sessions` section to cover the actual v2.14 surface:
+- Off by default (`--stateful` is opt-in)
+- Session ID = 128-bit random hex, allocated at `initialize`
+- Max concurrent sessions cap via `--max-sessions <n>` (default 100); overflow → 503 + Retry-After
+- Idle eviction via `--session-idle-timeout-ms <n>` (default 30 min)
+- Explicit termination via `DELETE /mcp` (idempotent — 404 on unknown ID)
+- Persistent SSE via `GET /mcp` with the same auth + rate-limit predicates
+- Privacy filter parity with stateless
+- Graceful shutdown drains the session map
+- Out-of-scope: session takeover on bearer-token leak, cross-session shared-state leakage (single-tenant tool by design)
+
+### Tests
+
+664 unit tests pass (unchanged count). The flake is now ABSENT on slow-I/O machines — the test gets up to 30 s headroom for the cold transformers.js import.
+
+### Migration
+
+**No-op for default users.** Pure test stability + docs sync.
+
 ## [3.5.4] — 2026-05-10
 
 **Patch — quick wins from external review.** Two single-line config tightenings, no behavior changes.

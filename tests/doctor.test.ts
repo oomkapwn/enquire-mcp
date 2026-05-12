@@ -35,6 +35,14 @@ afterEach(async () => {
 });
 
 describe("runDoctor (v2.11.0)", () => {
+  // v3.5.5 — external audit flagged this test as flaky under cold I/O:
+  // runDoctor probes optional deps via `await import(...)` including
+  // `@huggingface/transformers` (~100MB + ONNX runtime). First import in
+  // a fresh Vitest process can take 5-30s on slow disks / cold caches,
+  // tripping the default 5s timeout. We bump to 30s on the FIRST test
+  // in the describe block (the only one that pays the cold-import cost
+  // — subsequent tests in this file reuse Node's module cache and run
+  // in <100ms each).
   it("returns the expected DoctorResult shape", async () => {
     const result = await runDoctor({ vault: root, modelCacheRoot: cacheRoot });
     expect(result.vault).toBe(root);
@@ -50,7 +58,7 @@ describe("runDoctor (v2.11.0)", () => {
     // Summary tally adds up to check count.
     const total = result.summary.ok + result.summary.warn + result.summary.missing + result.summary.error;
     expect(total).toBe(result.checks.length);
-  });
+  }, 30_000); // see comment above the it() — cold transformers.js import can dominate.
 
   it("vault check is ok for a real directory", async () => {
     await fs.writeFile(path.join(root, "note.md"), "# Hello\n");

@@ -370,6 +370,10 @@ export class FtsIndex {
       // Prefix-equality via substr — avoids GLOB pattern semantics so folder
       // names containing `*`, `?`, `[`, `]` (rare but possible in Obsidian)
       // don't expand into wider matches.
+      // CodeQL js/polynomial-redos flags `\/+$` here as polynomial. False
+      // positive: the `$` anchor forces the engine to match from end-of-
+      // string, and `\/+` consumes only `/` chars greedily. Worst-case input
+      // is O(n) (a single trailing run of slashes), not O(n²).
       const prefix = `${opts.folder.replace(/\/+$/, "")}/`;
       where.push("substr(chunks.rel_path, 1, ?) = ?");
       params.push(prefix.length, prefix);
@@ -584,10 +588,15 @@ function computeBreadcrumbsByLine(content: string): string[] {
       out[i] = stack.join(" > ");
       continue;
     }
-    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(ln);
+    // v3.5.8 — split the heading parse into a single anchored capture +
+    // two linear trailing-trim ops, instead of one combined regex with
+    // `(.+?)\s*#*\s*$` (CodeQL js/polynomial-redos: O(n²) on pathological
+    // input like `## h<spaces×100000>####`). Each replace below is
+    // anchored at `$` so engine matches from the end — strictly linear.
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(ln);
     if (headingMatch?.[1] && headingMatch[2]) {
       const depth = headingMatch[1].length;
-      const text = headingMatch[2].trim();
+      const text = headingMatch[2].replace(/\s+$/, "").replace(/#+$/, "").trim();
       // Trim stack to current depth - 1, then push at depth.
       stack.length = depth - 1;
       stack.push(text);

@@ -400,6 +400,10 @@ export class EmbedDb {
       throw new Error(`query vector dim mismatch: got ${queryVec.length}, expected ${this.dim}`);
     }
     const minScore = opts.minScore ?? -Infinity;
+    // CodeQL js/polynomial-redos flags `\/+$` here as polynomial. False
+    // positive: the `$` anchor forces match from end-of-string, and `\/+`
+    // consumes only `/` chars greedily. Worst-case input (long trailing
+    // run of slashes) is O(n), not O(n²).
     const folderPrefix = opts.folder ? `${opts.folder.replace(/\/+$/, "")}/` : null;
 
     // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern

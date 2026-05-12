@@ -144,6 +144,32 @@ after the fence`;
     const after = chunks.find((c) => c.text === "after the fence");
     expect(after?.breadcrumb).toBe("Real Heading");
   });
+
+  // v3.5.8 — regression test for CodeQL js/polynomial-redos. Pre-fix
+  // heading parser used `/^(#{1,6})\s+(.+?)\s*#*\s*$/` which has O(n²)
+  // worst-case on input like `## h<spaces×N>####`. Post-fix splits into
+  // one anchored capture + two linear trailing-trim ops (both `$`-anchored).
+  // We assert linear-ish wall time on a pathological input — a true
+  // polynomial blowup would take seconds; linear should finish in <100ms.
+  it("heading parser is linear-time on pathological input (no polynomial-redos)", () => {
+    // H1 depth so the stack starts clean (no leading empty levels).
+    // 5000 chars of spaces + 5000 chars of trailing `#`. Pre-fix the regex
+    // `(.+?)\s*#*\s*$` backtracks O(n²) on this shape; n=10k → 10⁸ ops ≈
+    // several seconds. Post-fix splits into anchored ops, all linear.
+    const pathological = `# heading${" ".repeat(5_000)}${"#".repeat(5_000)}\n\nbody`;
+    const start = Date.now();
+    const chunks = chunkContent(pathological);
+    const elapsedMs = Date.now() - start;
+    // Sanity: it parsed.
+    expect(chunks.length).toBeGreaterThan(0);
+    // The breadcrumb should be "heading" (whitespace + trailing # stripped).
+    const body = chunks.find((c) => c.text === "body");
+    expect(body?.breadcrumb).toBe("heading");
+    // Regression-detection bound. Linear post-fix on a 10k-char line
+    // should complete in well under 500ms even on a slow CI runner.
+    // Pre-fix polynomial would blow past this comfortably.
+    expect(elapsedMs).toBeLessThan(500);
+  });
 });
 
 describe("FtsIndex — full lifecycle", () => {

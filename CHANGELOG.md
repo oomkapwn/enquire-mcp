@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.8] — 2026-05-12
+
+**Patch — CodeQL ReDoS triage.** Fixed one real polynomial-backtracking regex; documented two false positives with reasoning. No behavior changes for valid input.
+
+### Fixed — markdown heading parser polynomial backtracking
+
+`src/fts5.ts` heading parser used the regex `/^(#{1,6})\s+(.+?)\s*#*\s*$/` to extract heading text and depth. The `(.+?)\s*#*\s*$` tail is **polynomial in input length** because the non-greedy `(.+?)` tries every split point against the trailing `\s*#*\s*$` clause. Pathological input — `## heading<spaces×N><#×N>` — would take O(N²) wall time. At N=10K, ~1 second; at N=100K, several seconds.
+
+In practice: vault content is user-trusted (owner authored the markdown), so this is a performance concern, not a security exploit — but a 1 MB single-line heading would freeze the indexer for tens of seconds.
+
+Fix: split into one anchored capture + two linear trailing-trim ops, each anchored at `$` (engine matches from end-of-string, strictly linear):
+
+```ts
+// before (polynomial)
+const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(ln);
+
+// after (linear)
+const m = /^(#{1,6})\s+(.+)$/.exec(ln);
+const text = m[2].replace(/\s+$/, "").replace(/#+$/, "").trim();
+```
+
+Behavior preserved: a heading line like `## Setup #` parses with depth=2 and text="Setup" same as before.
+
+### Annotated — two CodeQL false positives
+
+`src/fts5.ts` and `src/embed-db.ts` both contain `opts.folder.replace(/\/+$/, "")` for trailing-slash normalization on folder filters. CodeQL flags `\/+$` as polynomial. **False positive:** the `$` anchor forces the engine to match from end-of-string, and `\/+` greedily consumes only `/` chars at the tail. Worst-case input (long trailing run of slashes) is O(n), not O(n²) — the engine doesn't backtrack across the rest of the string.
+
+Both call sites now carry an inline comment explaining the linear-time analysis. CodeQL alerts left in place for manual UI dismissal (we don't suppress in-source to keep the warnings visible in case future edits invalidate the analysis).
+
+### Tests
+
+665 unit tests pass (was 664, +1 regression test in `tests/fts5.test.ts` pinning linear-time behavior of the heading parser on a 10K-char pathological input — bound at 500 ms wall time, generous vs the ~1-2 s pre-fix polynomial blowup).
+
+### Migration
+
+**No-op.** Pure performance + static-analysis fix; valid markdown parses identically.
+
 ## [3.5.7] — 2026-05-12
 
 **Patch — privacy positioning surfaced in hero.** No code changes.

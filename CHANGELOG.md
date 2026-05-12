@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.7] — 2026-05-12
+
+**Patch — privacy positioning surfaced in hero.** No code changes.
+
+Obsidian launched the [Obsidian Community](https://obsidian.md/blog/future-of-plugins/) directory on 2026-05-12, including automated reviews and an upcoming **disclosure system** that will tag every community plugin with what it accesses (network / filesystem / clipboard / etc). Plugins that hit cloud APIs for retrieval will be visibly flagged.
+
+`enquire-mcp` makes **zero outbound network calls during serve** — all retrieval (BM25, embeddings, reranker) runs locally; models cached after one-time `install-model` from HuggingFace; vault content never leaves the machine. This was always true but never called out in the README hero.
+
+Added a second hero callout under the existing "First and only..." line: *"Zero outbound network calls during serve. Embedding + reranker models cached locally. Your vault content never leaves your machine. The privacy-conscious complement to Obsidian plugins that hit cloud APIs for retrieval."*
+
+No version-consistency or invariant changes; pure marketing-copy adjustment to align with the Obsidian ecosystem's new disclosure direction.
+
 ## [3.5.6] — 2026-05-10
 
 **Patch — root-cause fixes for two issue classes surfaced by external reviews.** Closes the systemic gaps, not just the individual symptoms. No behavior changes.

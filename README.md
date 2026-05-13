@@ -9,10 +9,10 @@
 **Every modern IR primitive. In one tool. For free.**
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp/latest.svg?label=npm%20%40latest&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
+[![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-712%20passing-brightgreen.svg)](#trust)
-[![stable](https://img.shields.io/badge/v3.0-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.5.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -89,7 +89,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **712 unit tests · 8 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
+| **712 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -159,8 +159,8 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `gray-matter` (`js-yaml` safeLoad) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **CI** | **8 required** branch-protection gates (lint · test ×3 [Node 20/22/24] · smoke · audit · coverage · version-consistency) + **4 advisory** (test-macos · CodeQL ×2 · Analyze actions). Release workflow re-verifies all 8 required passed on tagged SHA before npm publish. |
-| **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥73% (gated) |
+| **CI** | **7 required** branch-protection gates (lint · test ×2 [Node 22/24] · smoke · audit · coverage · version-consistency) + **4 advisory** (test-macos · CodeQL ×2 · Analyze actions). Release workflow re-verifies all 7 required passed on tagged SHA before npm publish. _v3.5.11 — Node 20 dropped (EOL'd 2026-04, pdfjs v5 requires ≥22.13)._ |
+| **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **SLSA-3** build provenance |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
 

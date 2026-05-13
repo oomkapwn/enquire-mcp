@@ -86,6 +86,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:coverage
+      # v3.5.12 — gate that CHANGELOG's claimed coverage stats match reality
+      # within 0.5pp. Closes the class of bug v3.5.10 audit caught (inflated
+      # stats copy-pasted from sub-agent output).
+      - run: npm run check:changelog-coverage
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-report

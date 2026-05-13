@@ -6,6 +6,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Command } from "commander";
 import { z } from "zod";
+import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP } from "./cli-help.js";
 import { EmbedDb } from "./embed-db.js";
 import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
 import { chunkContent, defaultIndexFile, FtsIndex } from "./fts5.js";
@@ -52,7 +53,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.5.11";
+const VERSION = "3.5.12";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -139,18 +140,12 @@ async function main(): Promise<void> {
     .command("serve", { isDefault: true })
     .description("Start the MCP server over stdio")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
-    .option(
-      "--enable-write",
-      "Enable the seven write tools (create_note, append_to_note, rename_note, replace_in_notes, archive_note, frontmatter_set, chat_thread_append). Off by default."
-    )
+    .option("--enable-write", ENABLE_WRITE_HELP)
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
     .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
     .option("--cache-file <path>", "Override the persistent-cache file location")
-    .option(
-      "--persistent-index",
-      "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Registers obsidian_full_text_search."
-    )
+    .option("--persistent-index", PERSISTENT_INDEX_HELP)
     .option("--index-file <path>", "Override the FTS5 index file location")
     .option(
       "--tokenize <mode>",
@@ -176,10 +171,7 @@ async function main(): Promise<void> {
       "--enabled-tools <name...>",
       "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
     )
-    .option(
-      "--diagnostic-search-tools",
-      "Register the single-ranker search tools (obsidian_search_text, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool — plus obsidian_full_text_search if --persistent-index is also set (it's gated on FTS5 availability separately). Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking."
-    )
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
     .option(
       "--include-pdfs",
       'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
@@ -263,12 +255,12 @@ async function main(): Promise<void> {
       "--max-sessions <n>",
       "v2.14.0 — max concurrent stateful sessions. New sessions beyond this cap return 503 + Retry-After. Default 100. Only effective with --stateful."
     )
-    .option("--enable-write", "Enable the write tools (gated identically to stdio mode). Off by default.")
+    .option("--enable-write", ENABLE_WRITE_HELP)
     .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
     .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
     .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
     .option("--cache-file <path>", "Override the persistent-cache file location")
-    .option("--persistent-index", "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search")
+    .option("--persistent-index", PERSISTENT_INDEX_HELP)
     .option("--index-file <path>", "Override the FTS5 index file location")
     .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
     .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
@@ -276,7 +268,7 @@ async function main(): Promise<void> {
     .option("--watch", "Watch the vault for .md changes and refresh indexes incrementally.")
     .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
     .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
-    .option("--diagnostic-search-tools", "Register the four single-ranker search tools alongside obsidian_search.")
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
     .option(
       "--quantize-embeddings <mode>",
       "v2.17.0 — vector storage encoding for the persistent embed db (`f32` default, `int8` for ~4× smaller BLOBs). Must match the mode used at `build-embeddings` time."

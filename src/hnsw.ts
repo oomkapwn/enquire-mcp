@@ -16,8 +16,12 @@
 //     consistency: which version of .embed.db produced the .hnsw.bin?).
 //   • For typical vault scales (≤50K chunks), rebuild is ≤30s on serve
 //     start — tolerable as a one-time boot cost for a long-running server.
-//   • Persistence is tracked for v3.0+ when million-chunk vaults become
-//     a real use case. For now: simple in-memory keeps the surface clean.
+//   • Persistence SHIPPED in v2.16.0 (sidecar `.hnsw.bin` + `.hnsw.meta.json`
+//     next to `.embed.db`; staleness check via `EmbedDb.computeSignature`).
+//     Default on for `--use-hnsw`; opt out with `--no-hnsw-persist`.
+//     See `loadHnswFromDisk` + `saveTo` below for the WAL-style consistency
+//     handling. The in-memory-only fallback path is still here (when the
+//     persistence flag is off OR the sidecar files are missing/stale).
 //
 // Native dep: `hnswlib-node@^3.0` (Node-N-API binding to the C++ hnswlib
 // reference impl). Maintained by yoshoku since 2022, stable since v3.0

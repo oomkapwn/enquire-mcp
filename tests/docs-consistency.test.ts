@@ -295,7 +295,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     for (const flag of sharedFlags) {
       const expectedConst = expectedConstFor[flag];
       if (!expectedConst) continue; // Not yet extracted — future work.
-      const flagOptRe = new RegExp(`\\.option\\(\\s*"${flag.replace(/-/g, "\\-")}"\\s*,\\s*([^)]+?)\\s*\\)`, "g");
+      // `flag` comes from /--[a-z-]+/ matches, so it can only contain `-` and
+      // lowercase letters — none are regex metachars outside character classes.
+      // No escaping needed; embed directly. (CodeQL js/incomplete-sanitization
+      // dismissed in v3.5.12 PR #62 — the prior .replace(/-/g, "\\-") was a
+      // useless escape that CodeQL correctly flagged as an incomplete pattern.)
+      const flagOptRe = new RegExp(`\\.option\\(\\s*"${flag}"\\s*,\\s*([^)]+?)\\s*\\)`, "g");
       const serveCall = [...serveBlock.matchAll(flagOptRe)][0]?.[1] ?? "";
       const httpCall = [...serveHttpBlock.matchAll(flagOptRe)][0]?.[1] ?? "";
       expect(

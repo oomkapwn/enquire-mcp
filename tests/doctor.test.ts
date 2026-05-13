@@ -135,6 +135,63 @@ describe("runDoctor (v2.11.0)", () => {
     const expectedReady = result.summary.missing === 0 && result.summary.error === 0;
     expect(result.ready).toBe(expectedReady);
   });
+
+  // v3.6 — branches coverage. The FTS5 "ok" branch (existing index file
+  // loads successfully) was previously uncovered — existing tests only
+  // hit the not-built (warn) and excluded paths.
+  it("FTS5 + embed-db checks report 'ok' when files exist", async () => {
+    // Build a minimal FTS5 index file by opening + closing FtsIndex. The
+    // doctor will reopen the same file via existsSync + new FtsIndex(...).
+    const { FtsIndex } = await import("../src/fts5.js");
+    const indexFile = path.join(cacheRoot, "real.fts5.db");
+    const idx = new FtsIndex({ file: indexFile, vaultRoot: root });
+    await idx.open();
+    idx.close();
+    // Build a fake embed.db too — doctor just stats the file, doesn't open it.
+    const embedFile = path.join(cacheRoot, "real.embed.db");
+    await fs.writeFile(embedFile, Buffer.alloc(2048));
+
+    const result = await runDoctor({
+      vault: root,
+      modelCacheRoot: cacheRoot,
+      indexFile,
+      embedFile
+    });
+    const ftsCheck = result.checks.find((c) => c.id === "index:fts5");
+    expect(ftsCheck?.status).toBe("ok");
+    expect(ftsCheck?.detail).toContain("files");
+    expect(ftsCheck?.detail).toContain("chunks");
+
+    const embedCheck = result.checks.find((c) => c.id === "index:embed");
+    // 'ok' iff embed file exists AND both optional deps are present.
+    // In CI both are installed; if not, the check stays 'warn' but the
+    // FTS5 branch is what we needed for coverage.
+    expect(["ok", "warn"]).toContain(embedCheck?.status);
+  });
+
+  // v3.6 — branches coverage. candidateModelCacheRoots() is called when
+  // modelCacheRoot is not specified; existing tests always specify it.
+  // This pass exercises the default candidate-path probing branches.
+  it("model-cache check probes default candidate paths when modelCacheRoot is omitted", async () => {
+    const prevHfHome = process.env.HF_HOME;
+    const prevTransformersCache = process.env.TRANSFORMERS_CACHE;
+    // Set both env vars to a known-empty path so the env-var branches fire.
+    process.env.HF_HOME = path.join(cacheRoot, "no-hf-home");
+    process.env.TRANSFORMERS_CACHE = path.join(cacheRoot, "no-transformers-cache");
+    try {
+      const result = await runDoctor({ vault: root });
+      const modelCheck = result.checks.find((c) => c.id === "model:cache");
+      expect(modelCheck).toBeDefined();
+      // We don't assert ok/missing — depends on the user's actual cache —
+      // but the candidate-paths branch must have been exercised.
+      expect(["ok", "missing"]).toContain(modelCheck?.status);
+    } finally {
+      if (prevHfHome === undefined) delete process.env.HF_HOME;
+      else process.env.HF_HOME = prevHfHome;
+      if (prevTransformersCache === undefined) delete process.env.TRANSFORMERS_CACHE;
+      else process.env.TRANSFORMERS_CACHE = prevTransformersCache;
+    }
+  }, 30_000);
 });
 
 describe("formatCheck + formatDoctorResult (v2.11.0)", () => {

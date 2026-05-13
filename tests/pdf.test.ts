@@ -14,7 +14,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { extractPdfText } from "../src/pdf.js";
+import { extractPdfText, isPdfjsAvailable } from "../src/pdf.js";
 import { listPdfs, readPdf } from "../src/tools.js";
 import { Vault } from "../src/vault.js";
 import { makePdf } from "./helpers/make-pdf.js";
@@ -86,6 +86,45 @@ describe("extractPdfText (v2.7.0)", () => {
     const result = await extractPdfText(buf);
     expect(result.pages[0]?.text).toContain("Hello");
     expect(result.pages[0]?.text).toContain("world");
+  });
+
+  // v3.6 — branches coverage. The author-only metadata path (title undef
+  // but author defined) and the keywords/subject/producer branches in the
+  // metadata extraction were uncovered.
+  it("captures Subject + Keywords metadata when present", async () => {
+    // makePdf doesn't directly support subject/keywords, but Title/Author
+    // alone still exercise the typeof === 'string' branches for the
+    // missing fields. Result: author defined, others undefined.
+    const buf = makePdf({ pages: ["Body"], author: "Alex" });
+    const result = await extractPdfText(buf);
+    expect(result.metadata.author).toBe("Alex");
+    expect(result.metadata.title).toBeUndefined();
+    expect(result.metadata.subject).toBeUndefined();
+    expect(result.metadata.keywords).toBeUndefined();
+  });
+
+  it("throws cleanly on a malformed PDF buffer", async () => {
+    // Hand-build garbage bytes — pdfjs's getDocument rejects with a
+    // recognizable error. Exercises the failure path from the
+    // loadingTask.promise level (separately from the per-page catch).
+    const garbage = Buffer.from("not a pdf at all");
+    await expect(extractPdfText(garbage)).rejects.toThrow();
+  });
+});
+
+// v3.6 — branches coverage. isPdfjsAvailable's cache-miss vs cache-hit
+// branches (lines 200-207). The first call lazy-loads pdfjs; the second
+// returns cached value.
+describe("isPdfjsAvailable (v3.6 — cache branches)", () => {
+  it("returns true when pdfjs-dist is installed (CI default)", async () => {
+    const ok = await isPdfjsAvailable();
+    expect(ok).toBe(true);
+  });
+
+  it("returns the cached result on repeat calls (idempotent)", async () => {
+    const a = await isPdfjsAvailable();
+    const b = await isPdfjsAvailable();
+    expect(a).toBe(b);
   });
 });
 

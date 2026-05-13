@@ -451,4 +451,119 @@ views:
       expect(paths).toContain("done.md");
     });
   });
+
+  // v3.6 — branches coverage uplift. Hit predicate branches the existing
+  // tests don't exercise: `tag != "x"`, boolean literals, contains on an
+  // array-valued frontmatter, and the SKIP / unevaluated paths.
+  describe("v3.6 — extra predicate branches", () => {
+    it('`tag != "book"` returns notes without the tag', async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'tag != "book"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      const paths = out.matches.map((m) => m.path).sort();
+      // untagged.md has no tags; the rest are #book.
+      expect(paths).toContain("untagged.md");
+      expect(paths).not.toContain("open.md");
+      expect(paths).not.toContain("done.md");
+    });
+
+    it("boolean literal `true` matches every note; `false` matches nothing", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "true.base"),
+        `filters: 'true'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "true.base" });
+      expect(out.matches.length).toBeGreaterThan(0);
+
+      await fs.writeFile(
+        path.join(root, "false.base"),
+        `filters: 'false'
+views:
+  - type: table
+`
+      );
+      const empty = await queryBase(vault, { path: "false.base" });
+      expect(empty.matches).toHaveLength(0);
+    });
+
+    it("`<key> contains` matches arrays element-wise (frontmatter tags array)", async () => {
+      const { root, vault } = await makeBaseVault();
+      // The default makeBaseVault notes have `tags: [book]` as an array
+      // frontmatter, so `tags contains "boo"` exercises the
+      // Array.isArray(v) branch of fmContains.
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'tags contains "boo"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      const paths = out.matches.map((m) => m.path).sort();
+      expect(paths).toContain("open.md");
+      expect(paths).toContain("done.md");
+      // untagged.md has no tags array → contains returns false.
+      expect(paths).not.toContain("untagged.md");
+    });
+
+    it("`<key> contains` returns false on missing key (no array, no string)", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'notakey contains "anything"'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches).toHaveLength(0);
+      // The expr is parsed by the `contains` regex, so it's NOT
+      // unevaluated — just always false.
+      expect(out.unevaluated_predicates).toEqual([]);
+    });
+
+    it("unparseable RHS literal lands in unevaluated_predicates (SKIP branch)", async () => {
+      const { root, vault } = await makeBaseVault();
+      // `status == bare-identifier` doesn't match `parseLiteral` (no quotes,
+      // not a number, not a bool/null) so it returns SKIP, and the predicate
+      // is pushed to ctx.unevaluated and treated as `true` (permissive).
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'status == something-unquoted'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      // All notes match (permissive default for unevaluable predicates).
+      expect(out.matches.length).toBeGreaterThan(0);
+      expect(out.unevaluated_predicates).toContain("status == something-unquoted");
+    });
+
+    it("syntactically unknown predicate is permissive + listed as unevaluated", async () => {
+      const { root, vault } = await makeBaseVault();
+      // `customFunc(...)` doesn't match any predicate regex — falls to the
+      // ctx.unevaluated.add(expr) branch at the end of evalPredicate.
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'customFunc("x")'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.matches.length).toBeGreaterThan(0);
+      expect(out.unevaluated_predicates).toContain('customFunc("x")');
+    });
+  });
 });

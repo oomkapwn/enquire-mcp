@@ -22,6 +22,7 @@ import {
   generateBearerToken,
   type HttpServeOptions,
   RateLimiter,
+  readJsonBody,
   startHttpServer,
   verifyBearer
 } from "../src/http-transport.js";
@@ -157,6 +158,49 @@ describe("RateLimiter (v2.6.0)", () => {
     for (let i = 0; i < 10_000; i++) {
       expect(lim.consume("k", i)).toBe(true);
     }
+  });
+
+  // v3.6 — branches coverage uplift. reset() was previously uncovered.
+  it("reset() clears all per-token windows", () => {
+    const lim = new RateLimiter(2);
+    expect(lim.consume("k", 100)).toBe(true);
+    expect(lim.consume("k", 101)).toBe(true);
+    expect(lim.consume("k", 102)).toBe(false); // over budget pre-reset
+    lim.reset();
+    // After reset, the bucket is fresh: 2 more should succeed.
+    expect(lim.consume("k", 200)).toBe(true);
+    expect(lim.consume("k", 201)).toBe(true);
+  });
+});
+
+// v3.6 — branches coverage uplift. readJsonBody's max-bytes overflow
+// branch is otherwise unreachable from the e2e harness (4MB cap).
+describe("readJsonBody (v3.6 — body-size cap branch)", () => {
+  // Build an IncomingMessage-shaped async iterable from a Buffer.
+  function asReq(buf: Buffer): import("node:http").IncomingMessage {
+    async function* it() {
+      yield buf;
+    }
+    return it() as unknown as import("node:http").IncomingMessage;
+  }
+
+  it("returns undefined on an empty body", async () => {
+    async function* empty() {
+      /* yields nothing */
+    }
+    const out = await readJsonBody(empty() as unknown as import("node:http").IncomingMessage, 1024);
+    expect(out).toBeUndefined();
+  });
+
+  it("parses a valid JSON body within the cap", async () => {
+    const buf = Buffer.from(JSON.stringify({ ok: 1 }));
+    const out = await readJsonBody(asReq(buf), 1024);
+    expect(out).toEqual({ ok: 1 });
+  });
+
+  it("throws when body exceeds maxBytes", async () => {
+    const big = Buffer.alloc(200, 65); // 200 bytes of 'A'
+    await expect(readJsonBody(asReq(big), 100)).rejects.toThrow(/exceeds max/);
   });
 });
 
@@ -434,6 +478,41 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       })
     ).rejects.toThrow(/16 chars/);
   });
+
+  // v3.6 — branches coverage. Exercise stateless-mode body-parse error
+  // (sendJsonRpcError -32700) + the DELETE-method-on-stateless 405 branch.
+  it("returns 400 + -32700 parse error on malformed JSON (stateless)", async () => {
+    const s = await spawn();
+    try {
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`
+        },
+        body: "{not valid json"
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: number; message: string } };
+      expect(body.error.code).toBe(-32700);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("returns 405 on DELETE /mcp in stateless mode (only POST + OPTIONS allowed)", async () => {
+    const s = await spawn();
+    try {
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${TOKEN}` }
+      });
+      expect(res.status).toBe(405);
+    } finally {
+      await s.close();
+    }
+  });
 });
 
 // v2.14.0 — stateful sessions: Mcp-Session-Id keyed transport reuse,
@@ -681,6 +760,45 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       const body = (await r2.json()) as { error: string; max: number };
       expect(body.error).toMatch(/max sessions/);
       expect(body.max).toBe(1);
+    } finally {
+      await s.close();
+    }
+  });
+
+  // v3.6 — branches coverage. Stateful mode's parse-error + 405 branches
+  // (lines 444-456 of http-transport.ts).
+  it("returns 405 on PATCH /mcp in stateful mode (only POST/GET/DELETE/OPTIONS routed)", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: "{}"
+      });
+      expect(r.status).toBe(405);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("returns 400 + -32700 on malformed JSON in stateful mode", async () => {
+    const s = await spawnStateful();
+    try {
+      const r = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`
+        },
+        body: "{garbled"
+      });
+      expect(r.status).toBe(400);
+      const body = (await r.json()) as { error: { code: number } };
+      expect(body.error.code).toBe(-32700);
     } finally {
       await s.close();
     }

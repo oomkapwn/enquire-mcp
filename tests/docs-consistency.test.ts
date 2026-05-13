@@ -364,4 +364,28 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
     }
   });
+
+  // v3.6 — class fix on top of v3.5.9. The v3.5.9 invariants caught mention
+  // drift (every registerTool name must appear *somewhere* in README/api.md),
+  // and they pin the numeric totals. But the audit on docs/api.md found a
+  // distinct failure mode: the tool COVERAGE table at the top of the file
+  // was 14 rows short while the count claim still added up — registered
+  // tools were silently absent from the canonical structured listing.
+  // This invariant requires every registered tool to appear as a row in one
+  // of the structured markdown tables in docs/api.md whose first column is
+  // a backtick-wrapped `obsidian_*` name, anywhere in the file. Rows may be
+  // split across multiple tables (e.g. read / write / opt-in sections).
+  it("docs/api.md tool index table covers every registered tool", async () => {
+    const indexSrc = await read("src/index.ts");
+    const apiMd = await read("docs/api.md");
+    const registered = registeredNames(indexSrc, "registerTool");
+    // Match every row of the form `| `obsidian_xxx` | ...`. Anchor on the
+    // start of a markdown table cell + a backtick-wrapped tool name. We
+    // accept any number of leading pipes/cells before the tool name so the
+    // matcher is robust to table reformat, but in practice the table format
+    // here is `| \`obsidian_*\` |` so the simple anchor catches every row.
+    const tableRows = new Set([...apiMd.matchAll(/^\|\s*`(obsidian_[a-z_]+)`\s*\|/gm)].map((m) => m[1] ?? ""));
+    const missingFromTable = [...registered].filter((t) => !tableRows.has(t)).sort();
+    expect(missingFromTable, "tools registered in src/index.ts but missing from a docs/api.md tool table").toEqual([]);
+  });
 });

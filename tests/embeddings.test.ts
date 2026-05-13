@@ -4,7 +4,15 @@
 // `enquire-mcp install-model multilingual` + the build-embeddings pipeline.
 
 import { describe, expect, it } from "vitest";
-import { cosineSim, DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, resolveModel } from "../src/embeddings.js";
+import {
+  cosineSim,
+  DEFAULT_MODEL_ALIAS,
+  DEFAULT_RERANKER_ALIAS,
+  EMBEDDING_MODELS,
+  RERANKER_MODELS,
+  resolveModel,
+  resolveRerankerModel
+} from "../src/embeddings.js";
 
 describe("EMBEDDING_MODELS catalog (v2.0 alpha)", () => {
   it("includes multilingual and bge with expected dim=384", () => {
@@ -64,5 +72,59 @@ describe("cosineSim", () => {
     const a = new Float32Array([1, 0, 0, 0]);
     const b = new Float32Array([1, 0, 0]);
     expect(() => cosineSim(a, b)).toThrow(/dim mismatch/);
+  });
+});
+
+// v3.6 — branches coverage uplift. resolveRerankerModel was uncovered;
+// exercise each branch of the same alias/default/throw pattern that
+// resolveModel uses for the embedding catalog.
+describe("RERANKER_MODELS catalog (v2.9.0)", () => {
+  it("includes the documented set of reranker aliases", () => {
+    // Lock in the catalog shape so a typo'd alias regresses loudly.
+    const aliases = Object.keys(RERANKER_MODELS).sort();
+    expect(aliases).toContain("rerank-bge");
+    expect(aliases).toContain("rerank-multilingual");
+    expect(aliases).toContain("rerank-bge-large");
+    expect(aliases).toContain("rerank-jina-tiny");
+    expect(aliases).toContain("rerank-multilingual-large");
+  });
+
+  it("default reranker alias points at rerank-multilingual", () => {
+    expect(DEFAULT_RERANKER_ALIAS).toBe("rerank-multilingual");
+    expect(RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.multilingual).toBe(true);
+  });
+
+  it("each reranker declares Xenova-hosted HF id + maxTokens 512", () => {
+    for (const m of Object.values(RERANKER_MODELS)) {
+      expect(m.hfId.startsWith("Xenova/")).toBe(true);
+      expect(m.maxTokens).toBe(512);
+    }
+  });
+});
+
+describe("resolveRerankerModel", () => {
+  it("returns the named reranker when alias is known", () => {
+    const m = resolveRerankerModel("rerank-bge");
+    expect(m.alias).toBe("rerank-bge");
+    expect(m.multilingual).toBe(false);
+  });
+
+  it("returns the default reranker when alias is undefined", () => {
+    const m = resolveRerankerModel(undefined);
+    expect(m.alias).toBe(DEFAULT_RERANKER_ALIAS);
+  });
+
+  it("throws on unknown alias with a list of known ones (catches typos)", () => {
+    expect(() => resolveRerankerModel("not-a-real-reranker")).toThrow(/Unknown reranker model alias/);
+    expect(() => resolveRerankerModel("not-a-real-reranker")).toThrow(/rerank-bge/);
+  });
+
+  it("resolves all catalog aliases without throwing", () => {
+    // Smoke over the full catalog so add-an-alias regressions in
+    // resolveRerankerModel surface here.
+    for (const alias of Object.keys(RERANKER_MODELS)) {
+      const m = resolveRerankerModel(alias);
+      expect(m.alias).toBe(alias);
+    }
   });
 });

@@ -115,8 +115,8 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfExtractionResul
   const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const loadingTask = pdfjs.getDocument({
     data,
-    // Server-side hardening — no network, no eval, no system fonts.
-    isEvalSupported: false,
+    // Server-side hardening — no network, no system fonts. pdfjs v5+
+    // removed `isEvalSupported` (eval is unconditionally disabled).
     useSystemFonts: false,
     // Quiet pdfjs's own warnings; we'll surface real errors via throw.
     verbosity: 0
@@ -132,6 +132,9 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfExtractionResul
       // Each item has `.str` (the text run); some have `.hasEOL` flags
       // we could use to insert newlines, but agents do better with
       // space-joined text + downstream normalization.
+      // pdfjs v5 widened TextContent.items to include TextMarkedContent
+      // (structural items without a `.str`). Use the in-operator guard to
+      // narrow the union; TS infers `item.str` as string inside the guard.
       const text = content.items
         .map((item) => ("str" in item ? item.str : ""))
         .join(" ")

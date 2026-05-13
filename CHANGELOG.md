@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.11] — 2026-05-13
+
+**Patch — pdfjs-dist v4 → v5 migration.** Dependabot PR #54 had been hanging since 2026-05-11 with CI red across every job. The bump itself was 1 line in `package.json`, but pdfjs v5 has 3 breaking API changes that needed code-side fixes. This release ships the bump + migration together.
+
+### Changed
+
+- **`pdfjs-dist` bumped from `^4.10.38` to `^5.7.284`** (the dependency itself is in `optionalDependencies`, so users without PDF support pay no cost).
+- **`src/pdf.ts:119`, `src/ocr.ts:159`** — removed `isEvalSupported: false` from `getDocument()` options. pdfjs v5 [unconditionally disables eval](https://github.com/mozilla/pdf.js/blob/master/src/display/api.js) and dropped the flag from `DocumentInitParameters` (any value is a `TS2353` error). The hardening invariant is preserved by v5's stricter default.
+- **`src/ocr.ts:200-209`** — `page.render()` now requires a top-level `canvas: HTMLCanvasElement | null` field. v5 made `canvas` the primary render target and demoted `canvasContext` to "backwards compatibility only". We pass both: the `@napi-rs/canvas` instance via `canvas` (cast for the HTMLCanvasElement-typed slot) AND the 2D context via `canvasContext` as a v4-style hint.
+- **`src/pdf.ts:136`** — fixed `TS7006` implicit-any on the `TextContent.items` map callback by relying on TypeScript's discriminated-union narrowing through the `"str" in item` guard. v5 widened the union to include `TextMarkedContent` (structural items without a `.str`); the guard already handles them.
+
+### Tests
+
+711 unit tests pass · branches 75.29% (unchanged) · lint clean · tsc clean · smoke pass (synthetic vault scan with FTS + 401 + auth all green) · version-consistency green at `3.5.11` across 5 surfaces.
+
+### Migration
+
+**No-op for users** who don't have `pdfjs-dist` installed (it's `optional`). Users who do have it will get v5 automatically on `npm install` and benefit from:
+
+- pdfjs v5 accessibility/annotation/font/image conversion improvements (per v5.7.284 release notes)
+- Slightly tighter security posture: v5 unconditionally disables eval at the engine level (was opt-out in v4 via the now-removed `isEvalSupported` flag)
+- ESM-native build (no CommonJS shim in v5 default exports)
+
+### Reference
+
+- pdfjs v5 changelog: https://github.com/mozilla/pdf.js/releases/tag/v5.0.0
+- Migration guide: code-side compatibility audit covered every `getDocument()` and `page.render()` call site in `src/pdf.ts` + `src/ocr.ts`. No other usages.
+
 ## [3.5.10] — 2026-05-13
 
 **Patch — external audit #3 followup (priorities 3-5 from [`CONCLUSIONS.md`](https://github.com/oomkapwn/.../enquire-mcp-audit/CONCLUSIONS.md)).** v3.5.9 closed §2 of the audit (docs drift class fix). This release tackles §3-4: onboarding clarity, alternative comparison, api.md completeness, and the v3.6 commitment from v3.5.9 to lift branch coverage back above 75%.

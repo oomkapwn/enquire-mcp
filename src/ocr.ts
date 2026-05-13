@@ -156,7 +156,7 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
   const data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const loadingTask = pdfjs.getDocument({
     data,
-    isEvalSupported: false,
+    // pdfjs v5+ removed `isEvalSupported` (eval is unconditionally disabled).
     useSystemFonts: false,
     verbosity: 0
   });
@@ -197,7 +197,15 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
         context.fillStyle = "white";
         context.fillRect(0, 0, canvas.width, canvas.height);
 
+        // pdfjs v5 made `canvas` the primary render target; `canvasContext`
+        // is now optional and only used for backwards compat. We pass both:
+        // the @napi-rs/canvas instance via `canvas` (cast for the
+        // HTMLCanvasElement-typed slot) AND the context as a hint for the
+        // legacy code path. v5 docs: "canvasContext: 2D context of a DOM
+        // Canvas object for backwards compatibility; it is recommended to
+        // use the `canvas` parameter instead."
         await page.render({
+          canvas: canvas as unknown as HTMLCanvasElement,
           canvasContext: context as unknown as CanvasRenderingContext2D,
           viewport
         }).promise;

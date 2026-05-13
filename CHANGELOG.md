@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.13] — 2026-05-13
+
+**Patch — README badges + stale CI claims.** Surface-only cleanup. No code changes.
+
+### Fixed
+
+- **npm badge label**: `npm @latest` → `npm`. The `@latest` suffix could be misread as the npm dist-tag (which is implicit when you query the latest version), so the badge was double-labeling. Plus the URL-encoded `%20%40` made the link ugly in raw markdown.
+- **`stable` badge version pointer**: `v3.0-stable` → `v3.5.x-stable`. Was last updated when v3.0.0 shipped (2026-05-09); 12 patch releases later it still pointed at v3.0.
+- **CI gate count + Node matrix in `#trust`** (README line 162): `**8 required** … test ×3 [Node 20/22/24]` → `**7 required** … test ×2 [Node 22/24]`. v3.5.11 dropped Node 20 from CI (EOL'd 2026-04, pdfjs v5 needs ≥22.13); this table was missed in that patch. Inline note added to explain the change.
+- **CI gate count in trust table** (line 92): `8 required + 4 advisory` → `7 required + 4 advisory`. Same drift class as above.
+- **Coverage row**: `branches ≥73% (gated)` → `branches ≥74% (gated)`. v3.5.10 raised the threshold from 72→74 after the coverage uplift work but missed this surface.
+
+### Tests
+
+712 unit tests pass · lint clean · tsc clean · version-consistency green at `3.5.13` across 5 surfaces.
+
+### Migration
+
+**No-op.** Documentation-only patch.
+
+### Method note
+
+This is exactly the class of drift the v3.5.9 docs-consistency invariants were designed to catch — the per-tool/prompt/test-count surfaces. But CI-config-claim drift (number of required checks, Node matrix in the trust table) is a NEW surface those invariants don't cover. Adding an invariant for "README claims about CI gates must match `.github/workflows/ci.yml` reality" would be the right class fix. Left as future work for the next audit cycle to flag — if it does, we know the class is worth chasing. Same applies to the `branches threshold` claim in the trust table vs `vitest.config.ts`.
+
 ## [3.5.12] — 2026-05-13
 
 **Patch — external audit #4 followup.** External re-audit measured v3.5.10 on disk and surfaced 5 LOW/INFO/COSMETIC findings (§3 of [REAUDIT_REPORT_v3.5.10]). Closes all 5 + applies root-cause-sweep methodology so the next audit doesn't find the same drift class again.

@@ -16,7 +16,11 @@ export default defineConfig({
     // boilerplate where line coverage doesn't reflect quality.
     coverage: {
       provider: "v8",
-      reporter: ["text", "html", "lcov"],
+      // json-summary added in v3.5.12 — feeds scripts/check-changelog-coverage.mjs
+      // which gates that the latest CHANGELOG section's stated coverage percentages
+      // match reality within 0.5pp. Closes the class of bug v3.5.10 audit caught
+      // (inflated stats copy-pasted from sub-agent output into release notes).
+      reporter: ["text", "html", "lcov", "json-summary"],
       include: ["src/**/*.ts"],
       exclude: ["src/index.ts", "**/*.test.ts"],
       // v3.6 — branches threshold raised 72→74 after the coverage uplift

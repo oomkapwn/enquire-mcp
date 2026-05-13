@@ -2,6 +2,64 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.12] — 2026-05-13
+
+**Patch — external audit #4 followup.** External re-audit measured v3.5.10 on disk and surfaced 5 LOW/INFO/COSMETIC findings (§3 of [REAUDIT_REPORT_v3.5.10]). Closes all 5 + applies root-cause-sweep methodology so the next audit doesn't find the same drift class again.
+
+### Added — `src/cli-help.ts` (class fix for §3.1)
+
+Audit caught that `serve` and `serve-http` had DIVERGED help strings for the SAME flag (e.g. `--diagnostic-search-tools` had a 50-word explanation in `serve` mentioning `--persistent-index` gating, but a one-line legacy stub in `serve-http`). New module owns the canonical text for every flag accepted by both subcommands. Both subcommands now import the same constant:
+
+- `ENABLE_WRITE_HELP` — "Enable the seven write tools..." (was inline in 2 places, drifted on count word)
+- `DIAGNOSTIC_SEARCH_TOOLS_HELP` — full v3.5.9-D6 wording with `--persistent-index` qualifier (was 2 different strings)
+- `PERSISTENT_INDEX_HELP` — registration-explicit wording (was 2 different strings)
+
+### Added — `scripts/check-changelog-coverage.mjs` + CI gate (class fix for §3.2.2)
+
+Audit caught that v3.5.10 CHANGELOG claimed `lines 91.81% / statements 87.61%` but actual was `lines 89.53% / statements 86.06%`. The inflated stats were copy-pasted from a sub-agent's report rather than measured against the final committed state.
+
+The script:
+1. Parses the **latest** CHANGELOG section for `(lines|statements|functions|branches) N.NN%` claims.
+2. Reads `coverage/coverage-summary.json` (vitest's `json-summary` reporter, added in this release).
+3. Fails if any claim drifts more than **0.5 percentage points** from reality.
+
+Wired into:
+- CI `coverage` job — fails the PR on drift
+- `prepublishOnly` — fails `npm publish` on drift (safety net for release tags)
+- `npm run check:changelog-coverage` — local invocation for pre-commit verification
+
+### Added — invariant: shared help-strings must source from `src/cli-help.ts`
+
+`tests/docs-consistency.test.ts` extended (now 21 tests): every CLI flag accepted by BOTH `serve` and `serve-http` must reference an `UPPERCASE_HELP` constant in its `.option(...)` call, not an inline string literal. Future drift = CI failure on the very first commit that introduces it.
+
+### Fixed — §3.2.1: removed broken `CONCLUSIONS.md` link from v3.5.10 entry
+
+The link in v3.5.10's first paragraph (`https://github.com/oomkapwn/.../enquire-mcp-audit/CONCLUSIONS.md`) had a literal `...` placeholder and pointed at a path that doesn't exist in the repo (audit reports lived in an external clone). Cleaned up.
+
+### Fixed — §3.2.2: corrected v3.5.10 coverage stats retroactively
+
+CHANGELOG entry for v3.5.10 updated: `lines 89.53% / functions 82.15% / statements 86.06%` (was inflated). Annotated inline that the correction is from v3.5.12.
+
+### Fixed — §3.3: aligned `biome.json` schema with installed version
+
+`$schema` reference bumped `2.4.14 → 2.4.15` to match the `@biomejs/biome` dependency pin (`^2.4.15`).
+
+### Fixed — §3.4: README hero version pointer
+
+`**44 tools · 19 MCP prompts · 712 unit tests · 50+ languages · v3.5 · ...**` → `v3.5.x`. Reflects that 3.5.0..3.5.12 all share the same surface; the cosmetic `v3.5` line was undersized for a patch-rich release stream.
+
+### Tests
+
+712 unit tests pass (was 711, **+1** for the new shared-help-strings invariant) · branches 75.29% · lines 89.54% · statements 86.07% · functions 82.15% · lint clean · tsc clean · smoke pass.
+
+### Method note
+
+Applied **root-cause-sweep** methodology again (`~/.claude/.../memory/method_audit_root_cause_sweep.md`):
+- §3.1 — class fix via `cli-help.ts` module + invariant, not just sync the two strings
+- §3.2.2 — class fix via gate script + CI integration, not just correct the numbers
+
+This closes the second class of bug the methodology was designed to prevent: numeric drift from copy-paste. The first class (tool/prompt/test counts in docs) was closed in v3.5.9.
+
 ## [3.5.11] — 2026-05-13
 
 **Patch — pdfjs-dist v4 → v5 migration + CI Node 20 drop.** Dependabot PR #54 had been hanging since 2026-05-11 with CI red across every job. The bump itself was 1 line in `package.json`, but pdfjs v5 has 3 breaking API changes that needed code-side fixes, AND v5.7+ requires `engines: >=22.13.0`. This release ships the bump + migration + CI matrix update together.
@@ -41,7 +99,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [3.5.10] — 2026-05-13
 
-**Patch — external audit #3 followup (priorities 3-5 from [`CONCLUSIONS.md`](https://github.com/oomkapwn/.../enquire-mcp-audit/CONCLUSIONS.md)).** v3.5.9 closed §2 of the audit (docs drift class fix). This release tackles §3-4: onboarding clarity, alternative comparison, api.md completeness, and the v3.6 commitment from v3.5.9 to lift branch coverage back above 75%.
+**Patch — external audit #3 followup.** v3.5.9 closed §2 of the audit (docs drift class fix). This release tackles §3-4: onboarding clarity, alternative comparison, api.md completeness, and the v3.6 commitment from v3.5.9 to lift branch coverage back above 75%.
 
 ### Added
 
@@ -58,7 +116,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Tests
 
-711 unit tests pass · branches 75.29% (threshold 74) · lines 91.81% · functions 81.67% · statements 87.61%. 31 test files. Lint clean.
+711 unit tests pass · branches 75.29% (threshold 74) · lines 89.53% · functions 82.15% · statements 86.06%. 31 test files. Lint clean. _(Coverage numbers retroactively corrected in v3.5.12 — original entry had inflated stats copy-pasted from a sub-agent's report rather than measured against the final state. The v3.5.12 CHANGELOG-coverage invariant prevents this class of bug going forward.)_
 
 ### Migration
 

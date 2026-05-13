@@ -249,16 +249,75 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   it("CLI --enable-write help text mentions seven (not five) write tools", async () => {
     // The audit found the help text said "five write tools" while reality is 7.
     // Pin it to the actual count so adding/removing writes forces a help-text update.
-    const indexSrc = await read("src/index.ts");
+    //
+    // v3.5.12 — help strings live in src/cli-help.ts (shared between `serve`
+    // and `serve-http`) per audit #4 LOW finding 3.1. Read from there.
+    const cliHelpSrc = await read("src/cli-help.ts");
     const counts = await getActualCounts();
     const expectedWord = NUMBER_WORDS[counts.writes];
     expect(expectedWord, `write count ${counts.writes} outside 0-10 NUMBER_WORDS range`).toBeDefined();
-    const helpMatch = /Enable the (\w+) write tools/.exec(indexSrc);
+    const helpMatch = /Enable the (\w+) write tools/.exec(cliHelpSrc);
     expect(
       helpMatch,
-      "--enable-write help text must follow 'Enable the <count-word> write tools' format"
+      "ENABLE_WRITE_HELP in src/cli-help.ts must follow 'Enable the <count-word> write tools' format"
     ).not.toBeNull();
     expect(helpMatch?.[1]).toBe(expectedWord);
+  });
+
+  // v3.5.12 audit #4 — section 3.1 caught that `serve` and `serve-http` had
+  // different help strings for the SAME flag. Class fix: shared cli-help.ts
+  // module. Invariant: every CLI flag accepted by BOTH subcommands must
+  // reference the shared constant, not an inline string. Catches drift on
+  // any newly-shared flag the next time someone forgets.
+  it("flags accepted by both serve and serve-http must source help from src/cli-help.ts", async () => {
+    const indexSrc = await read("src/index.ts");
+    const serveStart = indexSrc.indexOf('.command("serve",');
+    const serveHttpStart = indexSrc.indexOf('.command("serve-http"');
+    expect(serveStart, "serve subcommand definition not found").toBeGreaterThan(0);
+    expect(serveHttpStart, "serve-http subcommand definition not found").toBeGreaterThan(0);
+    const serveBlock = indexSrc.slice(serveStart, serveHttpStart);
+    const afterServeHttp = indexSrc.indexOf(".command(", serveHttpStart + 1);
+    const serveHttpBlock = indexSrc.slice(serveHttpStart, afterServeHttp > 0 ? afterServeHttp : indexSrc.length);
+
+    const flagRe = /\.option\(\s*"(--[a-z-]+)"/g;
+    const serveFlags = new Set([...serveBlock.matchAll(flagRe)].map((m) => m[1] ?? ""));
+    const serveHttpFlags = new Set([...serveHttpBlock.matchAll(flagRe)].map((m) => m[1] ?? ""));
+    const sharedFlags = [...serveFlags].filter((f) => serveHttpFlags.has(f));
+
+    // Map of flag → expected shared-help constant. Extend as more flags
+    // get extracted to src/cli-help.ts.
+    const expectedConstFor: Record<string, string> = {
+      "--enable-write": "ENABLE_WRITE_HELP",
+      "--diagnostic-search-tools": "DIAGNOSTIC_SEARCH_TOOLS_HELP",
+      "--persistent-index": "PERSISTENT_INDEX_HELP"
+    };
+
+    for (const flag of sharedFlags) {
+      const expectedConst = expectedConstFor[flag];
+      if (!expectedConst) continue; // Not yet extracted — future work.
+      // `flag` comes from /--[a-z-]+/ matches, so it can only contain `-` and
+      // lowercase letters — none are regex metachars outside character classes.
+      // No escaping needed; embed directly. (CodeQL js/incomplete-sanitization
+      // dismissed in v3.5.12 PR #62 — the prior .replace(/-/g, "\\-") was a
+      // useless escape that CodeQL correctly flagged as an incomplete pattern.)
+      const flagOptRe = new RegExp(`\\.option\\(\\s*"${flag}"\\s*,\\s*([^)]+?)\\s*\\)`, "g");
+      const serveCall = [...serveBlock.matchAll(flagOptRe)][0]?.[1] ?? "";
+      const httpCall = [...serveHttpBlock.matchAll(flagOptRe)][0]?.[1] ?? "";
+      expect(
+        serveCall,
+        `serve's ${flag} help should reference ${expectedConst} from cli-help.ts (saw: ${serveCall})`
+      ).toContain(expectedConst);
+      expect(
+        httpCall,
+        `serve-http's ${flag} help should reference ${expectedConst} from cli-help.ts (saw: ${httpCall})`
+      ).toContain(expectedConst);
+    }
+
+    // cli-help.ts must export each constant we're depending on.
+    const cliHelpSrc = await read("src/cli-help.ts");
+    for (const c of Object.values(expectedConstFor)) {
+      expect(cliHelpSrc, `cli-help.ts must export ${c}`).toMatch(new RegExp(`export const ${c}\\s*=`));
+    }
   });
 
   // v3.5.9 — class fix from external audit #3. The v3.5.1 invariants caught

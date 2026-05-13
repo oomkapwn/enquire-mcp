@@ -241,17 +241,127 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
   });
 
+  // v3.5.9 — number-word lookup for human-readable counts in CLI help / docs prose.
+  // Restricted to 0-10 since tool counts won't realistically reach 11 without a
+  // major surface redesign that would touch the help text anyway.
+  const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+
   it("CLI --enable-write help text mentions seven (not five) write tools", async () => {
     // The audit found the help text said "five write tools" while reality is 7.
-    // Pin it to "seven" so adding/removing writes forces a help-text update.
+    // Pin it to the actual count so adding/removing writes forces a help-text update.
     const indexSrc = await read("src/index.ts");
     const counts = await getActualCounts();
-    expect(counts.writes).toBe(7); // sanity check on our parsing
+    const expectedWord = NUMBER_WORDS[counts.writes];
+    expect(expectedWord, `write count ${counts.writes} outside 0-10 NUMBER_WORDS range`).toBeDefined();
     const helpMatch = /Enable the (\w+) write tools/.exec(indexSrc);
     expect(
       helpMatch,
       "--enable-write help text must follow 'Enable the <count-word> write tools' format"
     ).not.toBeNull();
-    expect(helpMatch?.[1]).toBe("seven");
+    expect(helpMatch?.[1]).toBe(expectedWord);
+  });
+
+  // v3.5.9 — class fix from external audit #3. The v3.5.1 invariants caught
+  // tool/prompt count drift in README + STABILITY.md, but the same drift
+  // recurred in 6 OTHER surfaces (docs/api.md, social-preview.svg, badge URL,
+  // package.json description, source-code comments). Below: extend the
+  // invariants to those surfaces so the next audit doesn't find the same
+  // class of bug a 4th time.
+
+  // Helper: count `it(` across tests/**.test.ts as a proxy for actual test
+  // count. Not perfect (nested `it` in fixtures would inflate) but our tests
+  // don't have nested it() blocks, verified manually. Cheaper than spawning
+  // `vitest list` and works without a glob dep — walk tests/ via fs.readdir.
+  async function countActualTests(): Promise<number> {
+    const fs = await import("node:fs/promises");
+    const files: string[] = [];
+    async function walk(dir: string) {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) await walk(full);
+        else if (e.name.endsWith(".test.ts")) files.push(full);
+      }
+    }
+    await walk(path.join(repoRoot, "tests"));
+    let count = 0;
+    for (const f of files) {
+      const body = await fs.readFile(f, "utf8");
+      // Match `it("..."` or `it(\n  "...` — both common formatter shapes.
+      const matches = [...body.matchAll(/^\s*it\s*[(]/gm)];
+      count += matches.length;
+    }
+    return count;
+  }
+
+  it("README test-count claims match actual it() count across tests/*.test.ts", async () => {
+    const readme = await read("README.md");
+    const actual = await countActualTests();
+    // Find every "N tests" / "N passing" / "N unit tests" mention in README.
+    // All occurrences must agree with each other AND with the actual count.
+    const allMentions = [
+      ...readme.matchAll(/\b(\d+)\s+(?:passing|tests|unit tests)\b/g),
+      ...readme.matchAll(/tests-(\d+)/g) // badge URL: tests-665%20passing
+    ];
+    expect(allMentions.length, "README must declare test count somewhere").toBeGreaterThan(0);
+    for (const m of allMentions) {
+      const claimed = Number.parseInt(m[1] ?? "0", 10);
+      expect(claimed, `README mentions "${m[0]}" but actual test count is ${actual}`).toBe(actual);
+    }
+  });
+
+  it("package.json description test count matches actual", async () => {
+    const pkgRaw = await read("package.json");
+    const pkg = JSON.parse(pkgRaw) as { description?: string };
+    const actual = await countActualTests();
+    const m = /(\d+)\s+tests/.exec(pkg.description ?? "");
+    if (m) {
+      // Test count in package.json description is optional, but if present,
+      // it must match.
+      expect(Number.parseInt(m[1] ?? "0", 10)).toBe(actual);
+    }
+  });
+
+  it("social-preview.svg test count matches actual (when present)", async () => {
+    const svg = await read("assets/social-preview.svg");
+    const actual = await countActualTests();
+    // The SVG shows e.g. `<text ...>665</text>` next to `tests`. Look for any
+    // number-text near the word "tests".
+    const near = /(\d+)<\/text>\s*[^<]*<text[^>]*>tests/.exec(svg);
+    if (near) {
+      expect(Number.parseInt(near[1] ?? "0", 10)).toBe(actual);
+    }
+  });
+
+  it("docs/api.md first-paragraph tool count matches actual registered count", async () => {
+    const apiMd = await read("docs/api.md");
+    const counts = await getActualCounts();
+    // First paragraph mentions "N MCP tools (M always-on read + ...)".
+    // Both N and M must match the actual counts.
+    const m = /(\d+) MCP tools \((\d+) always-on read/.exec(apiMd);
+    expect(m, "docs/api.md first paragraph must declare 'N MCP tools (M always-on read ...)'").not.toBeNull();
+    if (m) {
+      expect(Number.parseInt(m[1] ?? "0", 10)).toBe(counts.allTools);
+      expect(Number.parseInt(m[2] ?? "0", 10)).toBe(counts.alwaysOn);
+    }
+  });
+
+  it("docs/api.md write-tool count word matches actual", async () => {
+    const apiMd = await read("docs/api.md");
+    const counts = await getActualCounts();
+    const expectedWord = NUMBER_WORDS[counts.writes];
+    expect(expectedWord, `write count ${counts.writes} outside 0-10 NUMBER_WORDS range`).toBeDefined();
+    // Find every "<word> write tools" mention; all must agree with the actual.
+    const mentions = [...apiMd.matchAll(/\b(\w+) write tools?\b/g)];
+    expect(mentions.length, "docs/api.md must mention write-tool count").toBeGreaterThan(0);
+    for (const m of mentions) {
+      const word = m[1] ?? "";
+      // Allow either the count-word ("seven") or numeric/short forms not yet enforced.
+      // We pin only against the word form here; the per-count enforcement
+      // ensures we'd notice drift between count and word.
+      if (NUMBER_WORDS.includes(word)) {
+        expect(word, `docs/api.md says "${m[0]}" but actual write count is ${counts.writes}`).toBe(expectedWord);
+      }
+    }
   });
 });

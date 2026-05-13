@@ -314,7 +314,7 @@ export function createHttpHandler(
   const healthPath = opts.healthPath ?? "/health";
   const corsOrigins = opts.corsOrigins ?? [];
   const limiter = new RateLimiter(opts.rateLimitPerMinute ?? 120);
-  const maxBodyBytes = 4 * 1024 * 1024; // 4MB — generous for tools/list with 36 tools
+  const maxBodyBytes = 4 * 1024 * 1024; // 4MB — generous for tools/list at the current 44-tool surface (was 36 at v2.x; count grows with each minor release)
 
   // v2.14.0 stateful-mode state.
   const stateful = opts.stateful === true;

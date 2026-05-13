@@ -1,6 +1,6 @@
 # enquire — API
 
-**enquire is an MCP server for Obsidian vaults.** 40 MCP tools (29 always-on read + 4 opt-in read + 7 opt-in write); the 4 opt-ins are: 1 via `--persistent-index` (`obsidian_full_text_search`) + 3 via `--diagnostic-search-tools` (the single-ranker `obsidian_search_text` / `obsidian_semantic_search` / `obsidian_embeddings_search` — gated by default in v2.0+ since `obsidian_search` auto-detects + fuses signals). 2 + 1 opt-in MCP resources, 19 MCP prompts. **v3.1.0+ adds `obsidian_hyde_search`** (HyDE-augmented retrieval, Gao et al 2023; agent supplies a synthetic answer, server embeds it for retrieval) plus the `vault_research` (sub-question decomposition) and `vault_synthesis_page` (Karpathy LLM-Wiki synthesis loop) prompts. v2.6.0+ also speaks Streamable HTTP via `serve-http` (bearer auth + rate-limit + CORS). v2.7.0+ indexes PDFs as a separate read tool surface; **v2.8.0+ blends PDF chunks into `obsidian_search` hybrid retrieval** with `--include-pdfs` — every hit carries a `kind: "md" | "pdf"` flag and PDF snippets include `[page: N]` markers for citation. **v2.9.0+ adds BGE cross-encoder reranking** on top of RRF with `--enable-reranker` — typical +5-10 NDCG@10 retrieval-quality boost. **v2.10.0+ adds Tesseract OCR for image-only / scanned PDFs** via `obsidian_ocr_pdf` — completes the PDF retrieval story.
+**enquire is an MCP server for Obsidian vaults.** 44 MCP tools (33 always-on read + 4 opt-in read + 7 opt-in write); the 4 opt-ins are: 1 via `--persistent-index` (`obsidian_full_text_search`) + 3 via `--diagnostic-search-tools` (the single-ranker `obsidian_search_text` / `obsidian_semantic_search` / `obsidian_embeddings_search` — gated by default in v2.0+ since `obsidian_search` auto-detects + fuses signals). 2 + 1 opt-in MCP resources, 19 MCP prompts. **v3.1.0+ adds `obsidian_hyde_search`** (HyDE-augmented retrieval, Gao et al 2023; agent supplies a synthetic answer, server embeds it for retrieval) plus the `vault_research` (sub-question decomposition) and `vault_synthesis_page` (Karpathy LLM-Wiki synthesis loop) prompts. v2.6.0+ also speaks Streamable HTTP via `serve-http` (bearer auth + rate-limit + CORS). v2.7.0+ indexes PDFs as a separate read tool surface; **v2.8.0+ blends PDF chunks into `obsidian_search` hybrid retrieval** with `--include-pdfs` — every hit carries a `kind: "md" | "pdf"` flag and PDF snippets include `[page: N]` markers for citation. **v2.9.0+ adds BGE cross-encoder reranking** on top of RRF with `--enable-reranker` — typical +5-10 NDCG@10 retrieval-quality boost. **v2.10.0+ adds Tesseract OCR for image-only / scanned PDFs** via `obsidian_ocr_pdf` — completes the PDF retrieval story.
 
 > **Channels:** stable v1.x (`@latest` on npm) ships 28 tools — no ML embeddings, no hybrid search. **v2.0 beta** (`@beta` on npm) adds `obsidian_search` (hybrid RRF) + `obsidian_embeddings_search` + the `install-model` / `build-embeddings` / `clear-embeddings` subcommands. This document covers the **v2.0 beta** surface.
 
@@ -11,7 +11,7 @@
 | Flag                   | Default | Notes                                      |
 |------------------------|---------|--------------------------------------------|
 | `--vault <path>`       | (required) | Path to the Obsidian vault root.        |
-| `--enable-write`       | off     | Register the five write tools.             |
+| `--enable-write`       | off     | Register the seven write tools.            |
 | `--max-file-bytes <n>` | 5 MB    | Max size for any single file read/write.   |
 | `--cache-size <n>`     | 1024    | LRU cap for parsed-note cache.             |
 | `--persistent-cache`   | off     | Persist parsed-note cache to disk so cold starts skip re-parsing. **Stores full note bodies — see [Cache & privacy](../README.md#cache--privacy).** |
@@ -478,7 +478,7 @@ If the index is missing, the tool returns a clean error pointing at `enquire-mcp
 
 ## Write tools (opt-in)
 
-All five write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
+All seven write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
 
 ### `obsidian_create_note`
 

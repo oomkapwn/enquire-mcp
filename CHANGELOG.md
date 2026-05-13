@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.10] — 2026-05-13
+
+**Patch — external audit #3 followup (priorities 3-5 from [`CONCLUSIONS.md`](https://github.com/oomkapwn/.../enquire-mcp-audit/CONCLUSIONS.md)).** v3.5.9 closed §2 of the audit (docs drift class fix). This release tackles §3-4: onboarding clarity, alternative comparison, api.md completeness, and the v3.6 commitment from v3.5.9 to lift branch coverage back above 75%.
+
+### Added
+
+- **[`docs/COMPARISON.md`](./docs/COMPARISON.md)** (250 lines) — honest side-by-side against the 4 main Obsidian MCP alternatives (cyanheads, MarkusPfundstein, StevenStavrakis, FS-only). TL;DR matrix on the audit's 4 priority axes (REST vs FS · Obsidian-required · hybrid retrieval · remote), 4 "when to pick X (not enquire)" sections, 6 "when enquire is the right pick" scenarios, plus a 30-second decision tree. Dated snapshot — invites PRs to correct any row that understates an alternative.
+- **[`docs/QUICKSTART.md`](./docs/QUICKSTART.md)** (154 lines) — single happy-path scenario: `npm i` → `enquire-mcp doctor` smoke check → Claude Desktop wiring → first `obsidian_search` query, in under 5 minutes. Includes exact `claude_desktop_config.json` snippet, platform-specific config paths (macOS / Windows / Linux), and a 5-item troubleshooting section.
+- **[`docs/api.md`](./docs/api.md) — 14 missing tool sections backfilled** (+235 lines). Read (always-on): `obsidian_hyde_search`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_get_communities`, `obsidian_list_bases`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_list_pdfs`, `obsidian_read_pdf`, `obsidian_ocr_pdf` (12). Write (opt-in): `obsidian_chat_thread_append`, `obsidian_frontmatter_set` (2). All 44 registered tools now have structured documentation.
+- **Tool-index invariant in `tests/docs-consistency.test.ts`** — every `registerTool()` name in `src/index.ts` must appear in the api.md tool table. Catches the next time someone ships a new tool and forgets the docs.
+- **40 new tests** (711 total, was 670) covering previously-uncovered branches in `embeddings.ts` (RERANKER_MODELS catalog + `resolveRerankerModel`), `periodic.ts` (`formatToken` switch — YY, M/D, Mo, ddd, WW/Wo, gggg/GGGG, QQ, HH/H/hh/h/A/a, mm/m/ss/s, ordinal boundaries), `bases.ts` (5 query DSL branches), `watcher.ts` (FTS5 race paths), `http-transport.ts` (RateLimiter + `readJsonBody` + stateless/stateful 405/parse-error paths), `pdf.ts` (metadata absence + malformed + `isPdfjsAvailable` cache), and `doctor.ts` (FTS5+embed-db status + candidate cache roots).
+
+### Changed
+
+- **Branch coverage threshold 72 → 74** in `vitest.config.ts`. Actual coverage now **75.29%** (was 72.94% on v3.5.9), a 1.3pp safety margin above the new floor. Closes the v3.6 commitment from v3.5.9.
+- **Documented `obsidian_full_text_search` dual gating** in `docs/api.md` — clarifies it requires BOTH `--persistent-index` AND `--diagnostic-search-tools` (not just the former as the first-paragraph blurb implied). Count math is unchanged.
+
+### Tests
+
+711 unit tests pass · branches 75.29% (threshold 74) · lines 91.81% · functions 81.67% · statements 87.61%. 31 test files. Lint clean.
+
+### Migration
+
+**No-op.** Pure docs + tests + coverage uplift. No tool/CLI/behavior changes.
+
+### Method note
+
+v3.5.9 fixed §2 of audit #3 in one release. This release fixes §3-4 in one release. The §1 (security) was already clean, §5 (final formulation) is met. The remaining audit item — **Q1 monolith refactor** (`tools.ts` 4252 lines + `index.ts` 3673 lines) — is deferred to its own dedicated release (v3.6.0 or v4.0.0 if structurally breaking), as it's a multi-day refactor and doesn't share a coherent scope with documentation work.
+
 ## [3.5.9] — 2026-05-13
 
 **Patch — external audit #3: class fix for numeric/feature drift across 8 surfaces.** v3.5.1 invariants caught drift in README + STABILITY.md tool counts. The same drift recurred in **6 OTHER surfaces** the invariants didn't cover. This release closes the class, not just the instances.

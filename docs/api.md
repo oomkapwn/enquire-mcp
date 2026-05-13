@@ -6,6 +6,69 @@
 
 > Versioned dynamically — see [`CHANGELOG.md`](../CHANGELOG.md) for the current release.
 
+## Tool index
+
+Canonical list of every registered MCP tool. The `Kind` column splits read/write; `Gating` calls out CLI flags required to register the tool (else `always`). The new-tool invariant in `tests/docs-consistency.test.ts` parses this table and fails CI if any registered tool is missing.
+
+### Read tools — always registered
+
+| Tool | Kind | Gating | Summary |
+|---|---|---|---|
+| `obsidian_list_notes` | read | always | List markdown notes filtered by tag / folder / mtime — newest-first. |
+| `obsidian_read_note` | read | always | Read a note by `path` or `title` (full body or heading-only map). |
+| `obsidian_resolve_wikilink` | read | always | Resolve `[[wikilink]]` (alias / section / block / relative) to a vault file. |
+| `obsidian_get_recent_edits` | read | always | List notes ordered by most recent modification. |
+| `obsidian_get_backlinks` | read | always | List every note that links (or embeds) the target note, ranked. |
+| `obsidian_list_tags` | read | always | List unique tags with frontmatter / inline usage counts. |
+| `obsidian_dataview_query` | read | always | Run a Dataview-style `LIST` / `TABLE` query (subset DSL). |
+| `obsidian_get_unresolved_wikilinks` | read | always | Find every `[[wikilink]]` whose target does not resolve to a real file. |
+| `obsidian_get_outbound_links` | read | always | List every outbound wikilink / embed in a note with resolution status. |
+| `obsidian_validate_note_proposal` | read | always | Lint a draft note BEFORE writing — YAML / wikilinks / tags / collisions. |
+| `obsidian_find_similar` | read | always | Lexical-hybrid similarity (tags / 3-grams / shared outbound / co-backlinks). |
+| `obsidian_get_note_neighbors` | read | always | Return a note + its 1-hop graph neighborhood (outbound / inbound / tag siblings). |
+| `obsidian_stats` | read | always | Vault dashboard — totals, recent edits, orphans, broken links, top tags. |
+| `obsidian_lint_wiki` | read | always | Karpathy LLM-Wiki lint — orphans / broken / stubs / stale / concept candidates. |
+| `obsidian_open_questions` | read | always | Surface deferred-thinking markers (`Open question:` / `Q:` / `TODO?` / `??`) across notes. |
+| `obsidian_paper_audit` | read | always | Flag `#paper` notes missing a citable identifier (arxiv / doi / url / isbn). |
+| `obsidian_find_path` | read | always | BFS shortest wikilink path between two notes (with alternatives). |
+| `obsidian_open_in_ui` | read | always | Generate an `obsidian://open` URI for hand-off to the desktop app. |
+| `obsidian_list_canvases` | read | always | List `.canvas` files (whiteboard format) with node + edge counts. |
+| `obsidian_read_canvas` | read | always | Parse one `.canvas` file into typed nodes (text / file / link / group) + edges. |
+| `obsidian_get_communities` | read | always | Detect wikilink-graph communities via greedy modularity (GraphRAG-light). |
+| `obsidian_list_bases` | read | always | List `.base` files (Obsidian's structured-query primitive) with view counts. |
+| `obsidian_read_base` | read | always | Parse a `.base` file into structured JSON (filters / formulas / properties / views). |
+| `obsidian_query_base` | read | always | Execute a `.base` file's filter against the vault, returning matching notes. |
+| `obsidian_list_pdfs` | read | always | List `.pdf` files in the vault with size + mtime. |
+| `obsidian_read_pdf` | read | always | Extract per-page text + `full_text` + doc-level metadata from a PDF. |
+| `obsidian_ocr_pdf` | read | always | Tesseract OCR for image-only / scanned PDFs (multilingual via `lang`). |
+| `obsidian_hyde_search` | read | always | HyDE retrieval — agent supplies a synthetic answer; server embeds it for retrieval. |
+| `obsidian_search` | read | always | Hybrid retrieval — BM25 + TF-IDF + embeddings fused via RRF (v2.0 default). |
+| `obsidian_chat_thread_read` | read | always | Parse a note's `## Chat: <title>` block into structured messages. |
+| `obsidian_context_pack` | read | always | Retrieve + pack vault context for a question to a token budget. |
+| `obsidian_frontmatter_get` | read | always | Read parsed YAML frontmatter (full object or single key). |
+| `obsidian_frontmatter_search` | read | always | Find notes where `frontmatter.<key>` matches `equals` / `exists` / `contains`. |
+
+### Read tools — opt-in (diagnostic / index-gated)
+
+| Tool | Kind | Gating | Summary |
+|---|---|---|---|
+| `obsidian_full_text_search` | read | `--persistent-index` (+ `--diagnostic-search-tools`) | BM25-ranked search over a SQLite FTS5 inverted index. |
+| `obsidian_search_text` | read | `--diagnostic-search-tools` | Case-insensitive token search (AND / OR / phrase modes). |
+| `obsidian_semantic_search` | read | `--diagnostic-search-tools` | Pure-JS TF-IDF cosine retrieval (no model download). |
+| `obsidian_embeddings_search` | read | `--diagnostic-search-tools` | ML-embedding retrieval via `@huggingface/transformers` (persistent vector index). |
+
+### Write tools — opt-in (`--enable-write`)
+
+| Tool | Kind | Gating | Summary |
+|---|---|---|---|
+| `obsidian_create_note` | write | `--enable-write` | Create a new note (refuses to overwrite unless `overwrite=true`). |
+| `obsidian_append_to_note` | write | `--enable-write` | Append a markdown block to the end of an existing note. |
+| `obsidian_rename_note` | write | `--enable-write` | Atomically rename a note AND rewrite every `[[wikilink]]` / `![[embed]]` pointing at it (code-fence-aware). |
+| `obsidian_replace_in_notes` | write | `--enable-write` | Bulk find/replace across notes outside fenced code blocks. |
+| `obsidian_archive_note` | write | `--enable-write` | Move a note into `Archive/` and rewrite backlinks (`rename_note` wrapper). |
+| `obsidian_chat_thread_append` | write | `--enable-write` | Append a user/assistant/system message to a note's `## Chat: <title>` block. |
+| `obsidian_frontmatter_set` | write | `--enable-write` | Set or unset frontmatter keys atomically (pass `null` to delete). |
+
 ## CLI flags
 
 | Flag                   | Default | Notes                                      |
@@ -476,6 +539,152 @@ If the index is missing, the tool returns a clean error pointing at `enquire-mcp
 
 **Why prefer this over the per-ranker tools?** Single tool surface for agents → consistent recall regardless of vault setup. Per-ranker tools (`obsidian_search_text`, `obsidian_full_text_search`, `obsidian_semantic_search`, `obsidian_embeddings_search`) remain available as diagnostic surfaces for tuning / debugging.
 
+## `obsidian_hyde_search` _(v3.1.0)_
+
+HyDE retrieval (Gao et al 2023). The caller agent generates a 1–3 sentence synthetic answer to its own query (without vault access); the server embeds the **answer** (not the question) and retrieves against the answer-shaped vector. Typically beats raw-query embedding by +2–5 NDCG@10 on under-specified queries. Uses the same `.embed.db` as `obsidian_embeddings_search`. Requires `enquire-mcp build-embeddings` first; if `hypothetical_answer` is empty, falls back to embedding the raw `query`.
+
+| Argument               | Type             | Notes                                                                                  |
+|------------------------|------------------|----------------------------------------------------------------------------------------|
+| `query`                | `string`         | Required. The original user question; echoed for audit-trail. Does NOT influence retrieval when `hypothetical_answer` is non-empty. |
+| `hypothetical_answer`  | `string`         | Required. The 1–3 sentence synthetic answer the agent generates. This is what gets embedded. |
+| `folder`               | `string?`        | Restrict to a subfolder.                                                               |
+| `limit`                | `number?` (≤ 100)| Max hits. Default 10.                                                                  |
+| `min_score`            | `number?` (0–1)  | Drop hits below this cosine score. Default 0.3.                                        |
+
+**Returns:** Same shape as `obsidian_embeddings_search` plus an `applied_hyde: true` echo so the caller can confirm which branch ran.
+
+## `obsidian_context_pack`
+
+Given a question, retrieves top-relevant notes (via `obsidian_search`), gathers backlink summaries + optional recent dailies, deduplicates, packs to a token budget, and returns a single ready-to-paste markdown bundle. Saves ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.
+
+| Argument            | Type              | Notes                                                                  |
+|---------------------|-------------------|------------------------------------------------------------------------|
+| `query`             | `string`          | Required. Topic or question to gather context for.                     |
+| `budget_tokens`     | `number?` (≤ 32000)| Approximate token budget. Default 4000 (~4 chars/token).              |
+| `folder`            | `string?`         | Restrict retrieval to a folder.                                        |
+| `include_backlinks` | `boolean?`        | Include 1-line backlink summaries for top-3 notes. Default `true`.     |
+| `recent_dailies`    | `number?` (0–30)  | Include the last N daily-format notes (`YYYY-MM-DD` basenames). Default 0. |
+
+**Returns:** `{ query, budget_tokens, included_notes: [{ path, title, reason }], markdown }`. `markdown` is the packed bundle, ready to paste.
+
+## `obsidian_chat_thread_read`
+
+Parse a note's `## Chat: <title>` block into structured messages with role / timestamp / content / line-range. Non-chat content in the same note is ignored.
+
+| Argument    | Type     | Notes                                                |
+|-------------|----------|------------------------------------------------------|
+| `note_path` | `string` | Required. Vault-relative path to the note hosting the thread. |
+
+**Returns:** `{ note_path, threads: Array<{ title, messages: Array<{ role, content, timestamp?, line_start, line_end }> }> }`.
+
+## `obsidian_frontmatter_get`
+
+Return parsed YAML frontmatter for a note. With `key`, returns just that field's value; without `key`, returns the whole frontmatter object.
+
+| Argument | Type      | Notes                                                |
+|----------|-----------|------------------------------------------------------|
+| `path`   | `string?` | Vault-relative path.                                 |
+| `title`  | `string?` | Note title (filename without `.md`; periodic aliases accepted). |
+| `key`    | `string?` | Single key to read; omit for full frontmatter.       |
+
+**Returns:** `{ path, title, frontmatter }` (full mode) or `{ path, title, key, value }` (single-key mode). `value` is `null` when the key is absent.
+
+## `obsidian_frontmatter_search`
+
+Find every note where `frontmatter.<key>` matches a predicate. Useful as a precursor to bulk `frontmatter_set`: *find all notes with `status: draft` and set their status to `published`*. Predicates are exclusive — pass exactly one of `equals` / `exists` / `contains`.
+
+| Argument   | Type               | Notes                                                                |
+|------------|--------------------|----------------------------------------------------------------------|
+| `key`      | `string`           | Required. Frontmatter key to test.                                   |
+| `equals`   | `unknown?`         | Strict equality predicate (`JSON.stringify` comparison).             |
+| `exists`   | `boolean?`         | Predicate: key must exist (any value).                               |
+| `contains` | `unknown?`         | For array values, value must be a member.                            |
+| `folder`   | `string?`          | Restrict search to a folder.                                         |
+| `limit`    | `number?` (≤ 1000) | Max matches. Default 100.                                            |
+
+**Returns:** `Array<{ path, title, value, mtime }>`.
+
+## `obsidian_get_communities` _(v3.4.0)_
+
+GraphRAG-light. Builds an undirected wikilink graph and partitions notes into structural communities via greedy modularity optimization (single-phase Louvain). Pure structural — no embeddings, no LLM calls. The agent can summarize a community by reading its `representative` (the highest-in-community-degree note) + a sample of members.
+
+| Argument    | Type             | Notes                                                                 |
+|-------------|------------------|-----------------------------------------------------------------------|
+| `min_size`  | `number?` (≤ 1000)| Drop communities with fewer than N members. Default 1 (keep singletons). |
+| `limit`     | `number?` (≤ 500)| Max communities to return (size-desc sort). Default 50.               |
+
+**Returns:** `{ community_count, modularity, iterations, node_count, communities: [{ id, size, members: string[], representative }], membership: Record<string, number> }`. `modularity` ∈ [-0.5, 1] — higher = stronger structure. NOT cached server-side; call once per session and reuse.
+
+## `obsidian_list_bases` _(v3.2.0)_
+
+Lists `.base` files (Obsidian's structured-query primitive — YAML files defining filters/views over the vault) with each base's view count and view names. Honors `--exclude-glob` and `--read-paths`. Sorted newest-first by mtime.
+
+| Argument | Type             | Notes                                       |
+|----------|------------------|---------------------------------------------|
+| `folder` | `string?`        | Restrict the listing to a subfolder.        |
+| `limit`  | `number?` (≤ 500)| Max bases to return. Default 100.           |
+
+**Returns:** `Array<{ path, name, size_bytes, mtime, view_count, view_names: string[] }>`.
+
+## `obsidian_read_base` _(v3.2.0)_
+
+Parses a `.base` file into structured JSON (filters, formulas, properties, summaries, views). Does NOT execute the query — use `obsidian_query_base` for that. Useful when an agent wants to introspect a base before deciding which view to run.
+
+| Argument | Type     | Notes                                                  |
+|----------|----------|--------------------------------------------------------|
+| `path`   | `string` | Required. Vault-relative path of the `.base` file (`.base` extension auto-appended). |
+
+**Returns:** `{ path, name, size_bytes, mtime, filters, formulas, properties, summaries, views }`.
+
+## `obsidian_query_base` _(v3.2.0, extended in v3.5.0)_
+
+Runs a `.base` file's filter against the vault's markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (basename-resolved), `path startsWith / contains "X"`, `file.name == "X"`, `<frontmatter_key> == / != / contains <value>`, plus `and` / `or` / `not`. Anything else (formula evaluation, date arithmetic, summaries) is treated as `true` and surfaced in `unevaluated_predicates`.
+
+| Argument | Type             | Notes                                                                                                       |
+|----------|------------------|-------------------------------------------------------------------------------------------------------------|
+| `path`   | `string`         | Required. Vault-relative path of the `.base` file.                                                          |
+| `view`   | `string?`        | Optional view name; the view's filters are concat'd with the global filter via AND (matching Obsidian semantics). |
+| `folder` | `string?`        | Extra folder scope on top of the base's filters.                                                            |
+| `limit`  | `number?` (≤ 500)| Max matches to return. Default 50.                                                                          |
+
+**Returns:** `{ path, view, matches: Array<{ path, title, frontmatter_subset }>, unevaluated_predicates: string[] }`. Pair with `obsidian_search` for retrieval-quality search; this tool is for explicit saved queries.
+
+## `obsidian_list_pdfs` _(v2.7.0)_
+
+Lists `.pdf` files in the vault with size + last-modified timestamp. Honors `--exclude-glob` and `--read-paths`. Use as the discovery entry point before calling `obsidian_read_pdf`. Sorted newest-first by mtime.
+
+| Argument | Type             | Notes                                       |
+|----------|------------------|---------------------------------------------|
+| `folder` | `string?`        | Restrict the listing to a subfolder.        |
+| `limit`  | `number?` (≤ 500)| Max PDFs to return. Default 100.            |
+
+**Returns:** `Array<{ path, name, size_bytes, mtime }>`.
+
+## `obsidian_read_pdf` _(v2.7.0)_
+
+Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title / author / subject / etc). Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend `obsidian_ocr_pdf`. Powered by Mozilla's PDF.js (Apache-2.0).
+
+| Argument           | Type                                | Notes                                                                |
+|--------------------|-------------------------------------|----------------------------------------------------------------------|
+| `path`             | `string`                            | Required. Vault-relative path of the `.pdf` file.                    |
+| `pages`            | `[number, number]?`                 | Optional 1-indexed inclusive page range, e.g. `[2, 5]`.              |
+| `include_metadata` | `boolean?`                          | Include doc-level metadata. Default `true`.                          |
+
+**Returns:** `{ path, page_count, pages: Array<{ index, text }>, full_text, has_text, metadata? }`. `has_text: false` indicates an image-only PDF — call `obsidian_ocr_pdf` instead.
+
+## `obsidian_ocr_pdf` _(v2.10.0)_
+
+Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as `obsidian_read_pdf`. Multilingual via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'`). ~1–2s per page on M1 CPU. Powered by Tesseract.js (Apache-2.0; trained-data files download on first use into the local cache, ~10 MB per language) + `@napi-rs/canvas` for PDF→bitmap rendering. Both gated to `optionalDependencies` so the markdown-only path stays zero-cost.
+
+| Argument | Type                                | Notes                                                                                       |
+|----------|-------------------------------------|---------------------------------------------------------------------------------------------|
+| `path`   | `string`                            | Required. Vault-relative path of the `.pdf` file.                                           |
+| `lang`   | `string?`                           | Tesseract language pack(s). Default `'eng'`. Multi-lang via `'+'`: `'eng+rus'`. Common: `'eng'`, `'rus'`, `'jpn'`, `'chi_sim'`, `'fra'`, `'deu'`. |
+| `pages`  | `[number, number]?`                 | Optional 1-indexed inclusive page range.                                                    |
+| `scale`  | `number?` (0.5–4)                   | Render scale (DPI multiplier). Default 2 (~150 DPI). Higher = better OCR on small text but slower. |
+
+**Returns:** Same shape as `obsidian_read_pdf` plus `{ mean_confidence, pages: Array<{ index, text, confidence }> }`.
+
 ## Write tools (opt-in)
 
 All seven write tools are **only registered when the server is started with `--enable-write`**. Without that flag the tools are not advertised to the client at all.
@@ -553,6 +762,32 @@ Convenience wrapper around `obsidian_rename_note` for the common archive workflo
 **Source-folder stripping.** The source's leading folders are stripped so the basename lands cleanly in the archive — `Inbox/Foo.md` archives to `Archive/Foo.md`, not `Archive/Inbox/Foo.md`. If you want the inbox structure preserved, pass `archive_folder: "Archive/Inbox"` explicitly.
 
 **Bare-vs-qualified backlinks.** Bare wikilinks (`[[Foo]]`) stay bare and continue to resolve via `findBestMatch`'s basename search — they don't need rewriting. Path-qualified wikilinks (`[[Inbox/Foo]]`) are updated to point at the new path.
+
+### `obsidian_chat_thread_append`
+
+Add a user / assistant / system message to a note's `## Chat: <title>` block. Creates the note + heading if absent. Threads are stored as markdown so they're searchable, version-controllable, and survive across sessions / clients. Pair with `obsidian_chat_thread_read` to load past context.
+
+| Argument       | Type                                | Notes                                                                |
+|----------------|-------------------------------------|----------------------------------------------------------------------|
+| `note_path`    | `string`                            | Required. Vault-relative path to the note hosting the thread.        |
+| `role`         | `"user" \| "assistant" \| "system"` | Required. Role of the message being appended.                        |
+| `content`      | `string`                            | Required. Message body (markdown allowed).                           |
+| `thread_title` | `string?`                           | Optional thread title — used when the note is created from scratch.  |
+
+**Returns:** `{ note_path, thread_title, role, line_start, line_end, appended_bytes }`.
+
+### `obsidian_frontmatter_set`
+
+Surgical YAML manipulation: set one or more frontmatter keys, or remove them by passing `null` as the value. Round-trips through gray-matter (the same parser used at write time) so YAML formatting / quoting / type-coercion stays consistent.
+
+| Argument  | Type                       | Notes                                                                       |
+|-----------|----------------------------|-----------------------------------------------------------------------------|
+| `path`    | `string?`                  | Vault-relative path.                                                        |
+| `title`   | `string?`                  | Note title (filename without `.md`).                                        |
+| `set`     | `Record<string, unknown>`  | Required. Keys to set. Pass `null` as value to delete a key (e.g. `{status: "published", draft: null}`). |
+| `dry_run` | `boolean?`                 | Preview the diff without writing. Default `false`.                          |
+
+**Returns:** `{ path, before: object, after: object, changed_keys: string[], dry_run }`.
 
 ## MCP resources
 

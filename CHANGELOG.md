@@ -4,7 +4,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [3.5.11] — 2026-05-13
 
-**Patch — pdfjs-dist v4 → v5 migration.** Dependabot PR #54 had been hanging since 2026-05-11 with CI red across every job. The bump itself was 1 line in `package.json`, but pdfjs v5 has 3 breaking API changes that needed code-side fixes. This release ships the bump + migration together.
+**Patch — pdfjs-dist v4 → v5 migration + CI Node 20 drop.** Dependabot PR #54 had been hanging since 2026-05-11 with CI red across every job. The bump itself was 1 line in `package.json`, but pdfjs v5 has 3 breaking API changes that needed code-side fixes, AND v5.7+ requires `engines: >=22.13.0`. This release ships the bump + migration + CI matrix update together.
 
 ### Changed
 
@@ -13,9 +13,18 @@ All notable changes to this project will be documented here. The format follows 
 - **`src/ocr.ts:200-209`** — `page.render()` now requires a top-level `canvas: HTMLCanvasElement | null` field. v5 made `canvas` the primary render target and demoted `canvasContext` to "backwards compatibility only". We pass both: the `@napi-rs/canvas` instance via `canvas` (cast for the HTMLCanvasElement-typed slot) AND the 2D context via `canvasContext` as a v4-style hint.
 - **`src/pdf.ts:136`** — fixed `TS7006` implicit-any on the `TextContent.items` map callback by relying on TypeScript's discriminated-union narrowing through the `"str" in item` guard. v5 widened the union to include `TextMarkedContent` (structural items without a `.str`); the guard already handles them.
 
+### Changed — CI matrix
+
+- **Dropped Node 20 from CI test matrix** (`[20, 22, 24]` → `[22, 24]`). pdfjs-dist v5.7+ requires `engines: >=22.13.0` and silently skips install on Node 20 (it's in `optionalDependencies`), which then makes `tsc` fail in the `prepare` hook because `typeof import("pdfjs-dist")` types don't resolve. Node 20 went EOL 2026-04, so testing on it stopped reflecting reality.
+- **Updated `smoke` and `audit` jobs from Node 20 → 22** for the same reason.
+- **Updated `release.yml` required-check matcher** to drop `test (20)` (REQ_COUNT 8 → 7) so tag pushes don't block waiting for a check that no longer runs.
+- **Updated branch protection + ruleset** (admin-side): required contexts now `["lint", "test (22)", "test (24)", "smoke", "audit", "coverage", "version-consistency"]`. Was 8 required, now 7.
+
+`engines` in `package.json` stays at `">=20"` — end users on Node 20 installing from the npm registry get the prebuilt `dist/` (no local tsc) and the PDF feature simply degrades to "not available" (same as any other missing optional native dep). This is BC for non-PDF users. PDF users on Node 20 need to upgrade — but Node 20 is EOL anyway.
+
 ### Tests
 
-711 unit tests pass · branches 75.29% (unchanged) · lint clean · tsc clean · smoke pass (synthetic vault scan with FTS + 401 + auth all green) · version-consistency green at `3.5.11` across 5 surfaces.
+711 unit tests pass · branches 75.29% · lines 89.53% · statements 86.06% · functions 82.15% (verified locally via `npm run test:coverage`, not copy-pasted from sub-agent output — fixing the methodology lapse the v3.5.10 audit caught). Lint clean · tsc clean · smoke pass (synthetic vault scan with FTS + 401 + auth all green) · version-consistency green at `3.5.11` across 5 surfaces.
 
 ### Migration
 

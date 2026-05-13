@@ -28,13 +28,21 @@ jobs:
 
   test:
     # Required gate. Runs on Linux to keep check-run names stable for the
-    # branch protection ruleset (ruleset hardcodes "test (20)" etc.).
+    # branch protection ruleset.
+    # v3.5.11 — dropped Node 20 from matrix. pdfjs-dist v5.7+ requires
+    # `engines: >=22.13.0` and silently skips on Node 20 (it's an
+    # optionalDep), which makes `tsc` fail in the `prepare` hook because
+    # static `typeof import("pdfjs-dist")` types can't resolve. Node 20
+    # is EOL as of 2026-04, so dropping CI testing on it matches reality.
+    # End users on Node 20 still get the prebuilt `dist/` from npm and
+    # the PDF feature degrades to "not available" (consistent with how
+    # other optional native deps behave).
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -92,7 +100,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -116,7 +125,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=moderate

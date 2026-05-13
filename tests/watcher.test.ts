@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { Vault } from "../src/vault.js";
 import { VaultWatcher } from "../src/watcher.js";
 
@@ -118,5 +119,116 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     await w.start();
     await w.close();
     await w.close(); // second close — must not throw
+  });
+});
+
+// v3.6 — branches coverage. The watcher's FTS5-reindex paths
+// (add/change → reindexFile, unlink → dropFile, missing-file error in
+// the read-and-reindex try/catch) are only reachable when an
+// FtsIndex is wired in. Stand up a real FTS5 index against a temp
+// vault and observe totalFiles() / totalChunks() flip as files
+// move on disk. Deterministic — no time-based asserts beyond
+// chokidar's awaitWriteFinish (already polled via waitFor()).
+describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
+  it("reindexes on add + unlink drops the file's chunks", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+      await w.start();
+      try {
+        // Add: a fresh .md file should land in the index after the watcher
+        // picks it up.
+        const abs = path.join(root, "added.md");
+        await fs.writeFile(abs, "# Heading\n\nFirst body chunk.\n\nSecond chunk has more text.\n");
+        const indexed = await waitFor(() => fts.totalFiles() >= 1);
+        expect(indexed).toBe(true);
+        expect(fts.totalChunks()).toBeGreaterThan(0);
+        // Unlink: deleting the file should drop chunks via dropFile().
+        await fs.unlink(abs);
+        const dropped = await waitFor(() => fts.totalFiles() === 0);
+        expect(dropped).toBe(true);
+        expect(fts.totalChunks()).toBe(0);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      fts.close();
+    }
+  });
+
+  it("change event re-runs reindexFile (chunks update in place)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const filePath = path.join(root, "iter.md");
+    await fs.writeFile(filePath, "# T\n\nfirst body\n");
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    try {
+      // Seed the index with the initial content so the chunk count is known.
+      const note = await v.readNote(filePath);
+      const stat = await v.stat(filePath);
+      fts.reindexFile(
+        "iter.md",
+        stat.mtimeMs,
+        note.content,
+        note.parsed.wikilinks.map((w) => w.target),
+        note.parsed.tags
+      );
+      const chunksBefore = fts.totalChunks();
+      expect(chunksBefore).toBeGreaterThan(0);
+
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+      await w.start();
+      try {
+        // Rewrite with a longer body so the chunk count goes up — proof
+        // that the watcher invoked reindexFile (not a no-op).
+        await new Promise((r) => setTimeout(r, 20));
+        const bigger = "# T\n\nfirst body\n\nadded paragraph one.\n\nadded paragraph two.\n\nadded paragraph three.\n";
+        await fs.writeFile(filePath, bigger);
+        const grew = await waitFor(() => fts.totalChunks() > chunksBefore);
+        expect(grew).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      fts.close();
+    }
+  });
+
+  it("survives an add event for a file that disappears before stat (skip branch)", async () => {
+    // Race: chokidar fires `add`, but the file is unlinked before the
+    // watcher's stat() runs. The handle() try/catch should swallow it
+    // and emit a "skip" stderr line (we use silent:true so nothing
+    // pollutes the test runner).
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+      await w.start();
+      try {
+        const abs = path.join(root, "ephemeral.md");
+        await fs.writeFile(abs, "transient");
+        // Immediately unlink. By the time chokidar's awaitWriteFinish
+        // settles, the file is gone — vault.stat will throw ENOENT in
+        // the handle() try block, which falls into the "skip" branch.
+        await fs.unlink(abs).catch(() => {});
+        // Give chokidar a window to process and discard the event.
+        // We can't directly assert the skip-branch from outside the
+        // watcher, but we DO assert the FTS index stays empty (the
+        // alternative — chunks getting added for a phantom file —
+        // would mean the error branch silently succeeded).
+        await new Promise((r) => setTimeout(r, 800));
+        expect(fts.totalFiles()).toBe(0);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      fts.close();
+    }
   });
 });

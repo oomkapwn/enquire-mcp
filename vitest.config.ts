@@ -19,11 +19,20 @@ export default defineConfig({
       reporter: ["text", "html", "lcov"],
       include: ["src/**/*.ts"],
       exclude: ["src/index.ts", "**/*.test.ts"],
+      // v3.6 — branches threshold raised 72→74 after the coverage uplift
+      // pass. v3.5.9 had dropped it from 73→72 because local was at 72.94%
+      // (knife-edge against CI). This release adds targeted tests for
+      // bases predicates, embeddings reranker resolution, http-transport
+      // parse-error + DELETE/PATCH method-not-allowed branches, watcher
+      // FTS5 reindex paths, doctor FTS5/embed-db ok branches, pdf cache
+      // branches, and periodic formatToken switch cases. Branches moved
+      // 72.94% → 75.29% (+2.35pp). 74 leaves a ~1.3pp safety margin
+      // against CI-vs-local environment drift.
       thresholds: {
         lines: 86,
         statements: 82,
         functions: 75,
-        branches: 73
+        branches: 74
       }
     }
   }

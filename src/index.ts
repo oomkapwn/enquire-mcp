@@ -52,7 +52,7 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
-const VERSION = "3.5.8";
+const VERSION = "3.5.10";
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 function embedDbPath(vaultRoot: string): string {
@@ -178,7 +178,7 @@ async function main(): Promise<void> {
     )
     .option(
       "--diagnostic-search-tools",
-      "Register the four single-ranker search tools (obsidian_search_text, obsidian_full_text_search, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool. Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking."
+      "Register the single-ranker search tools (obsidian_search_text, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool — plus obsidian_full_text_search if --persistent-index is also set (it's gated on FTS5 availability separately). Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking."
     )
     .option(
       "--include-pdfs",

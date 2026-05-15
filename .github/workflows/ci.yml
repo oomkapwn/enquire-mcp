@@ -90,6 +90,11 @@ jobs:
       # within 0.5pp. Closes the class of bug v3.5.10 audit caught (inflated
       # stats copy-pasted from sub-agent output).
       - run: npm run check:changelog-coverage
+      # v3.7.0 — per-file branch coverage floors for security-critical modules.
+      # Global threshold (74%) alone hides per-file dips into the 66-68% range
+      # (http-transport.ts, tools/search.ts, tools/meta.ts, tools/media.ts).
+      # Floors set ~2pp below current values; updates require CHANGELOG note.
+      - run: npm run check:per-file-coverage
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-report

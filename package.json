@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.6.4",
-  "description": "Memory layer for AI agents over your Obsidian vault. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 773 tests, SLSA-3, semver-bound, MIT.",
+  "version": "3.7.0",
+  "description": "Memory layer for AI agents over your Obsidian vault. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 775 tests, SLSA-3, semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -61,6 +61,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check:changelog-coverage": "node scripts/check-changelog-coverage.mjs",
+    "check:per-file-coverage": "node scripts/check-per-file-coverage.mjs",
     "lint": "biome check",
     "lint:fix": "biome check --write",
     "format": "biome format --write",
@@ -71,7 +72,7 @@
     "bench:peek-cache": "npm run build && node scripts/bench-peek-cache.mjs",
     "docs:api": "typedoc",
     "prepare": "tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
-    "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs",
+    "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
     "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md"
   },
   "keywords": [

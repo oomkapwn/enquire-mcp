@@ -9,7 +9,7 @@
     "node_version": "v25.9.0",
     "platform": "darwin arm64",
     "cpu_model": "Apple A18 Pro",
-    "timestamp": "2026-05-15T10:47:19Z",
+    "timestamp": "2026-05-15T19:54:46Z",
     "reranker_alias": "rerank-bge",
     "reranker_hfid": "Xenova/bge-reranker-base",
     "reranker_dtype": "q8",
@@ -24,7 +24,7 @@
       "mean_ndcg": 0.8184028981055633,
       "mean_recall": 0.8844444444444444,
       "mean_mrr": 0.826851851851852,
-      "mean_latency_ms": 0.10921043333334333,
+      "mean_latency_ms": 0.1395638833333275,
       "ndcg_by_category": {
         "exact": 0.9413693051670988,
         "semantic": 0.5492184211113632,
@@ -39,7 +39,7 @@
       "mean_ndcg": 0.4059627718864251,
       "mean_recall": 0.38333333333333336,
       "mean_mrr": 0.48333333333333334,
-      "mean_latency_ms": 0.07408819999999802,
+      "mean_latency_ms": 0.09490761666666003,
       "ndcg_by_category": {
         "exact": 0.5545493171591656,
         "semantic": 0.11522479948324703,
@@ -54,7 +54,7 @@
       "mean_ndcg": 0.8667881925372072,
       "mean_recall": 0.9038888888888889,
       "mean_mrr": 0.9090277777777779,
-      "mean_latency_ms": 2.1132958333333476,
+      "mean_latency_ms": 2.734061766666658,
       "ndcg_by_category": {
         "exact": 0.9652385064038982,
         "semantic": 0.6203227707383645,
@@ -69,7 +69,7 @@
       "mean_ndcg": 0.898538248715456,
       "mean_recall": 0.9394444444444444,
       "mean_mrr": 0.9274074074074076,
-      "mean_latency_ms": 102.32531106666669,
+      "mean_latency_ms": 178.97990353333333,
       "ndcg_by_category": {
         "exact": 0.9937855593157552,
         "semantic": 0.6710385592898753,
@@ -84,7 +84,7 @@
       "mean_ndcg": 0.7142769657784033,
       "mean_recall": 0.9638888888888888,
       "mean_mrr": 0.6580555555555557,
-      "mean_latency_ms": 224.18464021666654,
+      "mean_latency_ms": 401.266277116667,
       "ndcg_by_category": {
         "exact": 0.7326611239540608,
         "semantic": 0.6759492356071226,
@@ -99,7 +99,7 @@
       "mean_ndcg": 0.8694043817172444,
       "mean_recall": 0.9122222222222223,
       "mean_mrr": 0.9051587301587303,
-      "mean_latency_ms": 540.3022715666667,
+      "mean_latency_ms": 1028.4066771666658,
       "ndcg_by_category": {
         "exact": 0.9611229661140764,
         "semantic": 0.6398069224019477,
@@ -114,7 +114,7 @@
       "mean_ndcg": 0.7672155804893493,
       "mean_recall": 0.8133333333333332,
       "mean_mrr": 0.8466666666666667,
-      "mean_latency_ms": 515.5845199599999,
+      "mean_latency_ms": 1066.0893449599982,
       "ndcg_by_category": {
         "exact": 0.9711032699350037,
         "semantic": 0.6720961830386256,
@@ -128,7 +128,7 @@
       "mean_ndcg": 0.572801467713516,
       "mean_recall": 0.5933333333333333,
       "mean_mrr": 0.7077777777777778,
-      "mean_latency_ms": 722.8922166400001,
+      "mean_latency_ms": 1344.3893616399978,
       "ndcg_by_category": {
         "exact": 0.9509883574167833,
         "semantic": 0.4461834326461955,

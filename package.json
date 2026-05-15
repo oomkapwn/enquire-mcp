@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.5.13",
+  "version": "3.5.14",
   "description": "The most advanced MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW vector index, int8 quantization, late-chunking, HyDE-augmented retrieval, sub-question decomposition, PDFs (with OCR), Bases (.base query execution, standalone — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 712 tests, SLSA-3, semver-bound. Works with Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client.",
   "type": "module",
   "bin": {

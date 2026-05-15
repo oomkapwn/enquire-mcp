@@ -1,8 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
+import { peekFtsMetaSafe } from "../src/fts5.js";
 import { parsePositiveInt, parseQuantizationMode } from "../src/index.js";
 
 describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => {
@@ -313,5 +315,120 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       { encoding: "utf8" }
     );
     expect(out2).toMatch(/added=2/);
+  });
+
+  // v3.7.0 M-1 — E2E preservation tests for the remaining K-1 callsites that
+  // v3.6.4 fixed but didn't yet have behavior-level coverage. The v3.6.4 K-1
+  // closure added peek-before-open at cli.ts:514,554 (setup), 398 (build-
+  // embeddings), and 638 (eval). v3.6.4 shipped E2E pairs only for `index`
+  // (above). These tests close the gap for the other three commands.
+  //
+  // Note: where the command path requires loading the embedder model (which
+  // depends on a network-cached HuggingFace download), we don't assert exit
+  // code — we capture stderr and assert the K-1 honoring message fires
+  // BEFORE the embedder load. That proves the peek-and-honor logic ran
+  // even when the test environment can't complete the full subcommand.
+
+  it("`enquire-mcp setup --skip-embeddings` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    // setup uses `defaultIndexFile(v.root)` where v.root is the REALPATH of
+    // the vault (Vault.ensureExists() does fs.realpath). On macOS,
+    // tmpdir/.../vault → /private/var/.../vault. To make our peek and
+    // setup look at the same file, use a pinned index location instead of
+    // relying on the hash-derived default. But setup has no `--index-file`
+    // flag, so we pre-seed via the default path computed against vault's
+    // realpath.
+    const realVault = await fs.realpath(vault);
+    const { defaultIndexFile } = await import("../src/fts5.js");
+    const indexFile = defaultIndexFile(realVault);
+    await fs.mkdir(path.dirname(indexFile), { recursive: true });
+    // Build FTS5 with trigram at the default location.
+    execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--tokenize", "trigram"], {
+      encoding: "utf8"
+    });
+    // Sanity: peek shows trigram before setup runs.
+    const metaBefore = await peekFtsMetaSafe(indexFile);
+    expect(metaBefore?.tokenize_mode).toBe("trigram");
+    // Re-run `setup --skip-embeddings`. Pre-v3.6.4 this would silently
+    // destroy trigram and rebuild as unicode61. Post-v3.6.4: preservation.
+    const setupResult = spawnSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
+      encoding: "utf8"
+    });
+    // v3.6.4 setup emits an info line when honoring trigram. Assert via
+    // combined stdout/stderr.
+    const combined = (setupResult.stdout ?? "") + (setupResult.stderr ?? "");
+    expect(combined).toMatch(/honoring existing tokenize_mode=trigram/);
+    // The on-disk meta must still be trigram after setup.
+    const metaAfter = await peekFtsMetaSafe(indexFile);
+    expect(metaAfter?.tokenize_mode).toBe("trigram");
+    expect(setupResult.status).toBe(0);
+  });
+
+  it("`enquire-mcp eval --persistent-index` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    // eval uses defaultIndexFile(v.root) — same realpath concern as setup.
+    const realVault = await fs.realpath(vault);
+    const { defaultIndexFile } = await import("../src/fts5.js");
+    const indexFile = defaultIndexFile(realVault);
+    // Build FTS5 with trigram at the default location so eval finds it.
+    execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--tokenize", "trigram"], {
+      encoding: "utf8"
+    });
+    // Minimal queries.jsonl — eval supports BM25-only via --persistent-index
+    // when no embed-db exists, so the embedder is not required here.
+    const queriesFile = path.join(tmpdir, "queries.jsonl");
+    await fs.writeFile(queriesFile, '{"query":"Apollo","relevant":["Apollo.md"]}\n');
+    // Run eval. K-1 contract: must not destroy the trigram-built FTS5 index.
+    const evalResult = spawnSync(
+      process.execPath,
+      [distEntry, "eval", "--vault", vault, "--persistent-index", "--queries", queriesFile, "--k", "5"],
+      { encoding: "utf8" }
+    );
+    // Assert eval ran (status 0 expected for BM25-only path).
+    expect(evalResult.status).toBe(0);
+    // Critical assertion: the on-disk FTS5 index after eval still has
+    // tokenize_mode=trigram. Pre-v3.6.4 it would have been rebuilt as
+    // unicode61 by eval's destructive bootstrapSchema path.
+    const metaAfter = await peekFtsMetaSafe(indexFile);
+    expect(metaAfter?.tokenize_mode).toBe("trigram");
+  });
+
+  it("`enquire-mcp build-embeddings` (no --embedding-model) HONORS existing model_alias=bge in stderr message (v3.7.0 M-1)", async () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    // build-embeddings uses embedDbPath(vault.root) — same realpath concern.
+    const realVault = await fs.realpath(vault);
+    const { embedDbPath } = await import("../src/tool-registry.js");
+    const embedFile = embedDbPath(realVault);
+    await fs.mkdir(path.dirname(embedFile), { recursive: true });
+    // Pre-create a meta-only embed-db via direct EmbedDb construction (no
+    // embedder load required — EmbedDb writes only the meta row at open
+    // time; vectors would come from a later syncEmbedDb call which we skip).
+    const seedDb = new EmbedDb({ file: embedFile, vaultRoot: realVault, modelAlias: "bge", dim: 384 });
+    await seedDb.open();
+    seedDb.close();
+    // Sanity: meta is bge.
+    const metaBefore = await peekEmbedDbMeta(embedFile);
+    expect(metaBefore?.model_alias).toBe("bge");
+    // Run `build-embeddings` without --embedding-model flag. The Commander
+    // default is "multilingual" — pre-v3.6.4 this would silently destroy
+    // bge and rebuild as multilingual. Post-v3.6.4: peek + honor + emit
+    // stderr line BEFORE embedder load.
+    //
+    // We don't assert exit code because the embedder may fail to load in
+    // CI environments without the model cached. The stderr line is the
+    // ground-truth proof that v3.6.4 peek-honor logic ran.
+    const buildResult = spawnSync(process.execPath, [distEntry, "build-embeddings", "--vault", vault], {
+      encoding: "utf8",
+      timeout: 60_000
+    });
+    const stderr = buildResult.stderr ?? "";
+    expect(stderr).toMatch(/honoring existing model_alias=bge/);
+    // After the run (success OR embedder-load failure), the on-disk meta
+    // must NOT have been silently rewritten to "multilingual".
+    const metaAfter = await peekEmbedDbMeta(embedFile);
+    expect(metaAfter?.model_alias).toBe("bge");
   });
 });

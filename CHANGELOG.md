@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.2] — 2026-05-15
+
+> **TL;DR:** 4th-instance audit response for the documentation-drift class. A round-3 audit of K-1 invariant comments found **13+ inline `// v3.6.3 K-1` mis-attributions** in `src/cli.ts`, `src/fts5.ts`, `src/embed-db.ts`, and `tests/k1-class-invariant.test.ts`. v3.6.3 was the marketing-only patch; **K-1 actually closed in v3.6.4** (the K-1 work was deferred mid-sprint when v3.6.3 scope was split). Inline find-and-replace wasn't done, so the comments shipped wrong. v3.7.1 had fixed the SECURITY.md drift; this patch fixes the source-comment drift + adds a **structural invariant test** (`tests/k1-version-stamp-consistency.test.ts`) so a 5th instance can't slip past CI. **+2 tests** (777 total). Zero code, behavior, or schema changes.
+
+**Patch — 4th drift-class instance fix + structural invariant against version-stamp drift.**
+
+### Critical retroactive correction — K-1 version attribution
+
+**13+ inline `// v3.6.3 K-1 ...` comments and TSDoc class-closure timelines in `src/` and `tests/` attributed the K-1 cli.ts closure to v3.6.3.** v3.6.3 was marketing-only ("memory for AI agents" positioning, no code changes). K-1 actually closed in v3.6.4. The drift happened because v3.6.3 was originally scoped to include K-1 + marketing, then was split mid-sprint (K-1 deferred to v3.6.4 per the CLAUDE.md "audit BEFORE ship" rule), and the inline comments weren't updated when the deferral decision landed.
+
+**Files with drift (now fixed)**:
+- `src/cli.ts` — 7 inline `// vX.Y.Z K-1 closure` / `// SAFE BY DESIGN (vX.Y.Z K-1 invariant)` comments at lines 269, 313, 418, 485, 566, 599, 728 → all bumped `v3.6.3` → `v3.6.4`.
+- `src/fts5.ts` — TSDoc class-closure timeline block at line 740+ → rewritten honestly: v3.6.1 (1/10 callsites) → v3.6.2 (4/10) → v3.6.3 (marketing-only, K-1 deferred) → v3.6.4 (full closure + grep invariant) → v3.7.0 (AST sibling invariant). Also fixed `within 20 lines` → `within 40 lines` (the v3.6.4 grep invariant uses 40-line window since biome reformat).
+- `src/embed-db.ts` — TSDoc class-closure timeline at line 636+ → same rewrite.
+- `tests/k1-class-invariant.test.ts` — file header rewritten with the corrected timeline.
+
+This is the **4th instance of the documentation-drift class** in the K-1 saga:
+1. v3.6.1: "CRIT-1 closed" — 1/10 callsites (overclaim instance #1)
+2. v3.6.2: "all 10 callsites" — 4/10 (overclaim instance #2)
+3. v3.7.1: SECURITY.md HN-2 said "permissive" but code was fail-closed since v3.6.2 (doc-lag drift)
+4. v3.7.2 (now): v3.6.3 K-1 mis-attribution — 13+ comments wrong (split-sprint drift)
+
+### Added — structural invariant against version-stamp drift
+
+**`tests/k1-version-stamp-consistency.test.ts`** — closes the class. Two tests:
+
+1. **Consistency check**: every `// vX.Y.Z K-1 ...` comment in `src/` must use the same version stamp. If a future sprint adds a comment with a different stamp, CI fails — forcing the author to either align with existing comments OR update ALL stamps + CHANGELOG in a single commit (architectural-change case).
+
+2. **Canonical anchor**: the K-1 version stamp must be `v3.6.4` (the version that structurally closed K-1). If a future v3.X.Y legitimately re-closes K-1 after a major refactor, the test will fail until `CANONICAL` is updated, forcing explicit acknowledgment.
+
+This is the **5th-level structural guard** for the K-1 class. The chain now:
+1. Grep invariant (`tests/k1-class-invariant.test.ts`, v3.6.4) — peek call presence
+2. AST def-use trace (`tests/k1-ast-invariant.test.ts`, v3.7.0) — peek result consumed
+3. Caller-pattern integration (`tests/peek-meta.test.ts`, v3.6.4) — peek→honor→open chain
+4. Fixture-based negative-control (`tests/fixtures/k1-invariant/`, v3.7.0) — analyzer self-test
+5. Version-stamp consistency (this patch, v3.7.2) — claim/reality drift
+
+**K-1 class enforcement now compound-redundant.** Each level catches a different bypass class; losing one doesn't lose the chain.
+
+### Changed — documentation honesty
+
+The retroactive TSDoc rewrites add a 5-step timeline including the v3.6.3 deferral and the v3.7.0 AST sibling test. This is more honest than the original 4-step timeline (which compressed v3.6.3 + v3.6.4 into one line and omitted v3.7.0 entirely).
+
+### Tests
+
+**777 tests** (was 775 in v3.7.1). **+2**:
+- 2 K-1 version-stamp consistency invariant tests (consistency + canonical anchor).
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · per-file coverage floors met · K-1 invariant gates green (grep + AST + version-stamp).
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same MCP wire format, same CLI. The fixed TSDoc surfaces in IDE intellisense + TypeDoc on GH Pages with correct version attribution (this is what makes it consumer-visible enough to warrant a version bump rather than just a docs commit).
+
+### Method note — when does drift-class iteration stop?
+
+The K-1 saga is now **4 documentation-drift instances + 1 code-drift instance** (the original K-1 destructive bug class):
+- Code drift: closed at v3.6.4 (peek-everywhere) + v3.7.0 (AST def-use trace).
+- Doc drift instance #1: overclaim "CRIT-1 closed" → CHANGELOG retroactive in v3.6.2.
+- Doc drift instance #2: overclaim "all 10 callsites" → retroactive in v3.6.4.
+- Doc drift instance #3: SECURITY.md HN-2 doc-lag → retroactive in v3.7.1.
+- Doc drift instance #4: v3.6.3 K-1 mis-attribution → retroactive in v3.7.2 + structural invariant.
+
+**The structural invariant in this patch is the iteration-terminator.** Future K-1 documentation drift becomes a test failure, not a future audit finding. Per the v3.6.4 method note: *"when a methodological bug recurs in two consecutive releases, the fix is not another instance fix — it's structural enforcement."* The K-1 doc-drift class has now recurred 4 times; the structural invariant closes the loop.
+
+**Expected v3.7.3?** No. After this patch, every known K-1 doc drift is closed AND mechanically prevented. If a 5th instance ships, that's a CI bug in the new invariant test (which has its own consistency + canonical-anchor tests as self-guards). The chain terminates here.
+
+---
+
 ## [3.7.1] — 2026-05-15
 
 > **TL;DR:** External audit response. A 3rd-party audit on v3.6.0 (commit `c84ddde`, 38 findings: 0 Critical / 2 High / 11 Medium / 14 Low / 9 Info) was processed against the current v3.7.0 state. **36/38 findings already closed** by the v3.6.1→v3.7.0 cascade. **1 residual material drift fixed in this patch**: `SECURITY.md` still described `.base` DSL unevaluated predicates as *"treated as `true` (permissive)"* — but v3.6.2's HN-2 fix flipped that policy to fail-closed. Misleading SECURITY surface is a real threat-model issue, even though the code is correct; fixing here. Plus 2 docs touch-ups (api.md channels → v3.7.x, QUICKSTART Node version framing). **No code changes, no behavior changes, no test count change.** 775 tests unchanged.

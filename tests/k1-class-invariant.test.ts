@@ -1,13 +1,19 @@
-// v3.6.3 K-1 class invariant — methodological guard.
+// v3.6.4 K-1 class invariant — methodological guard.
+// (v3.7.2 audit response: file header originally said "v3.6.3" — that
+//  was the 4th instance of the version-attribution drift class, since
+//  v3.6.3 was the marketing-only patch and K-1 actually closed in v3.6.4.
+//  Strengthened to v3.7.0 with the AST def-use trace sibling test.)
 //
 // Background. v3.6.1 fixed ONE callsite of the destructive-bootstrap-schema
 // class and claimed "CRIT-1 closed" — overclaim; 9 callsites remained.
 // v3.6.2 fixed 3 more callsites and claimed "all 10 callsites" — still an
-// overclaim; cli.ts had 5 residual sites. v3.6.3 closes the residual AND
-// adds this test as a class-level guard so the overclaim pattern can't
-// repeat: every `new EmbedDb(...)` / `new FtsIndex(...)` in src/ must be
-// preceded by either a `peek*Meta` call OR an explicit `// SAFE BY DESIGN`
-// comment within 20 lines of context.
+// overclaim; cli.ts had 5 residual sites. v3.6.3 shipped marketing-only;
+// v3.6.4 closes the residual AND adds this test as a class-level guard so
+// the overclaim pattern can't repeat: every `new EmbedDb(...)` /
+// `new FtsIndex(...)` in src/ must be preceded by either a `peek*Meta`
+// call OR an explicit `// SAFE BY DESIGN` comment within 40 lines of
+// context (raised from 20 in v3.6.4 to accommodate biome-reformatted
+// multi-line write calls).
 //
 // This is a grep-based invariant — not perfect (e.g. doesn't follow control
 // flow), but catches the specific class of bug v3.6.1 → v3.6.2 → v3.6.3

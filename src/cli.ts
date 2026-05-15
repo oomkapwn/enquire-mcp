@@ -266,7 +266,7 @@ export async function main(): Promise<void> {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
       const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
-      // SAFE BY DESIGN (v3.6.3 K-1 invariant): `clearOnDisk()` only deletes
+      // SAFE BY DESIGN (v3.6.4 K-1 invariant): `clearOnDisk()` only deletes
       // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
       // TABLE risk. Peek-before-open does not apply.
       const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
@@ -310,7 +310,7 @@ export async function main(): Promise<void> {
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
-        // v3.6.3 K-1 closure: if user passed --tokenize, honor user's intent.
+        // v3.6.4 K-1 closure: if user passed --tokenize, honor user's intent.
         // If not passed, peek existing to avoid silently rebuilding (which
         // would destroy a `--tokenize trigram`-built index when user just
         // wanted to refresh content). To force a rebuild with different
@@ -415,7 +415,7 @@ export async function main(): Promise<void> {
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
-        // v3.6.3 K-1 closure: peek existing embed-db before constructing
+        // v3.6.4 K-1 closure: peek existing embed-db before constructing
         // EmbedDb. If user didn't explicitly pass --embedding-model /
         // --quantize-embeddings, honor the existing config to avoid silent
         // rebuild (which destroys the user's pre-built data). To force a
@@ -482,7 +482,7 @@ export async function main(): Promise<void> {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
       const file = opts.embedFile ?? embedDbPath(vault.root);
-      // SAFE BY DESIGN (v3.6.3 K-1 invariant): `clearOnDisk()` only deletes
+      // SAFE BY DESIGN (v3.6.4 K-1 invariant): `clearOnDisk()` only deletes
       // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
       // TABLE risk. Dummy `modelAlias`/`dim` are never consulted because
       // we never construct the schema. Peek-before-open does not apply.
@@ -563,7 +563,7 @@ export async function main(): Promise<void> {
         // Step 1: FTS5 index.
         process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
         const indexFile = defaultIndexFile(v.root);
-        // v3.6.3 K-1 closure (setup is idempotent per its description):
+        // v3.6.4 K-1 closure (setup is idempotent per its description):
         // honor existing tokenize_mode so re-running `setup` on a vault
         // built with `--tokenize trigram` doesn't silently downgrade to
         // unicode61. The setup command has no `--tokenize` flag, so the
@@ -596,7 +596,7 @@ export async function main(): Promise<void> {
           return;
         }
 
-        // v3.6.3 K-1 closure: peek existing embed-db BEFORE loading the
+        // v3.6.4 K-1 closure: peek existing embed-db BEFORE loading the
         // embedder so step 2 loads the right model. setup is idempotent
         // per its description — re-running on a vault built with
         // `--embedding-model bge` must NOT silently rebuild as
@@ -725,7 +725,7 @@ export async function main(): Promise<void> {
         let ftsIndex: FtsIndex | null = null;
         if (opts.persistentIndex) {
           const indexFile = defaultIndexFile(v.root);
-          // v3.6.3 K-1 closure (eval = diagnostic, MUST never destroy):
+          // v3.6.4 K-1 closure (eval = diagnostic, MUST never destroy):
           // peek existing tokenize_mode before constructing. Without peek,
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.

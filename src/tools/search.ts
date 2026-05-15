@@ -4,23 +4,85 @@ import type { FileEntry, Vault } from "../vault.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
 
+/**
+ * Token-matching mode for {@link searchText}.
+ *
+ * - `"all"` — every whitespace-separated token must occur in the note (AND).
+ * - `"any"` — at least one token must occur (OR).
+ * - `"phrase"` — the raw query string must occur as a contiguous substring.
+ */
 export type SearchMode = "all" | "any" | "phrase";
 
+/**
+ * A single hit from {@link searchText}.
+ *
+ * Hits expose the surrounding snippet and the 1-based line where the first
+ * matched token landed so the agent can scroll a UI directly to the relevant
+ * passage. `score` is the total per-token occurrence count (higher = more
+ * matches), not normalized — compare scores within the same response only.
+ */
 export interface SearchHit {
+  /** Vault-relative path of the matching note (e.g. `"Reference/Foo.md"`). */
   path: string;
+  /** ~120-char excerpt centered on the first matched token, with `…` truncation. */
   snippet: string;
+  /** Total occurrences of all matched tokens. Sort key (desc). */
   score: number;
+  /** 1-based line number where the first match starts. `0` when no match. */
   line: number;
+  /** Original-case tokens that matched (subset of the query tokens). */
   matched_terms: string[];
 }
 
+/**
+ * Envelope returned by {@link searchText}.
+ *
+ * Includes `scanned_notes` for observability — agents can detect when an
+ * empty `matches[]` is "I searched 4000 notes and nothing matched" vs. "the
+ * `folder` filter excluded everything".
+ */
 export interface SearchResponse {
+  /** Echo of the input query (untouched). */
   query: string;
+  /** Mode that was actually used (after `args.mode ?? "all"` defaulting). */
   mode: SearchMode;
+  /** Total markdown notes considered (post-`folder`-filter, pre-match). */
   scanned_notes: number;
+  /** Sorted by `score` desc, truncated to `args.limit ?? 25`. */
   matches: SearchHit[];
 }
 
+/**
+ * Substring-grep search over the vault: scans every `.md` body for token
+ * occurrences in `all` / `any` / `phrase` mode and ranks by occurrence count.
+ *
+ * This is the simplest retrieval primitive — no index, no embeddings, no
+ * native deps. Useful when the agent already knows specific keywords; for
+ * fuzzier semantic recall prefer {@link searchHybrid} or {@link semanticSearch}.
+ * Read concurrency is bounded to 16 to avoid blowing the fd limit on large
+ * vaults. Tokenization is whitespace-split + lowercased; case-insensitive.
+ *
+ * @param vault - The vault to search.
+ * @param args - Search arguments. `query` is required and must be non-empty.
+ *   `folder` restricts the scan to a subdirectory (vault-relative).
+ *   `limit` caps results (default 25). `mode` defaults to `"all"`.
+ * @returns A {@link SearchResponse} with sorted `matches` and a
+ *   `scanned_notes` observability count.
+ * @throws {Error} If `query` is empty / whitespace-only.
+ * @throws {VaultPathError} If `folder` resolves outside the vault root.
+ * @example
+ * ```ts
+ * const result = await searchText(vault, {
+ *   query: "RAG retrieval",
+ *   folder: "Reference",
+ *   mode: "all",
+ *   limit: 10
+ * });
+ * for (const hit of result.matches) {
+ *   console.log(`${hit.path}:${hit.line} — ${hit.snippet}`);
+ * }
+ * ```
+ */
 export async function searchText(
   vault: Vault,
   args: { query: string; folder?: string; limit?: number; mode?: SearchMode }
@@ -113,20 +175,62 @@ export async function searchText(
 // TF-IDF pass is OK, but the structural signals above already converge on the
 // notes a human would call "related" without paying that cost on every call.
 
+/**
+ * One row of the {@link findSimilar} response. Exposes the per-signal
+ * breakdown so the agent can explain *why* a note is considered similar.
+ */
 export interface SimilarNote {
+  /** Vault-relative path of the candidate. */
   path: string;
+  /** `.md`-stripped basename for display. */
   title: string;
+  /** Composite weighted score in approximately `[0, 8.5]`. Sort key (desc). */
   score: number;
+  /** Per-signal contributions in `[0, 1]` before weighting. */
   signals: {
     tag_jaccard: number;
     title_3gram: number;
     shared_outbound: number;
     co_backlink: number;
   };
+  /** Tags shared between the target and this candidate (lowercased, sorted). */
   shared_tags: string[];
+  /** ISO-8601 modification time of the candidate note. */
   mtime: string;
 }
 
+/**
+ * Lexical-hybrid similarity over vault-native signals — finds notes related
+ * to the target without any embeddings.
+ *
+ * Combines four structural signals: tag Jaccard (×3.0), title character
+ * 3-gram Jaccard (×1.5), shared-outbound link overlap (×2.0), and co-backlink
+ * Jaccard (×2.0). Tag overlap dominates by design — that's the strongest
+ * "this is the same topic" signal a human would use. Skips body cosine on
+ * purpose: structural signals converge fast at vault scale (5k × 5KB) without
+ * a full TF-IDF pass per call.
+ *
+ * Use this when the agent has *one specific note* and wants neighbors. For
+ * "find notes about <topic>" use {@link searchHybrid} or {@link semanticSearch}.
+ *
+ * @param vault - The vault to search.
+ * @param args - One of `path` or `title` is required to identify the target.
+ *   `limit` defaults to 10. `min_score` (default 0.05) prunes weak matches.
+ * @returns Sorted `SimilarNote[]` (desc by `score`), capped at `limit`.
+ *   Empty array if the target was excluded by `--exclude-glob`.
+ * @throws {Error} If neither `path` nor `title` is provided, or the target
+ *   cannot be resolved.
+ * @example
+ * ```ts
+ * const related = await findSimilar(vault, {
+ *   path: "Reference/Hybrid Retrieval.md",
+ *   limit: 5
+ * });
+ * for (const n of related) {
+ *   console.log(n.path, n.score, n.signals);
+ * }
+ * ```
+ */
 export async function findSimilar(
   vault: Vault,
   args: { path?: string; title?: string; limit?: number; min_score?: number }
@@ -300,6 +404,28 @@ const STOP_WORDS = new Set([
 // tokenizer.
 const CJK_OR_THAI_RANGES = /[぀-ヿ㐀-䶿一-鿿가-힯฀-๿ༀ-࿿ក-៿]/;
 
+/**
+ * Unicode-aware tokenizer used by the TF-IDF index and {@link semanticSearch}.
+ *
+ * For Latin / Cyrillic / Greek / Arabic / Hebrew etc., matches `\p{L}\p{N}`
+ * runs (length 2–40, stop-word filtered). For CJK / Thai / Khmer / Lao
+ * (no-whitespace scripts), uses `Intl.Segmenter` with `granularity: "word"`
+ * to get real word boundaries — without this, a sentence like
+ * "認可サーバーがアクセストークン" becomes a single 12-char token that the
+ * length filter would drop, gutting non-Latin TF-IDF precision.
+ *
+ * @internal
+ * @param text - Raw text to tokenize. Will be lowercased.
+ * @returns A flat array of tokens in document order. May contain duplicates
+ *   (TF is computed downstream).
+ * @example
+ * ```ts
+ * tokenizeForTfidf("Hybrid RAG retrieval");
+ * // → ["hybrid", "rag", "retrieval"]
+ * tokenizeForTfidf("認可サーバーがアクセストークン");
+ * // → ["認可", "サーバー", "アクセス", "トークン"]
+ * ```
+ */
 export function tokenizeForTfidf(text: string): string[] {
   // v1.11.1: Unicode-aware tokenizer. The previous ASCII-only regex
   // (`/[a-z0-9][a-z0-9_-]*/g`) silently dropped Cyrillic, Greek, CJK,
@@ -335,6 +461,26 @@ export function tokenizeForTfidf(text: string): string[] {
   return out;
 }
 
+/**
+ * Build (or fetch from per-vault cache) the L2-normalized TF-IDF index over
+ * every markdown body in the vault.
+ *
+ * Uses smoothed IDF (`ln(1 + N / (1 + df))`) which keeps every-doc terms
+ * non-zero and tames inflation on small vaults. Cache invalidates on
+ * `entries` length / order / mtime mismatch — the same {@link Vault} instance
+ * reuses the index across consecutive {@link semanticSearch} calls.
+ *
+ * @internal
+ * @param vault - The vault whose corpus to index.
+ * @returns `{ docs, idf, entriesRef }` — `docs` are L2-normalized sparse
+ *   vectors keyed by relPath; `idf` maps term → smoothed IDF weight;
+ *   `entriesRef` is the {@link FileEntry} snapshot used for cache validation.
+ * @example
+ * ```ts
+ * const { docs, idf } = await buildTfidfIndex(vault);
+ * console.log(`${docs.length} docs, ${idf.size} unique terms`);
+ * ```
+ */
 export async function buildTfidfIndex(
   vault: Vault
 ): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
@@ -395,15 +541,54 @@ export async function buildTfidfIndex(
   return result;
 }
 
+/**
+ * One hit from {@link semanticSearch}. `matched_terms` are the query tokens
+ * that contributed to the cosine score, sorted by IDF (rarest first).
+ */
 export interface SemanticHit {
+  /** Vault-relative path of the matching note. */
   path: string;
+  /** `.md`-stripped basename for display. */
   title: string;
+  /** Cosine similarity in `[0, 1]`, rounded to 4 decimals. Sort key. */
   score: number;
+  /** ~120-char excerpt centered on the first matched term in the body. */
   snippet: string;
+  /** Up to 8 query tokens that contributed, sorted by IDF desc (rarest first). */
   matched_terms: string[];
+  /** ISO-8601 modification time of the note. */
   mtime: string;
 }
 
+/**
+ * Pure-JS lexical-semantic search via TF-IDF cosine similarity.
+ *
+ * Builds (or reuses cached) per-vault TF-IDF index, then ranks notes by
+ * cosine similarity of the query vector against each body vector. Catches
+ * "related-term" recall that the substring path of {@link searchText} misses
+ * (e.g. searching `"retrieval"` will surface notes about `"recall"` if the
+ * vocabulary co-occurs). Zero native deps — works on every platform with
+ * no model download. For full ML retrieval use {@link embeddingsSearch};
+ * for graceful-degradation fusion use {@link searchHybrid}.
+ *
+ * @param vault - The vault to search.
+ * @param args - `query` is required. `limit` defaults to 10. `min_score`
+ *   defaults to 0.05 — anything below is pruned. `folder` restricts to a
+ *   subdirectory.
+ * @returns An envelope with `query`, `total_docs` (corpus size), `method`
+ *   (always `"tfidf-cosine"`), and `matches` sorted by `score` desc.
+ * @throws {Error} If `query` is empty / whitespace-only.
+ * @example
+ * ```ts
+ * const result = await semanticSearch(vault, {
+ *   query: "vector retrieval cosine",
+ *   limit: 5
+ * });
+ * for (const hit of result.matches) {
+ *   console.log(hit.path, hit.score, hit.matched_terms);
+ * }
+ * ```
+ */
 export async function semanticSearch(
   vault: Vault,
   args: { query: string; folder?: string; limit?: number; min_score?: number }
@@ -492,18 +677,39 @@ export async function semanticSearch(
 // model files unless the tool is actually invoked. Cold path is identical to
 // `obsidian_semantic_search` (TF-IDF, no native deps, instant).
 
+/**
+ * One chunk-level hit from {@link embeddingsSearch}.
+ *
+ * Unlike {@link SemanticHit}, embedding hits are chunk-scoped (not note-
+ * scoped) — `chunk_index` / `line_start` / `line_end` let the agent jump to
+ * the exact paragraph that matched.
+ */
 export interface EmbedHit {
+  /** Vault-relative path of the source file (markdown or PDF). */
   path: string;
+  /** `.md`/`.pdf`-stripped basename for display. */
   title: string;
+  /** Cosine score in `[-1, 1]`, rounded to 4 decimals. Sort key. */
   score: number;
+  /** ~240-char excerpt from the matching chunk. */
   snippet: string;
+  /** 0-based chunk number within the source file. */
   chunk_index: number;
+  /** 1-based start line of the chunk in the source file. */
   line_start: number;
+  /** 1-based end line of the chunk (inclusive). */
   line_end: number;
   /** v2.8.0 — content-source kind ("md" | "pdf"). */
   kind: "md" | "pdf";
 }
 
+/**
+ * Envelope returned by {@link embeddingsSearch}.
+ *
+ * `total_chunks` is the full index size (post-exclusion filtering), useful
+ * for sanity-checking that the agent's `build-embeddings` actually ran on
+ * the expected corpus.
+ */
 export interface EmbedSearchResponse {
   query: string;
   method: "embeddings-cosine";
@@ -561,6 +767,53 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
   return { text: args.query, usedHyde: false };
 }
 
+/**
+ * ML embeddings retrieval — k-NN over a persistent vector index.
+ *
+ * Hits a `.embed.db` (SQLite) built by `enquire-mcp build-embeddings`. The
+ * index is **opt-in and out-of-band**: this function lazy-loads the
+ * `@huggingface/transformers` runtime + the embedder model only when called.
+ * If the user hasn't run `build-embeddings`, returns a clean error pointing
+ * to the setup command instead of blocking inside model load.
+ *
+ * Supports HyDE (Hypothetical Document Embeddings, Gao et al 2023): pass
+ * `hypothetical_answer` and that text is embedded instead of `query` —
+ * typically +2-5 NDCG@10 on under-specified queries. Optional HNSW
+ * acceleration (sub-10ms k-NN at any scale) when an {@link HnswSearchContext}
+ * is provided; otherwise falls back to brute-force cosine in `EmbedDb`.
+ *
+ * Privacy contract: hits are filtered through `vault.isExcluded()` before
+ * return — entries in the `.embed.db` for paths now matched by
+ * `--exclude-glob` / `--read-paths` never leak through.
+ *
+ * @param vault - The vault. Used for path-exclusion filtering and to error
+ *   on missing index with a guidance message.
+ * @param args - `query` is required + non-empty. `limit` defaults to 10,
+ *   `min_score` to 0.3 (relatively high cosine floor — embeddings cosine
+ *   has a tighter distribution than TF-IDF). `model` overrides the
+ *   embedder alias. `hypothetical_answer` enables HyDE.
+ * @param embedFile - Absolute path to the `.embed.db`. Existence is checked
+ *   before any model load so the error message is fast and clear.
+ * @param hnsw - Optional HNSW index context. When passed, k-NN routes
+ *   through HNSW instead of brute-force cosine.
+ * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
+ *   `hyde: true` marker iff HyDE actually fired.
+ * @throws {Error} If `query` is empty, the embed db doesn't exist, the
+ *   embedder fails to load, or returns no vectors for the query.
+ * @example
+ * ```ts
+ * const result = await embeddingsSearch(
+ *   vault,
+ *   {
+ *     query: "How do BM25 and embeddings compare on multilingual recall?",
+ *     limit: 10,
+ *     hypothetical_answer: "BM25 dominates on rare-term Latin queries..."
+ *   },
+ *   "/path/to/vault.embed.db"
+ * );
+ * console.log(result.matches[0]?.path, result.hyde); // true
+ * ```
+ */
 export async function embeddingsSearch(
   vault: Vault,
   args: {
@@ -691,8 +944,18 @@ export async function embeddingsSearch(
 // chunk hit is preserved on the response so the agent can scroll to the
 // right paragraph.
 
+/**
+ * One row of the fused {@link searchHybrid} response.
+ *
+ * Exposes `per_signal` for full observability — agents can see *which*
+ * retrieval signal contributed (BM25 / TF-IDF / embeddings) and at what
+ * rank/score, which is critical for debugging recall regressions and for
+ * explaining results to end users.
+ */
 export interface SearchHybridHit {
+  /** Vault-relative path of the matching note (or `path#chunk` for `granularity: "block"`). */
   path: string;
+  /** Stripped basename for display (`.md` or `.pdf` removed per `kind`). */
   title: string;
   /** Fused RRF score (sum of 1/(k+rank) terms across signals). */
   score: number;
@@ -724,10 +987,22 @@ export interface SearchHybridHit {
   reranker_score?: number;
 }
 
+/**
+ * Envelope returned by {@link searchHybrid}.
+ *
+ * `signals_used` tells the agent which rankers actually fired (BM25 needs
+ * `--persistent-index`; embeddings needs `build-embeddings`). `signal_errors`
+ * surfaces failed-but-attempted rankers so an empty `matches[]` can be
+ * distinguished from "all rankers crashed".
+ */
 export interface SearchHybridResponse {
+  /** Echo of the input query. */
   query: string;
+  /** Always `"rrf"` in v3.x — present as a versioned discriminator. */
   method: "rrf";
+  /** RRF constant `k` (60 per Cormack 2009; documented for transparency). */
   k: number;
+  /** Which rankers contributed to the fused result. */
   signals_used: ("bm25" | "tfidf" | "embeddings")[];
   /** v2.0.0-beta.2: per-signal failure reasons. Pre-fix, ranker exceptions
    *  were silently swallowed (only stderr-logged). The MCP response just
@@ -740,6 +1015,51 @@ export interface SearchHybridResponse {
   matches: SearchHybridHit[];
 }
 
+/**
+ * Hybrid retrieval — fuses BM25 + TF-IDF + ML embeddings via Reciprocal Rank
+ * Fusion (Cormack et al, 2009). The recommended search entry point.
+ *
+ * **Most agents should call this** rather than the single-ranker variants
+ * ({@link searchText}, {@link semanticSearch}, {@link embeddingsSearch})
+ * because the umbrella auto-detects which signals are available and produces
+ * consistent recall across user setups. Gracefully degrades:
+ * - All 3 signals → fuse all 3
+ * - No FTS5 (no `--persistent-index`) → TF-IDF + embeddings (or just TF-IDF)
+ * - No embeddings (no `build-embeddings`) → BM25 + TF-IDF
+ * - Only TF-IDF → fall back to TF-IDF-only ranking
+ *
+ * Two unique signal layers ride on top of RRF:
+ * - **Wikilink graph-boost** (v2.3.0): re-rank fused top-K by counting how
+ *   many other top-K hits link to each one. Only enquire-mcp does this —
+ *   wikilinks are the differentiating Obsidian primitive.
+ * - **Cross-encoder reranker** (v2.9.0, opt-in): re-score top-N candidates
+ *   with a BGE-style cross-encoder. ~30-50ms / query overhead on M1 CPU.
+ *
+ * @param vault - The vault to search.
+ * @param args - `query` is required + non-empty. `limit` defaults to 10.
+ *   `min_signals` (default 1) requires that many rankers fired for a hit.
+ *   `granularity: "note"` (default) collapses to best chunk per note;
+ *   `"block"` keeps each chunk distinct. `graph_boost` defaults to `true`.
+ * @param ctx - Server-side context: `ftsIndex` (nullable), `embedFile`
+ *   (path may not exist), optional `reranker` config, optional
+ *   `rerankerOverride` (test injection point), optional `hnsw` context for
+ *   accelerated k-NN.
+ * @returns A {@link SearchHybridResponse} with sorted `matches`, observability
+ *   in `signals_used` / `signal_errors`, and per-hit `per_signal` breakdown.
+ * @throws {Error} If `query` is empty / whitespace-only.
+ * @example
+ * ```ts
+ * const result = await searchHybrid(
+ *   vault,
+ *   { query: "RAG hybrid retrieval", limit: 10, folder: "Reference" },
+ *   { ftsIndex, embedFile: "/path/to/vault.embed.db" }
+ * );
+ * for (const hit of result.matches) {
+ *   console.log(hit.path, hit.score, hit.per_signal);
+ * }
+ * console.log("Rankers fired:", result.signals_used);
+ * ```
+ */
 export async function searchHybrid(
   vault: Vault,
   args: {
@@ -1212,6 +1532,27 @@ export async function searchHybrid(
   return response;
 }
 
+/**
+ * Build a fixed-width snippet centered on a character index within `text`,
+ * plus the 1-based line number where the match starts.
+ *
+ * Window is 60 chars before + `qLen` + 60 chars after, whitespace-collapsed,
+ * with `…` truncation markers when the window is clipped at either end.
+ * Used by {@link searchText} and {@link semanticSearch} to produce human-
+ * readable evidence excerpts.
+ *
+ * @internal
+ * @param text - The full text body to slice.
+ * @param idx - Character offset of the match. Negative values return an
+ *   empty snippet.
+ * @param qLen - Length of the matched substring.
+ * @returns `{ snippet, line }` — `line` is 0 if `idx < 0`.
+ * @example
+ * ```ts
+ * sliceSnippet("Hello world, this is a long text", 6, 5);
+ * // → { snippet: "Hello world, this is a long text", line: 1 }
+ * ```
+ */
 export function sliceSnippet(text: string, idx: number, qLen: number): { snippet: string; line: number } {
   if (idx < 0) return { snippet: "", line: 0 };
   const before = Math.max(0, idx - 60);

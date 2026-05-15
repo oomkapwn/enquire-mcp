@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0-rc.3] — 2026-05-15
+
+> **TL;DR:** v3.6.0 Phase 3 of 4 — **+2238 lines of Full TSDoc** added across 44 MCP tool functions, 19 prompt definitions, and ~50 exported helpers/types. Every exported function now ships with one-sentence summary + detailed description + `@param` / `@returns` / `@throws` / `@example`. Internal cross-domain helpers marked `@internal` so v3.6.0-rc.4's TypeDoc auto-generation keeps them out of the public surface. Pure documentation addition: 712 tests pass, zero behavior change. Published under npm dist-tag `rc`.
+
+**Pre-release — v3.6.0 sprint Phase 3.**
+
+### Added — Full TSDoc on the public API surface
+
+Every exported function in `src/tools/*` and every prompt in `src/prompts.ts` now has comprehensive TSDoc. Per-file expansion:
+
+| File | Before | After | TSDoc blocks |
+|---|---:|---:|---:|
+| `src/tools/search.ts` | 1224 | 1565 (+341) | 62 |
+| `src/tools/read.ts` | 864 | 1384 (+520) | 111 |
+| `src/tools/write.ts` | 682 | 1094 (+412) | 47 |
+| `src/tools/media.ts` | 516 | 725 (+209) | 53 |
+| `src/tools/meta.ts` | 984 | 1425 (+441) | 76 |
+| `src/prompts.ts` | 790 | 1105 (+315) | 20 |
+| **Total** | **5060** | **7298** | **369 TSDoc blocks** |
+
+The 369 TSDoc blocks include:
+- **44 MCP tool functions** (the public API surface) — each with summary, description distinguishing it from alternatives, `@param` per parameter with type-aware description, `@returns`, `@throws` where applicable, and ` ```ts ``` ` `@example` showing realistic usage.
+- **19 prompt registrations** in `src/prompts.ts` — each with a `// === prompt_name ============` banner header above the registration call + a TSDoc block above the banner describing purpose, expected args (read from `argsSchema`), and intended use case.
+- **~30 exported types/interfaces** (e.g., `SearchHit`, `SearchHybridResponse`, `RenameNoteResult`, `ContextPackResult`) — each with description and field-level docs where the field-doc convention was already in place.
+- **~15 cross-domain helpers** (e.g., `tokenizeForTfidf`, `findBestMatch`, `resolveTarget`, `rewriteRawTarget`, `jaccard`) — marked `@internal` so the v3.6.0-rc.4 TypeDoc pass keeps them out of the public API reference.
+
+Distinct-from cross-references are present where two functions could be confused:
+- `searchText` / `semanticSearch` / `embeddingsSearch` / `searchHybrid` — each TSDoc explicitly contrasts the variant and points readers at `{@link searchHybrid}` as the recommended umbrella entry.
+- `vault_synth` / `vault_synthesis_page` / `vault_research` / `search_with_query_expansion` — prompt-to-prompt cross-references explaining when each is the right pick.
+
+### Validation
+
+712 unit tests pass · branches 75.29% · lines 89.54% · statements 86.07% · functions 82.15% · lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · smoke pass · version-consistency green at `3.6.0-rc.3` (5 surfaces).
+
+### Migration
+
+**No-op for consumers.** No function signatures changed, no behavior changed, no exports added or removed. Pure documentation addition.
+
+For contributors:
+- IDE hovers now display full descriptions + examples for every tool function.
+- VS Code, Cursor, IntelliJ, Vim+lsp all surface the TSDoc instantly.
+
+### npm dist-tag
+
+Published under **`rc`** dist-tag. Users on `latest` stay on v3.5.14. Try: `npm install @oomkapwn/enquire-mcp@rc`.
+
+### Next RC
+
+`v3.6.0-rc.4`: TypeDoc auto-generation of API reference docs + publish to GitHub Pages. Plus public benchmarks (MRR / NDCG@10 / Recall@K on a BEIR/TREC subset, with comparison vs main competitors).
+
+### Method note
+
+This is the second phase that ships **without any logic change** — pure structural/documentation work that compounds value: the TSDoc written here becomes the source for rc.4's auto-generated API docs site. The maintenance burden going forward is low because the TSDoc lives next to the code (drift requires actively writing wrong docs vs. doing nothing).
+
 ## [3.6.0-rc.2] — 2026-05-15
 
 > **TL;DR:** v3.6.0 Phase 2 of 4 — `src/index.ts` (3665 lines) split into 5 domain modules (`cli.ts` 702 + `server.ts` 877 + `tool-registry.ts` 1300 + `prompts.ts` 790) plus a slim 84-line entry point. NEW `src/tool-manifest.ts` (318 lines, 44 machine-readable tool entries) becomes the single source of truth — `tests/docs-consistency.test.ts` pivoted off regex-parsing source code and reads the manifest directly. Pure refactor: same CLI surface, same registered tools, same 712 tests pass. Published under npm dist-tag `rc`.

@@ -14,6 +14,12 @@ import { resolveTarget, suggestSimilar } from "./write.js";
 // errors/warnings/suggestions, and the LLM can fix-and-retry without ever
 // writing a broken note.
 
+/**
+ * Arguments for {@link validateNoteProposal}.
+ *
+ * Pre-write validator — never mutates disk regardless of `mode`. The mode
+ * only controls how the validator reports path collisions.
+ */
 export interface ValidateProposalArgs {
   /** Vault-relative path the LLM intends to write to (e.g. "Inbox/idea.md"). */
   path: string;
@@ -23,6 +29,13 @@ export interface ValidateProposalArgs {
   mode?: "create" | "overwrite" | "append";
 }
 
+/**
+ * Structured validation report returned by {@link validateNoteProposal}.
+ *
+ * `ok` is true iff `errors` is empty — warnings don't block the agent.
+ * `wikilinks[*].suggestions` carry did-you-mean hints for broken links so
+ * the LLM can fix-and-retry without writing a broken note.
+ */
 export interface ValidateProposalResult {
   ok: boolean;
   proposed_path: string;
@@ -51,6 +64,36 @@ export interface ValidateProposalResult {
   };
 }
 
+/**
+ * Pre-write validator — lint an LLM-proposed note against the live vault
+ * before writing.
+ *
+ * The "anti-slop" first call: the LLM proposes a draft, this validator
+ * checks YAML / wikilinks / tags / path-collision against the vault, and
+ * returns structured `errors[]` + `warnings[]`. The LLM can fix-and-retry
+ * via the same call, finally invoking {@link createNote} / {@link appendToNote}
+ * only after the validator reports `ok: true`. Read-only — never mutates
+ * disk. Always returns a structured result for ANY input, even malformed —
+ * path-traversal errors become `kind: "path-traversal"` errors rather than
+ * exceptions.
+ *
+ * @param vault - The vault.
+ * @param args - {@link ValidateProposalArgs}. `path` + `content` required.
+ * @returns A {@link ValidateProposalResult} with `ok`, `errors`, `warnings`,
+ *   YAML parse status, per-wikilink resolution, tag classification, and
+ *   collision detection.
+ * @example
+ * ```ts
+ * const v = await validateNoteProposal(vault, {
+ *   path: "Inbox/draft.md",
+ *   content: "---\nstatus: draft\n---\n# Title\n\n[[Bar]] is broken.",
+ *   mode: "create"
+ * });
+ * if (!v.ok) {
+ *   for (const e of v.errors) console.error(e.kind, e.message);
+ * }
+ * ```
+ */
 export async function validateNoteProposal(vault: Vault, args: ValidateProposalArgs): Promise<ValidateProposalResult> {
   await vault.ensureExists();
   const mode = args.mode ?? "create";
@@ -202,6 +245,9 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
 // page." Each finding is shaped so the agent can fix it via existing tools
 // (validate_note_proposal → create_note / append_to_note / rename_note).
 
+/**
+ * Arguments for {@link lintWiki}. All optional with sensible defaults.
+ */
 export interface LintWikiArgs {
   /** Folder to restrict the lint to (default: whole vault). */
   folder?: string;
@@ -217,14 +263,30 @@ export interface LintWikiArgs {
   max_per_bucket?: number;
 }
 
+/**
+ * One lint finding. `details` carries kind-specific context (word count for
+ * stubs, mention sources for concepts, etc.). `suggestion` is an action
+ * hint the agent can paraphrase to the user.
+ */
 export interface LintWikiFinding {
+  /** Lint category. */
   kind: "orphan" | "broken-link" | "stub" | "stale" | "concept-without-page";
+  /** Vault-relative path of the offending note (absent on concept candidates). */
   path?: string;
+  /** Human-readable description of the issue. */
   message: string;
+  /** Action hint for fixing. */
   suggestion?: string;
+  /** Kind-specific payload (word_count, mention_count, sources, etc.). */
   details?: Record<string, unknown>;
 }
 
+/**
+ * Envelope returned by {@link lintWiki}.
+ *
+ * `summary` carries truncated counts (capped at `max_per_bucket`); use it
+ * for the agent's headline message. `findings` carries the per-issue list.
+ */
 export interface LintWikiResult {
   scope: string;
   scanned: number;
@@ -245,6 +307,37 @@ export interface LintWikiResult {
   };
 }
 
+/**
+ * Karpathy-style LLM-Wiki lint — single-call audit of orphans, broken
+ * links, stubs, stale notes, and concept candidates.
+ *
+ * Implements the "lint" workflow from Karpathy's LLM-Wiki gist (which named
+ * ingest/query/lint as the three primitives). Returns five finding buckets,
+ * each capped to `max_per_bucket` for bounded responses. Findings are
+ * shaped so the agent can act on them via existing tools
+ * ({@link validateNoteProposal} → {@link createNote} / {@link appendToNote} /
+ * {@link renameNote}).
+ *
+ * Concept candidates use a capitalised-phrase heuristic: 1-3 CapitalCase
+ * tokens that appear in ≥ `concept_min_mentions` notes but don't have a
+ * page of their own. Stop-words ("The", "This", etc.) at phrase start are
+ * dropped.
+ *
+ * @param vault - The vault.
+ * @param args - {@link LintWikiArgs}. All optional with documented defaults.
+ * @returns A {@link LintWikiResult} with summary counts + per-bucket findings.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const lint = await lintWiki(vault, {
+ *   folder: "Wiki",
+ *   stub_word_threshold: 50,
+ *   stale_days: 180
+ * });
+ * console.log(`Orphans: ${lint.summary.orphans}, Stubs: ${lint.summary.stubs}`);
+ * for (const f of lint.findings.broken_links) console.log(f.message);
+ * ```
+ */
 export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWikiResult> {
   await vault.ensureExists();
   const stubThreshold = args.stub_word_threshold ?? 100;
@@ -423,16 +516,58 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
 // "??" lines as deferred-thinking markers. This tool returns every such line
 // across the vault with source + context heading + age, sorted oldest-first.
 
+/**
+ * One open question / TODO marker surfaced by {@link getOpenQuestions}.
+ *
+ * `context_heading` is the nearest preceding heading (any level) — useful
+ * for context-locating the question without reading the surrounding note.
+ * `age_days` is computed from the note's mtime, so it surfaces questions
+ * that have aged without being touched.
+ */
 export interface OpenQuestion {
+  /** Trimmed text of the question (capture group of the matcher). */
   question: string;
+  /** Vault-relative path of the source note. */
   source_path: string;
+  /** `.md`-stripped basename for display. */
   source_title: string;
+  /** Nearest preceding heading, or null if at top of file. */
   context_heading: string | null;
+  /** 1-based line number where the question appears. */
   line: number;
+  /** Rounded days since the source note was last modified. */
   age_days: number;
+  /** ISO-8601 mtime of the source note. */
   mtime: string;
 }
 
+/**
+ * Surface unresolved threads — `Open question:` / `Q:` / `TODO?` / `??`
+ * markers across the vault.
+ *
+ * Karpathy and ML PKM workflows use these as deferred-thinking markers.
+ * This tool returns every such line with source path, context heading,
+ * and `age_days` for staleness ranking. Sorted oldest-first so aging
+ * questions surface for the agent to nudge the user about.
+ *
+ * Scans `parsed.body` (frontmatter excluded) so YAML lines containing
+ * "Q:"-ish tokens don't pollute results. The default matcher is
+ * case-insensitive and accepts list-bullets / quote / heading prefixes
+ * before the marker. Override `pattern` for a custom regex.
+ *
+ * @param vault - The vault.
+ * @param args - All optional. `folder` restricts the scan. `limit`
+ *   defaults to 100. `pattern` overrides the default matcher regex.
+ * @returns Sorted `OpenQuestion[]` (oldest-first by `age_days`).
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const qs = await getOpenQuestions(vault, { folder: "Reading", limit: 30 });
+ * for (const q of qs.slice(0, 5)) {
+ *   console.log(`${q.source_path}:${q.line} [${q.age_days}d ago] ${q.question}`);
+ * }
+ * ```
+ */
 export async function getOpenQuestions(
   vault: Vault,
   args: { folder?: string; limit?: number; pattern?: string }
@@ -491,15 +626,54 @@ export async function getOpenQuestions(
 // (e.g. "arxiv:2401.12345") but doesn't carry it in frontmatter — common after
 // quick-capture from a chat.
 
+/**
+ * One flagged paper note returned by {@link paperAudit}.
+ *
+ * `proposed_frontmatter_patch` is a ready-to-apply YAML patch the agent
+ * can hand to {@link frontmatterSet}. Null when the body has no detectable
+ * identifiers either (the note really has no citation, manual fix needed).
+ */
 export interface PaperAuditFinding {
+  /** Vault-relative path of the offending note. */
   path: string;
+  /** `.md`-stripped basename for display. */
   title: string;
+  /** Whether the note has any of arxiv/doi/url/isbn in frontmatter. */
   has_frontmatter_citation: boolean;
+  /** Identifiers detected in body text (deduplicated, URLs capped at 3). */
   found_in_body: { arxiv: string[]; doi: string[]; url: string[] };
+  /** A ready-to-apply `{ arxiv | doi | url }` patch — or null. */
   proposed_frontmatter_patch: Record<string, string> | null;
+  /** Human-readable description of the issue. */
   message: string;
 }
 
+/**
+ * Audit `#paper`-tagged notes for missing citation metadata.
+ *
+ * Scans every note carrying the configured tag and verifies frontmatter has
+ * at least one of `arxiv` / `doi` / `url` / `isbn`. Notes with detectable
+ * identifiers in body text (e.g. `arxiv:2401.12345` from quick-capture)
+ * but missing frontmatter receive an actionable `proposed_frontmatter_patch`.
+ *
+ * @param vault - The vault.
+ * @param args - All optional. `tag` defaults to `"paper"` (leading `#`
+ *   stripped if provided). `folder` restricts the scan. `limit` defaults
+ *   to 100.
+ * @returns `{ scanned, flagged }` — `scanned` counts notes carrying the
+ *   tag; `flagged` is the subset with missing frontmatter citation.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const audit = await paperAudit(vault, { tag: "paper", limit: 50 });
+ * console.log(`${audit.flagged.length}/${audit.scanned} papers need citation`);
+ * for (const p of audit.flagged) {
+ *   if (p.proposed_frontmatter_patch) {
+ *     await frontmatterSet(vault, { path: p.path, set: p.proposed_frontmatter_patch });
+ *   }
+ * }
+ * ```
+ */
 export async function paperAudit(
   vault: Vault,
   args: { tag?: string; folder?: string; limit?: number }
@@ -580,24 +754,76 @@ export async function paperAudit(
 // EntryIndex memo so repeat calls in a session reuse the basename index for
 // O(1) target resolution.
 
+/**
+ * One step of a graph traversal path returned by {@link findPath}.
+ */
 export interface PathStep {
+  /** Vault-relative path of this step. */
   path: string;
+  /** `.md`-stripped basename. */
   title: string;
   /** Wikilink raw text (`[[…]]` content) used to traverse FROM the previous
    *  step to this one. Empty on the source step. */
   via: string;
 }
 
+/**
+ * Result of a {@link findPath} traversal.
+ *
+ * `found: false` + `hops: -1` indicates no path within `max_depth`.
+ * `alternatives` is populated only when `args.include_alternatives` is true
+ * and at least one same-length alternative exists.
+ */
 export interface FindPathResult {
+  /** Source path (vault-relative, with `.md`). */
   from: string;
+  /** Destination path. */
   to: string;
+  /** Whether a path was found within `max_depth`. */
   found: boolean;
+  /** Shortest path as a sequence of {@link PathStep}. Empty on miss. */
   path: PathStep[];
+  /** Number of hops in `path`. -1 when not found. 0 for from = to. */
   hops: number;
   /** Up to 10 same-length alternatives, only when include_alternatives=true. */
   alternatives?: PathStep[][];
 }
 
+/**
+ * Find the shortest wikilink-graph path between two notes via BFS.
+ *
+ * Multi-hop graph traversal — closes the gap the competitive audit
+ * surfaced ("find paths between concepts" was the most-praised graph
+ * feature in competitor plugins). Returns the shortest path up to
+ * `max_depth` hops; with `include_alternatives: true`, also returns up
+ * to 10 same-length alternatives (useful for "show me different
+ * connections").
+ *
+ * Uses the shared `EntryIndex` (basename → entries map) for O(1) target
+ * resolution per hop, so repeat calls in a session reuse the index.
+ * v1.8.1 perf fix: builds a `relPath → entry` map once before BFS
+ * (pre-fix was O(N²) per visited node).
+ *
+ * @param vault - The vault.
+ * @param args - One of `from` / `from_title` and one of `to` / `to_title`
+ *   required. `max_depth` defaults to 5. `include_alternatives` defaults
+ *   to false. `follow_embeds` defaults to true (include `![[embeds]]` as
+ *   edges).
+ * @returns A {@link FindPathResult}. When `found: false`, `path: []` and
+ *   `hops: -1`.
+ * @throws {Error} If from / to can't be resolved.
+ * @example
+ * ```ts
+ * const r = await findPath(vault, {
+ *   from_title: "Attention",
+ *   to_title: "RLHF",
+ *   max_depth: 4
+ * });
+ * if (r.found) {
+ *   console.log(`${r.hops} hops:`, r.path.map(s => s.title).join(" → "));
+ * }
+ * ```
+ */
 export async function findPath(
   vault: Vault,
   args: {
@@ -715,13 +941,46 @@ export async function findPath(
 // network side effect — the URI emission lets the agent say "open this in
 // Obsidian" without enquire-mcp needing to coordinate with the running app.
 
+/**
+ * Result of {@link openInUi} — an `obsidian://` URI ready to hand off to
+ * the desktop app.
+ */
 export interface OpenInUiResult {
+  /** Full `obsidian://open?...` URI. */
   uri: string;
+  /** Vault name as derived from the root folder leaf. */
   vault_name: string;
+  /** Vault-relative path of the target note. */
   path: string;
+  /** `.md`-stripped basename for display. */
   title: string;
 }
 
+/**
+ * Emit an `obsidian://` URI for hand-off to the Obsidian desktop app.
+ *
+ * No filesystem or network side effect — the URI emission lets the agent
+ * say "open this in Obsidian" without enquire-mcp needing to coordinate
+ * with the running app (pattern from cyanheads' Obsidian MCP). The vault
+ * name is the leaf of the vault root path; Obsidian matches by name OR by
+ * file's absolute path, so this works even when the user opened the vault
+ * under a different name client-side.
+ *
+ * @param vault - The vault.
+ * @param args - One of `path` or `title` required. `new_pane: true` opens
+ *   the note in a new pane.
+ * @returns An {@link OpenInUiResult}. The caller is responsible for
+ *   actually emitting the URI (e.g. via the MCP client surface or stdout).
+ * @throws {Error} If target can't be resolved.
+ * @example
+ * ```ts
+ * const r = await openInUi(vault, {
+ *   path: "Reference/Article.md",
+ *   new_pane: true
+ * });
+ * console.log(r.uri); // → obsidian://open?vault=Vault&file=Reference/Article&newpane=true
+ * ```
+ */
 export async function openInUi(
   vault: Vault,
   args: { path?: string; title?: string; new_pane?: boolean }
@@ -754,6 +1013,9 @@ export async function openInUi(
 // This tool works in Claude Code, Cursor, Codex, anywhere — copy the result
 // into ANY chat.
 
+/**
+ * Arguments for {@link contextPack}.
+ */
 export interface ContextPackArgs {
   /** Topic / question to gather context for. */
   query: string;
@@ -767,12 +1029,24 @@ export interface ContextPackArgs {
   recent_dailies?: number;
 }
 
+/**
+ * Result of {@link contextPack} — a ready-to-paste markdown bundle.
+ *
+ * `bundle` is the full markdown blob the caller can paste into any AI
+ * chat. `sections` exposes per-section byte counts so the agent can
+ * report what's inside ("4 notes + 12 backlinks + 3 daily notes").
+ * `estimated_tokens` uses the ~4 chars/token heuristic for English /
+ * Cyrillic; CJK estimates run higher (real tokenization is
+ * model-dependent).
+ */
 export interface ContextPackResult {
+  /** Echo of the input query. */
   query: string;
   /** The packed markdown bundle ready to paste into an AI chat. */
   bundle: string;
   /** Approximate token count (chars / 4). */
   estimated_tokens: number;
+  /** Echo of the input budget. */
   budget_tokens: number;
   /** Per-section byte counts for observability. */
   sections: {
@@ -784,6 +1058,42 @@ export interface ContextPackResult {
   included_notes: string[];
 }
 
+/**
+ * Token-budgeted vault context export — runs hybrid retrieval, gathers
+ * note bodies + backlinks + recent dailies, packs to a token budget,
+ * returns one ready-to-paste markdown blob.
+ *
+ * The MCP-native answer to Smart Connections' "Send to Smart Context"
+ * pattern, but works in any chat (Claude / Cursor / Codex / web UI) by
+ * producing a plain-text bundle. Saves the agent from orchestrating 5
+ * separate tool calls.
+ *
+ * Budget enforcement: each note's body is truncated to ~50% of remaining
+ * budget so room remains for backlinks + dailies; oversize bodies get a
+ * `[…truncated…]` marker. Top-3 included notes get 1-line backlink
+ * summaries when `include_backlinks` is true.
+ *
+ * @param vault - The vault.
+ * @param args - {@link ContextPackArgs}. `query` required + non-empty.
+ * @param ctx - Server-side context: `ftsIndex` (nullable) and `embedFile`
+ *   (path may not exist) — same shape as {@link searchHybrid}.
+ * @returns A {@link ContextPackResult} with the packed bundle + meta.
+ * @throws {Error} If `query` is empty / whitespace-only.
+ * @example
+ * ```ts
+ * const pack = await contextPack(
+ *   vault,
+ *   {
+ *     query: "How do I tune the hybrid retrieval?",
+ *     budget_tokens: 3000,
+ *     include_backlinks: true,
+ *     recent_dailies: 3
+ *   },
+ *   { ftsIndex, embedFile: "/path/to/vault.embed.db" }
+ * );
+ * console.log(pack.bundle); // ready to paste into any chat
+ * ```
+ */
 export async function contextPack(
   vault: Vault,
   args: ContextPackArgs,
@@ -888,6 +1198,25 @@ export async function contextPack(
 
 // ─── small set / string helpers shared by find_similar / get_note_neighbors ─
 
+/**
+ * Compute the Jaccard similarity coefficient of two sets — `|A ∩ B| / |A ∪ B|`.
+ *
+ * Returns 0 for two empty sets (mathematically undefined; this convention
+ * avoids NaN propagation in similarity score sums). Used by
+ * {@link findSimilar}, {@link getNoteNeighbors}, and {@link searchHybrid}
+ * for tag and co-backlink overlap computations.
+ *
+ * @internal
+ * @param a - First set.
+ * @param b - Second set.
+ * @returns Similarity in `[0, 1]`. 1 means identical sets; 0 means disjoint
+ *   or both empty.
+ * @example
+ * ```ts
+ * jaccard(new Set([1, 2, 3]), new Set([2, 3, 4]));
+ * // → 0.5  (intersection {2,3} over union {1,2,3,4})
+ * ```
+ */
 export function jaccard<T>(a: Set<T>, b: Set<T>): number {
   if (a.size === 0 && b.size === 0) return 0;
   let inter = 0;
@@ -896,12 +1225,48 @@ export function jaccard<T>(a: Set<T>, b: Set<T>): number {
   return union === 0 ? 0 : inter / union;
 }
 
+/**
+ * Count elements present in both sets — `|A ∩ B|`.
+ *
+ * Cheaper than `new Set([...a].filter((x) => b.has(x))).size` when only
+ * the count is needed (no intermediate set allocation). Used by
+ * {@link findSimilar} for shared-outbound overlap percentage.
+ *
+ * @internal
+ * @param a - First set.
+ * @param b - Second set.
+ * @returns Non-negative integer count of common elements.
+ * @example
+ * ```ts
+ * intersectionSize(new Set([1, 2, 3]), new Set([2, 3, 4]));
+ * // → 2
+ * ```
+ */
 export function intersectionSize<T>(a: Set<T>, b: Set<T>): number {
   let n = 0;
   for (const x of a) if (b.has(x)) n += 1;
   return n;
 }
 
+/**
+ * Build the character n-gram set of a string.
+ *
+ * Used by {@link findSimilar} for title 3-gram Jaccard similarity. Strings
+ * shorter than `n` produce a single-element set containing the string
+ * itself (so a 1-char title doesn't collapse to an empty signal).
+ *
+ * @internal
+ * @param s - Input string.
+ * @param n - N-gram length (typically 3 for title matching).
+ * @returns Set of character n-grams. Empty only when `s` is empty.
+ * @example
+ * ```ts
+ * ngrams("hello", 3);
+ * // → Set { "hel", "ell", "llo" }
+ * ngrams("a", 3);
+ * // → Set { "a" }
+ * ```
+ */
 export function ngrams(s: string, n: number): Set<string> {
   const out = new Set<string>();
   if (s.length < n) {
@@ -924,6 +1289,22 @@ interface EntryIndex {
 }
 const entryIndexCache = new WeakMap<FileEntry[], EntryIndex>();
 
+/**
+ * Build (or fetch from per-`entries`-array cache) the basename / relPath
+ * lookup indices that {@link findBestMatch} needs.
+ *
+ * Cached via `WeakMap<FileEntry[], EntryIndex>` keyed by the entries array
+ * reference: a fresh `listMarkdown()` result rebuilds the indices, but a
+ * hot loop calling `findBestMatch` repeatedly with the same `entries`
+ * argument shares one index. Closes the v1.2 bench finding that
+ * `findBestMatch` was the dominant cost on 10k-note vaults
+ * (~2-3s p50 → ~50-200ms post-fix).
+ *
+ * @internal
+ * @param entries - File-entry array from `vault.listMarkdown()`.
+ * @returns `{ byBasename, byRelPath }` — basename → entries (multi-value
+ *   on collisions); relPath → entry (unique).
+ */
 export function indexFor(entries: FileEntry[]): EntryIndex {
   const cached = entryIndexCache.get(entries);
   if (cached) return cached;
@@ -941,6 +1322,34 @@ export function indexFor(entries: FileEntry[]): EntryIndex {
   return idx;
 }
 
+/**
+ * Resolve a wikilink target string to a concrete vault entry — the
+ * Obsidian-style fuzzy matcher used by every link-traversal tool.
+ *
+ * Resolution priority:
+ * 1. Relative paths (`./`, `../`) → resolve via `path.posix.normalize`
+ *    against `fromNote`'s directory.
+ * 2. Exact basename match. On collision, prefer the entry in `fromNote`'s
+ *    directory; otherwise return the first.
+ * 3. Path-qualified target → exact-relPath match, then `endsWith` fallback.
+ *
+ * Matches Obsidian's client-side link resolution closely enough that
+ * agents and the desktop app agree on what `[[Target]]` points at.
+ *
+ * @internal
+ * @param entries - File-entry array from `vault.listMarkdown()`.
+ * @param target - Link target string (with or without `.md`).
+ * @param fromNote - Source note's vault-relative path (biases resolution
+ *   toward same folder; required for `./` / `../`).
+ * @returns The resolved {@link FileEntry}, or null if no match.
+ * @example
+ * ```ts
+ * const entries = await vault.listMarkdown();
+ * findBestMatch(entries, "Foo");              // bare basename
+ * findBestMatch(entries, "Sub/Foo", "X.md");  // path-qualified
+ * findBestMatch(entries, "./Sibling", "Sub/X.md");  // relative
+ * ```
+ */
 export function findBestMatch(entries: FileEntry[], target: string, fromNote?: string): FileEntry | null {
   const idx = indexFor(entries);
 
@@ -975,10 +1384,42 @@ export function findBestMatch(entries: FileEntry[], target: string, fromNote?: s
   return null;
 }
 
+/**
+ * Strip a trailing `.md` extension (case-insensitive) from a filename or
+ * basename.
+ *
+ * @internal
+ * @param name - Filename or basename.
+ * @returns The input with any trailing `.md` removed.
+ * @example
+ * ```ts
+ * stripMd("Foo.md");   // → "Foo"
+ * stripMd("Foo.MD");   // → "Foo"
+ * stripMd("Foo.canvas"); // → "Foo.canvas" (only .md is stripped)
+ * ```
+ */
 export function stripMd(name: string): string {
   return name.replace(/\.md$/i, "");
 }
 
+/**
+ * Normalize a tag for comparison — strip leading `#` characters and
+ * lowercase the rest.
+ *
+ * Used everywhere the toolkit compares tags ({@link listNotes},
+ * {@link listTags}, {@link findSimilar}) to keep `#Draft` / `Draft` /
+ * `#draft` / `DRAFT` all hashing to the same key.
+ *
+ * @internal
+ * @param t - Tag string (with or without leading `#`).
+ * @returns Lowercased, `#`-stripped tag.
+ * @example
+ * ```ts
+ * normalizeTag("#Draft");   // → "draft"
+ * normalizeTag("DRAFT");    // → "draft"
+ * normalizeTag("##Idea");   // → "idea"
+ * ```
+ */
 export function normalizeTag(t: string): string {
   return t.replace(/^#+/, "").toLowerCase();
 }

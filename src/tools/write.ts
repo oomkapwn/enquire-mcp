@@ -4,6 +4,35 @@ import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { findBestMatch, stripMd } from "./meta.js";
 
+/**
+ * Create a new note (or overwrite an existing one) with optional YAML
+ * frontmatter.
+ *
+ * Frontmatter is serialized via gray-matter (js-yaml underneath), so values
+ * like dates / lists / pipe-containing strings round-trip cleanly without
+ * the hand-rolled-YAML corruption the old composer suffered. WRITE TOOL —
+ * only registered when the server is started with `--enable-write`.
+ *
+ * @param vault - The vault. Must allow writes (`vault.writeEnabled` is true).
+ * @param args - `path` is the vault-relative target. `content` is the body
+ *   (frontmatter prepended automatically). `frontmatter` is the optional YAML.
+ *   `overwrite` defaults to false — set true to replace an existing note.
+ * @returns `{ path, mtime, bytes }` — resolved vault-relative path, ISO
+ *   mtime, and UTF-8 byte size of the written file.
+ * @throws {Error} If the vault is read-only, the destination exists and
+ *   `overwrite` is not true, or the path is excluded by privacy filters.
+ * @throws {VaultPathError} If the path traverses outside the vault root.
+ * @example
+ * ```ts
+ * const r = await createNote(vault, {
+ *   path: "Posts/2026/Hybrid-Retrieval.md",
+ *   frontmatter: { status: "draft", tags: ["retrieval", "rag"] },
+ *   content: "# Hybrid Retrieval\n\nBM25 + embeddings...",
+ *   overwrite: false
+ * });
+ * console.log(r.path, r.bytes);
+ * ```
+ */
 export async function createNote(
   vault: Vault,
   args: { path: string; content: string; frontmatter?: Record<string, unknown>; overwrite?: boolean }
@@ -18,6 +47,31 @@ export async function createNote(
   };
 }
 
+/**
+ * Append content to the end of an existing note, with a configurable
+ * separator.
+ *
+ * Resolves the target by path or title (same fuzzy-match as wikilinks). The
+ * default separator is `"\n\n"` — a blank line — so appends read as a new
+ * paragraph. Pass `separator: ""` for raw concatenation. WRITE TOOL — only
+ * registered when the server is started with `--enable-write`.
+ *
+ * @param vault - The vault. Must allow writes.
+ * @param args - One of `path` or `title` is required. `content` is the
+ *   text to append. `separator` defaults to `"\n\n"`.
+ * @returns `{ path, mtime, appended_bytes }` — the appended byte count
+ *   includes the separator.
+ * @throws {Error} If the vault is read-only or the target can't be resolved.
+ * @throws {VaultPathError} If `path` resolves outside the vault.
+ * @example
+ * ```ts
+ * await appendToNote(vault, {
+ *   path: "Journal/2026-05-15.md",
+ *   content: "Afternoon: shipped v3.6.0-rc.3",
+ *   separator: "\n\n## "
+ * });
+ * ```
+ */
 export async function appendToNote(
   vault: Vault,
   args: { path?: string; title?: string; content: string; separator?: string }
@@ -41,21 +95,81 @@ export async function appendToNote(
 // then atomically renames the file. dry_run returns the same plan without
 // touching the disk.
 
+/**
+ * Per-file entry of the {@link renameNote} rewrite plan.
+ *
+ * `before` / `after` carry the full file contents in the planning phase;
+ * they are trimmed to empty strings in the public response (callers get
+ * just the per-file `rewrites` count).
+ */
 export interface RenameProposal {
+  /** Vault-relative path of the file whose links were rewritten. */
   path: string;
+  /** Number of distinct wikilink/embed literals rewritten in this file. */
   rewrites: number;
+  /** Original content (empty in the trimmed response). */
   before: string;
+  /** Rewritten content (empty in the trimmed response). */
   after: string;
 }
 
+/**
+ * Envelope returned by {@link renameNote}.
+ *
+ * `total_links_rewritten` is the sum across `files_updated`. `dry_run` echoes
+ * the input so the caller can detect a forgotten flag.
+ */
 export interface RenameNoteResult {
+  /** Source path (with `.md`). */
   from: string;
+  /** Destination path (with `.md`). */
   to: string;
+  /** Whether the file system was actually mutated. */
   dry_run: boolean;
+  /** Per-file rewrites. The source file is the last entry, at its NEW path. */
   files_updated: RenameProposal[];
+  /** Sum of `rewrites` across `files_updated`. */
   total_links_rewritten: number;
 }
 
+/**
+ * Atomic note rename with cross-vault backlink rewrite.
+ *
+ * Closes the longstanding "renaming breaks all backlinks" pain point. Walks
+ * every note, finds wikilinks / embeds whose `findBestMatch` resolves to the
+ * source file, rewrites only those literals (preserving `|alias`, `#section`,
+ * `^block`, and the user's path-qualification convention), then atomically
+ * moves the file. `dry_run` returns the same plan without touching disk.
+ *
+ * Self-references inside the renamed file are also rewritten in the same
+ * pass — the file ships with no broken self-links. Write order is
+ * recoverable: backlink-bearing files first, source last, fs.rename last —
+ * a mid-operation crash leaves backlinks pointing at the still-present old
+ * name. WRITE TOOL — only registered when `--enable-write` is passed.
+ *
+ * @param vault - The vault. Must allow writes.
+ * @param args - `from` and `to` are vault-relative paths (with or without
+ *   `.md`). `dry_run` defaults to false — when true, returns the plan
+ *   without writing. `overwrite` defaults to false — when true, allows
+ *   replacing an existing destination.
+ * @returns A {@link RenameNoteResult} with per-file rewrites and totals.
+ * @throws {Error} If source doesn't exist, destination exists and `overwrite`
+ *   is false, source equals destination, or destination is privacy-excluded.
+ * @throws {VaultPathError} If either path resolves outside the vault.
+ * @example
+ * ```ts
+ * // Preview first
+ * const plan = await renameNote(vault, {
+ *   from: "Inbox/draft-1.md",
+ *   to: "Posts/Hybrid Retrieval.md",
+ *   dry_run: true
+ * });
+ * console.log(`Would update ${plan.files_updated.length} files`);
+ *
+ * // Apply
+ * await renameNote(vault, { from: "Inbox/draft-1.md", to: "Posts/Hybrid Retrieval.md" });
+ * ```
+ */
 export async function renameNote(
   vault: Vault,
   args: { from: string; to: string; dry_run?: boolean; overwrite?: boolean }
@@ -192,6 +306,12 @@ export async function renameNote(
 // under the hood with a computed `to` path. Defaults the archive folder to
 // `Archive/` but accepts override.
 
+/**
+ * Arguments for {@link archiveNote}.
+ *
+ * Thin wrapper around rename — moves a note into the archive folder while
+ * preserving every wikilink and embed that points at it.
+ */
 export interface ArchiveNoteArgs {
   /** Vault-relative path of the note to archive (with or without `.md`). */
   path: string;
@@ -203,15 +323,55 @@ export interface ArchiveNoteArgs {
   overwrite?: boolean;
 }
 
+/**
+ * Arguments for {@link frontmatterSet}.
+ *
+ * Setting a key to `null` *deletes* it (not the same as setting to YAML
+ * `null`). This is a deliberate convenience choice — agents typically don't
+ * need to write literal YAML `null`, but they often need to remove a key.
+ */
 export interface FrontmatterSetArgs {
+  /** Vault-relative path of the target note. */
   path?: string;
+  /** Title (basename without `.md`) of the target note. */
   title?: string;
   /** Keys to set. Setting a key to `null` deletes it. */
   set: Record<string, unknown>;
-  /** Optional: dry_run shows the diff without writing. */
+  /** Preview the diff without writing. Default false. */
   dry_run?: boolean;
 }
 
+/**
+ * Atomic YAML frontmatter mutation — set, update, or delete keys via a
+ * gray-matter round-trip.
+ *
+ * Replaces the error-prone "find/replace YAML text" pattern. Parses the
+ * frontmatter, applies the diff, re-serializes via js-yaml (so date-like
+ * strings, multi-line values, pipe-containing strings, etc. stay correct).
+ * Reports per-key change markers in `changed_keys`: `"+key"` for added,
+ * `"~key"` for updated, `"-key"` for deleted. No-op writes (every value
+ * already matches) are skipped — the response still reports the empty diff.
+ * WRITE TOOL — only registered with `--enable-write`.
+ *
+ * @param vault - The vault. Must allow writes.
+ * @param args - {@link FrontmatterSetArgs}. `set` must be non-empty.
+ * @returns `{ path, changed_keys, before, after, dry_run }` — `before`
+ *   and `after` are the full frontmatter maps so the caller can diff.
+ * @throws {Error} If `set` is empty, vault is read-only, or target can't
+ *   be resolved.
+ * @example
+ * ```ts
+ * // Mark a draft as published, set a date, delete a stale key
+ * await frontmatterSet(vault, {
+ *   path: "Posts/Article.md",
+ *   set: {
+ *     status: "published",
+ *     published_at: "2026-05-15",
+ *     draft_notes: null  // deletes the key
+ *   }
+ * });
+ * ```
+ */
 export async function frontmatterSet(
   vault: Vault,
   args: FrontmatterSetArgs
@@ -254,6 +414,28 @@ export async function frontmatterSet(
   return { path: target.relPath, changed_keys: changed, before, after, dry_run: false };
 }
 
+/**
+ * Move a note into the archive folder, preserving every backlink.
+ *
+ * Thin convenience wrapper around {@link renameNote}: computes the
+ * destination path (`<archive_folder>/<basename>`, flattened — no source
+ * folder is preserved), then delegates. Leading folders of the source are
+ * stripped so `Inbox/Foo.md` archives to `Archive/Foo.md`, not
+ * `Archive/Inbox/Foo.md`.
+ *
+ * @param vault - The vault. Must allow writes.
+ * @param args - {@link ArchiveNoteArgs}. `path` is required.
+ * @returns The same shape as {@link renameNote}.
+ * @throws {Error} If `path` is missing, the vault is read-only, or
+ *   rename fails (e.g., destination exists without `overwrite`).
+ * @example
+ * ```ts
+ * await archiveNote(vault, {
+ *   path: "Inbox/old-idea.md",
+ *   archive_folder: "Archive/2026"
+ * });
+ * ```
+ */
 export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("archive_note: `path` is required");
@@ -279,6 +461,13 @@ export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<
 // dry_run is false; returns per-file counts so the agent can verify before
 // committing. WRITE TOOL — only registered when --enable-write is passed.
 
+/**
+ * Arguments for {@link replaceInNotes}.
+ *
+ * Literal substring find/replace — no regex, no globs. The agent is
+ * responsible for picking unambiguous needles. `search === replace` is
+ * rejected as a no-op.
+ */
 export interface ReplaceInNotesArgs {
   /** Literal substring to find. Empty string is rejected. */
   search: string;
@@ -292,11 +481,22 @@ export interface ReplaceInNotesArgs {
   case_sensitive?: boolean;
 }
 
+/**
+ * Per-file count emitted by {@link replaceInNotes}.
+ */
 export interface ReplaceInNotesFileResult {
+  /** Vault-relative path. */
   path: string;
+  /** Number of literal replacements applied in this file. */
   occurrences: number;
 }
 
+/**
+ * Envelope returned by {@link replaceInNotes}.
+ *
+ * `partial: true` signals that some writes failed mid-apply — check `errors`
+ * for the per-file reasons. Always false on dry-run.
+ */
 export interface ReplaceInNotesResult {
   search: string;
   replace: string;
@@ -317,6 +517,44 @@ export interface ReplaceInNotesResult {
   errors?: Array<{ path: string; message: string }>;
 }
 
+/**
+ * Bulk literal-substring find/replace across the vault, code-fence aware.
+ *
+ * Walks every note (optionally scoped to `folder`), replaces every
+ * occurrence of `search` with `replace` outside fenced code blocks (` ``` `
+ * and `~~~`), and writes results. The fence-awareness is critical — bulk
+ * find/replace that touches example snippets in documentation has been a
+ * historical foot-gun. Per-file write errors are collected (not thrown) so
+ * a single bad write doesn't lose the rest of the apply; check `partial`
+ * and `errors` in the response. WRITE TOOL — only registered with
+ * `--enable-write`.
+ *
+ * @param vault - The vault. Must allow writes (for non-dry-run apply).
+ * @param args - {@link ReplaceInNotesArgs}. `search` must be non-empty
+ *   and not equal to `replace`.
+ * @returns A {@link ReplaceInNotesResult} with per-file counts, totals,
+ *   and partial-write observability.
+ * @throws {Error} On invalid args (empty `search`, `search === replace`),
+ *   privacy-excluded folder, or a systemic write failure (read-only vault).
+ * @example
+ * ```ts
+ * // Preview a typo fix
+ * const preview = await replaceInNotes(vault, {
+ *   search: "embedings",
+ *   replace: "embeddings",
+ *   dry_run: true,
+ *   case_sensitive: false
+ * });
+ * console.log(`Would update ${preview.files_updated.length} files`);
+ *
+ * // Apply
+ * await replaceInNotes(vault, {
+ *   search: "embedings",
+ *   replace: "embeddings",
+ *   case_sensitive: false
+ * });
+ * ```
+ */
 export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Promise<ReplaceInNotesResult> {
   await vault.ensureExists();
   const dryRun = args.dry_run === true;
@@ -402,10 +640,31 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   return result;
 }
 
-/** Given the raw inner text of a wikilink (`Foo|alias`, `Folder/Foo#sec`, etc.)
- *  and the resolved target string the parser already extracted, produce the new
- *  raw text after the file has been renamed. Preserves alias/section/block and
- *  the user's chosen path-qualification convention (bare-basename vs path). */
+/**
+ * Rewrite a single wikilink's raw inner text after the target file has
+ * been renamed.
+ *
+ * Preserves the suffix (`|alias`, `#section`, `^block`) and respects the
+ * user's chosen path-qualification convention — if the original link was
+ * bare-basename (`[[Foo]]`), the rewrite stays bare; if it was path-
+ * qualified (`[[Folder/Foo]]`), the rewrite uses the new directory.
+ *
+ * @internal
+ * @param raw - Raw inner-bracket text from the parser
+ *   (e.g. `"Foo|alias"`, `"Folder/Foo#section"`).
+ * @param oldTarget - The resolved target string the parser extracted
+ *   (used to detect path-qualification).
+ * @param newBasename - New `.md`-stripped basename.
+ * @param newDir - New directory (vault-relative, `.`/empty for vault root).
+ * @returns The rewritten inner-bracket text.
+ * @example
+ * ```ts
+ * rewriteRawTarget("Foo|alias", "Foo", "Bar", ".");
+ * // → "Bar|alias"
+ * rewriteRawTarget("Old/Foo#sec", "Old/Foo", "Bar", "New");
+ * // → "New/Bar#sec"
+ * ```
+ */
 export function rewriteRawTarget(raw: string, oldTarget: string, newBasename: string, newDir: string): string {
   const wasPathQualified = oldTarget.includes("/");
   const newTargetBare = wasPathQualified
@@ -425,10 +684,28 @@ export function rewriteRawTarget(raw: string, oldTarget: string, newBasename: st
   return `${newTargetBare}${suffix}`;
 }
 
-/** Walk file content line by line. Toggle `inFence` at any line that opens or
- *  closes a ``` or ~~~ fence. Inside a fence, leave content untouched. Outside,
- *  replace each old literal with its new literal. Returns { content, count }
- *  where count is the total number of literal replacements applied. */
+/**
+ * Walk file content line-by-line and rewrite wikilink / embed literals
+ * outside fenced code blocks.
+ *
+ * Toggles `inFence` at any line opening or closing a ` ``` ` or `~~~`
+ * block; lines inside a fence are passed through verbatim. Outside fences,
+ * each entry in `oldRawsToNew` produces a `[[old]]` → `[[new]]` or
+ * `![[old]]` → `![[new]]` rewrite (per `kind`). Used by {@link renameNote}.
+ *
+ * @internal
+ * @param content - Full file content.
+ * @param oldRawsToNew - Map from old raw inner-bracket text to new raw +
+ *   link kind.
+ * @returns `{ content, count }` — count is the total number of literal
+ *   replacements applied.
+ * @example
+ * ```ts
+ * const map = new Map([["Foo", { kind: "wikilink", newRaw: "Bar" }]]);
+ * rewriteOutsideCodeFences("See [[Foo]]\n```\n[[Foo]]\n```", map);
+ * // → { content: "See [[Bar]]\n```\n[[Foo]]\n```", count: 1 }
+ * ```
+ */
 export function rewriteOutsideCodeFences(
   content: string,
   oldRawsToNew: Map<string, { kind: "wikilink" | "embed"; newRaw: string }>
@@ -465,11 +742,29 @@ export function rewriteOutsideCodeFences(
   return { content: out.join("\n"), count };
 }
 
-/** Generic code-fence-aware string replacer used by replaceInNotes (v1.9).
- *  Walks line-by-line, tracks ` ``` ` / `~~~` fences, and replaces every
- *  occurrence of `search` with `replace` outside fenced blocks. Case-sensitive
- *  by default; pass `caseSensitive: false` for case-insensitive substring
- *  match. Returns the rewritten content + replacement count. */
+/**
+ * Generic code-fence-aware substring replacer.
+ *
+ * Walks line-by-line, tracks ` ``` ` and `~~~` fences, and replaces every
+ * occurrence of `search` with `replace` outside fenced blocks. The
+ * code-fence skip is the critical correctness property — bulk
+ * find/replace on documentation that wipes out example snippets is a
+ * historical foot-gun.
+ *
+ * @internal
+ * @param content - Full file content.
+ * @param search - Literal substring to find. Empty string returns content
+ *   unchanged with `count: 0`.
+ * @param replace - Replacement text (may be empty).
+ * @param caseSensitive - When false, match is case-insensitive but the
+ *   replacement is inserted verbatim from `replace`.
+ * @returns `{ content, count }` — rewritten content + replacement count.
+ * @example
+ * ```ts
+ * replaceStringOutsideCodeFences("Hello WORLD\n```\nWORLD\n```", "world", "Earth", false);
+ * // → { content: "Hello Earth\n```\nWORLD\n```", count: 1 }
+ * ```
+ */
 export function replaceStringOutsideCodeFences(
   content: string,
   search: string,
@@ -519,6 +814,28 @@ export function replaceStringOutsideCodeFences(
   return { content: out.join("\n"), count };
 }
 
+/**
+ * Compose a complete note string from optional frontmatter and a body.
+ *
+ * Delegates to gray-matter's `stringify` (backed by js-yaml) so YAML-special
+ * strings — date-like (`"2026-05-03"`), `!`-prefixed, pipe-containing, etc.
+ * — round-trip safely. Replaces an older hand-rolled renderer that
+ * silently corrupted a long tail of valid string values. Empty / missing
+ * frontmatter returns `content` verbatim (no leading `---` delimiter).
+ *
+ * @internal
+ * @param frontmatter - YAML to serialize. Omitted or empty for body-only.
+ * @param content - Body content (no leading `---` delimiter — `composeNote`
+ *   adds them).
+ * @returns The full note string ready for `vault.writeNote`.
+ * @example
+ * ```ts
+ * composeNote({ status: "draft" }, "# Title\n\nBody");
+ * // → "---\nstatus: draft\n---\n# Title\n\nBody"
+ * composeNote(undefined, "Body");
+ * // → "Body"
+ * ```
+ */
 export function composeNote(frontmatter: Record<string, unknown> | undefined, content: string): string {
   if (!frontmatter || Object.keys(frontmatter).length === 0) return content;
   // Use gray-matter's stringify (backed by js-yaml) so YAML-special strings —
@@ -529,6 +846,28 @@ export function composeNote(frontmatter: Record<string, unknown> | undefined, co
   return matter.stringify(content, frontmatter);
 }
 
+/**
+ * Extract tags from a frontmatter map as a lowercased, `#`-stripped array.
+ *
+ * Accepts both Obsidian-common shapes:
+ * - `tags: [foo, bar]` — YAML array
+ * - `tags: "foo bar"` / `tags: "foo, bar"` — space- or comma-separated string
+ * - `tag: ...` — singular variant (some users prefer this)
+ *
+ * Returns `[]` when the field is absent or has an unsupported shape.
+ *
+ * @internal
+ * @param fm - Parsed frontmatter map.
+ * @returns Lowercased, `#`-stripped tag strings. Original order preserved
+ *   for array input; split order for string input.
+ * @example
+ * ```ts
+ * extractFrontmatterTagsLower({ tags: ["#Foo", "BAR"] });
+ * // → ["foo", "bar"]
+ * extractFrontmatterTagsLower({ tag: "draft, rag" });
+ * // → ["draft", "rag"]
+ * ```
+ */
 export function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {
   const raw = fm.tags ?? fm.tag;
   if (!raw) return [];
@@ -540,9 +879,31 @@ export function extractFrontmatterTagsLower(fm: Record<string, unknown>): string
   return list.map((t) => t.replace(/^#+/, "").toLowerCase());
 }
 
-/** Resolve "today"/"daily"/"weekly"/"monthly" to today's periodic-note name
- *  using the standard Obsidian Daily-Notes-plugin formats. Custom formats are
- *  out of scope (users with non-default conventions address by exact name). */
+/**
+ * Resolve a periodic-note alias to its corresponding date-format basename.
+ *
+ * Accepts `"daily"` / `"today"` (→ `YYYY-MM-DD`), `"weekly"` (→ `YYYY-Www`,
+ * ISO 8601 week number, Monday-based), or `"monthly"` (→ `YYYY-MM`). All
+ * other inputs return `null`. The format strings match Obsidian's default
+ * Daily-Notes / Periodic-Notes plugin conventions; custom formats are
+ * out-of-scope — users with non-default conventions should address notes by
+ * exact name. Used as a last-resort fallback in {@link resolveTarget} after
+ * the plugin-config-aware resolver misses.
+ *
+ * @internal
+ * @param title - Possible alias string (case-insensitive).
+ * @returns The basename (no `.md` extension), or `null` if `title` isn't
+ *   one of the supported aliases.
+ * @example
+ * ```ts
+ * resolvePeriodicAlias("today");
+ * // → "2026-05-15" (on 2026-05-15)
+ * resolvePeriodicAlias("weekly");
+ * // → "2026-W20"
+ * resolvePeriodicAlias("monthly");
+ * // → "2026-05"
+ * ```
+ */
 export function resolvePeriodicAlias(title: string): string | null {
   const lower = title.trim().toLowerCase();
   if (lower !== "daily" && lower !== "today" && lower !== "weekly" && lower !== "monthly") {
@@ -563,9 +924,27 @@ export function resolvePeriodicAlias(title: string): string | null {
   return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
-/** Up to 3 vault-relative paths whose basename or relPath looks similar to
- *  the missing target. Used to enrich `Note not found` errors with did-you-mean
- *  hints — meaningful for LLMs that mistype a note name. */
+/**
+ * Suggest up to 3 vault-relative paths whose basename or path looks similar
+ * to a missing target — used to enrich "note not found" errors.
+ *
+ * Helpful for LLMs that mistype a note name (e.g. `"Hybrid Reterival"` →
+ * suggests `"Hybrid Retrieval"`). Tiered scoring: exact match (100), prefix
+ * overlap (70), substring containment (50), relpath containment (30).
+ * Failures are swallowed — the suggestion path must never surface its own
+ * errors to the caller.
+ *
+ * @internal
+ * @param vault - The vault.
+ * @param target - The missed target string (with or without `.md`).
+ * @returns Up to 3 vault-relative paths, sorted by similarity score desc.
+ *   Empty array on any error or no candidates.
+ * @example
+ * ```ts
+ * const hints = await suggestSimilar(vault, "Hybrid Reterival");
+ * // → ["Concepts/Hybrid Retrieval.md", "Reference/Retrieval.md"]
+ * ```
+ */
 export async function suggestSimilar(vault: Vault, target: string): Promise<string[]> {
   try {
     const all = await vault.listMarkdown();
@@ -590,6 +969,39 @@ export async function suggestSimilar(vault: Vault, target: string): Promise<stri
   }
 }
 
+/**
+ * Resolve a note target by either `path` or `title`, with periodic-alias and
+ * fuzzy-suggestion fallbacks.
+ *
+ * The universal target-resolver used by every read/write tool. Resolution
+ * order:
+ * 1. If `path` is set → try exact path (with `.md` appended if missing).
+ * 2. If `title` is set → try literal title match.
+ * 3. If `title` is one of the periodic aliases (`daily` / `today` / `weekly` /
+ *    `monthly`) → respect the user's Daily-Notes / Periodic-Notes plugin
+ *    config first; fall back to default formats only if the plugin folder is
+ *    at vault root (privacy-safe).
+ * 4. On miss → throw with did-you-mean suggestions via {@link suggestSimilar}.
+ *
+ * @param vault - The vault.
+ * @param args - Exactly one of `path` or `title` should be provided. If
+ *   both are set, `path` takes precedence.
+ * @returns A {@link FileEntry} pointing at the resolved file on disk.
+ * @throws {Error} If neither is set, or no note matches (with did-you-mean
+ *   hints in the message).
+ * @throws {VaultPathError} If `path` traverses outside the vault.
+ * @example
+ * ```ts
+ * // By path
+ * const e1 = await resolveTarget(vault, { path: "Posts/Article.md" });
+ *
+ * // By title (basename match)
+ * const e2 = await resolveTarget(vault, { title: "Article" });
+ *
+ * // By periodic alias — respects user's Daily-Notes config
+ * const e3 = await resolveTarget(vault, { title: "today" });
+ * ```
+ */
 export async function resolveTarget(vault: Vault, args: { path?: string; title?: string }): Promise<FileEntry> {
   if (args.path) {
     const candidates = args.path.toLowerCase().endsWith(".md") ? [args.path] : [args.path, `${args.path}.md`];

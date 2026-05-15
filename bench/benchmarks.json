@@ -1,0 +1,140 @@
+{
+  "meta": {
+    "queries_count": 60,
+    "vault_notes": 48,
+    "k": 10,
+    "embedder": "bge",
+    "embed_ready": true,
+    "embed_skip_reason": null,
+    "node_version": "v25.9.0",
+    "platform": "darwin arm64",
+    "cpu_model": "Apple A18 Pro",
+    "timestamp": "2026-05-15T10:47:19Z",
+    "reranker_alias": "rerank-bge",
+    "reranker_hfid": "Xenova/bge-reranker-base",
+    "reranker_dtype": "q8",
+    "reranker_ready": true,
+    "reranker_skip_reason": null,
+    "hyde_subset_count": 25
+  },
+  "rows": [
+    {
+      "label": "FS-grep baseline",
+      "n": 60,
+      "mean_ndcg": 0.8184028981055633,
+      "mean_recall": 0.8844444444444444,
+      "mean_mrr": 0.826851851851852,
+      "mean_latency_ms": 0.10921043333334333,
+      "ndcg_by_category": {
+        "exact": 0.9413693051670988,
+        "semantic": 0.5492184211113632,
+        "synonym": 0.6934264036172708,
+        "compound": 0.60358202837432,
+        "rare": 1
+      }
+    },
+    {
+      "label": "BM25 only",
+      "n": 60,
+      "mean_ndcg": 0.4059627718864251,
+      "mean_recall": 0.38333333333333336,
+      "mean_mrr": 0.48333333333333334,
+      "mean_latency_ms": 0.07408819999999802,
+      "ndcg_by_category": {
+        "exact": 0.5545493171591656,
+        "semantic": 0.11522479948324703,
+        "synonym": 0.1532867981913646,
+        "compound": 0,
+        "rare": 0.8065735963827292
+      }
+    },
+    {
+      "label": "TF-IDF only",
+      "n": 60,
+      "mean_ndcg": 0.8667881925372072,
+      "mean_recall": 0.9038888888888889,
+      "mean_mrr": 0.9090277777777779,
+      "mean_latency_ms": 2.1132958333333476,
+      "ndcg_by_category": {
+        "exact": 0.9652385064038982,
+        "semantic": 0.6203227707383645,
+        "synonym": 0.7786032570268364,
+        "compound": 0.8315116656145795,
+        "rare": 1
+      }
+    },
+    {
+      "label": "Embeddings only",
+      "n": 60,
+      "mean_ndcg": 0.898538248715456,
+      "mean_recall": 0.9394444444444444,
+      "mean_mrr": 0.9274074074074076,
+      "mean_latency_ms": 102.32531106666669,
+      "ndcg_by_category": {
+        "exact": 0.9937855593157552,
+        "semantic": 0.6710385592898753,
+        "synonym": 0.809299428192324,
+        "compound": 0.8368305618056212,
+        "rare": 1
+      }
+    },
+    {
+      "label": "Hybrid (BM25+TF-IDF+embeddings, RRF)",
+      "n": 60,
+      "mean_ndcg": 0.7142769657784033,
+      "mean_recall": 0.9638888888888888,
+      "mean_mrr": 0.6580555555555557,
+      "mean_latency_ms": 224.18464021666654,
+      "ndcg_by_category": {
+        "exact": 0.7326611239540608,
+        "semantic": 0.6759492356071226,
+        "synonym": 0.5947414646304473,
+        "compound": 0.8746835066679459,
+        "rare": 0.640925341689295
+      }
+    },
+    {
+      "label": "Hybrid + reranker (rerank-bge)",
+      "n": 60,
+      "mean_ndcg": 0.8694043817172444,
+      "mean_recall": 0.9122222222222223,
+      "mean_mrr": 0.9051587301587303,
+      "mean_latency_ms": 540.3022715666667,
+      "ndcg_by_category": {
+        "exact": 0.9611229661140764,
+        "semantic": 0.6398069224019477,
+        "synonym": 0.9378188546829525,
+        "compound": 0.6313802748182548,
+        "rare": 1
+      }
+    },
+    {
+      "label": "Hybrid + reranker (HyDE subset, n=25)",
+      "n": 25,
+      "mean_ndcg": 0.7672155804893493,
+      "mean_recall": 0.8133333333333332,
+      "mean_mrr": 0.8466666666666667,
+      "mean_latency_ms": 515.5845199599999,
+      "ndcg_by_category": {
+        "exact": 0.9711032699350037,
+        "semantic": 0.6720961830386256,
+        "synonym": 0.875637709365905,
+        "compound": 0.6313802748182548
+      }
+    },
+    {
+      "label": "Hybrid + reranker + HyDE-sim (rerank-bge, HyDE subset)",
+      "n": 25,
+      "mean_ndcg": 0.572801467713516,
+      "mean_recall": 0.5933333333333333,
+      "mean_mrr": 0.7077777777777778,
+      "mean_latency_ms": 722.8922166400001,
+      "ndcg_by_category": {
+        "exact": 0.9509883574167833,
+        "semantic": 0.4461834326461955,
+        "synonym": 0.3065735963827292,
+        "compound": 0.41652879125147235
+      }
+    }
+  ]
+}

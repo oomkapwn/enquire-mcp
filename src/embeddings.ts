@@ -74,6 +74,8 @@ export interface Embedder {
 // tokenizer transitive deps surface only when the user actually invokes an
 // embeddings codepath. Mirrors the better-sqlite3 lazy-load in src/fts5.ts.
 let pipelineCtor: ((task: string, model: string) => Promise<unknown>) | null = null;
+let autoTokenizerCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
+let autoModelForSeqClsCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 
 async function loadPipeline(): Promise<(task: string, model: string) => Promise<unknown>> {
   if (pipelineCtor) return pipelineCtor;
@@ -89,6 +91,53 @@ async function loadPipeline(): Promise<(task: string, model: string) => Promise<
     throw new Error(
       `Embeddings require the optional '@huggingface/transformers' dependency; install failed or the binding could not be loaded. ` +
         `Run: npm install @huggingface/transformers (or reinstall enquire-mcp without --omit=optional). ` +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
+ * v3.6.0-rc.4 P0 fix — load `AutoTokenizer` + `AutoModelForSequenceClassification`
+ * directly from `@huggingface/transformers`. Reason: the high-level
+ * `text-classification` pipeline applies softmax over the model's
+ * classification head. BGE-reranker family (and the other sigmoid-head
+ * cross-encoders we ship) have a SINGLE output class — softmax over 1
+ * class is always 1.0 by definition, so the pipeline returns
+ * `{ label: "LABEL_0", score: 1 }` for every input regardless of
+ * relevance. Empirically verified on `Xenova/bge-reranker-base`.
+ *
+ * Direct inference: tokenize the (query, passage) pair, run the model,
+ * read the raw logit from `logits.data[0]`, apply sigmoid to map to
+ * [0, 1]. Yields meaningful relevance scoring.
+ *
+ * Tests/regression catch: `tests/reranker.test.ts` previously used a
+ * mock `rerankerOverride` so the bug never surfaced. v3.6.0-rc.4 adds
+ * an opt-in real-model smoke test that exercises this codepath.
+ */
+async function loadTransformersForRerank(): Promise<{
+  AutoTokenizer: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> };
+  AutoModelForSequenceClassification: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> };
+}> {
+  if (autoTokenizerCtor && autoModelForSeqClsCtor) {
+    return { AutoTokenizer: autoTokenizerCtor, AutoModelForSequenceClassification: autoModelForSeqClsCtor };
+  }
+  try {
+    const mod = (await import("@huggingface/transformers")) as {
+      AutoTokenizer?: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> };
+      AutoModelForSequenceClassification?: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> };
+    };
+    if (!mod.AutoTokenizer || !mod.AutoModelForSequenceClassification) {
+      throw new Error(
+        "@huggingface/transformers has no `AutoTokenizer` / `AutoModelForSequenceClassification` exports"
+      );
+    }
+    autoTokenizerCtor = mod.AutoTokenizer;
+    autoModelForSeqClsCtor = mod.AutoModelForSequenceClassification;
+    return { AutoTokenizer: autoTokenizerCtor, AutoModelForSequenceClassification: autoModelForSeqClsCtor };
+  } catch (err) {
+    throw new Error(
+      "Rerankers require the optional '@huggingface/transformers' dependency; install failed or the binding could not be loaded. " +
+        "Run: npm install @huggingface/transformers (or reinstall enquire-mcp without --omit=optional). " +
         `Original error: ${err instanceof Error ? err.message : String(err)}`
     );
   }
@@ -273,44 +322,68 @@ export interface Reranker {
  * `loadEmbedder`). Cold-start downloads the model from HuggingFace
  * (~25-110 MB depending on alias) into `~/.cache/huggingface/`.
  *
+ * **v3.6.0-rc.4 P0 fix.** Previously used the high-level
+ * `text-classification` pipeline, which softmax'es over the model's
+ * classification head. BGE-style rerankers have a SINGLE output class
+ * (relevance logit) — softmax over 1 class is always 1.0, so the
+ * pipeline returned `score: 1.0` for every input. **The reranker was
+ * effectively a no-op.** Hidden because `tests/reranker.test.ts` used a
+ * mock `rerankerOverride` that never exercised the real model. Now
+ * fixed: direct tokenizer + model inference + sigmoid maps the raw
+ * relevance logit to [0, 1].
+ *
  * @param alias - Reranker alias from RERANKER_MODELS (default: "rerank-multilingual").
  */
 export async function loadReranker(alias?: string): Promise<Reranker> {
   const model = resolveRerankerModel(alias);
-  const pipeline = await loadPipeline();
-  const classifier = (await pipeline("text-classification", model.hfId)) as (
-    inputs: ReadonlyArray<{ text: string; text_pair: string }> | { text: string; text_pair: string },
-    options?: { topk?: number }
-  ) => Promise<Array<{ label: string; score: number }>>;
+  const { AutoTokenizer, AutoModelForSequenceClassification } = await loadTransformersForRerank();
+  // q8 quantization keeps memory bounded and CPU-friendly. Models in our
+  // catalog all ship q8 ONNX weights via Xenova/.
+  const dtype = "q8" as const;
+  const tokenizer = (await AutoTokenizer.from_pretrained(model.hfId)) as (
+    text: string | string[],
+    options: { text_pair: string | string[]; padding: boolean; truncation: boolean }
+  ) => unknown;
+  const seqCls = (await AutoModelForSequenceClassification.from_pretrained(model.hfId, { dtype })) as (
+    inputs: unknown
+  ) => Promise<{ logits: { data: Float32Array; dims: readonly number[] } }>;
+
+  // Sub-batch size: cross-encoder is heavier per pair than encoder-only;
+  // 4 keeps peak memory under ~280 MB on M1 with q8 + the largest model
+  // (mxbai multilingual ~280 MB).
+  const MAX_INTERNAL_BATCH = 4;
 
   return {
     model,
     async score(query: string, passages: readonly string[]): Promise<number[]> {
       if (passages.length === 0) return [];
-      // Build the (query, passage) pair inputs. transformers.js
-      // text-classification accepts an array; the model returns one
-      // {label, score} per input.
-      const inputs = passages.map((p) => ({ text: query, text_pair: p }));
-      // Sub-batch to bound memory — same rationale as the embedder's
-      // MAX_INTERNAL_BATCH. Cross-encoder is heavier per pair, so we use a
-      // smaller batch (4) to keep peak memory under ~150 MB on M1.
-      const MAX_INTERNAL_BATCH = 4;
       const out: number[] = [];
-      for (let batchStart = 0; batchStart < inputs.length; batchStart += MAX_INTERNAL_BATCH) {
-        const batch = inputs.slice(batchStart, batchStart + MAX_INTERNAL_BATCH);
-        const result = await classifier(batch);
-        // Pipeline returns one Array per input by default; flatten to scores.
-        // Each output is {label, score}; for binary-relevance rerankers, the
-        // score is already the model's relevance probability.
-        const scores = Array.isArray(result) ? result : [result];
-        for (const r of scores) {
-          if (typeof r?.score === "number") {
-            out.push(r.score);
-          } else {
-            // Defensive: surface as -Infinity so this hit goes to the bottom
-            // rather than poisoning the sort with NaN.
+      for (let batchStart = 0; batchStart < passages.length; batchStart += MAX_INTERNAL_BATCH) {
+        const batch = passages.slice(batchStart, batchStart + MAX_INTERNAL_BATCH);
+        // Batched tokenization: each pair is (query, passage_i). transformers.js
+        // accepts parallel arrays for the second positional + the text_pair
+        // option. padding:true pads to the longest sequence in the batch;
+        // truncation:true clips to the model's max position (typically 512).
+        const queries = new Array<string>(batch.length).fill(query);
+        const inputs = tokenizer(queries, { text_pair: [...batch], padding: true, truncation: true });
+        const { logits } = await seqCls(inputs);
+        // For a 1-class sigmoid head: logits shape [batch, 1] → flat
+        // Float32Array of length batch. Map each logit through sigmoid to
+        // get a [0, 1] relevance score that's comparable across queries.
+        for (let i = 0; i < batch.length; i++) {
+          const raw = logits.data[i];
+          if (typeof raw !== "number" || Number.isNaN(raw)) {
+            // Defensive: -Infinity puts the hit at the bottom of the sort
+            // rather than poisoning order with NaN.
             out.push(-Infinity);
+            continue;
           }
+          // Sigmoid: 1 / (1 + exp(-x)). Stable for extreme magnitudes
+          // because exp(-large) → 0 and exp(-very-negative) → +∞ both
+          // clamp gracefully (the latter overflows to Infinity and the
+          // division yields 0, which is the correct relevance for a
+          // strongly-negative logit).
+          out.push(1 / (1 + Math.exp(-raw)));
         }
       }
       return out;

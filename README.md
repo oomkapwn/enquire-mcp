@@ -11,7 +11,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-712%20passing-brightgreen.svg)](#trust)
+[![tests](https://img.shields.io/badge/tests-714%20passing-brightgreen.svg)](#trust)
 [![stable](https://img.shields.io/badge/v3.5.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -29,7 +29,7 @@
 
 A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion (Cormack et al, 2009), reranks with a **BGE cross-encoder** (5 model options), scales to millions of chunks via **HNSW with int8 quantization**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**44 tools · 19 MCP prompts · 712 unit tests · 50+ languages · v3.5.x · semver-bound · MIT · SLSA-3.**
+**44 tools · 19 MCP prompts · 714 unit tests · 50+ languages · v3.5.x · semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -65,6 +65,12 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 ---
 
+## 📖 API reference
+
+Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — every tool, prompt, and exported helper with full TSDoc (`@param` / `@returns` / `@example`). Rebuilt from source on every push to `main` via [`publish-docs.yml`](./.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Drift-free by construction: the same TSDoc that AI agents and IDEs see is what's published.
+
+---
+
 ## 🏆 Why it's the best
 
 **Six features no other Obsidian-MCP has at all** (GraphRAG-light, standalone `.base` execution, HyDE, int8 quantization, late-chunking, built-in eval harness). **Plus the entire modern IR stack** (BM25 + ML embeddings + cross-encoder reranking + HNSW) that competitors ship at most one or two of. Side-by-side:
@@ -89,7 +95,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **712 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
+| **714 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -199,7 +205,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: 
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (712 tests, ~5s)
+npm test       # full suite (714 tests, ~5s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

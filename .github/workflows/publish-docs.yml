@@ -1,0 +1,56 @@
+name: Publish API docs
+
+# v3.6.0-rc.4 — auto-publish the TypeDoc-generated API reference from
+# src/tools/* + src/tool-manifest.ts (TSDoc added in rc.3) to GitHub
+# Pages on every push to main. The generated site lives at
+# https://oomkapwn.github.io/enquire-mcp/ and is regenerated from the
+# latest source on every merge — never hand-committed.
+
+on:
+  push:
+    branches: [main]
+  # Allow manual re-deploys (e.g. if Pages config changes) without a
+  # source commit. Useful when toggling GH Pages on for the first time.
+  workflow_dispatch:
+
+# Minimum permissions for the deploy-pages action. `contents: read` to
+# checkout, `pages: write` to publish, `id-token: write` to mint the
+# OIDC token deploy-pages exchanges for an upload URL.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time, but don't cancel an in-flight deploy
+# (an aborted upload would leave the site in a partial state).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run docs:api
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/api-reference
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

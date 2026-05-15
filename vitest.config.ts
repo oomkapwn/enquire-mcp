@@ -22,22 +22,21 @@ export default defineConfig({
       // (inflated stats copy-pasted from sub-agent output into release notes).
       reporter: ["text", "html", "lcov", "json-summary"],
       include: ["src/**/*.ts"],
-      // v3.6.0-rc.2 — original `src/index.ts` was excluded because it was
-      // registration boilerplate where line coverage doesn't reflect quality.
-      // The rc.2 monolith split moved those 3665 lines into `cli.ts` +
-      // `server.ts` + `tool-registry.ts` + `prompts.ts`, so the SAME
-      // exclusion reasoning applies to all of them. Without this exclusion,
-      // coverage would drop from ~89% lines to ~78% (a -11pp regression
-      // that's purely about the include set, not about test quality). The
-      // actual tool LOGIC is in `src/tools/*` which stays included +
-      // covered. `tool-manifest.ts` is also pure data — no logic to test.
+      // v3.6.0-rc.4 — registration-boilerplate exclude pivoted from exact
+      // paths to a brace-glob pattern. Rationale (Class A invariant fix):
+      // the rc.2 monolith split hardcoded 6 individual paths after running
+      // into the OLD `["src/index.ts"]` becoming stale post-split. A glob
+      // pattern is refactor-resistant — adding/renaming registration files
+      // in this category won't break coverage thresholds again.
+      //
+      // What "registration boilerplate" means here: code whose purpose is
+      // to wire up the MCP server (CLI parsing, server construction,
+      // tool/prompt registration loops, machine-readable manifest). The
+      // actual tool LOGIC is in `src/tools/*` which STAYS included + tested.
+      // Without these exclusions coverage drops from ~89% lines to ~78%
+      // (-11pp), which is an include-set artifact, not test quality.
       exclude: [
-        "src/index.ts",
-        "src/cli.ts",
-        "src/server.ts",
-        "src/tool-registry.ts",
-        "src/prompts.ts",
-        "src/tool-manifest.ts",
+        "src/{index,cli,server,tool-registry,prompts,tool-manifest}.ts",
         "**/*.test.ts"
       ],
       // v3.6 — branches threshold raised 72→74 after the coverage uplift

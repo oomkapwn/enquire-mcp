@@ -1,0 +1,77 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+
+  // Entry points — src/index.ts is the slim CLI / public-surface entry,
+  // src/tools/index.ts is the barrel re-exporting all 44 tools across 5
+  // domain modules (read / write / search / media / meta), and
+  // src/tool-manifest.ts is the machine-readable TOOL_MANIFEST array
+  // (single source of truth used by tool-registry.ts + docs-consistency
+  // tests). Together these give TypeDoc the full TSDoc surface added in
+  // v3.6.0-rc.3 (44 tools + 19 prompts + ~50 helpers + ~2200 lines of
+  // doc-comments) without dragging internal files into the API reference.
+  "entryPoints": [
+    "src/index.ts",
+    "src/tools/index.ts",
+    "src/tool-manifest.ts"
+  ],
+
+  // Generated HTML site goes to docs/api-reference/. This directory is
+  // gitignored — CI regenerates it on every push to main and deploys
+  // to GitHub Pages via .github/workflows/publish-docs.yml.
+  "out": "docs/api-reference",
+
+  // Honor the @internal tag added to internal helpers in v3.6.0-rc.3.
+  // Symbols marked @internal stay in source for IDE / contributor docs
+  // but don't pollute the public API reference.
+  "excludeInternal": true,
+
+  // Project metadata. `name` appears in the page title and header.
+  // `includeVersion` pulls from package.json automatically.
+  "name": "enquire-mcp API reference",
+  "includeVersion": true,
+
+  // Don't auto-discover a README — the site is a pure API reference;
+  // the project README lives in the repo root and is what GitHub shows.
+  "readme": "none",
+
+  // Reuse the project's existing tsconfig so TypeDoc compiles with the
+  // same options as `tsc` (strict + noUncheckedIndexedAccess).
+  "tsconfig": "./tsconfig.json",
+
+  // Surface broken @link references at doc-build time so they don't
+  // ship to GH Pages. `notExported` + `notDocumented` are too noisy
+  // for a codebase this size (every external symbol would trigger).
+  "validation": {
+    "notExported": false,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+
+  // Don't fail the build on the inevitable TSDoc warnings from a
+  // large codebase — rc.3 added ~369 doc-blocks and not every
+  // external-referenced symbol is annotated. The site renders fine.
+  "treatWarningsAsErrors": false,
+
+  // Emits a .nojekyll file so GH Pages serves files starting with
+  // underscores (TypeDoc's internal assets directory).
+  "githubPages": true,
+
+  // Built-in default theme. TypeDoc 0.28's default supports dark mode
+  // via prefers-color-scheme out of the box. Pin the syntax-highlight
+  // themes for predictable rendering across both modes.
+  "lightHighlightTheme": "github-light",
+  "darkHighlightTheme": "github-dark",
+
+  // Group reflections by kind in the sidebar so tools/* modules sit
+  // together. Categories aren't used in this codebase.
+  "navigation": {
+    "includeCategories": false,
+    "includeGroups": true,
+    "includeFolders": true
+  },
+
+  // Clean the output dir on each run so stale files from a previous
+  // build never linger.
+  "cleanOutputDir": true,
+  "hideGenerator": false
+}

@@ -78,7 +78,7 @@ Apply **root-cause sweep methodology** consistently: every bug → identify the 
 
 ## Current phase status
 
-- **rc.1 shipped**: `tools.ts` (4252 lines) → `src/tools/{search,read,write,media,meta}.ts` + barrel.
-- **rc.2 shipped**: `index.ts` (3665 lines) → `src/{cli,server,tool-registry,prompts,tool-manifest}.ts`; slim `src/index.ts` (84 lines).
-- **rc.3 in flight** (PR #67): Full TSDoc (+2238 lines, 369 doc-blocks) on 44 tools + 19 prompts + helpers.
-- **rc.4 next**: TypeDoc + GH Pages + Public benchmarks.
+- **v3.6.0 stable shipped**: tools.ts + index.ts splits + Full TSDoc + TypeDoc on GH Pages + public benchmarks. Internal 9-layer audit produced 4.85/5 verdict. Mavis external 4.9/5.
+- **v3.6.1 emergency patch shipped**: closed 3 CRITICAL ship-blockers caught by an anonymous external auditor that all 3 prior audits (internal + Mavis + my rootcause sweep) missed.
+- **v3.6.2 sprint next**: batch fixes for 13 Medium + 14 Low + 3 new High from internal + external audits. All non-blocking, batched as patch.
+- **Method lesson**: every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies. Internal multi-layer audits = breadth + speed but NOT a substitute for fresh external perspective. See `~/.claude/.../memory/method_full_system_audit.md` for the rule.

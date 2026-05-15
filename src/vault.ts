@@ -7,30 +7,60 @@ import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
+/** Maximum file size {@link Vault.readNote} / {@link Vault.writeNote} will
+ *  process by default. 5 MB — large enough for any realistic note, small
+ *  enough that a runaway file (e.g. a multi-GB log mistakenly placed in
+ *  the vault) doesn't OOM the server. */
 export const DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+/** Maximum in-memory parsed-note cache size (LRU eviction past this). */
 export const DEFAULT_MAX_CACHE_ENTRIES = 1024;
 
 /** Bumped on any change to ParsedNote shape — invalidates persisted caches that don't match. */
 const DISK_CACHE_VERSION = 1;
+/** Maximum size of the on-disk parse cache file (`~/.cache/enquire/<hash>.json`).
+ *  Refuse to read or write a larger file — defensive limit so a corrupted
+ *  cache can't balloon. */
 export const DEFAULT_MAX_DISK_CACHE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * A markdown file discovered by {@link Vault.listMarkdown}. Carries both
+ * absolute and vault-relative paths so callers can chose whichever fits
+ * their downstream API.
+ */
 export interface FileEntry {
+  /** Absolute filesystem path. */
   absPath: string;
+  /** Vault-relative path (forward-slash separated on all platforms). */
   relPath: string;
+  /** Basename including the `.md` extension. */
   basename: string;
+  /** Modification time, ms since epoch. */
   mtimeMs: number;
 }
 
+/** A parse-cached note (post-frontmatter body + parsed structure + the
+ *  mtime at parse time, for cache freshness). */
 export interface CachedNote {
+  /** Raw file content (UTF-8). */
   content: string;
+  /** Parsed structure — see {@link ParsedNote}. */
   parsed: ParsedNote;
+  /** mtime at parse time. Used to detect stale cache entries. */
   mtimeMs: number;
 }
 
+/**
+ * Options accepted by the {@link Vault} constructor. Every field is
+ * optional; omit to accept the documented default.
+ */
 export interface VaultOptions {
+  /** Per-file size cap. Default {@link DEFAULT_MAX_FILE_BYTES}. */
   maxFileBytes?: number;
+  /** In-memory parsed-note cache size cap. Default {@link DEFAULT_MAX_CACHE_ENTRIES}. */
   maxCacheEntries?: number;
+  /** Allow `writeNote` / `appendNote` / `renameFile`. Default false (read-only). */
   enableWrite?: boolean;
+  /** Persist the parse cache across server restarts. Default false. */
   persistentCache?: boolean;
   /** Override the cache file location. Default: ~/.cache/enquire/<vault-hash>.json. */
   cacheFile?: string;
@@ -47,6 +77,25 @@ export interface VaultOptions {
   readPaths?: string[];
 }
 
+/**
+ * Vault — the central read-and-cache layer over the user's Obsidian
+ * directory. Handles path safety (no escapes via `..` or symlinks),
+ * privacy filtering (`--read-paths` allowlist + `--exclude-glob` denylist),
+ * parsed-note caching (in-memory LRU + optional persistent JSON file),
+ * and write gating (opt-in via `--enable-write`).
+ *
+ * Construct once at server start, then share across all tool calls.
+ * Methods are async because filesystem IO; the in-memory cache makes
+ * repeated reads of the same note ~free.
+ *
+ * @example
+ * ```ts
+ * const vault = new Vault("/home/me/Vault", { enableWrite: false });
+ * await vault.ensureExists();
+ * const md = await vault.listMarkdown();
+ * const note = await vault.readNote(md[0].absPath);
+ * ```
+ */
 export class Vault {
   root: string;
   readonly maxFileBytes: number;
@@ -135,6 +184,15 @@ export class Vault {
     return this.excludeRegexes.some((re) => re.test(norm));
   }
 
+  /**
+   * Verify the vault root exists, is a directory, and resolve through any
+   * symlinks. Idempotent — safe to call before every operation; the
+   * underlying state is cached after the first successful call.
+   *
+   * Also (when persistent cache is enabled) loads the on-disk parse cache.
+   *
+   * @throws {Error} If the vault root doesn't exist or isn't a directory.
+   */
   async ensureExists(): Promise<void> {
     if (this.ready) return;
     let stat: import("node:fs").Stats;
@@ -156,6 +214,18 @@ export class Vault {
     }
   }
 
+  /**
+   * Read the on-disk parse cache (`.cache/enquire/<hash>.json`) into the
+   * in-memory LRU. Drops entries whose source file is missing, oversized,
+   * or path-traverses outside the vault. Re-runs the realpath check to
+   * guard against symlink-based escape attempts in a tampered cache file.
+   *
+   * Idempotent — entries already in memory aren't duplicated.
+   *
+   * @returns Number of entries loaded into memory.
+   * @internal called automatically by {@link ensureExists} when persistent
+   *           cache is enabled.
+   */
   async loadDiskCache(): Promise<number> {
     if (!this.cacheFile) return 0;
     try {
@@ -236,6 +306,12 @@ export class Vault {
     return loaded;
   }
 
+  /**
+   * Delete the on-disk parse cache file and reset the in-memory cache.
+   * No-op when persistent cache wasn't configured.
+   *
+   * @returns `true` if a cache file was removed, `false` if no file existed.
+   */
   async clearDiskCache(): Promise<boolean> {
     if (!this.cacheFile) return false;
     try {
@@ -249,6 +325,15 @@ export class Vault {
     }
   }
 
+  /**
+   * Flush the in-memory parse cache to disk. Writes to a temp file then
+   * atomically renames over the target so a crash mid-flush can't
+   * corrupt the cache. Sets mode 0o600 on the cache file and 0o700 on
+   * its directory to keep note bodies private to the user account.
+   *
+   * No-op when persistent cache wasn't configured or the cache hasn't
+   * been modified since the last save (`cacheDirty` flag).
+   */
   async saveDiskCache(): Promise<void> {
     if (!this.persistentCacheEnabled || !this.cacheFile || !this.cacheDirty) return;
     const entries: DiskCacheEntry[] = [];
@@ -289,6 +374,15 @@ export class Vault {
     this.cacheDirty = false;
   }
 
+  /**
+   * Resolve a vault-relative or absolute path to an absolute path, after
+   * asserting the result stays inside the vault root. This is the
+   * lexical guard; {@link resolveSafePath} additionally walks symlinks.
+   *
+   * @param p - Path string (relative or absolute).
+   * @returns Absolute path.
+   * @throws {Error} If the resolved path escapes the vault root.
+   */
   resolveInside(p: string): string {
     const abs = path.resolve(this.root, p);
     const rel = path.relative(this.root, abs);
@@ -298,6 +392,18 @@ export class Vault {
     return abs;
   }
 
+  /**
+   * List every markdown file under the vault root (or a subfolder).
+   * Skips `.git` / `.obsidian` / `.trash` / `node_modules` directories,
+   * follows the standard hidden-file rule (no dotfiles), refuses to
+   * traverse symlinks. Applies the privacy filter (`--exclude-glob` /
+   * `--read-paths`) before returning.
+   *
+   * @param folder - Optional vault-relative subfolder. When set, scan
+   *   only under that folder. Returns `[]` if the folder doesn't exist,
+   *   is a symlink, or is itself excluded.
+   * @returns Discovered files in walk order (depth-first, alphabetical).
+   */
   async listMarkdown(folder?: string): Promise<FileEntry[]> {
     if (!this.ready) await this.ensureExists();
     const start = folder ? this.resolveInside(folder) : this.root;
@@ -356,12 +462,35 @@ export class Vault {
     return fs.readFile(abs);
   }
 
+  /**
+   * Read a text file (UTF-8) from the vault. Same path-safety and size
+   * cap as {@link readNote}, but doesn't parse — useful for non-markdown
+   * text files where the caller wants the raw bytes.
+   *
+   * @param relOrAbs - Vault-relative or absolute path.
+   * @returns File content as UTF-8 string.
+   * @throws {Error} If the path escapes the vault, is excluded by privacy
+   *   filter, or the file exceeds the size cap.
+   */
   async readFile(relOrAbs: string): Promise<string> {
     const abs = await this.resolveSafePath(relOrAbs);
     await this.assertSize(abs);
     return fs.readFile(abs, "utf8");
   }
 
+  /**
+   * Read and parse a markdown note. Returns the cached entry when the
+   * file's mtime hasn't changed; otherwise reads from disk, parses via
+   * {@link parseNote}, and caches the result (LRU-evicting the oldest
+   * entry when at capacity).
+   *
+   * @param relOrAbs - Vault-relative or absolute path to a `.md` file.
+   * @param knownMtimeMs - Optional pre-stat'd mtime (saves a `fs.stat`
+   *   call when the caller already has it, e.g. straight after `listMarkdown`).
+   * @returns Cached note including parsed structure.
+   * @throws {Error} If the path escapes the vault, is excluded, or
+   *   exceeds the size cap.
+   */
   async readNote(relOrAbs: string, knownMtimeMs?: number): Promise<CachedNote> {
     const abs = await this.resolveSafePath(relOrAbs);
     const mtimeMs = knownMtimeMs ?? (await fs.stat(abs)).mtimeMs;
@@ -380,6 +509,22 @@ export class Vault {
     return entry;
   }
 
+  /**
+   * Create or overwrite a markdown note. Requires `enableWrite: true` at
+   * construction. Honors privacy filters — refuses to write to a path
+   * excluded by `--read-paths` / `--exclude-glob`. Refuses to write
+   * through symlinks. Auto-creates parent directories.
+   *
+   * @param relPath - Vault-relative target path. `.md` suffix is added
+   *   if absent. Must not be empty / `.` / `.md`.
+   * @param content - File body (UTF-8). Must be under the size cap.
+   * @param opts.overwrite - If true, replace an existing file; otherwise
+   *   throw when the target exists. Default false.
+   * @returns Metadata about the written file.
+   * @throws {Error} If the vault is read-only, the destination is
+   *   excluded, the target is a symlink, content exceeds the cap, or
+   *   the file exists and `overwrite` is false.
+   */
   async writeNote(
     relPath: string,
     content: string,
@@ -508,6 +653,17 @@ export class Vault {
     };
   }
 
+  /**
+   * Append text to an existing note. Requires `enableWrite: true`.
+   * Refuses if the resulting file would exceed the size cap.
+   *
+   * @param relOrAbs - Vault-relative or absolute target path.
+   * @param addition - Text to append (UTF-8). Caller is responsible for
+   *   including any leading newline.
+   * @returns Metadata about the file after the append.
+   * @throws {Error} If the vault is read-only or the appended file
+   *   would exceed `maxFileBytes`.
+   */
   async appendNote(
     relOrAbs: string,
     addition: string
@@ -531,6 +687,9 @@ export class Vault {
     };
   }
 
+  /** Drop every entry from the in-memory parse cache. Used after bulk
+   *  changes (e.g. a full vault rebuild). Does NOT delete the on-disk
+   *  cache file — call {@link clearDiskCache} for that. */
   invalidateCache(): void {
     this.cache.clear();
   }
@@ -541,16 +700,36 @@ export class Vault {
     this.cache.delete(absPath);
   }
 
+  /**
+   * Stat a vault file. Same path-safety as the read methods but no
+   * size-cap check (callers may want to inspect oversized files'
+   * metadata).
+   *
+   * @param relOrAbs - Vault-relative or absolute path.
+   * @returns Modification time and byte size.
+   */
   async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {
     const abs = await this.resolveSafePath(relOrAbs);
     const s = await fs.stat(abs);
     return { mtimeMs: s.mtimeMs, size: s.size };
   }
 
+  /** Convert an absolute path under the vault to a vault-relative one
+   *  (POSIX-separated on all platforms). Does not verify the result
+   *  stays inside the vault; callers needing that should use
+   *  {@link resolveInside}. */
   toRel(abs: string): string {
     return path.relative(this.root, abs);
   }
 
+  /**
+   * Find a markdown note by title (basename without `.md`, case-insensitive).
+   * Returns the first match in walk order — vaults with duplicate titles
+   * across folders silently pick one.
+   *
+   * @param title - Note title with or without `.md` suffix.
+   * @returns The matching file entry, or `null` if no note matches.
+   */
   async findByTitle(title: string): Promise<FileEntry | null> {
     const norm = stripMdExt(title).toLowerCase();
     const all = await this.listMarkdown();

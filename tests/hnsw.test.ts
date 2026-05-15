@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
+import { assertHnswModelMatchesEmbedder } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
 function l2(v: Float32Array): Float32Array {
@@ -415,6 +416,31 @@ describe("HNSW persistence (v2.16.0)", () => {
     const loaded = await loadHnswFromDisk(persistFile, "match");
     expect(loaded).toBeNull();
   });
+
+  // v3.6.2 audit M-7 — both sidecars (.bin + .meta.json) MUST be chmod'd to
+  // 0o600 after write. The .meta.json carries text_preview snippets which are
+  // sensitive note content; the parent dir is already 0700 (defense-in-depth),
+  // but the per-file invariant is what SECURITY.md guarantees. Matches the
+  // canonical pattern in src/embed-db.ts and src/fts5.ts.
+  it("saveTo chmods both sidecars (.bin + .meta.json) to 0o600 (audit M-7)", async () => {
+    if (process.platform === "win32") return; // POSIX mode bits don't apply on NTFS
+    const dim = 4;
+    const v = new Float32Array(dim).fill(0.5);
+    let s = 0;
+    for (const x of v) s += x * x;
+    const norm = Math.sqrt(s);
+    for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
+    const index = await buildHnsw([{ label: 0, vector: v }], { dim, maxElements: 1 });
+
+    const persistFile = path.join(dir, "chmod-check.hnsw");
+    const ok = await index.saveTo(persistFile, new Map(), "chmod-sig");
+    expect(ok).toBe(true);
+
+    const binStat = await fs.stat(`${persistFile}.bin`);
+    const metaStat = await fs.stat(`${persistFile}.meta.json`);
+    expect(binStat.mode & 0o777).toBe(0o600);
+    expect(metaStat.mode & 0o777).toBe(0o600);
+  });
 });
 
 // v2.16.0 — embed-db signature for HNSW staleness checks.
@@ -492,6 +518,45 @@ describe("EmbedDb.computeSignature (v2.16.0)", () => {
       expect(sig2).toMatch(/rows=0/);
     } finally {
       db.close();
+    }
+  });
+});
+
+// v3.6.2 HN-4 — search-side model verification. CRIT-1 fixed the build path
+// (which silently DROP-TABLE'd on model-alias mismatch); this is the
+// search-time guard that prevents returning garbage similarities when the
+// HNSW index and the query embedder come from different vector spaces.
+describe("assertHnswModelMatchesEmbedder (v3.6.2 HN-4)", () => {
+  it("passes silently when aliases match (multilingual = multilingual)", () => {
+    expect(() => assertHnswModelMatchesEmbedder("multilingual", "multilingual")).not.toThrow();
+  });
+
+  it("passes silently when aliases match (bge = bge)", () => {
+    expect(() => assertHnswModelMatchesEmbedder("bge", "bge")).not.toThrow();
+  });
+
+  it("throws an actionable error on mismatch (HNSW=bge, search=multilingual)", () => {
+    // The classic mismatch: user built embeddings with --embedding-model bge
+    // then forgot the flag on serve / overrode it in a tool call → query
+    // vector and index vectors come from different latent spaces, cosine
+    // returns meaningless numbers. We refuse to return those.
+    expect(() => assertHnswModelMatchesEmbedder("multilingual", "bge")).toThrow(/HNSW model mismatch/);
+    expect(() => assertHnswModelMatchesEmbedder("multilingual", "bge")).toThrow(/built with embedding model 'bge'/);
+    expect(() => assertHnswModelMatchesEmbedder("multilingual", "bge")).toThrow(/search is using 'multilingual'/);
+  });
+
+  it("throws on the reverse mismatch (HNSW=multilingual, search=bge)", () => {
+    expect(() => assertHnswModelMatchesEmbedder("bge", "multilingual")).toThrow(/HNSW model mismatch/);
+  });
+
+  it("error message includes a fix suggestion (build-embeddings command)", () => {
+    try {
+      assertHnswModelMatchesEmbedder("bge", "multilingual");
+      throw new Error("did not throw");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("build-embeddings");
+      expect(msg).toContain("--embedding-model bge");
     }
   });
 });

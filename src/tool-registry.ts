@@ -60,7 +60,7 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
     {
       title: "Full-text search (BM25, FTS5 index)",
       description:
-        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with `--persistent-index`.",
+        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with BOTH `--persistent-index` (so the FTS5 index exists) AND `--diagnostic-search-tools` (single-ranker diagnostic surface; the hybrid `obsidian_search` tool is the recommended default).",
       annotations: { ...READ_ONLY, title: "Full-text search" },
       inputSchema: {
         query: z

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { chunkContent, FtsIndex, safeFts5Query } from "../src/fts5.js";
+import { chunkContent, FtsIndex, peekFtsMetaSafe, safeFts5Query } from "../src/fts5.js";
 
 let canRunFts5 = true;
 beforeAll(async () => {
@@ -546,5 +546,44 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
     await idx2.open();
     expect(idx2.totalChunks()).toBeGreaterThan(0);
     idx2.close();
+  });
+});
+
+// v3.6.2 — peekFtsMetaSafe (audit M-8 / K-1b class fix). Reads meta from
+// a SQLite file without triggering bootstrapSchema's DROP-TABLE-on-mismatch
+// path. We cover: missing file → null; populated db → meta dict; reopened
+// with the discovered tokenize → no rebuild.
+describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
+  it("returns null when the file doesn't exist", async () => {
+    if (!canRunFts5) return;
+    const missing = path.join(dbDir, "nope.db");
+    expect(await peekFtsMetaSafe(missing)).toBeNull();
+  });
+
+  it("reads tokenize_mode + vault_root + schema_version from an existing db", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v", tokenize: "trigram" });
+    await idx.open();
+    idx.reindexFile("a.md", 1000, "content");
+    idx.close();
+
+    const meta = await peekFtsMetaSafe(dbFile);
+    expect(meta).not.toBeNull();
+    expect(meta?.tokenize_mode).toBe("trigram");
+    expect(meta?.vault_root).toBe("/v");
+    expect(meta?.schema_version).toBeDefined();
+  });
+
+  it("default-falls back to unicode61 when tokenize_mode is unknown", async () => {
+    if (!canRunFts5) return;
+    // Build a fresh db with the default tokenize_mode (unicode61) — the
+    // else-branch of the ternary at L779 fires for any non-trigram value.
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    idx.reindexFile("a.md", 1000, "content");
+    idx.close();
+
+    const meta = await peekFtsMetaSafe(dbFile);
+    expect(meta?.tokenize_mode).toBe("unicode61");
   });
 });

@@ -1,31 +1,74 @@
 import type { FileEntry, Vault } from "./vault.js";
 
+/**
+ * The `FROM` clause of a parsed DQL query. `"all"` means scan every note;
+ * `"folder"` restricts to a vault-relative subtree; `"tag"` restricts to
+ * notes carrying the given tag (frontmatter or inline).
+ */
 export type Source = { type: "all" } | { type: "folder"; path: string } | { type: "tag"; tag: string };
 
+/** Supported predicate operators in a DQL `WHERE` clause. `like` uses
+ *  SQL-LIKE-style `*` wildcards (case-insensitive). */
 export type Op = "=" | "!=" | "contains" | "like";
 
+/** A single `WHERE` predicate (`field op value`). */
 export interface Predicate {
+  /** Field path — either a `file.*` virtual field or a frontmatter key. */
   field: string;
+  /** Operator. See {@link Op}. */
   op: Op;
+  /** RHS literal. Coerced at parse time: bare numbers → number, `true`/`false`
+   *  → boolean, `null` → null, quoted strings → string, bare ident → string. */
   value: string | number | boolean | null;
 }
 
 /** A WHERE clause is a disjunction of conjunctions: (A AND B) OR (C AND D). */
 export type WhereGroups = Predicate[][];
 
+/**
+ * Fully parsed Dataview-Query-Language (DQL) query, ready for
+ * {@link runDql}.
+ */
 export interface DataviewQuery {
+  /** Result shape: `LIST` returns one row per note; `TABLE` returns named columns. */
   kind: "LIST" | "TABLE";
+  /** Column expressions (TABLE only). Empty for LIST. */
   columns: string[];
+  /** Source restriction — see {@link Source}. */
   source: Source;
+  /** Disjunction-of-conjunctions WHERE clause. Empty array means no filter. */
   where: WhereGroups;
+  /** Optional sort spec. Default is unsorted (source order). */
   sort?: { field: string; dir: "ASC" | "DESC" };
+  /** Optional row cap. Falls back to {@link DEFAULT_DQL_ROW_LIMIT} when undefined. */
   limit?: number;
 }
 
+/** Thrown by {@link parseDql} when input is not a valid DQL query.
+ *  Error message describes the failure point. */
 export class DqlParseError extends Error {}
 
 const KEYWORDS = ["FROM", "WHERE", "SORT", "LIMIT"];
 
+/**
+ * Parse a Dataview-Query-Language string into a {@link DataviewQuery}.
+ * Supports `LIST` / `TABLE` queries with `FROM`, `WHERE`, `SORT`, `LIMIT`
+ * clauses. WHERE supports `AND` / `OR` and the {@link Op} operators.
+ *
+ * Quoted strings are recognized via a simple quote-aware tokenizer so
+ * folder names with spaces or operator keywords survive.
+ *
+ * @param input - Raw DQL text. Whitespace-only input throws.
+ * @returns Parsed query ready for {@link runDql}.
+ * @throws {DqlParseError} On syntax errors (with a message pointing at the failing clause).
+ * @example
+ * ```ts
+ * const q = parseDql('TABLE file.name FROM "Inbox" WHERE status = "open" SORT mtime DESC LIMIT 10');
+ * q.kind;    // "TABLE"
+ * q.columns; // ["file.name"]
+ * q.source;  // { type: "folder", path: "Inbox" }
+ * ```
+ */
 export function parseDql(input: string): DataviewQuery {
   // No global whitespace collapse here — splitClauses is quote-aware and would
   // otherwise see post-collapsed quoted strings, which silently mangles real
@@ -234,8 +277,32 @@ interface Row {
   values: Record<string, unknown>;
 }
 
+/**
+ * Default row cap for {@link runDql} when the query has no `LIMIT` clause.
+ * Prevents accidental "TABLE FROM" returning thousands of rows on a
+ * large vault.
+ */
 export const DEFAULT_DQL_ROW_LIMIT = 1000;
 
+/**
+ * Execute a parsed DQL query against a vault. Iterates the source
+ * restriction, evaluates the WHERE filter per note, sorts (if requested),
+ * and applies the row cap. Each result row carries `file.path`,
+ * `file.name`, `file.mtime` plus any TABLE-requested columns.
+ *
+ * @param vault - The vault to query.
+ * @param query - Parsed query (from {@link parseDql}).
+ * @param opts - Optional overrides; `defaultLimit` replaces
+ *   {@link DEFAULT_DQL_ROW_LIMIT} when the query has no `LIMIT`.
+ * @returns Result rows in sort order (or source order when unsorted),
+ *   truncated to the limit.
+ * @example
+ * ```ts
+ * const q = parseDql('LIST FROM "Inbox" WHERE status = "open"');
+ * const rows = await runDql(vault, q);
+ * for (const row of rows) console.log(row["file.path"]);
+ * ```
+ */
 export async function runDql(
   vault: Vault,
   query: DataviewQuery,

@@ -1291,7 +1291,7 @@ const entryIndexCache = new WeakMap<FileEntry[], EntryIndex>();
 
 /**
  * Build (or fetch from per-`entries`-array cache) the basename / relPath
- * lookup indices that {@link findBestMatch} needs.
+ * lookup indices that `findBestMatch` needs.
  *
  * Cached via `WeakMap<FileEntry[], EntryIndex>` keyed by the entries array
  * reference: a fresh `listMarkdown()` result rebuilds the indices, but a
@@ -1341,7 +1341,7 @@ export function indexFor(entries: FileEntry[]): EntryIndex {
  * @param target - Link target string (with or without `.md`).
  * @param fromNote - Source note's vault-relative path (biases resolution
  *   toward same folder; required for `./` / `../`).
- * @returns The resolved {@link FileEntry}, or null if no match.
+ * @returns The resolved `FileEntry`, or null if no match.
  * @example
  * ```ts
  * const entries = await vault.listMarkdown();

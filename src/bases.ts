@@ -95,14 +95,24 @@ export interface BaseQueryHit {
 export interface BaseQueryResult {
   base_path: string;
   view: string | null;
+  /**
+   * v3.6.2 HN-1 — count of ALL matching notes in the vault, NOT just the
+   * returned slice. Pre-3.6.2 this was `matches.length` after the limit
+   * cap, which underreported when more matches existed than `limit`.
+   * Callers can now reliably tell when a result was truncated by
+   * comparing `total_matched > matches.length` (or check `truncated`).
+   */
   total_matched: number;
+  /** v3.6.2 HN-1 — true iff `total_matched > matches.length` (i.e. the
+   *  `limit` capped the response). */
+  truncated: boolean;
   /** Sub-set of matches (truncated to limit). */
   matches: BaseQueryHit[];
   /**
    * Predicates the parser couldn't evaluate (formula calls, linksTo, etc).
-   * Listed verbatim so callers know what was IGNORED — these were treated
-   * as "true" in our DSL subset (most permissive). Empty array = all
-   * predicates fully evaluated.
+   * v3.6.2 HN-2 — under strict mode (the new default) these now exclude
+   * the row instead of admitting it. Listed verbatim so callers can see
+   * what was REJECTED — empty array = all predicates fully evaluated.
    */
   unevaluated_predicates: string[];
 }
@@ -269,12 +279,18 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
 
   // Walk the vault. We use the markdown listing for now; PDFs/canvas are
   // not exposed to base queries (Obsidian itself only queries .md notes).
+  //
+  // v3.6.2 HN-1 — walk ALL notes without early break, so `total_matched`
+  // reflects the full count. The `limit` is applied AFTER the walk by
+  // slicing. Memory cost is bounded by the vault's matching subset (worst
+  // case the whole markdown listing × constant per-hit overhead) which is
+  // acceptable: an Obsidian vault that doesn't fit in memory for a single
+  // walk would already break dozens of other code paths in this server.
   const matches: BaseQueryHit[] = [];
   const unevaluated = new Set<string>();
   const gm = await getGrayMatter();
   const notes = await vault.listFilesByExtension(".md", args.folder);
   for (const e of notes) {
-    if (matches.length >= limit) break;
     let fm: Record<string, unknown> = {};
     let body = "";
     try {
@@ -316,11 +332,17 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     }
   }
   matches.sort((a, b) => a.path.localeCompare(b.path));
+  // v3.6.2 HN-1 — `total_matched` is the full count (post-walk); `matches`
+  // is the truncated slice. `truncated` is the bit-flag callers should
+  // check before assuming `matches.length === total_matched`.
+  const totalMatched = matches.length;
+  const sliced = matches.slice(0, limit);
   return {
     base_path: args.path,
     view: effectiveViewName,
-    total_matched: matches.length,
-    matches: matches.slice(0, limit),
+    total_matched: totalMatched,
+    truncated: totalMatched > sliced.length,
+    matches: sliced,
     unevaluated_predicates: [...unevaluated]
   };
 }
@@ -336,9 +358,50 @@ interface EvalContext {
    * only operation we need.
    */
   outbound: Set<string>;
-  /** Predicates we couldn't evaluate get pushed here. Treated as `true`
-   *  (most permissive) so the rest of the filter still works. */
+  /**
+   * v3.6.2 HN-2 — predicates we couldn't evaluate get pushed here.
+   * Under STRICT mode (the new default) the row is EXCLUDED on an unknown
+   * predicate, not admitted. Pre-3.6.2 we returned `true` (permissive),
+   * which silently caused over-inclusion: a typo in a predicate name
+   * (`taggedWWith` instead of `taggedWith`) matched every note in the
+   * vault, hiding the bug behind plausible-looking results.
+   */
   unevaluated: Set<string>;
+}
+
+/**
+ * v3.6.2 HN-2 — allowlist of predicate name prefixes the DSL recognizes.
+ * Used purely for documentation / stderr warning text — the actual
+ * dispatching still happens via the regex chain in `evalPredicate`.
+ * Update both when adding a new predicate.
+ */
+const KNOWN_PREDICATES = Object.freeze([
+  "true",
+  "false",
+  "taggedWith(file.file, ...)",
+  "linksTo(file.file, ...)",
+  'tag == "..." / tag != "..."',
+  'path startsWith "..." / path contains "..."',
+  'file.path startsWith "..." / file.path contains "..."',
+  'file.name == "..." / file.name != "..."',
+  '<key> == <value> / <key> != <value> / <key> contains "..."'
+] as const);
+
+/**
+ * v3.6.2 HN-2 — stderr warning is rate-limited to ONE message per
+ * predicate string per process, so a single typo doesn't drown out logs
+ * on a vault with 10k notes. Module-level Set is fine because the daemon
+ * is single-process; the worst case across multiple `serve` sessions is
+ * one log line each.
+ */
+const warnedUnknownPredicates = new Set<string>();
+function warnUnknownPredicate(expr: string): void {
+  if (warnedUnknownPredicates.has(expr)) return;
+  warnedUnknownPredicates.add(expr);
+  const known = KNOWN_PREDICATES.join(" | ");
+  process.stderr.write(
+    `enquire: bases.ts — unknown predicate '${expr}'; row excluded (strict mode). Known predicates: ${known}\n`
+  );
 }
 
 function evalFilter(f: BaseFilter, ctx: EvalContext): boolean {
@@ -359,8 +422,12 @@ function evalFilter(f: BaseFilter, ctx: EvalContext): boolean {
  *   - `<key> == <value>` / `<key> != <value>` / `<key> contains "<substr>"`
  *   - boolean literals: `true`, `false`
  *
- * Anything else: pushed to ctx.unevaluated and returns `true` (most
- * permissive — we'd rather over-include than under-include silently).
+ * Anything else (v3.6.2 HN-2 — STRICT mode): pushed to ctx.unevaluated and
+ * returns `false` (fail-closed — exclude row). Pre-3.6.2 we returned `true`
+ * (over-permissive), which let typos silently match every note. The
+ * unevaluated set is still surfaced to the caller via
+ * `BaseQueryResult.unevaluated_predicates` so a typo is visible in the
+ * response itself, not just in stderr.
  */
 function evalPredicate(raw: string, ctx: EvalContext): boolean {
   const expr = raw.trim();
@@ -439,16 +506,24 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
     const lhs = ctx.frontmatter[key];
     const rhs = parseLiteral(rhsRaw);
     if (rhs === SKIP) {
+      // v3.6.2 HN-2 — unparseable RHS literal (bare identifier, etc) is
+      // surfaced in unevaluated AND fails-closed (excludes the row),
+      // matching strict-mode semantics for unknown predicates. Pre-3.6.2
+      // returned `true` (permissive).
       ctx.unevaluated.add(expr);
-      return true;
+      warnUnknownPredicate(expr);
+      return false;
     }
     const eq = literalEqual(lhs, rhs);
     return op === "==" ? eq : !eq;
   }
 
-  // Anything else: log + permissive.
+  // v3.6.2 HN-2 — STRICT mode: unknown predicate → row excluded.
+  // The expr is surfaced in `unevaluated_predicates` so the caller sees
+  // the typo, and a one-time stderr warning explains the change.
   ctx.unevaluated.add(expr);
-  return true;
+  warnUnknownPredicate(expr);
+  return false;
 }
 
 const SKIP = Symbol("skip");

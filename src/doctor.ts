@@ -29,7 +29,7 @@ import { existsSync, promises as fs, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { EmbeddingModel } from "./embeddings.js";
-import { defaultIndexFile, FtsIndex } from "./fts5.js";
+import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { Vault } from "./vault.js";
 
 /** Severity buckets surfaced in the diagnostic UI. */
@@ -322,10 +322,18 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   if (vaultExists) {
     const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
     if (existsSync(indexFile) && hasSqlite) {
+      // v3.6.2 K-1b — `doctor` is a DIAGNOSTIC subcommand. It must NEVER
+      // cause side effects. Pre-fix: opening FtsIndex with default tokenize
+      // "unicode61" against an index built with "trigram" would fire the
+      // bootstrapSchema DROP TABLE path — `doctor --vault X` would silently
+      // destroy the user's FTS5 index. Peek tokenize_mode first; honor it.
+      // External audit on v3.6.1 caught this as a sibling of K-1.
+      const peeked = await peekFtsMetaSafe(indexFile);
+      const honoredTokenize = peeked?.tokenize_mode ?? "unicode61";
       // Open + close to count files/chunks. If something's off, surface it
       // as a warn (not missing — caller can still serve without the index).
       try {
-        const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize: honoredTokenize });
         await idx.open();
         const totalFiles = idx.totalFiles();
         const totalChunks = idx.totalChunks();

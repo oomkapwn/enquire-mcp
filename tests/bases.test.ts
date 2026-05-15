@@ -532,11 +532,11 @@ views:
       expect(out.unevaluated_predicates).toEqual([]);
     });
 
-    it("unparseable RHS literal lands in unevaluated_predicates (SKIP branch)", async () => {
+    it("v3.6.2 HN-2 — unparseable RHS literal excludes row + listed as unevaluated (strict mode)", async () => {
       const { root, vault } = await makeBaseVault();
       // `status == bare-identifier` doesn't match `parseLiteral` (no quotes,
-      // not a number, not a bool/null) so it returns SKIP, and the predicate
-      // is pushed to ctx.unevaluated and treated as `true` (permissive).
+      // not a number, not a bool/null) so it returns SKIP. v3.6.2 HN-2:
+      // strict mode → row is excluded (was: permissive `true`).
       await fs.writeFile(
         path.join(root, "q.base"),
         `filters: 'status == something-unquoted'
@@ -545,15 +545,16 @@ views:
 `
       );
       const out = await queryBase(vault, { path: "q.base" });
-      // All notes match (permissive default for unevaluable predicates).
-      expect(out.matches.length).toBeGreaterThan(0);
+      // v3.6.2: strict mode → no matches (was: all notes matched).
+      expect(out.matches).toHaveLength(0);
       expect(out.unevaluated_predicates).toContain("status == something-unquoted");
     });
 
-    it("syntactically unknown predicate is permissive + listed as unevaluated", async () => {
+    it("v3.6.2 HN-2 — syntactically unknown predicate excludes row + listed as unevaluated (strict mode)", async () => {
       const { root, vault } = await makeBaseVault();
       // `customFunc(...)` doesn't match any predicate regex — falls to the
       // ctx.unevaluated.add(expr) branch at the end of evalPredicate.
+      // v3.6.2: strict mode → row excluded (was: permissive `true`).
       await fs.writeFile(
         path.join(root, "q.base"),
         `filters: 'customFunc("x")'
@@ -562,8 +563,44 @@ views:
 `
       );
       const out = await queryBase(vault, { path: "q.base" });
-      expect(out.matches.length).toBeGreaterThan(0);
+      expect(out.matches).toHaveLength(0);
       expect(out.unevaluated_predicates).toContain('customFunc("x")');
+    });
+  });
+
+  // v3.6.2 HN-1 — `total_matched` reports the full count, not the slice.
+  describe("v3.6.2 — total_matched + truncated reflect full vault scan", () => {
+    it("reports total_matched as the full match count even when limit truncates", async () => {
+      const { root, vault } = await makeBaseVault();
+      // 4 notes in the vault (open.md, done.md, untagged.md, Notes/inline.md);
+      // a permissive `true` filter matches every one.
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'true'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base", limit: 2 });
+      // Pre-3.6.2: total_matched would have been 2 (post-cap). Now it's 4.
+      expect(out.total_matched).toBe(4);
+      expect(out.matches).toHaveLength(2);
+      expect(out.truncated).toBe(true);
+    });
+
+    it("truncated is false when limit doesn't actually cap the results", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "q.base"),
+        `filters: 'true'
+views:
+  - type: table
+`
+      );
+      const out = await queryBase(vault, { path: "q.base", limit: 100 });
+      expect(out.total_matched).toBe(4);
+      expect(out.matches).toHaveLength(4);
+      expect(out.truncated).toBe(false);
     });
   });
 });

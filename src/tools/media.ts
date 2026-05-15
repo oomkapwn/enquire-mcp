@@ -196,7 +196,7 @@ export interface ReadCanvasResult {
  * Returns a graph representation the agent can reason about: which notes
  * are pinned where, what's textual vs file-embed vs URL, what edges
  * connect what. File-node references (`file:` kind) are resolved against
- * the live vault — `file_resolved` carries the post-{@link findBestMatch}
+ * the live vault — `file_resolved` carries the post-`findBestMatch`
  * path or null on a broken reference. Forward-compatible: unknown
  * `type` values become `kind: "unknown"` rather than throwing.
  *

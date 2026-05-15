@@ -27,7 +27,7 @@ Verify the install:
 enquire-mcp --version
 ```
 
-Expected output: the current version string (e.g. `3.5.8`).
+Expected output: the current version string (e.g. `3.6.1`).
 
 ## Step 2 — Smoke test (30 seconds)
 
@@ -139,7 +139,7 @@ The drop-in hybrid config is in [`examples/claude-desktop-hybrid.json`](../examp
 
 **`enquire-mcp: command not found`.** The npm global bin directory isn't on your `PATH`. Run `npm config get prefix` to find it, then add `<prefix>/bin` to your `PATH` — or switch to the `npx` form of the Claude Desktop config (see Step 3): `"command": "npx"`, `"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/abs/path"]`.
 
-**`ENOENT` or `unsupported engine` on install.** You're on Node < 20. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 20 && nvm use 20`). enquire-mcp targets Node 20 / 22 / 24 — the CI matrix runs all three.
+**`ENOENT` or `unsupported engine` on install.** You're on Node < 22. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 22 && nvm use 22`). enquire-mcp's CI matrix tests Node 22 + 24 (Node 20 dropped in v3.5.11 — `pdfjs-dist@5.7+` requires `>=22.13`; the package's `engines: >=20` is still honored for non-PDF users on the prebuilt `dist/`).
 
 **`Error: vault path does not exist`.** Either the path is wrong, or you used `~` instead of the absolute form. MCP clients don't expand `~` — use `/Users/you/MyVault` on macOS/Linux or `C:\Users\you\MyVault` on Windows. Paths containing spaces are fine as long as the JSON string itself is well-formed; no shell escaping needed inside `claude_desktop_config.json`.
 

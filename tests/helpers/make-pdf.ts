@@ -29,6 +29,18 @@ interface MakePdfOptions {
   title?: string;
   /** Optional document author (Info dict). */
   author?: string;
+  /** Optional document subject (Info dict). */
+  subject?: string;
+  /** Optional document keywords (Info dict). */
+  keywords?: string;
+  /** Optional document creator (Info dict). */
+  creator?: string;
+  /** Optional document producer (Info dict). */
+  producer?: string;
+  /** Optional creation date (Info dict — PDF-formatted, e.g. `D:20240101120000Z`). */
+  creationDate?: string;
+  /** Optional modification date (Info dict — PDF-formatted). */
+  modDate?: string;
 }
 
 /**
@@ -36,8 +48,9 @@ interface MakePdfOptions {
  * external deps. Produces one Type1 Helvetica text run per page.
  */
 export function makePdf(opts: MakePdfOptions): Buffer {
-  const { pages, title, author } = opts;
+  const { pages, title, author, subject, keywords, creator, producer, creationDate, modDate } = opts;
   if (pages.length === 0) throw new Error("makePdf: at least one page is required");
+  const hasAnyInfo = !!(title || author || subject || keywords || creator || producer || creationDate || modDate);
 
   // Object IDs (1-indexed by spec):
   //   1 = Catalog
@@ -52,7 +65,7 @@ export function makePdf(opts: MakePdfOptions): Buffer {
   const fontId = 3;
   const pageStart = 4;
   const contentsStart = pageStart + N;
-  const infoId = title || author ? contentsStart + N : 0;
+  const infoId = hasAnyInfo ? contentsStart + N : 0;
 
   // Build content streams first so we know their lengths for /Length entries.
   const escapePdfString = (s: string): string => s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
@@ -116,6 +129,12 @@ export function makePdf(opts: MakePdfOptions): Buffer {
     const parts: string[] = ["<<"];
     if (title) parts.push(`/Title (${escapePdfString(title)})`);
     if (author) parts.push(`/Author (${escapePdfString(author)})`);
+    if (subject) parts.push(`/Subject (${escapePdfString(subject)})`);
+    if (keywords) parts.push(`/Keywords (${escapePdfString(keywords)})`);
+    if (creator) parts.push(`/Creator (${escapePdfString(creator)})`);
+    if (producer) parts.push(`/Producer (${escapePdfString(producer)})`);
+    if (creationDate) parts.push(`/CreationDate (${escapePdfString(creationDate)})`);
+    if (modDate) parts.push(`/ModDate (${escapePdfString(modDate)})`);
     parts.push(">>");
     append(`${infoId} 0 obj\n${parts.join(" ")}\nendobj\n`);
   }

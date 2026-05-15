@@ -206,3 +206,115 @@ describe("detectCommunities", () => {
     expect(r.communities[0]?.size).toBeGreaterThanOrEqual(r.communities[1]?.size ?? 0);
   });
 });
+
+// v3.6.2 branch-coverage uplift: exercise the wikilink-resolution edge
+// paths (duplicate basenames across folders, explicit `.md`-suffixed
+// target paths, empty link targets) so the buildWikilinkGraph branches
+// at L83 / L101 / L107-108 land. These were uncovered in v3.6.0 — the
+// per-instance backfill mentioned in `docs/audits/findings/L3-tests.md`.
+describe("buildWikilinkGraph — resolution edge cases (v3.6.2 branches)", () => {
+  it("first-seen wins when multiple notes share a basename across folders", async () => {
+    const v = await vaultWith({
+      "A.md": "[[Dup]]",
+      "Folder1/Dup.md": "first",
+      "Folder2/Dup.md": "second"
+    });
+    const g = await buildWikilinkGraph(v);
+    // The basename index is populated in walk order; the FIRST `Dup.md`
+    // wins (line 83 — `if (!byBasename.has(base))` is the falsy branch
+    // when the second `Dup.md` is processed).
+    expect(g.nodes.length).toBe(3);
+    const aLinks = g.adjacency.get("A.md");
+    expect(aLinks).toBeDefined();
+    expect(aLinks?.size).toBe(1); // only one Dup edge — second is shadowed
+  });
+
+  it("ignores wikilinks whose target trims to empty (e.g. [[#section-only]])", async () => {
+    const v = await vaultWith({
+      "A.md": "ref to section: [[#orphan]] and [[B]]",
+      "B.md": "real note"
+    });
+    const g = await buildWikilinkGraph(v);
+    // [[#orphan]] has an empty target after stripping `#orphan` → branch
+    // at L101 (`if (!target) continue;`). The [[B]] edge still resolves.
+    expect(g.adjacency.get("A.md")?.get("B.md")).toBe(1);
+    expect(g.adjacency.get("A.md")?.size).toBe(1);
+  });
+
+  it("falls back to direct path match when basename lookup misses", async () => {
+    const v = await vaultWith({
+      "A.md": "[[notes/Sub]]", // multi-segment, no basename collision
+      "notes/Sub.md": "target"
+    });
+    const g = await buildWikilinkGraph(v);
+    // basename lookup finds `sub` → maps to `notes/Sub.md` already.
+    // But the explicit-`.md` branch in L107 needs a different setup:
+    expect(g.adjacency.get("A.md")?.get("notes/Sub.md")).toBe(1);
+  });
+
+  it("resolves [[Target.md]] with explicit .md suffix via path-fallback", async () => {
+    const v = await vaultWith({
+      "A.md": "explicit: [[Sub/T.md]]",
+      "Sub/T.md": "target"
+    });
+    const g = await buildWikilinkGraph(v);
+    // L107: `const candidate = target.endsWith(".md") ? target : ${target}.md`
+    // — the truthy branch ("ends with .md").
+    expect(g.adjacency.get("A.md")?.get("Sub/T.md")).toBe(1);
+  });
+
+  it("returns empty edge list when wikilink targets a note that doesn't exist (path-fallback miss)", async () => {
+    const v = await vaultWith({
+      "A.md": "[[ghost/NoSuch.md]] and [[B]]",
+      "B.md": "real"
+    });
+    const g = await buildWikilinkGraph(v);
+    // ghost/NoSuch.md doesn't resolve via either basename or path —
+    // L108's `if (adj.has(candidate))` is the falsy branch.
+    expect(g.adjacency.get("A.md")?.size).toBe(1);
+    expect(g.adjacency.get("A.md")?.has("B.md")).toBe(true);
+  });
+});
+
+describe("detectCommunities — convergence + Louvain branches (v3.6.2)", () => {
+  it("nodes with zero degree don't change community during the pass", async () => {
+    // Pure isolated graph: the `wToCommunity` loop at L168 is empty for
+    // every node, so the bestGain at L183 stays = `(0 - 0)/m2` = 0 for
+    // the stay-option, and no move happens. Exercises the "no candidate
+    // beats current" branch at L188.
+    const v = await vaultWith({ "Solo1.md": "no links", "Solo2.md": "no links" });
+    const g = await buildWikilinkGraph(v);
+    const r = detectCommunities(g);
+    // Both nodes stay in their own community (community_count === 2,
+    // modularity === 0 by the m2 === 0 short-circuit at L153).
+    expect(r.community_count).toBe(2);
+    expect(r.modularity).toBe(0);
+  });
+
+  it("two strongly-connected triangles bridged by one edge produce 2 communities", async () => {
+    // Drives the inner Louvain loop: each triangle's nodes prefer their
+    // own community over the bridge community, so on the second sweep
+    // the system converges. Branches in `for (const [cand, kIc] of
+    // wToCommunity.entries())` (L184) execute multiple times.
+    const v = await vaultWith({
+      "T1.md": "[[T2]] [[T3]] [[B1]]",
+      "T2.md": "[[T1]] [[T3]]",
+      "T3.md": "[[T1]] [[T2]]",
+      "B1.md": "[[T1]] [[U1]]", // single bridge
+      "U1.md": "[[U2]] [[U3]] [[B1]]",
+      "U2.md": "[[U1]] [[U3]]",
+      "U3.md": "[[U1]] [[U2]]"
+    });
+    const g = await buildWikilinkGraph(v);
+    const r = detectCommunities(g);
+    // Modularity should be positive (planted structure recovered).
+    expect(r.modularity).toBeGreaterThan(0);
+    // T1/T2/T3 share a community; U1/U2/U3 share one too.
+    const cT1 = r.membership.get("T1.md");
+    expect(cT1).toBe(r.membership.get("T2.md"));
+    expect(cT1).toBe(r.membership.get("T3.md"));
+    const cU1 = r.membership.get("U1.md");
+    expect(cU1).toBe(r.membership.get("U2.md"));
+    expect(cU1).toBe(r.membership.get("U3.md"));
+  });
+});

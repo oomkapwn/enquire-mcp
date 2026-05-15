@@ -25,27 +25,48 @@ const SCHEMA_VERSION = 4;
 // in the same index as markdown — `obsidian_search` returns blended hits
 // with the kind flag exposed to agents. Schema bump auto-rebuilds.
 
+/**
+ * FTS5 tokenizer mode. `unicode61` (default) tokenizes on Unicode word
+ * boundaries with diacritic folding — good fit for natural-language
+ * markdown. `trigram` indexes every 3-char substring — slower to build
+ * but better recall on CJK / agglutinative scripts.
+ */
 export type TokenizeMode = "unicode61" | "trigram";
 
 /** Content-source kind. v2.7.0 added `pdf`; v2.8.0 indexes them. */
 export type ChunkKind = "md" | "pdf";
 
+/** A single hit from {@link FtsIndex.search}. `snippet` carries the
+ *  FTS5 `snippet(...)` output (matched terms wrapped in `«»`). */
 export interface FtsSearchHit {
+  /** Vault-relative path of the source note / PDF. */
   rel_path: string;
+  /** 0-based chunk position within the source. */
   chunk_index: number;
+  /** 1-based starting line in the source. */
   line_start: number;
+  /** 1-based ending line in the source (inclusive). */
   line_end: number;
+  /** Excerpt with matched tokens wrapped in `«»` and `…` truncation markers. */
   snippet: string;
+  /** Flipped BM25 score — higher = better (the underlying FTS5 score is
+   *  negative; we negate so callers can sort descending). */
   score: number;
   /** v2.8.0 — content-source kind. Defaults to "md" for backward compat. */
   kind: ChunkKind;
 }
 
+/** Counter summary returned by the FTS5 sync routine in `server.ts`. */
 export interface FtsSyncReport {
+  /** Files newly indexed (no prior source_state row). */
   added: number;
+  /** Files re-indexed due to mtime change. */
   updated: number;
+  /** Files dropped because the source vanished from the vault. */
   deleted: number;
+  /** Files whose mtime matched the stored row — no work needed. */
   unchanged: number;
+  /** Total chunks in the index after the sync. */
   total_chunks: number;
 }
 
@@ -107,6 +128,26 @@ interface Stmt {
   get<T = unknown>(...params: unknown[]): T | undefined;
 }
 
+/**
+ * SQLite FTS5 inverted index over chunked note content. Opt-in via
+ * `--persistent-index`. Provides sub-100ms BM25-ranked search on
+ * multi-thousand-note vaults; falls back transparently to the in-memory
+ * parallel-scan path when `better-sqlite3` isn't installed.
+ *
+ * Construct, then call `open()`, then drive incremental sync via
+ * {@link diff} + {@link reindexFile} / {@link reindexPdfFile} / {@link dropFile}.
+ * Query with {@link search}; deep-link to individual chunks with
+ * {@link getChunk}.
+ *
+ * @example
+ * ```ts
+ * const idx = new FtsIndex({ file, vaultRoot, tokenize: "unicode61" });
+ * await idx.open();
+ * idx.reindexFile(relPath, mtimeMs, content, wikilinkTargets, tags);
+ * const hits = idx.search("vector retrieval", { limit: 25 });
+ * idx.close();
+ * ```
+ */
 export class FtsIndex {
   private db: Db | null = null;
   private readonly file: string;
@@ -119,6 +160,14 @@ export class FtsIndex {
     this.tokenize = opts.tokenize ?? "unicode61";
   }
 
+  /**
+   * Open the SQLite database, bootstrap the FTS5 virtual table + helpers,
+   * and tighten file perms to 0o600 on the db + WAL/SHM sidecars. Idempotent —
+   * a second `open()` call is a no-op.
+   *
+   * @throws {Error} If `better-sqlite3` (optional dep) fails to load or
+   *   the native binding can't be loaded.
+   */
   async open(): Promise<void> {
     if (this.db) return;
     const Ctor = await loadBetterSqlite();
@@ -151,6 +200,8 @@ export class FtsIndex {
     return removed;
   }
 
+  /** Close the underlying SQLite handle. Idempotent. Call before process
+   *  exit to flush WAL. */
   close(): void {
     if (this.db) {
       this.db.close();
@@ -356,6 +407,22 @@ export class FtsIndex {
     return chunks.length;
   }
 
+  /**
+   * BM25-ranked search over chunk content. Folder + tag + recency filters
+   * are pushed down to the SQL layer. Hyphenated identifiers (e.g.
+   * `"claude-telegram"`) are quote-escaped via {@link safeFts5Query} so
+   * FTS5 doesn't interpret `-` as the `NOT` operator.
+   *
+   * @param rawQuery - User query string. Whitespace-only returns `[]`.
+   * @param opts.limit - Max results. Default 25.
+   * @param opts.folder - Vault-relative prefix filter.
+   * @param opts.tag - Exact-tag membership filter (only matches the full
+   *   tag, not `core-team` for `core`).
+   * @param opts.sinceMtimeMs - Recency filter — only return chunks from
+   *   files modified at or after this mtime.
+   * @returns Sorted hits (score desc). Empty array if no usable query
+   *   tokens or no matches.
+   */
   search(
     rawQuery: string,
     opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
@@ -442,12 +509,15 @@ export class FtsIndex {
     return row ?? null;
   }
 
+  /** Total chunks across the index. Used by stats / banner / UI. */
   totalChunks(): number {
     const db = this.requireDb();
     const row = db.prepare("SELECT COUNT(*) AS c FROM chunks").get<{ c: number }>();
     return row?.c ?? 0;
   }
 
+  /** Total source files (notes + PDFs) tracked in `source_state`. Used by
+   *  the ready banner so users can verify the index actually built. */
   totalFiles(): number {
     const db = this.requireDb();
     const row = db.prepare("SELECT COUNT(*) AS c FROM source_state").get<{ c: number }>();
@@ -455,10 +525,17 @@ export class FtsIndex {
   }
 }
 
-// Quote-wrap any token containing non-alphanumerics so FTS5 doesn't interpret
-// hyphens / colons / dots as operators (`claude-telegram` would otherwise
-// parse as `claude NOT telegram`). Strip reserved keywords. Returns "" if the
-// query has no usable tokens.
+/**
+ * Sanitize a user query for FTS5. Quote-wraps any token containing
+ * non-alphanumerics so hyphens / colons / dots are treated literally
+ * (without this, `"claude-telegram"` would parse as `claude NOT telegram`).
+ * Strips reserved keywords (`AND`, `OR`, `NOT`, `NEAR`) so they can't
+ * inject unexpected boolean logic.
+ *
+ * @param q - User query string.
+ * @returns Sanitized query ready to pass to FTS5's `MATCH` operator.
+ *   Empty string when no usable tokens remain.
+ */
 export function safeFts5Query(q: string): string {
   const RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
   const parts = q.trim().split(/\s+/);
@@ -631,10 +708,79 @@ function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentC
   return out;
 }
 
+/**
+ * Default location for the FTS5 index file — `~/.cache/enquire/<hash>.fts5.db`
+ * (or `$XDG_CACHE_HOME` on Linux). The hash is the first 12 chars of
+ * sha1(vaultRoot) so each vault gets its own database.
+ *
+ * @param vaultRoot - Absolute path to the vault root.
+ * @returns Absolute path to the index file.
+ */
 export function defaultIndexFile(vaultRoot: string): string {
   const base =
     process.env.XDG_CACHE_HOME ??
     (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
   const hash = createHash("sha1").update(vaultRoot).digest("hex").slice(0, 12);
   return path.join(base, "enquire", `${hash}.fts5.db`);
+}
+
+/**
+ * v3.6.2 K-1b — non-destructive peek at an existing fts5 index's meta row.
+ *
+ * Mirror of `peekEmbedDbMeta()` in `src/embed-db.ts`. Reads `tokenize_mode`,
+ * `vault_root`, `schema_version` from a SQLite file WITHOUT opening it via
+ * `FtsIndex` (which would trigger `bootstrapSchema()` and DROP TABLE on any
+ * tokenize-mode mismatch with the caller's declared mode).
+ *
+ * **Why this exists (audit class K-1b):** the original v3.6.1 CRIT-1 fix
+ * (peek-before-open) was applied ONLY to the `serve --use-hnsw` embed-db
+ * path. The SAME bootstrap-schema-DROP class affects FtsIndex on
+ * `tokenize_mode` mismatch — and at 5 callsites (server.ts, multiple
+ * cli.ts subcommands, and `src/doctor.ts:328`, where a diagnostic
+ * subcommand could silently DROP user data). v3.6.2 closes the full
+ * class by adding peek+honor at all 10 EmbedDb + FtsIndex callsites.
+ *
+ * Returns null if the file doesn't exist OR doesn't have a `meta` table
+ * yet. Throws only on actual SQLite open/read errors.
+ *
+ * @param file - Absolute path to a `.fts5.db` file.
+ * @returns Meta dict if the file is a populated fts5 index, null otherwise.
+ * @example
+ * ```ts
+ * const meta = await peekFtsMetaSafe(indexFile);
+ * if (meta?.tokenize_mode) {
+ *   const idx = new FtsIndex({ file: indexFile, vaultRoot, tokenize: meta.tokenize_mode });
+ * }
+ * ```
+ */
+export async function peekFtsMetaSafe(file: string): Promise<{
+  schema_version?: string;
+  vault_root?: string;
+  tokenize_mode?: TokenizeMode;
+} | null> {
+  const fsMod = await import("node:fs");
+  if (!fsMod.existsSync(file)) return null;
+  let Database: typeof import("better-sqlite3");
+  try {
+    Database = (await import("better-sqlite3")).default as unknown as typeof import("better-sqlite3");
+  } catch {
+    return null;
+  }
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
+    if (!tableCheck) return null;
+    const rows = db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
+    const meta: { schema_version?: string; vault_root?: string; tokenize_mode?: TokenizeMode } = {};
+    for (const row of rows) {
+      if (row.key === "schema_version") meta.schema_version = row.value;
+      else if (row.key === "vault_root") meta.vault_root = row.value;
+      else if (row.key === "tokenize_mode") {
+        meta.tokenize_mode = row.value === "trigram" ? "trigram" : "unicode61";
+      }
+    }
+    return meta;
+  } finally {
+    db.close();
+  }
 }

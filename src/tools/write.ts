@@ -981,12 +981,12 @@ export async function suggestSimilar(vault: Vault, target: string): Promise<stri
  *    `monthly`) → respect the user's Daily-Notes / Periodic-Notes plugin
  *    config first; fall back to default formats only if the plugin folder is
  *    at vault root (privacy-safe).
- * 4. On miss → throw with did-you-mean suggestions via {@link suggestSimilar}.
+ * 4. On miss → throw with did-you-mean suggestions via `suggestSimilar`.
  *
  * @param vault - The vault.
  * @param args - Exactly one of `path` or `title` should be provided. If
  *   both are set, `path` takes precedence.
- * @returns A {@link FileEntry} pointing at the resolved file on disk.
+ * @returns A `FileEntry` pointing at the resolved file on disk.
  * @throws {Error} If neither is set, or no note matches (with did-you-mean
  *   hints in the message).
  * @throws {VaultPathError} If `path` traverses outside the vault.

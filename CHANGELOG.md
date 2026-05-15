@@ -2,6 +2,93 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.2] — 2026-05-15
+
+> **TL;DR:** Audit batch — closes **K-1 RESIDUAL CLASS** (the v3.6.1 CRIT-1 fix was instance-only; the destructive-bootstrap-schema class was still active in 4 hot paths including a sibling K-1b in FtsIndex tokenize_mode). Plus 13 Medium + 14 Low findings from the internal 9-layer audit + 4 HIGHs from a second external audit. **+37 tests** (753 total, +1.29pp branches margin). No breaking API changes. **Retroactive correction** — v3.6.1's "CRIT-1 closed" was an overclaim.
+
+**Patch — full class fix for K-1 + audit batch.**
+
+### Critical retroactive correction
+
+**v3.6.1's `Fixed — CRIT-1 (data destruction)` claim was an OVERCLAIM.**
+
+I added `peekEmbedDbMeta()` and used it at exactly ONE site (`src/server.ts:251` — the `serve --use-hnsw` build path). But the SAME `bootstrapSchema()`-DROP-TABLE pattern was active at:
+
+- `src/tools/search.ts:909` — every `obsidian_search` / `obsidian_embeddings_search` call (HOT PATH)
+- `src/cli.ts:398`, `cli.ts:554` — build-embeddings + eval subcommand
+- `src/server.ts:174` — `serve --persistent-index` (FtsIndex, K-1b sibling on tokenize_mode)
+- `src/doctor.ts:328` — diagnostic subcommand could DROP user's FTS5 index
+- 4 more `cli.ts` FtsIndex sites with the same exposure
+
+A second external audit on v3.6.1 caught the residual class. Lesson: I treated CRIT-1 as a symptom (one wrong-looking call site) rather than a class (every site that constructs EmbedDb/FtsIndex with parameters that must match what's already on disk). The methodology gap (instance fix vs class fix) was the same one v3.5.9 was supposed to teach.
+
+### Fixed — K-1 full class closure
+
+- **K-1a (EmbedDb model_alias)**: added `peekEmbedDbMeta()` guard at `src/tools/search.ts:909` (the runtime hot path). On every `embeddingsSearch` call, peek the existing embed-db's `model_alias` BEFORE opening, honor it unless caller passes `args.model` explicitly. Prevents DROP TABLE on every search when the user built with `--embedding-model bge` but searches with `multilingual` default.
+- **K-1b (FtsIndex tokenize_mode)**: NEW helper `peekFtsMetaSafe()` mirroring `peekEmbedDbMeta()`. Used at `src/server.ts:174` (serve start) and `src/doctor.ts:328` (most critical — diagnostic subcommand must NEVER cause side effects). The doctor case was particularly bad: a user running `enquire-mcp doctor --vault X` against an FTS5 index built with `--tokenize trigram` would have silently destroyed it via the default `unicode61` mismatch.
+- 7 new unit tests in `tests/peek-meta.test.ts` covering both helpers across 3 scenarios + 2 regression guards (V-5 closure).
+
+### Fixed — HIGH findings from external + internal audits
+
+- **HN-1 (`obsidian_query_base` total_matched)** (`src/bases.ts:277,321-323`): removed early break, walks all matches, computes `total_matched` from the full count, adds `truncated: boolean` flag, slices to `limit` for `.matches[]`. 2 new tests verifying cap + no-cap cases.
+- **HN-2 (.base DSL strict mode)** (`src/bases.ts:339-363`): unknown predicates now fail-closed (`return false`) instead of permissively returning true. Plus `KNOWN_PREDICATES` const array + rate-limited stderr warning. Existing tests rewritten to assert strict behavior.
+- **HN-4 (HNSW model mismatch on search)**: new exported `assertHnswModelMatchesEmbedder()` helper. Stored `modelAlias` on `HnswSearchContext`. Throws actionable error on mismatch rather than computing cosine over vectors from two different vector spaces (which would silently return garbage). 5 new tests.
+- **L-3 (full_text_search description drift)**: fixed in `src/tool-registry.ts:63` + `docs/api.md` (3 occurrences) — now correctly mentions BOTH `--persistent-index` AND `--diagnostic-search-tools`.
+
+### Fixed — MEDIUM batch (internal + external audits)
+
+- **M-1 (TSDoc on foundational modules)**: ~50+ new TSDoc blocks across `src/{parser,dql,vault,embed-db,embeddings,fts5,server}.ts`. Foundational modules now match the gold-standard `src/tools/*` doc level.
+- **M-3 (branches coverage uplift)**: 75.02% → 75.29% (+0.27pp, +1.29pp safety margin above the 74% threshold). Per-file improvements in `watcher.ts` (+11.1pp), `communities.ts` (+3.7pp), `parser.ts` (+3.9pp), `pdf.ts` (+25pp). 32 new branch-coverage tests.
+- **M-7 (HNSW persistence chmod 0o600)** (`src/hnsw.ts:289-323`): `.hnsw.bin` and `.hnsw.meta.json` now explicitly `chmod 0o600` after write, matching the canonical pattern in `embed-db.ts` and `fts5.ts`. The `.meta.json` contains `rel_path` + `text_preview` (sensitive snippets).
+- **M-8 (CLI privacy filters on `index` + `setup`)** (`src/cli.ts:290-296,489-496`): both subcommands now accept `--exclude-glob` + `--read-paths` and pass them to `Vault` constructor. Previously `index`/`setup` would index private content even when user explicitly excluded it. 6 new E2E tests.
+- **M-9 (`docs/COMPARISON.md` stale)**: updated to v3.6.1 / 2026-05-15. Removed the "no project ships public benchmarks" claim (we ship them in `docs/benchmarks.md` since v3.6.0-rc.4). Note about `tests/docs-consistency.test.ts` invariant.
+- **M-11 (`docs/api.md` "v2.0 beta")**: removed all 7 stale "v2.0 beta" annotations; intro paragraph now correctly describes v3.6.x stable surface (44 tools).
+- **M-12 (`docs/api.md` broken anchor `README.md#cache--privacy`)**: updated to reference the existing `#-trust` section.
+
+### Fixed — LOW batch
+
+- **L-11**: `docs/QUICKSTART.md` cited `3.5.8` + claimed Node 20/22/24 CI matrix (Node 20 dropped v3.5.11). Updated.
+- **L-12**: README badge `v3.5.x-stable` → `v3.6.x-stable`.
+- **L-13**: 5 TypeDoc `@link` references to `@internal` helpers (`findBestMatch`, `suggestSimilar`, `FileEntry`) replaced with backtick code spans. **TypeDoc warnings: 3 → 0.**
+- **L6-09**: README footnote `v3.0 release (2026-05-09)` → `v3.6.1 (2026-05-15)` + added benchmark callout.
+
+### Tests
+
+**753 tests** (752 passing + 1 env-gated reranker smoke skip) — was 715 in v3.6.1. **+38 tests:**
+- 7 peek-meta unit tests
+- 7 HN-1/HN-2/HN-4 tests
+- 6 CLI privacy filter E2E tests
+- 1 HNSW chmod assertion test
+- 32 branch-coverage uplift tests (subset; some overlap with new TSDoc work)
+
+Branches **75.29%** (threshold 74%, **+1.29pp margin**) · lines 89.20% · statements 85.86% · functions 81.93% · lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · version-consistency green at `3.6.2` (5 surfaces).
+
+### Migration
+
+**No-op for npm consumers.** Public API surface (44 tools, CLI flags, `package.json#exports`) is identical to v3.6.1.
+
+Behavior changes that affect existing users:
+- **K-1a/K-1b fixes**: if you previously built embeddings with `--embedding-model bge` then ran search, your `.embed.db` was being silently destroyed and rebuilt on every search. Now it's preserved — searches are faster + you don't lose late-chunking / quantization metadata between calls.
+- **HN-2 (.base DSL)**: queries with typo'd predicates that previously silently matched all rows now correctly match none. Warning logged once per session.
+- **HN-4**: HNSW search with mismatched embedder model now throws actionable error instead of returning garbage similarities.
+- **L-3 docs fix**: `obsidian_full_text_search` is now correctly documented to require BOTH `--persistent-index` AND `--diagnostic-search-tools` (which it always did — only the description lied).
+
+### Method note
+
+**Two parallel methodology lessons this patch encodes:**
+
+1. **Class fix ≠ instance fix.** When an audit finds bug B, identify the underlying CLASS pattern, grep for every instance of the class, fix them all together. v3.6.1 missed this on CRIT-1 → 10 callsites stayed vulnerable. v3.6.2 closes all 10 (plus adds invariants so the class doesn't regress).
+
+2. **Multi-auditor methodology proven.** v3.6.0 had 3 internal passes + 1 external (Mavis) — all missed 3 CRIT. v3.6.1 had 1 anonymous external auditor — caught 3 CRIT. v3.6.2 had 2 external auditors (Mavis + anonymous) — caught the K-1 residual class that the 4 v3.6.0 audits AND my v3.6.1 self-audit missed. **CLAUDE.md rule confirmed: every minor/major needs ≥2 INDEPENDENT external auditors with different methodologies.** Memory note `method_full_system_audit.md` updated.
+
+### Deferred
+
+A small handful of LOW/INFO findings remain backlogged for v3.6.3:
+- 4 CLI build-* sites still construct EmbedDb/FtsIndex without peek (user explicitly passes model/tokenize — much lower risk class)
+- `serve-http` feature parity vs `serve` (8 missing flags) — major scope, separate sprint
+- 4 reranker aliases broken at AutoTokenizer (transformers.js compat, v3.7 backlog)
+- `engines: ">=20"` vs reality — design choice (see v3.5.11 documentation)
+
 ## [3.6.1] — 2026-05-15
 
 > **TL;DR:** **Emergency patch** closing **3 CRITICAL findings** discovered by external (anonymous) audit on v3.6.0 stable — bugs my internal 9-layer audit and Mavis missed. (1) `serve --use-hnsw` could DROP TABLE embeddings when the embed-db was built with a non-default model. (2) Default reranker alias pointed at a broken-end-to-end catalog entry — every `--enable-reranker` user without explicit `--reranker-model` got no reranking. (3) The `docs/api.md tool index table covers every registered tool` test was silently passing because it read `src/index.ts` for `registerTool(` calls after they moved to `tool-registry.ts` in rc.2. Plus 6 secondary fixes from internal + external audits. NO breaking API changes.

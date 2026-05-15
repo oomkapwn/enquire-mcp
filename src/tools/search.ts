@@ -474,7 +474,7 @@ export function tokenizeForTfidf(text: string): string[] {
  * @param vault - The vault whose corpus to index.
  * @returns `{ docs, idf, entriesRef }` — `docs` are L2-normalized sparse
  *   vectors keyed by relPath; `idf` maps term → smoothed IDF weight;
- *   `entriesRef` is the {@link FileEntry} snapshot used for cache validation.
+ *   `entriesRef` is the `FileEntry` snapshot used for cache validation.
  * @example
  * ```ts
  * const { docs, idf } = await buildTfidfIndex(vault);
@@ -746,6 +746,49 @@ export interface HnswSearchContext {
     }
   >;
   ef?: number;
+  /**
+   * v3.6.2 HN-4 — embedding-model alias the HNSW index was built with
+   * (e.g. "multilingual" or "bge"). At search time we verify that the
+   * embedder used to encode the query produces vectors in the SAME
+   * vector space as the index. CRIT-1 (v3.6.1) fixed the build-side
+   * silent destruction; this is the corresponding search-side guard.
+   *
+   * If the search-time embedder model doesn't match this alias, the
+   * stored vectors and the query vector are from different vector
+   * spaces — cosine returns garbage similarities. We throw instead of
+   * returning garbage; the agent / user can correct the
+   * `--embedding-model` flag and retry.
+   */
+  modelAlias: string;
+}
+
+/**
+ * v3.6.2 HN-4 — assert that the query-time embedder model matches the
+ * HNSW index's build-time model. Standalone helper so the check is
+ * unit-testable in isolation from `embeddingsSearch` (which depends on
+ * loading the real ONNX embedder runtime).
+ *
+ * Throws a clear, actionable error on mismatch instead of letting the
+ * caller compute cosine distances between vectors from two different
+ * vector spaces (which would silently return garbage similarities).
+ *
+ * @param embedderAlias - The alias of the embedder being used at search
+ *   time (typically `embedder.model.alias` after `loadEmbedder(...)`).
+ * @param hnswAlias - The alias the HNSW index was built with (stored
+ *   on the {@link HnswSearchContext} at server boot).
+ * @throws {Error} If the aliases differ.
+ */
+export function assertHnswModelMatchesEmbedder(embedderAlias: string, hnswAlias: string): void {
+  if (embedderAlias !== hnswAlias) {
+    throw new Error(
+      `HNSW model mismatch: index was built with embedding model '${hnswAlias}' ` +
+        `but the search is using '${embedderAlias}'. ` +
+        `The cosine similarities would be meaningless (vectors come from different spaces). ` +
+        `Fix: re-run \`enquire-mcp build-embeddings --vault <path> --embedding-model ${embedderAlias}\` ` +
+        `(rebuilds the index against the search-time model), ` +
+        `OR restart \`serve\` without overriding the model in tool args (the embed-db's meta is honored automatically).`
+    );
+  }
 }
 
 /**
@@ -846,7 +889,7 @@ export async function embeddingsSearch(
   const minScore = args.min_score ?? 0.3;
 
   // Lazy-load embed-db + embeddings only when the tool is actually called.
-  const [{ EmbedDb }, { loadEmbedder, resolveModel }] = await Promise.all([
+  const [{ EmbedDb, peekEmbedDbMeta }, { loadEmbedder, resolveModel }] = await Promise.all([
     import("../embed-db.js"),
     import("../embeddings.js")
   ]);
@@ -862,12 +905,30 @@ export async function embeddingsSearch(
     );
   }
 
-  const model = resolveModel(args.model);
+  // v3.6.2 K-1a — peek the existing embed-db's model_alias BEFORE open,
+  // so bootstrapSchema() doesn't DROP TABLE when the user built embeddings
+  // with `--embedding-model bge` but searches with the default
+  // `multilingual` model (or vice versa). v3.6.1 CRIT-1 fix only closed
+  // the `serve --use-hnsw` path; this runtime hot path (every
+  // obsidian_search + obsidian_embeddings_search call) was still
+  // destroying data on every query. External audit on v3.6.1 caught this
+  // (K-1 residual class). Honor the stored alias unless caller passes
+  // `args.model` explicitly.
+  const existingMeta = await peekEmbedDbMeta(embedFile);
+  const honoredAlias = args.model ?? existingMeta?.model_alias;
+  const honoredQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
+  const model = resolveModel(honoredAlias);
+  if (existingMeta?.model_alias && !args.model && existingMeta.model_alias !== resolveModel(undefined).alias) {
+    process.stderr.write(
+      `enquire: embeddingsSearch — honoring embed-db's stored model '${existingMeta.model_alias}' (avoids DROP TABLE on schema mismatch); pass args.model to override.\n`
+    );
+  }
   const db = new EmbedDb({
     file: embedFile,
     vaultRoot: vault.root,
     modelAlias: model.alias,
-    dim: model.dim
+    dim: model.dim,
+    quantization: honoredQuant
   });
   await db.open();
   try {
@@ -888,6 +949,11 @@ export async function embeddingsSearch(
     const overFetch = limit * 2;
     let rawHits: import("../embed-db.js").EmbedSearchHit[];
     if (hnsw) {
+      // v3.6.2 HN-4 — verify the search-time embedder model matches the
+      // model the HNSW index was built with. Different models → different
+      // vector spaces → cosine returns garbage. CRIT-1 fixed the build
+      // side; this is the corresponding search-side guard.
+      assertHnswModelMatchesEmbedder(embedder.model.alias, hnsw.modelAlias);
       // v2.13.0 — HNSW path. Sub-10ms top-K at any scale. We over-fetch
       // slightly more (3×) than brute-force because HNSW can occasionally
       // miss a true nearest neighbor; the privacy filter then pares down.

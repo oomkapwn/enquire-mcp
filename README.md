@@ -11,8 +11,8 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)](#trust)
-[![stable](https://img.shields.io/badge/v3.5.x-stable-brightgreen.svg)](./STABILITY.md)
+[![tests](https://img.shields.io/badge/tests-753%20passing-brightgreen.svg)](#trust)
+[![stable](https://img.shields.io/badge/v3.6.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -29,7 +29,7 @@
 
 A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion (Cormack et al, 2009), reranks with a **BGE cross-encoder** (5 model options), scales to millions of chunks via **HNSW with int8 quantization**, and returns blended markdown + PDF hits with `[page: N]` citations.
 
-**44 tools · 19 MCP prompts · 715 unit tests · 50+ languages · v3.5.x · semver-bound · MIT · SLSA-3.**
+**44 tools · 19 MCP prompts · 753 unit tests · 50+ languages · v3.6.x · semver-bound · MIT · SLSA-3.**
 
 ---
 
@@ -95,13 +95,13 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **715 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
+| **753 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
 | License | MIT, free | proprietary, paid | varies |
 
-<sub>Comparison based on each project's public capabilities as documented at v3.0 release (2026-05-09). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing.</sub>
+<sub>Comparison based on each project's public capabilities as of v3.6.1 (2026-05-15). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
 
 > Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 
@@ -205,7 +205,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: 
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (715 tests, ~5s)
+npm test       # full suite (753 tests, ~5s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

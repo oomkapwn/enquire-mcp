@@ -33,10 +33,18 @@ export type EmbedChunkKind = "md" | "pdf";
 /** v2.17.0 — vector storage encoding. */
 export type EmbedQuantization = "f32" | "int8";
 
+/**
+ * A single hit from {@link EmbedDb.search}. Mirrors the {@link FtsSearchHit}
+ * shape so the RRF fusion layer can blend them by id (rel_path + chunk_index).
+ */
 export interface EmbedSearchHit {
+  /** Vault-relative path of the source note / PDF. */
   rel_path: string;
+  /** 0-based chunk position within the source. */
   chunk_index: number;
+  /** 1-based starting line in the source. */
   line_start: number;
+  /** 1-based ending line in the source (inclusive). */
   line_end: number;
   /** Raw chunk text — caller can render snippets. */
   text_preview: string;
@@ -46,11 +54,17 @@ export interface EmbedSearchHit {
   kind: EmbedChunkKind;
 }
 
+/** Counter summary returned by the embed-sync routine in `server.ts`. */
 export interface EmbedSyncReport {
+  /** Files newly embedded (no prior source_state row). */
   added: number;
+  /** Files re-embedded due to mtime change. */
   updated: number;
+  /** Files dropped because the source vanished from the vault. */
   deleted: number;
+  /** Files whose mtime matched the stored row — no work needed. */
   unchanged: number;
+  /** Total chunks in the index after the sync. */
   total_chunks: number;
 }
 
@@ -184,6 +198,26 @@ export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
   return out;
 }
 
+/**
+ * Persistent embedding index backed by SQLite (one row per chunk + meta
+ * table for cross-vault contamination guards). Vectors are stored as
+ * Float32 BLOBs (default) or int8-quantized BLOBs (`quantization: "int8"`,
+ * ~4× storage reduction at ~1-2% recall@10 cost). Brute-force cosine
+ * top-K via {@link EmbedDb.search} or wrap with HNSW (see `src/hnsw.ts`)
+ * for sub-10ms queries at million-chunk scale.
+ *
+ * Schema is bootstrapped on `open()` and auto-rebuilt on any meta
+ * mismatch (vault root, model alias, dim, quantization, schema version).
+ *
+ * @example
+ * ```ts
+ * const db = new EmbedDb({ file, vaultRoot, modelAlias: "multilingual", dim: 384 });
+ * await db.open();
+ * db.upsertNote(relPath, mtimeMs, chunks);
+ * const hits = db.search(queryVec, 10);
+ * db.close();
+ * ```
+ */
 export class EmbedDb {
   private db: Db | null = null;
   private readonly file: string;
@@ -204,6 +238,15 @@ export class EmbedDb {
     this.encodedBytes = this.quantization === "int8" ? this.dim + 8 : this.dim * 4;
   }
 
+  /**
+   * Open the SQLite database, bootstrap the schema, and tighten file perms
+   * to 0o600 on the db + WAL/SHM sidecars (note bodies live here — same
+   * privacy posture as `vault.ts`'s persistent parse cache). Idempotent —
+   * a second call after an open is a no-op.
+   *
+   * @throws {Error} If `better-sqlite3` (an optional dependency) fails to
+   *   load or its native binding can't be loaded.
+   */
   async open(): Promise<void> {
     if (this.db) return;
     const Ctor = await loadBetterSqlite();
@@ -233,6 +276,8 @@ export class EmbedDb {
     return removed;
   }
 
+  /** Close the underlying SQLite handle. Idempotent — calling close
+   *  twice is safe. Call before process exit to flush WAL. */
   close(): void {
     if (this.db) {
       this.db.close();

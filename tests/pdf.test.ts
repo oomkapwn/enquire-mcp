@@ -110,6 +110,33 @@ describe("extractPdfText (v2.7.0)", () => {
     const garbage = Buffer.from("not a pdf at all");
     await expect(extractPdfText(garbage)).rejects.toThrow();
   });
+
+  // v3.6.2 — branches coverage. Exercise every metadata field's
+  // typeof-is-string branch (Subject, Keywords, Creator, Producer,
+  // CreationDate, ModDate). Pre-fix only Title + Author were covered;
+  // the other six branches stayed at 0 hits.
+  it("captures all populated Info-dict metadata fields", async () => {
+    const buf = makePdf({
+      pages: ["Body"],
+      title: "T",
+      author: "A",
+      subject: "S",
+      keywords: "k1, k2",
+      creator: "C",
+      producer: "P",
+      creationDate: "D:20260101000000Z",
+      modDate: "D:20260115000000Z"
+    });
+    const result = await extractPdfText(buf);
+    expect(result.metadata.title).toBe("T");
+    expect(result.metadata.author).toBe("A");
+    expect(result.metadata.subject).toBe("S");
+    expect(result.metadata.keywords).toBe("k1, k2");
+    expect(result.metadata.creator).toBe("C");
+    expect(result.metadata.producer).toBe("P");
+    expect(result.metadata.creationDate).toBe("D:20260101000000Z");
+    expect(result.metadata.modDate).toBe("D:20260115000000Z");
+  });
 });
 
 // v3.6 — branches coverage. isPdfjsAvailable's cache-miss vs cache-hit

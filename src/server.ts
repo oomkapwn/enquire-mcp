@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
-import { chunkContent, defaultIndexFile, FtsIndex } from "./fts5.js";
+import { chunkContent, defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
 import {
@@ -18,21 +18,47 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 
+/**
+ * Configuration for {@link startServer} / {@link prepareServerDeps}.
+ * Mirrors the CLI flag surface (`enquire-mcp serve --vault X --enable-write`)
+ * but typed as a plain options object so HTTP transport / tests can call
+ * the same entry points programmatically.
+ *
+ * Strings on numeric fields (e.g. `maxFileBytes`, `cacheSize`) reflect the
+ * fact that callers usually pass CLI args verbatim — parsing happens
+ * inside `prepareServerDeps` via {@link parsePositiveInt}.
+ */
 export interface ServeOptions {
+  /** Absolute path to the vault root directory. Required. */
   vault: string;
+  /** Allow write tools (`obsidian_create_note`, `obsidian_append_note`,
+   *  `obsidian_rename_file`). Default false (read-only). */
   enableWrite?: boolean;
+  /** Per-file size cap (parsed via {@link parsePositiveInt}). */
   maxFileBytes?: string;
+  /** In-memory parsed-note cache capacity. */
   cacheSize?: string;
+  /** Persist the parse cache across server restarts. */
   persistentCache?: boolean;
+  /** Override the persistent cache file location. */
   cacheFile?: string;
+  /** Enable the persistent FTS5 index (requires `better-sqlite3`). */
   persistentIndex?: boolean;
+  /** Override the FTS5 index file location. */
   indexFile?: string;
+  /** FTS5 tokenizer mode. */
   tokenize?: "unicode61" | "trigram";
+  /** Privacy: glob patterns to exclude from the vault. */
   excludeGlob?: string[];
+  /** Privacy: glob patterns that form a strict allowlist. */
   readPaths?: string[];
+  /** Enable the filesystem watcher (auto-reindex on change). */
   watch?: boolean;
+  /** Per-tool gating: deny list. Tools named here won't register. */
   disabledTools?: string[];
+  /** Per-tool gating: allow list. Only listed tools register (deny still applies). */
   enabledTools?: string[];
+  /** Expose diagnostic / debug tools (`obsidian_full_text_search` etc.). */
   diagnosticSearchTools?: boolean;
   /** v2.8.0 — also index PDFs into FTS5 (and embeddings, if a build-embeddings
    *  with --include-pdfs ran). Off by default; opt-in because PDF extraction
@@ -109,6 +135,14 @@ export interface ServerDeps {
     >;
     /** Search-time beam width override; falls back to module default if undefined. */
     ef?: number;
+    /**
+     * v3.6.2 HN-4 — model alias the HNSW index was built with (from
+     * the embed-db's persisted meta, or the resolved default for fresh
+     * dbs). Propagated to `HnswSearchContext` at search time so the
+     * query embedder model can be verified against the index. CRIT-1
+     * fixed the build-side destruction; this seals the search side.
+     */
+    modelAlias: string;
   } | null;
 }
 
@@ -135,8 +169,24 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // 1k-file vault is ~5s.
   let ftsIndex: FtsIndex | null = null;
   if (opts.persistentIndex) {
-    const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
     const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+    // v3.6.2 K-1b — peek the existing fts5 index's tokenize_mode BEFORE
+    // open. If user built with `--tokenize trigram` and restarts `serve`
+    // without explicit --tokenize, the default "unicode61" would mismatch
+    // and trigger bootstrapSchema DROP TABLE chunks. Honor the existing
+    // mode unless caller passes --tokenize explicitly. Same class as
+    // CRIT-1 (v3.6.1) — K-1b residual on FTS5 side. External audit
+    // caught this on v3.6.1.
+    const peeked = await peekFtsMetaSafe(indexFile);
+    let tokenize: "unicode61" | "trigram" = opts.tokenize === "trigram" ? "trigram" : "unicode61";
+    if (peeked?.tokenize_mode && !opts.tokenize) {
+      tokenize = peeked.tokenize_mode;
+      if (tokenize !== "unicode61") {
+        process.stderr.write(
+          `enquire: --persistent-index — honoring fts5 index stored tokenize '${tokenize}' (avoids DROP TABLE on schema mismatch); pass --tokenize to override.\n`
+        );
+      }
+    }
     ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
     try {
       await ftsIndex.open();
@@ -259,6 +309,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             hnswContext = {
               index: loaded.index,
               rowByLabel: loaded.rowByLabel,
+              modelAlias: model.alias,
               ...(efOverride !== undefined ? { ef: efOverride } : {})
             };
           } else {
@@ -292,7 +343,12 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   kind: r.kind
                 });
               }
-              hnswContext = { index, rowByLabel, ...(efOverride !== undefined ? { ef: efOverride } : {}) };
+              hnswContext = {
+                index,
+                rowByLabel,
+                modelAlias: model.alias,
+                ...(efOverride !== undefined ? { ef: efOverride } : {})
+              };
               process.stderr.write(
                 `enquire: HNSW index built (${rows.length} vectors, dim=${model.dim}, ${Date.now() - startMs}ms)\n`
               );

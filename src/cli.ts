@@ -287,15 +287,25 @@ export async function main(): Promise<void> {
       "--include-pdfs",
       "v2.8.0 — also index PDFs into the FTS5 index. Off by default; PDF extraction is slower than markdown."
     )
+    .option(
+      "--exclude-glob <pattern...>",
+      "v3.6.2 (audit M-8) — privacy denylist (same semantics as `serve`). Paths matching any pattern are skipped at indexing time so the FTS5 db never contains private content at rest. Repeatable."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "v3.6.2 (audit M-8) — privacy allowlist (same semantics as `serve`). When set, ONLY matching paths are indexed. Repeatable."
+    )
     .action(
       async (opts: {
         vault: string;
         indexFile?: string;
         tokenize?: "unicode61" | "trigram";
         includePdfs?: boolean;
+        excludeGlob?: string[];
+        readPaths?: string[];
       }) => {
         const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
-        const vault = new Vault(opts.vault);
+        const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
         const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
@@ -476,6 +486,14 @@ export async function main(): Promise<void> {
       "--quantize-embeddings <mode>",
       "v2.17.0 — vector storage encoding for the embed db (`f32` default, `int8` for ~4× smaller BLOBs). Same semantics as the `build-embeddings` flag."
     )
+    .option(
+      "--exclude-glob <pattern...>",
+      "v3.6.2 (audit M-8) — privacy denylist (same semantics as `serve`). Paths matching any pattern are skipped during BOTH the FTS5 index build AND the embedding build so neither db contains private content at rest. Repeatable."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "v3.6.2 (audit M-8) — privacy allowlist (same semantics as `serve`). When set, ONLY matching paths are indexed/embedded. Repeatable."
+    )
     .action(
       async (opts: {
         vault: string;
@@ -483,8 +501,10 @@ export async function main(): Promise<void> {
         includePdfs?: boolean;
         skipEmbeddings?: boolean;
         quantizeEmbeddings?: string;
+        excludeGlob?: string[];
+        readPaths?: string[];
       }) => {
-        const v = new Vault(opts.vault);
+        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
         process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
 

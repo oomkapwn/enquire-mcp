@@ -120,6 +120,83 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     await w.close();
     await w.close(); // second close — must not throw
   });
+
+  it("close() before start() is a no-op (idempotent)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    // Construct + close without start — this.watcher remains null, so
+    // the inner branch at line 137 (if (this.watcher)) is skipped.
+    const w = new VaultWatcher({ vault: v, silent: true });
+    await w.close(); // closed=false → set closed=true; no watcher to close
+    await w.close(); // closed=true → early return
+  });
+
+  // v3.6.2 branch-coverage uplift: exercise the silent=false stderr paths
+  // (cache-invalidate, unlink, reindex, error skip). We capture stderr so
+  // the assertions don't pollute the test runner output. The silent=false
+  // branch is otherwise unreachable from the rest of the suite (every
+  // other test uses silent:true to keep output clean).
+  it("logs cache-invalidate to stderr when silent=false and no FTS index is wired", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "n.md"), "v1");
+
+    const captured: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    // biome-ignore lint/suspicious/noExplicitAny: stderr.write has overloads
+    process.stderr.write = ((chunk: any) => {
+      if (typeof chunk === "string") captured.push(chunk);
+      return true;
+    }) as unknown as typeof process.stderr.write;
+    try {
+      const w = new VaultWatcher({ vault: v, silent: false });
+      await w.start();
+      try {
+        await new Promise((r) => setTimeout(r, 20));
+        await fs.writeFile(path.join(root, "n.md"), "v2");
+        const ok = await waitFor(() =>
+          captured.some((s) => s.includes("watcher change") && s.includes("cache-invalidated"))
+        );
+        expect(ok).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
+
+  it("logs reindexed / unlink lines to stderr when silent=false and FTS5 is wired", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    const captured: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    // biome-ignore lint/suspicious/noExplicitAny: stderr.write has overloads
+    process.stderr.write = ((chunk: any) => {
+      if (typeof chunk === "string") captured.push(chunk);
+      return true;
+    }) as unknown as typeof process.stderr.write;
+    try {
+      const w = new VaultWatcher({ vault: v, silent: false, ftsIndex: fts });
+      await w.start();
+      try {
+        const abs = path.join(root, "logged.md");
+        await fs.writeFile(abs, "# T\n\nbody\n");
+        const indexed = await waitFor(() => captured.some((s) => s.includes("fts5 reindexed")));
+        expect(indexed).toBe(true);
+        await fs.unlink(abs);
+        const dropped = await waitFor(() => captured.some((s) => s.includes("fts5 dropped")));
+        expect(dropped).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      process.stderr.write = origWrite;
+      fts.close();
+    }
+  });
 });
 
 // v3.6 — branches coverage. The watcher's FTS5-reindex paths

@@ -307,6 +307,17 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
         writtenAt: new Date().toISOString()
       };
       await fs.writeFile(metaFile, JSON.stringify(meta, null, 2), "utf8");
+      // v3.6.2 (audit M-7) — defense-in-depth: persist the user-only
+      // 0600 mode on both sidecars, matching the canonical pattern in
+      // src/embed-db.ts and src/fts5.ts. The parent dir is already
+      // 0700 (created by EmbedDb.open before HNSW persistence runs),
+      // but per-file invariants are what the SECURITY.md privacy
+      // guarantees require — the .meta.json carries text_preview
+      // snippets which are sensitive note content. Best-effort: on
+      // platforms without POSIX mode bits (Windows / some FAT mounts)
+      // chmod is a no-op or throws; we swallow either way because the
+      // parent-dir guard is the real protection.
+      await Promise.all([fs.chmod(binFile, 0o600).catch(() => {}), fs.chmod(metaFile, 0o600).catch(() => {})]);
       return true;
     }
   };

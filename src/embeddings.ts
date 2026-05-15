@@ -30,6 +30,12 @@ export interface EmbeddingModel {
   maxTokens: number;
 }
 
+/**
+ * Catalog of supported embedding models, keyed by CLI-friendly alias.
+ * Add new entries by pinning the Xenova-converted ONNX model id, dim
+ * count, and approximate download size. Frozen at module load so
+ * runtime can't accidentally mutate.
+ */
 export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object.freeze({
   multilingual: {
     alias: "multilingual",
@@ -52,6 +58,15 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
 /** Default model alias when the user doesn't pass `--embedding-model`. */
 export const DEFAULT_MODEL_ALIAS = "multilingual";
 
+/**
+ * Look up an entry in the {@link EMBEDDING_MODELS} catalog. Throws with
+ * a list of known aliases if the input is unknown — surfaces typos at
+ * CLI parse time rather than after a 120MB model download.
+ *
+ * @param alias - Model alias, or `undefined` for the default ({@link DEFAULT_MODEL_ALIAS}).
+ * @returns The matching {@link EmbeddingModel} entry.
+ * @throws {Error} If `alias` isn't a known catalog key.
+ */
 export function resolveModel(alias: string | undefined): EmbeddingModel {
   const key = alias ?? DEFAULT_MODEL_ALIAS;
   const model = EMBEDDING_MODELS[key];
@@ -227,14 +242,23 @@ export function cosineSim(a: Float32Array, b: Float32Array): number {
 
 /** BGE reranker model catalog — analogous to `EMBEDDING_MODELS`. */
 export interface RerankerModel {
+  /** CLI-friendly alias passed via `--reranker-model <alias>`. */
   alias: string;
+  /** HuggingFace model id (Xenova-converted to ONNX). */
   hfId: string;
+  /** Approximate disk footprint in MB after download. */
   approxSizeMB: number;
+  /** True if trained on multilingual data. */
   multilingual: boolean;
   /** Max combined (query + passage) tokens — BGE base is 512. */
   maxTokens: number;
 }
 
+/**
+ * Catalog of supported cross-encoder reranker models, keyed by CLI alias.
+ * Each entry trades off quality vs latency vs download size; see comments
+ * inline for guidance. Frozen at module load.
+ */
 export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.freeze({
   // BGE-reranker-base — English, ~110 MB. Latency ~30-50ms per pair on M1 CPU.
   "rerank-bge": {
@@ -299,6 +323,15 @@ export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.f
 // audit (anonymous) caught this.
 export const DEFAULT_RERANKER_ALIAS = "rerank-bge";
 
+/**
+ * Look up an entry in the {@link RERANKER_MODELS} catalog. Throws with
+ * a list of known aliases if the input is unknown.
+ *
+ * @param alias - Reranker alias, or `undefined` for the default
+ *   ({@link DEFAULT_RERANKER_ALIAS}).
+ * @returns The matching {@link RerankerModel} entry.
+ * @throws {Error} If `alias` isn't a known catalog key.
+ */
 export function resolveRerankerModel(alias: string | undefined): RerankerModel {
   const key = alias ?? DEFAULT_RERANKER_ALIAS;
   const model = RERANKER_MODELS[key];

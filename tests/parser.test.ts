@@ -154,4 +154,26 @@ describe("parseNote", () => {
     expect(r.frontmatter).toEqual({});
     expect(r.wikilinks[0].target).toBe("Link");
   });
+
+  // v3.6.2 — exercise branches in extractFrontmatterTags. Pre-fix the
+  // non-array, non-string branch (`tags: 42`) and the malformed-YAML
+  // fallback weren't hit.
+  it("ignores `tags:` values that aren't an array or string", () => {
+    const r = parseNote("---\ntags: 42\n---\nbody");
+    expect(r.tags).toEqual([]);
+  });
+
+  it("falls back to body-only when frontmatter YAML is malformed", () => {
+    // gray-matter throws on hard YAML errors — the parseNote catch
+    // treats the whole source as body and returns empty frontmatter.
+    const r = parseNote("---\ntags: [foo,\n---\nstill body [[Link]]");
+    expect(r.frontmatter).toEqual({});
+    // body fallback contains the original source verbatim.
+    expect(r.body).toContain("still body");
+  });
+
+  it("strips multiple leading # from frontmatter tags", () => {
+    const r = parseNote("---\ntags: ['##already-hashed', '#single']\n---\nbody");
+    expect(r.tags.sort()).toEqual(["already-hashed", "single"]);
+  });
 });

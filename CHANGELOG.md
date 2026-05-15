@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0-rc.2] — 2026-05-15
+
+> **TL;DR:** v3.6.0 Phase 2 of 4 — `src/index.ts` (3665 lines) split into 5 domain modules (`cli.ts` 702 + `server.ts` 877 + `tool-registry.ts` 1300 + `prompts.ts` 790) plus a slim 84-line entry point. NEW `src/tool-manifest.ts` (318 lines, 44 machine-readable tool entries) becomes the single source of truth — `tests/docs-consistency.test.ts` pivoted off regex-parsing source code and reads the manifest directly. Pure refactor: same CLI surface, same registered tools, same 712 tests pass. Published under npm dist-tag `rc`.
+
+**Pre-release — v3.6.0 sprint Phase 2.**
+
+### Changed — `src/index.ts` (3665 lines) → domain modules
+
+Phase 1 (rc.1) split `tools.ts`. This RC does the same for `index.ts`. The pre-refactor file packed CLI definition, MCP server construction, tool registration, prompt definitions, sync routines, and utility helpers into a single 3665-line monolith. After rc.2:
+
+| File | Lines | Purpose |
+|---|---:|---|
+| `src/index.ts` (slim) | 84 | `VERSION` literal (kept here so `scripts/check-version-consistency.mjs` regex still finds it) + CLI-entry guard + re-exports (`main`, `parsePositiveInt`, `parseQuantizationMode`, `startServer`, `buildMcpServer`, `buildEmbedText`, `formatReadyBanner`, `prepareServerDeps`, types `ServeOptions` / `ServerDeps`) |
+| `src/cli.ts` | 702 | `main()` + commander program definition (all 12 subcommands) |
+| `src/server.ts` | 877 | MCP server construction: `ServeOptions`, `ServerDeps`, `prepareServerDeps`, `buildMcpServer`, `startServer`, `formatReadyBanner`, `buildEmbedText`, `syncEmbedDb` / `syncFtsIndex` / `syncPdfFtsIndex` / `syncPdfEmbedDb` |
+| `src/tool-registry.ts` | 1300 | `registerFtsTools` + `registerReadTools` + `registerWriteTools` + `registerResources` + `registerChunkResource` + helpers (`embedDbPath`, `parsePositiveInt`, `parseQuantizationMode`, `encodeNotePath`, `decodeNotePath`, `textResult`) |
+| `src/prompts.ts` | 790 | `registerPrompts` with all 19 MCP prompt definitions |
+
+The slim `index.ts` keeps the v3.5.x re-export surface so `src/http-transport.ts` + tests + external consumers don't need to know about the new layout. Module dependency graph is cycle-safe (the `cli.ts` ↔ `index.ts` VERSION cycle is a literal-value cycle, evaluated at module-init time; runtime-only, no TDZ surprises).
+
+### Added — `src/tool-manifest.ts` (318 lines, 44 entries)
+
+Machine-readable manifest of every MCP tool: `name`, `kind` (`read` | `fts` | `write` | `diagnostic`), `gating` (the `--persistent-index` / `--enable-write` / etc. clause), and a 1-line `summary`. Entries:
+
+| Kind | Count | Gating |
+|---|---:|---|
+| `read` | 33 | always-on |
+| `fts` | 1 | `--persistent-index + --diagnostic-search-tools` |
+| `diagnostic` | 3 | `--diagnostic-search-tools` |
+| `write` | 7 | `--enable-write` |
+| **Total** | **44** | (matches the count math invariant in `tests/docs-consistency.test.ts`) |
+
+The full `registerTool()` description argument stays at the registration site so MCP clients still see verbatim what they did pre-refactor. The manifest's `summary` is a 1-line distillation for docs / future auto-generation use cases.
+
+### Changed — `tests/docs-consistency.test.ts` pivots to TOOL_MANIFEST
+
+Pre-v3.6.0-rc.2, this file regex-parsed `src/index.ts` for `registerTool(` patterns + `function registerWriteTools(` markers + `if (diagnosticSearchTools) server.registerTool(` gating syntax. After the rc.2 monolith split, those patterns moved to `tool-registry.ts` — but rather than chase the regex paths, we **pivoted the entire tool-count invariants to read `TOOL_MANIFEST` directly**. Type-safe, no regex brittleness, single source of truth.
+
+Surfaces still parsed by regex (no manifest yet):
+- `src/prompts.ts` — registerPrompt() names (possible v3.6.0-rc.3: introduce `PROMPT_MANIFEST`)
+- `src/cli.ts` — `.command()` subcommand names + the `serve` / `serve-http` flag blocks (for the shared-help-strings invariant)
+
+### Validation
+
+712 unit tests pass · 31 test files · branches 75.29% · lines 89.54% · statements 86.06% · functions 82.15% · lint clean (1 pre-existing info note about biome schema 2.4.15 vs locally-cached 2.4.14 CLI — resolves on CI which installs 2.4.15 fresh) · `tsc` strict + `noUncheckedIndexedAccess` clean · smoke pass · version-consistency green at `3.6.0-rc.2` (5 surfaces).
+
+### Migration
+
+**No-op for consumers.** Public npm package surface (44 tools, 19 prompts, CLI flags, `package.json` `exports` sub-paths) is identical. The refactor is internal file structure + new `tool-manifest.ts` as a documentation source-of-truth.
+
+For contributors:
+- `import { TOOL_MANIFEST } from "@oomkapwn/enquire-mcp/dist/tool-manifest.js"` — programmatically iterate tools by kind / gating / summary.
+- `src/index.ts` re-exports the v3.5.x surface unchanged. Imports from `./index.js` continue to work.
+
+### Method note
+
+This RC removed an entire **class of brittleness** (regex-parsing source code to extract structured data). Replaced with type-safe, IDE-completable iteration over a typed const array. The methodology: when refactor causes drift in tests, don't chase the regex — pivot the test to a machine-readable structure that survives future refactors.
+
+### npm dist-tag
+
+Published under **`rc`** dist-tag. Users on `latest` stay on v3.5.14. To try: `npm install @oomkapwn/enquire-mcp@rc`.
+
+### Next RC
+
+`v3.6.0-rc.3`: Full TSDoc (`@param` / `@returns` / `@example`) on 44 tools + 19 prompts + 20 `src/` modules (~1300+ lines of doc-comments). Setup for `v3.6.0-rc.4` TypeDoc auto-generation.
+
 ## [3.6.0-rc.1] — 2026-05-15
 
 > **TL;DR:** v3.6.0 Phase 1 of 4 — `src/tools.ts` (4252 lines) split into 5 domain modules under `src/tools/` with a barrel re-export. Pure refactor: same exported surface, same signatures, all 712 tests pass. Published to npm under dist-tag `rc` (NOT `latest`); install with `npm i @oomkapwn/enquire-mcp@rc` to try.

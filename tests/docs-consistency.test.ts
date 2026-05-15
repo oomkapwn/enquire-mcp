@@ -1,12 +1,21 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { TOOL_MANIFEST } from "../src/tool-manifest.js";
 
-// Static-analysis tests: every MCP surface registered in src/index.ts must be
-// documented in README.md, and every tool/prompt name mentioned in README.md
-// must be a real registered surface. Catches doc drift that a real audit
-// previously found (e.g. README listing `summarize_recent` instead of the
-// actual `summarize_recent_edits`, or a `review_tag` row missing entirely).
+// Static-analysis tests: every MCP surface declared in src/tool-manifest.ts
+// (single source of truth as of v3.6.0-rc.2) must be documented in
+// README.md, and every tool/prompt name mentioned in README.md must be a
+// real registered surface. Catches doc drift that a real audit previously
+// found (e.g. README listing `summarize_recent` instead of the actual
+// `summarize_recent_edits`, or a `review_tag` row missing entirely).
+//
+// Pre-v3.6.0-rc.2 this file regex-parsed `src/index.ts` for `registerTool(`
+// patterns. After the v3.6.0-rc.2 monolith split, registration moved to
+// `src/tool-registry.ts` and prompts moved to `src/prompts.ts`. Rather
+// than chase the regex paths, we pivoted the **tool**-side checks onto
+// `TOOL_MANIFEST` (machine-readable, type-safe). The **prompt**-side
+// checks still parse `src/prompts.ts` directly via `registeredNames`.
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -18,6 +27,11 @@ function registeredNames(src: string, fn: "registerTool" | "registerPrompt"): Se
   // Grab the first string-literal arg of every fn(...) call.
   const re = new RegExp(`${fn}\\(\\s*"([^"]+)"`, "g");
   return new Set([...src.matchAll(re)].map((m) => m[1] ?? ""));
+}
+
+/** Set of all registered tool names from the v3.6.0-rc.2 manifest. */
+function manifestToolNames(): Set<string> {
+  return new Set(TOOL_MANIFEST.map((t) => t.name));
 }
 
 function mentionedToolNames(readme: string): Set<string> {
@@ -36,28 +50,26 @@ function mentionedPromptNames(readme: string): Set<string> {
 }
 
 describe("docs/code consistency — README mirrors registered MCP surface", () => {
-  it("every registerTool() in src/index.ts appears in README", async () => {
-    const indexSrc = await read("src/index.ts");
+  it("every tool in TOOL_MANIFEST appears in README", async () => {
     const readme = await read("README.md");
-    const registered = registeredNames(indexSrc, "registerTool");
+    const registered = manifestToolNames();
     const mentioned = mentionedToolNames(readme);
     const missingFromReadme = [...registered].filter((t) => !mentioned.has(t));
     expect(missingFromReadme).toEqual([]);
   });
 
-  it("every tool mentioned in README is actually registered", async () => {
-    const indexSrc = await read("src/index.ts");
+  it("every tool mentioned in README is actually registered (in TOOL_MANIFEST)", async () => {
     const readme = await read("README.md");
-    const registered = registeredNames(indexSrc, "registerTool");
+    const registered = manifestToolNames();
     const mentioned = mentionedToolNames(readme);
     const ghostTools = [...mentioned].filter((t) => !registered.has(t));
     expect(ghostTools).toEqual([]);
   });
 
-  it("every registerPrompt() in src/index.ts appears in README's prompts cell", async () => {
-    const indexSrc = await read("src/index.ts");
+  it("every registerPrompt() in src/prompts.ts appears in README's prompts cell", async () => {
+    const promptsSrc = await read("src/prompts.ts");
     const readme = await read("README.md");
-    const registered = registeredNames(indexSrc, "registerPrompt");
+    const registered = registeredNames(promptsSrc, "registerPrompt");
     const mentioned = mentionedPromptNames(readme);
     const missingFromReadme = [...registered].filter((p) => !mentioned.has(p));
     expect(missingFromReadme).toEqual([]);
@@ -70,32 +82,11 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
   // while real source was 7526 lines. Each was a manual-update miss.
 
   it("README tool-count claim matches actual registered count", async () => {
-    const indexSrc = await read("src/index.ts");
     const readme = await read("README.md");
-    const registered = registeredNames(indexSrc, "registerTool");
-    // Heuristic: split by always-on read / opt-in read / write tools.
-    // Always-on read = registered NOT in registerWriteTools or registerFtsTools
-    // AND NOT gated behind `if (diagnosticSearchTools) server.registerTool(`.
-    const writeFnStart = indexSrc.indexOf("function registerWriteTools(");
-    const writeFnEnd = writeFnStart > 0 ? indexSrc.indexOf("\n}\n", writeFnStart) : -1;
-    const ftsFnStart = indexSrc.indexOf("function registerFtsTools(");
-    const ftsFnEnd = ftsFnStart > 0 ? indexSrc.indexOf("\n}\n", ftsFnStart) : -1;
-    const writeBody = writeFnStart > 0 && writeFnEnd > 0 ? indexSrc.slice(writeFnStart, writeFnEnd) : "";
-    const ftsBody = ftsFnStart > 0 && ftsFnEnd > 0 ? indexSrc.slice(ftsFnStart, ftsFnEnd) : "";
-    const writeNames = registeredNames(writeBody, "registerTool");
-    const ftsNames = registeredNames(ftsBody, "registerTool");
-    // v2.0.0-beta.3: tools gated behind `if (diagnosticSearchTools)` are
-    // opt-in, not always-on. Use `\s+` (matches newlines) instead of a
-    // single space — Biome's formatter splits `if (...) server.registerTool(`
-    // onto separate lines, which would have escaped a single-line regex.
-    const diagnosticGated = new Set(
-      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
-        (m) => m[1] ?? ""
-      )
-    );
-    const alwaysOnRead = [...registered].filter(
-      (n) => !writeNames.has(n) && !ftsNames.has(n) && !diagnosticGated.has(n)
-    );
+    // v3.6.0-rc.2: derive always-on-read count from TOOL_MANIFEST instead
+    // of regex-parsing source code. kind="read" === always-on; the other
+    // three kinds (fts, diagnostic, write) are opt-in via various flags.
+    const alwaysOnRead = TOOL_MANIFEST.filter((t) => t.kind === "read");
     // Look for a heading or sentence claiming an always-on read tool count.
     // Accept "<N> read tools (always on)" (legacy phrasing) or "<N> always-on
     // read tools" (current heading-style phrasing in v2.0.0+ README).
@@ -117,13 +108,13 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     );
   });
 
-  it("CLI subcommands documented in docs/api.md match those registered in src/index.ts", async () => {
-    const indexSrc = await read("src/index.ts");
+  it("CLI subcommands documented in docs/api.md match those registered in src/cli.ts", async () => {
+    // v3.6.0-rc.2: `main()` and `program.command()` calls moved from
+    // src/index.ts to src/cli.ts as part of the monolith split.
+    const cliSrc = await read("src/cli.ts");
     const apiMd = await read("docs/api.md");
     // Subcommands registered as `program.command("name")`.
-    const registered = new Set(
-      [...indexSrc.matchAll(/program\s*\n?\s*\.command\(\s*"([^"]+)"/g)].map((m) => m[1] ?? "")
-    );
+    const registered = new Set([...cliSrc.matchAll(/program\s*\n?\s*\.command\(\s*"([^"]+)"/g)].map((m) => m[1] ?? ""));
     // Subcommands documented as backtick-wrapped first column entries in the
     // Subcommands table in api.md. Match `<name>` plus optional `(...)` suffix
     // (e.g. `(default)`, `(v2.0 beta)`).
@@ -149,31 +140,17 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     writes: number;
     prompts: number;
   }> {
-    const indexSrc = await read("src/index.ts");
-    const allTools = registeredNames(indexSrc, "registerTool");
-    const writeStart = indexSrc.indexOf("function registerWriteTools(");
-    const writeEnd = writeStart > 0 ? indexSrc.indexOf("\n}\n", writeStart) : -1;
-    const ftsStart = indexSrc.indexOf("function registerFtsTools(");
-    const ftsEnd = ftsStart > 0 ? indexSrc.indexOf("\n}\n", ftsStart) : -1;
-    const writeBody = writeStart > 0 && writeEnd > 0 ? indexSrc.slice(writeStart, writeEnd) : "";
-    const ftsBody = ftsStart > 0 && ftsEnd > 0 ? indexSrc.slice(ftsStart, ftsEnd) : "";
-    const writes = registeredNames(writeBody, "registerTool").size;
-    const ftsOptIn = registeredNames(ftsBody, "registerTool").size;
-    const diagnostic = new Set(
-      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
-        (m) => m[1] ?? ""
-      )
-    ).size;
-    const writeNames = registeredNames(writeBody, "registerTool");
-    const ftsNames = registeredNames(ftsBody, "registerTool");
-    const diagSet = new Set(
-      [...indexSrc.matchAll(/if \(diagnosticSearchTools\)\s+server\.registerTool\(\s*"([^"]+)"/g)].map(
-        (m) => m[1] ?? ""
-      )
-    );
-    const alwaysOn = [...allTools].filter((n) => !writeNames.has(n) && !ftsNames.has(n) && !diagSet.has(n)).length;
-    const prompts = registeredNames(indexSrc, "registerPrompt").size;
-    return { allTools: allTools.size, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
+    // v3.6.0-rc.2: tools come from TOOL_MANIFEST (single source of truth).
+    // Prompts still parsed from src/prompts.ts via registeredNames since
+    // there's no PROMPT_MANIFEST yet — possible v3.6.0-rc.3 follow-up.
+    const allTools = TOOL_MANIFEST.length;
+    const alwaysOn = TOOL_MANIFEST.filter((t) => t.kind === "read").length;
+    const ftsOptIn = TOOL_MANIFEST.filter((t) => t.kind === "fts").length;
+    const diagnostic = TOOL_MANIFEST.filter((t) => t.kind === "diagnostic").length;
+    const writes = TOOL_MANIFEST.filter((t) => t.kind === "write").length;
+    const promptsSrc = await read("src/prompts.ts");
+    const prompts = registeredNames(promptsSrc, "registerPrompt").size;
+    return { allTools, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
   }
 
   it("README total-tool-count badge matches actual registered tool count", async () => {
@@ -270,14 +247,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // reference the shared constant, not an inline string. Catches drift on
   // any newly-shared flag the next time someone forgets.
   it("flags accepted by both serve and serve-http must source help from src/cli-help.ts", async () => {
-    const indexSrc = await read("src/index.ts");
-    const serveStart = indexSrc.indexOf('.command("serve",');
-    const serveHttpStart = indexSrc.indexOf('.command("serve-http"');
+    // v3.6.0-rc.2: commander program.command() calls moved from src/index.ts
+    // to src/cli.ts during the monolith split.
+    const cliSrc = await read("src/cli.ts");
+    const serveStart = cliSrc.indexOf('.command("serve",');
+    const serveHttpStart = cliSrc.indexOf('.command("serve-http"');
     expect(serveStart, "serve subcommand definition not found").toBeGreaterThan(0);
     expect(serveHttpStart, "serve-http subcommand definition not found").toBeGreaterThan(0);
-    const serveBlock = indexSrc.slice(serveStart, serveHttpStart);
-    const afterServeHttp = indexSrc.indexOf(".command(", serveHttpStart + 1);
-    const serveHttpBlock = indexSrc.slice(serveHttpStart, afterServeHttp > 0 ? afterServeHttp : indexSrc.length);
+    const serveBlock = cliSrc.slice(serveStart, serveHttpStart);
+    const afterServeHttp = cliSrc.indexOf(".command(", serveHttpStart + 1);
+    const serveHttpBlock = cliSrc.slice(serveHttpStart, afterServeHttp > 0 ? afterServeHttp : cliSrc.length);
 
     const flagRe = /\.option\(\s*"(--[a-z-]+)"/g;
     const serveFlags = new Set([...serveBlock.matchAll(flagRe)].map((m) => m[1] ?? ""));

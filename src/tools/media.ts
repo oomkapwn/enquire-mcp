@@ -7,15 +7,48 @@ import { findBestMatch } from "./meta.js";
 // Green-field per the v1.5 competitive audit: only obscure forks support
 // canvas, and we now do it natively without coupling to the Obsidian app.
 
+/**
+ * Lightweight summary of a `.canvas` file in the vault.
+ *
+ * Includes node and edge counts so an agent can pick which canvas to dive
+ * into without parsing each file in full.
+ */
 export interface CanvasSummary {
+  /** Vault-relative path. */
   path: string;
+  /** `.canvas`-stripped basename. */
   name: string;
+  /** File size in bytes (0 if the file failed to parse). */
   size_bytes: number;
+  /** ISO-8601 modification timestamp. */
   mtime: string;
+  /** Total nodes in the canvas. 0 on parse failure. */
   node_count: number;
+  /** Total edges in the canvas. 0 on parse failure. */
   edge_count: number;
 }
 
+/**
+ * List Obsidian `.canvas` files (whiteboards) in the vault.
+ *
+ * Canvas is Obsidian's JSON-format whiteboard with positional nodes (text /
+ * file embeds / external URLs / groups) and labeled edges. Per the v1.5
+ * competitive audit, no other Obsidian-MCP indexes them; we parse them
+ * natively without coupling to the Obsidian app. Malformed JSON canvases
+ * surface with `node_count: 0` and `edge_count: 0` rather than poisoning
+ * the listing.
+ *
+ * @param vault - The vault to scan.
+ * @param args - All optional. `folder` restricts the scan. `limit`
+ *   defaults to 100.
+ * @returns A {@link CanvasSummary} array sorted by mtime desc.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const boards = await listCanvases(vault, { folder: "Whiteboards", limit: 20 });
+ * for (const c of boards) console.log(c.path, c.node_count, "nodes");
+ * ```
+ */
 export async function listCanvases(vault: Vault, args: { folder?: string; limit?: number }): Promise<CanvasSummary[]> {
   await vault.ensureExists();
   const limit = args.limit ?? 100;
@@ -54,6 +87,15 @@ export async function listCanvases(vault: Vault, args: { folder?: string; limit?
 // representation it can reason about: which notes are pinned where, what
 // connects them, what's textual vs file-embed vs URL.
 
+/**
+ * Discriminated union of canvas node kinds.
+ *
+ * Five variants: `text` (free-form markdown), `file` (vault note embed —
+ * carries `file_resolved` with the post-`findBestMatch` vault-relative path
+ * or null on broken reference), `link` (external URL), `group` (labeled
+ * container), and `unknown` (preserves the raw `type` and full object for
+ * forward compatibility with future Obsidian canvas extensions).
+ */
 export type CanvasNode =
   | {
       kind: "text";
@@ -104,16 +146,36 @@ export type CanvasNode =
       raw: Record<string, unknown>;
     };
 
+/**
+ * A directed canvas edge between two nodes.
+ *
+ * `from_side` / `to_side` are Obsidian's `"top" | "right" | "bottom" | "left"`
+ * anchor specifiers (passed through as strings — no validation, forward-
+ * compatible with new variants).
+ */
 export interface CanvasEdge {
+  /** Canvas-internal edge ID. */
   id: string;
+  /** Source node ID. */
   from_node: string;
+  /** Source node anchor side (e.g. `"right"`). Omitted if absent. */
   from_side?: string;
+  /** Destination node ID. */
   to_node: string;
+  /** Destination node anchor side. Omitted if absent. */
   to_side?: string;
+  /** Edge label string. Omitted if absent. */
   label?: string;
+  /** Hex / named color. Omitted if absent. */
   color?: string;
 }
 
+/**
+ * Full canvas read result returned by {@link readCanvas}.
+ *
+ * `broken_file_refs` lists `file:` node targets that didn't resolve against
+ * the live vault index — the canvas equivalent of {@link getUnresolvedWikilinks}.
+ */
 export interface ReadCanvasResult {
   path: string;
   name: string;
@@ -128,6 +190,30 @@ export interface ReadCanvasResult {
   broken_file_refs: string[];
 }
 
+/**
+ * Parse a single `.canvas` file into typed nodes + edges.
+ *
+ * Returns a graph representation the agent can reason about: which notes
+ * are pinned where, what's textual vs file-embed vs URL, what edges
+ * connect what. File-node references (`file:` kind) are resolved against
+ * the live vault — `file_resolved` carries the post-{@link findBestMatch}
+ * path or null on a broken reference. Forward-compatible: unknown
+ * `type` values become `kind: "unknown"` rather than throwing.
+ *
+ * @param vault - The vault.
+ * @param args - `path` is the vault-relative path to the canvas
+ *   (with or without `.canvas` extension).
+ * @returns A {@link ReadCanvasResult} with nodes, edges, summary, and
+ *   broken-reference list.
+ * @throws {Error} If `path` is empty, the file is missing, or the JSON
+ *   is malformed.
+ * @throws {VaultPathError} If `path` resolves outside the vault.
+ * @example
+ * ```ts
+ * const c = await readCanvas(vault, { path: "Whiteboards/research.canvas" });
+ * console.log("Files:", c.summary.file, "Broken:", c.broken_file_refs);
+ * ```
+ */
 export async function readCanvas(vault: Vault, args: { path: string }): Promise<ReadCanvasResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");
@@ -286,6 +372,25 @@ export interface PdfSummary {
   mtime: string;
 }
 
+/**
+ * List `.pdf` files in the vault — companion to {@link listCanvases} /
+ * {@link listNotes}.
+ *
+ * PDFs are the #1 non-markdown content kind in real research vaults. Same
+ * privacy filter (`--exclude-glob` / `--read-paths`) applies. Returns
+ * lightweight metadata only — for full text extraction call {@link readPdf}.
+ * Unreadable PDFs are skipped without poisoning the listing.
+ *
+ * @param vault - The vault.
+ * @param args - All optional. `folder` restricts the scan. `limit`
+ *   defaults to 100.
+ * @returns A {@link PdfSummary} array sorted by mtime desc.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const pdfs = await listPdfs(vault, { folder: "Papers", limit: 50 });
+ * ```
+ */
 export async function listPdfs(vault: Vault, args: { folder?: string; limit?: number }): Promise<PdfSummary[]> {
   await vault.ensureExists();
   const limit = args.limit ?? 100;
@@ -318,6 +423,9 @@ export async function listPdfs(vault: Vault, args: { folder?: string; limit?: nu
 // to v2.8+). Supports an optional `pages` slice (1-indexed inclusive range)
 // for partial reads of long documents.
 
+/**
+ * Arguments for {@link readPdf}.
+ */
 export interface ReadPdfArgs {
   /** Vault-relative path to the .pdf file. */
   path: string;
@@ -327,13 +435,32 @@ export interface ReadPdfArgs {
   include_metadata?: boolean;
 }
 
+/**
+ * One page of extracted PDF text.
+ *
+ * `is_empty` true indicates either a blank page or — more commonly — an
+ * image-only page that needs OCR. Drives the `has_text` aggregate on the
+ * envelope.
+ */
 export interface ReadPdfPage {
+  /** 1-indexed page number. */
   page_number: number;
+  /** Extracted text content (may be empty for image-only pages). */
   text: string;
+  /** True when no text could be extracted (likely needs OCR). */
   is_empty: boolean;
+  /** Character count of `text` (post-extraction, post-trim). */
   char_count: number;
 }
 
+/**
+ * Envelope returned by {@link readPdf}.
+ *
+ * `has_text` is the OR across pages — false for image-only scans, which
+ * agents should detect and route through {@link ocrPdf}. `metadata` is
+ * present when `args.include_metadata` is not explicitly false AND the
+ * PDF carries any doc-level metadata.
+ */
 export interface ReadPdfResult {
   path: string;
   name: string;
@@ -358,6 +485,35 @@ export interface ReadPdfResult {
   total_page_count: number;
 }
 
+/**
+ * Extract text from a PDF page-by-page, with optional page-range slicing
+ * and metadata.
+ *
+ * Image-only / scanned PDFs surface `has_text: false` — agents should
+ * detect this and route through {@link ocrPdf} for OCR. Lazy-loads
+ * `pdfjs-dist` (optional dep) so markdown-only users pay zero cost.
+ * Out-of-range `pages` slice arguments are clamped rather than thrown
+ * (matches `Array.prototype.slice` semantics).
+ *
+ * @param vault - The vault.
+ * @param args - {@link ReadPdfArgs}. `path` required.
+ * @returns A {@link ReadPdfResult} with per-page text, full-text join,
+ *   metadata, and original `total_page_count`.
+ * @throws {Error} If `path` is empty, the file is missing or excluded,
+ *   or `pdfjs-dist` is not installed.
+ * @throws {VaultPathError} If `path` resolves outside the vault.
+ * @example
+ * ```ts
+ * // Read pages 1-5 of a long paper
+ * const r = await readPdf(vault, {
+ *   path: "Papers/2024-rag-survey.pdf",
+ *   pages: [1, 5],
+ *   include_metadata: true
+ * });
+ * if (!r.has_text) console.log("Scanned PDF — try ocrPdf()");
+ * console.log(r.metadata?.title, r.full_text.slice(0, 200));
+ * ```
+ */
 export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");
@@ -429,6 +585,13 @@ export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfR
 // the PDF retrieval story. Tesseract.js + @napi-rs/canvas are
 // optionalDependencies — clean install-hint error if missing.
 
+/**
+ * Arguments for {@link ocrPdf}.
+ *
+ * `lang` supports Tesseract's `+`-joined multi-language packs for mixed
+ * scans. `scale` is the render DPI multiplier — higher gives better
+ * accuracy on small text but uses more memory and is slower.
+ */
 export interface OcrPdfArgs {
   /** Vault-relative path to the .pdf file. */
   path: string;
@@ -447,15 +610,33 @@ export interface OcrPdfArgs {
   scale?: number;
 }
 
+/**
+ * One OCR'd page of a PDF.
+ *
+ * `confidence` is Tesseract's mean per-word confidence for this page,
+ * 0-100. Low confidence (<60) typically indicates a rough render — try
+ * increasing `scale` or providing a better-matched `lang`.
+ */
 export interface OcrPdfPage {
+  /** 1-indexed page number. */
   page_number: number;
+  /** OCR'd text content. */
   text: string;
+  /** True when OCR returned no text (blank page or render failure). */
   is_empty: boolean;
+  /** Character count of `text`. */
   char_count: number;
   /** Tesseract's mean confidence for this page, 0-100. */
   confidence: number;
 }
 
+/**
+ * Envelope returned by {@link ocrPdf}.
+ *
+ * `mean_confidence` is the average across pages with text (NaN if all
+ * empty). `langs` echoes the language(s) used so the caller can audit
+ * what was actually tried (especially relevant when defaulting to `'eng'`).
+ */
 export interface OcrPdfResult {
   path: string;
   name: string;
@@ -472,6 +653,34 @@ export interface OcrPdfResult {
   langs: string;
 }
 
+/**
+ * Run Tesseract OCR over a PDF's page bitmaps — the image-only / scanned
+ * counterpart to {@link readPdf}.
+ *
+ * When {@link readPdf} returns `has_text: false`, the PDF is image-only;
+ * this function renders each page via `@napi-rs/canvas` and runs Tesseract
+ * over the bitmap. Tesseract.js + @napi-rs/canvas are `optionalDependencies`
+ * — without them the function surfaces a clean install-hint error rather
+ * than crashing. Costs ~1-3s/page on a modern laptop at default scale.
+ *
+ * @param vault - The vault.
+ * @param args - {@link OcrPdfArgs}. `path` required.
+ * @returns An {@link OcrPdfResult} with per-page text, confidence scores,
+ *   and aggregate statistics.
+ * @throws {Error} If `path` is empty / missing / excluded, or the OCR
+ *   optional deps aren't installed.
+ * @throws {VaultPathError} If `path` resolves outside the vault.
+ * @example
+ * ```ts
+ * const r = await ocrPdf(vault, {
+ *   path: "Papers/scanned-1978.pdf",
+ *   lang: "eng+fra",
+ *   pages: [1, 10],
+ *   scale: 3
+ * });
+ * console.log(`OCR confidence: ${r.mean_confidence}/100`);
+ * ```
+ */
 export async function ocrPdf(vault: Vault, args: OcrPdfArgs): Promise<OcrPdfResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");

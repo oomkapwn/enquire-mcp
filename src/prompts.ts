@@ -1,7 +1,54 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+/**
+ * Register all enquire-mcp prompt templates on the given MCP server.
+ *
+ * Prompts are agent-side orchestration recipes — each one expands into a
+ * structured `user`-role message that tells the LLM how to chain
+ * `obsidian_*` tools to accomplish a higher-level workflow (weekly review,
+ * Karpathy-style wiki maintenance, captcha-style ingest, sub-question
+ * decomposition, etc.). No server-side LLM calls happen here; the prompts
+ * are pure prompt engineering that the calling client surfaces to its own
+ * model.
+ *
+ * Total: 19 prompts grouped roughly into:
+ * - Day-to-day vault hygiene (`summarize_recent_edits`, `weekly_review`,
+ *   `monthly_review`, `extract_todos`, `process_inbox`, `consolidate_tags`,
+ *   `find_orphans`, `find_duplicates`)
+ * - Wiki maintenance (`lint_wiki`, `vault_synth`, `vault_wiki_compile`,
+ *   `vault_lint_extended`, `vault_synthesis_page`)
+ * - Retrieval orchestration (`search_with_query_expansion`, `vault_research`,
+ *   `vault_persona_search`)
+ * - Knowledge capture / automation (`vault_capture`, `vault_automation_setup`)
+ * - Reading-list helpers (`review_tag`)
+ *
+ * Called once at server startup by `tool-registry.ts`.
+ *
+ * @param server - The MCP server to register prompts on. Mutated in place.
+ * @example
+ * ```ts
+ * const server = new McpServer({ name: "enquire-mcp", version: "3.6.0" });
+ * registerPrompts(server);
+ * registerTools(server, vault, ctx);
+ * ```
+ */
 export function registerPrompts(server: McpServer): void {
+  /**
+   * Summarize recent vault activity for the user.
+   *
+   * Use case: "What was I working on this morning?" / "Catch me up after I
+   * step away for a day". Chains `obsidian_get_recent_edits` (window-
+   * filtered list) → `obsidian_read_note` on the top-3 results → produces
+   * one paragraph per note with TODOs quoted verbatim, plus a one-sentence
+   * "what to pick up next" suggestion.
+   *
+   * Args: `since_minutes` (string, optional, default `"720"` = last 12 hours).
+   *
+   * @example
+   * The client invokes this with `since_minutes="60"` to get a one-hour catch-up.
+   */
+  // === summarize_recent_edits ==========================================
   server.registerPrompt(
     "summarize_recent_edits",
     {
@@ -29,6 +76,20 @@ export function registerPrompts(server: McpServer): void {
     })
   );
 
+  /**
+   * Review every note carrying a specific tag and surface unresolved threads.
+   *
+   * Use case: "What's the state of #project-foo?" / "All the open questions
+   * across my #reading list". Pulls notes via `obsidian_list_notes` with the
+   * tag filter, reads each, extracts open questions / blocking decisions /
+   * TODOs, and groups recurring themes across the set.
+   *
+   * Args: `tag` (string, required, leading `#` optional).
+   *
+   * @example
+   * Invoke with `tag="project-foo"` to summarize state of a project.
+   */
+  // === review_tag ======================================================
   server.registerPrompt(
     "review_tag",
     {
@@ -56,6 +117,19 @@ export function registerPrompts(server: McpServer): void {
     })
   );
 
+  /**
+   * Identify orphan notes — notes with no inbound links, candidates for
+   * archiving or wiring up to a hub note.
+   *
+   * Use case: vault hygiene pass. Enumerates with `obsidian_list_notes`,
+   * checks `obsidian_get_backlinks` per note, and surfaces the zero-inbound
+   * set sorted by mtime ascending (oldest stale orphans first). For each
+   * orphan, proposes archive / hub-link / delete based on frontmatter +
+   * a skim of the body.
+   *
+   * Args: `folder` (string, optional — scope the scan to a subfolder).
+   */
+  // === find_orphans ====================================================
   server.registerPrompt(
     "find_orphans",
     {
@@ -83,6 +157,17 @@ export function registerPrompts(server: McpServer): void {
     })
   );
 
+  /**
+   * Weekly review of vault activity — what shipped, what's open, what's stuck.
+   *
+   * Use case: end-of-week reflection. Aggregates the past 7 days
+   * (`since_minutes=10080`), groups by frontmatter `tags`, reads top-2
+   * notes per tag-group, and produces "Shipped / Open / Stuck" bullets
+   * plus a 2-sentence reflection on the actual-vs-intended focus.
+   *
+   * Args: `folder` (string, optional — restrict the review to a subfolder).
+   */
+  // === weekly_review ===================================================
   server.registerPrompt(
     "weekly_review",
     {
@@ -113,6 +198,18 @@ export function registerPrompts(server: McpServer): void {
     })
   );
 
+  /**
+   * Extract every TODO / FIXME / QUESTION marker across the vault, grouped
+   * by note.
+   *
+   * Use case: "show me everything I've punted on". Runs three
+   * `obsidian_search_text` passes (one per marker), optionally cross-filters
+   * by tag, reads each unique source note, pulls the literal marker lines,
+   * and ends with a highest-leverage next-action pick.
+   *
+   * Args: `folder` (string, optional), `tag` (string, optional).
+   */
+  // === extract_todos ===================================================
   server.registerPrompt(
     "extract_todos",
     {
@@ -141,6 +238,18 @@ ${tag ? "5" : "4"}. End with a one-line "highest-leverage next action" pick — 
     })
   );
 
+  /**
+   * Process an inbox folder — for each note propose where it should live
+   * and which existing notes link to it.
+   *
+   * Use case: GTD-style inbox triage. Lists every note in the inbox,
+   * checks inbound + outbound links per note, and proposes one of: move /
+   * merge into existing / promote to hub / archive. Read-only by design —
+   * proposes only, the user runs the actual write tools.
+   *
+   * Args: `folder` (string, required — the inbox folder, e.g. `"00_Inbox"`).
+   */
+  // === process_inbox ===================================================
   server.registerPrompt(
     "process_inbox",
     {
@@ -176,6 +285,21 @@ ${tag ? "5" : "4"}. End with a one-line "highest-leverage next action" pick — 
     })
   );
 
+  /**
+   * Audit the tag forest and propose consolidations for near-duplicate
+   * variants.
+   *
+   * Use case: tag drift cleanup. Finds clusters like
+   * `#productivity` / `#productive` / `#Productivity` (case drift),
+   * `book-notes` / `booknotes` / `book_notes` (separator drift),
+   * `project` / `projects` (pluralization drift), or
+   * `work/clients` / `clients` (hierarchy drift). Proposes a single
+   * canonical tag per cluster. Read-only — no notes modified.
+   *
+   * Args: `min_count` (string, optional — minimum tag usage threshold,
+   * default `"2"`).
+   */
+  // === consolidate_tags ================================================
   server.registerPrompt(
     "consolidate_tags",
     {
@@ -210,6 +334,19 @@ DO NOT modify any notes. This is read-only analysis.`
     })
   );
 
+  /**
+   * Find clusters of near-duplicate notes — merge candidates.
+   *
+   * Use case: vault consolidation. Walks notes via `obsidian_list_notes`,
+   * runs `obsidian_find_similar` per candidate, builds mutual-top-5
+   * clusters, then verifies content overlap on the top-2 of each cluster
+   * (don't trust the structural signal alone). Proposes merge / split /
+   * leave per cluster. Read-only.
+   *
+   * Args: `folder` (string, optional), `min_score` (string, optional,
+   * default `"1.5"` — moderately tight similarity threshold).
+   */
+  // === find_duplicates =================================================
   server.registerPrompt(
     "find_duplicates",
     {
@@ -242,6 +379,21 @@ DO NOT modify any notes. Read-only.`
     })
   );
 
+  /**
+   * Karpathy LLM-Wiki lint workflow — comprehensive wiki health audit.
+   *
+   * Use case: Karpathy-style PKM maintenance pass. Orchestrates
+   * `obsidian_lint_wiki` (orphans + broken links + stubs + stale + concept
+   * candidates) + `obsidian_open_questions` (deferred threads) +
+   * `obsidian_paper_audit` (missing citations). Synthesizes the top 5
+   * highest-leverage fixes across all three reports with concrete
+   * `obsidian_*` calls. Read-only — proposes only.
+   *
+   * Reference: {@link https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f}.
+   *
+   * Args: `folder` (string, optional — restrict the lint to a subfolder).
+   */
+  // === lint_wiki =======================================================
   server.registerPrompt(
     "lint_wiki",
     {
@@ -285,6 +437,18 @@ DO NOT actually modify any notes. This is a proposal pass — the user runs the 
     })
   );
 
+  /**
+   * 30-day vault review — themes, what shipped, what stalled.
+   *
+   * Use case: end-of-month reflection. Calls `obsidian_stats` for vault
+   * health, then `obsidian_get_recent_edits` over a 30-day window
+   * (`since_minutes=43200`). Groups by tags, identifies through-lines,
+   * surfaces notes that look stalled (touched once early in the month),
+   * and compares against the previous month if possible.
+   *
+   * Args: `folder` (string, optional).
+   */
+  // === monthly_review ==================================================
   server.registerPrompt(
     "monthly_review",
     {
@@ -323,6 +487,21 @@ DO NOT actually modify any notes. This is a proposal pass — the user runs the 
   // the user's question N ways, calls obsidian_search per paraphrase, then
   // RRF-fuses the results client-side. Boosts recall on terse / ambiguous
   // queries by 5-15 NDCG@10 vs single-pass search. Pure prompt eng.
+  /**
+   * High-recall retrieval via multi-query expansion + client-side RRF
+   * fusion.
+   *
+   * Use case: terse or ambiguous queries where single-pass search misses
+   * the right answer. The agent paraphrases the query 3-5 ways (mix of
+   * keyword-focused, semantic-focused, step-back, optionally bilingual),
+   * calls `obsidian_search` per paraphrase, then reciprocal-rank-fuses the
+   * results client-side (no server-side LLM call — violates the MCP
+   * boundary). Boosts recall by 5-15 NDCG@10 on ambiguous queries.
+   *
+   * Args: `query` (string, required), `n_paraphrases` (string, optional,
+   * default `"4"`), `limit` (string, optional, default `"10"`).
+   */
+  // === search_with_query_expansion =====================================
   server.registerPrompt(
     "search_with_query_expansion",
     {
@@ -371,6 +550,24 @@ The goal is recall + observability: the user sees not just the answer but WHY ea
   // `synth` patterns that close the loop. Position: enquire-mcp = the
   // open-source backend for Karpathy-style LLM Wikis on top of Obsidian.
 
+  /**
+   * Karpathy LLM-Wiki **ingest** workflow — synthesize wiki page(s) from
+   * an external source.
+   *
+   * Use case: paste a paragraph / arXiv abstract / URL transcript and have
+   * the agent extract 3-7 concepts, reconcile each against existing vault
+   * notes (EXISTS → append / PARTIAL → new note with wikilink / NEW →
+   * fresh wiki page), validate each draft via `obsidian_validate_note_proposal`,
+   * then output a transactional plan for user approval before writing.
+   * Every claim is cited with the source quote.
+   *
+   * Distinct from `vault_synthesis_page` which synthesizes from existing
+   * vault content rather than external input.
+   *
+   * Args: `source` (string, required — the content to ingest),
+   * `target_folder` (string, optional — default `"Wiki/"`).
+   */
+  // === vault_synth =====================================================
   server.registerPrompt(
     "vault_synth",
     {
@@ -428,6 +625,20 @@ This is the Karpathy LLM-Wiki ingest loop applied to Obsidian. Goal: knowledge t
     })
   );
 
+  /**
+   * Karpathy LLM-Wiki **compile** workflow — regenerate `index.md` +
+   * append to `log.md`.
+   *
+   * Use case: weekly maintenance run, or post-batch-ingest. Scans
+   * recently-changed wiki notes, groups by tags/folder into clusters,
+   * regenerates the top-level index with table of contents + concept
+   * clusters + "Recent" section, then appends a chronological compile-log
+   * entry. Idempotent — safe to re-run.
+   *
+   * Args: `since_minutes` (string, optional, default `"10080"` = 7 days),
+   * `wiki_folder` (string, optional, default `"Wiki/"`).
+   */
+  // === vault_wiki_compile ==============================================
   server.registerPrompt(
     "vault_wiki_compile",
     {
@@ -473,6 +684,26 @@ Idempotent. Re-run weekly.`
     })
   );
 
+  /**
+   * Deeper-than-structural vault lint — contradictions, stale claims,
+   * missing cross-references.
+   *
+   * Use case: monthly deep audit on top of `lint_wiki`'s structural pass.
+   * Four phases:
+   * 1. Structural lint via `obsidian_lint_wiki`.
+   * 2. Semantic contradictions: paraphrase claims to their negation,
+   *    search for multi-ranker consensus on the opposite (`min_signals=2`).
+   * 3. Stale claims: scan body for date patterns + present-tense markers
+   *    ("current" / "latest" / "now"), flag if > 6 months old.
+   * 4. Missing cross-references: titles mentioned in plain text without
+   *    `[[brackets]]`.
+   *
+   * Output is a single markdown report with sections per phase + top 5
+   * highest-leverage fixes.
+   *
+   * Args: `folder` (string, optional).
+   */
+  // === vault_lint_extended =============================================
   server.registerPrompt(
     "vault_lint_extended",
     {
@@ -515,6 +746,25 @@ Output: a single markdown report with sections per phase. End with the top 5 hig
     })
   );
 
+  /**
+   * Mem.ai-style "write don't organize" capture — file a quick thought
+   * intelligently with user approval.
+   *
+   * Use case: pasting a transient thought without manually filing it.
+   * Decision tree:
+   * 1. Daily? (conversational / time-bound) → append to today's daily note.
+   * 2. Continues an existing note? (top hit score > 0.05) → propose
+   *    append.
+   * 3. New wiki page? (1-3 distinct concepts) → run `vault_synth`.
+   * 4. Inbox catch-all → `Inbox/<timestamp>-<3-word-slug>.md`.
+   *
+   * Always validates via `obsidian_validate_note_proposal`, shows the diff,
+   * asks for user approval before writing.
+   *
+   * Args: `text` (string, required), `target_hint` (string, optional —
+   * `"daily"` / `"new-note"` / a path/topic).
+   */
+  // === vault_capture ===================================================
   server.registerPrompt(
     "vault_capture",
     {
@@ -568,6 +818,20 @@ Goal: zero filing burden on the user. The AI does the indexing.`
   // existing tools. Pure agent-side: no server-side state, no LLM calls.
   // HTTP transport is a separate larger-scope sprint (planned post v2.5).
 
+  /**
+   * Khoj-style persona-scoped vault search — folder-scoped retrieval with
+   * persona-tuned response framing.
+   *
+   * Use case: distinct "agents" over distinct vault zones — "research-
+   * assistant" over `Research/` (cites sources, ignores drafts) vs.
+   * "editor" over `Drafts/` (flags contradictions, surfaces structure).
+   * Pure prompt template — orchestrates existing search tools with a
+   * fixed scope and persona-specific instructions.
+   *
+   * Args: `persona` (string, required — persona name + traits),
+   * `folder` (string, required), `query` (string, required).
+   */
+  // === vault_persona_search ============================================
   server.registerPrompt(
     "vault_persona_search",
     {
@@ -606,6 +870,21 @@ Stay in the persona for the entire response. If asked something out-of-scope (e.
     })
   );
 
+  /**
+   * Khoj-style automation setup — wire up a cron'd vault query that lands
+   * in a daily note or digest.
+   *
+   * Use case: "every Monday at 9am, surface last week's edits and
+   * unresolved questions". Bridges enquire-mcp tools + the host's
+   * `scheduled-tasks` MCP (or any cron tool the agent has access to).
+   * Five steps: parse intent → propose JSON spec → user confirms →
+   * register via `mcp__scheduled-tasks__create_scheduled_task` →
+   * smoke-run once to verify output shape.
+   *
+   * Args: `intent` (string, required — natural-language description of
+   * the automation, including cadence + source + sink).
+   */
+  // === vault_automation_setup ==========================================
   server.registerPrompt(
     "vault_automation_setup",
     {
@@ -664,6 +943,24 @@ This is the Khoj automation pattern translated to MCP: research that comes to yo
   // v3.1.0 — sub-question decomposition / agentic retrieval. Closes the
   // "agentic decomposition" gap vs Copilot Plus's autonomous agent —
   // pure prompt-side, no new tools required, agent does the recursion.
+  /**
+   * Multi-hop research via sub-question decomposition — agentic-RAG
+   * pattern translated to vault search.
+   *
+   * Use case: complex questions that hide multiple lookups (e.g. "what
+   * are the trade-offs between BM25 and embeddings for my use case?").
+   * Single-shot RRF retrieves the most plausible chunk but misses the
+   * chunks that answer the sub-parts. Decomposition surfaces them all
+   * and forces evidence-grounded synthesis.
+   *
+   * Workflow: decompose → per-sub `obsidian_search` (or `obsidian_hyde_search`
+   * if available) → extract atomic evidence → compose answer with citations
+   * → flag any sub-question the vault didn't answer as an "open question".
+   *
+   * Args: `question` (string, required — the complex / multi-hop question),
+   * `max_sub_questions` (string, optional, default `"3-5"`).
+   */
+  // === vault_research ==================================================
   server.registerPrompt(
     "vault_research",
     {
@@ -721,6 +1018,24 @@ Why this beats single-shot search: complex questions hide multiple lookups. Sing
   // v3.1.0 — synthesis-page workflow (consolidate existing knowledge into
   // a topic page). Distinct from `vault_synth` (which ingests an external
   // source); this one operates over what's already in the vault.
+  /**
+   * Karpathy LLM-Wiki **synthesis** workflow — consolidate scattered
+   * existing notes into a single topic page.
+   *
+   * Use case: when the vault has enough scattered notes about a topic
+   * that a consolidated overview would help. Surveys via
+   * `obsidian_search`, extracts per-source bullets (definition,
+   * comparison, examples, caveats, see-also), reconciles across sources
+   * (deduplicate, flag contradictions), composes a structured wiki page
+   * with citations, validates, asks user, writes via `obsidian_create_note`.
+   *
+   * Distinct from `vault_synth` (which ingests external sources rather
+   * than synthesizing existing vault content).
+   *
+   * Args: `topic` (string, required), `target_path` (string, optional,
+   * default `"Wiki/<Topic>.md"`).
+   */
+  // === vault_synthesis_page ============================================
   server.registerPrompt(
     "vault_synthesis_page",
     {

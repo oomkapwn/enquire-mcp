@@ -5,14 +5,53 @@ import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
 import { extractFrontmatterTagsLower, resolveTarget } from "./write.js";
 
+/**
+ * Lightweight metadata row used by listing endpoints ({@link listNotes},
+ * {@link getRecentEdits}).
+ *
+ * No `content` — for the body, follow up with {@link readNote}.
+ */
 export interface NoteSummary {
+  /** `.md`-stripped basename of the note. */
   title: string;
+  /** Vault-relative path. */
   path: string;
+  /** Parsed YAML frontmatter (may be empty `{}`). */
   frontmatter: Record<string, unknown>;
+  /** Tags (frontmatter + inline `#tag`), de-duplicated, original case. */
   tags: string[];
+  /** ISO-8601 modification timestamp. */
   mtime: string;
 }
 
+/**
+ * List markdown notes in the vault, optionally filtered by tag / folder /
+ * modification date.
+ *
+ * Sorted by mtime descending (most recent first). Cheap metadata view —
+ * frontmatter and tags only, no body. Use {@link readNote} to fetch the
+ * full content for a specific result.
+ *
+ * @param vault - The vault to scan.
+ * @param args - All optional. `tag` matches against both frontmatter and
+ *   inline tags (normalized — leading `#` and case ignored). `folder`
+ *   restricts to a subdirectory. `since_date` is an ISO 8601 date
+ *   (`YYYY-MM-DD`) — only notes modified at-or-after are returned.
+ *   `limit` defaults to 50.
+ * @returns A {@link NoteSummary} array sorted by mtime desc, truncated to
+ *   `limit`.
+ * @throws {Error} If `since_date` is not a parseable ISO 8601 date.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const drafts = await listNotes(vault, {
+ *   tag: "draft",
+ *   folder: "Posts",
+ *   since_date: "2026-01-01",
+ *   limit: 20
+ * });
+ * ```
+ */
 export async function listNotes(
   vault: Vault,
   args: { tag?: string; folder?: string; since_date?: string; limit?: number }
@@ -45,30 +84,92 @@ export async function listNotes(
   return out;
 }
 
+/**
+ * Full-fidelity note representation returned by `readNote(..., format: "full")`.
+ *
+ * `content` is the body (frontmatter stripped — frontmatter is exposed
+ * separately in the `frontmatter` field).
+ */
 export interface NoteReadFull {
+  /** Vault-relative path. */
   path: string;
+  /** `.md`-stripped basename. */
   title: string;
+  /** Markdown body, frontmatter stripped. */
   content: string;
+  /** Parsed YAML frontmatter (may be empty `{}`). */
   frontmatter: Record<string, unknown>;
+  /** All `[[wikilinks]]` in the body, with target / alias / section / block. */
   wikilinks: Wikilink[];
+  /** All `![[embeds]]` in the body (images, transcludes, etc.). */
   embeds: Embed[];
+  /** Tags (frontmatter + inline), de-duplicated. */
   tags: string[];
+  /** ISO-8601 modification timestamp. */
   mtime: string;
 }
 
+/**
+ * Document-map projection returned by `readNote(..., format: "map")`.
+ *
+ * Headings + frontmatter keys + counts only — no body. Lets the agent plan
+ * a surgical edit (target a specific heading, count outbound links)
+ * without paying token cost for the full content.
+ */
 export interface NoteReadMap {
+  /** Vault-relative path. */
   path: string;
+  /** `.md`-stripped basename. */
   title: string;
+  /** Discriminator — always `"map"` for this variant. */
   format: "map";
+  /** Top-level keys present in frontmatter (no values — values may be PII). */
   frontmatter_keys: string[];
+  /** ATX headings (`#`, `##`, ...). 1-based line numbers. Code-fence aware. */
   headings: Array<{ level: number; text: string; line: number }>;
+  /** Total `[[wikilinks]]` in the body. */
   wikilinks_count: number;
+  /** Total `![[embeds]]` in the body. */
   embeds_count: number;
+  /** Tags (frontmatter + inline), de-duplicated. */
   tags: string[];
+  /** ISO-8601 modification timestamp. */
   mtime: string;
+  /** UTF-8 byte length of the full file (frontmatter + body). */
   byte_size: number;
 }
 
+/**
+ * Read a single note, either full-body or as a document-map projection.
+ *
+ * The `"map"` format is the recommended preflight call when an agent wants
+ * to plan an edit but doesn't yet need the full body — it returns headings,
+ * frontmatter keys, and counts in a fraction of the tokens. Switch to
+ * `"full"` for the actual content.
+ *
+ * Resolves notes by exact path (`path: "Sub/Note.md"`) or by title
+ * (`title: "Note"`) — title resolution uses the same fuzzy-match path as
+ * wikilinks.
+ *
+ * @param vault - The vault to read from.
+ * @param args - One of `path` or `title` is required. `format` defaults to
+ *   `"full"`.
+ * @returns Either a {@link NoteReadFull} or {@link NoteReadMap} depending on
+ *   `args.format`. Use the `format` discriminator to narrow.
+ * @throws {Error} If neither `path` nor `title` is provided, or the note
+ *   cannot be resolved.
+ * @throws {VaultPathError} If `path` resolves outside the vault.
+ * @example
+ * ```ts
+ * // Plan an edit — cheap, no body
+ * const map = await readNote(vault, { path: "Reference/Foo.md", format: "map" });
+ * console.log(map.headings); // → [{ level: 1, text: "Foo", line: 1 }, ...]
+ *
+ * // Fetch full body
+ * const full = await readNote(vault, { title: "Foo" });
+ * console.log(full.content);
+ * ```
+ */
 export async function readNote(
   vault: Vault,
   args: { path?: string; title?: string; format?: "full" | "map" }
@@ -128,6 +229,34 @@ function extractHeadings(body: string): Array<{ level: number; text: string; lin
   return out;
 }
 
+/**
+ * Resolve an Obsidian wikilink string to a concrete vault file (or report
+ * unresolved).
+ *
+ * Accepts the full wikilink syntax (`[[Target]]`, `[[Target|alias]]`,
+ * `[[Target#section]]`, `[[Target^block]]`, `![[Embedded]]`) and parses out
+ * the components. Resolution uses the project's fuzzy-match path — exact
+ * basename, then in-folder, then global — same algorithm Obsidian uses
+ * client-side. Pass `from_note` to bias resolution toward the same folder.
+ *
+ * @param vault - The vault to resolve against.
+ * @param args - `wikilink` is required and may include or omit the
+ *   `[[` ... `]]` brackets. `from_note` (vault-relative path) is the
+ *   source note — used for folder-local resolution priority.
+ *   `include_content` defaults to `true`; set false to skip the body read.
+ * @returns `{ found, path, title, content, section, block, alias }`. When
+ *   `found` is false all path/title/content are null but section/block/alias
+ *   are still parsed (so the agent can report "broken link to
+ *   `[[Foo#Bar]]`").
+ * @example
+ * ```ts
+ * const r = await resolveWikilink(vault, {
+ *   wikilink: "[[Hybrid Retrieval#BM25|the BM25 part]]",
+ *   from_note: "Posts/2026/Article.md"
+ * });
+ * if (r.found) console.log(r.path, r.section, r.alias);
+ * ```
+ */
 export async function resolveWikilink(
   vault: Vault,
   args: { wikilink: string; from_note?: string; include_content?: boolean }
@@ -177,6 +306,25 @@ export async function resolveWikilink(
   };
 }
 
+/**
+ * Recently-modified notes — the "what changed lately" view.
+ *
+ * Lighter-weight than {@link listNotes} when the caller doesn't need tag
+ * filtering. Sorted by mtime descending. Use `since_minutes` for tight
+ * windows ("what did I edit in the last hour?") rather than `since_date`.
+ *
+ * @param vault - The vault to scan.
+ * @param args - All optional. `since_minutes` is a sliding window in
+ *   minutes; omit for "everything, newest first". `limit` defaults to 20.
+ *   `folder` restricts the scan.
+ * @returns A {@link NoteSummary} array sorted by mtime desc.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * // What did I edit in the last 2 hours?
+ * const recent = await getRecentEdits(vault, { since_minutes: 120, limit: 10 });
+ * ```
+ */
 export async function getRecentEdits(
   vault: Vault,
   args: { since_minutes?: number; limit?: number; folder?: string }
@@ -204,14 +352,51 @@ export async function getRecentEdits(
   return out;
 }
 
+/**
+ * One backlink hit — a note that links to the target.
+ *
+ * `count` is how many distinct links from that note point at the target
+ * (a note can link to the same target multiple times). `snippets` includes
+ * up to 2 context excerpts showing where the link appears.
+ */
 export interface BacklinkHit {
+  /** Vault-relative path of the linking note. */
   path: string;
+  /** `.md`-stripped basename for display. */
   title: string;
+  /** Number of distinct links from this note to the target. Sort key (desc). */
   count: number;
+  /** Up to 2 context excerpts showing the link in situ. */
   snippets: string[];
+  /** Whether the links are wikilinks, embeds, or a mix. */
   link_kind: "wikilink" | "embed" | "mixed";
 }
 
+/**
+ * Find every note that links to the target — the "who references this?"
+ * query.
+ *
+ * Scans the full vault, so cost is O(N notes × parse). Use {@link getNoteNeighbors}
+ * if you also need outbound links + tag siblings in one call. Sorted by
+ * `count` desc (most-linking notes first).
+ *
+ * @param vault - The vault to search.
+ * @param args - One of `path` or `title` is required to identify the target.
+ *   `limit` defaults to 50. `include_embeds` defaults to `true` —
+ *   set false to count only `[[wikilinks]]` and skip `![[embeds]]`.
+ * @returns A {@link BacklinkHit} array sorted by `count` desc.
+ * @throws {Error} If the target can't be resolved.
+ * @example
+ * ```ts
+ * const backlinks = await getBacklinks(vault, {
+ *   path: "Concepts/Vector Embeddings.md",
+ *   limit: 25
+ * });
+ * for (const b of backlinks) {
+ *   console.log(`${b.path} links ${b.count}x:`, b.snippets);
+ * }
+ * ```
+ */
 export async function getBacklinks(
   vault: Vault,
   args: { path?: string; title?: string; limit?: number; include_embeds?: boolean }
@@ -261,6 +446,29 @@ export async function getBacklinks(
   return hits.slice(0, limit);
 }
 
+/**
+ * Run a Dataview-style DQL query against the vault.
+ *
+ * Parses the input with the project's DQL frontend (see `src/dql.ts`) and
+ * executes against the live vault index. Supports a subset of Dataview's
+ * syntax: `TABLE` / `LIST` projections, `WHERE` clauses, `FROM "folder"` /
+ * `FROM #tag` sources, `SORT`, `LIMIT`, `GROUP BY`. No formula evaluator —
+ * pure field projection + boolean filters (formula evaluator deferred per
+ * v3.6.0 non-goals).
+ *
+ * @param vault - The vault to query.
+ * @param args - `query` is the DQL string.
+ * @returns `{ query, rows }` — `rows` is an array of objects keyed by the
+ *   projected fields.
+ * @throws {Error} If the DQL fails to parse or references an unknown source.
+ * @example
+ * ```ts
+ * const r = await dataviewQuery(vault, {
+ *   query: 'TABLE status, mtime FROM "Posts" WHERE status = "draft" SORT mtime DESC'
+ * });
+ * for (const row of r.rows) console.log(row);
+ * ```
+ */
 export async function dataviewQuery(
   vault: Vault,
   args: { query: string }
@@ -274,18 +482,54 @@ export async function dataviewQuery(
   return { query: args.query, rows };
 }
 
+/**
+ * One unresolved (broken) wikilink — a `[[Target]]` that doesn't point to
+ * any file in the vault.
+ *
+ * `line` + `snippet` give the agent enough context to fix the link in-place.
+ */
 export interface UnresolvedWikilink {
+  /** Note containing the broken link. */
   from_path: string;
+  /** Link target as written (e.g. `"Foo"`, `"Sub/Bar"`). */
   target: string;
+  /** Raw inner-bracket text including any `|alias` / `#section` / `^block`. */
   raw: string;
+  /** Whether the link is a normal `[[wikilink]]` or an `![[embed]]`. */
   kind: "wikilink" | "embed";
+  /** Display alias, or null if absent. */
   alias: string | null;
+  /** `#section` anchor, or null if absent. */
   section: string | null;
+  /** `^block` anchor, or null if absent. */
   block: string | null;
+  /** 1-based line number where the broken link appears. */
   line: number;
+  /** ~120-char excerpt centered on the link. */
   snippet: string;
 }
 
+/**
+ * Find every wikilink in the vault that doesn't resolve to a real file —
+ * the "broken links" report.
+ *
+ * Useful for housekeeping: detecting moved/deleted notes, typos, or
+ * orphaned `[[Future Note]]` placeholders. Cost is O(N notes × outbound).
+ *
+ * @param vault - The vault to scan.
+ * @param args - All optional. `folder` restricts the source scan (broken
+ *   links are still resolved against the full vault). `include_embeds`
+ *   defaults to `true`. `limit` defaults to 200 — early-exits on hit count.
+ * @returns Sorted in scan order (mtime desc per `vault.listMarkdown`).
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const broken = await getUnresolvedWikilinks(vault, { limit: 50 });
+ * for (const b of broken) {
+ *   console.log(`${b.from_path}:${b.line} → [[${b.target}]]`);
+ * }
+ * ```
+ */
 export async function getUnresolvedWikilinks(
   vault: Vault,
   args: { folder?: string; include_embeds?: boolean; limit?: number }
@@ -327,17 +571,54 @@ export async function getUnresolvedWikilinks(
   return out;
 }
 
+/**
+ * One outbound link from a source note. Both resolved and unresolved
+ * variants share this shape — `resolved_path` is null when the target is
+ * broken (and `include_unresolved` was true).
+ */
 export interface OutboundLink {
+  /** Raw inner-bracket text. */
   raw: string;
+  /** Link target as written. */
   target: string;
+  /** Wikilink vs. embed. */
   kind: "wikilink" | "embed";
+  /** Display alias, or null. */
   alias: string | null;
+  /** `#section` anchor, or null. */
   section: string | null;
+  /** `^block` anchor, or null. */
   block: string | null;
+  /** Vault-relative path of the resolved target, or null if unresolved. */
   resolved_path: string | null;
+  /** `.md`-stripped basename of the resolved target, or null. */
   resolved_title: string | null;
 }
 
+/**
+ * List every link emanating from a single note, with resolved targets.
+ *
+ * The "outbound" complement to {@link getBacklinks}. Useful for building a
+ * link-graph view of a note's neighborhood without paying for the inbound
+ * scan. Resolution uses the same fuzzy match as {@link resolveWikilink},
+ * biased toward the source note's folder.
+ *
+ * @param vault - The vault.
+ * @param args - One of `path` or `title` is required. `include_embeds`
+ *   defaults to `true`. `include_unresolved` defaults to `true` — set
+ *   false to filter out broken targets.
+ * @returns `{ from_path, from_title, links }` — `links` preserves the
+ *   order links appear in the source note.
+ * @throws {Error} If the source note can't be resolved.
+ * @example
+ * ```ts
+ * const r = await getOutboundLinks(vault, {
+ *   path: "Posts/2026/Article.md",
+ *   include_unresolved: false
+ * });
+ * for (const link of r.links) console.log(link.target, "→", link.resolved_path);
+ * ```
+ */
 export async function getOutboundLinks(
   vault: Vault,
   args: { path?: string; title?: string; include_embeds?: boolean; include_unresolved?: boolean }
@@ -374,13 +655,43 @@ export async function getOutboundLinks(
   };
 }
 
+/**
+ * One row of the {@link listTags} response.
+ *
+ * Tracks frontmatter vs. inline occurrences separately — useful for
+ * detecting tag drift (e.g. `#draft` inline that should be moved to
+ * `tags: [draft]` in YAML).
+ */
 export interface TagSummary {
+  /** Normalized tag (lowercased, no leading `#`). */
   tag: string;
+  /** Total occurrences across the vault (frontmatter + inline). Sort key. */
   count: number;
+  /** Occurrences in YAML `tags:` arrays. */
   frontmatter_count: number;
+  /** Occurrences as inline `#tag` in note body. */
   inline_count: number;
 }
 
+/**
+ * Build a tag-frequency dashboard for the vault.
+ *
+ * Aggregates every tag from both frontmatter (`tags: [foo, bar]`) and
+ * inline (`#foo` in body) across all notes. Sorted by count descending,
+ * tied by alphabetical. Cheap — single pass with the parser cache.
+ *
+ * @param vault - The vault.
+ * @param args - All optional. `folder` restricts the scan. `min_count`
+ *   filters tags below a threshold (default 1, i.e. include everything).
+ *   `limit` defaults to 200.
+ * @returns Sorted {@link TagSummary} array.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * const top = await listTags(vault, { min_count: 5, limit: 30 });
+ * for (const t of top) console.log(`#${t.tag}: ${t.count}`);
+ * ```
+ */
 export async function listTags(
   vault: Vault,
   args: { folder?: string; min_count?: number; limit?: number }
@@ -431,6 +742,9 @@ export async function listTags(
 // This format is human-readable, parseable, and feeds back into our
 // retrieval index — agents can search past chat threads by content.
 
+/**
+ * Arguments for {@link chatThreadAppend}.
+ */
 export interface ChatThreadAppendArgs {
   /** Vault-relative path to the note hosting the thread. Created if absent. */
   note_path: string;
@@ -442,19 +756,36 @@ export interface ChatThreadAppendArgs {
   thread_title?: string;
 }
 
+/**
+ * Parsed message row returned by {@link chatThreadRead}.
+ *
+ * `line_start` / `line_end` are 1-based and let the agent jump to or
+ * surgically edit a single turn in the conversation.
+ */
 export interface ChatThreadMessage {
+  /** Speaker role from the message heading. */
   role: "user" | "assistant" | "system";
+  /** ISO-8601 timestamp from the heading (writer-supplied, not reparsed). */
   timestamp: string;
+  /** Message body, trimmed. May contain markdown. */
   content: string;
   /** 1-based start line in the source note (for jumping to that point). */
   line_start: number;
+  /** 1-based end line of this message. */
   line_end: number;
 }
 
+/**
+ * Envelope returned by {@link chatThreadRead}.
+ */
 export interface ChatThreadReadResult {
+  /** Vault-relative path of the source note. */
   note_path: string;
+  /** Thread title from `## Chat: <title>`, or null if no chat block. */
   thread_title: string | null;
+  /** Parsed messages in chronological order. */
   messages: ChatThreadMessage[];
+  /** Convenience field — equal to `messages.length`. */
   message_count: number;
 }
 
@@ -464,10 +795,38 @@ const CHAT_HEADING_RE = /^### (user|assistant|system) · (.+?)\s*$/;
 // codepath uses .exec(line) per-line so the flag is harmless there.
 const CHAT_THREAD_TITLE_RE = /^## Chat: (.+?)\s*$/m;
 
-/** Append a message to a note's chat thread. Creates the note (and the
- *  `## Chat: <title>` heading) if absent. Idempotent in the sense that
- *  appending always creates a fresh `### <role> · <timestamp>` block — no
- *  silent overwrites. */
+/**
+ * Append a message to a note's chat thread — note-tethered AI conversations
+ * persisted as markdown.
+ *
+ * Creates the note (and the `## Chat: <title>` parent heading) if absent.
+ * Messages are stored as third-level headings with role + ISO timestamp
+ * (`### user · 2026-05-08T10:00Z`). The format is human-readable, version-
+ * controllable via git, and feeds back into the vault's retrieval index —
+ * agents can search past threads by content like any other note.
+ *
+ * Appending always creates a fresh `### <role> · <timestamp>` block, never
+ * mutates existing messages. Safe to call concurrently if note writes don't
+ * collide (last-write-wins on simultaneous appends to same note).
+ *
+ * @param vault - The vault. Must allow writes (i.e. the server was started
+ *   with `--enable-writes`).
+ * @param args - `note_path`, `role`, `content` are required. `thread_title`
+ *   is used only when creating a brand-new note from scratch.
+ * @returns The note's vault-relative path plus the 1-based line range of
+ *   the appended message (for jumping the UI to it).
+ * @throws {Error} If `note_path` or `content` is empty, or `role` is not
+ *   a valid value.
+ * @example
+ * ```ts
+ * await chatThreadAppend(vault, {
+ *   note_path: "Threads/Research-2026-05-08.md",
+ *   role: "user",
+ *   content: "What did I write last week about RLHF?",
+ *   thread_title: "RLHF research session"
+ * });
+ * ```
+ */
 export async function chatThreadAppend(
   vault: Vault,
   args: ChatThreadAppendArgs
@@ -522,8 +881,31 @@ export async function chatThreadAppend(
   };
 }
 
-/** Parse a note's chat thread into structured messages. Non-chat content
- *  (anything outside the `## Chat: <title>` block) is ignored. */
+/**
+ * Parse a note's chat thread into structured messages.
+ *
+ * Reads the chat block delimited by `## Chat: <title>` and parses each
+ * `### <role> · <timestamp>` sub-heading into a {@link ChatThreadMessage}.
+ * Non-chat content (anything outside the chat block) is ignored. Returns
+ * `thread_title: null` and an empty `messages` array if the note has no
+ * chat block.
+ *
+ * @param vault - The vault.
+ * @param args - `note_path` is the vault-relative path to the thread note.
+ * @returns A {@link ChatThreadReadResult} with parsed messages in
+ *   chronological order.
+ * @throws {VaultPathError} If `note_path` resolves outside the vault.
+ * @throws {Error} If the note doesn't exist.
+ * @example
+ * ```ts
+ * const thread = await chatThreadRead(vault, {
+ *   note_path: "Threads/Research-2026-05-08.md"
+ * });
+ * for (const msg of thread.messages) {
+ *   console.log(`[${msg.timestamp}] ${msg.role}: ${msg.content}`);
+ * }
+ * ```
+ */
 export async function chatThreadRead(vault: Vault, args: { note_path: string }): Promise<ChatThreadReadResult> {
   await vault.ensureExists();
   const targetRel = args.note_path.toLowerCase().endsWith(".md") ? args.note_path : `${args.note_path}.md`;
@@ -616,6 +998,33 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
 //
 // _get is read-only; _set + _delete are write-gated.
 
+/**
+ * Read a note's frontmatter — full map, or a single key's value.
+ *
+ * The read-only counterpart to `frontmatterSet` (write side). Use this
+ * before bulk-editing frontmatter so the agent can reason about current
+ * state before issuing a write. When `key` is set, the response includes
+ * the resolved `value` (which may be `undefined` if the key is absent).
+ *
+ * @param vault - The vault to read from.
+ * @param args - One of `path` or `title` is required. `key` narrows the
+ *   response to a single value.
+ * @returns `{ path, frontmatter, value? }` — `value` is only included when
+ *   `key` is set.
+ * @throws {Error} If the target can't be resolved.
+ * @example
+ * ```ts
+ * // Read all frontmatter
+ * const all = await frontmatterGet(vault, { path: "Posts/Article.md" });
+ *
+ * // Read a single key
+ * const just = await frontmatterGet(vault, {
+ *   path: "Posts/Article.md",
+ *   key: "status"
+ * });
+ * console.log(just.value); // → "draft"
+ * ```
+ */
 export async function frontmatterGet(
   vault: Vault,
   args: { path?: string; title?: string; key?: string }
@@ -633,24 +1042,60 @@ export async function frontmatterGet(
   return { path: target.relPath, frontmatter: note.parsed.frontmatter };
 }
 
-/** Find every note where frontmatter.<key> matches a predicate. Useful as
- *  a precursor to bulk frontmatter_set: "find all notes with status:draft
- *  and set their status to published".
+/**
+ * Predicate-based frontmatter query — arguments to {@link frontmatterSearch}.
  *
- *  Predicate semantics:
- *    - `equals: <value>`   — strict equality (JSON.stringify comparison)
- *    - `exists: true`      — key must exist (any value)
- *    - `contains: <value>` — for array values, value must be a member
- *  Exactly one predicate must be set. */
+ * Exactly one of `equals` / `exists` / `contains` must be set:
+ * - `equals: <value>`   — strict equality (JSON.stringify comparison)
+ * - `exists: true`      — key must exist (any value, including `false` / `0` / `null`)
+ * - `contains: <value>` — for array values, value must be a member
+ */
 export interface FrontmatterSearchArgs {
+  /** Frontmatter key to match against. */
   key: string;
+  /** Strict equality predicate (JSON.stringify comparison). */
   equals?: unknown;
+  /** Existence predicate — when `true`, matches notes where `key` is present at all. */
   exists?: boolean;
+  /** Array-membership predicate. Matches when `frontmatter[key]` is an array containing this value. */
   contains?: unknown;
+  /** Restrict scan to a subdirectory (vault-relative). */
   folder?: string;
+  /** Result cap (default 100). */
   limit?: number;
 }
 
+/**
+ * Find every note whose frontmatter matches a predicate.
+ *
+ * Useful as a precursor to bulk operations like {@link frontmatterSet}:
+ * "find all notes with `status: draft` and set their status to `published`",
+ * or "find notes whose `aliases` array contains a typo". Single predicate
+ * per call by design — combine with multiple calls if you need AND/OR logic.
+ *
+ * @param vault - The vault to scan.
+ * @param args - {@link FrontmatterSearchArgs}. `key` is required and
+ *   exactly one of `equals` / `exists` / `contains` must be set.
+ * @returns `{ key, total_matches, matches }` — `total_matches` equals
+ *   `matches.length` (counts the truncated result, not the full count).
+ * @throws {Error} If `key` is empty or the predicate count is not exactly 1.
+ * @throws {VaultPathError} If `folder` resolves outside the vault.
+ * @example
+ * ```ts
+ * // Find every draft
+ * const drafts = await frontmatterSearch(vault, {
+ *   key: "status",
+ *   equals: "draft",
+ *   limit: 50
+ * });
+ *
+ * // Find every note whose `aliases` array contains "RAG"
+ * const rag = await frontmatterSearch(vault, {
+ *   key: "aliases",
+ *   contains: "RAG"
+ * });
+ * ```
+ */
 export async function frontmatterSearch(
   vault: Vault,
   args: FrontmatterSearchArgs
@@ -699,18 +1144,56 @@ export async function frontmatterSearch(
 // to reason about this note" call: instead of read_note → backlinks → outbound
 // → resolve_wikilink (4 round-trips), one call returns the node and its edges.
 
+/**
+ * One-hop graph neighborhood around a target note — returned by
+ * {@link getNoteNeighbors}.
+ *
+ * Three orthogonal "neighbor" buckets:
+ * - `outbound` — notes the target links to
+ * - `inbound`  — notes that link to the target (with backlink count)
+ * - `tag_siblings` — notes sharing ≥1 tag, excluding outbound/inbound
+ */
 export interface NoteNeighbors {
+  /** The target note (the graph center). */
   center: {
     path: string;
     title: string;
     tags: string[];
     mtime: string;
   };
+  /** Notes the center links to. Bounded by `max_per_bucket`. */
   outbound: Array<{ path: string; title: string; tags: string[] }>;
+  /** Notes linking to the center, sorted by `count` desc. Bounded by `max_per_bucket`. */
   inbound: Array<{ path: string; title: string; tags: string[]; count: number }>;
+  /** Notes sharing ≥1 tag, excluding outbound/inbound. Bounded by `max_per_bucket`. */
   tag_siblings: Array<{ path: string; title: string; shared_tags: string[] }>;
 }
 
+/**
+ * Return a note and its 1-hop graph neighborhood — outbound links +
+ * backlinks + tag-cluster siblings in one call.
+ *
+ * Designed as the canonical "give the LLM enough context to reason about
+ * this note" call. Pre-fix, the agent had to chain 4 round-trips
+ * (`read_note` → `get_backlinks` → `get_outbound_links` →
+ * `resolve_wikilink` × N). This collapses them into one structured graph
+ * view at the cost of a full vault scan.
+ *
+ * @param vault - The vault.
+ * @param args - One of `path` or `title` is required. `max_per_bucket`
+ *   caps each bucket independently (default 20).
+ * @returns A {@link NoteNeighbors} with center + 3 sorted neighbor buckets.
+ * @throws {Error} If the target can't be resolved.
+ * @example
+ * ```ts
+ * const ctx = await getNoteNeighbors(vault, {
+ *   path: "Concepts/Hybrid Retrieval.md",
+ *   max_per_bucket: 10
+ * });
+ * console.log("Linked from:", ctx.inbound.length, "notes");
+ * console.log("Tag siblings:", ctx.tag_siblings.map(s => s.title));
+ * ```
+ */
 export async function getNoteNeighbors(
   vault: Vault,
   args: { path?: string; title?: string; max_per_bucket?: number }
@@ -790,19 +1273,56 @@ export async function getNoteNeighbors(
 // Single-shot vault summary the LLM can call once at the start of a session
 // to orient itself. Cheap signals only — no full-text scan.
 
+/**
+ * Vault-wide dashboard returned by {@link getVaultStats}.
+ *
+ * All counts are computed in a single pass over the markdown corpus so
+ * cost is O(N notes × parse). `orphans` are notes with neither inbound nor
+ * outbound links. `broken_wikilinks` is the total count of unresolved
+ * `[[targets]]` (use {@link getUnresolvedWikilinks} for the per-link details).
+ */
 export interface VaultStats {
+  /** Total `.md` files in the vault (post-exclusion filtering). */
   total_notes: number;
+  /** Sum of UTF-8 byte sizes across all notes. */
   total_size_bytes: number;
+  /** Average words per note, rounded. Zero if vault is empty. */
   avg_note_words: number;
+  /** Notes with mtime in the last 7 days. */
   recently_modified_7d: number;
+  /** Notes with no inbound AND no outbound wikilinks. */
   orphans: number;
+  /** Total count of `[[targets]]` that fail to resolve to any note. */
   broken_wikilinks: number;
+  /** Distinct tag count (normalized: lowercase, deduplicated). */
   total_tags: number;
+  /** Top N tags by frequency, sorted desc. N = `args.top_tags ?? 10`. */
   top_tags: Array<{ tag: string; count: number }>;
+  /** Notes whose frontmatter is non-empty. */
   notes_with_frontmatter: number;
+  /** ISO-8601 timestamp of report generation. */
   generated_at: string;
 }
 
+/**
+ * One-shot vault dashboard the LLM can call at the start of a session to
+ * orient itself.
+ *
+ * Cheap structural signals only — no full-text scan, no embedding. Useful
+ * as a "first call" for an agent to understand the corpus shape (size,
+ * recency, link-graph health) before issuing specific reads.
+ *
+ * @param vault - The vault.
+ * @param args - `top_tags` controls how many top tags are returned
+ *   (default 10).
+ * @returns A {@link VaultStats} snapshot.
+ * @example
+ * ```ts
+ * const stats = await getVaultStats(vault, { top_tags: 20 });
+ * console.log(`${stats.total_notes} notes, ${stats.orphans} orphans`);
+ * console.log("Top tags:", stats.top_tags.slice(0, 5));
+ * ```
+ */
 export async function getVaultStats(vault: Vault, args: { top_tags?: number }): Promise<VaultStats> {
   await vault.ensureExists();
   const topTagsLimit = args.top_tags ?? 10;

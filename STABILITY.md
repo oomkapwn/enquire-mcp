@@ -50,8 +50,9 @@ The package exports a few symbols for advanced embedding / programmatic use. The
 - `EmbedDb` / `EmbedDbOptions` / `EmbedQuantization` / `encodeInt8Vector` / `decodeInt8Vector` (`src/embed-db.ts`)
 - `FtsIndex` / `chunkContent` / `defaultIndexFile` (`src/fts5.ts`)
 - `Vault` (`src/vault.ts`)
-- `ServeOptions` / `parsePositiveInt` / `parseQuantizationMode` / `startServer` / `main` / `buildMcpServer` / `prepareServerDeps` / `formatReadyBanner` / `buildEmbedText` (`src/index.ts`)
+- `ServeOptions` / `parsePositiveInt` / `parseQuantizationMode` / `startServer` / `main` / `buildMcpServer` / `prepareServerDeps` / `formatReadyBanner` / `buildEmbedText` — re-exported from `src/index.ts` (since v3.6.0-rc.2 they live in `src/server.ts` / `src/cli.ts` / `src/tool-registry.ts`, with `src/index.ts` keeping the re-export surface for v3.5.x BC).
 - `HnswIndex` / `loadHnswFromDisk` / `HnswPersistedMeta` (`src/hnsw.ts`)
+- `TOOL_MANIFEST` / `ToolManifestEntry` (`src/tool-manifest.ts`) — machine-readable manifest of all MCP tools (added in v3.6.0-rc.2). New stable surface — guaranteed to retain `name`, `kind`, `gating`, `summary` fields per entry across all v3.x.
 
 Anything not listed here (private fields, internal helpers, test fixtures) is **not** semver-bound.
 

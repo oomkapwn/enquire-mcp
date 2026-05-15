@@ -13,7 +13,7 @@ Directive: **"Максимальное качество и уверенный т
 ## Scope — RC sequence + promotion
 
 - **v3.6.0-rc.1**: `tools.ts` (4252 lines) → 5 domain modules in `src/tools/` + barrel
-- **v3.6.0-rc.2**: `index.ts` (3665 lines) → `src/cli/*` + `src/server.ts` + `src/prompts.ts` + `src/tool-registry.ts` + `src/tool-manifest.ts`
+- **v3.6.0-rc.2**: `index.ts` (3665 lines) → `src/cli.ts` + `src/server.ts` + `src/prompts.ts` + `src/tool-registry.ts` + `src/tool-manifest.ts`
 - **v3.6.0-rc.3**: Full TSDoc (`@param` / `@returns` / `@example`) on 44 tools + 19 prompts + 20 `src/` modules (~1300+ lines of doc-comments)
 - **v3.6.0-rc.4**: TypeDoc + GH Pages auto-generated API reference + Public benchmarks (`docs/benchmarks.md`, MRR/NDCG@10/Recall@K vs 3 main competitors)
 - **v3.6.0 (stable)**: promote rc.4 → npm `latest`, GH release marked Latest
@@ -78,4 +78,7 @@ Apply **root-cause sweep methodology** consistently: every bug → identify the 
 
 ## Current phase status
 
-- **rc.1 in progress**: sub-agent splitting `tools.ts` into `src/tools/` domain modules (branch `v3.6.0-rc.1/tools-split`). On completion: I update imports in `src/index.ts` and `src/eval.ts`, run tests, push PR.
+- **rc.1 shipped**: `tools.ts` (4252 lines) → `src/tools/{search,read,write,media,meta}.ts` + barrel.
+- **rc.2 shipped**: `index.ts` (3665 lines) → `src/{cli,server,tool-registry,prompts,tool-manifest}.ts`; slim `src/index.ts` (84 lines).
+- **rc.3 in flight** (PR #67): Full TSDoc (+2238 lines, 369 doc-blocks) on 44 tools + 19 prompts + helpers.
+- **rc.4 next**: TypeDoc + GH Pages + Public benchmarks.

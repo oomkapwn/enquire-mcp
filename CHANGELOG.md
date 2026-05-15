@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.3] — 2026-05-15
+
+> **TL;DR:** Discoverability + positioning patch. README, npm description, `package.json#keywords`, and the GitHub repo About + Topics now lead with **"long-term memory for AI agents"** framing — aligning with the post-Claude-Memory (Oct 2025) / post-Anthropic-Skills (Nov 2025) developer-discovery vocabulary. The capability we've shipped since v1.0 (durable, queryable, vendor-neutral memory in plain markdown) hasn't changed — just the framing on the discovery surfaces. **No code, API, schema, or behavior changes. 753 tests still passing.** No-op upgrade for everyone.
+
+**Patch — discoverability / SEO repositioning (zero functional changes).**
+
+### Changed — discovery & positioning
+
+- **README headline subtitle**: `"Every modern IR primitive. In one tool. For free."` → `"The most advanced Obsidian MCP — every modern IR primitive, in one tool, for free."` (preserved as secondary line). New PRIMARY headline: **"Long-term memory for AI agents. Built on your Obsidian vault."**
+- **README `## What it is` lead paragraph**: rewritten to frame the project as the **open-source, MCP-native, agent-grade memory layer** that complements Claude Memory / ChatGPT Memory / Cursor memory with vendor-neutral, file-owned, MCP-portable persistence. All technical claims preserved + sourced.
+- **README new `## 🧠 Use cases` section** (between Quick start and API reference). 3 explicit scenarios — (1) long-term memory for AI agents, (2) personal knowledge base / second brain, (3) agentic RAG / context engineering — each anchored to specific enquire-mcp capabilities (hybrid retrieval, multilingual, graph-boost, HyDE, sub-question decomposition, eval harness).
+- **`package.json#description`**: now leads with `"Memory layer for AI agents over your Obsidian vault."`. All capability claims preserved. Adds the phrase "open-source long-term memory / second brain".
+- **`package.json#keywords`** (60 → 71): added 10 hype-aligned keywords at the **top of the array** (npm search ranks early keywords higher in many surfaces): `ai-memory`, `agent-memory`, `llm-memory`, `long-term-memory`, `claude-memory`, `memory-for-ai-agents`, `context-engineering`, `second-brain`, `personal-knowledge-base`, `knowledge-graph`. Also added `ai-agents` (plural) and `hybrid-search` (was only `hybrid-retrieval`). All 60 prior keywords retained.
+- **GitHub repo About** (via `gh api -X PATCH /repos/oomkapwn/enquire-mcp`): updated to `"Memory layer for AI agents over your Obsidian vault. Hybrid retrieval (BM25 + ML + BGE rerank, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), standalone Bases, PDFs+OCR. Open-source long-term memory for Claude Code/Desktop, Cursor, ChatGPT, Codex. MCP-native, MIT, SLSA-3."`
+- **GitHub Topics** (rebalanced within the 20-cap): added 7 hype topics — `ai-memory`, `agent-memory`, `llm-memory`, `long-term-memory`, `claude-memory`, `second-brain`, `context-engineering`. Dropped 7 lower-yield existing topics (`hnsw`, `ocr`, `pdf`, `openclaw`, `embeddings`, `vector-search`, `claude-desktop` — all still discoverable via npm keywords + README). Final 20-topic set: `obsidian, obsidian-mcp, mcp-server, model-context-protocol, claude, claude-code, cursor, chatgpt, codex, rag, agentic-rag, hybrid-search, semantic-search, ai-memory, agent-memory, llm-memory, long-term-memory, claude-memory, second-brain, context-engineering`.
+
+### Tests
+
+**753 tests** — identical to v3.6.2. No code paths changed → no test additions / removals / regressions. Lint clean, `tsc` strict + `noUncheckedIndexedAccess` clean, version-consistency green at `3.6.3` (5 surfaces), changelog-coverage gate passes (this section makes no coverage claims, so nothing to check).
+
+### Migration
+
+**No-op for every consumer.** Identical public API (44 tools), CLI, `package.json#exports`, dependency tree, on-disk DB schema, MCP wire format. Existing README anchors and links are preserved; the new `## 🧠 Use cases` section is **additive** between Quick start and API reference.
+
+### Method note
+
+This patch is a **deliberate timing call**, not a fix for a found defect.
+
+In Oct 2025 Anthropic shipped **Claude Memory**; in Nov 2025 **Claude Skills**. Both moved phrases like *"memory for AI agents"*, *"long-term agent memory"*, *"context engineering"* from niche jargon into mainstream developer-discovery vocabulary on npm, GitHub, X, and Google. enquire-mcp has shipped the underlying primitive — durable, queryable, vendor-neutral long-term memory in plain markdown — since v1.0 (public OSS release 2026-05-02; my private vault dogfooding goes back to early 2025). The technical capability hasn't changed; the search demand around the *words for that capability* has.
+
+The lesson: **positioning isn't a one-time launch decision — it's continuous calibration against where the audience's vocabulary actually IS.** v3.6.x already had the strongest IR stack in the open-source Obsidian-MCP space (per `docs/benchmarks.md` + `docs/COMPARISON.md`). This patch makes that fact findable by the people actively searching for *"agent memory"* / *"long-term memory for Claude"* / *"second brain for Cursor"*.
+
+**Non-goal: no over-claiming, no spec inflation.** Every capability claim in the new framing maps to an empirical benchmark in `docs/benchmarks.md` or a row in the comparison matrix. The memory-positioning is layered *on top of* the technical claims, never replacing them. Success criterion: ≥1pp lift in repo / npm impression CTR over the 14 days following 2026-05-15 (will verify via npm search analytics + GitHub Insights traffic; if no measurable lift by 2026-05-29 the framing returns to evaluation).
+
+**Why a patch release and not just a README edit on `main`:** the `package.json#description` and `package.json#keywords` changes are surfaces visible on **npmjs.com** — and those only update when a new version publishes. So the marketing pivot must ship as a real version bump to land on npm. Going with `patch` (not minor) because the public API surface and behavior are byte-identical to v3.6.2.
+
+---
+
 ## [3.6.2] — 2026-05-15
 
 > **TL;DR:** Audit batch — closes **K-1 RESIDUAL CLASS** (the v3.6.1 CRIT-1 fix was instance-only; the destructive-bootstrap-schema class was still active in 4 hot paths including a sibling K-1b in FtsIndex tokenize_mode). Plus 13 Medium + 14 Low findings from the internal 9-layer audit + 4 HIGHs from a second external audit. **+37 tests** (753 total, +1.29pp branches margin). No breaking API changes. **Retroactive correction** — v3.6.1's "CRIT-1 closed" was an overclaim.

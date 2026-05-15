@@ -4,9 +4,9 @@
 
 # enquire-mcp
 
-### The most advanced Obsidian MCP server. Period.
+### Long-term memory for AI agents. Built on your Obsidian vault.
 
-**Every modern IR primitive. In one tool. For free.**
+**The most advanced Obsidian MCP — every modern IR primitive, in one tool, for free.**
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -27,7 +27,9 @@
 
 ## What it is
 
-A **production-ready MCP server** that gives any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients — structured access to your Obsidian vault. The umbrella `obsidian_search` tool fuses **BM25 + TF-IDF + multilingual ML embeddings** via Reciprocal Rank Fusion (Cormack et al, 2009), reranks with a **BGE cross-encoder** (5 model options), scales to millions of chunks via **HNSW with int8 quantization**, and returns blended markdown + PDF hits with `[page: N]` citations.
+A **production-ready MCP server** that turns your Obsidian vault into **persistent, queryable long-term memory** for any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients. Unlike session-scoped chat memory or proprietary cloud "memory" features, your knowledge lives in plain markdown files **you own**, indexed locally, and recalled with the full modern IR stack: **BM25 + TF-IDF + multilingual ML embeddings** fused via Reciprocal Rank Fusion (Cormack et al, 2009), reranked with a **BGE cross-encoder** (5 model options), scaled to millions of chunks via **HNSW with int8 quantization**, with blended markdown + PDF hits and `[page: N]` citations.
+
+Think of it as the **open-source, MCP-native, agent-grade memory layer** that complements Claude Memory / ChatGPT Memory / Cursor memory — but stores your durable knowledge in a portable, vendor-neutral format (your Obsidian vault) any agent can read.
 
 **44 tools · 19 MCP prompts · 753 unit tests · 50+ languages · v3.6.x · semver-bound · MIT · SLSA-3.**
 
@@ -62,6 +64,16 @@ enquire-mcp setup --vault <path>     # downloads model, builds FTS5 + embed-db
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
 enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 ```
+
+---
+
+## 🧠 Use cases
+
+**1 — Long-term memory for AI agents.** Drop your Obsidian vault into any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex). The agent now has durable, semantic recall over every meeting note, journal entry, research log, and decision doc you've ever written — across sessions, models, and providers. Unlike `Claude Memory` or `ChatGPT Memory`, your knowledge isn't locked into one vendor's cloud; it lives in plain markdown you own and can migrate freely.
+
+**2 — Personal knowledge base / second brain.** Hybrid retrieval surfaces the right note for *any* phrasing, in any of 50+ languages. Ask in English about a Russian-language journal entry from 2 years ago, get the right hit. Wikilink graph-boost reranks notes that sit at the centre of your knowledge graph. GraphRAG-light surfaces topical communities — discover connections you forgot you made. PDFs blend into search with `[page: N]` citations so research papers and meeting transcripts become first-class memory.
+
+**3 — Agentic RAG / context engineering.** `obsidian_search` exposes per-signal scores so the agent sees *why* each hit ranked. HyDE pre-rewrites vague queries into rich hypothetical answers before retrieval. Sub-question decomposition handles multi-hop questions ("how did our pricing strategy evolve and what was the customer reaction?") by breaking them into independent sub-queries, fusing results. The built-in eval harness (NDCG / Recall / MRR) lets you measure retrieval quality on your own queries instead of trusting vendor benchmarks.
 
 ---
 

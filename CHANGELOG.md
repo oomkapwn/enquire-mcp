@@ -2,6 +2,91 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] — 2026-05-15
+
+> **TL;DR:** v3.6.0 stable — promotion of `v3.6.0-rc.4` to `latest` dist-tag after 4 RCs of internal refactor, full API documentation, public benchmarks, and a critical P0 fix. Net result: same 44 MCP tools, but **the cross-encoder reranker now actually works** (was a no-op since v2.9.0), the monolith files are split into 11 domain modules, every public function has TSDoc + auto-generated TypeDoc reference docs, public retrieval benchmarks are reproducible with one command. No CLI/tool/behavior breaking changes for users — pure internal quality work, plus the reranker fix that lifts retrieval quality measurably.
+
+**Minor — promotion to stable.** Aggregates `v3.6.0-rc.1` through `v3.6.0-rc.4`. Each RC has its own detailed entry below; this top-level entry is the sweeping summary.
+
+### Headline numbers
+
+| Metric | v3.5.14 (last stable) | v3.6.0 (this release) | Delta |
+|---|---:|---:|---:|
+| Test count | 712 | 714 (713 + 1 env-gated smoke) | +2 |
+| Branches coverage | 75.29% | 75.02% | -0.27pp* |
+| Lines coverage | 89.54% | 89.20% | -0.34pp* |
+| Source modules (`src/`) | 18 (incl. 2 monoliths totalling 7917 lines) | 28 (11 new domain modules, no file > 1565 lines) | +10 modules |
+| Documented exports (TSDoc) | sparse | **369 TSDoc blocks** across 44 tools + 19 prompts + helpers | full coverage |
+| Auto-generated API reference | none | 111 HTML pages at `oomkapwn.github.io/enquire-mcp` | new |
+| Public benchmarks | none | 60-query ablation with 4-decimal reproducibility | new |
+| Reranker delta over hybrid (`rerank-bge`) | no-op (1.0 flat) | **+24.7 MRR, +15.5 NDCG@10** measured | first time it actually works |
+| Catalog rerankers verified working | 0/5 (all silently no-op) | 1/5 (rerank-bge); 4/5 documented as v3.7 work | net +1 honest |
+
+*Coverage marginal drop is the new `loadReranker` + `loadTransformersForRerank` runtime paths not being exercised by the default suite (only by env-gated smoke). Stays well above all thresholds.
+
+### What this release contains (per-RC summary)
+
+**`v3.6.0-rc.1` — `tools.ts` (4252 lines) → `src/tools/` (5 domain modules + barrel)**
+- `search.ts` (1224 lines, 19 exports) — 4 search variants + TF-IDF helpers
+- `write.ts` (682 lines, 21 exports) — 6 write tools + rename / replace helpers
+- `read.ts` (864 lines, 28 exports) — read / list / links / frontmatter / chat
+- `media.ts` (516 lines, 16 exports) — pdf + canvas + ocr
+- `meta.ts` (984 lines, 26 exports) — contextPack + validateNoteProposal + lintWiki + findPath + helpers
+- Barrel re-exports preserve v3.5.x import surface — zero migration
+
+**`v3.6.0-rc.2` — `index.ts` (3665 lines) → `src/{cli,server,tool-registry,prompts,tool-manifest}.ts` + slim 84-line entry**
+- `cli.ts` (702 lines) — `main()` + commander program (all 12 subcommands)
+- `server.ts` (877 lines) — MCP server construction + sync routines
+- `tool-registry.ts` (1300 lines) — registerTool loops + utility helpers
+- `prompts.ts` (790 lines) — 19 MCP prompts
+- **`tool-manifest.ts` (318 lines, 44 entries)** — NEW machine-readable manifest, single source of truth. `tests/docs-consistency.test.ts` pivoted off regex-parsing `src/index.ts` and reads the manifest directly — type-safe, refactor-resistant.
+- The new VERSION location + re-export surface in slim `src/index.ts` preserves the v3.5.x public-import contract.
+
+**`v3.6.0-rc.3` — Full TSDoc on the public API surface (+2238 lines, 369 doc-blocks)**
+- 44 tool functions: summary + description + `@param` / `@returns` / `@throws` / `@example` (TypeScript code fences)
+- 19 prompts: each with banner comment + TSDoc above
+- ~30 types/interfaces with field-level docs
+- ~15 cross-domain helpers marked `@internal` so TypeDoc filters them out of the public reference
+
+**`v3.6.0-rc.4` — TypeDoc + GH Pages + benchmarks + Class A invariants + P0 reranker fix**
+- **TypeDoc** (`typedoc@0.28.19`, 111 HTML pages, 1.9 MB site) auto-published to GitHub Pages via OIDC workflow on every push to `main`. Live: `https://oomkapwn.github.io/enquire-mcp/`.
+- **Public benchmarks**: 60 queries, 7-stack ablation (FS-grep / BM25 / TF-IDF / embeddings / hybrid / hybrid+rerank / hybrid+rerank+HyDE-sim), 4-decimal reproducibility via `npm run bench:retrieval`. Reranker delta `+24.7 MRR / +15.5 NDCG@10` measured.
+- **🚨 P0 reranker fix**: `loadReranker()` was a no-op since v2.9.0 — `text-classification` pipeline softmax over a 1-class relevance head = always 1.0. Hidden because tests used a mock `rerankerOverride`. Fixed via direct `AutoTokenizer` + `AutoModelForSequenceClassification` + sigmoid on raw logit. `rerank-bge` now verified working end-to-end (real-model smoke `tests/reranker-smoke.test.ts` gated by `ENQUIRE_LOAD_RERANKER_SMOKE=1`). The other 4 catalog rerankers fail at AutoTokenizer due to an unrelated transformers.js compat issue — tracked for v3.7.
+- **Class A invariants** (drift-class fix): `tests/no-internal-imports.test.ts` blocks future tests from value-importing from registration boilerplate; `vitest.config.ts` coverage exclude pivoted to brace-glob — refactor-resistant.
+- **`check-changelog-coverage.mjs` regex bug fix**: pre-release versions `[X.Y.Z-rc.N]` weren't matching, so the gate had been silently passing for the WRONG section throughout rc.1..rc.3. Now matches prereleases correctly.
+- **`docs/audits/v3.6.0-system-audit-plan.md`** (280 lines) — plan for the post-v3.6.0 full-system audit (9 layers, 7 parallel sub-agents).
+- **`docs/audits/v3.6.0-rc.4-rootcause.md`** (134 lines) — root-cause audit of all 7 sprint errors with cross-cutting analysis.
+
+### Migration
+
+**No-op for consumers.** The npm package's public API surface (44 MCP tools, CLI flags, all `package.json` `exports` sub-paths) is identical to v3.5.x. The refactor is purely internal file structure + a new `tool-manifest.ts` optional export for programmatic tool discovery.
+
+For users currently selecting `rerank-multilingual` / `rerank-bge-large` / `rerank-jina-tiny` / `rerank-multilingual-large`: those have been silently no-op since v2.9.0; switch to `rerank-bge` to actually benefit from cross-encoder reranking (`+24.7 MRR / +15.5 NDCG@10` measured). The 4 unverified aliases will be restored in v3.7 via transformers.js bump or pipeline-fallback path.
+
+For everyone else: `npm install -g @oomkapwn/enquire-mcp` continues to work; the only user-visible change is that if you've been passing `--enable-reranker --reranker-model rerank-bge`, your retrieval results will now actually re-order after RRF fusion.
+
+### Validation
+
+714 tests (713 passing + 1 env-gated smoke) · 33 test files · branches 75.02% · lines 89.20% · statements 85.79% · functions 82.15% · lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · smoke pass (synthetic vault scan + FTS5 + bearer auth) · version-consistency green at `3.6.0` (5 surfaces) · changelog-coverage gate OK · 5 prior RCs each merged with all 7 required CI gates green.
+
+### npm dist-tag
+
+This release promotes to **`latest`**. Users currently on `rc` will receive this as their next `latest` upgrade.
+
+### Method note
+
+This sprint exercised the **root-cause sweep methodology** more than any prior release. Two specific patterns paid off massively:
+
+1. **«Don't fix the symptom, find the class»** — every audit finding got grep'd for the underlying pattern. The "hardcoded paths to internal files" class fix (Class A invariants in rc.4) preempts future rc-merge breakage; the "regex assumes stricter format than spec allows" fix in `check-changelog-coverage.mjs` preempts future prerelease-validation false-passes.
+
+2. **«Real-dependency smoke needed for every external dependency»** — the reranker no-op stayed hidden for 6+ months because tests used mocks. Adding `tests/reranker-smoke.test.ts` opt-in surfaces the class. The post-v3.6.0 full-system audit will add this pattern across all external deps.
+
+Both are durable methodology — the kind that pays dividends release after release.
+
+### Next
+
+Post-v3.6.0-stable: execute `docs/audits/v3.6.0-system-audit-plan.md` (9 layers, 7 parallel sub-agents). Findings → v3.6.1 or v3.6.2 class-fix patches.
+
 ## [3.6.0-rc.4] — 2026-05-15
 
 > **TL;DR:** v3.6.0 Phase 4 of 4 — TypeDoc + GitHub Pages auto-publish of API reference, public retrieval benchmarks (60 queries, ablation across 7 stack configs, **+24.7 MRR / +15.5 NDCG@10 reranker delta measured**), Class A invariants for hardcoded-paths, full-system audit plan committed, AND a **P0 fix to the BGE cross-encoder reranker which had been a no-op for all 5 catalog models since v2.9.0**. Published under npm dist-tag `rc`.

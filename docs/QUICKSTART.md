@@ -13,7 +13,7 @@ From `npm install` to a working **long-term memory layer for your AI agents**, b
 
 ## Prerequisites
 
-- **Node 20+** — `node --version` should print `v20.x.x` or higher.
+- **Node 22.13+ recommended** (or 20+ for non-PDF use cases — `node --version` should print `v22.13` or higher to enable PDF indexing via `pdfjs-dist@5.7+`; on Node 20 you get the full MCP server minus PDF features). CI matrix tests Node 22 + 24.
 - **An Obsidian vault folder** — any directory containing `.md` files. If you don't have one, `mkdir ~/TestVault && echo "# Hello" > ~/TestVault/note.md` is enough to follow this guide.
 - **An MCP client** — one of: Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT (with remote MCP), Codex, or any other MCP-compatible client.
 

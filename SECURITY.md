@@ -221,7 +221,7 @@ Out of scope (stateful mode specifically):
 
 **Threat model:**
 - **Malformed YAML / YAML bombs.** Parsed via `js-yaml`'s `SAFE_SCHEMA` (the same engine and schema `gray-matter` uses for frontmatter). No anchor-expansion, no `!!js/function` tag, no code execution path. A YAML bomb (deeply nested anchors) is rejected at parse time before our zod schema validation runs.
-- **ReDoS in DSL predicate regexes.** Each predicate is matched against a small set of fixed, non-backtracking regexes (`^tag\s*(==|!=)\s*..." literal "$"` style). No user-controlled regex compilation. Predicate strings that don't match any pattern fall into `unevaluated_predicates` and are treated as `true` (permissive) — they don't cause regex evaluation against user content.
+- **ReDoS in DSL predicate regexes.** Each predicate is matched against a small set of fixed, non-backtracking regexes (`^tag\s*(==|!=)\s*..." literal "$"` style). No user-controlled regex compilation. Predicate strings that don't match any pattern fall into `unevaluated_predicates` and are treated as `false` (**fail-closed since v3.6.2 HN-2** — exclude the row rather than over-include it). The unevaluated set is surfaced to the caller via `BaseQueryResult.unevaluated_predicates` so a typo is visible in the response itself, not just in stderr. Pre-3.6.2 the policy was the opposite (permissive `true`); the v3.6.2 audit batch flipped it after an external auditor flagged the over-include risk for `inDate`/formula-style predicates. They don't cause regex evaluation against user content either way.
 - **Path traversal via `.base` file path.** `obsidian_read_base({ path })` and `obsidian_query_base({ path })` resolve through `vault.readBinaryFile` → `vault.resolveSafePath` — the same realpath + `--exclude-glob` + `--read-paths` chain as `readNote`. Symlinks-out-of-vault rejected; excluded paths refuse to load.
 - **Filter against private paths.** `queryBase`'s vault walk goes through `vault.listFilesByExtension(".md", folder)`, which respects `--exclude-glob` / `--read-paths`. A `.base` filter cannot surface content that the privacy filter would block from `readNote`.
 - **Outbound wikilink-set materialization.** v3.5.0 added `linksTo()` predicate evaluation; the per-note outbound set is computed from `extractWikilinks(body)` — same parser as the read-only `obsidian_get_outbound_links` tool. No new file reads or path resolution beyond what's already exposed.
@@ -229,7 +229,7 @@ Out of scope (stateful mode specifically):
 **Out of scope (deferred):**
 - **Formula evaluation** (`formulas:` section). Our DSL is filters-only; formulas are surfaced as metadata via `obsidian_read_base` but never evaluated. Until a formula evaluator ships (separate sprint), there is no code execution path through `.base` formulas — they're inert strings.
 - **Summaries / aggregations.** Same — surfaced as metadata, not evaluated. No SQL-injection-class concern since there's no executable backend.
-- **Date arithmetic** (`inDate` etc). Falls into `unevaluated_predicates`, permissive. No date-parser surface yet.
+- **Date arithmetic** (`inDate` etc). Falls into `unevaluated_predicates` and is **fail-closed** (excludes the row) since v3.6.2 HN-2. No date-parser surface yet; when one ships, this section gets a dedicated subsection covering its threat model.
 
 When formula evaluation lands, this section gets an "Expression engine sandbox" subsection covering the threat model for that.
 

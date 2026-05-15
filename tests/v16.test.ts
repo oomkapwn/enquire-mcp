@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { findPath, listNotes, openInUi } from "../src/tools.js";
+import { findPath, listNotes, openInUi } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;

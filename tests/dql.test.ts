@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DqlParseError, parseDql, runDql } from "../src/dql.js";
-import { dataviewQuery, listTags } from "../src/tools.js";
+import { dataviewQuery, listTags } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;

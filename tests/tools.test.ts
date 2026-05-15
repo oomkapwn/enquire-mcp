@@ -16,7 +16,7 @@ import {
   resolveWikilink,
   searchText,
   validateNoteProposal
-} from "../src/tools.js";
+} from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;

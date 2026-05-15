@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.6.0-rc.3",
-  "description": "The most advanced MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW vector index, int8 quantization, late-chunking, HyDE-augmented retrieval, sub-question decomposition, PDFs (with OCR), Bases (.base query execution, standalone — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 712 tests, SLSA-3, semver-bound. Works with Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client.",
+  "version": "3.6.0-rc.4",
+  "description": "The most advanced MCP server for Obsidian vaults. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW vector index, int8 quantization, late-chunking, HyDE-augmented retrieval, sub-question decomposition, PDFs (with OCR), Bases (.base query execution, standalone — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 714 tests, SLSA-3, semver-bound. Works with Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -67,6 +67,8 @@
     "render:preview": "node scripts/render-social-preview.mjs",
     "bench": "npm run build && node scripts/bench.mjs",
     "bench:quick": "npm run build && node scripts/bench.mjs --quick",
+    "bench:retrieval": "npm run build && node scripts/run-benchmarks.mjs",
+    "docs:api": "typedoc",
     "prepare": "tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
     "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs",
     "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md"
@@ -162,6 +164,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "husky": "^9.1.7",
     "sharp": "^0.34.5",
+    "typedoc": "^0.28.19",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   },

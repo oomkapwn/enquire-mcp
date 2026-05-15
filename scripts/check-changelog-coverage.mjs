@@ -67,18 +67,27 @@ console.log(
   `[changelog-coverage] actual: lines ${actual.lines}% · statements ${actual.statements}% · functions ${actual.functions}% · branches ${actual.branches}%`
 );
 
-// Find the LATEST changelog section (from first `## [X.Y.Z]` to either the
-// next one or end of file). Biome auto-fix earlier mangled `\Z` (which JS
-// regex doesn't support anyway); explicit split-and-take is more readable.
+// Find the LATEST changelog section (from first `## [X.Y.Z]` or
+// `## [X.Y.Z-prerelease]` to either the next one or end of file).
+//
+// v3.6.0-rc.4 fix: original regex `\[\d+\.\d+\.\d+\]` did NOT match
+// pre-release versions like `[3.6.0-rc.4]` — the closing bracket
+// after the third digit fails when there's a `-rc.N` suffix. Result:
+// during the v3.6.0 RC sequence, the script silently fell through to
+// reading `[3.5.14]`'s coverage claim (the most recent matching
+// stable-semver section), validating CHANGELOG against STALE numbers.
+// Gate always passed because the v3.5.14 stats were fixed at write
+// time. Class: regex assumes stricter format than spec allows.
+const SEMVER_BRACKET_RE = /^## \[\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\]/m;
+const NEXT_SEMVER_BRACKET_RE = /\n## \[\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\]/;
 const changelog = readFileSync(CHANGELOG_PATH, "utf8");
-const sectionStart = changelog.search(/^## \[\d+\.\d+\.\d+\]/m);
+const sectionStart = changelog.search(SEMVER_BRACKET_RE);
 if (sectionStart < 0) {
   console.warn("[changelog-coverage] no `## [X.Y.Z]` section found in CHANGELOG. Skipping.");
   process.exit(0);
 }
 const afterFirst = changelog.slice(sectionStart);
-const nextSectionRe = /\n## \[\d+\.\d+\.\d+\]/;
-const nextMatch = nextSectionRe.exec(afterFirst);
+const nextMatch = NEXT_SEMVER_BRACKET_RE.exec(afterFirst);
 const latestSection = nextMatch ? afterFirst.slice(0, nextMatch.index) : afterFirst;
 
 // Parse claimed numbers — match patterns like `branches 75.29%` or

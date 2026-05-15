@@ -14,3 +14,11 @@ coverage/
 # a fresh `npm run bench` on the maintainer's machine; contributors should
 # generate their own and not commit them.
 bench/results.md
+# Note: bench/benchmarks.json (retrieval-quality bench) IS committed —
+# `docs/benchmarks.md` references it as the canonical reproducible
+# artifact. MRR/NDCG/Recall are bit-identical across hardware (only
+# latency varies), so the committed values are a deterministic baseline.
+# Generated TypeDoc API reference — built fresh by `npm run docs:api` on
+# every push to main (see .github/workflows/publish-docs.yml) and
+# deployed to GH Pages from there. Never commit the generated HTML.
+docs/api-reference/

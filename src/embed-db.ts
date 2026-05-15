@@ -576,3 +576,61 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
   // we just append the .embed.db extension for consistency with .fts5.db.
   return `${vaultHashPrefix}.embed.db`;
 }
+
+/**
+ * v3.6.1 CRIT-1 — non-destructive peek at an existing embed-db's meta row.
+ *
+ * Reads `model_alias`, `dim`, `quantization`, `vault_root`, `schema_version`
+ * from a SQLite file WITHOUT opening it via `EmbedDb` (which would trigger
+ * `bootstrapSchema()` and DROP TABLE on any mismatch with the caller's
+ * declared model). This lets a caller like `prepareServerDeps()`
+ * pre-discover what model the embed-db was built with, then open it with
+ * the matching model — avoiding the data-destruction class of bug the
+ * external (anonymous) v3.6.0 audit caught.
+ *
+ * Returns null if the file doesn't exist OR doesn't have a `meta` table
+ * yet (fresh db). Throws only on actual SQLite open/read errors.
+ *
+ * The opened SQLite handle is read-only and closed before return — no
+ * lock contention with a subsequent `EmbedDb.open()`.
+ *
+ * @param file - Absolute path to a `.embed.db` file.
+ * @returns Meta dict if the file is a populated embed-db, null otherwise.
+ * @example
+ * ```ts
+ * const meta = await peekEmbedDbMeta(embedFile);
+ * if (meta?.model_alias) {
+ *   const model = resolveModel(meta.model_alias); // honor what was built
+ * }
+ * ```
+ */
+export async function peekEmbedDbMeta(file: string): Promise<{
+  schema_version?: string;
+  vault_root?: string;
+  model_alias?: string;
+  dim?: string;
+  quantization?: string;
+} | null> {
+  const fsMod = await import("node:fs");
+  if (!fsMod.existsSync(file)) return null;
+  // Lazy-import better-sqlite3 (optionalDependency).
+  let Database: typeof import("better-sqlite3");
+  try {
+    Database = (await import("better-sqlite3")).default as unknown as typeof import("better-sqlite3");
+  } catch {
+    // No better-sqlite3 installed; embed-db doesn't work anyway. Return null.
+    return null;
+  }
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    // Confirm meta table exists before SELECT — avoid throwing on fresh dbs.
+    const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
+    if (!tableCheck) return null;
+    const rows = db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
+    const meta: Record<string, string> = {};
+    for (const row of rows) meta[row.key] = row.value;
+    return meta;
+  } finally {
+    db.close();
+  }
+}

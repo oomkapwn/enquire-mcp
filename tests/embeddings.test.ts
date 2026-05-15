@@ -89,9 +89,14 @@ describe("RERANKER_MODELS catalog (v2.9.0)", () => {
     expect(aliases).toContain("rerank-multilingual-large");
   });
 
-  it("default reranker alias points at rerank-multilingual", () => {
-    expect(DEFAULT_RERANKER_ALIAS).toBe("rerank-multilingual");
-    expect(RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.multilingual).toBe(true);
+  // v3.6.1 CRIT-2 — was "rerank-multilingual" but that alias is the
+  // broken-at-AutoTokenizer one per v3.6.0 CHANGELOG. Switched to the
+  // verified-working "rerank-bge" (English-only). Multilingual property
+  // assertion removed since rerank-bge is English-only.
+  it("default reranker alias points at rerank-bge (v3.6.1)", () => {
+    expect(DEFAULT_RERANKER_ALIAS).toBe("rerank-bge");
+    // rerank-bge is English-only — multilingual users wait for v3.7 fix.
+    expect(RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.multilingual).toBe(false);
   });
 
   it("each reranker declares Xenova-hosted HF id + maxTokens 512", () => {

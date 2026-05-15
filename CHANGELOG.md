@@ -2,6 +2,104 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] — 2026-05-15
+
+> **TL;DR:** **Emergency patch** closing **3 CRITICAL findings** discovered by external (anonymous) audit on v3.6.0 stable — bugs my internal 9-layer audit and Mavis missed. (1) `serve --use-hnsw` could DROP TABLE embeddings when the embed-db was built with a non-default model. (2) Default reranker alias pointed at a broken-end-to-end catalog entry — every `--enable-reranker` user without explicit `--reranker-model` got no reranking. (3) The `docs/api.md tool index table covers every registered tool` test was silently passing because it read `src/index.ts` for `registerTool(` calls after they moved to `tool-registry.ts` in rc.2. Plus 6 secondary fixes from internal + external audits. NO breaking API changes.
+
+**Emergency patch — closes 3 CRITICAL from post-stable audit.**
+
+The v3.6.0 stable promotion was followed by two parallel external audits:
+- **Mavis** rated v3.6.0 at 4.9/5.0 (mild, missed all 3 CRITICAL)
+- **Anonymous external audit** found 3 CRITICAL ship-blockers
+- **My own internal 9-layer audit** also missed all 3 (verdict 4.85/5.0)
+
+The lesson: parallel multi-layer internal audits + a single external auditor are NOT a substitute for a SECOND external auditor with a different methodology. Multiple lenses catch different things.
+
+### Fixed — CRIT-1 (data destruction)
+
+**File**: `src/server.ts:184-219`, new helper in `src/embed-db.ts`.
+
+`serve --use-hnsw` opened the embed-db with `resolveModel(undefined)` (always default `multilingual` model). If the user previously built embeddings with `--embedding-model bge`, the `bootstrapSchema()` `model_alias` mismatch check fired `DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS source_state;` — **data destruction on every serve start with `--use-hnsw`**. The code even commented "Workaround: open with the default model + dim; mismatch will trigger an auto-rebuild (which is wrong)".
+
+Fix: new exported `peekEmbedDbMeta(file: string)` reads the existing embed-db's `model_alias` + `quantization` from a read-only SQLite handle WITHOUT triggering `bootstrapSchema()`. `prepareServerDeps()` now calls it first, then opens `EmbedDb` with the matching model. If a fresh embed-db has no meta yet, we gracefully fall back to the default. Stderr now logs which alias is being honored when it differs from the default.
+
+### Fixed — CRIT-2 (default reranker silently broken)
+
+**File**: `src/embeddings.ts:293`, plus 4 dependent surfaces.
+
+`DEFAULT_RERANKER_ALIAS = "rerank-multilingual"` — but v3.6.0 CHANGELOG explicitly documents that **only `rerank-bge` is verified working** end-to-end. The 4 other catalog aliases (multilingual / bge-large / jina-tiny / multilingual-large) fail at `AutoTokenizer.from_pretrained` due to a transformers.js compat issue (tracked for v3.7). So every user who passed `--enable-reranker` without explicitly setting `--reranker-model rerank-bge` silently received NO reranking — falsifying the marketing claim "+5-10 NDCG@10". The benchmark in `docs/benchmarks.md` was measured with explicit `rerank-bge`, not the broken default.
+
+Fix: `DEFAULT_RERANKER_ALIAS = "rerank-bge"`. The 4 broken aliases stay in the catalog so users explicitly selecting them get a recognizable name + the proper "broken end-to-end" error (which surfaces in `signal_errors.reranker`), but the DEFAULT now points at the verified-working alias. CLI help, the `eval` subcommand fallback, and the 2 test assertions explicitly checking the old default were all updated.
+
+### Fixed — CRIT-3 (silent-pass gate)
+
+**File**: `tests/docs-consistency.test.ts:417`.
+
+The test `"docs/api.md tool index table covers every registered tool"` did:
+
+```ts
+const indexSrc = await read("src/index.ts");
+const registered = registeredNames(indexSrc, "registerTool"); // ← regex
+```
+
+But after the v3.6.0-rc.2 monolith split, `registerTool()` calls moved from `src/index.ts` to `src/tool-registry.ts`. The regex returned an empty set. `[...∅].filter(...)` returned an empty array. **The test passed regardless of what `docs/api.md` actually contained for the entire v3.6.0 sprint.**
+
+This is exactly the **E7 class** (gates passing for the wrong reason) my pre-stable rootcause audit claimed was closed. **I missed this ONE instance.**
+
+Fix: pivot the test to `TOOL_MANIFEST` (the rc.2-introduced single source of truth) — type-safe, refactor-resistant. PLUS added a META-INVARIANT test that asserts `registerTool(` and `registerPrompt(` regex matches against `src/index.ts` are ZERO — guards against the SAME class of silent-pass recurring in any other test that reads `src/index.ts`.
+
+### Fixed — H-1 (GH Pages 404)
+
+**Surface**: GitHub Pages settings.
+
+`publish-docs.yml` failed both runs on `main` (rc.4 merge + stable merge). The README + v3.6.0 CHANGELOG advertised `https://oomkapwn.github.io/enquire-mcp/` but it returned 404 — GH Pages was never enabled on the repo (cross-confirmed by L4 + L6 + L8 layers of the internal audit).
+
+Fix: `gh api -X POST repos/oomkapwn/enquire-mcp/pages -f build_type=workflow` (enables Pages with workflow-driven deploy via OIDC). The next push to `main` (this v3.6.1 merge) will trigger publish-docs.yml + actually deploy.
+
+### Fixed — H-2 (npm test 5000ms timeout flakes)
+
+**File**: `vitest.config.ts`.
+
+Three consecutive `npm test` runs at default 5000ms timeout produced 10/11/3 failures respectively (all in `tests/cli.test.ts`, `tests/pdf.test.ts`, `tests/ocr.test.ts`, `tests/fts5.test.ts` — places that do child-process spawns or cold native-dep loads). A fourth run with `--testTimeout=30000` produced 0 failures. CI happens to have more compute headroom than typical local environments, so this never tripped CI gates — but it did make local development noisier than necessary.
+
+Fix: `testTimeout: 15_000` in `vitest.config.ts`. Generous safety margin while still catching genuine hangs.
+
+### Fixed — HN-3 (CLI help typo)
+
+**File**: `src/cli.ts:95`.
+
+`--use-hnsw` help text said "Requires the `hnswlib-wasm` optionalDependency (~340 KB, pure WASM, no native binding)". Project uses `hnswlib-node` (native binding via N-API), not `hnswlib-wasm`. Anonymous auditor caught.
+
+Fix: text now correctly says "Requires the `hnswlib-node` optionalDependency (native binding via N-API)".
+
+### Tests
+
+715 tests (714 passing + 1 env-gated skip) · branches 75.13% · lines 89.20% · statements 85.86% · functions 81.93%. New meta-invariant catches future silent-pass gates. Lint clean · tsc strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · version-consistency green at `3.6.1` (5 surfaces).
+
+### Method note
+
+This patch demonstrates the **multi-auditor methodology gap** identified post-v3.6.0. Three independent passes (Mavis external, internal 9-layer parallel sub-agent audit, my pre-stable rootcause sweep) ALL missed the same 3 CRITICAL findings. The fourth pass — by an anonymous auditor reading the code linearly, looking at workflow flows rather than per-layer surfaces — caught them in minutes.
+
+Going forward: every minor/major release will request at least 2 INDEPENDENT external audits with different methodologies (one structural / per-layer, one workflow-walkthrough). Internal audits stay valuable for breadth + parallelism, but cannot substitute for external eyes with fresh perspective.
+
+Documented in:
+- `docs/audits/v3.6.0-final-audit.md` — internal 9-layer audit (verdict 4.85/5.0; missed 3 CRIT)
+- `docs/audits/v3.6.0-external-anonymous-audit.md` — external auditor that caught 3 CRIT (verbatim copy preserved)
+- `~/.claude/.../memory/method_full_system_audit.md` — methodology note will be updated with "multiple external auditors required" rule
+
+### Deferred to v3.6.2
+
+13 Medium + 14 Low findings from the internal audit (TSDoc drift in foundational modules, serve-http feature parity gap, .base DSL permissive predicates, COMPARISON.md stale claims, CLAUDE.md status refresh, broken anchor in api.md, etc.) — batched for v3.6.2. None are ship-blockers; all are documented in `docs/audits/v3.6.0-final-audit.md`.
+
+### Migration
+
+**No-op for consumers** on the npm public API surface. Behavior changes:
+- `serve --use-hnsw` users with non-default embedding-model: data is now preserved across restarts (was destroyed).
+- `--enable-reranker` users without explicit `--reranker-model`: now receive ACTUAL reranking (was a no-op).
+- `obsidian_search` queries with `reranker.alias` defaulting will now hit the working alias.
+
+If you were explicitly relying on the no-op default (unlikely), pin `--reranker-model rerank-multilingual` (will error explicitly until v3.7 fixes the transformers.js compat issue).
+
 ## [3.6.0] — 2026-05-15
 
 > **TL;DR:** v3.6.0 stable — promotion of `v3.6.0-rc.4` to `latest` dist-tag after 4 RCs of internal refactor, full API documentation, public benchmarks, and a critical P0 fix. Net result: same 44 MCP tools, but **the cross-encoder reranker now actually works** (was a no-op since v2.9.0), the monolith files are split into 11 domain modules, every public function has TSDoc + auto-generated TypeDoc reference docs, public retrieval benchmarks are reproducible with one command. No CLI/tool/behavior breaking changes for users — pure internal quality work, plus the reranker fix that lifts retrieval quality measurably.

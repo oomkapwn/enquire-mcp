@@ -84,7 +84,7 @@ export async function main(): Promise<void> {
     )
     .option(
       "--reranker-model <alias>",
-      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-multilingual` (Xenova/mxbai-rerank-xsmall-v1, ~25 MB, multilingual). Other options: `rerank-bge` (~110 MB, English), `rerank-bge-large` (~560 MB, English, +1-2 NDCG@10), `rerank-jina-tiny` (~33 MB, English, latency-optimized), `rerank-multilingual-large` (~280 MB, 50+ langs). Only effective with `--enable-reranker`."
+      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-bge` (Xenova/bge-reranker-base, ~110 MB, English; v3.6.1 — verified working end-to-end). Other options: `rerank-multilingual` / `rerank-bge-large` / `rerank-jina-tiny` / `rerank-multilingual-large` currently fail at AutoTokenizer due to transformers.js compat issue — tracked for v3.7 restoration. Only effective with `--enable-reranker`."
     )
     .option(
       "--reranker-top-n <n>",
@@ -92,7 +92,7 @@ export async function main(): Promise<void> {
     )
     .option(
       "--use-hnsw",
-      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-wasm` optionalDependency (~340 KB, pure WASM, no native binding)."
+      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-node` optionalDependency (native binding via N-API)."
     )
     .option(
       "--hnsw-ef <n>",
@@ -577,7 +577,11 @@ export async function main(): Promise<void> {
     .option("--k <n>", "Top-K cutoff for NDCG / Recall (default 10)", "10")
     .option("--matrix", "Run a 2x2 matrix of (graph_boost ± reranker) and print a comparison table")
     .option("--reranker", "Enable cross-encoder reranking (same as serve --enable-reranker)")
-    .option("--reranker-model <alias>", `Reranker alias (default rerank-multilingual)`, "rerank-multilingual")
+    .option(
+      "--reranker-model <alias>",
+      "Reranker alias (default rerank-bge — v3.6.1 only verified-working alias)",
+      "rerank-bge"
+    )
     .option("--reranker-top-n <n>", "How many top RRF candidates to rerank (default 50)", "50")
     .option("--persistent-index", "Open the FTS5 index for BM25 retrieval (recommended)")
     .option("--per-query", "Print per-query scores in addition to aggregates (verbose)")
@@ -636,7 +640,7 @@ export async function main(): Promise<void> {
                 label: "+reranker",
                 searchOpts: { graph_boost: false },
                 reranker: {
-                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  alias: opts.rerankerModel ?? "rerank-bge",
                   topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
                 }
               },
@@ -644,7 +648,7 @@ export async function main(): Promise<void> {
                 label: "+graph-boost +reranker",
                 searchOpts: { graph_boost: true },
                 reranker: {
-                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  alias: opts.rerankerModel ?? "rerank-bge",
                   topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
                 }
               }
@@ -673,7 +677,7 @@ export async function main(): Promise<void> {
             // Single-config run.
             const reranker = opts.reranker
               ? {
-                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  alias: opts.rerankerModel ?? "rerank-bge",
                   topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
                 }
               : undefined;

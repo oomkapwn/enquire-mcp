@@ -1,6 +1,8 @@
 # Quickstart — enquire-mcp in 5 minutes
 
-From `npm install` to a working semantic search across your Obsidian vault, inside Claude Desktop. One happy path. Concrete commands, expected output, troubleshooting at the bottom.
+From `npm install` to a working **long-term memory layer for your AI agents**, backed by your Obsidian vault, inside Claude Desktop (or any MCP client). One happy path. Concrete commands, expected output, troubleshooting at the bottom.
+
+> **What "memory layer" means here.** Unlike vendor-specific chat memory (Claude Memory, ChatGPT Memory, Cursor memory) that locks your knowledge into one provider's cloud, enquire-mcp turns any directory of `.md` files into queryable, semantically-searchable memory accessible from every MCP-compatible agent. The knowledge is yours, in plain markdown, portable forever.
 
 ## What you'll get
 

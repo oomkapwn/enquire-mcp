@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { EmbedDb } from "./embed-db.js";
+import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { chunkContent, defaultIndexFile, FtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -191,18 +191,29 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
           `enquire: --use-hnsw passed but ${embedFile} doesn't exist; skipping HNSW build. Run \`enquire-mcp build-embeddings --vault ${vault.root}\` first.\n`
         );
       } else {
-        // Resolve the model dim by reading meta from the embed-db (we
-        // don't know which alias the user built with — they might have
-        // chosen `bge` instead of the default `multilingual`).
-        // Workaround: open with the default model + dim; mismatch will
-        // trigger an auto-rebuild (which is wrong). Better: peek at
-        // the meta directly without reopening. For now we accept the
-        // over-default-fallback risk and recommend doctor's output.
-        const model = resolveModel(undefined);
-        // v2.17.0 — pass through the quantization mode from CLI so the
-        // schema check matches what build-embeddings wrote. Default
-        // "f32" matches v2.16- behavior for users who don't set it.
-        const quantization = opts.quantizeEmbeddings ?? "f32";
+        // v3.6.1 CRIT-1 — peek the existing embed-db's meta to discover
+        // which model alias was used at build-embeddings time. Without
+        // this, `serve --use-hnsw` always opened with the default
+        // ("multilingual"). If the user had built with `--embedding-model
+        // bge`, the bootstrap-schema mismatch check fired DROP TABLE
+        // embeddings → data destruction on every restart.
+        //
+        // Now: peek first, resolve to the matching model, open without
+        // forcing a rebuild. Fresh embed-dbs (no meta yet) still
+        // gracefully fall back to the default.
+        const existingMeta = await peekEmbedDbMeta(embedFile);
+        const builtAlias = existingMeta?.model_alias;
+        const builtQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
+        const model = resolveModel(builtAlias);
+        // v2.17.0 — quantization mode honored same way as the model:
+        // prefer the existing db's quantization over CLI default, since
+        // mismatching it would also trigger DROP TABLE (same class).
+        const quantization = builtQuant ?? opts.quantizeEmbeddings ?? "f32";
+        if (builtAlias && builtAlias !== resolveModel(undefined).alias) {
+          process.stderr.write(
+            `enquire: --use-hnsw — embed-db was built with model '${builtAlias}'; honoring (avoiding DROP TABLE on schema mismatch).\n`
+          );
+        }
         const db = new EmbedDb({
           file: embedFile,
           vaultRoot: vault.root,

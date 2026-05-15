@@ -1,0 +1,19 @@
+{
+  "version": "3.6.0",
+  "shipped_at": "2026-05-15T12:48:25Z",
+  "npm_latest": "3.6.0",
+  "tests": 714,
+  "test_files": 33,
+  "coverage": { "lines": 89.20, "statements": 85.79, "functions": 82.15, "branches": 75.02 },
+  "thresholds": { "lines": 86, "statements": 82, "functions": 75, "branches": 74 },
+  "tools": 44,
+  "prompts": 19,
+  "src_modules": 28,
+  "tool_manifest_entries": 44,
+  "tsdoc_blocks": 369,
+  "typedoc_html_pages": 111,
+  "benchmark_queries": 60,
+  "external_audits_passed": 5,
+  "sprint_errors_traced": 7,
+  "drift_classes_closed_or_deferred": 6
+}

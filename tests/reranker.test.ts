@@ -33,9 +33,13 @@ describe("RERANKER_MODELS catalog (v2.9.0)", () => {
     expect(m.multilingual).toBe(false);
   });
 
-  it("defaults to rerank-multilingual when alias is undefined", () => {
+  // v3.6.1 CRIT-2 — default flipped from "rerank-multilingual" to
+  // "rerank-bge" (transformers.js compat issue blocks the multilingual
+  // alias; tracked for v3.7). Keep the catalog entry so users get a
+  // proper "Unknown alias" message if they explicitly pass it.
+  it("defaults to rerank-bge when alias is undefined (v3.6.1: was rerank-multilingual; flipped because that alias is broken)", () => {
     const m = resolveRerankerModel(undefined);
-    expect(m.alias).toBe("rerank-multilingual");
+    expect(m.alias).toBe("rerank-bge");
   });
 
   it("throws on unknown alias with a list of known aliases", () => {

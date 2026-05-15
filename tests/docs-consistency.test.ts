@@ -414,16 +414,37 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // a backtick-wrapped `obsidian_*` name, anywhere in the file. Rows may be
   // split across multiple tables (e.g. read / write / opt-in sections).
   it("docs/api.md tool index table covers every registered tool", async () => {
-    const indexSrc = await read("src/index.ts");
+    // v3.6.1 CRIT-3 fix — this test silently passed for the whole v3.6.0
+    // sprint because it was reading `src/index.ts` for `registerTool(`
+    // calls, but registration moved to `src/tool-registry.ts` in rc.2.
+    // `registered` set was empty → `missingFromTable` always empty →
+    // gate trivially passed regardless of api.md content. External
+    // (anonymous) audit caught this. Class fix: read from TOOL_MANIFEST
+    // (the rc.2-introduced single source of truth) — refactor-resistant
+    // and type-safe. Same pivot we did for the README/STABILITY tool
+    // count checks during rc.2.
     const apiMd = await read("docs/api.md");
-    const registered = registeredNames(indexSrc, "registerTool");
-    // Match every row of the form `| `obsidian_xxx` | ...`. Anchor on the
-    // start of a markdown table cell + a backtick-wrapped tool name. We
-    // accept any number of leading pipes/cells before the tool name so the
-    // matcher is robust to table reformat, but in practice the table format
-    // here is `| \`obsidian_*\` |` so the simple anchor catches every row.
+    const registered = manifestToolNames();
     const tableRows = new Set([...apiMd.matchAll(/^\|\s*`(obsidian_[a-z_]+)`\s*\|/gm)].map((m) => m[1] ?? ""));
     const missingFromTable = [...registered].filter((t) => !tableRows.has(t)).sort();
-    expect(missingFromTable, "tools registered in src/index.ts but missing from a docs/api.md tool table").toEqual([]);
+    expect(missingFromTable, "tools in TOOL_MANIFEST but missing from a docs/api.md tool table").toEqual([]);
+  });
+
+  // v3.6.1 — meta-invariant: any docs-consistency test that uses
+  // `registeredNames()` should have a non-empty set, otherwise the test
+  // trivially passes (the CRIT-3 silent-pass class). This guards against
+  // the SAME class of bug recurring in some other test in this file.
+  it("meta: no registeredNames(src/index.ts) returns ∅ (anti-silent-pass guard)", async () => {
+    const indexSrc = await read("src/index.ts");
+    const toolsInIndex = registeredNames(indexSrc, "registerTool");
+    const promptsInIndex = registeredNames(indexSrc, "registerPrompt");
+    expect(
+      toolsInIndex.size,
+      "registerTool() should NOT be in src/index.ts (registration moved to tool-registry.ts in rc.2). If this fails, tool registration moved BACK to index.ts — investigate. If a NEW test reads tools from index.ts and gets 0, it's the CRIT-3 class silent-pass bug; pivot to TOOL_MANIFEST or src/tool-registry.ts."
+    ).toBe(0);
+    expect(
+      promptsInIndex.size,
+      "registerPrompt() should NOT be in src/index.ts (registration moved to prompts.ts in rc.2)."
+    ).toBe(0);
   });
 });

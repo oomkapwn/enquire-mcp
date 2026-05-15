@@ -290,7 +290,14 @@ export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.f
   }
 });
 
-export const DEFAULT_RERANKER_ALIAS = "rerank-multilingual";
+// v3.6.1 CRIT-2 — was "rerank-multilingual" but per v3.6.0 CHANGELOG, only
+// `rerank-bge` is verified working end-to-end. The 4 other catalog aliases
+// fail at `AutoTokenizer.from_pretrained` due to a transformers.js compat
+// issue (tracked for v3.7). Defaulting to a broken alias meant every
+// `--enable-reranker` user (without `--reranker-model rerank-bge`) silently
+// got NO reranking despite the marketing claim "+5-10 NDCG@10". External
+// audit (anonymous) caught this.
+export const DEFAULT_RERANKER_ALIAS = "rerank-bge";
 
 export function resolveRerankerModel(alias: string | undefined): RerankerModel {
   const key = alias ?? DEFAULT_RERANKER_ALIAS;

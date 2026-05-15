@@ -4,6 +4,16 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // v3.6.1 H-2 — bump per-test timeout from vitest default 5000ms to
+    // 15000ms. Root cause: under contended CPU (parallel tests + cold
+    // native-dep loads via setupFiles + child-process spawns in
+    // cli.test.ts via execFileSync), the default budget is too tight.
+    // Three consecutive `npm test` runs at default produced 10/11/3
+    // timeouts respectively; a fourth run with --testTimeout=30000
+    // produced 0 failures. 15s gives a generous safety margin while
+    // still catching genuine hangs. Discovered in v3.6.0 post-stable
+    // 9-layer audit (L3-01) + cross-confirmed by external auditor.
+    testTimeout: 15_000,
     // v3.5.6 — warm native + heavy optional deps once per process so
     // individual tests don't pay the cold-import cost. See
     // tests/setup.ts for the rationale + which deps + cost analysis.

@@ -737,24 +737,35 @@ export function defaultIndexFile(vaultRoot: string): string {
  * path. The SAME bootstrap-schema-DROP class affects FtsIndex on
  * `tokenize_mode` mismatch.
  *
- * **Class-closure timeline (retroactive correction in v3.6.3):**
+ * **Class-closure timeline (retroactive correction batch — see also
+ * v3.7.2 audit response for the 4th drift instance: this TSDoc itself
+ * previously mis-attributed the closure to v3.6.3):**
  * - v3.6.1 fixed 1 callsite (`server.ts` HNSW path), claimed "CRIT-1
  *   closed". External audit caught 9 residual.
  * - v3.6.2 fixed `server.ts:174` (serve start) + `doctor.ts:328` +
  *   `src/tools/search.ts:917` (3 callsites total). The v3.6.2 CHANGELOG
  *   TL;DR + this TSDoc previously claimed "all 10 callsites" — that
  *   was an overclaim. cli.ts had 5 residual sites.
- * - v3.6.3 closes the cli.ts class: `cli.ts:638` (eval, diagnostic class
+ * - v3.6.3 was deferred to a marketing-only patch ("memory for AI
+ *   agents" positioning); K-1 work was pushed to v3.6.4.
+ * - v3.6.4 closes the cli.ts class: `cli.ts:638` (eval, diagnostic class
  *   like doctor), `cli.ts:514,554` (setup, idempotent class), and
  *   `cli.ts:311,398` (index, build-embeddings — peek-and-honor when
  *   user did NOT explicitly pass `--tokenize` / `--embedding-model`).
  *   `clear-index` and `clear-embeddings` call only `.clearOnDisk()` and
- *   never trigger bootstrapSchema — marked `// SAFE BY DESIGN`.
+ *   never trigger bootstrapSchema — marked `// SAFE BY DESIGN`. Added
+ *   `tests/k1-class-invariant.test.ts` (grep gate, 40-line window).
+ * - v3.7.0 added `tests/k1-ast-invariant.test.ts` (TypeScript compiler
+ *   API def-use trace) catching the "peek called but result discarded"
+ *   bypass that grep would miss.
  *
- * **K-1 class is fully closed at v3.6.3.** `tests/k1-class-invariant.test.ts`
- * enforces the rule: every `new EmbedDb(...)` / `new FtsIndex(...)` must
- * be preceded by a `peek*Meta` call OR an explicit `// SAFE BY DESIGN`
- * comment within 20 lines.
+ * **K-1 class is structurally enforced at v3.6.4 (grep) + v3.7.0 (AST).**
+ * `tests/k1-class-invariant.test.ts` enforces the grep rule: every
+ * `new EmbedDb(...)` / `new FtsIndex(...)` must be preceded by a
+ * `peek*Meta` call OR an explicit `// SAFE BY DESIGN` comment within
+ * 40 lines. `tests/k1-ast-invariant.test.ts` enforces the deeper rule:
+ * the peek result must trace to one of the constructor's K-1-relevant
+ * args (modelAlias / dim / tokenize / quantization).
  *
  * Returns null if the file doesn't exist OR doesn't have a `meta` table
  * yet. Throws only on actual SQLite open/read errors.

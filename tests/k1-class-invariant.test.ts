@@ -19,7 +19,10 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SRC_DIRS = ["src", "src/tools"];
+// v3.7.0 M-3: scan ALL of src/ recursively (was hardcoded ["src", "src/tools"]
+// in v3.6.4). When new sub-directories are added (e.g. src/managers/), they
+// auto-fall under invariant coverage instead of silently slipping past.
+const SRC_ROOT = "src";
 const CONSTRUCTOR_PATTERNS = [/\bnew EmbedDb\s*\(/g, /\bnew FtsIndex\s*\(/g];
 const PEEK_MARKERS = ["peekEmbedDbMeta", "peekFtsMetaSafe"];
 const SAFE_MARKER = "SAFE BY DESIGN";
@@ -36,12 +39,42 @@ interface ConstructorSite {
   text: string;
 }
 
+/**
+ * v3.7.0 M-3 — recursive .ts file walker for `src/`.
+ *
+ * Pre-v3.7.0 the invariant scanned only `["src", "src/tools"]` (hardcoded).
+ * Any new sub-directory under `src/` would silently fall outside invariant
+ * scope. Now: walks the entire `src/` tree, skipping nothing.
+ *
+ * Excludes `.d.ts` files (declaration only — no runtime constructor calls)
+ * and directories named `node_modules` or starting with `.` (paranoia for
+ * unexpected nested package layouts).
+ */
 async function collectTsFiles(dir: string): Promise<string[]> {
   const here = path.resolve(process.cwd(), dir);
-  const entries = await fs.readdir(here, { withFileTypes: true });
-  return entries
-    .filter((e) => e.isFile() && e.name.endsWith(".ts") && !e.name.endsWith(".d.ts"))
-    .map((e) => path.join(here, e.name));
+  const out: string[] = [];
+  const stack: string[] = [here];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(cur, { withFileTypes: true });
+    } catch {
+      continue; // Missing dir — skip gracefully.
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+        stack.push(path.join(cur, e.name));
+        continue;
+      }
+      if (!e.isFile()) continue;
+      if (!e.name.endsWith(".ts") || e.name.endsWith(".d.ts")) continue;
+      out.push(path.join(cur, e.name));
+    }
+  }
+  return out;
 }
 
 /**
@@ -99,12 +132,9 @@ function hasGuard(text: string, site: ConstructorSite): "peek" | "safe" | null {
   return null;
 }
 
-describe("K-1 class invariant (v3.6.3 methodological guard)", () => {
+describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since v3.7.0 M-3)", () => {
   it("every `new EmbedDb` / `new FtsIndex` in src/ is preceded by peek* or // SAFE BY DESIGN", async () => {
-    const files: string[] = [];
-    for (const dir of SRC_DIRS) {
-      files.push(...(await collectTsFiles(dir)));
-    }
+    const files = await collectTsFiles(SRC_ROOT);
     const unguarded: string[] = [];
     for (const file of files) {
       const sites = await findConstructorSites(file);
@@ -128,10 +158,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard)", () => {
   });
 
   it("at least 6 EmbedDb/FtsIndex sites are tracked (sanity — invariant has scope)", async () => {
-    const files: string[] = [];
-    for (const dir of SRC_DIRS) {
-      files.push(...(await collectTsFiles(dir)));
-    }
+    const files = await collectTsFiles(SRC_ROOT);
     let total = 0;
     for (const file of files) {
       total += (await findConstructorSites(file)).length;
@@ -141,5 +168,15 @@ describe("K-1 class invariant (v3.6.3 methodological guard)", () => {
     // coverage. Adjust upward when adding new sites; never downward without
     // documenting the architectural removal in CHANGELOG.
     expect(total).toBeGreaterThanOrEqual(6);
+  });
+
+  // v3.7.0 M-3 — guards the recursive walker itself. If someone replaces
+  // `collectTsFiles` with a non-recursive version, this catches the
+  // regression by asserting that files in a known sub-directory (src/tools/)
+  // appear in the collected set.
+  it("recursive walker actually reaches src/tools/ (regression guard for M-3 fix)", async () => {
+    const files = await collectTsFiles(SRC_ROOT);
+    const hasToolsFile = files.some((f) => f.includes(`${path.sep}src${path.sep}tools${path.sep}`));
+    expect(hasToolsFile, "recursive walker should pick up src/tools/*.ts").toBe(true);
   });
 });

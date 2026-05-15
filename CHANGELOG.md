@@ -2,6 +2,105 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.4] — 2026-05-15
+
+> **TL;DR:** **K-1 class TRULY FINAL closure + retroactive correction (second one).** Fixes 5 residual `cli.ts` callsites that v3.6.2's CHANGELOG TL;DR and `peekFtsMetaSafe` TSDoc claimed *"all 10 callsites"* while actually only fixing 4. Adds a grep-based class-invariant test (`tests/k1-class-invariant.test.ts`) so the overclaim pattern cannot ship a 4th time + 3 caller-pattern integration tests that exercise the full `peek → honor → open` chain (positive + negative-control). **+6 tests** (759 total). One user-visible behavior change: callers who relied on default flags against a non-default existing index now get **preservation instead of silent destruction** (data-positive). All other usage byte-identical to v3.6.3.
+
+**Patch — K-1 truly final + retroactive overclaim correction (NO marketing changes — those shipped in v3.6.3).**
+
+### Critical retroactive correction (second instance of the overclaim class)
+
+**v3.6.2's CHANGELOG TL;DR + `peekFtsMetaSafe` TSDoc claimed "all 10 EmbedDb + FtsIndex callsites" — overclaim.**
+
+Reality after v3.6.2 ship: 4 callsites were peek-guarded (`src/server.ts:174`, `src/server.ts:254`, `src/doctor.ts:331`, `src/tools/search.ts:917`). `src/cli.ts` had 5 residual sites with the SAME class of bug, deferred to a "backlog" with no enforcement gate.
+
+The methodology lesson is the same one v3.6.1 was supposed to teach: **claim AFTER verify, not before.** Both v3.6.1 ("CRIT-1 closed", 9 callsites stayed vulnerable) and v3.6.2 ("K-1 RESIDUAL CLASS full fix", 5 callsites stayed vulnerable) overclaimed. v3.6.4 closes the remaining 5 sites AND adds an invariant test so a third instance of this overclaim cannot ship undetected. From here on, any new `EmbedDb` / `FtsIndex` construction in `src/` must be preceded by a `peek*Meta` call OR a `// SAFE BY DESIGN: <reason>` comment within 40 lines — or the test fails.
+
+### Fixed — K-1 class TRULY FINAL closure (5 cli.ts sites)
+
+- **`cli.ts:638` (`eval --persistent-index`)** — **REAL BUG, same class as v3.6.2's doctor.ts fix.** `eval` is a diagnostic/measurement subcommand (computes NDCG/Recall/MRR on a query set). It MUST never destroy. Pre-fix: a user who ran `enquire-mcp index --vault X --tokenize trigram` then later ran `enquire-mcp eval --vault X --persistent-index --queries q.jsonl` would have silently lost their trigram-built FTS5 index because eval constructed `new FtsIndex({ ..., tokenize: <implicit unicode61> })` and bootstrapSchema DROPped on mismatch. Now: peeks tokenize_mode and honors it.
+- **`cli.ts:514` (`setup` step 1, FTS5)** — **idempotency promise violation.** Setup's own description: *"Idempotent — re-running on a fully set-up vault is a fast no-op pass."* Pre-fix: re-running `setup` on a trigram-built vault destroyed it and rebuilt as unicode61. Now: peeks + honors existing tokenize_mode. Output shows `(honoring existing tokenize_mode=trigram — run clear-index then setup to reset)`.
+- **`cli.ts:554` (`setup` step 3, embed-db)** — same idempotency story for `model_alias` + `quantization`. Pre-fix: re-running `setup` on a `bge` / `int8`-built vault destroyed both and rebuilt as `multilingual` / `f32`. Now: peeks + honors. Honored when user did NOT explicitly pass `--embedding-model` / `--quantize-embeddings` on the CLI (detected via Commander's `getOptionValueSource("name") === "cli"`). Step 2 (embedder load) also uses the honored model — so model + db stay consistent.
+- **`cli.ts:311` (`index`)** — same fix for FTS5. Refresh semantics now PRESERVE existing tokenize_mode unless user explicitly passes `--tokenize`. To force a rebuild with different tokenize, pass it explicitly.
+- **`cli.ts:398` (`build-embeddings`)** — same fix for embed-db. Refresh semantics now PRESERVE existing model + quantization unless user explicitly passes `--embedding-model` / `--quantize-embeddings`.
+- **`cli.ts:269` (`clear-index`)** + **`cli.ts:440` (`clear-embeddings`)** — annotated `// SAFE BY DESIGN (v3.6.3 K-1 invariant)`: they call `.clearOnDisk()` only and never `.open()`, so bootstrapSchema cannot fire. The new invariant test recognises this comment.
+
+### Added — K-1 class invariant test (methodology-level fix)
+
+- **`tests/k1-class-invariant.test.ts`** — grep-based class guard. Walks every `.ts` file in `src/` and `src/tools/`, finds every `new EmbedDb(...)` / `new FtsIndex(...)`, asserts that within 40 lines above (or 1 below) there's either:
+  - a `peekEmbedDbMeta` / `peekFtsMetaSafe` call, OR
+  - a `// SAFE BY DESIGN` comment
+- Walker has a robust JSDoc-block filter so `@example` blocks inside TSDoc don't false-positive (anchor-only `/**` detection at line start to avoid matching `Projects/**` glob substrings inside help-text string literals).
+- Plus a sanity test that ≥6 sites are tracked so accidental deletion of a constructor doesn't silently shrink invariant coverage.
+- **This is the methodology-level fix.** v3.6.1 missed instance-counting; v3.6.2 missed instance-counting. v3.6.4 makes instance-counting a test, not a comment in CHANGELOG.
+
+### Added — K-1 caller-pattern integration tests
+
+- **`tests/peek-meta.test.ts`** extended with 3 new tests under `describe("K-1 caller-pattern regression guards (v3.6.3)")` (label kept v3.6.3 to mark the audit origin):
+  - Build embed-db with `bge` → simulate caller's `peek → honor → open` chain → assert `model_alias` stays `bge`.
+  - Same for FtsIndex with trigram.
+  - **NEGATIVE control** — caller WITHOUT peek causes meta corruption. Pins the bad behavior so any future refactor of bootstrapSchema that "fixes" it to be non-destructive will fail this test and force review.
+- These close the gap that v3.6.2's unit tests left open: helpers were tested in isolation, but the caller pattern (what callers DO with the helpers) wasn't.
+
+### Changed — TSDoc retroactive corrections
+
+- **`src/fts5.ts` `peekFtsMetaSafe`** — TSDoc rewritten with honest class-closure timeline (v3.6.1: 1 of 10 → overclaim; v3.6.2: 4 of 10 → overclaim; v3.6.4: full closure + invariant test).
+- **`src/embed-db.ts` `peekEmbedDbMeta`** — same retroactive timeline.
+
+### Changed — docs version stamps (drift fix)
+
+- `docs/COMPARISON.md` (5 occurrences of `v3.6.1` → `v3.6.4`).
+- `docs/benchmarks.md` (`v3.6.0-rc.4` last-updated + git checkout reference → `v3.6.4`).
+- `README.md` Comparison-table sub: `as of v3.6.1` → `as of v3.6.4`.
+- `README.md` + `package.json#description` + `assets/social-preview.svg`: test count `753` → `758`.
+
+### Tests
+
+**759 tests** (was 753 in v3.6.3). **+6:**
+- 2 k1-class-invariant tests (the methodology-level fix).
+- 3 K-1 caller-pattern integration tests (positive bge + positive trigram + negative-control).
+- 1 CLI E2E test pair refresh: the old `index --tokenize trigram → re-run → rebuild` test (which asserted the BUG behavior) is rewritten to assert preservation, and a new sibling test covers the forced-rebuild path (`--tokenize unicode61` explicit).
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK (no coverage claim in this section) · version-consistency green at `3.6.4` (5 surfaces) · coverage: lines 89.3% · statements 85.92% · functions 81.95% · branches 75.4% (all above thresholds).
+
+### Migration
+
+**Backwards-compatible for explicit-flag users; data-positive for implicit-default users.** If you previously relied on implicit-default flag values silently rebuilding your non-default-built indexes (e.g. `setup` rebuild-destroying `bge` as `multilingual`), that silent destruction stops. To force a rebuild with new config, pass the new flag explicitly:
+
+```bash
+# Force-switch from trigram to unicode61:
+enquire-mcp clear-index --vault X && enquire-mcp index --vault X --tokenize unicode61
+
+# Force-switch from bge to multilingual:
+enquire-mcp clear-embeddings --vault X && enquire-mcp build-embeddings --vault X --embedding-model multilingual
+```
+
+`serve`, `serve-http`, and all MCP tools have NO behavior change — they were already peek-guarded in v3.6.1/v3.6.2.
+
+### Method note — third instance of the overclaim class is the inflection point
+
+The K-1 saga is now a 3-instance pattern of the same methodological bug — **claim before verify**:
+
+1. **v3.6.1**: "CRIT-1 (data destruction) closed". Reality: 1 of 10 callsites fixed.
+2. **v3.6.2**: "K-1 RESIDUAL CLASS full fix" + "all 10 callsites". Reality: 4 of 10 callsites fixed.
+3. **v3.6.4** (now): closes the remaining 5 AND adds `tests/k1-class-invariant.test.ts` so a fourth instance cannot ship undetected.
+
+**Method note**: when a methodological bug recurs in two consecutive releases, the fix is not another instance fix — it's a structural enforcement (test, invariant, compile-time rule). Per-instance grep audits aren't sustainable across a refactor velocity of 4 minor releases in a day.
+
+**Three positive lessons baked in**:
+1. **Instance vs class**: v3.5.9 → v3.6.1 → v3.6.2 → v3.6.4 each tightened the class-fix discipline. v3.6.4 makes it mechanical via the invariant test, not aspirational via CHANGELOG copy.
+2. **Caller pattern vs helper pattern**: unit tests for helpers ≠ regression coverage for callers. Negative-control test pins the failure mode.
+3. **Audit BEFORE patch ship, not after**: this v3.6.4 was discovered by re-auditing v3.6.3 within the same session that shipped it. The audit cost: ~10 minutes of grep + read. Saved cost: 1 audit cycle that would have surfaced the class residual externally.
+
+**Open audit-trail items** (deferred to v3.7+):
+- Coverage cliffs: per-file branch threshold for security-critical modules (`http-transport.ts`, `tools/search.ts`, `tools/meta.ts`, `tools/media.ts`). Global threshold (75.4%) hides per-file dips into the 66-68% range.
+- Marketing-positioning permeation into `docs/api.md`, `docs/QUICKSTART.md`, `docs/COMPARISON.md` opening paragraphs (still framed as "MCP server", not "memory layer").
+- GitHub repo metadata invariant test (About + Topics drift not caught by any CI today).
+
+These are tracked openly; no audit item is silently dropped.
+
+---
+
 ## [3.6.3] — 2026-05-15
 
 > **TL;DR:** Discoverability + positioning patch. README, npm description, `package.json#keywords`, and the GitHub repo About + Topics now lead with **"long-term memory for AI agents"** framing — aligning with the post-Claude-Memory (Oct 2025) / post-Anthropic-Skills (Nov 2025) developer-discovery vocabulary. The capability we've shipped since v1.0 (durable, queryable, vendor-neutral memory in plain markdown) hasn't changed — just the framing on the discovery surfaces. **No code, API, schema, or behavior changes. 753 tests still passing.** No-op upgrade for everyone.

@@ -274,7 +274,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out2).toMatch(/added=0 updated=0 deleted=0 unchanged=2/);
   });
 
-  it("`enquire-mcp index --tokenize trigram` then re-run with default tokenize triggers a rebuild", () => {
+  it("`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize PRESERVES trigram (v3.6.4 K-1 fix)", () => {
     if (!distExists()) return;
     if (!canRunFts5) return;
     const indexFile = path.join(tmpdir, "tokenize-flip.fts5.db");
@@ -283,10 +283,35 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       [distEntry, "index", "--vault", vault, "--index-file", indexFile, "--tokenize", "trigram"],
       { encoding: "utf8" }
     );
-    // Second run with no --tokenize (default = unicode61) should clear and re-add.
+    // v3.6.4 K-1 closure: a refresh-style re-run (no --tokenize flag) must
+    // PRESERVE the existing trigram-built index, not silently destroy and
+    // rebuild as unicode61. Pre-v3.6.4: out2 matched `added=2 updated=0`
+    // (rebuild). Post-v3.6.4: out2 matches `unchanged=2` (preservation).
     const out2 = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
     });
-    expect(out2).toMatch(/added=2 updated=0/);
+    expect(out2).toMatch(/unchanged=2/);
+    // Honor message announced on stderr (combined output check is more robust).
+    // Don't strictly assert the warning text — the behavior (preservation) is
+    // what matters for the K-1 contract.
+  });
+
+  it("`enquire-mcp index --tokenize trigram` then re-run WITH explicit --tokenize unicode61 DOES rebuild (v3.6.4 forced-rebuild path)", () => {
+    if (!distExists()) return;
+    if (!canRunFts5) return;
+    const indexFile = path.join(tmpdir, "tokenize-flip-forced.fts5.db");
+    execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile, "--tokenize", "trigram"],
+      { encoding: "utf8" }
+    );
+    // With explicit --tokenize unicode61 the user opts INTO a rebuild — this
+    // is the only path that should destroy + re-add.
+    const out2 = execFileSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", indexFile, "--tokenize", "unicode61"],
+      { encoding: "utf8" }
+    );
+    expect(out2).toMatch(/added=2/);
   });
 });

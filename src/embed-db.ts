@@ -633,6 +633,18 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
  * the matching model — avoiding the data-destruction class of bug the
  * external (anonymous) v3.6.0 audit caught.
  *
+ * **Class-closure timeline (retroactive correction in v3.6.3):**
+ * - v3.6.1 fixed 1 callsite (`server.ts` HNSW path) and claimed "CRIT-1
+ *   closed" — overclaim; 9 callsites stayed vulnerable.
+ * - v3.6.2 fixed `server.ts:254` (serve), `src/tools/search.ts:917`
+ *   (hot path) plus the K-1b sibling for FtsIndex; CHANGELOG claimed
+ *   "all 10 callsites" — still an overclaim; cli.ts had 5 residual.
+ * - v3.6.3 fixes the cli.ts residual: `cli.ts:398` (build-embeddings),
+ *   `cli.ts:554` (setup step 3). `clear-embeddings` is marked
+ *   `// SAFE BY DESIGN` — it never calls `.open()`.
+ *
+ * Enforced by `tests/k1-class-invariant.test.ts`.
+ *
  * Returns null if the file doesn't exist OR doesn't have a `meta` table
  * yet (fresh db). Throws only on actual SQLite open/read errors.
  *

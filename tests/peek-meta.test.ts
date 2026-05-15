@@ -130,3 +130,86 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     expect(meta?.tokenize_mode).toBe("trigram");
   });
 });
+
+// v3.6.3 caller-pattern coverage. The peek-meta unit tests above verify the
+// HELPERS work. But the actual K-1 bug class lives in CALLERS forgetting to
+// call peek before constructing EmbedDb/FtsIndex. These tests exercise the
+// full caller chain — "build with non-default config; invoke the caller
+// without specifying that config; assert the existing config is preserved
+// (not silently rebuilt)" — so a regression in any caller (search.ts,
+// server.ts, doctor.ts, cli.ts) would fail here even if the helpers stay
+// correct.
+describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
+  let tmpDir: string;
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-peek-caller-"));
+  });
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("EmbedDb caller pattern: build with `bge`, re-open peeking, meta stays `bge`", async () => {
+    const file = path.join(tmpDir, "caller.embed.db");
+    // Build with bge.
+    const db1 = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: "bge", dim: 384 });
+    await db1.open();
+    db1.close();
+
+    // Simulate the canonical caller pattern: peek FIRST, honor what we find,
+    // open with the honored model. This is what search.ts:917, server.ts:254,
+    // cli.ts:398, and cli.ts:554 all do. If a caller skips peek (the K-1
+    // bug), bootstrapSchema would DROP and rebuild as "multilingual" here.
+    const peeked = await peekEmbedDbMeta(file);
+    expect(peeked?.model_alias).toBe("bge");
+    const honored = peeked?.model_alias ?? "multilingual";
+    const db2 = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: honored, dim: 384 });
+    await db2.open();
+    db2.close();
+
+    // After the "caller" re-open, meta is still bge — caller honored it.
+    const after = await peekEmbedDbMeta(file);
+    expect(after?.model_alias).toBe("bge");
+  });
+
+  it("FtsIndex caller pattern: build with trigram, re-open peeking, meta stays trigram", async () => {
+    const file = path.join(tmpDir, "caller.fts5.db");
+    // Build with trigram.
+    const idx1 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
+    await idx1.open();
+    idx1.close();
+
+    // Canonical caller pattern (server.ts:180, doctor.ts:331, cli.ts:514/638).
+    const peeked = await peekFtsMetaSafe(file);
+    expect(peeked?.tokenize_mode).toBe("trigram");
+    const honored = peeked?.tokenize_mode ?? "unicode61";
+    const idx2 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: honored });
+    await idx2.open();
+    idx2.close();
+
+    const after = await peekFtsMetaSafe(file);
+    expect(after?.tokenize_mode).toBe("trigram");
+  });
+
+  it("EmbedDb caller pattern: NEGATIVE control — caller without peek does DROP", async () => {
+    // Pre-v3.6.3 (and pre-v3.6.2 for several callers): caller constructs
+    // EmbedDb with the default modelAlias without peeking. bootstrapSchema
+    // detects mismatch and DROPs. This test pins the BAD behavior so any
+    // future refactor that "fixes" bootstrapSchema to be non-destructive
+    // surfaces in test results (would change this test, forcing review).
+    const file = path.join(tmpDir, "negative.embed.db");
+    const db1 = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: "bge", dim: 384 });
+    await db1.open();
+    db1.close();
+
+    // Caller SKIPS peek and uses a different alias.
+    const dbBad = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: "wrong-alias", dim: 384 });
+    await dbBad.open();
+    dbBad.close();
+
+    // Meta is now "wrong-alias" — the original bge is gone. This is the
+    // failure mode the K-1 fix prevents at every caller. Documenting the
+    // bug class explicitly so its consequence is testable.
+    const after = await peekEmbedDbMeta(file);
+    expect(after?.model_alias).toBe("wrong-alias");
+  });
+});

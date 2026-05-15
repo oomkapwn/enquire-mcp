@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP } from "./cli-help.js";
-import { EmbedDb } from "./embed-db.js";
+import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
-import { defaultIndexFile, FtsIndex } from "./fts5.js";
+import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import {
   type ServeOptions,
@@ -266,6 +266,9 @@ export async function main(): Promise<void> {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
       const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+      // SAFE BY DESIGN (v3.6.3 K-1 invariant): `clearOnDisk()` only deletes
+      // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
+      // TABLE risk. Peek-before-open does not apply.
       const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
       const removed = await idx.clearOnDisk();
       if (removed) {
@@ -304,10 +307,26 @@ export async function main(): Promise<void> {
         excludeGlob?: string[];
         readPaths?: string[];
       }) => {
-        const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+        // v3.6.3 K-1 closure: if user passed --tokenize, honor user's intent.
+        // If not passed, peek existing to avoid silently rebuilding (which
+        // would destroy a `--tokenize trigram`-built index when user just
+        // wanted to refresh content). To force a rebuild with different
+        // tokenize, pass --tokenize explicitly.
+        let tokenize: TokenizeMode;
+        if (opts.tokenize === "trigram" || opts.tokenize === "unicode61") {
+          tokenize = opts.tokenize;
+        } else {
+          const peeked = await peekFtsMetaSafe(indexFile);
+          tokenize = peeked?.tokenize_mode ?? "unicode61";
+          if (peeked?.tokenize_mode === "trigram") {
+            process.stderr.write(
+              `enquire index: honoring existing tokenize_mode=trigram (pass --tokenize unicode61 to rebuild)\n`
+            );
+          }
+        }
         const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
         await idx.open();
         try {
@@ -380,21 +399,49 @@ export async function main(): Promise<void> {
       "v2.17.0 — vector storage encoding. `f32` (default) is identical to v2.16- behavior. `int8` uses asymmetric scalar quantization (per-vector min + scale + int8 bytes) for ~4× smaller BLOBs at ~1-2% recall@10 cost. Switching modes triggers a full rebuild via the schema-mismatch path. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
     )
     .action(
-      async (opts: {
-        vault: string;
-        embeddingModel?: string;
-        embedFile?: string;
-        excludeGlob?: string[];
-        readPaths?: string[];
-        includePdfs?: boolean;
-        lateChunkContext?: string;
-        quantizeEmbeddings?: string;
-      }) => {
-        const model = resolveModel(opts.embeddingModel);
+      async (
+        opts: {
+          vault: string;
+          embeddingModel?: string;
+          embedFile?: string;
+          excludeGlob?: string[];
+          readPaths?: string[];
+          includePdfs?: boolean;
+          lateChunkContext?: string;
+          quantizeEmbeddings?: string;
+        },
+        command: Command
+      ) => {
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
-        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        // v3.6.3 K-1 closure: peek existing embed-db before constructing
+        // EmbedDb. If user didn't explicitly pass --embedding-model /
+        // --quantize-embeddings, honor the existing config to avoid silent
+        // rebuild (which destroys the user's pre-built data). To force a
+        // switch, pass the explicit flag.
+        const explicitModel = command.getOptionValueSource("embeddingModel") === "cli";
+        const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
+        const peeked = await peekEmbedDbMeta(embedFile);
+        const requestedModel = resolveModel(opts.embeddingModel);
+        let model = requestedModel;
+        if (!explicitModel && peeked?.model_alias) {
+          const honored = resolveModel(peeked.model_alias);
+          if (honored.alias !== requestedModel.alias) {
+            process.stderr.write(
+              `enquire build-embeddings: honoring existing model_alias=${peeked.model_alias} (pass --embedding-model to override)\n`
+            );
+            model = honored;
+          }
+        }
+        const requestedQuant = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        let quantization = requestedQuant;
+        if (!explicitQuant && peeked?.quantization && peeked.quantization !== requestedQuant) {
+          quantization = peeked.quantization === "int8" ? "int8" : "f32";
+          process.stderr.write(
+            `enquire build-embeddings: honoring existing quantization=${peeked.quantization} (pass --quantize-embeddings to override)\n`
+          );
+        }
         const db = new EmbedDb({
           file: embedFile,
           vaultRoot: vault.root,
@@ -409,7 +456,7 @@ export async function main(): Promise<void> {
         await db.open();
         try {
           process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
-          const embedder = await loadEmbedder(opts.embeddingModel);
+          const embedder = await loadEmbedder(model.alias);
           const report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
           process.stdout.write(
             `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
@@ -435,8 +482,10 @@ export async function main(): Promise<void> {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
       const file = opts.embedFile ?? embedDbPath(vault.root);
-      // Use any model alias / dim for the delete path — bootstrapSchema uses
-      // them only when the file already exists with mismatched meta.
+      // SAFE BY DESIGN (v3.6.3 K-1 invariant): `clearOnDisk()` only deletes
+      // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
+      // TABLE risk. Dummy `modelAlias`/`dim` are never consulted because
+      // we never construct the schema. Peek-before-open does not apply.
       const db = new EmbedDb({ file, vaultRoot: vault.root, modelAlias: "n/a", dim: 1 });
       const removed = await db.clearOnDisk();
       if (removed) {
@@ -495,15 +544,18 @@ export async function main(): Promise<void> {
       "v3.6.2 (audit M-8) — privacy allowlist (same semantics as `serve`). When set, ONLY matching paths are indexed/embedded. Repeatable."
     )
     .action(
-      async (opts: {
-        vault: string;
-        embeddingModel?: string;
-        includePdfs?: boolean;
-        skipEmbeddings?: boolean;
-        quantizeEmbeddings?: string;
-        excludeGlob?: string[];
-        readPaths?: string[];
-      }) => {
+      async (
+        opts: {
+          vault: string;
+          embeddingModel?: string;
+          includePdfs?: boolean;
+          skipEmbeddings?: boolean;
+          quantizeEmbeddings?: string;
+          excludeGlob?: string[];
+          readPaths?: string[];
+        },
+        command: Command
+      ) => {
         const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
         process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
@@ -511,7 +563,17 @@ export async function main(): Promise<void> {
         // Step 1: FTS5 index.
         process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
         const indexFile = defaultIndexFile(v.root);
-        const idx = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+        // v3.6.3 K-1 closure (setup is idempotent per its description):
+        // honor existing tokenize_mode so re-running `setup` on a vault
+        // built with `--tokenize trigram` doesn't silently downgrade to
+        // unicode61. The setup command has no `--tokenize` flag, so the
+        // user's only way to "switch" is to clear-index first.
+        const peekedFts = await peekFtsMetaSafe(indexFile);
+        const setupTokenize: TokenizeMode = peekedFts?.tokenize_mode ?? "unicode61";
+        if (peekedFts?.tokenize_mode === "trigram") {
+          process.stdout.write(`   (honoring existing tokenize_mode=trigram — run clear-index then setup to reset)\n`);
+        }
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: setupTokenize });
         await idx.open();
         try {
           const ftsReport = await syncFtsIndex(v, idx);
@@ -534,28 +596,56 @@ export async function main(): Promise<void> {
           return;
         }
 
-        // Step 2: Install-model.
+        // v3.6.3 K-1 closure: peek existing embed-db BEFORE loading the
+        // embedder so step 2 loads the right model. setup is idempotent
+        // per its description — re-running on a vault built with
+        // `--embedding-model bge` must NOT silently rebuild as
+        // multilingual. Honor existing model unless user passed
+        // --embedding-model explicitly on the CLI.
+        const embedFile = embedDbPath(v.root);
+        const explicitEmbedModel = command.getOptionValueSource("embeddingModel") === "cli";
+        const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
+        const peekedEmbed = await peekEmbedDbMeta(embedFile);
+        const requestedModel = resolveModel(opts.embeddingModel);
+        let setupModel = requestedModel;
+        if (!explicitEmbedModel && peekedEmbed?.model_alias) {
+          setupModel = resolveModel(peekedEmbed.model_alias);
+          if (setupModel.alias !== requestedModel.alias) {
+            process.stdout.write(
+              `   (note: existing embed-db built with ${peekedEmbed.model_alias}; honoring it — pass --embedding-model to override)\n`
+            );
+          }
+        }
+        const requestedQuant = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        let quantization = requestedQuant;
+        if (!explicitQuant && peekedEmbed?.quantization && peekedEmbed.quantization !== requestedQuant) {
+          quantization = peekedEmbed.quantization === "int8" ? "int8" : "f32";
+          process.stdout.write(
+            `   (note: existing embed-db built with quantization=${peekedEmbed.quantization}; honoring it — pass --quantize-embeddings to override)\n`
+          );
+        }
+
+        // Step 2: Install-model (load the resolved/honored model).
         process.stdout.write("\n>> Step 2/3: Install embedding model\n");
-        const model = resolveModel(opts.embeddingModel);
         const t0 = Date.now();
-        const embedder = await loadEmbedder(opts.embeddingModel);
+        const embedder = await loadEmbedder(setupModel.alias);
         const [smokeVec] = await embedder.embed(["hello"]);
-        if (!smokeVec || smokeVec.length !== model.dim) {
-          throw new Error(`Model ${model.alias} loaded but dim mismatch: ${smokeVec?.length} vs ${model.dim}`);
+        if (!smokeVec || smokeVec.length !== setupModel.dim) {
+          throw new Error(
+            `Model ${setupModel.alias} loaded but dim mismatch: ${smokeVec?.length} vs ${setupModel.dim}`
+          );
         }
         process.stdout.write(
-          `   model ${model.alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+          `   model ${setupModel.alias} ready (${setupModel.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
         );
 
         // Step 3: build-embeddings.
         process.stdout.write("\n>> Step 3/3: Build embedding index\n");
-        const embedFile = embedDbPath(v.root);
-        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
         const db = new EmbedDb({
           file: embedFile,
           vaultRoot: v.root,
-          modelAlias: model.alias,
-          dim: model.dim,
+          modelAlias: setupModel.alias,
+          dim: setupModel.dim,
           quantization
         });
         await db.open();
@@ -635,7 +725,14 @@ export async function main(): Promise<void> {
         let ftsIndex: FtsIndex | null = null;
         if (opts.persistentIndex) {
           const indexFile = defaultIndexFile(v.root);
-          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+          // v3.6.3 K-1 closure (eval = diagnostic, MUST never destroy):
+          // peek existing tokenize_mode before constructing. Without peek,
+          // an eval run against a `--tokenize trigram`-built index would
+          // silently DROP TABLE because the default `unicode61` mismatches.
+          // Same class as the doctor.ts:328 fix in v3.6.2.
+          const peeked = await peekFtsMetaSafe(indexFile);
+          const honoredTokenize: TokenizeMode = peeked?.tokenize_mode ?? "unicode61";
+          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
           try {
             await ftsIndex.open();
             await syncFtsIndex(v, ftsIndex);

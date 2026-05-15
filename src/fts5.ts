@@ -735,10 +735,26 @@ export function defaultIndexFile(vaultRoot: string): string {
  * **Why this exists (audit class K-1b):** the original v3.6.1 CRIT-1 fix
  * (peek-before-open) was applied ONLY to the `serve --use-hnsw` embed-db
  * path. The SAME bootstrap-schema-DROP class affects FtsIndex on
- * `tokenize_mode` mismatch — and at 5 callsites (server.ts, multiple
- * cli.ts subcommands, and `src/doctor.ts:328`, where a diagnostic
- * subcommand could silently DROP user data). v3.6.2 closes the full
- * class by adding peek+honor at all 10 EmbedDb + FtsIndex callsites.
+ * `tokenize_mode` mismatch.
+ *
+ * **Class-closure timeline (retroactive correction in v3.6.3):**
+ * - v3.6.1 fixed 1 callsite (`server.ts` HNSW path), claimed "CRIT-1
+ *   closed". External audit caught 9 residual.
+ * - v3.6.2 fixed `server.ts:174` (serve start) + `doctor.ts:328` +
+ *   `src/tools/search.ts:917` (3 callsites total). The v3.6.2 CHANGELOG
+ *   TL;DR + this TSDoc previously claimed "all 10 callsites" — that
+ *   was an overclaim. cli.ts had 5 residual sites.
+ * - v3.6.3 closes the cli.ts class: `cli.ts:638` (eval, diagnostic class
+ *   like doctor), `cli.ts:514,554` (setup, idempotent class), and
+ *   `cli.ts:311,398` (index, build-embeddings — peek-and-honor when
+ *   user did NOT explicitly pass `--tokenize` / `--embedding-model`).
+ *   `clear-index` and `clear-embeddings` call only `.clearOnDisk()` and
+ *   never trigger bootstrapSchema — marked `// SAFE BY DESIGN`.
+ *
+ * **K-1 class is fully closed at v3.6.3.** `tests/k1-class-invariant.test.ts`
+ * enforces the rule: every `new EmbedDb(...)` / `new FtsIndex(...)` must
+ * be preceded by a `peek*Meta` call OR an explicit `// SAFE BY DESIGN`
+ * comment within 20 lines.
  *
  * Returns null if the file doesn't exist OR doesn't have a `meta` table
  * yet. Throws only on actual SQLite open/read errors.

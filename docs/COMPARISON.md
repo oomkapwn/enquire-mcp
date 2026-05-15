@@ -1,6 +1,6 @@
 # enquire-mcp vs. other Obsidian MCP servers
 
-There are several MCP servers for Obsidian vaults, and they make very different trade-offs. This document is a side-by-side feature matrix plus an honest "when to pick which" guide, written by the enquire-mcp maintainer. It is intentionally fair-not-sales: each alternative has scenarios where it is the better pick, and those scenarios are called out below. Numbers and feature claims for enquire-mcp are accurate as of v3.6.1 (2026-05-15); claims about the four alternatives are based on their public READMEs as of the same date — please verify against their current state before deciding.
+There are several MCP servers for Obsidian vaults, and they make very different trade-offs. This document is a side-by-side feature matrix plus an honest "when to pick which" guide, written by the enquire-mcp maintainer. It is intentionally fair-not-sales: each alternative has scenarios where it is the better pick, and those scenarios are called out below. Numbers and feature claims for enquire-mcp are accurate as of v3.6.4 (2026-05-15); claims about the four alternatives are based on their public READMEs as of the same date — please verify against their current state before deciding.
 
 ## Servers compared
 
@@ -56,7 +56,7 @@ Notes on the matrix:
 
 - **"Limited" for markus on Obsidian-side operations:** it covers a smaller subset of REST endpoints than cyanheads.
 
-- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 44-tool count is exact for v3.6.1 and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
+- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 44-tool count is exact for v3.6.4 and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
 
 - **License row** is informational, not a recommendation. MIT and Apache-2.0 are both permissive; pick what your org's policy requires.
 
@@ -239,7 +239,7 @@ As of v3.6.0-rc.4, **enquire-mcp ships public, reproducible end-to-end retrieval
 
 ## Disclaimer
 
-This is a snapshot as of **2026-05-15** (v3.6.1). All five servers are actively developed (or in some cases archived) and the feature matrix will drift. Before making a decision:
+This is a snapshot as of **2026-05-15** (v3.6.4). All five servers are actively developed (or in some cases archived) and the feature matrix will drift. Before making a decision:
 
 1. Re-read each alternative's current `README.md` — features land between matrix updates.
 2. Run each candidate against a sample of your own vault for an hour. Retrieval quality, in particular, is vault-specific and unreliable to compare from feature lists alone.
@@ -247,4 +247,4 @@ This is a snapshot as of **2026-05-15** (v3.6.1). All five servers are actively 
 
 Corrections to this document are welcome — open an issue or PR on [`oomkapwn/enquire-mcp`](https://github.com/oomkapwn/enquire-mcp). Specifically: if a row above understates an alternative's capabilities, that's a bug in this doc and we'd like to fix it.
 
-— enquire-mcp maintainer, v3.6.1
+— enquire-mcp maintainer, v3.6.4

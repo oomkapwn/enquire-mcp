@@ -36,7 +36,7 @@
 
 import { promises as fs } from "node:fs";
 import type { FtsIndex } from "./fts5.js";
-import { type SearchHybridHit, searchHybrid } from "./tools.js";
+import { type SearchHybridHit, searchHybrid } from "./tools/index.js";
 import type { Vault } from "./vault.js";
 
 /** A single evaluation query — relevant doc paths are the ground truth. */

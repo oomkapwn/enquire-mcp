@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RERANKER_MODELS, resolveRerankerModel } from "../src/embeddings.js";
 import { FtsIndex } from "../src/fts5.js";
-import { searchHybrid } from "../src/tools.js";
+import { searchHybrid } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 describe("RERANKER_MODELS catalog (v2.9.0)", () => {

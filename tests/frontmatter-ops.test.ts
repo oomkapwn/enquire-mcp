@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { frontmatterGet, frontmatterSearch, frontmatterSet } from "../src/tools.js";
+import { frontmatterGet, frontmatterSearch, frontmatterSet } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;

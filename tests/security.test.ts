@@ -12,7 +12,7 @@ import {
   renameNote,
   replaceInNotes,
   searchHybrid
-} from "../src/tools.js";
+} from "../src/tools/index.js";
 import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;

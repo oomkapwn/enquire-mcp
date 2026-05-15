@@ -2,6 +2,64 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0-rc.1] — 2026-05-15
+
+> **TL;DR:** v3.6.0 Phase 1 of 4 — `src/tools.ts` (4252 lines) split into 5 domain modules under `src/tools/` with a barrel re-export. Pure refactor: same exported surface, same signatures, all 712 tests pass. Published to npm under dist-tag `rc` (NOT `latest`); install with `npm i @oomkapwn/enquire-mcp@rc` to try.
+
+**Pre-release — v3.6.0 sprint Phase 1.** First RC of the v3.6.0 minor release. The sprint goal (`CLAUDE.md` in repo root) is split into 4 phased RCs + stable promotion; each RC is independently testable on the `rc` dist-tag before the final `latest` promotion.
+
+### Changed — `src/tools.ts` (4252 lines) → `src/tools/` (5 domain files + barrel)
+
+The monolith `tools.ts` was the **#1 finding across 3 independent external audits** (Mavis ×2, MiniMax) — every audit flagged it as the only blocker between the project and a clean top-tier rating. This RC closes it.
+
+| Domain | File | Lines | Exports | What's inside |
+|---|---|---|---|---|
+| Search | `src/tools/search.ts` | 1224 | 19 | `searchText`, `semanticSearch`, `embeddingsSearch`, `searchHybrid`, `findSimilar`, `pickEmbedTextForHyde` + TF-IDF helpers (`tokenizeForTfidf`, `buildTfidfIndex`, `sliceSnippet`) + types (`SearchMode`, `SearchHit`, `SearchResponse`, `SemanticHit`, `EmbedHit`, `EmbedSearchResponse`, `HnswSearchContext`, `SimilarNote`, `SearchHybridHit`, `SearchHybridResponse`) |
+| Write | `src/tools/write.ts` | 682 | 21 | `createNote`, `appendToNote`, `renameNote`, `archiveNote`, `replaceInNotes`, `frontmatterSet` + helpers (`rewriteRawTarget`, `rewriteOutsideCodeFences`, `replaceStringOutsideCodeFences`, `composeNote`, `suggestSimilar`, `resolveTarget`, `extractFrontmatterTagsLower`, `resolvePeriodicAlias`) + types |
+| Read | `src/tools/read.ts` | 864 | 28 | `listNotes`, `readNote`, `getRecentEdits`, `listTags`, `getVaultStats`, `resolveWikilink`, `getBacklinks`, `getUnresolvedWikilinks`, `getOutboundLinks`, `getNoteNeighbors`, `frontmatterGet`, `frontmatterSearch`, `dataviewQuery`, `chatThreadRead`, `chatThreadAppend` + helpers (`extractHeadings`) + types |
+| Media | `src/tools/media.ts` | 516 | 16 | `listPdfs`, `readPdf`, `ocrPdf`, `listCanvases`, `readCanvas` + types |
+| Meta | `src/tools/meta.ts` | 984 | 26 | `contextPack`, `validateNoteProposal`, `lintWiki`, `getOpenQuestions`, `paperAudit`, `findPath`, `openInUi` + helpers (`jaccard`, `intersectionSize`, `ngrams`, `indexFor`, `findBestMatch`, `stripMd`, `normalizeTag`) + types |
+| Barrel | `src/tools/index.ts` | 5 | re-export | `export * from "./search.js"; ...` |
+| **Total** | **6 files** | **4275** | **110** | (+23 lines: previously-private helpers became `export` for cross-domain use) |
+
+### Changed — import paths
+
+- `src/index.ts`: `from "./tools.js"` → `from "./tools/index.js"`
+- `src/eval.ts`: same
+- 15 test files updated identically. Pure path swap, no API changes.
+
+### Helper visibility — what changed and why
+
+A handful of previously-private helpers became exported so cross-domain functions can share them via ES module imports. Each is benign (used only inside async function bodies, no runtime cycles). The barrel re-exports them transparently. List in commit message + below for traceability:
+
+- `meta.ts` exports (new): `jaccard`, `intersectionSize`, `ngrams`, `indexFor`, `findBestMatch`, `stripMd`, `normalizeTag`
+- `search.ts` exports (new): `sliceSnippet`, `tokenizeForTfidf`, `buildTfidfIndex`
+- `write.ts` exports (new): `composeNote`, `extractFrontmatterTagsLower`, `resolvePeriodicAlias`, `suggestSimilar`, `resolveTarget`, `rewriteRawTarget`, `rewriteOutsideCodeFences`, `replaceStringOutsideCodeFences`
+
+These now appear in the public barrel surface. They are NOT part of `package.json` `exports` (which only re-exports `embed-db`, `fts5`, `vault`, `hnsw`, `bases`, `communities`) — so no SemVer contract change. STABILITY.md surface unaffected.
+
+### Migration
+
+**No-op for consumers.** The npm package's public API surface (44 MCP tools, CLI flags, exported sub-paths) is identical. The refactor is purely internal file structure.
+
+For contributors who imported from `src/tools.ts` directly:
+- Old: `import { createNote } from "@oomkapwn/enquire-mcp/dist/tools.js"`
+- New: `import { createNote } from "@oomkapwn/enquire-mcp/dist/tools/index.js"`
+
+But `src/tools.ts` was never in `package.json` `exports`, so this import path was never officially supported. No breakage on supported paths.
+
+### Tests
+
+712 unit tests pass · 31 test files · branches 75.29% · lines 89.54% · statements 86.06% · functions 82.15% · lint clean · `tsc` strict clean · smoke pass (synthetic vault scan + FTS5 path + bearer auth).
+
+### npm dist-tag
+
+Published under **`rc`** dist-tag, NOT `latest`. Users on `latest` stay on v3.5.14. To try this RC: `npm install @oomkapwn/enquire-mcp@rc`.
+
+### Next RC
+
+`v3.6.0-rc.2`: split `src/index.ts` (3665 lines) → `src/cli/*` + `src/server.ts` + `src/prompts.ts` + `src/tool-registry.ts` + machine-readable `src/tool-manifest.ts`.
+
 ## [3.5.14] — 2026-05-14
 
 > **TL;DR:** External audit #5 (MiniMax, 4.7/5.0). Surface-only cleanup: added TL;DR headers to v3.5.9..v3.5.13 entries for skimability + documented the rejected L-2 finding (deps dual-listing is needed, not cosmetic). No code changes.

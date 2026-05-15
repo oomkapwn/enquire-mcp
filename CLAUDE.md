@@ -67,6 +67,9 @@ Directive: **"Максимальное качество и уверенный т
 - **Dismissing an auditor without CHANGELOG reasoning** (rule since v3.5.14)
 - **Compressing CHANGELOG for aesthetics** — audit trail trumps style
 - **Merge without green daily-check on main** afterward
+- **Claim "all N callsites" before grep-verifying** — overclaim class repeated 3× in K-1 saga (v3.6.1, v3.6.2, v3.6.4). Solution: structural enforcement (`tests/k1-class-invariant.test.ts`) > CHANGELOG promises. **Rule since v3.6.4**: any "N of N fixed" claim requires a test gate or it doesn't ship.
+- **Reactive same-day patching** — 5 releases (3.6.0→3.6.4) on 2026-05-15 happened because each post-ship audit found another instance. Lesson: **audit BEFORE ship, not after**. After a retroactive correction patch (like v3.6.4), allow 24h of dogfood on main before next patch — surfaces regressions and breaks the "instance-spotted → instance-patched" cycle. **Rule since v3.6.4**: after a CRITICAL or retroactive-correction patch, the next patch waits ≥24h unless a new CRITICAL is found in production.
+- **Invariant test without negative-control** — a test that ALWAYS passes proves nothing. Every new invariant test must have a sibling test that fails when the invariant is violated (see `tests/peek-meta.test.ts` "NEGATIVE control" pattern from v3.6.4). **Rule since v3.6.4**.
 
 ## Method note
 
@@ -79,6 +82,22 @@ Apply **root-cause sweep methodology** consistently: every bug → identify the 
 ## Current phase status
 
 - **v3.6.0 stable shipped**: tools.ts + index.ts splits + Full TSDoc + TypeDoc on GH Pages + public benchmarks. Internal 9-layer audit produced 4.85/5 verdict. Mavis external 4.9/5.
-- **v3.6.1 emergency patch shipped**: closed 3 CRITICAL ship-blockers caught by an anonymous external auditor that all 3 prior audits (internal + Mavis + my rootcause sweep) missed.
-- **v3.6.2 sprint next**: batch fixes for 13 Medium + 14 Low + 3 new High from internal + external audits. All non-blocking, batched as patch.
-- **Method lesson**: every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies. Internal multi-layer audits = breadth + speed but NOT a substitute for fresh external perspective. See `~/.claude/.../memory/method_full_system_audit.md` for the rule.
+- **v3.6.1 emergency patch shipped**: closed 3 CRITICAL ship-blockers caught by an anonymous external auditor that all 3 prior audits missed. (Overclaim instance #1: "CRIT-1 closed" was 1 of 10 callsites.)
+- **v3.6.2 shipped**: 13 Medium + 14 Low + 4 HIGHs from internal + external audits. Claimed "K-1 RESIDUAL CLASS full fix" + "all 10 callsites". (Overclaim instance #2: actually 4 of 10.)
+- **v3.6.3 shipped**: marketing pivot to "memory layer for AI agents" framing — README + npm description + GitHub About/Topics + package.json keywords. Zero code/behavior changes; pure discovery patch.
+- **v3.6.4 shipped (current)**: K-1 class TRULY FINAL closure — fixes the 5 residual `cli.ts` callsites that v3.6.2 left + adds `tests/k1-class-invariant.test.ts` (structural class guard) + 3 caller-pattern integration tests (positive bge / positive trigram / negative-control). Retroactive TSDoc corrections in `embed-db.ts` + `fts5.ts`. CHANGELOG explicitly names v3.6.2 as overclaim instance #2 and v3.6.1 as #1. **The methodology bug is now structurally prevented, not just documented.**
+- **v3.7+ backlog** (deferred — not blocking):
+  - E2E preservation tests for `setup` / `eval` / `build-embeddings` (currently only `index` has E2E preservation+forced-rebuild pair from v3.6.4).
+  - Strengthen K-1 invariant via TypeScript AST: enforce that peek result is CONSUMED in the constructor's `modelAlias` / `tokenize` arg, not just present in scope.
+  - Recursive `SRC_DIRS` scan in `tests/k1-class-invariant.test.ts` (currently hardcoded `["src", "src/tools"]`).
+  - Cache peek result in `prepareServerDeps` to avoid hot-path SQLite open+close on every `embeddingsSearch` call (~5-10ms × N searches).
+  - Re-run `npm run bench:retrieval` post-v3.6.4 and republish `docs/benchmarks.md` (ensure K-1 fix doesn't impact retrieval numbers).
+  - Marketing positioning permeation into `docs/api.md`, `docs/QUICKSTART.md`, `docs/COMPARISON.md` opening paragraphs (still framed as "MCP server", not "memory layer").
+  - Per-file branch-coverage thresholds for security-critical modules (`http-transport.ts` 67%, `tools/search.ts` 68%, `tools/meta.ts` 68%, `tools/media.ts` 68%). Global 75.4% hides these dips.
+  - GitHub repo metadata invariant test (`About` + `Topics` drift caught by no CI today).
+- **Method lessons accumulated through the v3.6.x cascade**:
+  1. **Every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies.** Internal multi-layer audits = breadth + speed but NOT a substitute for fresh external perspective. See `~/.claude/.../memory/method_full_system_audit.md`.
+  2. **Class fix ≠ instance fix; structural enforcement > CHANGELOG promises.** When a methodological bug recurs in two consecutive releases, the fix is a test gate, not another patch. (See `tests/k1-class-invariant.test.ts`.)
+  3. **Caller-pattern coverage ≠ helper-pattern coverage.** Unit tests for utility functions don't catch callers forgetting to use them. Negative-control test pins the bad behavior.
+  4. **Audit BEFORE ship, not after.** Reactive post-ship patches create release churn and overclaim risk. Audit during code review; after a CRITICAL/retroactive patch, allow 24h of main dogfooding before the next patch.
+  5. **Marketing positioning is continuous calibration.** Same capabilities, evolving search vocabulary — Claude Memory (Oct 2025) and Skills (Nov 2025) shifted "memory for AI agents" into mainstream developer-discovery terms.

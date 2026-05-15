@@ -1,0 +1,702 @@
+import { Command } from "commander";
+import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP } from "./cli-help.js";
+import { EmbedDb } from "./embed-db.js";
+import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
+import { defaultIndexFile, FtsIndex } from "./fts5.js";
+import { VERSION } from "./index.js";
+import {
+  type ServeOptions,
+  startServer,
+  syncEmbedDb,
+  syncFtsIndex,
+  syncPdfEmbedDb,
+  syncPdfFtsIndex
+} from "./server.js";
+import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
+import { Vault } from "./vault.js";
+
+/** Raw `serve-http` flags as parsed by commander (string-typed). */
+interface HttpServeCli extends ServeOptions {
+  port?: string;
+  host?: string;
+  bearerToken?: string;
+  bearerTokenEnv?: string;
+  mcpPath?: string;
+  rateLimit?: string;
+  corsOrigin?: string[];
+  healthPath?: string;
+  /** v2.14.0 — stateful mode flags. */
+  stateful?: boolean;
+  sessionIdleTimeoutMs?: string;
+  maxSessions?: string;
+}
+
+export async function main(): Promise<void> {
+  const program = new Command();
+  program
+    .name("enquire-mcp")
+    .description("enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the WWW.")
+    .version(VERSION);
+
+  program
+    .command("serve", { isDefault: true })
+    .description("Start the MCP server over stdio")
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--enable-write", ENABLE_WRITE_HELP)
+    .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
+    .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
+    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--persistent-index", PERSISTENT_INDEX_HELP)
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option(
+      "--tokenize <mode>",
+      "FTS5 tokenize mode: 'unicode61' (default; Latin/Cyrillic) or 'trigram' (CJK/mixed-script)"
+    )
+    .option(
+      "--exclude-glob <pattern...>",
+      "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "Strict allowlist — when set, ONLY paths matching one of these glob patterns are visible. Complement to --exclude-glob (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics as --exclude-glob (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`."
+    )
+    .option(
+      "--watch",
+      "Watch the vault for .md add/change/unlink events and incrementally invalidate the parsed-note cache (and refresh the FTS5 index when --persistent-index is also enabled). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
+    )
+    .option(
+      "--disabled-tools <name...>",
+      "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`."
+    )
+    .option(
+      "--enabled-tools <name...>",
+      "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
+    )
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
+    .option(
+      "--include-pdfs",
+      'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
+    )
+    .option(
+      "--enable-reranker",
+      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; +5-10 NDCG@10 typical for retrieval quality. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
+    )
+    .option(
+      "--reranker-model <alias>",
+      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-multilingual` (Xenova/mxbai-rerank-xsmall-v1, ~25 MB, multilingual). Other options: `rerank-bge` (~110 MB, English), `rerank-bge-large` (~560 MB, English, +1-2 NDCG@10), `rerank-jina-tiny` (~33 MB, English, latency-optimized), `rerank-multilingual-large` (~280 MB, 50+ langs). Only effective with `--enable-reranker`."
+    )
+    .option(
+      "--reranker-top-n <n>",
+      "v2.9.0 — how many top RRF-fused candidates to rerank (default 50). Larger N improves recall ceiling but costs more reranker compute (~30-50ms per 50 pairs on M1). Only effective with `--enable-reranker`."
+    )
+    .option(
+      "--use-hnsw",
+      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-wasm` optionalDependency (~340 KB, pure WASM, no native binding)."
+    )
+    .option(
+      "--hnsw-ef <n>",
+      "v2.13.0 — HNSW search-time beam width (default 100; must be ≥ requested k). Higher = more accurate, slightly slower. Common range: 50-500. Only effective with `--use-hnsw`."
+    )
+    .option(
+      "--late-chunk-context <chars>",
+      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
+    )
+    .option(
+      "--no-hnsw-persist",
+      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
+    )
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
+    )
+    .action(async (opts: ServeOptions) => {
+      // Validate up-front so a bad value fails before we touch the vault.
+      parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
+      await startServer(opts);
+    });
+
+  // v2.6.0 — remote-MCP HTTP transport. Mirrors `serve` flags + adds HTTP
+  // surface (bearer auth, rate-limit, CORS). See docs/http-transport.md.
+  program
+    .command("serve-http")
+    .description(
+      "Start the MCP server over HTTP (Streamable HTTP transport). For remote-MCP use with claude.ai web, ChatGPT, Cursor HTTP mode, mobile clients. Requires --bearer-token (or --bearer-token-env). Bind to 127.0.0.1 by default — front with Tailscale Funnel / Cloudflare Tunnel for remote access."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--port <n>", "TCP port (default 3000)", "3000")
+    .option(
+      "--host <host>",
+      "Bind host (default 127.0.0.1 — explicit because 0.0.0.0 must be opt-in for remote-MCP)",
+      "127.0.0.1"
+    )
+    .option(
+      "--bearer-token <token>",
+      "Bearer token clients must present in the Authorization header. Generate with `enquire-mcp gen-token`. Required."
+    )
+    .option(
+      "--bearer-token-env <name>",
+      "Read the bearer token from this env var instead of --bearer-token (cleaner for systemd / .env / process listings). Either flag is required."
+    )
+    .option("--mcp-path <path>", "URL path for the MCP endpoint (default /mcp)", "/mcp")
+    .option("--rate-limit <n>", "Max requests per minute per bearer token (default 120). Pass 0 to disable.", "120")
+    .option(
+      "--cors-origin <origin...>",
+      "CORS allowlist (repeatable). Default empty — no Access-Control-Allow-Origin sent. Use '*' as a single entry to allow any origin (not compatible with credentialed Bearer requests; you almost always want explicit origins like https://claude.ai)."
+    )
+    .option("--health-path <path>", "URL path for the unauthenticated health probe (default /health)", "/health")
+    .option(
+      "--stateful",
+      "v2.14.0 — run in stateful mode: sessions keyed by `Mcp-Session-Id`, persistent SSE for server-initiated notifications, DELETE /mcp for explicit termination. Required for ChatGPT custom GPT actions and other clients expecting persistent state across requests. Off by default (stateless minimizes attack surface and is the right choice for short-running tools)."
+    )
+    .option(
+      "--session-idle-timeout-ms <n>",
+      "v2.14.0 — evict stateful sessions idle longer than this many milliseconds. Default 1800000 (30 min). Only effective with --stateful."
+    )
+    .option(
+      "--max-sessions <n>",
+      "v2.14.0 — max concurrent stateful sessions. New sessions beyond this cap return 503 + Retry-After. Default 100. Only effective with --stateful."
+    )
+    .option("--enable-write", ENABLE_WRITE_HELP)
+    .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
+    .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
+    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--persistent-index", PERSISTENT_INDEX_HELP)
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
+    .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
+    .option("--watch", "Watch the vault for .md changes and refresh indexes incrementally.")
+    .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
+    .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the persistent embed db (`f32` default, `int8` for ~4× smaller BLOBs). Must match the mode used at `build-embeddings` time."
+    )
+    .action(async (opts: HttpServeCli) => {
+      const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
+      const tokenFromEnv =
+        typeof opts.bearerTokenEnv === "string" ? (process.env[opts.bearerTokenEnv] ?? "").trim() : "";
+      const bearerToken = tokenFromArg.length > 0 ? tokenFromArg : tokenFromEnv;
+      if (!bearerToken) {
+        process.stderr.write(
+          "enquire serve-http: --bearer-token (or --bearer-token-env <name>) is required.\n" +
+            "  Generate one with: enquire-mcp gen-token\n"
+        );
+        process.exit(1);
+      }
+      // --port accepts 0 as "kernel-assigned ephemeral" — useful for tests
+      // and for scenarios where the user binds via a tunnel and doesn't
+      // care which local port. So we use a non-negative-integer check
+      // here, NOT parsePositiveInt (which would reject 0).
+      const portNum = Number(opts.port ?? "3000");
+      if (!Number.isFinite(portNum) || !Number.isInteger(portNum) || portNum < 0 || portNum > 65535) {
+        throw new Error(`--port must be an integer in [0, 65535]; got "${opts.port}"`);
+      }
+      // v2.14.0 — stateful-mode opts. Tolerate missing flags (default to
+      // standard values) and validate parsed integers.
+      const sessionIdleMs =
+        opts.sessionIdleTimeoutMs !== undefined
+          ? parsePositiveInt(opts.sessionIdleTimeoutMs, "--session-idle-timeout-ms")
+          : 30 * 60 * 1000;
+      const maxSessionsCap =
+        opts.maxSessions !== undefined ? parsePositiveInt(opts.maxSessions, "--max-sessions") : 100;
+      // v2.17.0 — fail fast on a typo'd quantization mode.
+      const quantMode = parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
+      const httpOpts = {
+        ...(opts as ServeOptions),
+        ...(quantMode !== undefined ? { quantizeEmbeddings: quantMode } : {}),
+        port: portNum,
+        host: opts.host ?? "127.0.0.1",
+        bearerToken,
+        mcpPath: opts.mcpPath ?? "/mcp",
+        rateLimitPerMinute: opts.rateLimit !== undefined ? Number(opts.rateLimit) : 120,
+        corsOrigins: opts.corsOrigin ?? [],
+        healthPath: opts.healthPath ?? "/health",
+        stateful: opts.stateful === true,
+        sessionIdleTimeoutMs: sessionIdleMs,
+        maxSessions: maxSessionsCap
+      } as const;
+      if (
+        !Number.isFinite(httpOpts.rateLimitPerMinute) ||
+        httpOpts.rateLimitPerMinute < 0 ||
+        !Number.isInteger(httpOpts.rateLimitPerMinute)
+      ) {
+        throw new Error(`--rate-limit must be a non-negative integer; got "${opts.rateLimit}"`);
+      }
+      const { startHttpServer } = await import("./http-transport.js");
+      await startHttpServer(httpOpts);
+    });
+
+  // v2.6.0 — convenience helper. Same as `node -e
+  // 'console.log(require("crypto").randomBytes(32).toString("base64url"))'`
+  // but discoverable in --help.
+  program
+    .command("gen-token")
+    .description("Generate a fresh 32-byte base64url bearer token suitable for `serve-http --bearer-token`.")
+    .action(async () => {
+      const { generateBearerToken } = await import("./http-transport.js");
+      process.stdout.write(`${generateBearerToken()}\n`);
+    });
+
+  program
+    .command("clear-cache")
+    .description("Delete the persistent-cache file for a given vault")
+    .requiredOption("--vault <path>", "Vault whose cache to delete")
+    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .action(async (opts: { vault: string; cacheFile?: string }) => {
+      const vault = new Vault(opts.vault, { persistentCache: true, cacheFile: opts.cacheFile });
+      await vault.ensureExists();
+      const removed = await vault.clearDiskCache();
+      if (removed) {
+        process.stdout.write(`enquire: removed cache file ${vault.cacheFile}\n`);
+      } else {
+        process.stdout.write(`enquire: no cache file at ${vault.cacheFile}\n`);
+      }
+    });
+
+  program
+    .command("clear-index")
+    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM sidecar) for a given vault")
+    .requiredOption("--vault <path>", "Vault whose index to delete")
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .action(async (opts: { vault: string; indexFile?: string }) => {
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+      const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
+      const removed = await idx.clearOnDisk();
+      if (removed) {
+        process.stdout.write(`enquire: removed fts5 index files at ${indexFile}\n`);
+      } else {
+        process.stdout.write(`enquire: no fts5 index files at ${indexFile}\n`);
+      }
+    });
+
+  program
+    .command("index")
+    .description(
+      "Cold-build (or refresh) the FTS5 search index for a vault. Useful before first --persistent-index use."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .option(
+      "--include-pdfs",
+      "v2.8.0 — also index PDFs into the FTS5 index. Off by default; PDF extraction is slower than markdown."
+    )
+    .action(
+      async (opts: {
+        vault: string;
+        indexFile?: string;
+        tokenize?: "unicode61" | "trigram";
+        includePdfs?: boolean;
+      }) => {
+        const tokenize = opts.tokenize === "trigram" ? "trigram" : "unicode61";
+        const vault = new Vault(opts.vault);
+        await vault.ensureExists();
+        const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
+        await idx.open();
+        try {
+          const report = await syncFtsIndex(vault, idx);
+          process.stdout.write(
+            `enquire: index ${indexFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfFtsIndex(vault, idx);
+            process.stdout.write(
+              `enquire: index ${indexFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          idx.close();
+        }
+      }
+    );
+
+  // v2.0 alpha — ML embeddings subcommands.
+  program
+    .command("install-model")
+    .description(
+      `Pre-download an embedding model so the first \`obsidian_embeddings_search\` call doesn't block on a ${EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]?.approxSizeMB}MB HuggingFace download. Models are cached under ~/.cache/huggingface/transformers.js/ and are reused across vaults.`
+    )
+    .argument("[alias]", `Model alias (${Object.keys(EMBEDDING_MODELS).join(" | ")})`, DEFAULT_MODEL_ALIAS)
+    .action(async (alias: string) => {
+      const model = resolveModel(alias);
+      process.stderr.write(
+        `enquire: downloading ${model.hfId} (~${model.approxSizeMB}MB; ${model.dim}-dim, ${
+          model.multilingual ? "multilingual" : "English-only"
+        })...\n`
+      );
+      const t0 = Date.now();
+      // Loading the embedder triggers the transformers.js model download +
+      // local cache write. We don't actually run inference — just verify the
+      // pipeline initializes successfully.
+      const embedder = await loadEmbedder(alias);
+      // Smoke: embed one tiny string so any ONNX-runtime failure surfaces here
+      // rather than at first MCP call.
+      const [vec] = await embedder.embed(["hello"]);
+      if (!vec || vec.length !== model.dim) {
+        throw new Error(`Model loaded but produced unexpected output dim=${vec?.length}`);
+      }
+      process.stdout.write(
+        `enquire: model ${alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+      );
+    });
+
+  program
+    .command("build-embeddings")
+    .description(
+      "Cold-build (or refresh) the persistent embedding index for a vault. Required before `obsidian_embeddings_search` is useful. Uses the same paragraph-level chunking as the FTS5 index, so chunk identity matches across BM25 and embeddings."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
+    .option("--embed-file <path>", "Override the .embed.db file location")
+    .option("--exclude-glob <pattern...>", "Exclude paths matching glob (repeatable)")
+    .option("--read-paths <pattern...>", "Strict allowlist of glob patterns (repeatable)")
+    .option(
+      "--include-pdfs",
+      "v2.8.0 — also embed PDF chunks. Off by default; PDF extraction + embedding is ~10-30x slower than markdown per file."
+    )
+    .option(
+      "--late-chunk-context <chars>",
+      "v2.15.0 — context-windowed embedding text (doc title + breadcrumb + neighbor-chunk tails of N chars). Default 0 (off). Typical 100-200 for +2-5 NDCG@10."
+    )
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding. `f32` (default) is identical to v2.16- behavior. `int8` uses asymmetric scalar quantization (per-vector min + scale + int8 bytes) for ~4× smaller BLOBs at ~1-2% recall@10 cost. Switching modes triggers a full rebuild via the schema-mismatch path. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
+    )
+    .action(
+      async (opts: {
+        vault: string;
+        embeddingModel?: string;
+        embedFile?: string;
+        excludeGlob?: string[];
+        readPaths?: string[];
+        includePdfs?: boolean;
+        lateChunkContext?: string;
+        quantizeEmbeddings?: string;
+      }) => {
+        const model = resolveModel(opts.embeddingModel);
+        const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
+        await vault.ensureExists();
+        const embedFile = opts.embedFile ?? embedDbPath(vault.root);
+        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        const db = new EmbedDb({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
+        const lateChunkContext =
+          opts.lateChunkContext !== undefined
+            ? Math.max(0, parsePositiveInt(opts.lateChunkContext, "--late-chunk-context"))
+            : 0;
+        await db.open();
+        try {
+          process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
+          const embedder = await loadEmbedder(opts.embeddingModel);
+          const report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
+          process.stdout.write(
+            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfEmbedDb(vault, db, embedder, { lateChunkContext });
+            process.stdout.write(
+              `enquire: embed db ${embedFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          db.close();
+        }
+      }
+    );
+
+  program
+    .command("clear-embeddings")
+    .description("Delete the embedding index files (.embed.db + WAL/SHM sidecar) for a given vault")
+    .requiredOption("--vault <path>", "Vault whose embedding index to delete")
+    .option("--embed-file <path>", "Override the embedding-index file location")
+    .action(async (opts: { vault: string; embedFile?: string }) => {
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const file = opts.embedFile ?? embedDbPath(vault.root);
+      // Use any model alias / dim for the delete path — bootstrapSchema uses
+      // them only when the file already exists with mismatched meta.
+      const db = new EmbedDb({ file, vaultRoot: vault.root, modelAlias: "n/a", dim: 1 });
+      const removed = await db.clearOnDisk();
+      if (removed) {
+        process.stdout.write(`enquire: removed embedding index files at ${file}\n`);
+      } else {
+        process.stdout.write(`enquire: no embedding index files at ${file}\n`);
+      }
+    });
+
+  // v2.11.0 — diagnostic + zero-touch onboarding. `doctor` is read-only and
+  // returns 0 if everything is ready, 1 if any critical setup is missing.
+  // `setup` runs the install + build sequence in order, idempotent.
+  program
+    .command("doctor")
+    .description(
+      "Run a read-only health check: verify the vault path, optional deps (better-sqlite3 / transformers / pdfjs / tesseract / canvas), embedding-model cache, FTS5 index, and embed-db. Returns 0 if everything is ready for full hybrid retrieval, 1 if any critical piece is missing. Color-coded ✓ / ⚠ / ✗ output. Use this when you're unsure what's set up vs not."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--json", "Emit machine-readable JSON instead of the colored banner")
+    .action(async (opts: { vault: string; json?: boolean }) => {
+      const { runDoctor, formatDoctorResult } = await import("./doctor.js");
+      const result = await runDoctor({
+        vault: opts.vault,
+        modelEntry: EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]
+      });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        process.stdout.write(`${formatDoctorResult(result)}\n`);
+      }
+      if (!result.ready) process.exit(1);
+    });
+
+  program
+    .command("setup")
+    .description(
+      "Zero-touch onboarding: run `install-model` + `index` + `build-embeddings` in sequence so a fresh vault is fully indexed for hybrid retrieval (BM25 + TF-IDF + ML embeddings) in a single command. Idempotent — re-running on a fully set-up vault is a fast no-op pass that just reports the existing state."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
+    .option(
+      "--include-pdfs",
+      "Also index PDFs (FTS5 + embeddings). Off by default; opt-in because PDF extraction is slower."
+    )
+    .option("--skip-embeddings", "Skip the install-model + build-embeddings steps (only build FTS5)")
+    .option(
+      "--quantize-embeddings <mode>",
+      "v2.17.0 — vector storage encoding for the embed db (`f32` default, `int8` for ~4× smaller BLOBs). Same semantics as the `build-embeddings` flag."
+    )
+    .action(
+      async (opts: {
+        vault: string;
+        embeddingModel?: string;
+        includePdfs?: boolean;
+        skipEmbeddings?: boolean;
+        quantizeEmbeddings?: string;
+      }) => {
+        const v = new Vault(opts.vault);
+        await v.ensureExists();
+        process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
+
+        // Step 1: FTS5 index.
+        process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
+        const indexFile = defaultIndexFile(v.root);
+        const idx = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+        await idx.open();
+        try {
+          const ftsReport = await syncFtsIndex(v, idx);
+          process.stdout.write(
+            `   FTS5 (md): added=${ftsReport.added} updated=${ftsReport.updated} unchanged=${ftsReport.unchanged} chunks=${ftsReport.total_chunks}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfFtsIndex(v, idx);
+            process.stdout.write(
+              `   FTS5 (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          idx.close();
+        }
+
+        if (opts.skipEmbeddings) {
+          process.stdout.write("\n>> Step 2-3 skipped (--skip-embeddings)\n");
+          process.stdout.write("\nSetup partial. Run without --skip-embeddings to enable ML hybrid retrieval.\n");
+          return;
+        }
+
+        // Step 2: Install-model.
+        process.stdout.write("\n>> Step 2/3: Install embedding model\n");
+        const model = resolveModel(opts.embeddingModel);
+        const t0 = Date.now();
+        const embedder = await loadEmbedder(opts.embeddingModel);
+        const [smokeVec] = await embedder.embed(["hello"]);
+        if (!smokeVec || smokeVec.length !== model.dim) {
+          throw new Error(`Model ${model.alias} loaded but dim mismatch: ${smokeVec?.length} vs ${model.dim}`);
+        }
+        process.stdout.write(
+          `   model ${model.alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+        );
+
+        // Step 3: build-embeddings.
+        process.stdout.write("\n>> Step 3/3: Build embedding index\n");
+        const embedFile = embedDbPath(v.root);
+        const quantization = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
+        const db = new EmbedDb({
+          file: embedFile,
+          vaultRoot: v.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
+        await db.open();
+        try {
+          const embReport = await syncEmbedDb(v, db, embedder);
+          process.stdout.write(
+            `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
+          );
+          if (opts.includePdfs) {
+            const pdfReport = await syncPdfEmbedDb(v, db, embedder);
+            process.stdout.write(
+              `   embed-db (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
+            );
+          }
+        } finally {
+          db.close();
+        }
+
+        process.stdout.write("\n✓ Setup complete. Now run:\n");
+        process.stdout.write(`   enquire-mcp serve --vault ${opts.vault} --persistent-index`);
+        if (opts.includePdfs) process.stdout.write(" --include-pdfs");
+        if (quantization !== "f32") process.stdout.write(` --quantize-embeddings ${quantization}`);
+        process.stdout.write("\n");
+        process.stdout.write(`Or check status: enquire-mcp doctor --vault ${opts.vault}\n`);
+      }
+    );
+
+  // v2.12.0 — retrieval-quality evaluation harness. Reads a JSONL file of
+  // queries with known-relevant doc paths, runs obsidian_search for each,
+  // computes NDCG@K + Recall@K + MRR. Pretty table by default, --json for
+  // machine output, --matrix to A/B several flag combinations.
+  program
+    .command("eval")
+    .description(
+      "Built-in retrieval-quality benchmark harness. Reads a JSONL file of queries with known-relevant doc paths, runs `obsidian_search` for each, computes NDCG@K + Recall@K + MRR + per-query latency. Pretty table output by default; `--json` for machine-readable output. `--matrix` runs all combinations of (graph_boost on/off × reranker on/off) side-by-side for systematic tuning. The only Obsidian-MCP with built-in retrieval evaluation."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .requiredOption("--queries <file>", "JSONL file with {query, relevant: ['path1', ...], id?} per line")
+    .option("--k <n>", "Top-K cutoff for NDCG / Recall (default 10)", "10")
+    .option("--matrix", "Run a 2x2 matrix of (graph_boost ± reranker) and print a comparison table")
+    .option("--reranker", "Enable cross-encoder reranking (same as serve --enable-reranker)")
+    .option("--reranker-model <alias>", `Reranker alias (default rerank-multilingual)`, "rerank-multilingual")
+    .option("--reranker-top-n <n>", "How many top RRF candidates to rerank (default 50)", "50")
+    .option("--persistent-index", "Open the FTS5 index for BM25 retrieval (recommended)")
+    .option("--per-query", "Print per-query scores in addition to aggregates (verbose)")
+    .option("--json", "Emit machine-readable JSON instead of the pretty table")
+    .action(
+      async (opts: {
+        vault: string;
+        queries: string;
+        k?: string;
+        matrix?: boolean;
+        reranker?: boolean;
+        rerankerModel?: string;
+        rerankerTopN?: string;
+        persistentIndex?: boolean;
+        perQuery?: boolean;
+        json?: boolean;
+      }) => {
+        const { readQueriesJsonl, runEval, formatEvalResult, formatEvalMatrix } = await import("./eval.js");
+        const k = parsePositiveInt(opts.k ?? "10", "--k");
+        const queries = await readQueriesJsonl(opts.queries);
+        if (queries.length === 0) {
+          process.stderr.write(`enquire eval: ${opts.queries} contains no queries\n`);
+          process.exit(1);
+        }
+        process.stderr.write(`enquire eval: loaded ${queries.length} queries from ${opts.queries}\n`);
+
+        const v = new Vault(opts.vault);
+        await v.ensureExists();
+
+        // Optional FTS5 index.
+        let ftsIndex: FtsIndex | null = null;
+        if (opts.persistentIndex) {
+          const indexFile = defaultIndexFile(v.root);
+          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root });
+          try {
+            await ftsIndex.open();
+            await syncFtsIndex(v, ftsIndex);
+          } catch (err) {
+            ftsIndex.close();
+            throw err;
+          }
+        }
+        const embedFile = embedDbPath(v.root);
+
+        try {
+          if (opts.matrix) {
+            // 2x2 matrix: (graph_boost ± reranker)
+            const configs: Array<{
+              label: string;
+              searchOpts: { graph_boost: boolean };
+              reranker?: { alias: string; topN: number };
+            }> = [
+              { label: "baseline (RRF only)", searchOpts: { graph_boost: false } },
+              { label: "+graph-boost", searchOpts: { graph_boost: true } },
+              {
+                label: "+reranker",
+                searchOpts: { graph_boost: false },
+                reranker: {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              },
+              {
+                label: "+graph-boost +reranker",
+                searchOpts: { graph_boost: true },
+                reranker: {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              }
+            ];
+            const results = [];
+            for (const cfg of configs) {
+              process.stderr.write(`enquire eval: running config "${cfg.label}"...\n`);
+              const r = await runEval({
+                vault: v,
+                queries,
+                ftsIndex,
+                embedFile,
+                k,
+                label: cfg.label,
+                searchOpts: cfg.searchOpts,
+                ...(cfg.reranker ? { reranker: cfg.reranker } : {})
+              });
+              results.push(r);
+            }
+            if (opts.json) {
+              process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+            } else {
+              process.stdout.write(`${formatEvalMatrix(results)}\n`);
+            }
+          } else {
+            // Single-config run.
+            const reranker = opts.reranker
+              ? {
+                  alias: opts.rerankerModel ?? "rerank-multilingual",
+                  topN: parsePositiveInt(opts.rerankerTopN ?? "50", "--reranker-top-n")
+                }
+              : undefined;
+            const result = await runEval({
+              vault: v,
+              queries,
+              ftsIndex,
+              embedFile,
+              k,
+              label: reranker ? `with-reranker(${reranker.alias})` : "default",
+              ...(reranker ? { reranker } : {})
+            });
+            if (opts.json) {
+              process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            } else {
+              process.stdout.write(`${formatEvalResult(result, { perQuery: opts.perQuery ?? false })}\n`);
+            }
+          }
+        } finally {
+          if (ftsIndex) ftsIndex.close();
+        }
+      }
+    );
+
+  await program.parseAsync(process.argv);
+}

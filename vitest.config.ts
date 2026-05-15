@@ -22,7 +22,24 @@ export default defineConfig({
       // (inflated stats copy-pasted from sub-agent output into release notes).
       reporter: ["text", "html", "lcov", "json-summary"],
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts", "**/*.test.ts"],
+      // v3.6.0-rc.2 — original `src/index.ts` was excluded because it was
+      // registration boilerplate where line coverage doesn't reflect quality.
+      // The rc.2 monolith split moved those 3665 lines into `cli.ts` +
+      // `server.ts` + `tool-registry.ts` + `prompts.ts`, so the SAME
+      // exclusion reasoning applies to all of them. Without this exclusion,
+      // coverage would drop from ~89% lines to ~78% (a -11pp regression
+      // that's purely about the include set, not about test quality). The
+      // actual tool LOGIC is in `src/tools/*` which stays included +
+      // covered. `tool-manifest.ts` is also pure data — no logic to test.
+      exclude: [
+        "src/index.ts",
+        "src/cli.ts",
+        "src/server.ts",
+        "src/tool-registry.ts",
+        "src/prompts.ts",
+        "src/tool-manifest.ts",
+        "**/*.test.ts"
+      ],
       // v3.6 — branches threshold raised 72→74 after the coverage uplift
       // pass. v3.5.9 had dropped it from 73→72 because local was at 72.94%
       // (knife-edge against CI). This release adds targeted tests for

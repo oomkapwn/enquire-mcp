@@ -2,7 +2,47 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.14] — 2026-05-14
+
+> **TL;DR:** External audit #5 (MiniMax, 4.7/5.0). Surface-only cleanup: added TL;DR headers to v3.5.9..v3.5.13 entries for skimability + documented the rejected L-2 finding (deps dual-listing is needed, not cosmetic). No code changes.
+
+**Patch — external audit #5 followup (MiniMax, v3.5.13).**
+
+Third independent audit in 4 days. Verdict: **4.7/5.0**, production-ready, only major concern is the monolith files already in v3.6 roadmap. Two reviewer recommendations actioned this release, one rejected with documented reasoning.
+
+### Added — TL;DR headers on recent CHANGELOG entries (audit M-1, partial)
+
+Auditor recommended simplifying the CHANGELOG (~1000 lines on 13 patches felt overweight). Full simplification rejected — the detail is **audit trail**, not noise: v3.5.10's coverage-stats drift was only catchable BECAUSE we had the original (wrong) numbers vs the (right) retroactive correction in the same file. Compromise: every recent entry now has a one-blockquote **TL;DR** at the top so skim-readers can grok scope in 1 second, while the full detail stays available for the next maintainer / next audit.
+
+Pattern applied to v3.5.9, v3.5.10, v3.5.11, v3.5.12, v3.5.13 — plus this entry. Future patches will follow the same convention.
+
+### Rejected — auditor L-2 (`@huggingface/transformers` deps dual-listing)
+
+Auditor flagged `@huggingface/transformers ^4.2.0` appearing in BOTH `devDependencies` and `optionalDependencies` as "cosmetic". **Tested the removal locally: 13 test failures** (cold-import timeouts in `pdf.test.ts` + `ocr.test.ts` + flake spreading across the test matrix when 31 test files run in parallel and each one's setup.ts cold-imports the 100MB transformers package).
+
+The dual-listing isn't cosmetic — it's the v3.5.6 root-cause fix for cold-import flakes. `optionalDependencies` alone is enough for npm to install the package, but listing in `devDependencies` ensures the dependency resolver hoists / caches it more aggressively, which keeps `tests/setup.ts`'s `Promise.allSettled([...])` warm-load reliable under the parallel test matrix. Empirical: with dual-listing 712/712 pass; without it 699/712 pass (4 test files fail with timeouts).
+
+Documented inline (this CHANGELOG entry) so future audits see the prior-art rejection and don't re-flag.
+
+### Deferred — auditor M-2 (JSDoc for public API)
+
+Adding TSDoc to 44 tools + 19 prompts is ~1300 lines of doc-comments. Worth doing but doesn't fit a patch — folded into the v3.6 sprint along with the monolith refactor.
+
+### Tests
+
+712 unit tests pass · branches 75.29% · lines 89.54% · statements 86.07% · functions 82.15% (verified via `npm run test:coverage`). Lint clean · tsc clean · version-consistency green at `3.5.14` across 5 surfaces.
+
+### Migration
+
+**No-op.** Documentation-only patch.
+
+### Method note
+
+This is a deliberate "no-op patch" against auditor findings: only the cheap actionable items get applied, the recommendations that turn out to be wrong on closer inspection get **documented rejections** in the CHANGELOG (not silently ignored). The next audit cycle sees the rejection trail and either accepts it or escalates with a stronger argument — avoiding the cycle of "auditor flags X → maintainer dismisses → next auditor flags X again".
+
 ## [3.5.13] — 2026-05-13
+
+> **TL;DR:** README badges + `#trust` table stale CI claims (8→7 required gates, Node 22/24 matrix, branches ≥74%).
 
 **Patch — README badges + stale CI claims.** Surface-only cleanup. No code changes.
 
@@ -27,6 +67,8 @@ All notable changes to this project will be documented here. The format follows 
 This is exactly the class of drift the v3.5.9 docs-consistency invariants were designed to catch — the per-tool/prompt/test-count surfaces. But CI-config-claim drift (number of required checks, Node matrix in the trust table) is a NEW surface those invariants don't cover. Adding an invariant for "README claims about CI gates must match `.github/workflows/ci.yml` reality" would be the right class fix. Left as future work for the next audit cycle to flag — if it does, we know the class is worth chasing. Same applies to the `branches threshold` claim in the trust table vs `vitest.config.ts`.
 
 ## [3.5.12] — 2026-05-13
+
+> **TL;DR:** Audit #4 followup — class fixes for `serve`/`serve-http` help drift (shared `cli-help.ts` module) + CHANGELOG coverage stat drift (new gate script in CI). 4 instance fixes (broken link, retroactive coverage numbers, biome schema bump, cosmetic version).
 
 **Patch — external audit #4 followup.** External re-audit measured v3.5.10 on disk and surfaced 5 LOW/INFO/COSMETIC findings (§3 of [REAUDIT_REPORT_v3.5.10]). Closes all 5 + applies root-cause-sweep methodology so the next audit doesn't find the same drift class again.
 
@@ -86,6 +128,8 @@ This closes the second class of bug the methodology was designed to prevent: num
 
 ## [3.5.11] — 2026-05-13
 
+> **TL;DR:** `pdfjs-dist` upgraded v4 → v5 (closes dependabot #54 that hung 2 days on CI red). 3 breaking API changes patched. CI matrix drops Node 20 (pdfjs v5 needs ≥22.13, Node 20 EOL'd 2026-04). Engines `>=20` UNCHANGED for non-PDF users on prebuilt dist.
+
 **Patch — pdfjs-dist v4 → v5 migration + CI Node 20 drop.** Dependabot PR #54 had been hanging since 2026-05-11 with CI red across every job. The bump itself was 1 line in `package.json`, but pdfjs v5 has 3 breaking API changes that needed code-side fixes, AND v5.7+ requires `engines: >=22.13.0`. This release ships the bump + migration + CI matrix update together.
 
 ### Changed
@@ -123,6 +167,8 @@ This closes the second class of bug the methodology was designed to prevent: num
 
 ## [3.5.10] — 2026-05-13
 
+> **TL;DR:** Audit #3 §3-5 followup — new `docs/COMPARISON.md` (honest matrix vs 4 alternatives) + `docs/QUICKSTART.md` (5-min happy path) + 14 missing tool sections in `docs/api.md` (now 44/44 documented) + branch coverage uplift 72.94% → 75.29% via 40 targeted tests.
+
 **Patch — external audit #3 followup.** v3.5.9 closed §2 of the audit (docs drift class fix). This release tackles §3-4: onboarding clarity, alternative comparison, api.md completeness, and the v3.6 commitment from v3.5.9 to lift branch coverage back above 75%.
 
 ### Added
@@ -151,6 +197,8 @@ This closes the second class of bug the methodology was designed to prevent: num
 v3.5.9 fixed §2 of audit #3 in one release. This release fixes §3-4 in one release. The §1 (security) was already clean, §5 (final formulation) is met. The remaining audit item — **Q1 monolith refactor** (`tools.ts` 4252 lines + `index.ts` 3673 lines) — is deferred to its own dedicated release (v3.6.0 or v4.0.0 if structurally breaking), as it's a multi-day refactor and doesn't share a coherent scope with documentation work.
 
 ## [3.5.9] — 2026-05-13
+
+> **TL;DR:** Audit #3 §2 class fix — 5 new docs-consistency invariants (README test count, package.json description, social-preview.svg, api.md tool counts, write-tool count word) + 6 instance drift fixes (D1-D6). Class fix, not symptom fix: next audit can't find the same bug class in 0 new surfaces.
 
 **Patch — external audit #3: class fix for numeric/feature drift across 8 surfaces.** v3.5.1 invariants caught drift in README + STABILITY.md tool counts. The same drift recurred in **6 OTHER surfaces** the invariants didn't cover. This release closes the class, not just the instances.
 

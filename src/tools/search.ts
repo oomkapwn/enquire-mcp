@@ -889,7 +889,7 @@ export async function embeddingsSearch(
   const minScore = args.min_score ?? 0.3;
 
   // Lazy-load embed-db + embeddings only when the tool is actually called.
-  const [{ EmbedDb, peekEmbedDbMeta }, { loadEmbedder, resolveModel }] = await Promise.all([
+  const [{ EmbedDb, peekEmbedDbMetaCached }, { loadEmbedder, resolveModel }] = await Promise.all([
     import("../embed-db.js"),
     import("../embeddings.js")
   ]);
@@ -914,7 +914,13 @@ export async function embeddingsSearch(
   // destroying data on every query. External audit on v3.6.1 caught this
   // (K-1 residual class). Honor the stored alias unless caller passes
   // `args.model` explicitly.
-  const existingMeta = await peekEmbedDbMeta(embedFile);
+  //
+  // v3.7.0 L-1 — uses `peekEmbedDbMetaCached` so the SQLite open+close
+  // overhead (~5-10ms) only fires on the first search after a file-mtime
+  // change. Subsequent searches against the same embed-db hit the
+  // module-level cache (~µs). Mtime-based invalidation covers the
+  // clear-embeddings + build-embeddings rebuild flow automatically.
+  const existingMeta = await peekEmbedDbMetaCached(embedFile);
   const honoredAlias = args.model ?? existingMeta?.model_alias;
   const honoredQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
   const model = resolveModel(honoredAlias);

@@ -691,3 +691,60 @@ export async function peekEmbedDbMeta(file: string): Promise<{
     db.close();
   }
 }
+
+/**
+ * v3.7.0 L-1 — cached variant of {@link peekEmbedDbMeta} for hot paths.
+ *
+ * `peekEmbedDbMeta()` opens a SQLite handle (read-only) and closes it.
+ * That's ~5-10ms per call on a typical SSD — affordable at server-start
+ * (one call), but a 2-20% overhead on every `embeddingsSearch` /
+ * `obsidian_search` invocation since v3.6.4's K-1 fix added the call
+ * to `src/tools/search.ts:917`.
+ *
+ * This wrapper caches the peek result keyed by `file` path. Cache entries
+ * are invalidated when the file's `mtimeMs` changes — covering the
+ * `clear-embeddings` + `build-embeddings` rebuild flow without requiring
+ * manual cache invalidation. On `stat` failure (file removed), the cache
+ * entry is also dropped so subsequent calls return `null` (matching
+ * non-cached semantics).
+ *
+ * **Thread/race notes**: the cache is module-level state. In a multi-
+ * worker context (none in this codebase today) each worker has its own
+ * cache. A race between `stat` and `peekEmbedDbMeta` is harmless — the
+ * worst case is one stale peek before the next call sees the new mtime.
+ *
+ * @param file - Absolute path to a `.embed.db` file.
+ * @returns Same shape as `peekEmbedDbMeta` (cached when file mtime unchanged).
+ */
+const peekCache = new Map<string, { mtimeMs: number; meta: PeekEmbedDbMetaResult }>();
+type PeekEmbedDbMetaResult = Awaited<ReturnType<typeof peekEmbedDbMeta>>;
+
+export async function peekEmbedDbMetaCached(file: string): Promise<PeekEmbedDbMetaResult> {
+  const fsMod = await import("node:fs/promises");
+  let mtimeMs: number;
+  try {
+    const stat = await fsMod.stat(file);
+    mtimeMs = stat.mtimeMs;
+  } catch {
+    // File missing/inaccessible — drop any stale cache and delegate to
+    // the non-cached peek (which itself returns null for missing files).
+    peekCache.delete(file);
+    return peekEmbedDbMeta(file);
+  }
+  const cached = peekCache.get(file);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.meta;
+  }
+  const meta = await peekEmbedDbMeta(file);
+  peekCache.set(file, { mtimeMs, meta });
+  return meta;
+}
+
+/**
+ * v3.7.0 L-1 — test-only. Clear the module-level peek cache. Used in
+ * unit tests to isolate per-test state; in production the cache lives
+ * as long as the process.
+ */
+export function clearPeekCache(): void {
+  peekCache.clear();
+}

@@ -408,18 +408,39 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
 function likeToRegex(pattern: string): RegExp {
   // Single-pass walker so escaping is unambiguous:
   //   *  → .*   (SQL-LIKE-style wildcard, any run of chars)
-  //   \* → \*   (literal asterisk; the \ is an escape, dropped)
+  //   \* → \*   (literal asterisk; the \ is an escape)
   //   \\ → \\   (literal backslash; the \ escapes the next \)
-  //   anything else regex-special → escaped
+  //   \d → d    (literal d; SQL-LIKE escape passes char through; pre-v3.7.10
+  //              this incorrectly output `\d` which is regex digit-class)
+  //   trailing \ → \\  (literal backslash; pre-v3.7.10 emitted a dangling
+  //                     escape that produced invalid RegExp)
+  // v3.7.10 (external audit #13) — added `*` and `\` to the regex-specials
+  // set. `*` is regex-meta (repetition); without it in the set, an escaped
+  // `\*` would fall through to the else-branch and output literal `*` which
+  // is then mis-interpreted by RegExp. `\` itself is regex-meta and trailing
+  // backslash needs explicit handling (see trailing-\\ branch above).
   // biome-ignore lint/suspicious/noTemplateCurlyInString: regex meta-chars list, not a template
-  const REGEX_SPECIALS = ".+^${}()|[]";
+  const REGEX_SPECIALS = ".+*^${}()|[]\\";
   let out = "";
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
+    // v3.7.10 (external audit #13) — handle trailing backslash as literal.
+    if (ch === "\\" && i + 1 >= pattern.length) {
+      out += "\\\\";
+      continue;
+    }
     if (ch === "\\" && i + 1 < pattern.length) {
-      // Backslash escapes the next char into a regex-literal of itself.
+      // Backslash escapes the next char. Result is the next char as a
+      // regex literal — escape it ONLY if it's regex-special, else pass
+      // through. v3.7.10 fix: pre-v3.7.10 unconditionally prepended `\`
+      // which turned escape sequences like `\d` into regex digit-class
+      // instead of literal `d`.
       const next = pattern[i + 1] as string;
-      out += `\\${next}`;
+      if (REGEX_SPECIALS.includes(next)) {
+        out += `\\${next}`;
+      } else {
+        out += next;
+      }
       i++;
       continue;
     }

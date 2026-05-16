@@ -51,9 +51,13 @@ jobs:
           # can race with CI on main starting — poll up to 5 minutes.
           # v3.5.11 — dropped `test (20)` from required checks because
           # pdfjs-dist v5+ requires Node `>=22.13` (Node 20 is EOL as of
-          # 2026-04). Required count is 7 now (lint, test×2, smoke, audit,
+          # 2026-04). Required count was 7 (lint, test×2, smoke, audit,
           # coverage, version-consistency).
-          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency"
+          # v3.7.10 — bumped to 8 by adding `docs` (TypeDoc generation gate
+          # from v3.7.6 M-5; round-12 audit caught that the release gate
+          # didn't track this CI check, so a tag with failing TypeDoc could
+          # have published to npm).
+          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs"
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
             FAILED=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
@@ -63,7 +67,7 @@ jobs:
               exit 1
             fi
             DONE=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null)] | length')
-            REQ_COUNT=7
+            REQ_COUNT=8
             if [ "$DONE" -ge "$REQ_COUNT" ]; then
               echo "✓ All $DONE required checks passed on $SHA"
               break

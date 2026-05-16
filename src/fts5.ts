@@ -121,6 +121,10 @@ interface Db {
   exec(sql: string): void;
   close(): void;
   pragma(query: string): unknown;
+  // v3.7.10 (external audit #10) — added for transactional reindexFile().
+  // better-sqlite3 wraps the passed function in a SAVEPOINT and rolls back
+  // on throw. Returns a callable that re-uses the prepared transaction.
+  transaction<F extends (...args: never[]) => unknown>(fn: F): F;
 }
 interface Stmt {
   run(...params: unknown[]): { changes: number };
@@ -350,7 +354,15 @@ export class FtsIndex {
     db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
   }
 
-  /** Re-chunk a single markdown file, replacing its existing chunks atomically. */
+  /** Re-chunk a single markdown file, replacing its existing chunks atomically.
+   *
+   * v3.7.10 (external audit #10) — wrapped DELETE + N×INSERT + source_state
+   * UPDATE in a single SQLite transaction. Pre-fix a crash/error between
+   * statements could leave partially-updated chunks (some new, some stale)
+   * with a stale source_state row pointing at the wrong chunk count. The
+   * transaction guarantees all-or-nothing atomicity. better-sqlite3
+   * `db.transaction()` wraps + auto-rolls back on throw.
+   */
   reindexFile(
     relPath: string,
     mtimeMs: number,
@@ -360,30 +372,33 @@ export class FtsIndex {
   ): number {
     const db = this.requireDb();
     const chunks = chunkContent(content);
-    db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
-    const insert = db.prepare(
-      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, 'md')"
-    );
-    // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
-    // with leading/trailing commas for exact-tag matching at query time.
     const tagsSerialized = tags.length ? tags.join(",") : "";
-    chunks.forEach((c, i) => {
-      // FTS5 column `content` carries an enriched form: original text + a
-      // synthetic `[wikilink_targets: …]` meta-line so a search for a link
-      // target name recalls notes that link out without naming it inline.
-      // v2.1.0: also prepend the heading breadcrumb so BM25 search hits
-      // notes where the section heading matches a query term even when the
-      // body doesn't repeat it. The unindexed `raw_content` keeps the
-      // *original* chunk so the `obsidian://chunk/{n}/{path}` resource
-      // can return verbatim text.
-      const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
-      const linksSuffix = wikilinkTargets.length ? `\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : "";
-      const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
-      insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
+    const txn = db.transaction(() => {
+      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      const insert = db.prepare(
+        "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, 'md')"
+      );
+      // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
+      // with leading/trailing commas for exact-tag matching at query time.
+      chunks.forEach((c, i) => {
+        // FTS5 column `content` carries an enriched form: original text + a
+        // synthetic `[wikilink_targets: …]` meta-line so a search for a link
+        // target name recalls notes that link out without naming it inline.
+        // v2.1.0: also prepend the heading breadcrumb so BM25 search hits
+        // notes where the section heading matches a query term even when the
+        // body doesn't repeat it. The unindexed `raw_content` keeps the
+        // *original* chunk so the `obsidian://chunk/{n}/{path}` resource
+        // can return verbatim text.
+        const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
+        const linksSuffix = wikilinkTargets.length ? `\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : "";
+        const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
+        insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
+      });
+      db.prepare(
+        "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'md', ?)"
+      ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
     });
-    db.prepare(
-      "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'md', ?)"
-    ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
+    txn();
     return chunks.length;
   }
 
@@ -406,18 +421,23 @@ export class FtsIndex {
     // a marker so chunks downstream of them can still cite the right page.
     const joined = pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
     const chunks = chunkContent(joined);
-    db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
-    const insert = db.prepare(
-      "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, '', ?, 'pdf')"
-    );
-    chunks.forEach((c, i) => {
-      // No wikilink/tag enrichment for PDFs (they don't have either). The
-      // page marker is already in c.text so it shows up in snippets.
-      insert.run(c.text, relPath, i, c.lineStart, c.lineEnd, c.text);
+    // v3.7.10 (external audit #10) — same transaction wrapper as
+    // reindexFile(). See its TSDoc for rationale.
+    const txn = db.transaction(() => {
+      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      const insert = db.prepare(
+        "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, '', ?, 'pdf')"
+      );
+      chunks.forEach((c, i) => {
+        // No wikilink/tag enrichment for PDFs (they don't have either). The
+        // page marker is already in c.text so it shows up in snippets.
+        insert.run(c.text, relPath, i, c.lineStart, c.lineEnd, c.text);
+      });
+      db.prepare(
+        "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
+      ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
     });
-    db.prepare(
-      "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
-    ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
+    txn();
     return chunks.length;
   }
 

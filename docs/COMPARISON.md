@@ -43,7 +43,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Read open editor state, active note, etc.     | **No**              | **Yes**          | Limited          | No               | No               |
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | SLSA-3 build provenance on releases           | **Yes**             | No               | No               | No               | No               |
-| Test count (public)                           | **670**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **786**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
@@ -56,7 +56,7 @@ Notes on the matrix:
 
 - **"Limited" for markus on Obsidian-side operations:** it covers a smaller subset of REST endpoints than cyanheads.
 
-- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 44-tool count is exact for v3.7.0 and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
+- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 44-tool count is exact for v3.7.x and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
 
 - **License row** is informational, not a recommendation. MIT and Apache-2.0 are both permissive; pick what your org's policy requires.
 

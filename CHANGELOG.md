@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.9] — 2026-05-16
+
+> **TL;DR:** Round-11 audit response — **positioning permeation completion**. v3.7.8 calibrated the GitHub About + Topics + README hero + npm description, but the same pass missed `docs/QUICKSTART.md`, `docs/api.md`, `tests/github-metadata-invariant.test.ts`, and `CLAUDE.md` status section. v3.7.9 syncs all 5 surfaces. **786 tests unchanged.** Zero code changes. Round-11 caught the same class of bug v3.7.4 caught (instance-fix-not-class-fix): v3.7.8 was an instance fix (key surfaces only), the broader class needed propagation to all positioning surfaces.
+
+**Patch — positioning permeation completion (the v3.7.8 class fix).**
+
+### Critical methodological correction — v3.7.8 was instance fix, class needed propagation
+
+v3.7.8 changed:
+- README hero
+- README image alt text + 4 other README mentions
+- `package.json#description`
+- GitHub About (out-of-band)
+- GitHub Topics (out-of-band)
+
+But the **class** of "positioning surfaces" also includes:
+- `docs/QUICKSTART.md` agent list (2 mentions)
+- `docs/api.md` lead paragraph
+- `tests/github-metadata-invariant.test.ts` REQUIRED_TOPICS + ABOUT_LEADS_WITH (the invariant that would have CAUGHT this drift was itself out of sync — it carried v3.7.0 values across v3.7.0 → v3.7.8 metadata changes)
+- `CLAUDE.md` Current Phase Status section (stuck at v3.7.4)
+
+This is the **6th instance** of the instance-fix-not-class-fix recursion class (after K-1 instances, v3.7.3 K-1 invariant negative-control, v3.7.4 github-metadata negative-control). The lesson keeps recurring: when a positioning/calibration touches one surface, the entire class of positioning surfaces needs the same touch in the same commit.
+
+### Fixed — OpenClaw permeation across 3 docs surfaces
+
+- `docs/QUICKSTART.md:12` agent list — OpenClaw added
+- `docs/QUICKSTART.md:18` MCP client list — OpenClaw added
+- `docs/api.md:3` lead paragraph — "the most advanced Obsidian MCP" credential added + OpenClaw added to agent list
+
+### Fixed — github-metadata-invariant test drift
+
+The invariant test caught GitHub metadata drift since v3.7.0 but its OWN constants drifted across positioning changes:
+
+- `REQUIRED_TOPICS`: dropped `context-engineering` (no longer in Topics since v3.7.8), added `openclaw` (restored in Topics in v3.7.8). Now matches the actual Topics list.
+- `ABOUT_LEADS_WITH`: updated from `/^Memory layer for AI agents/i` to `/^The most advanced Obsidian MCP/i` (matches v3.7.8 About copy).
+- Negative-control test cases updated to verify the new canonical phrase: positive cases include "The most advanced Obsidian MCP — long-term memory for AI agents"; negative cases include the v3.7.0-v3.7.7 phrasing ("Memory layer for AI agents...", "Long-term memory for AI agents") which is now WRONG against the v3.7.8 About.
+
+The negative-control proves the analyzer correctly distinguishes old vs new canonical phrasing — the v3.7.4 negative-control infrastructure pays dividends here.
+
+### Changed — CLAUDE.md Current Phase Status section
+
+Updated from v3.7.4 (4 releases stale) through v3.7.9. Now documents the full v3.7.5 → v3.7.9 arc: external audit response, ship-ready batch, visual refresh, positioning calibration, permeation completion.
+
+### Tests
+
+**786 tests** — unchanged. No code paths touched, no test additions/removals, no coverage delta. The invariant constants change is a CONFIG update, not a new test.
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · version-consistency green at `3.7.9` (5 surfaces) · all K-1 invariants green · github-metadata invariant now correctly tracks v3.7.8 metadata.
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same wire format. Visible surfaces:
+- GitHub repo metadata — already in v3.7.8 state
+- README — already in v3.7.8 state
+- `docs/QUICKSTART.md` + `docs/api.md` — now match v3.7.8 positioning (instantly after merge)
+
+### Method note — the instance-fix-not-class-fix recursion now has its 6th instance
+
+The instance-fix-not-class-fix bug has now recurred at the methodology-recursion level **6 times** across the v3.6.x → v3.7.x cascade:
+1. K-1 instances (v3.6.1 1/10, v3.6.2 4/10, v3.6.4 10/10)
+2. K-1 invariant chain (v3.6.4 grep → v3.7.0 AST → v3.7.4 caller-pattern)
+3. K-1 invariant negative-control (v3.7.3 fixed k1-version-stamp instance, v3.7.4 caught github-metadata instance)
+4. Reranker count gate (v3.7.4)
+5. External-audit K-1/K-2 sibling class (v3.7.5)
+6. **Positioning surface class** (v3.7.8 instance fix, v3.7.9 class propagation — THIS)
+
+The pattern: every time I think a class is closed, the NEXT iteration finds another surface where the class still applies. The terminator would be a **"positioning consistency invariant test"** that scans all positioning surfaces (README, package.json description, docs/*.md leads, GitHub About via gh api) for the SAME canonical phrasing — but that's v3.8+ scope (requires defining what "positioning surfaces" means and how to extract their lead text).
+
+For now: v3.7.9 closes the v3.7.8 class manually. If round-12 finds another positioning surface, that's the signal to ship the invariant.
+
+---
+
 ## [3.7.8] — 2026-05-16
 
 > **TL;DR:** Repo-page positioning patch. Restores **"The most advanced Obsidian MCP"** as the primary credential in the README hero (previously demoted to a secondary line in v3.6.3's "memory for AI agents" pivot, then dropped entirely in v3.7.7's visual refresh). Adds **OpenClaw** to all agent-list mentions (README hero, "What it is", Use cases, comparison matrix, npm description, image alt text). GitHub About description + Topics updated out-of-band via `gh api`: About now leads with "The most advanced Obsidian MCP — long-term memory for AI agents...", Topics list `openclaw` (dropped `context-engineering` from the 20-cap as the least-discoverable hype keyword). **Zero code changes.** 786 tests unchanged.

@@ -638,7 +638,7 @@ Parses a `.base` file into structured JSON (filters, formulas, properties, summa
 
 ## `obsidian_query_base` _(v3.2.0, extended in v3.5.0)_
 
-Runs a `.base` file's filter against the vault's markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (basename-resolved), `path startsWith / contains "X"`, `file.name == "X"`, `<frontmatter_key> == / != / contains <value>`, plus `and` / `or` / `not`. Anything else (formula evaluation, date arithmetic, summaries) is treated as `true` and surfaced in `unevaluated_predicates`.
+Runs a `.base` file's filter against the vault's markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (basename-resolved), `path startsWith / contains "X"`, `file.name == "X"`, `<frontmatter_key> == / != / contains <value>`, plus `and` / `or` / `not`. Anything else (formula evaluation, date arithmetic, summaries) is **fail-closed since v3.6.2 HN-2** — treated as `false` (excludes the row) and surfaced in `unevaluated_predicates` so the caller sees the typo/unsupported expression in the response. Pre-v3.6.2 these were permissive (`true`); flipped after an external auditor flagged the over-include risk.
 
 | Argument | Type             | Notes                                                                                                       |
 |----------|------------------|-------------------------------------------------------------------------------------------------------------|

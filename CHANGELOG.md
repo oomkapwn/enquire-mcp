@@ -2,6 +2,117 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.5] — 2026-05-16
+
+> **TL;DR:** **Emergency external-audit response — 2 CRITICAL bugs the v3.6.0 → v3.7.4 cascade missed.** A second external audit (`/Users/alex/enquire-mcp-audit-report-v3.6.2.md`, dated 2026-05-16) on the v3.6.2 codebase found 2 CRITICAL severity findings. Re-verified against v3.7.4 state: **both still OPEN**. The K-1 invariant chain (grep + AST + caller-pattern + fixture + version-stamp consistency) caught the destructive-bootstrap-schema class but NOT these related-but-distinct K-1-class siblings. Fixed both + closed the docs/M-1 drift the auditor also caught. **+2 tests** (786 total). One-line code fix + one architectural fix + one docs cleanup.
+
+**Patch — second external audit caught 2 CRITICAL bugs missed by 5 rounds of internal audit.**
+
+### Critical methodological correction — internal audits + 5-level K-1 invariant chain did NOT catch these
+
+This is the **2nd external audit** in the v3.6.x → v3.7.x cascade. The first (v3.6.0 audit) found bugs already fixed by v3.7.0. The second found NEW bugs the entire internal-audit + structural-invariant chain missed. Lesson re-confirmed: *"internal audits = breadth + speed but NOT a substitute for fresh external perspective"* (CLAUDE.md method note). Structural invariants don't catch what they don't model.
+
+The K-1 invariant chain protects:
+1. peek-before-open at constructor sites (grep + AST + caller-pattern)
+2. peek result consumed in K-1-relevant constructor args
+3. version-stamp consistency across stamps
+
+The chain does **NOT** model:
+- "embedder model alias must match the constructed EmbedDb's modelAlias" (K-1 audit finding)
+- "read-only tools must not trigger destructive rebuild" (K-2 audit finding)
+
+These are K-1-class SIBLINGS (different shapes of the same data-destruction risk), but the invariants didn't generalize over them.
+
+### Fixed — K-1 (CRITICAL): embedder model thread-through (silent vector-space corruption)
+
+**Location**: `src/tools/search.ts:945` (pre-fix).
+
+**The bug**: `embeddingsSearch()` correctly peeks the existing embed-db's `model_alias` and opens `EmbedDb` with the honored alias. But the embedder was loaded via:
+
+```ts
+const embedder = await loadEmbedder(args.model);
+```
+
+If `args.model === undefined` (user didn't specify) AND the embed-db was built with `bge`, the EmbedDb opened as `bge` (correct via v3.6.2 peek-honor) but `loadEmbedder(undefined)` resolved to the DEFAULT (`multilingual`). Query vector built in `multilingual` vector space; similarity computed against `bge` chunks → **silent garbage similarities** with the response still reporting `model: "bge"`.
+
+HNSW path had `assertHnswModelMatchesEmbedder()` (v3.6.2 HN-4) which converted this to an error for HNSW only. Brute-force cosine and HyDE paths silent-passed. The auditor found this in the read/search hot path.
+
+**Fix** (1-line change, v3.7.5):
+```ts
+const embedder = await loadEmbedder(model.alias);  // was: args.model
+```
+
+`model.alias` is the resolved-and-honored alias (already threaded through `peek → honor → resolveModel`). Brings the embedder load into the same honoring chain as the EmbedDb construction.
+
+### Fixed — K-2 (CRITICAL): read-only search can DROP TABLE on `embedding_model` override
+
+**Location**: `src/tools/search.ts:917+` (the user-override path).
+
+**The bug**: `obsidian_search` accepts an `embedding_model` parameter. If a user/agent passes an override that differs from the stored `model_alias`, the previous code's `honoredAlias = args.model ?? existingMeta?.model_alias` prefers the user value, opens `EmbedDb` with the override, and `bootstrapSchema` detects the mismatch and DROPs both tables:
+
+```sql
+DROP TABLE IF EXISTS embeddings;
+DROP TABLE IF EXISTS source_state;
+```
+
+**Data destruction from a read-only tool.** An agent typo or curious exploration could nuke the index.
+
+**Fix** (v3.7.5): detect mismatch BEFORE opening, throw a clear actionable error:
+
+```ts
+if (args.model && existingMeta?.model_alias && args.model !== existingMeta.model_alias) {
+  throw new Error(
+    `embeddingsSearch: requested model '${args.model}' does not match the embed-db's stored model '${existingMeta.model_alias}'. ` +
+    `Read-only search refuses to rebuild the index. ` +
+    `To switch models, run: enquire-mcp clear-embeddings --vault <path> && enquire-mcp build-embeddings --vault <path> --embedding-model <new>`
+  );
+}
+```
+
+Read-only search now NEVER triggers destructive rebuild. To switch models, the user runs explicit write/build commands (`clear-embeddings` + `build-embeddings`).
+
+### Fixed — M-1: `.base` docs/tool-registry still claim "permissive" (v3.6.2 HN-2 fix lagged)
+
+**Files**: `docs/api.md:641`, `src/tool-registry.ts:645`.
+
+The v3.7.1 audit response fixed `SECURITY.md` to say `.base` unevaluated predicates are fail-closed (since v3.6.2 HN-2). But the auditor caught that `docs/api.md` and `src/tool-registry.ts` (the tool description visible to MCP agents) still claimed "treated as `true` (most permissive)". This is doc-drift class #5 — another surface that lagged the v3.6.2 HN-2 flip.
+
+Both updated to: "fail-closed since v3.6.2 HN-2 — treated as `false` (excludes the row) and surfaced in `unevaluated_predicates`".
+
+### Added — regression tests for K-1 and K-2
+
+`tests/peek-meta.test.ts` extended with `describe("K-1 / K-2 external-audit regression guards (v3.7.5)")`:
+
+1. **K-1 source-grep guard**: asserts `loadEmbedder(args.model)` is NOT present in `src/tools/search.ts` (the bug signature) AND `loadEmbedder(model.alias)` IS present (the fix). A future refactor that re-introduces the bug fails the test.
+
+2. **K-2 source-grep + behavioral guard**: asserts the K-2 throw message text is present in source + simulates the mismatch path locally + asserts that when the K-2 check fires, the on-disk meta stays intact.
+
+Both tests are intentionally source-grep-based because the runtime behavior requires loading the actual embedder model (network + ~25 MB download). Source-grep is a fast structural guard with no runtime cost.
+
+### Tests
+
+**786 tests** (was 784 in v3.7.4). **+2** K-1/K-2 external-audit regression guards.
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · per-file coverage floors met · K-1 version-stamp invariant green (new comments deliberately phrased to NOT use `vX.Y.Z K-1` pattern — they reference the K-1 class as a *topic* in prose, not as a structured version stamp; this preserves the v3.7.2 invariant's contract that version stamps mark closure events, not class-membership references).
+
+### Migration
+
+**No breaking change for correctly-built indexes.** Users with embed-db built via standard `build-embeddings` who search WITHOUT `embedding_model` override: see no change (the K-1 fix is invisible — silent corruption is replaced with correct results).
+
+**Breaking change for one pre-existing misuse path**: users who relied on `obsidian_search({ embedding_model: "different" })` triggering a rebuild now get an error directing them to the explicit `clear-embeddings + build-embeddings` flow. This was destructive misuse; the error is corrective.
+
+### Method note — round-6 found by external audit (NOT internal audit)
+
+5 internal audit rounds (v3.6.4 → v3.7.4) all looked at the K-1 class but kept iterating on the SAME failure mode (peek-before-open chain). The external auditor with fresh eyes found NEW failure modes (embedder thread-through + read-only-search-drop) that none of my rounds modeled.
+
+**This re-confirms the v3.6.1 method note**: *"every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies. Internal multi-layer audits = breadth + speed but NOT a substitute for fresh external perspective."*
+
+The K-1 invariant chain (now 5 levels) protects the SHAPE of K-1 we knew about. It doesn't generalize to siblings. To prevent round-7 from finding another sibling: would need to model the data-destruction class at a higher abstraction (e.g., "any tool annotated `readOnlyHint: true` must not cause destructive side effects"). That's a v3.8+ architectural change — too large for this patch.
+
+**Open invariant gap** (deferred to v3.8 backlog): a `readOnlyHint`-aware invariant test that asserts all read-only tools never reach a destructive code path. Would require tagging destructive ops + flow analysis. Not shipping today; documented for next cycle.
+
+---
+
 ## [3.7.4] — 2026-05-16
 
 > **TL;DR:** Round-5 audit response — **class-vs-instance recursion correction**. v3.7.3 fixed ONE instance of "post-v3.6.4 invariant lacking negative-control" (the k1-version-stamp invariant) but the CLASS had a second open instance: `tests/github-metadata-invariant.test.ts` (added in v3.7.0, also post-v3.6.4 rule, also lacked negative-control). I made the same instance-fix-not-class-fix methodological bug v3.6.4's lesson was supposed to teach. Plus a separate finding: `package.json#description` says *"5 cross-encoder reranker models"* — that count was NOT enforced by `docs-consistency.test.ts` (violates CLAUDE.md anti-pattern *"Hardcoded counts in docs without an invariant"* — Rule since v3.5.9). **+5 tests** (784 total). Both gaps closed with structural enforcement.

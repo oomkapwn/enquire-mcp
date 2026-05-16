@@ -921,6 +921,24 @@ export async function embeddingsSearch(
   // module-level cache (~µs). Mtime-based invalidation covers the
   // clear-embeddings + build-embeddings rebuild flow automatically.
   const existingMeta = await peekEmbedDbMetaCached(embedFile);
+  // v3.7.5 CRITICAL — external-audit caught read-only-search-can-DROP
+  // (K-1-class sibling that v3.6.4 cli.ts closure didn't model).
+  // Read-only search MUST NOT trigger destructive rebuild. Pre-fix: if user passed
+  // `embedding_model` override that differed from the stored model_alias,
+  // the EmbedDb open path would DROP TABLE embeddings and rebuild as the
+  // user's choice. That's a data-loss side effect from a read-only tool.
+  // Now: if user-explicit override mismatches stored alias, throw a
+  // clear actionable error — never silently destroy the index. To
+  // intentionally switch models, the user must run
+  // `enquire-mcp clear-embeddings` + `build-embeddings --embedding-model X`
+  // explicitly (those paths are documented write/build operations).
+  if (args.model && existingMeta?.model_alias && args.model !== existingMeta.model_alias) {
+    throw new Error(
+      `embeddingsSearch: requested model '${args.model}' does not match the embed-db's stored model '${existingMeta.model_alias}'. ` +
+        `Read-only search refuses to rebuild the index. ` +
+        `To switch models, run: enquire-mcp clear-embeddings --vault <path> && enquire-mcp build-embeddings --vault <path> --embedding-model ${args.model}`
+    );
+  }
   const honoredAlias = args.model ?? existingMeta?.model_alias;
   const honoredQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
   const model = resolveModel(honoredAlias);
@@ -942,7 +960,19 @@ export async function embeddingsSearch(
     if (total === 0) {
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
     }
-    const embedder = await loadEmbedder(args.model);
+    // v3.7.5 CRITICAL — external-audit caught embedder/db model mismatch
+    // (a residual K-1-class instance the v3.6.4 cli.ts closure didn't
+    // cover). Pre-fix: when user omitted `args.model` and the embed-db
+    // was built with `bge`, we opened the DB as `bge` (correct via peek-
+    // honor) but loaded the embedder as `multilingual` (the default that
+    // `loadEmbedder(undefined)` resolves to). Result: query vector built
+    // in `multilingual` vector space but similarity computed against
+    // `bge` chunks — silent garbage output with response still reporting
+    // `model: "bge"`. HNSW path had `assertHnswModelMatchesEmbedder`
+    // which converted this to an error for HNSW, but brute-force cosine
+    // and HyDE silent-passed. Now we load embedder via `model.alias`
+    // (already resolved + honored above).
+    const embedder = await loadEmbedder(model.alias);
     const [qVec] = await embedder.embed([embedText]);
     if (!qVec) throw new Error("Embedder returned no vectors for the query");
     // v2.0.0-beta.2 P0 fix: filter excluded paths from the embedding-index

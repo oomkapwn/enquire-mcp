@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.8] — 2026-05-16
+
+> **TL;DR:** Repo-page positioning patch. Restores **"The most advanced Obsidian MCP"** as the primary credential in the README hero (previously demoted to a secondary line in v3.6.3's "memory for AI agents" pivot, then dropped entirely in v3.7.7's visual refresh). Adds **OpenClaw** to all agent-list mentions (README hero, "What it is", Use cases, comparison matrix, npm description, image alt text). GitHub About description + Topics updated out-of-band via `gh api`: About now leads with "The most advanced Obsidian MCP — long-term memory for AI agents...", Topics list `openclaw` (dropped `context-engineering` from the 20-cap as the least-discoverable hype keyword). **Zero code changes.** 786 tests unchanged.
+
+**Patch — positioning restoration + OpenClaw discoverability.**
+
+### Changed — README hero (most-advanced credential restored)
+
+The v3.6.3 marketing pivot moved "The most advanced Obsidian MCP" from the primary headline to a secondary bold line ("Long-term memory for AI agents." became the lead). The v3.7.7 visual refresh dropped the secondary line entirely in favor of the pain-point hook ("Stop re-explaining context..."). **v3.7.8 restores the credential to the H3 subtitle** so visitors immediately see both positioning facets:
+
+```
+### The most advanced Obsidian MCP. Long-term memory for AI agents.
+```
+
+The bold pain-point hook below stays, so the structure is now: **credential + value prop** (H3) → **pain point + outcome** (bold).
+
+### Added — OpenClaw to all agent surfaces
+
+OpenClaw is a primary MCP client (reference deployment partner; see v3.5.x CHANGELOG for the SZBOX trading-system pairing). v3.6.3's Topics rebalance dropped `openclaw` to fit the 8 new hype keywords inside GitHub's 20-cap, but the README + npm description references also got trimmed. v3.7.8 restores OpenClaw discoverability:
+
+- **README** — added to 5 agent-list mentions: image alt text, hero bold line, "What it is" lead paragraph, Use case #1, comparison matrix "MCP-native" row.
+- **`package.json#description`** — agent list now reads "Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and any MCP client". Also: the description NOW LEADS with "The most advanced Obsidian MCP — long-term memory for AI agents." (matching the GitHub About).
+- **GitHub About** (out-of-band via `gh api`): replaced with `"The most advanced Obsidian MCP — long-term memory for AI agents. Hybrid retrieval (BM25 + ML + BGE rerank, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), standalone Bases, PDFs+OCR. For Claude Code/Desktop, Cursor, ChatGPT, Codex, OpenClaw. MCP-native, MIT, SLSA-3."` (288 chars, fits the 350 limit).
+- **GitHub Topics** (out-of-band via `gh api`): swapped `context-engineering` → `openclaw`. New 20-topic set: `obsidian, obsidian-mcp, mcp-server, model-context-protocol, claude, claude-code, cursor, chatgpt, codex, openclaw, rag, agentic-rag, hybrid-search, semantic-search, ai-memory, agent-memory, llm-memory, long-term-memory, claude-memory, second-brain`.
+
+`context-engineering` was the safest drop from the 20-cap: it's the most jargon-heavy of the agent-memory keywords (low natural-search volume vs `ai-memory`, `agent-memory`, `llm-memory`, `long-term-memory`, `claude-memory` which it overlaps with). `openclaw` brings unique discoverability for the dedicated client community.
+
+### Tests
+
+**786 tests** — unchanged. No code paths touched, no test additions, no coverage delta. Lint clean, `tsc` strict + `noUncheckedIndexedAccess` clean, version-consistency green at `3.7.8` (5 surfaces), all K-1 invariants green.
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same wire format. Visible surfaces:
+- GitHub About + Topics — updated instantly (out-of-band, already live)
+- README — instantly after merge
+- npm description — after `npm publish`
+
+OpenClaw users specifically benefit: the repo is now discoverable via the `openclaw` topic + README references → easier for the OpenClaw community to find the recommended Obsidian memory backend.
+
+### Method note
+
+Positioning continues to be a calibration exercise (per v3.6.3 method note: *"positioning isn't a one-time launch decision — it's continuous calibration"*). The "most advanced Obsidian MCP" credential and the "memory for AI agents" value-prop are **complementary**, not mutually-exclusive: this patch restores the both-and framing rather than the v3.7.7 either-or compromise. OpenClaw discoverability is a smaller-but-similar calibration — the v3.6.3 rebalance traded it for general-hype keywords; v3.7.8 trades back one of those (the least-discoverable one) to restore the dedicated-community pathway.
+
+---
+
 ## [3.7.7] — 2026-05-16
 
 > **TL;DR:** Visual + marketing refresh. New `assets/social-preview.png` leads with the emotional value prop ("Long-term memory for AI agents") and a visual flow showing vault → enquire-mcp → 5 AI agents — replaces the previous engineering-stats-heavy preview. README hero rewritten with **"The problem / The solution"** framing + sticky nav links + a clear 3-bullet differentiation block. **Zero code changes.** 786 tests unchanged. The visual + copy hierarchy is now optimized for first-time visitor conversion (3-second value-prop comprehension); technical depth is preserved but moved below the fold.

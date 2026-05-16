@@ -1,12 +1,12 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — long-term memory for AI agents. Built on your Obsidian vault. Open-source, MCP-native, vendor-neutral. Hybrid retrieval, BGE reranker, HNSW, PDFs with OCR. For Claude Code, Claude Desktop, Cursor, ChatGPT, Codex." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the most advanced Obsidian MCP. Long-term memory for AI agents. Built on your Obsidian vault. Open-source, MCP-native, vendor-neutral. Hybrid retrieval, BGE reranker, HNSW, PDFs with OCR. For Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw." width="100%"></a>
 
 # enquire-mcp
 
-### Long-term memory for AI agents. Built on your Obsidian vault.
+### The most advanced Obsidian MCP. Long-term memory for AI agents.
 
-**Stop re-explaining context to Claude, Cursor, ChatGPT every session. Your Obsidian notes become shared, searchable memory across every MCP-compatible agent — your knowledge, every model, forever yours.**
+**Stop re-explaining context to Claude, Cursor, ChatGPT, Codex, OpenClaw every session. Your Obsidian notes become shared, searchable memory across every MCP-compatible agent — your knowledge, every model, forever yours.**
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -29,7 +29,7 @@ Every AI session starts from zero. You re-explain your project, your design deci
 
 ## The solution
 
-Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
+Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
 
 > **Three things make enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
@@ -74,7 +74,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 ## 🧠 Use cases
 
-**1 — Long-term memory for AI agents.** Drop your Obsidian vault into any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex). The agent now has durable, semantic recall over every meeting note, journal entry, research log, and decision doc you've ever written — across sessions, models, and providers. Unlike `Claude Memory` or `ChatGPT Memory`, your knowledge isn't locked into one vendor's cloud; it lives in plain markdown you own and can migrate freely.
+**1 — Long-term memory for AI agents.** Drop your Obsidian vault into any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). The agent now has durable, semantic recall over every meeting note, journal entry, research log, and decision doc you've ever written — across sessions, models, and providers. Unlike `Claude Memory` or `ChatGPT Memory`, your knowledge isn't locked into one vendor's cloud; it lives in plain markdown you own and can migrate freely.
 
 **2 — Personal knowledge base / second brain.** Hybrid retrieval surfaces the right note for *any* phrasing, in any of 50+ languages. Ask in English about a Russian-language journal entry from 2 years ago, get the right hit. Wikilink graph-boost reranks notes that sit at the centre of your knowledge graph. GraphRAG-light surfaces topical communities — discover connections you forgot you made. PDFs blend into search with `[page: N]` citations so research papers and meeting transcripts become first-class memory.
 
@@ -106,7 +106,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | **Built-in retrieval-quality eval harness** (NDCG, Recall, MRR, A/B matrix) | ✅ | ❌ | ❌ |
 | **Remote MCP** over HTTP + bearer auth + stateful sessions | ✅ | ❌ | partial |
 | **Per-signal observability** per hit | ✅ | ❌ | ❌ |
-| **MCP-native** (Claude · Cursor · ChatGPT · Codex · any client) | ✅ | ❌ Obsidian-only | varies |
+| **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
 | **44 production tools** (33 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |

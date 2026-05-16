@@ -9,19 +9,19 @@
 //
 // Architecture: in-memory rebuild on serve start.
 //
-// Why not persistent?
-//   • `hnswlib-wasm` writes through Emscripten's virtual FS; persisting
-//     to disk + restoring requires syncing the WASM FS to host disk. The
-//     plumbing isn't bad but it's another file to manage (WAL-style
-//     consistency: which version of .embed.db produced the .hnsw.bin?).
-//   • For typical vault scales (≤50K chunks), rebuild is ≤30s on serve
-//     start — tolerable as a one-time boot cost for a long-running server.
-//   • Persistence SHIPPED in v2.16.0 (sidecar `.hnsw.bin` + `.hnsw.meta.json`
-//     next to `.embed.db`; staleness check via `EmbedDb.computeSignature`).
-//     Default on for `--use-hnsw`; opt out with `--no-hnsw-persist`.
-//     See `loadHnswFromDisk` + `saveTo` below for the WAL-style consistency
-//     handling. The in-memory-only fallback path is still here (when the
-//     persistence flag is off OR the sidecar files are missing/stale).
+// Persistence: SHIPPED in v2.16.0 — sidecar `.hnsw.bin` + `.hnsw.meta.json`
+// next to `.embed.db`. Staleness check via `EmbedDb.computeSignature`.
+// Default on for `--use-hnsw`; opt out with `--no-hnsw-persist`.
+// See `loadHnswFromDisk` + `saveTo` below for the WAL-style consistency
+// handling. The in-memory-only fallback path is still here (when the
+// persistence flag is off OR the sidecar files are missing/stale).
+//
+// Historical note (v3.7.6 audit cleanup): early prototypes considered
+// `hnswlib-wasm` (Emscripten port) but its virtual-FS persistence
+// model added complexity vs. host-disk for our use case. Final choice
+// is `hnswlib-node` (native N-API binding to C++ hnswlib reference
+// impl) which writes directly to host disk and is the production-grade
+// path for server-side vault retrieval.
 //
 // Native dep: `hnswlib-node@^3.0` (Node-N-API binding to the C++ hnswlib
 // reference impl). Maintained by yoshoku since 2022, stable since v3.0
@@ -30,10 +30,7 @@
 // uncommon platforms. Lazy-loaded — same `optionalDependencies` pattern
 // as tesseract.js / pdfjs-dist / @huggingface/transformers.
 //
-// Why not hnswlib-wasm? It exists (~340 KB pure-WASM) but its v0.8
-// build is hardcoded for the browser environment (ENVIRONMENT_IS_WEB=
-// true at compile time) and refuses to load under Node. hnswlib-node
-// is the production-grade choice for server-side vault retrieval.
+// (See "Historical note" above re: hnswlib-wasm vs hnswlib-node choice.)
 //
 // Performance characteristics on M1 Pro (cosine space, dim=384):
 //   • Build: ~0.5ms per vector → 8K chunks ≈ 4s, 50K ≈ 25s, 500K ≈ 4min
@@ -225,7 +222,7 @@ async function loadHnswlib(): Promise<HnswlibNodeModule> {
  * usual call path (loadAllVectors → buildHnsw) is safe by construction.
  *
  * Throws if `dim` doesn't match any vector's length, if `maxElements`
- * is less than the input count, or if `hnswlib-wasm` failed to load.
+ * is less than the input count, or if `hnswlib-node` failed to load.
  */
 export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: HnswBuildOptions): Promise<HnswIndex> {
   const dim = opts.dim;
@@ -426,7 +423,7 @@ export function hnswResultsToHits(
     if (label === undefined || distance === undefined) continue;
     const row = rowByLabel.get(label);
     if (!row) continue; // race: row deleted between build and query — skip
-    // hnswlib-wasm cosine distance = 1 - cosine_similarity.
+    // hnswlib-node cosine distance = 1 - cosine_similarity.
     // Convert back so callers can compare against brute-force scores.
     const score = 1 - distance;
     hits.push({

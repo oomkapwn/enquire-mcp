@@ -250,8 +250,17 @@ export class EmbedDb {
   async open(): Promise<void> {
     if (this.db) return;
     const Ctor = await loadBetterSqlite();
-    await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    await fs.chmod(path.dirname(this.file), 0o700).catch(() => {});
+    // v3.7.6 M-9 (external audit) — only chmod the parent directory if WE
+    // created it. See src/fts5.ts:open() for the rationale.
+    const parentDir = path.dirname(this.file);
+    const parentExisted = await fs
+      .stat(parentDir)
+      .then(() => true)
+      .catch(() => false);
+    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+    if (!parentExisted) {
+      await fs.chmod(parentDir, 0o700).catch(() => {});
+    }
     this.db = new Ctor(this.file) as Db;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
@@ -539,7 +548,15 @@ export class EmbedDb {
     }>();
     const rows = row?.n ?? 0;
     const maxId = row?.maxId ?? 0;
-    return `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias}`;
+    // v3.7.6 M-10 (external audit) — include `quantization` in the
+    // signature. Pre-fix: signature was only `dim;rows;maxId;model` — if a
+    // user re-built with `--quantize-embeddings int8` (vs the previous
+    // `f32` build) while rowcount/maxId/dim/model stayed the same, the
+    // persisted HNSW sidecar was considered "fresh" but its float32
+    // vectors no longer matched the int8 bytes in the new embed-db rows.
+    // Including `quantization` in the signature forces a rebuild on
+    // encoding switch.
+    return `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias};quant=${this.quantization}`;
   }
 
   /**

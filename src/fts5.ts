@@ -171,8 +171,22 @@ export class FtsIndex {
   async open(): Promise<void> {
     if (this.db) return;
     const Ctor = await loadBetterSqlite();
-    await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    await fs.chmod(path.dirname(this.file), 0o700).catch(() => {});
+    // v3.7.6 M-9 (external audit) — only chmod the parent directory if WE
+    // created it (parent didn't exist before mkdir). For user-supplied
+    // custom paths like `--index-file /existing/shared/path.fts5.db`, the
+    // pre-fix code would tighten the existing parent to 0o700 — surprising
+    // and potentially breaking for shared parent directories (Dropbox,
+    // shared NFS mounts, etc.). Now: existence check before mkdir; chmod
+    // only when we just created the dir.
+    const parentDir = path.dirname(this.file);
+    const parentExisted = await fs
+      .stat(parentDir)
+      .then(() => true)
+      .catch(() => false);
+    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+    if (!parentExisted) {
+      await fs.chmod(parentDir, 0o700).catch(() => {});
+    }
     this.db = new Ctor(this.file) as Db;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");

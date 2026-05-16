@@ -800,18 +800,32 @@ export async function syncPdfFtsIndex(
   // Lazy import — keeps the markdown-only path zero-cost when pdfjs-dist
   // isn't installed (--omit=optional users).
   const { extractPdfText } = await import("./pdf.js");
+  const updatedSet = new Set(diff.updated);
   for (const relPath of [...diff.added, ...diff.updated]) {
     const entry = pdfEntries.find((e) => e.relPath === relPath);
     if (!entry) continue;
     try {
       const buf = await vault.readBinaryFile(entry.absPath);
       const result = await extractPdfText(buf);
-      // Skip image-only PDFs (no extractable text). They'd produce a chunk
-      // with only `[page: N]` markers and waste index space.
+      // v3.7.6 H-4 (external audit) — when a PDF becomes image-only (re-saved
+      // as scan, replaced with photo, etc.), the old text-extracted chunks
+      // linger in the FTS5 index unless we explicitly delete them. Pre-fix
+      // the old chunks kept returning stale text for the path even though
+      // the new PDF file had no extractable text. Now: when `!hasText` AND
+      // this is an UPDATE (path is in diff.updated, i.e. was previously
+      // indexed), we drop the previous rows. Pure adds with no text are
+      // still just skipped (nothing to delete).
       if (!result.hasText) {
-        process.stderr.write(
-          `enquire: skipping ${relPath} during pdf-fts5 sync — image-only / scanned (no extractable text; use OCR via v2.9+)\n`
-        );
+        if (updatedSet.has(relPath)) {
+          idx.dropFile(relPath);
+          process.stderr.write(
+            `enquire: dropping stale rows for ${relPath} during pdf-fts5 sync — PDF is now image-only / scanned (previous text-extracted chunks removed)\n`
+          );
+        } else {
+          process.stderr.write(
+            `enquire: skipping ${relPath} during pdf-fts5 sync — image-only / scanned (no extractable text; use OCR via v2.9+)\n`
+          );
+        }
         continue;
       }
       idx.reindexPdfFile(relPath, entry.mtimeMs, result.pages);
@@ -877,7 +891,17 @@ export async function syncPdfEmbedDb(
       const buf = await vault.readBinaryFile(e.absPath);
       const extracted = await extractPdfText(buf);
       if (!extracted.hasText) {
-        process.stderr.write(`enquire: skipping ${e.relPath} during pdf-embed sync — image-only / scanned\n`);
+        // v3.7.6 H-4 (external audit) — drop stale embed-db rows when a
+        // previously-indexed PDF becomes image-only. Same data-staleness
+        // class as the FTS5 fix above.
+        if (prevMtime !== undefined) {
+          db.deleteNote(e.relPath);
+          process.stderr.write(
+            `enquire: dropping stale embed rows for ${e.relPath} — PDF is now image-only / scanned\n`
+          );
+        } else {
+          process.stderr.write(`enquire: skipping ${e.relPath} during pdf-embed sync — image-only / scanned\n`);
+        }
         skipped += 1;
         processed += 1;
         continue;

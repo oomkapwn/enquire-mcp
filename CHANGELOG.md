@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.7] — 2026-05-16
+
+> **TL;DR:** Visual + marketing refresh. New `assets/social-preview.png` leads with the emotional value prop ("Long-term memory for AI agents") and a visual flow showing vault → enquire-mcp → 5 AI agents — replaces the previous engineering-stats-heavy preview. README hero rewritten with **"The problem / The solution"** framing + sticky nav links + a clear 3-bullet differentiation block. **Zero code changes.** 786 tests unchanged. The visual + copy hierarchy is now optimized for first-time visitor conversion (3-second value-prop comprehension); technical depth is preserved but moved below the fold.
+
+**Patch — visual + marketing refresh (no code, no behavior changes).**
+
+### Changed — social preview image
+
+**Old design**: dark-themed SVG with `enquire-mcp` brand + 3-line technical tagline + terminal mockup showing JSON tool calls + version stamp "v3.5 · stable" (drift since v3.7.x) + stats row (44 tools / 19 prompts / 786 tests).
+
+**New design**: same dimensions (1280×640) and color palette (purple/cyan/slate dark theme) but reorganized for emotional value:
+- **Top half** — big bold headline `Long-term memory for AI agents.` with `AI agents` accented in cyan; subtitle `Built on your Obsidian vault. Your knowledge, every agent, every session.`
+- **Middle row** — visual flow: stacked markdown vault → `enquire-mcp` chip → 5 AI agent badges (Claude · Cursor · ChatGPT · Codex · "+ more"). The flow tells the story in 3 seconds.
+- **Bottom strip** — trust signals (MIT · SLSA-3 · Hybrid retrieval · BGE reranker · HNSW · PDFs + OCR · 50+ languages · Zero cloud calls) + install command + repo link.
+- **Removed**: version stamp (drift-prone), terminal mockup (technical noise for first-time visitors), counts row (moved to README body for visitors who want depth).
+
+### Changed — README hero
+
+**The problem / The solution** narrative replaces the previous feature-dump opening. Visitors now see:
+1. **The problem**: "Every AI session starts from zero..." — connects to a pain point most LLM users experience.
+2. **The solution**: "Your Obsidian vault becomes persistent, queryable long-term memory..." — frames the project as the answer.
+3. **3-bullet differentiation block** in a blockquote: vendor-neutral, best-in-class retrieval, zero cloud calls.
+
+Plus new sticky nav bar above the fold: `[⚡ 30-second install] · [🧠 Use cases] · [📊 Benchmarks] · [📖 API reference] · [💬 Compare alternatives]`.
+
+**Stale stamp fixes** (incidental drift caught during the rewrite):
+- README stable badge `v3.6.x-stable` → `v3.7.x-stable` (we're past v3.7.x).
+- README image `alt` text updated to match new positioning.
+
+Technical depth (hybrid retrieval, RRF, cross-encoder, HNSW, quantization, etc.) preserved — just moved below the hero. Visitors who want depth get it; visitors who want value-prop in 3 seconds get it too.
+
+### Tests
+
+**786 tests** — unchanged from v3.7.6. No code paths touched, no test additions/removals, no coverage delta. Lint clean, `tsc` strict + `noUncheckedIndexedAccess` clean, version-consistency green at `3.7.7` (5 surfaces), all K-1 invariants green.
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same wire format. The visual refresh is visible to:
+- GitHub repository visitors (README + social card on link previews) — instantly after merge
+- npm consumers (`assets/social-preview.png` ships in tarball per `package.json#files`) — after `npm install`
+
+Existing README anchors, links, and section headings preserved. The hero rewrite adds content above existing structure rather than rearranging it.
+
+### Method note
+
+Per CLAUDE.md anti-pattern *"Compressing CHANGELOG for aesthetics — audit trail trumps style"*: this patch documents WHY the visual changed, not just THAT it changed. The old design was engineering-trail-friendly (stats, version stamp, JSON mockup) but conversion-hostile for first-time visitors who don't know what "RRF fusion" or "BGE reranker" means. The new design optimizes the **first 3 seconds** of a visitor's attention while preserving 100% of the technical depth below.
+
+**Why a patch release**: `assets/social-preview.png` ships in the npm tarball per `package.json#files`. npm consumers see the new image after install. GitHub viewers see the new image + README hero immediately after merge.
+
+---
+
 ## [3.7.6] — 2026-05-16
 
 > **TL;DR:** Quality batch — closes 8 remaining audit-findings from the v3.6.2 external audit that weren't CRITICAL but were ship-ready (H-4, H-5, M-5, M-9, M-10, M-12, L-3, L-4). All fixes pure improvements: no new behavior, no breaking changes. Architectural items (H-1 HNSW filter-during-search, H-2 graph boost magnitude, H-3 watcher embeddings invalidation, M-2 HTTP transport full parity, M-7 PDF/OCR DoS resource controls, M-8 write-path TOCTOU, readOnlyHint-aware invariant) deferred to **v3.8.0 backlog** as they require architectural changes. 786 tests unchanged from v3.7.5 (2 existing tests updated to reflect M-10 signature change).

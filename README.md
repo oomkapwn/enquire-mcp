@@ -1,37 +1,42 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the most advanced MCP server for Obsidian. Hybrid retrieval (BM25 + TF-IDF + ML embeddings via RRF), BGE cross-encoder reranking, HNSW vector index, int8 quantization, multilingual semantic search, PDFs with OCR, remote MCP. For Claude Code, Claude Desktop, Cursor, ChatGPT, Codex." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — long-term memory for AI agents. Built on your Obsidian vault. Open-source, MCP-native, vendor-neutral. Hybrid retrieval, BGE reranker, HNSW, PDFs with OCR. For Claude Code, Claude Desktop, Cursor, ChatGPT, Codex." width="100%"></a>
 
 # enquire-mcp
 
 ### Long-term memory for AI agents. Built on your Obsidian vault.
 
-**The most advanced Obsidian MCP — every modern IR primitive, in one tool, for free.**
+**Stop re-explaining context to Claude, Cursor, ChatGPT every session. Your Obsidian notes become shared, searchable memory across every MCP-compatible agent — your knowledge, every model, forever yours.**
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-786%20passing-brightgreen.svg)](#trust)
-[![stable](https://img.shields.io/badge/v3.6.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.7.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
+
+**[⚡ 30-second install](#-quick-start) · [🧠 Use cases](#-use-cases) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 API reference](https://oomkapwn.github.io/enquire-mcp/) · [💬 Compare alternatives](./docs/COMPARISON.md)**
 
 </div>
 
 ---
 
-> **First and only Obsidian-MCP that ships hybrid retrieval, cross-encoder reranking, HNSW, int8 quantization, late-chunking, HyDE, GraphRAG-light community detection, standalone `.base` query execution, PDFs + OCR, and stateful remote MCP — together. In one binary. Under MIT. SLSA-3 signed.**
->
-> **Zero outbound network calls during serve.** Embedding + reranker models cached locally (one-time `install-model` from HuggingFace). Your vault content never leaves your machine. The privacy-conscious complement to Obsidian plugins that hit cloud APIs for retrieval.
+## The problem
 
-## What it is
+Every AI session starts from zero. You re-explain your project, your design decisions, the conclusions of last week's research. Vendor "memory" features ([Claude Memory](https://www.anthropic.com/news/memory-and-tool-use), [ChatGPT Memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), Cursor memory) lock your knowledge into one provider's cloud — and forget it again when you switch tools. **Your knowledge keeps starting over.**
 
-A **production-ready MCP server** that turns your Obsidian vault into **persistent, queryable long-term memory** for any AI agent — Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients. Unlike session-scoped chat memory or proprietary cloud "memory" features, your knowledge lives in plain markdown files **you own**, indexed locally, and recalled with the full modern IR stack: **BM25 + TF-IDF + multilingual ML embeddings** fused via Reciprocal Rank Fusion (Cormack et al, 2009), reranked with a **BGE cross-encoder** (5 model options), scaled to millions of chunks via **HNSW with int8 quantization**, with blended markdown + PDF hits and `[page: N]` citations.
+## The solution
 
-Think of it as the **open-source, MCP-native, agent-grade memory layer** that complements Claude Memory / ChatGPT Memory / Cursor memory — but stores your durable knowledge in a portable, vendor-neutral format (your Obsidian vault) any agent can read.
+Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
 
-**44 tools · 19 MCP prompts · 786 unit tests · 50+ languages · v3.6.x · semver-bound · MIT · SLSA-3.**
+> **Three things make enquire-mcp different**:
+> 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
+> 2. **Best-in-class retrieval.** Hybrid BM25 + multilingual embeddings + BGE cross-encoder reranker fused via RRF, scaled with HNSW + int8 quantization. The same IR stack a search startup would build — open-sourced, in one binary.
+> 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
+
+**44 tools · 19 MCP prompts · 786 unit tests · 50+ languages · v3.7.x stable · semver-bound · MIT · SLSA-3 signed.**
 
 ---
 

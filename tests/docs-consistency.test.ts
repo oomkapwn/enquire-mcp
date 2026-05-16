@@ -371,6 +371,33 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.7.4 — close the "Hardcoded counts in docs without an invariant"
+  // anti-pattern gap (Rule since v3.5.9 per CLAUDE.md). Previously docs-
+  // consistency gated tool count, prompt count, and test count, but the
+  // `package.json#description` claim "5 cross-encoder reranker models" was
+  // not enforced. If RERANKER_MODELS grows/shrinks, the npm description
+  // would drift silently.
+  it("package.json description reranker-model count matches RERANKER_MODELS catalog", async () => {
+    const pkgRaw = await read("package.json");
+    const pkg = JSON.parse(pkgRaw) as { description?: string };
+    const m = /(\d+)\s+cross-encoder\s+reranker\s+models/.exec(pkg.description ?? "");
+    if (!m) return; // Claim is optional; if absent, nothing to check.
+    const claimed = Number.parseInt(m[1] ?? "0", 10);
+    // Import via the dist build so we read the same catalog production code uses.
+    const distEntry = path.join(repoRoot, "dist", "embeddings.js");
+    try {
+      await fs.access(distEntry);
+    } catch {
+      return; // dist not built — skip rather than fail (dev watch loop case).
+    }
+    const mod = (await import(distEntry)) as { RERANKER_MODELS?: Record<string, unknown> };
+    const actual = Object.keys(mod.RERANKER_MODELS ?? {}).length;
+    expect(
+      claimed,
+      `package.json says "${claimed} cross-encoder reranker models" but RERANKER_MODELS has ${actual}`
+    ).toBe(actual);
+  });
+
   it("docs/api.md first-paragraph tool count matches actual registered count", async () => {
     const apiMd = await read("docs/api.md");
     const counts = await getActualCounts();

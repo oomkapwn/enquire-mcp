@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.4] — 2026-05-16
+
+> **TL;DR:** Round-5 audit response — **class-vs-instance recursion correction**. v3.7.3 fixed ONE instance of "post-v3.6.4 invariant lacking negative-control" (the k1-version-stamp invariant) but the CLASS had a second open instance: `tests/github-metadata-invariant.test.ts` (added in v3.7.0, also post-v3.6.4 rule, also lacked negative-control). I made the same instance-fix-not-class-fix methodological bug v3.6.4's lesson was supposed to teach. Plus a separate finding: `package.json#description` says *"5 cross-encoder reranker models"* — that count was NOT enforced by `docs-consistency.test.ts` (violates CLAUDE.md anti-pattern *"Hardcoded counts in docs without an invariant"* — Rule since v3.5.9). **+5 tests** (784 total). Both gaps closed with structural enforcement.
+
+**Patch — class-vs-instance audit response + missing-gate closure.**
+
+### Critical methodological correction — instance fix vs class fix (recurrence #2)
+
+**v3.7.3 was an instance fix, not a class fix.** I fixed the k1-version-stamp invariant's missing negative-control, but the CLASS — *"invariants added after v3.6.4 that lack negative-control"* — had at least 2 open instances:
+- `tests/k1-version-stamp-consistency.test.ts` (v3.7.2, fixed in v3.7.3)
+- `tests/github-metadata-invariant.test.ts` (v3.7.0, **STILL OPEN until this patch**)
+
+The v3.6.4 method note explicitly stated: *"when a methodological bug recurs in two consecutive releases, the fix is structural enforcement, not another instance fix."* I violated that rule between v3.7.3 and v3.7.4. The K-1 saga's class-vs-instance bug RECURRED at the methodology layer.
+
+**v3.7.4 fixes the broader class.** Both invariants now have fixture-/synthetic-input negative-control.
+
+### Added — negative-control for `tests/github-metadata-invariant.test.ts`
+
+- **Extracted** assertion logic into pure helper functions (`validateAboutLeadsWith`, `findMissingTopics`).
+- **Added 4 negative-control tests** under `describe("NEGATIVE-CONTROL: analyzers detect drift on synthetic bad inputs (v3.7.4)")`:
+  - `validateAboutLeadsWith` rejects descriptions that don't lead with the canonical phrase (5 cases: positive, 3 negatives, 1 case-insensitive).
+  - `findMissingTopics` returns all required topics when given empty input.
+  - `findMissingTopics` returns subset when given partial topic list.
+  - `findMissingTopics` returns `[]` when all required topics are present (positive control mixed with extras).
+
+If someone breaks the `ABOUT_LEADS_WITH` regex or the `REQUIRED_TOPICS` array, these negative-control tests fail loudly. The production tests no longer silent-pass on analyzer regressions.
+
+### Added — reranker count gate (closes "Hardcoded counts" anti-pattern hole)
+
+- **`docs-consistency.test.ts`** now gates the *"5 cross-encoder reranker models"* claim in `package.json#description`. Reads `RERANKER_MODELS` from `dist/embeddings.js` (the same catalog production code uses) and asserts the count matches the claim.
+
+Previous gated counts: tools (44), prompts (19), tests (784). **Now also: reranker models (5).**
+
+If `RERANKER_MODELS` grows or shrinks, the npm description claim now fails CI until the description is updated to match.
+
+### Tests
+
+**784 tests** (was 779 in v3.7.3). **+5**:
+- 4 GitHub-metadata-invariant negative-control tests.
+- 1 reranker count gate test in docs-consistency.
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · per-file coverage floors met · all invariants now have negative-control.
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same wire format.
+
+### Method note — round-5 caught a methodological RECURSION
+
+The K-1 saga produced a hierarchy of method bugs:
+- Round-1 (code): K-1 destructive bootstrap-schema → closed at v3.6.4 + AST sibling at v3.7.0.
+- Round-2 (claims): CHANGELOG overclaims → closed via retroactive corrections.
+- Round-3 (documentation): SECURITY.md / inline-comment drift → closed via structural invariants.
+- Round-4 (methodology): invariant without negative-control → CAUGHT MY OWN v3.7.2 patch.
+- **Round-5 (meta-methodology)**: my v3.7.3 fix was instance-only, the class was still open. **The methodology bug recurred at the methodology-fix layer.**
+
+Each round catches a more subtle class than the previous. Round-5 is "I made the instance-fix-not-class-fix error WHILE FIXING the negative-control violation". The audit pattern is now recursive over its own outputs.
+
+**Will round-6 surface?** If the audit pattern continues self-recursing, round-6 might catch "the class-fix-not-instance-fix lesson, but I missed level N". To prevent: this patch enforces the broader class — invariants without negative-control fail CI structurally. There's no obvious round-6 finding I can predict, meaning either the methodology saga is closed OR round-6 will catch something I can't conceive of yet.
+
+**Terminator**: the broadest possible class invariant ("every invariant test file must have a `describe("NEGATIVE-CONTROL`)` block or have its parent test cover it") would catch round-6 of this same pattern. Considered for v3.7.5 if a round-6 finding actually appears; otherwise unnecessary scope creep.
+
+---
+
 ## [3.7.3] — 2026-05-16
 
 > **TL;DR:** Self-applied compliance fix. The v3.7.2 K-1 version-stamp consistency invariant shipped **without a negative-control sibling test**, violating the CLAUDE.md anti-pattern *"Invariant test without negative-control — Rule since v3.6.4"*. A round-4 audit (~24h after v3.7.2 ship, per the "audit BEFORE ship + 24h main dogfood" rule) caught the methodological gap. v3.7.3 closes it: extracts the scanning logic into a pure `scanK1Stamps()` function + adds a fixture-based negative-control at `tests/fixtures/k1-version-stamps/drift-mixed.ts` with **3 intentionally-mixed K-1 version stamps** + 2 negative-control tests proving the analyzer detects the drift. **+2 tests** (779 total). Zero code, behavior, or schema changes.

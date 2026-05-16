@@ -63,7 +63,23 @@ function fetchRepoMeta(): RepoMeta | null {
   }
 }
 
-describe("GitHub repo metadata invariant (v3.7.0)", () => {
+/**
+ * v3.7.4 — extracted assertion helpers for negative-control coverage.
+ * Per CLAUDE.md anti-pattern "Invariant test without negative-control —
+ * Rule since v3.6.4": every invariant test must have a sibling that
+ * fails when the invariant is violated. v3.7.0 shipped this invariant
+ * with assertions inlined, which made negative-control impossible.
+ * v3.7.4 extracts the logic so we can prove the analyzer flags drift.
+ */
+function validateAboutLeadsWith(description: string): boolean {
+  return ABOUT_LEADS_WITH.test(description ?? "");
+}
+function findMissingTopics(topics: string[]): string[] {
+  const set = new Set(topics ?? []);
+  return REQUIRED_TOPICS.filter((t) => !set.has(t));
+}
+
+describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", () => {
   // Always use `it` (not `it.skip`) so the total `it()` count is constant
   // across local-with-gh-auth and CI-without-gh-auth environments. The
   // `tests/docs-consistency.test.ts` regex counts `^\s*it\(` declarations
@@ -97,8 +113,55 @@ describe("GitHub repo metadata invariant (v3.7.0)", () => {
       console.warn("[github-metadata] gh api call failed; treating as no-op.");
       return;
     }
-    const topics = new Set(meta.topics ?? []);
-    const missing = REQUIRED_TOPICS.filter((t) => !topics.has(t));
+    const missing = findMissingTopics(meta.topics);
     expect(missing, `Missing topics: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  // v3.7.4 — NEGATIVE-CONTROL siblings. The 2 production tests above pass
+  // when gh metadata matches the expected positioning. Without the negative
+  // control, if `ABOUT_LEADS_WITH` regex or `REQUIRED_TOPICS` array broke,
+  // the production tests would silent-pass even on bad input. These tests
+  // call the extracted pure functions on KNOWN-BAD inputs and assert the
+  // analyzer correctly flags them.
+  //
+  // Per CLAUDE.md anti-pattern "Invariant test without negative-control —
+  // Rule since v3.6.4". v3.7.0 shipped this invariant without negative-
+  // control (oversight); v3.7.4 closes the gap.
+  describe("NEGATIVE-CONTROL: analyzers detect drift on synthetic bad inputs (v3.7.4)", () => {
+    it("validateAboutLeadsWith rejects descriptions that don't lead with the canonical phrase", () => {
+      expect(validateAboutLeadsWith("Memory layer for AI agents — built on Obsidian.")).toBe(true);
+      // Negative cases — analyzer MUST flag these.
+      expect(validateAboutLeadsWith("The most advanced MCP server for Obsidian vaults.")).toBe(false);
+      expect(validateAboutLeadsWith("")).toBe(false);
+      expect(validateAboutLeadsWith("memory layer for AI agents")).toBe(true); // case-insensitive
+      expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false); // wrong lead noun
+    });
+
+    it("findMissingTopics returns all required topics when given empty input", () => {
+      const missing = findMissingTopics([]);
+      expect(missing.length).toBe(REQUIRED_TOPICS.length);
+      // Spot-check that each required topic is in the missing list.
+      for (const required of REQUIRED_TOPICS) {
+        expect(missing).toContain(required);
+      }
+    });
+
+    it("findMissingTopics returns subset when given partial topic list", () => {
+      // Pass only 3 of 8 required → 5 should be reported missing.
+      const partial = REQUIRED_TOPICS.slice(0, 3);
+      const missing = findMissingTopics(partial);
+      expect(missing.length).toBe(REQUIRED_TOPICS.length - 3);
+      // The 3 we passed must NOT be in missing.
+      for (const passed of partial) {
+        expect(missing).not.toContain(passed);
+      }
+    });
+
+    it("findMissingTopics returns [] when all required topics are present (positive control)", () => {
+      // Mix required topics with some unrelated extras — analyzer should
+      // ignore the extras and report no missing.
+      const full = [...REQUIRED_TOPICS, "extra-1", "extra-2"];
+      expect(findMissingTopics(full)).toEqual([]);
+    });
   });
 });

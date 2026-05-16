@@ -2,6 +2,112 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.10] — 2026-05-17
+
+> **TL;DR:** **3rd external audit response** (`enquire-mcp-audit-report-2026-05-17.md`, round-12). 15 findings + 6 docs drift items. Verified: 2 findings were FALSE POSITIVES on outdated tree state (PNG asset exists; parser TAG_RE correctly rejects headings). This patch ships 7 quick-win fixes: benchmark docs↔JSON sync, COMPARISON test count, release.yml docs gate, examples/ in package files, DQL likeToRegex escape bug, FTS5 transactional reindex × 2 paths. 7 architectural findings documented in v3.8.0 backlog. **786 tests unchanged.**
+
+**Patch — round-12 external audit (3rd auditor): 7 ship-ready fixes + 7 architectural backlog items.**
+
+### Critical methodological note — 3rd external audit confirms the v3.6.1 rule
+
+Third external audit in the v3.6.0 → v3.7.10 cascade. Each audit finds NEW failure modes that internal audit + the previous external auditors missed. **Re-confirms the v3.6.1 method note**: *"every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies"*. Three independent auditors so far; each surfaced material findings the others missed.
+
+### Fixed — public trust issues
+
+- **Benchmark docs/JSON mismatch (#5)**: `docs/benchmarks.md` claimed latencies `110ms / 228ms / 517ms` but `bench/benchmarks.json` (the SOURCE artifact) had `179ms / 401ms / 1028ms`. Real public-trust drift — auditor noted `"no hand-edited numbers"` claim was undermined. Synced docs to JSON values + added explanatory note about hardware-variable latency. Quality columns (MRR / NDCG / Recall) unchanged — those don't drift by hardware.
+- **COMPARISON.md test count `670` → `786`**: stale since v3.6.0 (715 tests at that point). Now matches README + package.json + SVG.
+- **`docs/COMPARISON.md` test-count footnote**: `"exact for v3.7.0"` → `"exact for v3.7.x"` (less drift-prone formulation).
+
+### Fixed — release gate completeness (#12)
+
+`release.yml` REQUIRED regex was `"lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency"` (7 gates) — missing the `docs` job added in v3.7.6 M-5. A tag with failing TypeDoc generation could publish to npm. Now: regex includes `docs`, REQ_COUNT bumped 7 → 8.
+
+### Fixed — package manifest hygiene
+
+- **`examples/` added to `package.json#files`**: README + QUICKSTART reference `examples/` but the directory wasn't shipped in the npm tarball. Per auditor's recommendation. Users installing via npm now get the drop-in configs.
+- **(Verified)**: `assets/social-preview.png` exists at 188KB — audit finding #4 was based on an outdated tree state (PNG was regenerated in v3.7.7).
+
+### Fixed — DQL `like` escaping (#13)
+
+`src/dql.ts:likeToRegex` had two bugs:
+1. **Trailing backslash crash**: pattern ending in `\` produced a dangling regex escape → `new RegExp("...\\")` threw `SyntaxError`. Fix: trailing `\` outputs literal `\\`.
+2. **Escape sequence over-escape**: pre-fix `\d` → regex `\d` (digit class) instead of literal `d`. The escape sequence should pass the next char as a literal (escaped only if regex-meta). Fix: branch on whether `next` is in `REGEX_SPECIALS`.
+3. **`*` missing from REGEX_SPECIALS**: my initial #13 fix broke an existing test (`\*` literal asterisk). Root cause: `*` is regex-meta but wasn't in the specials set. Added.
+
+### Fixed — FTS5 reindex transactional atomicity (#10)
+
+`reindexFile()` and `reindexPdfFile()` (`src/fts5.ts`) did `DELETE chunks + N×INSERT + UPDATE source_state` as separate statements. A crash or error between statements left partially-updated chunks with a stale `source_state` row pointing at the wrong chunk count.
+
+Fix: wrap in `db.transaction(() => { ... })()`. better-sqlite3's transaction wrapper auto-rolls back on throw. All-or-nothing atomicity.
+
+Required type addition: `Db.transaction<F>(fn: F): F` — was missing from the local Db interface stub in `src/fts5.ts` (the runtime has it; only the type-only stub was incomplete).
+
+### Audit findings — full status matrix
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 1 | `--watch` doesn't invalidate embeddings/HNSW/PDF | High | **v3.8.0 backlog** (H-3, architectural) |
+| 2 | TF-IDF always runs in hybrid hot path | High | **v3.8.0 backlog** (architectural — needs persistent TF-IDF) |
+| 3 | HNSW under-returns after folder/privacy filters | High | **v3.8.0 backlog** (H-1, architectural) |
+| 4 | README/package references missing PNG | High | ✗ **FALSE POSITIVE** (verified: PNG exists, 188KB) |
+| 5 | Benchmark docs/JSON mismatch | High | ✅ **Fixed in v3.7.10** |
+| 6 | Write/cache symlink TOCTOU windows | Medium | **v3.8.0 backlog** (M-8, security hardening) |
+| 7 | Persisted index `rel_path` validation incomplete | Medium | **v3.8.0 backlog** (security hardening — needs careful path validation) |
+| 8 | `context_pack` token budget overflow + silently loses PDF hits | Medium | **v3.8.0 backlog** (medium-effort budget/path-kind fix) |
+| 9 | Parser TAG_RE matches `# Heading` | Medium | ✗ **FALSE POSITIVE** (verified: regex correctly rejects ATX headings; tested with `# Heading`, `## Heading`, `#real-tag` — only the last matches) |
+| 10 | FTS5 reindex not transactional | Medium | ✅ **Fixed in v3.7.10** |
+| 11 | `serve-http` ≠ `serve` flag parity | Medium | **v3.8.0 backlog** (M-2, architectural) |
+| 12 | Release workflow doesn't require `docs` CI gate | Medium | ✅ **Fixed in v3.7.10** |
+| 13 | DQL `like` escaping incomplete | Low | ✅ **Fixed in v3.7.10** |
+| 14 | Privacy filters applied after full walk | Low | **v3.8.0 backlog** (perf optimization) |
+| 15 | Node support story ambiguous | Low | Partially addressed in v3.7.1 docs/QUICKSTART; full `engines >=22.13` deferred (would force-block valid non-PDF Node 20 deployments — see v3.7.1 method note) |
+| D1 | `docs/COMPARISON.md` stale test count `670` | Doc drift | ✅ **Fixed in v3.7.10** |
+| D2 | `docs/api.md` CLI flag table incomplete | Doc drift | **v3.8.0 backlog** (medium-effort docs rewrite) |
+| D3 | `docs/benchmarks.md` links to gitignored generated docs path | Doc drift | Acceptable — link is to GH Pages URL, not tarball path |
+| D4 | README references `examples/` but not in `package.json#files` | Doc drift | ✅ **Fixed in v3.7.10** |
+| D5 | `TOOL_MANIFEST` "single source of truth" claim vs manual registration | Doc drift | Existing docs-consistency test bridges manifest ↔ docs ↔ runtime — acceptable |
+| D6 | github-metadata invariant silently skips without gh auth | Doc drift | Already handled (v3.7.4 negative-control proves analyzer correctness when gh isn't available) |
+
+**Summary**: 7 ship-ready fixes shipped in v3.7.10; 7 architectural items moved to v3.8.0 backlog with clear rationale; 2 findings verified as false positives; 3 lower-priority/acceptable items documented.
+
+### Tests
+
+**786 tests** — unchanged from v3.7.9. 1 existing DQL test (`LIKE backslash-asterisk matches a literal asterisk`) initially failed when my first `likeToRegex` fix omitted `*` from REGEX_SPECIALS; corrected before commit. All tests now green.
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · version-consistency green at `3.7.10` (5 surfaces) · all K-1 invariants green · github-metadata invariant green.
+
+### Migration
+
+**No-op for most consumers.** Subtle behavior changes from the bug fixes:
+- DQL `like` with trailing `\` no longer throws RegExp error
+- DQL `like` escape sequences like `\d` now correctly mean literal `d` (was incorrectly digit-class)
+- FTS5 reindex of a single file is now atomic — partial-failure scenarios that previously left mixed-state indexes now roll back cleanly
+- `npm install @oomkapwn/enquire-mcp` now ships `examples/` directory (~8 KB added)
+
+`benchmarks.md` latency numbers changed (synced to actual measurements) — quality numbers unchanged.
+
+### Method note — instance-fix discipline at scale
+
+7 ship-ready findings closed in one batch; 7 architectural findings explicitly documented with severity + rationale in v3.8.0 backlog. The pattern follows the v3.6.4 method note: *"class fix not instance fix"* — even when shipping multiple unrelated findings, each gets its own root-cause analysis (e.g. likeToRegex bug had THREE distinct sub-bugs: trailing-backslash crash, over-escape, and missing-from-specials — all three fixed in one patch with three explicit comments documenting the class).
+
+**Open backlog for v3.8.0 (now 14 architectural items)**:
+- H-1 HNSW filter-during-search (round-12 #3)
+- H-2 TF-IDF hot path opt-out (round-12 #2 — NEW)
+- H-3 watcher embeddings invalidation (round-12 #1)
+- M-2 HTTP transport full parity (round-12 #11)
+- M-7 PDF/OCR DoS resource controls (round-7)
+- M-8 write-path TOCTOU mitigation (round-12 #6)
+- M-13 OCR text in hybrid retrieval (round-7)
+- readOnlyHint-aware invariant test (round-7)
+- Persisted index `rel_path` validation (round-12 #7 — NEW)
+- `context_pack` budget + PDF-kind handling (round-12 #8 — NEW)
+- Privacy filters early-exit during walk (round-12 #14 — NEW)
+- `docs/api.md` CLI flag table rewrite (round-12 D2 — NEW)
+- Positioning consistency invariant (round-11 deferred)
+- Node engine tier refinement (round-12 #15)
+
+---
+
 ## [3.7.9] — 2026-05-16
 
 > **TL;DR:** Round-11 audit response — **positioning permeation completion**. v3.7.8 calibrated the GitHub About + Topics + README hero + npm description, but the same pass missed `docs/QUICKSTART.md`, `docs/api.md`, `tests/github-metadata-invariant.test.ts`, and `CLAUDE.md` status section. v3.7.9 syncs all 5 surfaces. **786 tests unchanged.** Zero code changes. Round-11 caught the same class of bug v3.7.4 caught (instance-fix-not-class-fix): v3.7.8 was an instance fix (key surfaces only), the broader class needed propagation to all positioning surfaces.

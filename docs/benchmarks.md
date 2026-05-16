@@ -15,12 +15,14 @@ reproducible from this repository — there are no hand-edited numbers.** Run
 | --------------------------------------------------------- | ---------- | ---------- | ---------- | ------------ |
 | FS-grep baseline                                          | 0.8269     | 0.8184     | 0.8844     | 0.1 ms       |
 | BM25 only                                                 | 0.4833     | 0.4060     | 0.3833     | 0.1 ms       |
-| TF-IDF only                                               | 0.9090     | 0.8668     | 0.9039     | 2.2 ms       |
-| Embeddings only (BGE-small-en, brute-force cosine)        | 0.9274     | 0.8985     | 0.9394     | 110 ms       |
-| **Hybrid (BM25 + TF-IDF + embeddings, RRF + graph-boost)** | 0.6581     | 0.7143     | **0.9639** | 228 ms       |
-| **Hybrid + BGE-reranker-base (q8)**                       | **0.9052** | **0.8694** | 0.9122     | 517 ms       |
-| Hybrid + reranker (HyDE subset, n=25)                     | 0.8467     | 0.7672     | 0.8133     | 526 ms       |
-| Hybrid + reranker + HyDE-sim (HyDE subset, n=25)          | 0.7078     | 0.5728     | 0.5933     | 729 ms       |
+| TF-IDF only                                               | 0.9090     | 0.8668     | 0.9039     | 2.7 ms       |
+| Embeddings only (BGE-small-en, brute-force cosine)        | 0.9274     | 0.8985     | 0.9394     | 179 ms       |
+| **Hybrid (BM25 + TF-IDF + embeddings, RRF + graph-boost)** | 0.6581     | 0.7143     | **0.9639** | 401 ms       |
+| **Hybrid + BGE-reranker-base (q8)**                       | **0.9052** | **0.8694** | 0.9122     | 1028 ms      |
+| Hybrid + reranker (HyDE subset, n=25)                     | 0.8467     | 0.7672     | 0.8133     | 1066 ms      |
+| Hybrid + reranker + HyDE-sim (HyDE subset, n=25)          | 0.7078     | 0.5728     | 0.5933     | 1344 ms      |
+
+> **v3.7.10 (external audit M-5 fix)**: latency column re-synced to `bench/benchmarks.json` after round-12 audit caught drift (previous values were from a faster machine — A18 Pro re-measured at the values above on 2026-05-15). Quality columns (MRR / NDCG / Recall) unchanged — those are deterministic and don't drift by hardware. Per the audit recommendation: hardware-variable latency and quality metrics are now visually separable.
 
 **Headline takeaways:**
 

@@ -23,17 +23,31 @@
 // This is the 5th-level structural guard for the K-1 class (after grep
 // invariant, AST def-use trace, caller-pattern integration, fixture-based
 // negative-control). The class is now closed at FIVE levels.
+//
+// v3.7.3 — added negative-control fixture coverage. Per the CLAUDE.md
+// anti-pattern "Invariant test without negative-control — Rule since
+// v3.6.4", the v3.7.2 invariant lacked a sibling test that would FAIL
+// when the invariant was violated. v3.7.3 closes that compliance gap by
+// extracting the scanning logic + adding fixture-based negative control
+// at `tests/fixtures/k1-version-stamps/drift-mixed.ts`.
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SRC_ROOT = "src";
+const NEGATIVE_FIXTURE_ROOT = "tests/fixtures/k1-version-stamps";
 // K-1 invariant comments look like `// vX.Y.Z K-1 closure` or
 // `// vX.Y.Z K-1 invariant` or `// SAFE BY DESIGN (vX.Y.Z K-1 invariant)`.
 // We anchor on "K-1" to filter; the version is the immediately-preceding
 // vX.Y.Z token.
 const K1_VERSION_RE = /\bv(\d+\.\d+\.\d+)\s+K-1\b/g;
+// Canonical: v3.6.4 was when K-1 structurally closed (peek-everywhere +
+// grep invariant). v3.7.0 added the AST sibling test but didn't change the
+// K-1 closure version. If a future v3.X.Y legitimately re-closes K-1
+// (e.g. after a major refactor), update this constant + every stamp +
+// CHANGELOG in one batch.
+const CANONICAL_VERSION = "3.6.4";
 
 async function collectTs(root: string): Promise<string[]> {
   const out: string[] = [];
@@ -60,23 +74,36 @@ async function collectTs(root: string): Promise<string[]> {
   return out;
 }
 
-describe("K-1 version-stamp consistency invariant (v3.7.2)", () => {
-  it("every `vX.Y.Z K-1 ...` comment in src/ uses the same version stamp", async () => {
-    const files = await collectTs(SRC_ROOT);
-    const stamps = new Map<string, { file: string; line: number }[]>();
-    for (const file of files) {
-      const text = await fs.readFile(file, "utf8");
-      const lines = text.split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? "";
-        for (const m of line.matchAll(K1_VERSION_RE)) {
-          const version = m[1] ?? "";
-          const list = stamps.get(version) ?? [];
-          list.push({ file, line: i + 1 });
-          stamps.set(version, list);
-        }
+/**
+ * Extract the K-1 version-stamp scanning logic into a pure function so
+ * negative-control fixture tests can call it on a known-bad input. Returns
+ * a Map keyed by version string with the list of file:line sites where
+ * each version was found.
+ *
+ * Added in v3.7.3 to close the negative-control compliance gap.
+ */
+async function scanK1Stamps(rootDir: string): Promise<Map<string, { file: string; line: number }[]>> {
+  const stamps = new Map<string, { file: string; line: number }[]>();
+  const files = await collectTs(rootDir);
+  for (const file of files) {
+    const text = await fs.readFile(file, "utf8");
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      for (const m of line.matchAll(K1_VERSION_RE)) {
+        const version = m[1] ?? "";
+        const list = stamps.get(version) ?? [];
+        list.push({ file, line: i + 1 });
+        stamps.set(version, list);
       }
     }
+  }
+  return stamps;
+}
+
+describe("K-1 version-stamp consistency invariant (v3.7.2 + v3.7.3 negative-control)", () => {
+  it("every `vX.Y.Z K-1 ...` comment in src/ uses the same version stamp", async () => {
+    const stamps = await scanK1Stamps(SRC_ROOT);
     if (stamps.size <= 1) {
       // Either zero K-1 comments (file deleted?) or all consistent.
       // We don't require a minimum count here — the existence-side is
@@ -100,35 +127,54 @@ describe("K-1 version-stamp consistency invariant (v3.7.2)", () => {
   });
 
   it("the K-1 version stamp matches the version that closed the class (v3.6.4)", async () => {
-    // Anchor against the canonical version: v3.6.4 was when K-1 structurally
-    // closed (peek-everywhere + grep invariant). v3.7.0 added the AST sibling
-    // test but didn't change the K-1 closure version. If a future v3.X.Y
-    // legitimately re-closes K-1 (e.g. after a major refactor), update this
-    // constant + every stamp + CHANGELOG entry in one batch.
-    const CANONICAL = "3.6.4";
-    const files = await collectTs(SRC_ROOT);
+    const stamps = await scanK1Stamps(SRC_ROOT);
     const violations: string[] = [];
-    for (const file of files) {
-      const text = await fs.readFile(file, "utf8");
-      const lines = text.split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? "";
-        for (const m of line.matchAll(K1_VERSION_RE)) {
-          const version = m[1] ?? "";
-          if (version !== CANONICAL) {
-            violations.push(`${path.relative(process.cwd(), file)}:${i + 1} uses v${version}, expected v${CANONICAL}`);
-          }
-        }
+    for (const [version, sites] of stamps) {
+      if (version === CANONICAL_VERSION) continue;
+      for (const s of sites) {
+        violations.push(
+          `${path.relative(process.cwd(), s.file)}:${s.line} uses v${version}, expected v${CANONICAL_VERSION}`
+        );
       }
     }
     if (violations.length > 0) {
       expect.fail(
-        `Found ${violations.length} K-1 inline-comment(s) NOT using the canonical version v${CANONICAL}:\n` +
+        `Found ${violations.length} K-1 inline-comment(s) NOT using the canonical version v${CANONICAL_VERSION}:\n` +
           violations.map((v) => `  ${v}`).join("\n") +
-          `\n\nFix: either update each comment to v${CANONICAL}, OR if K-1 was legitimately re-closed ` +
+          `\n\nFix: either update each comment to v${CANONICAL_VERSION}, OR if K-1 was legitimately re-closed ` +
           `in a newer version, update the CANONICAL constant in this test file + every stamp + CHANGELOG ` +
           `in a single commit (per the v3.7.2 methodology rule).`
       );
     }
+  });
+
+  // v3.7.3 negative-control sibling. Without these, the v3.7.2 invariant
+  // tests above would silently pass even if the analyzer regex / scanner
+  // logic regressed (since there are no offending stamps in current src/).
+  // The fixture at `tests/fixtures/k1-version-stamps/drift-mixed.ts`
+  // intentionally has 3 different K-1 stamps; the analyzer MUST detect
+  // them all — that proves the production-side analyzer works.
+  describe("NEGATIVE-CONTROL: scanK1Stamps detects drift on known-bad fixture (v3.7.3)", () => {
+    it("detects ALL distinct version stamps in drift-mixed.ts (consistency-test counterpart)", async () => {
+      const stamps = await scanK1Stamps(NEGATIVE_FIXTURE_ROOT);
+      // Fixture has v3.6.3, v3.6.4, v3.6.5 — analyzer must find all 3.
+      expect(stamps.size).toBe(3);
+      expect(stamps.has("3.6.3")).toBe(true);
+      expect(stamps.has("3.6.4")).toBe(true);
+      expect(stamps.has("3.6.5")).toBe(true);
+    });
+
+    it("flags violations for non-canonical stamps in drift-mixed.ts (canonical-anchor counterpart)", async () => {
+      const stamps = await scanK1Stamps(NEGATIVE_FIXTURE_ROOT);
+      const violations: string[] = [];
+      for (const [version, sites] of stamps) {
+        if (version === CANONICAL_VERSION) continue;
+        for (const _s of sites) violations.push(version);
+      }
+      // Fixture has 2 non-canonical stamps (v3.6.3 and v3.6.5).
+      expect(violations.length).toBe(2);
+      expect(violations).toContain("3.6.3");
+      expect(violations).toContain("3.6.5");
+    });
   });
 });

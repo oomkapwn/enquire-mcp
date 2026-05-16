@@ -377,6 +377,33 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // `package.json#description` claim "5 cross-encoder reranker models" was
   // not enforced. If RERANKER_MODELS grows/shrinks, the npm description
   // would drift silently.
+  // v3.7.11 (round-13 audit) — extend hardcoded-counts gate to
+  // docs/COMPARISON.md, which had stale "670 tests" / "44 tools" /
+  // "19 prompts" claims that the v3.7.4 gate scope didn't include.
+  // Round-12 caught "670" → "786" drift; this invariant locks the
+  // counts in COMPARISON.md against actual values going forward.
+  it("docs/COMPARISON.md hardcoded tool/prompt counts match actual", async () => {
+    const comparisonMd = await read("docs/COMPARISON.md");
+    const counts = await getActualCounts();
+    // Match standalone "N tools" / "M prompts" mentions in COMPARISON
+    // (e.g. "44 tools + 19 prompts" appears in line 117). Skip if no
+    // matches found — the file is allowed to not mention counts at all.
+    const toolMatches = [...comparisonMd.matchAll(/(\d+)\s+tools\b/g)];
+    for (const m of toolMatches) {
+      const claimed = Number.parseInt(m[1] ?? "0", 10);
+      expect(claimed, `COMPARISON.md mentions "${m[0]}" but actual tool count is ${counts.allTools}`).toBe(
+        counts.allTools
+      );
+    }
+    const promptMatches = [...comparisonMd.matchAll(/(\d+)\s+prompts\b/g)];
+    for (const m of promptMatches) {
+      const claimed = Number.parseInt(m[1] ?? "0", 10);
+      expect(claimed, `COMPARISON.md mentions "${m[0]}" but actual prompt count is ${counts.prompts}`).toBe(
+        counts.prompts
+      );
+    }
+  });
+
   it("package.json description reranker-model count matches RERANKER_MODELS catalog", async () => {
     const pkgRaw = await read("package.json");
     const pkg = JSON.parse(pkgRaw) as { description?: string };

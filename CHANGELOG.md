@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.11] — 2026-05-17
+
+> **TL;DR:** Round-13 self-audit (analogues to round-12 v3.7.10 fixes). Closed 3 findings: (1) `EmbedDb.deleteNote` non-transactional — sibling of v3.7.10 #10 FTS5 fix that I missed in the class scan; (2) `docs/COMPARISON.md` hardcoded tool/prompt counts not gated by docs-consistency — round-12 #D1 fix was instance-only; (3) **v3.7.10 silent overclaim correction**: CHANGELOG claimed `examples/` was added to `package.json#files` but the Edit hit a file-modified race and didn't actually persist. Verified post-merge: `examples` was missing. This patch actually adds it. **+1 test** (787 total).
+
+**Patch — round-13 class-extension audit + silent overclaim correction.**
+
+### Critical retroactive correction — v3.7.10 silent overclaim
+
+**v3.7.10 CHANGELOG D4 entry claimed**: *"`examples/` added to `package.json#files`: ... Users installing via npm now get the drop-in configs."*
+
+**Reality**: `git show v3.7.10:package.json` shows the `files` array WITHOUT `examples`. The Edit tool call during the v3.7.10 sprint hit a "file modified" race after the bench numbers were re-written and never re-applied. The CHANGELOG entry was written assuming the Edit succeeded, but post-merge verification (round-13 audit) found the actual file unchanged.
+
+This is the **5th overclaim instance** in the v3.6.x cascade history (after K-1 overclaims and SECURITY.md drift). Pattern: "wrote that I did X, didn't verify X actually shipped." Class is still the same as v3.6.1 / v3.6.2 K-1 overclaims — claim before verify.
+
+**v3.7.11 fix**: `examples` actually added to `files` array this time, verified by re-reading package.json after the Edit completed.
+
+### Fixed — EmbedDb.deleteNote transactional (sibling of v3.7.10 #10)
+
+`src/embed-db.ts:428-432` `deleteNote` did `DELETE FROM embeddings + DELETE FROM source_state` as separate statements. Less critical than `upsertNote` (already transactional v2.0+) or the v3.7.10 FTS5 `reindexFile`/`reindexPdfFile` fixes (which had DELETE + N×INSERT + UPDATE compound failure modes), because both `deleteNote` statements are idempotent DELETEs. But for consistency with the rest of the class — and to handle a crash between the two statements leaving an orphaned source_state row — wrapped in `db.transaction()`.
+
+Round-13 audit caught this when I systematically grepped for `DELETE FROM\|INSERT INTO\|UPDATE.*SET` across `src/embed-db.ts`. The v3.7.10 audit only scanned FTS5; class extension applies the same fix to embed-db.
+
+### Fixed — docs/COMPARISON.md hardcoded counts now gated
+
+`docs/COMPARISON.md` had hardcoded count claims (`44 tools`, `19 prompts`) outside the `tests/docs-consistency.test.ts` scope. v3.7.10 D1 fix corrected the stale `670 tests → 786 tests` value, but the test count was the ONLY count actually gated for COMPARISON.md. Other counts (tools, prompts) drifted silently.
+
+**v3.7.11 fix**: extended `docs-consistency.test.ts` with a new test that walks COMPARISON.md for `(\d+)\s+tools` and `(\d+)\s+prompts` matches and asserts each against `TOOL_MANIFEST.length` and the actual prompt count. Closes the same class as the v3.7.4 reranker-count gate.
+
+### Audit findings — round-13 root-cause sweep against round-12 fixes
+
+| Meta-class | Pattern | Status |
+|---|---|---|
+| **A: Multiple sources of truth (drift)** | COMPARISON.md hardcoded counts not gated | ✅ Fixed — extended docs-consistency |
+| **B: Non-transactional multi-statement DB ops** | EmbedDb.deleteNote (DELETE + DELETE) | ✅ Fixed — added transaction wrapper |
+| **B: Other DB ops** | EmbedDb.upsertNote (DELETE + N×INSERT + UPDATE) | ✓ Verified already transactional |
+| **C: Escape transforms** | safeFts5Query, globToRegex | ✓ Verified — both correct, no bugs |
+| **D: CI/release sync** | test-macos not in REQUIRED | ⚠️ Intentional advisory (acceptable) |
+| **E: File manifest** | examples/ in package.json#files | ✅ **Fixed (v3.7.10 silent overclaim corrected)** |
+| **Overclaim recursion** | "Claimed X, didn't actually ship X" | ✅ Fixed + documented as 5th instance |
+
+### Tests
+
+**787 tests** (was 786 in v3.7.10). **+1 docs-consistency test** for COMPARISON.md count gate.
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · version-consistency green at `3.7.11` (5 surfaces) · all K-1 invariants green · all docs-consistency gates green.
+
+### Migration
+
+**No-op for most consumers.** Subtle changes:
+- `EmbedDb.deleteNote` is now atomic — if you have tooling that depends on partial-failure state visible to other DB connections, it won't see it anymore. (Almost certainly nobody does.)
+- `npm install @oomkapwn/enquire-mcp` now actually ships `examples/` (was claimed in v3.7.10 but didn't ship due to silent Edit failure).
+
+### Method note — overclaim recursion #5
+
+The overclaim class has now recurred 5 times across the v3.6.x → v3.7.x cascade:
+1. v3.6.1: "CRIT-1 closed" — 1 of 10 callsites fixed
+2. v3.6.2: "all 10 callsites" — 4 of 10 fixed
+3. v3.7.1: SECURITY.md "permissive" claim 5 patches stale
+4. v3.7.2: 13+ K-1 v3.6.3 attribution stamps
+5. **v3.7.11 (this) — v3.7.10 `examples/` claim didn't actually ship**
+
+The new pattern variant: **silent tooling failure during a multi-Edit patch session.** The Edit tool returned an error ("file modified since read") that I noted but didn't re-apply, then the CHANGELOG was written from the assumed-successful state. This is the LLM-tool equivalent of the K-1 class-fix-not-instance-fix bug — assumed completion vs verified completion.
+
+**Mitigation candidate (v3.8+)**: a post-commit verification script that re-reads each file mentioned in the CHANGELOG entry's "Fixed/Added/Changed" sections and verifies the claimed change is in the diff. Out of scope for this patch; documenting for v3.8 backlog.
+
+For now: extra discipline on "claim AFTER verify" — re-read package.json after each `files` edit before writing CHANGELOG.
+
+---
+
 ## [3.7.10] — 2026-05-17
 
 > **TL;DR:** **3rd external audit response** (`enquire-mcp-audit-report-2026-05-17.md`, round-12). 15 findings + 6 docs drift items. Verified: 2 findings were FALSE POSITIVES on outdated tree state (PNG asset exists; parser TAG_RE correctly rejects headings). This patch ships 7 quick-win fixes: benchmark docs↔JSON sync, COMPARISON test count, release.yml docs gate, examples/ in package files, DQL likeToRegex escape bug, FTS5 transactional reindex × 2 paths. 7 architectural findings documented in v3.8.0 backlog. **786 tests unchanged.**

@@ -424,11 +424,23 @@ export class EmbedDb {
     tx(chunks);
   }
 
-  /** Drop a note's embeddings entirely (used on file deletion). */
+  /** Drop a note's embeddings entirely (used on file deletion).
+   *
+   * v3.7.11 (round-13 audit, sibling of v3.7.10 #10) — wrapped DELETE
+   * embeddings + DELETE source_state in a single transaction. Pre-fix
+   * a crash between the two statements left an orphaned source_state
+   * row pointing at no chunks. Less critical than upsertNote (both
+   * statements are idempotent DELETEs) but for consistency with
+   * upsertNote (already transactional) + reindexFile (v3.7.10) +
+   * reindexPdfFile (v3.7.10), this completes the atomicity class fix.
+   */
   deleteNote(relPath: string): void {
     const db = this.requireDb();
-    db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
-    db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+    const txn = db.transaction(() => {
+      db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+    });
+    txn();
   }
 
   /**

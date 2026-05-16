@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.7.4",
-  "description": "Memory layer for AI agents over your Obsidian vault. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 784 tests, SLSA-3, semver-bound, MIT.",
+  "version": "3.7.5",
+  "description": "Memory layer for AI agents over your Obsidian vault. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, and any MCP client. 44 tools, 19 MCP prompts, 5 cross-encoder reranker models, 786 tests, SLSA-3, semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"

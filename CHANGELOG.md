@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.3] — 2026-05-16
+
+> **TL;DR:** Self-applied compliance fix. The v3.7.2 K-1 version-stamp consistency invariant shipped **without a negative-control sibling test**, violating the CLAUDE.md anti-pattern *"Invariant test without negative-control — Rule since v3.6.4"*. A round-4 audit (~24h after v3.7.2 ship, per the "audit BEFORE ship + 24h main dogfood" rule) caught the methodological gap. v3.7.3 closes it: extracts the scanning logic into a pure `scanK1Stamps()` function + adds a fixture-based negative-control at `tests/fixtures/k1-version-stamps/drift-mixed.ts` with **3 intentionally-mixed K-1 version stamps** + 2 negative-control tests proving the analyzer detects the drift. **+2 tests** (779 total). Zero code, behavior, or schema changes.
+
+**Patch — methodological compliance: negative-control for v3.7.2 invariant.**
+
+### Critical methodological correction
+
+**v3.7.2's `tests/k1-version-stamp-consistency.test.ts` had no negative-control.**
+
+The invariant has 2 production tests:
+1. Consistency check — fail if `src/` has multiple distinct K-1 stamps.
+2. Canonical anchor — fail if `src/` has K-1 stamps != `v3.6.4`.
+
+Both PASS in current state because v3.7.2 already aligned all stamps. But there's NO test that proves the analyzer *would* fail when given drift. If a future refactor breaks the regex `K1_VERSION_RE = /\bv(\d+\.\d+\.\d+)\s+K-1\b/g` or the directory walker, the production tests still pass silently — exactly the failure mode the CLAUDE.md anti-pattern was added (in v3.6.4) to prevent.
+
+**Self-applied violation**: I shipped v3.7.2 with a methodology bug it was supposed to teach. v3.7.3 is the round-4 audit response that catches the gap and closes it.
+
+### Added — negative-control coverage
+
+- **`tests/fixtures/k1-version-stamps/drift-mixed.ts`** — fixture with 3 intentionally-mixed K-1 stamps (`v3.6.3`, `v3.6.4`, `v3.6.5`). The fixture is excluded from biome lint (`biome.json#files.includes` already excludes `tests/fixtures`).
+- **`scanK1Stamps(rootDir)` extracted** as a pure function inside `tests/k1-version-stamp-consistency.test.ts`. Production tests now call it on `src/`; negative-control tests call it on `tests/fixtures/k1-version-stamps/`.
+- **2 new tests**:
+  1. *consistency-test counterpart*: assert analyzer detects all 3 stamps in the fixture (proves the consistency check works on real drift).
+  2. *canonical-anchor counterpart*: assert analyzer flags 2 violations (the 2 non-canonical stamps in fixture).
+
+If someone breaks `K1_VERSION_RE` or `collectTs()`, these negative-control tests fail loudly. The production tests no longer silent-pass on analyzer regressions.
+
+### K-1 enforcement chain — now structurally complete
+
+| # | Test | Catches | Has negative-control? |
+|---|---|---|---|
+| 1 | `k1-class-invariant.test.ts` (v3.6.4) | "No peek call" | Yes — k1-ast-invariant fixtures cover it |
+| 2 | `k1-ast-invariant.test.ts` (v3.7.0) | "Peek result discarded" | Yes — `bad-ignored-peek.ts` + `bad-no-peek.ts` |
+| 3 | `peek-meta.test.ts` caller-pattern (v3.6.4) | "Caller chain regresses" | Yes — explicit "NEGATIVE control" test inside |
+| 4 | `fixtures/k1-invariant/{good,bad-*}.ts` (v3.7.0) | "AST analyzer self-test" | Yes — IS the negative-control |
+| 5 | `k1-version-stamp-consistency.test.ts` (v3.7.2 + **v3.7.3 negative-control**) | "Doc claim drifts" | **Yes — added in v3.7.3** |
+
+**All 5 levels now have negative-control coverage.** The K-1 saga's methodological closure is complete.
+
+### Tests
+
+**779 tests** (was 777 in v3.7.2). **+2 negative-control tests.**
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · per-file coverage floors met · all 5 K-1 invariants green with negative-control coverage.
+
+### Migration
+
+**No-op for every consumer.** Zero code/API/behavior/schema changes. Same npm install, same wire format. The fixture file ships in tests/, not in dist/, so npm consumers don't see it.
+
+### Method note — round-4 audit caught self-applied violation
+
+The CLAUDE.md "audit BEFORE ship + 24h main dogfood after retroactive correction" rule worked exactly as designed:
+- v3.7.2 shipped on 2026-05-15.
+- 24h+ later (round-4 audit on 2026-05-16), I audited my own v3.7.2 invariant against the v3.6.4 anti-pattern "Invariant test without negative-control".
+- Found the gap; closed it.
+
+This is the **first audit that caught a methodological bug in MY OWN previous patch** (rather than in audited prior code). The audit pattern compounds: each round catches more subtle classes than the previous.
+
+**Expected v3.7.4?** Now check round-5: did v3.7.3 itself ship clean? The negative-control fixture has its own implicit invariant (must contain ≥2 distinct stamps to test the consistency-check). If someone "fixes" the fixture by aligning stamps, the negative-control silently degrades to a no-op. **Mitigation**: the negative-control test asserts `expect(stamps.size).toBe(3)` — if someone aligns the fixture, that assertion fails. Self-protecting.
+
+The pattern terminator: round-N audit catches what round-(N-1) missed. After round-4, the K-1 saga has 5 levels of structural enforcement, all with negative-control. There's no obvious round-5 finding I can predict — meaning either the saga is closed or round-5 will surface a class I haven't conceived of yet.
+
+---
+
 ## [3.7.2] — 2026-05-15
 
 > **TL;DR:** 4th-instance audit response for the documentation-drift class. A round-3 audit of K-1 invariant comments found **13+ inline `// v3.6.3 K-1` mis-attributions** in `src/cli.ts`, `src/fts5.ts`, `src/embed-db.ts`, and `tests/k1-class-invariant.test.ts`. v3.6.3 was the marketing-only patch; **K-1 actually closed in v3.6.4** (the K-1 work was deferred mid-sprint when v3.6.3 scope was split). Inline find-and-replace wasn't done, so the comments shipped wrong. v3.7.1 had fixed the SECURITY.md drift; this patch fixes the source-comment drift + adds a **structural invariant test** (`tests/k1-version-stamp-consistency.test.ts`) so a 5th instance can't slip past CI. **+2 tests** (777 total). Zero code, behavior, or schema changes.

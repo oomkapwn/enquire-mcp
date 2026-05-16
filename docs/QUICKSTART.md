@@ -9,13 +9,13 @@ From `npm install` to a working **long-term memory layer for your AI agents**, b
 - **Hybrid search** across every `.md` in your vault — BM25 + TF-IDF fused via Reciprocal Rank Fusion (Cormack et al, 2009), so keyword hits *and* related-term hits both surface.
 - **Top-K ranked notes with snippets** — each result returns the matching note path, a ~120-char snippet around the hit, and per-signal scores so you see why it ranked.
 - **No Obsidian app required** — any directory with `.md` files works. Obsidian doesn't even need to be installed.
-- **Works in every MCP client** — Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT, Codex, mobile MCP clients. One server, one config snippet per client.
+- **Works in every MCP client** — Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT, Codex, OpenClaw, mobile MCP clients. One server, one config snippet per client.
 
 ## Prerequisites
 
 - **Node 22.13+ recommended** (or 20+ for non-PDF use cases — `node --version` should print `v22.13` or higher to enable PDF indexing via `pdfjs-dist@5.7+`; on Node 20 you get the full MCP server minus PDF features). CI matrix tests Node 22 + 24.
 - **An Obsidian vault folder** — any directory containing `.md` files. If you don't have one, `mkdir ~/TestVault && echo "# Hello" > ~/TestVault/note.md` is enough to follow this guide.
-- **An MCP client** — one of: Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT (with remote MCP), Codex, or any other MCP-compatible client.
+- **An MCP client** — one of: Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT (with remote MCP), Codex, OpenClaw, or any other MCP-compatible client.
 
 ## Step 1 — Install (15 seconds)
 

@@ -22,6 +22,11 @@ import { execSync, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const REPO = "oomkapwn/enquire-mcp";
+// v3.7.9 — REQUIRED_TOPICS updated to reflect the v3.7.8 positioning calibration:
+//   - openclaw added (restored after v3.6.3 dropped it to fit hype keywords)
+//   - context-engineering removed (swapped for openclaw in v3.7.8 Topics rebalance)
+// Per round-11 audit: the test was carrying the v3.7.0 8-topic shortlist
+// while the v3.7.8 metadata had moved on. Bringing the invariant up to date.
 const REQUIRED_TOPICS = [
   "ai-memory",
   "agent-memory",
@@ -29,10 +34,14 @@ const REQUIRED_TOPICS = [
   "long-term-memory",
   "claude-memory",
   "second-brain",
-  "context-engineering",
+  "openclaw",
   "obsidian-mcp"
 ];
-const ABOUT_LEADS_WITH = /^Memory layer for AI agents/i;
+// v3.7.8 — About now leads with "The most advanced Obsidian MCP" credential
+// followed by the value prop. v3.7.9 invariant matches this new lead phrase
+// (the v3.7.0 invariant matched "Memory layer for AI agents"; v3.7.8 changed
+// the About copy out-of-band via gh api, and round-11 caught the test drift).
+const ABOUT_LEADS_WITH = /^The most advanced Obsidian MCP/i;
 
 function ghIsAvailable(): boolean {
   try {
@@ -129,12 +138,17 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // control (oversight); v3.7.4 closes the gap.
   describe("NEGATIVE-CONTROL: analyzers detect drift on synthetic bad inputs (v3.7.4)", () => {
     it("validateAboutLeadsWith rejects descriptions that don't lead with the canonical phrase", () => {
-      expect(validateAboutLeadsWith("Memory layer for AI agents — built on Obsidian.")).toBe(true);
+      // v3.7.9 — canonical About lead is now "The most advanced Obsidian MCP"
+      // (was "Memory layer for AI agents" before v3.7.8). Update positive +
+      // negative cases accordingly.
+      expect(validateAboutLeadsWith("The most advanced Obsidian MCP — long-term memory for AI agents")).toBe(true);
+      // Case-insensitive — same canonical phrase, lowercase.
+      expect(validateAboutLeadsWith("the most advanced obsidian mcp — built")).toBe(true);
       // Negative cases — analyzer MUST flag these.
-      expect(validateAboutLeadsWith("The most advanced MCP server for Obsidian vaults.")).toBe(false);
+      expect(validateAboutLeadsWith("Memory layer for AI agents — built on Obsidian.")).toBe(false);
+      expect(validateAboutLeadsWith("The most advanced MCP server for Obsidian vaults.")).toBe(false); // "MCP server for Obsidian" ≠ "Obsidian MCP"
       expect(validateAboutLeadsWith("")).toBe(false);
-      expect(validateAboutLeadsWith("memory layer for AI agents")).toBe(true); // case-insensitive
-      expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false); // wrong lead noun
+      expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false); // pre-v3.7.8 phrasing
     });
 
     it("findMissingTopics returns all required topics when given empty input", () => {

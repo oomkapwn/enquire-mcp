@@ -18,12 +18,11 @@ enquire-mcp serve-http \
   --bearer-token-env ENQUIRE_TOKEN \
   --stateful \
   --persistent-index \
-  --enable-reranker \
-  --use-hnsw \
-  --include-pdfs \
   --cors-origin https://chat.openai.com \
   --cors-origin https://chatgpt.com
 ```
+
+> **v3.7.6 audit fix**: previously this example showed `--enable-reranker`, `--use-hnsw`, and `--include-pdfs` — none of which `serve-http` currently accepts. Those flags are `serve`-only as of v3.7.6. To run a remote-MCP endpoint with reranker/HNSW/PDFs, either (a) use `serve` over stdio (recommended for local agents), or (b) wait for v3.8.0 which adds full `serve-http` flag parity. The example above shows only the flags `serve-http` actually accepts. See [`docs/http-transport.md`](../docs/http-transport.md) for the supported flag matrix.
 
 Set the env var first: `export ENQUIRE_TOKEN=$(cat ~/.config/enquire/token)`.
 

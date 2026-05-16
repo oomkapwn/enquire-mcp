@@ -101,6 +101,35 @@ jobs:
           path: coverage/
           if-no-files-found: warn
 
+  # v3.7.6 M-5 (external audit) — TypeDoc generation gate. README claims
+  # "drift-free API reference auto-generated from source TSDoc on every push",
+  # but pre-fix `npm run docs:api` was only run by the publish-docs workflow
+  # on push-to-main, NOT on PR. A PR could land with broken @link references
+  # or other TypeDoc warnings, and the drift only surfaced AFTER merge.
+  # Now: PR CI verifies docs:api runs cleanly + emits no warnings.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # TypeDoc warnings on PR — treat as failure so doc drift fails CI,
+      # not silently lands on main. The shell pipe captures the output and
+      # greps for the "Found N warnings" / "Found N errors" lines.
+      - name: TypeDoc generation (warnings = CI failure)
+        run: |
+          set -o pipefail
+          npm run docs:api 2>&1 | tee /tmp/typedoc.log
+          if grep -E "^\\[(warning|error)\\]|Found [1-9][0-9]* warning|Found [1-9][0-9]* error" /tmp/typedoc.log; then
+            echo "::error::TypeDoc emitted warnings or errors — fix them before merge"
+            exit 1
+          fi
+
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5

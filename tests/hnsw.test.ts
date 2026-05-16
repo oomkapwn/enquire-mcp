@@ -461,20 +461,20 @@ describe("EmbedDb.computeSignature (v2.16.0)", () => {
     await db.open();
     try {
       const sigEmpty = db.computeSignature();
-      expect(sigEmpty).toBe("dim=4;rows=0;maxId=0;model=multilingual");
+      expect(sigEmpty).toBe("dim=4;rows=0;maxId=0;model=multilingual;quant=f32");
 
       db.upsertNote("a.md", 1, [
         { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2(new Float32Array([1, 0, 0, 0])) }
       ]);
       const sig1 = db.computeSignature();
-      expect(sig1).toBe("dim=4;rows=1;maxId=1;model=multilingual");
+      expect(sig1).toBe("dim=4;rows=1;maxId=1;model=multilingual;quant=f32");
       expect(sig1).not.toBe(sigEmpty);
 
       db.upsertNote("b.md", 2, [
         { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2(new Float32Array([0, 1, 0, 0])) }
       ]);
       const sig2 = db.computeSignature();
-      expect(sig2).toBe("dim=4;rows=2;maxId=2;model=multilingual");
+      expect(sig2).toBe("dim=4;rows=2;maxId=2;model=multilingual;quant=f32");
       expect(sig2).not.toBe(sig1);
     } finally {
       db.close();

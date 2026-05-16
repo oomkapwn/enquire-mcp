@@ -607,12 +607,18 @@ describe("EmbedDb int8 quantization", () => {
     }
   });
 
-  it("computeSignature is identical across modes (signature ignores encoding)", async () => {
-    // The HNSW staleness signature uses dim/rows/maxId/model — NOT the
-    // quantization mode. Two indexes with identical content but different
-    // encodings must produce identical signatures (so persisted HNSW
-    // indexes survive a quant flip... or rather, get rebuilt only because
-    // the embed-db itself was rebuilt). We assert the invariant here.
+  it("computeSignature DIFFERS across quantization modes (v3.7.6 M-10 fix — was: ignored encoding)", async () => {
+    // v3.7.6 M-10 (external audit) — pre-fix the HNSW staleness signature
+    // was `dim;rows;maxId;model`, NOT including quantization. If the user
+    // re-built embed-db with `--quantize-embeddings int8` (vs the previous
+    // `f32`) and rowcount/maxId/dim/model stayed the same, the persisted
+    // HNSW sidecar was considered "fresh" — but its float32 vectors no
+    // longer matched the int8 bytes in the new embed-db rows. v3.7.6 adds
+    // `quant=` to the signature, so quantization swaps now force HNSW
+    // rebuild correctly.
+    //
+    // This test FLIPS the pre-v3.7.6 assertion: two indexes with identical
+    // content but different encodings must now produce DIFFERENT signatures.
     const fileA = path.join(dir, "sig-a.embed.db");
     const fileB = path.join(dir, "sig-b.embed.db");
     const a = new EmbedDb({ file: fileA, vaultRoot: "/v", modelAlias: "m", dim: 4 });
@@ -629,7 +635,10 @@ describe("EmbedDb int8 quantization", () => {
       const v = l2([1, 0, 0, 0]);
       a.upsertNote("x.md", 1, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: v }]);
       b.upsertNote("x.md", 1, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: v }]);
-      expect(a.computeSignature()).toBe(b.computeSignature());
+      // Post-fix: signatures differ because `quant=f32` vs `quant=int8`.
+      expect(a.computeSignature()).not.toBe(b.computeSignature());
+      expect(a.computeSignature()).toMatch(/quant=f32/);
+      expect(b.computeSignature()).toMatch(/quant=int8/);
     } finally {
       a.close();
       b.close();

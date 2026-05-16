@@ -1519,11 +1519,21 @@ export async function searchHybrid(
       // For each candidate, find the best snippet (BM25 > embeddings > TF-IDF)
       // and pair it with the query. Empty-snippet candidates go to the bottom
       // by getting a -Infinity score (sort below scored candidates).
+      //
+      // v3.7.6 M-12 (external audit) — pre-fix the empty-snippet sentinel
+      // was implicit: we passed `""` to the reranker and the comment
+      // claimed those candidates would get -Infinity, but the reranker
+      // returned a real (low) score for `""` and that score was used.
+      // Now: track which passages were empty BEFORE scoring, and
+      // explicitly set their final score to -Infinity regardless of
+      // what the reranker returned. Matches the comment's contract.
+      const emptySnippetIds = new Set<string>();
       const passages = rerankBatch.map((f) => {
         const bm = bm25Map.get(f.id);
         const emb = embedMap.get(f.id);
         const tf = tfidfMap.get(f.id);
         const snippet = bm?.snippet ?? emb?.snippet ?? tf?.snippet ?? "";
+        if (!snippet.trim()) emptySnippetIds.add(f.id);
         // Strip FTS5 «…» highlight markers — they're cosmetic and the
         // reranker should see clean prose. Limit to ~600 chars to stay
         // safely under the model's 512-token budget (rough char/token ratio
@@ -1536,7 +1546,14 @@ export async function searchHybrid(
       for (let i = 0; i < rerankBatch.length; i++) {
         const f = rerankBatch[i];
         const s = scores[i];
-        if (f && typeof s === "number") rerankerScores.set(f.id, s);
+        if (!f) continue;
+        // v3.7.6 M-12 — pin empty-snippet candidates to -Infinity per
+        // the documented contract. Otherwise honor the reranker score.
+        if (emptySnippetIds.has(f.id)) {
+          rerankerScores.set(f.id, Number.NEGATIVE_INFINITY);
+        } else if (typeof s === "number") {
+          rerankerScores.set(f.id, s);
+        }
       }
       // Sort the top-N by reranker score; everything below top-N keeps RRF
       // order. We do this by re-ordering fused[0..topN] in place.

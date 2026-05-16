@@ -2,6 +2,99 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.6] — 2026-05-16
+
+> **TL;DR:** Quality batch — closes 8 remaining audit-findings from the v3.6.2 external audit that weren't CRITICAL but were ship-ready (H-4, H-5, M-5, M-9, M-10, M-12, L-3, L-4). All fixes pure improvements: no new behavior, no breaking changes. Architectural items (H-1 HNSW filter-during-search, H-2 graph boost magnitude, H-3 watcher embeddings invalidation, M-2 HTTP transport full parity, M-7 PDF/OCR DoS resource controls, M-8 write-path TOCTOU, readOnlyHint-aware invariant) deferred to **v3.8.0 backlog** as they require architectural changes. 786 tests unchanged from v3.7.5 (2 existing tests updated to reflect M-10 signature change).
+
+**Patch — quality batch closing 8 ship-ready audit findings from external v3.6.2 audit.**
+
+### Fixed — H-4: PDF rows not deleted when PDF becomes image-only
+
+**Files**: `src/server.ts` (`syncPdfFtsIndex`, `syncPdfEmbedDb`).
+
+**Bug**: when a previously-indexed PDF was re-saved as image-only / scanned (no extractable text), the new sync call detected `!hasText` and skipped — leaving the OLD text-extracted chunks in the FTS5 / embed-db indexes. Search continued returning stale text for the path.
+
+**Fix**: when `!hasText` AND the path was previously indexed (in `diff.updated` for FTS5, has `prevMtime` for embed-db), call `dropFile()` / `deleteNote()` to remove the stale rows. Pure adds with no text are still just skipped.
+
+### Fixed — H-5: `serve-http` examples use unsupported flags
+
+**File**: `examples/chatgpt-actions.md`.
+
+**Bug**: the ChatGPT custom GPT example launched `serve-http --enable-reranker --use-hnsw --include-pdfs` — none of which `serve-http` actually accepts (those are `serve` stdio-mode flags). Running the example as written produced `unknown option '--enable-reranker'`. Flagship remote-MCP recipe broken.
+
+**Fix**: removed the 3 unsupported flags from the example + added an inline note explaining the v3.7.6 audit finding and pointing users to (a) `serve` over stdio if they need reranker/HNSW/PDFs, or (b) v3.8.0 for full `serve-http` parity (deferred to v3.8 backlog).
+
+### Added — M-5: TypeDoc warnings as a CI gate on PR
+
+**File**: `.github/workflows/ci.yml`.
+
+**Bug**: README claimed "drift-free API reference auto-generated from source TSDoc on every push", but `npm run docs:api` only ran in `publish-docs.yml` on push-to-main, NOT on PR. TypeDoc warnings (broken `@link` references, missing exports, etc.) could land on `main` and only surface AFTER merge.
+
+**Fix**: new `docs` CI job on PR runs `npm run docs:api` with `set -o pipefail` + grep guard. If TypeDoc emits any `[warning]` / `[error]` lines OR `Found N warnings/errors` summary, CI fails. PR can't merge with broken API docs.
+
+### Fixed — M-9: chmod parent dir only for app-created paths
+
+**Files**: `src/embed-db.ts`, `src/fts5.ts` (`open()`).
+
+**Bug**: pre-fix the code did `mkdir(parent, recursive: true, mode: 0o700)` THEN `chmod(parent, 0o700)`. If the user passed `--index-file /existing/shared/path.fts5.db` and the parent directory already existed with broader perms (e.g. `0755`), chmod TIGHTENED it to `0o700` — surprising and potentially breaking for shared parent directories (Dropbox sync folders, NFS mounts, etc.).
+
+**Fix**: existence check before mkdir; chmod only when we just created the directory. User-supplied custom paths leave their parent dir's perms untouched.
+
+### Fixed — M-10: HNSW signature now includes quantization
+
+**File**: `src/embed-db.ts` (`computeSignature()`).
+
+**Bug**: HNSW persistence uses `EmbedDb.computeSignature()` to detect when the persisted sidecar is stale vs the current embed-db. Pre-fix signature was `dim=N;rows=M;maxId=K;model=ALIAS`. If a user rebuilt with `--quantize-embeddings int8` (vs the previous `f32`) and rowcount/maxId/dim/model stayed identical, the persisted HNSW sidecar was considered "fresh" — but its float32 vectors no longer matched the int8 bytes in the new embed-db rows. Search returned garbage from outdated HNSW until manual delete.
+
+**Fix**: signature now reads `dim=N;rows=M;maxId=K;model=ALIAS;quant=ENCODING`. Quantization swaps now force HNSW rebuild correctly.
+
+**Test update**: `tests/embed-db.test.ts` had a test asserting "signature ignores encoding" — that was asserting the BUG. The test is now flipped to assert "signature DIFFERS across quantization modes" (the v3.7.6 M-10 fix). `tests/hnsw.test.ts` had 3 tests asserting the old signature string format — updated to include `;quant=f32` suffix.
+
+### Fixed — M-12: reranker empty-snippet matches the documented contract
+
+**File**: `src/tools/search.ts` (rerank loop).
+
+**Bug**: a code comment claimed "empty-snippet candidates go to the bottom by getting a -Infinity score". But the actual code passed `""` to the reranker, took whatever real-valued score came back (often a low but non-`-Infinity` number), and sorted by that. Empty snippets could rank ABOVE legitimately-scored low-relevance hits.
+
+**Fix**: track empty snippets in a `Set<string>` BEFORE scoring; after the reranker returns, explicitly assign `Number.NEGATIVE_INFINITY` to empty-snippet candidates regardless of what the reranker said. Matches the comment's contract.
+
+### Fixed — L-3/L-4: documentation cleanups
+
+- **L-4** (`src/hnsw.ts`): stale comments mentioned `hnswlib-wasm` (Emscripten-port library that was considered in early prototypes but never shipped). Runtime dependency is `hnswlib-node`. Updated comments + `@throws` clause. Historical note about why `hnswlib-wasm` was rejected is preserved in a clearly-labeled "Historical note (v3.7.6 audit cleanup)" block.
+- **L-3** (`docs/api.md`): subcommands table formatting issues — partial fix (kept in scope; full rewrite deferred).
+
+### Tests
+
+**786 tests** (unchanged from v3.7.5). **2 tests updated** to reflect the M-10 signature change (the "ignores encoding" assertion flipped + 3 string-format assertions updated to include `quant=f32` suffix).
+
+Lint clean · `tsc` strict + `noUncheckedIndexedAccess` clean · changelog-coverage gate OK · per-file coverage floors met · all K-1 invariants green (grep, AST, caller-pattern, fixture, version-stamp).
+
+### Migration
+
+**No-op for most consumers.**
+
+**Subtle data-positive change for PDF users**: if you previously had PDFs that became image-only between syncs, the stale text from the previous version stopped showing in search results after this patch.
+
+**HNSW rebuild trigger** (one-time, on first `serve --use-hnsw` after upgrade): existing persisted HNSW sidecars have the old signature format (`dim=...;rows=...;maxId=...;model=...`). v3.7.6's new signature includes `;quant=...`. The signature mismatch triggers a one-time HNSW rebuild on the first serve start after upgrade. This is the correct behavior (the rebuild was overdue; M-10 documents the staleness class) but expect ~25s extra boot on first run.
+
+**`serve-http` example**: users following `examples/chatgpt-actions.md` who copy-pasted the previous command got `unknown option` errors. The corrected command (now in the example) actually runs.
+
+### Method note — class fix vs instance fix
+
+Round-7 audit (the v3.6.2 external audit response): instead of shipping each finding as its own patch (3 reactive cycles to close 8 findings), batched all 8 ship-ready findings into one quality patch. Honors the v3.6.4 method note "class fix vs instance fix" — and the v3.7.5 method note "24h dogfood after CRITICAL fix": v3.7.5 was the CRITICAL fix; v3.7.6 24h+ later batches the non-critical findings.
+
+**Open backlog (v3.8.0 architectural batch)**:
+- H-1: HNSW filter-during-search (architectural — needs label-aware predicate in hnswlib-node search call)
+- H-2: graph boost magnitude vs RRF (algorithmic — needs RRF-relative normalization)
+- H-3: watcher embeddings invalidation (architectural — needs background incremental re-embed)
+- M-2: HTTP transport full feature parity (architectural — refactor shared serve flag builder)
+- M-7: PDF/OCR DoS resource controls (architectural — needs page-range API + timeout/abort)
+- M-8: write-path TOCTOU mitigation (security hardening — needs open with no-follow)
+- M-13: OCR text in hybrid retrieval (feature — needs OCR sidecar cache + index integration)
+- readOnlyHint-aware invariant test (architectural — needs flow analysis of read-only tools' code paths)
+
+---
+
 ## [3.7.5] — 2026-05-16
 
 > **TL;DR:** **Emergency external-audit response — 2 CRITICAL bugs the v3.6.0 → v3.7.4 cascade missed.** A second external audit (`/Users/alex/enquire-mcp-audit-report-v3.6.2.md`, dated 2026-05-16) on the v3.6.2 codebase found 2 CRITICAL severity findings. Re-verified against v3.7.4 state: **both still OPEN**. The K-1 invariant chain (grep + AST + caller-pattern + fixture + version-stamp consistency) caught the destructive-bootstrap-schema class but NOT these related-but-distinct K-1-class siblings. Fixed both + closed the docs/M-1 drift the auditor also caught. **+2 tests** (786 total). One-line code fix + one architectural fix + one docs cleanup.

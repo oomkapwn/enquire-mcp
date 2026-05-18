@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.7.12",
-  "description": "The most advanced Obsidian MCP — long-term memory for AI agents. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and any MCP client. 44 tools, 19 MCP prompts, BGE cross-encoder reranker verified end-to-end (+4 aliases in catalog, transformers.js bump pending), 801 tests, SLSA-3, semver-bound, MIT.",
+  "version": "3.7.13",
+  "description": "The most advanced Obsidian MCP — long-term memory for AI agents. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and any MCP client. 44 tools, 19 MCP prompts, BGE cross-encoder reranker verified end-to-end (+4 aliases in catalog, transformers.js bump pending), 813 tests, SLSA-3, semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -46,7 +46,12 @@
   },
   "files": [
     "dist",
-    "docs",
+    "docs/api.md",
+    "docs/QUICKSTART.md",
+    "docs/COMPARISON.md",
+    "docs/benchmarks.md",
+    "docs/http-transport.md",
+    "docs/api-reference",
     "examples",
     "assets/social-preview.png",
     "README.md",
@@ -166,7 +171,7 @@
     "url": "https://github.com/oomkapwn/enquire-mcp/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

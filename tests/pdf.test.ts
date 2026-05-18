@@ -111,6 +111,53 @@ describe("extractPdfText (v2.7.0)", () => {
     await expect(extractPdfText(garbage)).rejects.toThrow();
   });
 
+  // v3.7.13 H1 — pageRange option. Pre-3.7.13, extractPdfText iterated
+  // every page of the doc unconditionally; the caller (readPdf) then
+  // sliced the result. That was wasted CPU + memory for big PDFs and a
+  // bearer-token DoS vector in serve-http. Now pageRange.from/to clamp
+  // doc.getPage() invocations to the requested window.
+  describe("v3.7.13 H1 pageRange", () => {
+    it("only iterates the requested window", async () => {
+      const buf = makePdf({ pages: ["P1 body", "P2 body", "P3 body", "P4 body", "P5 body"] });
+      const result = await extractPdfText(buf, { pageRange: { from: 2, to: 4 } });
+      // pageCount reflects the document total (5), not the windowed count.
+      expect(result.pageCount).toBe(5);
+      // pages array only has the requested 3 pages.
+      expect(result.pages.length).toBe(3);
+      expect(result.pages[0]?.pageNumber).toBe(2);
+      expect(result.pages[0]?.text).toContain("P2");
+      expect(result.pages[1]?.pageNumber).toBe(3);
+      expect(result.pages[2]?.pageNumber).toBe(4);
+    });
+
+    it("clamps out-of-range bounds", async () => {
+      const buf = makePdf({ pages: ["A", "B"] });
+      // Caller asks for pages 1..10 on a 2-page doc — clamp to 1..2.
+      const result = await extractPdfText(buf, { pageRange: { from: 1, to: 10 } });
+      expect(result.pages.length).toBe(2);
+    });
+
+    // Negative-control: when pageRange is omitted, behavior is identical
+    // to pre-3.7.13 (all pages extracted). If a future regression makes
+    // pageRange mandatory or skips pages when omitted, this fails.
+    it("(negative-control) omitting pageRange extracts every page", async () => {
+      const buf = makePdf({ pages: ["P1", "P2", "P3"] });
+      const result = await extractPdfText(buf);
+      expect(result.pages.length).toBe(3);
+      expect(result.pageCount).toBe(3);
+    });
+
+    it("inverted range yields empty pages (caller responsibility to reject)", async () => {
+      const buf = makePdf({ pages: ["A", "B", "C"] });
+      // L2 — schema-level rejection rejects to < from at tool boundary,
+      // but the library function clamps and returns an empty iteration.
+      // This documents the library's own behavior; the schema's refine
+      // means clients never see this path.
+      const result = await extractPdfText(buf, { pageRange: { from: 5, to: 2 } });
+      expect(result.pages.length).toBe(0);
+    });
+  });
+
   // v3.6.2 — branches coverage. Exercise every metadata field's
   // typeof-is-string branch (Subject, Keywords, Creator, Producer,
   // CreationDate, ModDate). Pre-fix only Title + Author were covered;

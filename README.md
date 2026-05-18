@@ -11,7 +11,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-801%20passing-brightgreen.svg)](#trust)
+[![tests](https://img.shields.io/badge/tests-813%20passing-brightgreen.svg)](#trust)
 [![stable](https://img.shields.io/badge/v3.7.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -36,7 +36,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 2. **Best-in-class retrieval.** Hybrid BM25 + multilingual embeddings + BGE cross-encoder reranker fused via RRF, scaled with HNSW + int8 quantization. The same IR stack a search startup would build — open-sourced, in one binary.
 > 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
 
-**44 tools · 19 MCP prompts · 801 unit tests · 50+ languages · v3.7.x stable · semver-bound · MIT · SLSA-3 signed.**
+**44 tools · 19 MCP prompts · 813 unit tests · 50+ languages · v3.7.x stable · semver-bound · MIT · SLSA-3 signed.**
 
 ---
 
@@ -112,7 +112,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **801 unit tests · 7 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
+| **813 unit tests · 8 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
 | **SLSA-3 build provenance** | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -182,7 +182,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `gray-matter` (`js-yaml` safeLoad) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **CI** | **7 required** branch-protection gates (lint · test ×2 [Node 22/24] · smoke · audit · coverage · version-consistency) + **4 advisory** (test-macos · CodeQL ×2 · Analyze actions). Release workflow re-verifies all 7 required passed on tagged SHA before npm publish. _v3.5.11 — Node 20 dropped (EOL'd 2026-04, pdfjs v5 requires ≥22.13)._ |
+| **CI** | **8 required** branch-protection gates (lint · test ×2 [Node 22/24] · smoke · audit · coverage · version-consistency · docs) + **4 advisory** (test-macos · CodeQL ×2 · Analyze actions). Release workflow re-verifies all 8 required passed on tagged SHA before npm publish. _v3.7.10 — `docs` (TypeDoc generation gate) added to required set. v3.7.13 — `engines.node` floor bumped to `>=22.13.0` to match the CI matrix._ |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **SLSA-3** build provenance |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
@@ -222,7 +222,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable. Full changelog: 
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (801 tests, ~5s)
+npm test       # full suite (813 tests, ~5s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

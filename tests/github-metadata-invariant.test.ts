@@ -99,29 +99,36 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
 
   it("repo About description leads with 'Memory layer for AI agents'", () => {
     if (!available) {
-      console.warn("[github-metadata] `gh` not authenticated; skipping (set GITHUB_TOKEN for CI).");
+      // v3.7.13 L4 — CI now sets `GH_TOKEN: ${{ github.token }}` so this
+      // branch only fires in local dev without auth. Production CI runs
+      // assert against the live repo and would fail loud on drift.
+      console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
       return;
     }
     const meta = fetchRepoMeta();
-    if (!meta) {
-      // `gh` was available but the API call failed (network blip, rate
-      // limit, repo not found). No-op rather than fail — next CI run retries.
-      console.warn("[github-metadata] gh api call failed; treating as no-op.");
-      return;
-    }
+    // v3.7.13 L4 — fail loud on API failure when `gh` is available. Pre-3.7.13
+    // we no-op'd here, which let CI count this as "passed" even if rate-limit
+    // / network / token-scope blocked the fetch. If `gh` is available but the
+    // API fails, that's a real signal worth surfacing.
+    expect(
+      meta,
+      "gh api call failed despite gh being available — check rate limit / network / token scope"
+    ).not.toBeNull();
+    if (!meta) return;
     expect(meta.description ?? "").toMatch(ABOUT_LEADS_WITH);
   });
 
   it("repo Topics include the 8 v3.6.3 hype keywords", () => {
     if (!available) {
-      console.warn("[github-metadata] `gh` not authenticated; skipping (set GITHUB_TOKEN for CI).");
+      console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
       return;
     }
     const meta = fetchRepoMeta();
-    if (!meta) {
-      console.warn("[github-metadata] gh api call failed; treating as no-op.");
-      return;
-    }
+    expect(
+      meta,
+      "gh api call failed despite gh being available — check rate limit / network / token scope"
+    ).not.toBeNull();
+    if (!meta) return;
     const missing = findMissingTopics(meta.topics);
     expect(missing, `Missing topics: ${missing.join(", ")}`).toEqual([]);
   });

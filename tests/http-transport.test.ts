@@ -22,6 +22,7 @@ import {
   deriveHttpBodyCap,
   generateBearerToken,
   type HttpServeOptions,
+  isInitializeRequest,
   parseMaxFileBytes,
   RateLimiter,
   readJsonBody,
@@ -252,6 +253,55 @@ describe("deriveHttpBodyCap (v3.7.12 M4)", () => {
       cap,
       "v3.7.12 M4 regression: derived cap must exceed the legacy 4MB to accommodate the 5MB default file cap"
     ).toBeGreaterThan(legacy);
+  });
+});
+
+// v3.7.13 H2 — `initialize` pre-check before stateful server/transport
+// allocation. Pre-3.7.13, any POST without Mcp-Session-Id allocated the
+// pair before checking the body's RPC method, which leaked the pair if
+// the body wasn't initialize. The fix rejects non-initialize POSTs at
+// the JSON-RPC level before any allocation runs.
+describe("isInitializeRequest (v3.7.13 H2)", () => {
+  it("accepts a single initialize request", () => {
+    expect(isInitializeRequest({ jsonrpc: "2.0", method: "initialize", id: 1, params: {} })).toBe(true);
+  });
+
+  it("accepts a batch where at least one element is initialize", () => {
+    expect(
+      isInitializeRequest([
+        { jsonrpc: "2.0", method: "tools/list", id: 1 },
+        { jsonrpc: "2.0", method: "initialize", id: 2 }
+      ])
+    ).toBe(true);
+  });
+
+  // Negative-control siblings — the bug was that ALL of these used to
+  // result in allocation. Each must now return false so the handler
+  // short-circuits before allocating a McpServer + StreamableHTTPServerTransport.
+  it("(negative-control) rejects tools/list as first POST", () => {
+    expect(isInitializeRequest({ jsonrpc: "2.0", method: "tools/list", id: 1 })).toBe(false);
+  });
+
+  it("(negative-control) rejects tools/call as first POST", () => {
+    expect(isInitializeRequest({ jsonrpc: "2.0", method: "tools/call", id: 1, params: {} })).toBe(false);
+  });
+
+  it("(negative-control) rejects empty / malformed bodies", () => {
+    expect(isInitializeRequest(undefined)).toBe(false);
+    expect(isInitializeRequest(null)).toBe(false);
+    expect(isInitializeRequest("initialize")).toBe(false);
+    expect(isInitializeRequest({})).toBe(false);
+    expect(isInitializeRequest({ method: 42 })).toBe(false);
+    expect(isInitializeRequest({ method: "INITIALIZE" })).toBe(false); // case-sensitive
+  });
+
+  it("(negative-control) rejects a batch with NO initialize entries", () => {
+    expect(
+      isInitializeRequest([
+        { jsonrpc: "2.0", method: "tools/list", id: 1 },
+        { jsonrpc: "2.0", method: "tools/call", id: 2, params: {} }
+      ])
+    ).toBe(false);
   });
 });
 

@@ -53,6 +53,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+        env:
+          # v3.7.13 L4 — feed the GH token to `tests/github-metadata-invariant.test.ts`
+          # so it actually runs `gh api` against the live repo instead of
+          # silently no-op'ing. `gh` reads GH_TOKEN before GITHUB_TOKEN; the
+          # built-in actions token has `metadata: read` for the workflow's
+          # repo, which is exactly what the invariant needs (no escalated
+          # permissions required — read-only About/Topics fetch).
+          GH_TOKEN: ${{ github.token }}
 
   test-macos:
     # v2.0.0-beta.3: cross-platform advisory job (not required by branch

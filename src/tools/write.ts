@@ -261,20 +261,56 @@ export async function renameNote(
   }
 
   if (!dryRun) {
-    // Write order:
-    //   1. All backlink-bearing files (other notes pointing at the source).
-    //   2. Source file's rewritten content, written to its OLD path.
-    //   3. fs.rename source's old path → new path.
-    // A failure at any step leaves backlinks pointing at the still-present old
-    // name (worst case: safe, recoverable).
-    for (const p of plan) {
-      await vault.writeNote(p.path, p.after, { overwrite: true });
-    }
+    // v3.7.13 M1 — reordered to make the failure mode actually recoverable.
+    //
+    // Pre-3.7.13 order was:
+    //   1. Rewrite backlink-bearing files (now pointing at the NEW name).
+    //   2. Rewrite source file content at its OLD path.
+    //   3. fs.rename source: OLD → NEW.
+    // The CHANGELOG/comment claimed "failure leaves backlinks pointing at
+    // still-present old name (safe, recoverable)" — but step 1 had ALREADY
+    // rewritten those backlinks to the NEW name. A failure at step 3 left
+    // backlinks pointing at a phantom NEW path that didn't exist on disk.
+    //
+    // Post-3.7.13 order:
+    //   1. Rewrite source file content at its OLD path (self-references
+    //      now use the NEW name, but the file lives at the OLD path).
+    //   2. fs.rename source: OLD → NEW (atomic — the failure-prone step,
+    //      runs FIRST so backlinks don't get touched on rename failure).
+    //   3. Rewrite backlink-bearing files (all targets now resolve — the
+    //      destination already exists on disk thanks to step 2).
+    //
+    // Failure modes:
+    //   • Step 1 fails → no on-disk state changed (writeNote uses atomic
+    //     rename internally for new files; for overwrite-mode it's a
+    //     direct fs.writeFile — could partially write, but write of the
+    //     SAME file just means the source has interrupted content. Re-run
+    //     resumes normally because the rewrite is idempotent on re-input.)
+    //   • Step 2 fails → source content updated at OLD path (self-links
+    //     reference NEW name but file is at OLD path). User re-runs the
+    //     same call — source's self-link rewrite is idempotent (count=0
+    //     on already-rewritten files, see line 249's `continue`), and
+    //     rename retries.
+    //   • Step 3 fails partway → some backlinks updated, others not. The
+    //     destination file IS at the NEW path (step 2 succeeded), so the
+    //     already-updated backlinks point at a real file. User re-runs;
+    //     the plan only includes files that still contain old refs, so
+    //     resumes cleanly.
+    //
+    // Net: every failure mode is recoverable by re-running the same call.
     if (sourcePlan) {
       await vault.writeNote(sourcePlan.path, sourcePlan.after, { overwrite: true });
     }
-    // Atomic file move + cache invalidation.
+    // Atomic file move + cache invalidation. Most likely to fail (cross-fs
+    // rename, race on destination, permission issue). Run FIRST so failure
+    // here doesn't leave updated backlinks pointing at a phantom target.
     await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
+    // Backlink rewrites — destination already exists on disk, so even a
+    // partial failure leaves the cluster in a consistent (if half-renamed)
+    // state that's resumable by re-running the same call.
+    for (const p of plan) {
+      await vault.writeNote(p.path, p.after, { overwrite: true });
+    }
   }
 
   // Combine plans for the response so the caller sees the full picture.

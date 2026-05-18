@@ -34,17 +34,28 @@ describe("safeFts5Query", () => {
     expect(safeFts5Query("claude-telegram stuck")).toBe('"claude-telegram" stuck');
   });
 
-  it("strips reserved FTS5 keywords (AND/OR/NOT/NEAR)", () => {
-    expect(safeFts5Query("foo AND bar OR baz NOT qux")).toBe("foo bar baz qux");
+  // v3.7.16 P3-28 — contract change: reserved FTS5 keywords (AND / OR /
+  // NOT / NEAR) are now quoted as LITERALS, not stripped. Pre-3.7.16
+  // a search for "operating systems AND databases" got `AND` dropped
+  // silently AND the surrounding tokens implicitly OR'd — but users
+  // searching for the literal word "AND" (e.g. in a logic-puzzle note)
+  // had no recourse. Quoting makes the literal-search path work AND
+  // still neutralizes the boolean operator (FTS5 treats `"AND"` as the
+  // literal token, not the connective).
+  it("quotes reserved FTS5 keywords as literals (v3.7.16 P3-28)", () => {
+    expect(safeFts5Query("foo AND bar OR baz NOT qux")).toBe('foo "AND" bar "OR" baz "NOT" qux');
   });
 
   it("escapes embedded double-quotes inside quote-wrapped tokens", () => {
     expect(safeFts5Query('a"b')).toBe('"a""b"');
   });
 
-  it("returns empty string for whitespace-only or all-reserved input", () => {
+  it("returns empty string for whitespace-only input; all-reserved input becomes quoted literals", () => {
     expect(safeFts5Query("")).toBe("");
-    expect(safeFts5Query("AND OR NOT")).toBe("");
+    // v3.7.16 P3-28 — `"AND OR NOT"` is no longer stripped to empty;
+    // it's now a literal-token search (probably yielding 0 hits unless
+    // user has notes with those literal words, which is fine).
+    expect(safeFts5Query("AND OR NOT")).toBe('"AND" "OR" "NOT"');
   });
 });
 

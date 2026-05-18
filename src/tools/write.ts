@@ -77,7 +77,9 @@ export async function appendToNote(
   args: { path?: string; title?: string; content: string; separator?: string }
 ): Promise<{ path: string; mtime: string; appended_bytes: number }> {
   await vault.ensureExists();
-  const target = await resolveTarget(vault, args);
+  // v3.7.16 P2-13 — write-side resolution refuses to silently mutate
+  // when the title matches multiple notes.
+  const target = await resolveTarget(vault, args, { strictOnAmbiguousTitle: true });
   const sep = args.separator ?? "\n\n";
   const result = await vault.appendNote(target.absPath, sep + args.content);
   return {
@@ -192,9 +194,14 @@ export async function renameNote(
   const fromRel = vault.toRel(fromAbs);
   await vault.stat(fromAbs); // throws on missing source — fail fast.
   // Validate to-path early so we don't do O(N) work then fail.
+  // v3.7.16 P1-6 sibling — use the canonical-case form so case-insensitive
+  // FS variants (`personal/x.md` vs `Personal/x.md`) don't slip past the
+  // fast-fail and waste an O(N) backlink-rewrite walk before `renameFile`
+  // catches them with the same canonical check.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
-  const renameReason = vault.exclusionReason(toRelCheck);
+  const canonicalToRel = await vault.canonicalRelForPrivacyCheckPublic(toAbsCheck);
+  const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
     // writeNote and Vault.renameFile do. Pre-fix the message always blamed
@@ -428,7 +435,9 @@ export async function frontmatterSet(
   if (!args.set || Object.keys(args.set).length === 0) {
     throw new Error("frontmatter_set: `set` must be a non-empty object");
   }
-  const target = await resolveTarget(vault, args);
+  // v3.7.16 P2-13 — write-side resolution refuses to silently mutate
+  // when the title matches multiple notes.
+  const target = await resolveTarget(vault, args, { strictOnAmbiguousTitle: true });
   const note = await vault.readNote(target.absPath, target.mtimeMs);
   const before = { ...note.parsed.frontmatter };
   const after: Record<string, unknown> = { ...before };
@@ -1044,7 +1053,17 @@ export async function suggestSimilar(vault: Vault, target: string): Promise<stri
  * const e3 = await resolveTarget(vault, { title: "today" });
  * ```
  */
-export async function resolveTarget(vault: Vault, args: { path?: string; title?: string }): Promise<FileEntry> {
+/**
+ * v3.7.16 P2-13 — `opts.strictOnAmbiguousTitle` controls whether
+ * title-based lookup throws when multiple notes share the basename.
+ * Write callers pass `true` (silent data corruption is unacceptable);
+ * read callers default `false` (single best-effort match is fine).
+ */
+export async function resolveTarget(
+  vault: Vault,
+  args: { path?: string; title?: string },
+  opts: { strictOnAmbiguousTitle?: boolean } = {}
+): Promise<FileEntry> {
   if (args.path) {
     const candidates = args.path.toLowerCase().endsWith(".md") ? [args.path] : [args.path, `${args.path}.md`];
     let lastErr: unknown;
@@ -1069,11 +1088,32 @@ export async function resolveTarget(vault: Vault, args: { path?: string; title?:
       : new Error(`Note not found: ${args.path}${hint}`);
   }
   if (args.title) {
-    // Try literal title first — a user may have an actual file named
-    // "Daily.md" / "Today.md" they meant to address. Only fall back to the
-    // periodic-note alias when the literal lookup misses.
-    const literal = await vault.findByTitle(args.title);
-    if (literal) return literal;
+    // v3.7.16 P2-13 — fail loud on ambiguity FOR WRITE CALLERS ONLY.
+    // Pre-3.7.16 `findByTitle` returned the first walk-order match,
+    // so write operations against (e.g.) "Daily" silently mutated
+    // whichever of `Work/Daily.md` / `Personal/Daily.md` came first.
+    // Read callers (`read_note`, `get_outbound_links`, etc.) keep the
+    // permissive behavior because they don't mutate — returning a
+    // single best-effort match is what users expect for read APIs.
+    // Write callers pass `opts.strictOnAmbiguousTitle: true`.
+    if (opts.strictOnAmbiguousTitle === true) {
+      const literalAll = await vault.findAllByTitle(args.title);
+      if (literalAll.length > 1) {
+        const candidates = literalAll
+          .slice(0, 8)
+          .map((e) => e.relPath)
+          .join(", ");
+        throw new Error(
+          `Ambiguous title "${args.title}" — ${literalAll.length} notes share that basename: ${candidates}. ` +
+            `Pass an explicit \`path\` argument instead (e.g. \`path: "${literalAll[0]?.relPath ?? "..."}"\` for the first match).`
+        );
+      }
+      const literal = literalAll[0] ?? null;
+      if (literal) return literal;
+    } else {
+      const literal = await vault.findByTitle(args.title);
+      if (literal) return literal;
+    }
     // v1.10: try the user's Daily / Periodic Notes plugin config first. The
     // user may have configured `Daily Notes/YYYY-MM-DD` or a custom format —
     // honor that before the v0.11 hard-coded defaults.

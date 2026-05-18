@@ -482,8 +482,16 @@ export class FtsIndex {
     if (opts.tag) {
       // Exact-tag membership inside the comma-separated `tags` column —
       // wrap both sides with commas so "core" doesn't match "core-team".
-      where.push("(',' || chunks.tags || ',') LIKE ?");
-      params.push(`%,${opts.tag},%`);
+      //
+      // v3.7.16 P2-15 — escape `%` and `_` (SQL LIKE wildcards) so a
+      // user-supplied tag with those characters matches LITERALLY. Pre-
+      // 3.7.16 a tag like `core_team` would match `coreXteam` (and any
+      // other 1-char-substituted variant) because `_` is the LIKE 1-char
+      // wildcard; `%` was even worse — `tag: "%"` matched every chunk.
+      // ESCAPE clause uses backslash, matching SQLite's standard form.
+      const literalTag = opts.tag.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      where.push("(',' || chunks.tags || ',') LIKE ? ESCAPE '\\'");
+      params.push(`%,${literalTag},%`);
     }
     let join = "";
     if (opts.sinceMtimeMs !== undefined) {
@@ -563,20 +571,35 @@ export class FtsIndex {
  * Sanitize a user query for FTS5. Quote-wraps any token containing
  * non-alphanumerics so hyphens / colons / dots are treated literally
  * (without this, `"claude-telegram"` would parse as `claude NOT telegram`).
- * Strips reserved keywords (`AND`, `OR`, `NOT`, `NEAR`) so they can't
- * inject unexpected boolean logic.
+ *
+ * v3.7.16 P3-28 — reserved keywords (`AND`, `OR`, `NOT`, `NEAR`) are
+ * QUOTED as literals instead of stripped. Pre-3.7.16 the strip-path
+ * silently dropped real query terms ("operating systems AND databases"
+ * lost the connective AND user couldn't search for the literal word
+ * "AND"). Quoting makes both cases work: FTS5 treats `"AND"` as the
+ * literal token rather than the boolean operator.
  *
  * @param q - User query string.
  * @returns Sanitized query ready to pass to FTS5's `MATCH` operator.
- *   Empty string when no usable tokens remain.
+ *   Empty string when input is empty / whitespace-only.
  */
 export function safeFts5Query(q: string): string {
   const RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
   const parts = q.trim().split(/\s+/);
   const out: string[] = [];
   for (const p of parts) {
-    if (RESERVED.has(p.toUpperCase())) continue;
     if (!p) continue;
+    // v3.7.16 P3-28 — quote reserved keywords as literals instead of
+    // stripping. Pre-3.7.16 a user searching "operating systems AND
+    // databases" got their AND dropped silently AND the unrelated tokens
+    // OR'd implicitly — but they ALSO couldn't search literally for the
+    // word "AND" (the SQL boolean conjunction). Now we wrap reserved
+    // words in double-quotes so FTS5 treats them as the literal token,
+    // matching how we handle any token with non-alphanumerics below.
+    if (RESERVED.has(p.toUpperCase())) {
+      out.push(`"${p}"`);
+      continue;
+    }
     if (/[^A-Za-z0-9_]/.test(p)) {
       const escaped = p.replace(/"/g, '""');
       out.push(`"${escaped}"`);

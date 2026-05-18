@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { Vault } from "../src/vault.js";
 import { VaultWatcher } from "../src/watcher.js";
+import { makePdf } from "./helpers/make-pdf.js";
 
 let root: string;
 
@@ -267,6 +268,68 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await fs.writeFile(filePath, bigger);
         const grew = await waitFor(() => fts.totalChunks() > chunksBefore);
         expect(grew).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      fts.close();
+    }
+  });
+
+  // v3.7.16 P1-5 — PDF lifecycle when includePdfs is on. Pre-3.7.16 the
+  // watcher ignored everything but `.md`. Now `.pdf` add/change/unlink
+  // events flow through to reindexPdfFile / dropFile. Tests don't need
+  // real PDFs — we use the synthetic `makePdf` from the pdf test fixtures
+  // and verify FtsIndex sees the chunks. The change-branch is exercised
+  // by the initial add (the watcher debounces and may collapse events;
+  // testing add+unlink is the canonical lifecycle).
+  it("includePdfs=true: PDF add fires reindexPdfFile + PDF unlink drops chunks (P1-5)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, includePdfs: true, silent: true });
+      await w.start();
+      try {
+        const pdfPath = path.join(root, "added.pdf");
+        const pdfBuf = makePdf({ pages: ["PDF page one", "Second page text"] });
+        await fs.writeFile(pdfPath, pdfBuf);
+        const indexed = await waitFor(() => fts.totalFiles() >= 1);
+        expect(indexed).toBe(true);
+        expect(fts.totalChunks()).toBeGreaterThan(0);
+        // Unlink should drop chunks (same dropFile branch as .md unlink).
+        await fs.unlink(pdfPath);
+        const dropped = await waitFor(() => fts.totalFiles() === 0);
+        expect(dropped).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      fts.close();
+    }
+  });
+
+  it("includePdfs=false: PDF events are silently ignored (P1-5 default safety)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    try {
+      // includePdfs intentionally omitted (defaults to false).
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+      await w.start();
+      try {
+        const pdfPath = path.join(root, "ignored.pdf");
+        // Write a synthetic PDF — we don't care if it parses; the watcher
+        // should never touch it because includePdfs is false.
+        await fs.writeFile(pdfPath, "%PDF-1.4\n...");
+        // Wait a beat — if the watcher were going to process it, this is
+        // enough time for chokidar's awaitWriteFinish + the handler call.
+        await new Promise((r) => setTimeout(r, 800));
+        // No chunks should appear (FTS5 stays empty).
+        expect(fts.totalFiles()).toBe(0);
+        expect(fts.totalChunks()).toBe(0);
       } finally {
         await w.close();
       }

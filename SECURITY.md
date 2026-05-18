@@ -156,6 +156,32 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
+## OCR (`obsidian_ocr_pdf`): network posture (v3.7.16 disclosure)
+
+The `obsidian_ocr_pdf` tool (v2.10+) uses `tesseract.js` for image-PDF OCR. Tesseract.js's default behavior is to fetch the `<lang>.traineddata` file (~10 MB per language) from `https://tessdata.projectnaptha.com/4.0.0/` on first use of each language.
+
+**This is the only outbound network call possible in serve mode** — broader "zero outbound network calls in serve mode" framing in README needs this caveat. v3.7.16 added a stderr disclosure warning that fires once per OCR worker creation, so operators see the network-fetch behavior clearly in their logs / journald.
+
+**Mitigations:**
+- The OCR tool is only registered when the optional dependencies (`tesseract.js`, `@napi-rs/canvas`) are installed — `npm install --omit=optional` leaves OCR fully unavailable, restoring the strict offline posture.
+- Pre-download trained-data files by running OCR once per language on a known-online machine, then copy the resulting `tessdata/` directory to the offline deployment.
+- The runtime warning is unconditional — it fires whether the trained-data is cached or not, because the WORKER COULD fall back to the CDN if the cache is somehow incomplete.
+
+**Roadmap (v3.8.0):**
+- An `enquire-mcp install-ocr-lang <code>` subcommand to mirror `install-model` for embeddings (explicit, opt-in network call; offline posture for `serve`).
+- Strict cache check before `createWorker()` that fails fast on missing trained-data, with a clear "run `install-ocr-lang <code>`" message.
+- `--enable-ocr-online` flag for users who explicitly want the CDN fallback.
+
+Tracked in CHANGELOG under v3.7.16 P1-1.
+
+### OCR resource limits (v3.7.16 P1-2)
+
+OCR is the slowest path in the project — ~1-2s per page on M1 CPU at default scale. Pre-3.7.16 a single bearer-authenticated HTTP request could trigger unbounded OCR work (the entire PDF, no timeout, no concurrency cap, no per-call budget). A 10000-page PDF would peg the CPU for hours.
+
+v3.7.16 adds a default **200-page cap per call** (`DEFAULT_OCR_MAX_PAGES`), bypassable via an explicit `pages: [from, to]` range or via the `maxPages` option. The cap is checked BEFORE the Tesseract worker spins up, so no resources allocate on adversarial inputs.
+
+Roadmap (v3.8.0): per-call timeout, concurrent-request cap, HTTP-transport operation budget.
+
 ## Persistent FTS5 index: privacy posture
 
 When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts5.db` (alongside the parse cache) stores **chunked note content** (paragraph-level, ~4 KB each), the **comma-serialized tag list** of each note, and the **list of wikilink targets** as part of the FTS5 enrichment for recall.

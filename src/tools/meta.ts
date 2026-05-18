@@ -77,11 +77,19 @@ export interface ValidateProposalResult {
  * path-traversal errors become `kind: "path-traversal"` errors rather than
  * exceptions.
  *
+ * v3.7.16 P2-14 — errors[] now includes `path-excluded` when the
+ * proposed destination is blocked by `--exclude-glob` / `--read-paths`.
+ * Pre-3.7.16 the validator passed structurally-valid proposals into
+ * excluded destinations; the actual write would then fail at runtime.
+ * Pre-write parity with `writeNote` / `createNote` is the new contract.
+ *
  * @param vault - The vault.
  * @param args - {@link ValidateProposalArgs}. `path` + `content` required.
  * @returns A {@link ValidateProposalResult} with `ok`, `errors`, `warnings`,
  *   YAML parse status, per-wikilink resolution, tag classification, and
- *   collision detection.
+ *   collision detection. Possible `errors[].kind` values include
+ *   `path-traversal`, `path-excluded` (v3.7.16+), `yaml-invalid`,
+ *   plus the wikilink / tag / collision categories.
  * @example
  * ```ts
  * const v = await validateNoteProposal(vault, {
@@ -113,6 +121,23 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
       kind: "path-traversal",
       message: err instanceof Error ? err.message : String(err)
     });
+  }
+
+  // v3.7.16 P2-14 — privacy-filter check. Pre-3.7.16 the validator only
+  // checked structural concerns (traversal, YAML, wikilinks) and gave a
+  // green light for proposals into excluded destinations — the actual
+  // write would then fail at runtime with "destination is excluded by ...".
+  // The pre-write validator is supposed to be the dry-run check before
+  // calling createNote/appendToNote, so it should return the privacy
+  // verdict too. Adds `path-excluded` error class.
+  if (absPath !== null) {
+    const exclusion = vault.exclusionReason(normalizedPath);
+    if (exclusion !== null) {
+      errors.push({
+        kind: "path-excluded",
+        message: `Destination is excluded by ${exclusion}: ${normalizedPath}`
+      });
+    }
   }
 
   // 2. YAML parse via gray-matter (the same parser used at write time).

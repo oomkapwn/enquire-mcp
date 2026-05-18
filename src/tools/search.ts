@@ -1451,9 +1451,15 @@ export async function searchHybrid(
   // do it either. Wikilinks ARE the differentiating Obsidian primitive.
   const graphBoost = args.graph_boost !== false; // default ON
   if (graphBoost && fused.length > 1) {
+    // v3.7.16 P2-16 — strip the `#chunk-N` suffix ONLY when it's a chunk
+    // marker, not a literal `#` in the filename. Pre-3.7.16 `f.id.split("#")[0]`
+    // mangled `C# Notes.md` → `C` and broke graph boost for any filename
+    // containing `#`. The post-3.7.16 regex strips `#<digits>` ONLY at the
+    // end of the id, matching the chunker's `${path}#${chunkIndex}` format.
+    const stripChunkSuffix = (id: string): string => id.replace(/#\d+$/, "");
     const candidatePaths = new Set<string>();
     for (const f of fused) {
-      const candidatePath = f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id;
+      const candidatePath = stripChunkSuffix(f.id);
       // v3.7.12 M6 — skip non-markdown candidates. PDF/canvas/base files
       // can show up in `fused` (PDFs ride the same FTS5 + embeddings tables
       // when --include-pdfs is on) but they don't have wikilinks parsable
@@ -1484,7 +1490,7 @@ export async function searchHybrid(
     }
     const ALPHA = 0.005;
     for (const f of fused) {
-      const fPath = f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id;
+      const fPath = stripChunkSuffix(f.id); // v3.7.16 P2-16
       const fBasename = stripMd(path.basename(fPath));
       let inDegree = 0;
       for (const [otherPath, targets] of outLinks) {

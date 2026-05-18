@@ -220,6 +220,14 @@ export class Vault {
    * or path-traverses outside the vault. Re-runs the realpath check to
    * guard against symlink-based escape attempts in a tampered cache file.
    *
+   * v3.7.16 P1-4 — ALSO drops entries that violate the LIVE privacy
+   * filter state (`--exclude-glob` / `--read-paths`). Pre-3.7.16, if a
+   * user filled the cache with all notes and then added a new exclusion
+   * pattern on the next start, the excluded note bodies were silently
+   * restored into the in-memory cache (and rewritten on the next save).
+   * Privacy-driven drops mark `cacheDirty` so the next `saveDiskCache`
+   * persists the pruned snapshot, and emit a stderr disclosure line.
+   *
    * Idempotent — entries already in memory aren't duplicated.
    *
    * @returns Number of entries loaded into memory.
@@ -268,6 +276,19 @@ export class Vault {
         const abs = path.resolve(this.root, entry.relPath);
         const relCheck = path.relative(this.root, abs);
         if (relCheck.startsWith("..") || path.isAbsolute(relCheck)) return { kind: "drop" } as const;
+        // v3.7.16 P1-4 — drop entries that violate the current privacy
+        // filters (--exclude-glob / --read-paths). Pre-3.7.16, loadDiskCache
+        // happily restored full note bodies even after the user added a new
+        // exclude/allowlist pattern on this run. Direct reads were blocked
+        // by resolveSafePath, but the excluded body remained in the parse
+        // cache + got rewritten to disk by the next saveDiskCache call —
+        // breaking the at-rest privacy boundary across filter changes.
+        // Now we check isExcluded() using the live filter state for every
+        // candidate and drop misses. The drop also marks the cache dirty,
+        // so the next saveDiskCache writes the pruned snapshot back to disk.
+        if (this.isExcluded(relCheck.replace(/\\/g, "/"))) {
+          return { kind: "drop", excludedByPrivacy: true } as const;
+        }
         try {
           const s = await fs.stat(abs);
           if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
@@ -285,9 +306,13 @@ export class Vault {
     );
     let loaded = 0;
     let dropped = 0;
+    let droppedByPrivacy = 0;
     for (const result of checks) {
       if (result.kind === "drop") {
         dropped += 1;
+        if ("excludedByPrivacy" in result && result.excludedByPrivacy === true) {
+          droppedByPrivacy += 1;
+        }
         continue;
       }
       if (this.cache.size >= this.maxCacheEntries) break;
@@ -303,6 +328,18 @@ export class Vault {
     // those entries. Closes the audit finding about deleted-note content
     // lingering on disk after the source note is removed from the vault.
     if (dropped > 0) this.cacheDirty = true;
+    // v3.7.16 P1-4 — when entries were dropped specifically because a new
+    // privacy filter excluded them, surface that to stderr so operators
+    // see the privacy-boundary correction (e.g., adding --exclude-glob
+    // "Personal/**" after running for weeks with no filter). The pruned
+    // snapshot will be written to disk by the next saveDiskCache() call
+    // via the cacheDirty flag above.
+    if (droppedByPrivacy > 0) {
+      process.stderr.write(
+        `enquire: persistent cache — dropped ${droppedByPrivacy} entries now excluded by --exclude-glob / --read-paths. ` +
+          `Cache will be rewritten without them on the next save.\n`
+      );
+    }
     return loaded;
   }
 
@@ -524,6 +561,16 @@ export class Vault {
    * excluded by `--read-paths` / `--exclude-glob`. Refuses to write
    * through symlinks. Auto-creates parent directories.
    *
+   * v3.7.13 M2 — `overwrite=false` uses the `wx` open flag for atomic
+   * exclusive create (closes stat-then-write TOCTOU race).
+   *
+   * v3.7.16 P1-6 — privacy filter runs on the canonical-case relative
+   * path (resolved via `realpath` against the nearest existing parent)
+   * rather than the lexical user input. Closes the case-insensitive-FS
+   * bypass on default macOS HFS+/APFS and Windows NTFS where
+   * `personal/secret.md` and `Personal/secret.md` resolve to the same
+   * physical file but used to bypass `--exclude-glob "Personal/**"`.
+   *
    * @param relPath - Vault-relative target path. `.md` suffix is added
    *   if absent. Must not be empty / `.` / `.md`.
    * @param content - File body (UTF-8). Must be under the size cap.
@@ -562,7 +609,19 @@ export class Vault {
     // `obsidian_create_note({ path: "Private/secret.md" })` — a clear violation
     // of the SECURITY.md privacy contract. We now match the predicate from
     // `resolveSafePath()` and surface the same allowlist-vs-denylist reason.
-    const targetRelNorm = path.relative(this.root, abs).replace(/\\/g, "/");
+    //
+    // v3.7.16 P1-6 — case-insensitive write privacy bypass on macOS / Windows.
+    // Pre-3.7.16 the predicate ran on `path.relative(this.root, abs)`, which
+    // is the LEXICAL form of the user's input. On default macOS HFS+/APFS
+    // (case-insensitive) and Windows NTFS, `personal/secret.md` resolves to
+    // the same physical file as `Personal/secret.md`. If the user configured
+    // `--exclude-glob "Personal/**"` (case-sensitive glob), the lexical
+    // predicate would MISS the lowercase variant, but the actual write would
+    // land in the excluded directory. The fix is to canonicalize against the
+    // nearest existing parent's realpath, then re-derive the relative form,
+    // before running the exclusion check. Linux ext4/btrfs (case-sensitive)
+    // is unaffected; the realpath operation is a no-op there.
+    const targetRelNorm = await this.canonicalRelForPrivacyCheck(abs);
     if (this.isExcluded(targetRelNorm)) {
       const reason =
         this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(targetRelNorm))
@@ -626,6 +685,67 @@ export class Vault {
     }
   }
 
+  /**
+   * v3.7.16 P1-6 — return the relative path used for privacy-filter
+   * matching, canonicalized against the filesystem's actual case
+   * convention. On case-insensitive filesystems (default macOS HFS+/APFS,
+   * default Windows NTFS), `personal/Note.md` and `Personal/Note.md`
+   * resolve to the same physical file. Pre-3.7.16 the privacy check ran
+   * on the LEXICAL relative path (whatever the caller typed), so a
+   * case-variant of an excluded folder bypassed `--exclude-glob` /
+   * `--read-paths`.
+   *
+   * Strategy: walk UP from the target until we hit an existing parent,
+   * resolve its real (on-disk) path via `fs.realpath`, then re-join the
+   * not-yet-existing tail segments AS-TYPED. This yields a path whose
+   * EXISTING prefix uses the filesystem's canonical case and whose TAIL
+   * uses the caller's case (which is fine — the tail doesn't exist yet,
+   * so it has no canonical case). Linux ext4/btrfs (case-sensitive)
+   * filesystems treat realpath as a no-op, so this is portable.
+   *
+   * Falls back to the lexical form if no parent exists (vault root
+   * missing — handled by the broader `ensureExists` startup check).
+   */
+  /**
+   * Public alias for {@link canonicalRelForPrivacyCheck}. v3.7.16 P1-6 —
+   * used by `renameNote` wrapper in `src/tools/write.ts` to fail-fast on
+   * case-insensitive-FS variants before doing O(N) backlink-rewrite work.
+   * The inner `renameFile` also does this check; this public surface lets
+   * orchestrators pre-check without duplicating the realpath logic.
+   */
+  async canonicalRelForPrivacyCheckPublic(abs: string): Promise<string> {
+    return this.canonicalRelForPrivacyCheck(abs);
+  }
+
+  private async canonicalRelForPrivacyCheck(abs: string): Promise<string> {
+    const lexical = path.relative(this.root, abs).replace(/\\/g, "/");
+    let existing = abs;
+    const tail: string[] = [];
+    // Walk UP until we find an existing path (or hit vault root).
+    while (true) {
+      try {
+        await fs.stat(existing);
+        break;
+      } catch {
+        const parent = path.dirname(existing);
+        if (parent === existing) return lexical; // hit FS root unexpectedly
+        tail.unshift(path.basename(existing));
+        existing = parent;
+        if (existing.length < this.root.length) return lexical; // walked past vault root
+      }
+    }
+    // Resolve realpath on the existing prefix → canonical case from disk.
+    const realExisting = await fs.realpath(existing).catch(() => existing);
+    // Re-join the not-yet-existing tail (caller's case is fine for non-
+    // existent segments).
+    const canonicalAbs = tail.length === 0 ? realExisting : path.join(realExisting, ...tail);
+    const rel = path.relative(this.root, canonicalAbs).replace(/\\/g, "/");
+    // If the canonical-form path escapes the vault, fall back to the
+    // lexical form — the broader path-traversal check will catch it.
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return lexical;
+    return rel;
+  }
+
   /** Rename a markdown file inside the vault. v3.7.14 F2 — atomic destination
    *  guard via `fs.link(fromAbs, toAbs)` + `fs.unlink(fromAbs)` for the
    *  non-overwrite path (link(2) fails atomically with EEXIST, closing the
@@ -637,7 +757,11 @@ export class Vault {
    *  (unless overwrite), either path traverses, or the target sits behind a
    *  symlink that points outside the vault. Caller is responsible for
    *  rewriting wikilinks pointing at the old name (see {@link renameNote}
-   *  in `src/tools/write.ts` for the orchestration). */
+   *  in `src/tools/write.ts` for the orchestration).
+   *
+   *  v3.7.16 P1-6 — destination privacy filter uses
+   *  {@link canonicalRelForPrivacyCheck} (case-insensitive-FS bypass
+   *  closure; parity with `writeNote`). */
   async renameFile(
     fromRel: string,
     toRel: string,
@@ -653,7 +777,8 @@ export class Vault {
     await this.assertParentInsideVault(toAbs);
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
     // writeNote does, so users with --read-paths see the actual reason.
-    const toRelForFilter = path.relative(this.root, toAbs).replace(/\\/g, "/");
+    // v3.7.16 P1-6 — case-insensitive bypass closure (same as writeNote).
+    const toRelForFilter = await this.canonicalRelForPrivacyCheck(toAbs);
     if (this.isExcluded(toRelForFilter)) {
       const reason =
         this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(toRelForFilter))
@@ -819,6 +944,13 @@ export class Vault {
    * Returns the first match in walk order — vaults with duplicate titles
    * across folders silently pick one.
    *
+   * v3.7.16 P2-13 — WRITE callers should use {@link findAllByTitle} +
+   * fail-on-ambiguity instead of this method (silent first-match
+   * selection here is fine for read paths but causes silent data
+   * corruption when used as the write-target resolver). The
+   * `resolveTarget` helper in `src/tools/write.ts` has an
+   * `opts.strictOnAmbiguousTitle` flag for the write/read distinction.
+   *
    * @param title - Note title with or without `.md` suffix.
    * @returns The matching file entry, or `null` if no note matches.
    */
@@ -826,6 +958,26 @@ export class Vault {
     const norm = stripMdExt(title).toLowerCase();
     const all = await this.listMarkdown();
     return all.find((e) => stripMdExt(e.basename).toLowerCase() === norm) ?? null;
+  }
+
+  /**
+   * v3.7.16 P2-13 — find ALL notes with a given title (basename match).
+   * Used by write tools to FAIL LOUDLY when multiple files share a
+   * basename instead of silently mutating the first walk-order match.
+   *
+   * Pre-3.7.16, `appendToNote({ title: "Daily" })` would mutate
+   * `Work/Daily.md` or `Personal/Daily.md` depending on directory walk
+   * order — a silent-data-corruption footgun. Write surfaces now use
+   * this method, fail on `.length > 1`, and surface the candidate paths
+   * to the caller so they can disambiguate by `path`.
+   *
+   * @param title - Title without `.md` (case-insensitive basename match).
+   * @returns All matching file entries (empty array if no match).
+   */
+  async findAllByTitle(title: string): Promise<FileEntry[]> {
+    const norm = stripMdExt(title).toLowerCase();
+    const all = await this.listMarkdown();
+    return all.filter((e) => stripMdExt(e.basename).toLowerCase() === norm);
   }
 
   /** Periodic Notes plugin config (`.obsidian/daily-notes.json` + Periodic

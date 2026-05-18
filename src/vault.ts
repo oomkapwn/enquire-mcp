@@ -626,10 +626,18 @@ export class Vault {
     }
   }
 
-  /** Rename a markdown file inside the vault. Atomic via fs.rename. Refuses if
-   *  source missing, target exists (unless overwrite), either path traverses,
-   *  or the target sits behind a symlink that points outside the vault. Caller
-   *  is responsible for rewriting wikilinks pointing at the old name. */
+  /** Rename a markdown file inside the vault. v3.7.14 F2 — atomic destination
+   *  guard via `fs.link(fromAbs, toAbs)` + `fs.unlink(fromAbs)` for the
+   *  non-overwrite path (link(2) fails atomically with EEXIST, closing the
+   *  stat-then-rename TOCTOU race that POSIX rename(2) silently lost by
+   *  replacing destinations). Cross-device fallback (`EXDEV`) uses
+   *  `fs.copyFile(..., COPYFILE_EXCL)` + `fs.unlink` for the same atomic
+   *  guarantee. The overwrite=true path keeps plain `fs.rename` since the
+   *  caller opted into replacement. Refuses if source missing, target exists
+   *  (unless overwrite), either path traverses, or the target sits behind a
+   *  symlink that points outside the vault. Caller is responsible for
+   *  rewriting wikilinks pointing at the old name (see {@link renameNote}
+   *  in `src/tools/write.ts` for the orchestration). */
   async renameFile(
     fromRel: string,
     toRel: string,
@@ -713,6 +721,15 @@ export class Vault {
   /**
    * Append text to an existing note. Requires `enableWrite: true`.
    * Refuses if the resulting file would exceed the size cap.
+   *
+   * v3.7.14 F3 — the size-cap check is performed against the OPEN file
+   * descriptor's `fstat`, not a separate `fs.stat(abs)` call before
+   * `fs.appendFile`. Pre-3.7.14 the two-call pattern let parallel
+   * writers race the cap: stat says `before.size + addition <= max`,
+   * another process appends size Y between stat and our append, our
+   * append takes the file past `max`. The post-3.7.14 single-fd pattern
+   * keeps stat→write inside one kernel handle that another process
+   * can't reposition.
    *
    * @param relOrAbs - Vault-relative or absolute target path.
    * @param addition - Text to append (UTF-8). Caller is responsible for

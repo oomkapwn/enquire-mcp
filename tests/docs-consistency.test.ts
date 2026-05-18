@@ -459,6 +459,27 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.7.15 R17-3 — lock COMPARISON.md's reranker-row positioning against
+  // the same v3.7.12 L4 honest framing applied to package.json. Round-17
+  // self-audit found "Cross-encoder reranker (BGE, 5 models)" in
+  // COMPARISON.md (line 31) while v3.7.12 L4 had already updated
+  // package.json#description from "5 cross-encoder reranker models" →
+  // "BGE cross-encoder reranker verified end-to-end (+4 aliases in
+  // catalog ...)". The COMPARISON.md row was missed in v3.7.12 + v3.7.13.
+  //
+  // The invariant: COMPARISON.md must NOT claim a flat "N models" reranker
+  // count (matches the v3.7.12 L4 narrative class fix); IF it mentions a
+  // verified entity, the entity must be BGE (matches DEFAULT_RERANKER_ALIAS).
+  it("COMPARISON.md reranker row uses honest framing (v3.7.15 R17-3)", async () => {
+    const comparisonMd = await read("docs/COMPARISON.md");
+    // Find any "reranker (BGE, N models)" form — should be ZERO matches post-3.7.15.
+    const flatCount = /reranker\s*\(BGE\s*,?\s*\d+\s*models?\)/i.exec(comparisonMd);
+    expect(
+      flatCount,
+      "COMPARISON.md reranker row uses stale 'BGE, N models' framing — use the v3.7.12 L4 honest form 'BGE verified end-to-end' instead"
+    ).toBeNull();
+  });
+
   // v3.7.14 F4 — close the "Hardcoded counts in docs without an invariant"
   // anti-pattern (Rule since v3.5.9). v3.7.13 M5 bumped the README+CLAUDE.md
   // "N required CI gates" claim from 7 → 8 manually, but no test gated it

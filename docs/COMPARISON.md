@@ -28,7 +28,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Retrieval — TF-IDF                            | Yes                 | No               | No               | No               | No               |
 | Retrieval — dense ML embeddings               | Yes (multilingual)  | No               | No               | No               | No               |
 | Retrieval — RRF fusion of all three           | **Yes**             | No               | No               | No               | No               |
-| Cross-encoder reranker (BGE, 5 models)        | **Yes**             | No               | No               | No               | No               |
+| Cross-encoder reranker (BGE verified end-to-end) | **Yes**             | No               | No               | No               | No               |
 | HNSW vector index                             | Yes                 | n/a              | n/a              | n/a              | n/a              |
 | int8 vector quantization                      | Yes                 | n/a              | n/a              | n/a              | n/a              |
 | PDF indexing                                  | Yes (text + chunks) | No               | No               | No               | No               |
@@ -43,7 +43,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Read open editor state, active note, etc.     | **No**              | **Yes**          | Limited          | No               | No               |
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | SLSA-3 build provenance on releases           | **Yes**             | No               | No               | No               | No               |
-| Test count (public)                           | **815**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **816**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |

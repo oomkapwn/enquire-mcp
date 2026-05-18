@@ -194,9 +194,14 @@ export async function renameNote(
   const fromRel = vault.toRel(fromAbs);
   await vault.stat(fromAbs); // throws on missing source — fail fast.
   // Validate to-path early so we don't do O(N) work then fail.
+  // v3.7.16 P1-6 sibling — use the canonical-case form so case-insensitive
+  // FS variants (`personal/x.md` vs `Personal/x.md`) don't slip past the
+  // fast-fail and waste an O(N) backlink-rewrite walk before `renameFile`
+  // catches them with the same canonical check.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
-  const renameReason = vault.exclusionReason(toRelCheck);
+  const canonicalToRel = await vault.canonicalRelForPrivacyCheckPublic(toAbsCheck);
+  const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
     // writeNote and Vault.renameFile do. Pre-fix the message always blamed

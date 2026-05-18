@@ -167,7 +167,20 @@ export const DEFAULT_OCR_MAX_PAGES = 200;
  * `vault.readBinaryFile(relPath)` for vault-aware reading with
  * privacy-filter + max-bytes guards applied).
  *
- * Throws on encrypted PDFs, hard-corrupt files, or missing optional deps.
+ * v3.7.16 P1-1 — fires a stderr disclosure warning once per worker
+ * creation: Tesseract.js may fetch the requested `<lang>.traineddata`
+ * file from a CDN on first use, contradicting the broader "zero
+ * outbound network calls in serve mode" framing. See SECURITY.md
+ * "OCR network posture" for the v3.8.0 offline-only roadmap.
+ *
+ * v3.7.16 P1-2 — refuses to process more than `opts.maxPages` (default
+ * {@link DEFAULT_OCR_MAX_PAGES} = 200) in a single call. The check
+ * runs BEFORE the Tesseract worker spawns, so adversarial inputs don't
+ * allocate resources. Pass an explicit `pages: [from, to]` slice to
+ * narrow the work, or raise `maxPages` to opt out of the default cap.
+ *
+ * Throws on encrypted PDFs, hard-corrupt files, missing optional deps,
+ * or when the requested page span exceeds `maxPages`.
  * Returns empty pages (with `isEmpty: true`) for pages where Tesseract
  * found nothing.
  */

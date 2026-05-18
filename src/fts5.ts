@@ -571,12 +571,17 @@ export class FtsIndex {
  * Sanitize a user query for FTS5. Quote-wraps any token containing
  * non-alphanumerics so hyphens / colons / dots are treated literally
  * (without this, `"claude-telegram"` would parse as `claude NOT telegram`).
- * Strips reserved keywords (`AND`, `OR`, `NOT`, `NEAR`) so they can't
- * inject unexpected boolean logic.
+ *
+ * v3.7.16 P3-28 — reserved keywords (`AND`, `OR`, `NOT`, `NEAR`) are
+ * QUOTED as literals instead of stripped. Pre-3.7.16 the strip-path
+ * silently dropped real query terms ("operating systems AND databases"
+ * lost the connective AND user couldn't search for the literal word
+ * "AND"). Quoting makes both cases work: FTS5 treats `"AND"` as the
+ * literal token rather than the boolean operator.
  *
  * @param q - User query string.
  * @returns Sanitized query ready to pass to FTS5's `MATCH` operator.
- *   Empty string when no usable tokens remain.
+ *   Empty string when input is empty / whitespace-only.
  */
 export function safeFts5Query(q: string): string {
   const RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);

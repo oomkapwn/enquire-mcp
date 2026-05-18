@@ -57,15 +57,42 @@ The audit was on v3.7.5 — these findings were closed before this patch:
 - **P3-27 HNSW metadata shallow validation** (validate `meta.dim`, `meta.size`, rows shape).
 - **P3-29 setup-snippet mkdir** (`docs/http-transport.md` + `examples/chatgpt-actions.md`).
 
+### Pre-merge RCA sweep (in-release recursion prevention)
+
+Per the v3.7.15 rule *"single class-sweep is not enough — same-release recursion happens"*, I ran a post-fix class-sweep BEFORE merging this PR. Found **8 additional issues inside v3.7.16's own diff** + 2 cross-class sibling bugs. All fixed in this same patch:
+
+| Class | Finding | Fix |
+|---|---|---|
+| A (TSDoc drift) | `loadDiskCache` header didn't mention P1-4 privacy drop | header updated |
+| A (TSDoc drift) | `writeNote` header didn't mention P1-6 canonical case check | header updated |
+| A (TSDoc drift) | `renameFile` header didn't mention P1-6 (mentioned v3.7.14 F2 but missed P1-6 layer) | header updated |
+| A (TSDoc drift) | `findByTitle` header still claimed "silently pick one" (now P2-13-strict for writes) | cross-ref to `findAllByTitle` + `strictOnAmbiguousTitle` |
+| A (TSDoc drift) | `safeFts5Query` header still claimed "strips reserved keywords" (P3-28 changed to quote-as-literal) | header updated |
+| A (TSDoc drift) | `validateNoteProposal` header didn't list `path-excluded` in errors[].kind enum | header updated |
+| A (TSDoc drift) | `extractPdfWithOcr` header didn't mention P1-1 (network) or P1-2 (200-page) | header updated |
+| C (P1-6 sibling) | `renameNote` wrapper at `tools/write.ts:199` did lexical exclusion-check before delegating to `renameFile` — case-variant bypass wasted O(N) backlink work before the inner canonical check caught it | new `Vault.canonicalRelForPrivacyCheckPublic()`; wrapper now pre-checks canonically |
+| F (P1-2 sibling) | `extractPdfText` (called by `obsidian_read_pdf` without `pages`) had no page-count cap — a 5MB / 2000-page PDF could peg CPU for minutes via HTTP | new `DEFAULT_PDF_MAX_PAGES = 500` cap with same pattern as OCR's `DEFAULT_OCR_MAX_PAGES` |
+
+**Classes verified clean (no new findings):**
+
+- **Class D** (cache/index privacy lifecycle siblings) — `vault.listMarkdown()` filters via `isExcluded()`, and the FTS5/EmbedDb `diff()` sync marks previously-indexed-now-excluded files as deleted on next sync. Tested by inspection.
+- **Class E** (watcher coverage gaps) — `.canvas` and `.base` files are not FTS5-indexed (no chunks stored), so watcher's `.md`+`.pdf`-only coverage is complete. Only the `--include-pdfs` runtime gap (closed by P1-5) was real.
+- **Class G** (user-input wildcard injection siblings) — other `LIKE` usages (`embed-db.ts:475`) already use `substr` not `LIKE`. RegExp constructions from user input (`new RegExp(args.pattern)` in `getOpenQuestions`, `dql.ts`) are documented as intentional advanced-user features.
+- **Class H** (path/wikilink special-char parsing siblings) — wikilink inner parsing (`split("|")[0]` then `split("#")[0]` then `split("^")[0]` in `validateNoteProposal`) is correct per Obsidian wikilink grammar (`#` IS the section separator INSIDE wikilink inner text, unlike chunk-id parsing for graph boost).
+- **Class I** (title-ambiguity write siblings) — only `appendToNote` and `frontmatterSet` accept `title`; both now use `strictOnAmbiguousTitle: true`. `archiveNote` and `replaceInNotes` require `path` (no title path → no ambiguity surface).
+
 ### Stats
 
-- **816 tests** (unchanged). +1 test CONTRACT change for P3-28 (quotes vs strips reserved words).
-- **+0 docs-consistency invariants** (P2-13 ambiguity-fail is enforced by runtime error, P1-6 case-insensitive bypass is enforced by realpath canonicalization; neither needs a docs-consistency gate).
+- **816 tests** (unchanged count). 1 test CONTRACT change for P3-28 (quotes vs strips).
+- **+0 docs-consistency invariants** (P2-13 + P1-6 enforced at runtime).
+- **+10 RCA-driven fixes** discovered + fixed BEFORE merge (8 TSDoc + 1 Class C sibling + 1 Class F sibling).
 - All 8 required CI gates pass locally.
 
 ### Method
 
 5th independent external audit since v3.6.0. The "audit on v3.7.5 codebase but processed at v3.7.15 state" pattern is now established as the verification workflow — each external audit finds new failure modes that the previous releases' methodologies didn't cover. Round-18 added the OCR network-policy honesty (new privacy-promise class), persistent-cache filter lifecycle (new at-rest privacy class), and case-insensitive filesystem bypass (new portability class).
+
+**Pre-merge RCA sweep is now mandatory** (Rule since v3.7.15 — verified working this release): caught 10 additional findings INSIDE v3.7.16's own diff before they shipped as overclaim #10+. This is the rule firing as designed — same-release class recursion happens, and the only way to prevent it from leaking into production is to scan the patch's own diff for fresh instances of every class it claims to fix.
 
 ## [3.7.15] — 2026-05-18
 

@@ -114,9 +114,25 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 export interface ExtractPdfTextOptions {
   /** 1-indexed inclusive page range. `to >= from > 0`. Values are clamped
    *  to the document's actual `pageCount` if out-of-range. When `undefined`,
-   *  every page is extracted (legacy behavior). */
+   *  every page is extracted (legacy behavior, subject to `maxPages` cap
+   *  below). */
   pageRange?: { from: number; to: number };
+  /**
+   * v3.7.16 (Class F sibling of P1-2) — defense-in-depth page cap. Even
+   * when the caller doesn't pass `pageRange`, refuse to process more than
+   * this many pages in one call to bound CPU on adversarial / runaway
+   * inputs. Default 500 (~50-100s on M1 CPU at default extraction speed
+   * for text-only PDFs; far below the OCR pipeline's 200-page cap because
+   * text extraction is ~10x faster per page). Pass
+   * `Number.POSITIVE_INFINITY` to opt out (background-job mode), or pass
+   * an explicit `pageRange` to bypass the default cap.
+   */
+  maxPages?: number;
 }
+
+/** v3.7.16 (Class F sibling of P1-2) — default safety cap on per-call
+ *  PDF text extraction. See {@link ExtractPdfTextOptions.maxPages}. */
+export const DEFAULT_PDF_MAX_PAGES = 500;
 
 /**
  * Extract text from a PDF buffer. Memory-mode — caller has already
@@ -151,6 +167,21 @@ export async function extractPdfText(buffer: Buffer, opts: ExtractPdfTextOptions
   // earlier full-document extraction was the resource-leak path).
   const fromPage = opts.pageRange ? Math.max(1, opts.pageRange.from) : 1;
   const toPage = opts.pageRange ? Math.min(pageCount, opts.pageRange.to) : pageCount;
+
+  // v3.7.16 Class F (sibling of P1-2 OCR cap) — refuse runaway extractions.
+  // Pre-3.7.16 a bearer-authenticated HTTP request against a 5MB text-only
+  // PDF with ~2000 pages could peg CPU for 5+ minutes. The check fires
+  // BEFORE the page loop, so adversarial inputs don't deserialize pages.
+  // Explicit `pageRange` caller opted in; an explicit `maxPages` opts to
+  // raise the cap; otherwise the default 500-page cap applies.
+  const maxPages = opts.maxPages ?? DEFAULT_PDF_MAX_PAGES;
+  const requestedSpan = toPage - fromPage + 1;
+  if (requestedSpan > maxPages) {
+    throw new Error(
+      `enquire PDF: refusing to extract ${requestedSpan} pages in a single call ` +
+        `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range or raise maxPages.`
+    );
+  }
 
   for (let i = fromPage; i <= toPage; i++) {
     try {

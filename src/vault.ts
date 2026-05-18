@@ -220,6 +220,14 @@ export class Vault {
    * or path-traverses outside the vault. Re-runs the realpath check to
    * guard against symlink-based escape attempts in a tampered cache file.
    *
+   * v3.7.16 P1-4 — ALSO drops entries that violate the LIVE privacy
+   * filter state (`--exclude-glob` / `--read-paths`). Pre-3.7.16, if a
+   * user filled the cache with all notes and then added a new exclusion
+   * pattern on the next start, the excluded note bodies were silently
+   * restored into the in-memory cache (and rewritten on the next save).
+   * Privacy-driven drops mark `cacheDirty` so the next `saveDiskCache`
+   * persists the pruned snapshot, and emit a stderr disclosure line.
+   *
    * Idempotent — entries already in memory aren't duplicated.
    *
    * @returns Number of entries loaded into memory.
@@ -553,6 +561,16 @@ export class Vault {
    * excluded by `--read-paths` / `--exclude-glob`. Refuses to write
    * through symlinks. Auto-creates parent directories.
    *
+   * v3.7.13 M2 — `overwrite=false` uses the `wx` open flag for atomic
+   * exclusive create (closes stat-then-write TOCTOU race).
+   *
+   * v3.7.16 P1-6 — privacy filter runs on the canonical-case relative
+   * path (resolved via `realpath` against the nearest existing parent)
+   * rather than the lexical user input. Closes the case-insensitive-FS
+   * bypass on default macOS HFS+/APFS and Windows NTFS where
+   * `personal/secret.md` and `Personal/secret.md` resolve to the same
+   * physical file but used to bypass `--exclude-glob "Personal/**"`.
+   *
    * @param relPath - Vault-relative target path. `.md` suffix is added
    *   if absent. Must not be empty / `.` / `.md`.
    * @param content - File body (UTF-8). Must be under the size cap.
@@ -688,6 +706,17 @@ export class Vault {
    * Falls back to the lexical form if no parent exists (vault root
    * missing — handled by the broader `ensureExists` startup check).
    */
+  /**
+   * Public alias for {@link canonicalRelForPrivacyCheck}. v3.7.16 P1-6 —
+   * used by `renameNote` wrapper in `src/tools/write.ts` to fail-fast on
+   * case-insensitive-FS variants before doing O(N) backlink-rewrite work.
+   * The inner `renameFile` also does this check; this public surface lets
+   * orchestrators pre-check without duplicating the realpath logic.
+   */
+  async canonicalRelForPrivacyCheckPublic(abs: string): Promise<string> {
+    return this.canonicalRelForPrivacyCheck(abs);
+  }
+
   private async canonicalRelForPrivacyCheck(abs: string): Promise<string> {
     const lexical = path.relative(this.root, abs).replace(/\\/g, "/");
     let existing = abs;
@@ -728,7 +757,11 @@ export class Vault {
    *  (unless overwrite), either path traverses, or the target sits behind a
    *  symlink that points outside the vault. Caller is responsible for
    *  rewriting wikilinks pointing at the old name (see {@link renameNote}
-   *  in `src/tools/write.ts` for the orchestration). */
+   *  in `src/tools/write.ts` for the orchestration).
+   *
+   *  v3.7.16 P1-6 — destination privacy filter uses
+   *  {@link canonicalRelForPrivacyCheck} (case-insensitive-FS bypass
+   *  closure; parity with `writeNote`). */
   async renameFile(
     fromRel: string,
     toRel: string,
@@ -910,6 +943,13 @@ export class Vault {
    * Find a markdown note by title (basename without `.md`, case-insensitive).
    * Returns the first match in walk order — vaults with duplicate titles
    * across folders silently pick one.
+   *
+   * v3.7.16 P2-13 — WRITE callers should use {@link findAllByTitle} +
+   * fail-on-ambiguity instead of this method (silent first-match
+   * selection here is fine for read paths but causes silent data
+   * corruption when used as the write-target resolver). The
+   * `resolveTarget` helper in `src/tools/write.ts` has an
+   * `opts.strictOnAmbiguousTitle` flag for the write/read distinction.
    *
    * @param title - Note title with or without `.md` suffix.
    * @returns The matching file entry, or `null` if no note matches.

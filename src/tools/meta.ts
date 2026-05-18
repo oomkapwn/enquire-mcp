@@ -77,11 +77,19 @@ export interface ValidateProposalResult {
  * path-traversal errors become `kind: "path-traversal"` errors rather than
  * exceptions.
  *
+ * v3.7.16 P2-14 — errors[] now includes `path-excluded` when the
+ * proposed destination is blocked by `--exclude-glob` / `--read-paths`.
+ * Pre-3.7.16 the validator passed structurally-valid proposals into
+ * excluded destinations; the actual write would then fail at runtime.
+ * Pre-write parity with `writeNote` / `createNote` is the new contract.
+ *
  * @param vault - The vault.
  * @param args - {@link ValidateProposalArgs}. `path` + `content` required.
  * @returns A {@link ValidateProposalResult} with `ok`, `errors`, `warnings`,
  *   YAML parse status, per-wikilink resolution, tag classification, and
- *   collision detection.
+ *   collision detection. Possible `errors[].kind` values include
+ *   `path-traversal`, `path-excluded` (v3.7.16+), `yaml-invalid`,
+ *   plus the wikilink / tag / collision categories.
  * @example
  * ```ts
  * const v = await validateNoteProposal(vault, {

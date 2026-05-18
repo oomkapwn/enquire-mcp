@@ -12,7 +12,15 @@ on:
         type: string
 
 permissions:
-  contents: read
+  # `contents: write` (was `read` pre-3.7.15) — required for the
+  # "Create GitHub Release" step (v3.7.14 F5) to call the GitHub Releases
+  # API. The first end-to-end test of F5 (v3.7.14 tag push) failed with
+  # `HTTP 403: Resource not accessible by integration` because GitHub's
+  # default GITHUB_TOKEN since 2023 grants only read on `contents`.
+  # Documented as overclaim #9 in v3.7.15 CHANGELOG. The npm publish
+  # step is unaffected (it uses NODE_AUTH_TOKEN from `secrets.NPM_TOKEN`).
+  contents: write
+  # `id-token: write` — npm provenance OIDC token signing.
   id-token: write
 
 jobs:

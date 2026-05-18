@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.15] — 2026-05-18
+
+> **TL;DR:** Round-17 post-merge audit on v3.7.14 — **meta-recursion finding**: the v3.7.14 patch that closed overclaim #6 (F1) introduced overclaim **#7 inside its own release**. v3.7.14 F2 fixed `vault.renameFile` internals (stat→link()+unlink()) but left the function's TSDoc header claiming *"Atomic via fs.rename"* — exactly the same class as F1 it had just fixed. Plus 2 unfixed instances of v3.7.12 L4's reranker-honesty class missed in COMPARISON.md. 3 fixes + 1 new invariant. **+1 test** (816 total). Documents the methodological lesson: **a single class-sweep round isn't enough — same-release recursion is a real failure mode and requires post-merge re-sweep.**
+
+**Patch — round-17 post-merge audit.**
+
+### The meta-finding
+
+v3.7.14 was a "round-16 SELF-audit" that closed 5 findings, prominently including **F1 — silent overclaim #6** (renameNote TSDoc header still described the old buggy write order after the M1 internals fix). The very next class-sweep, run AFTER v3.7.14 shipped, found that v3.7.14's own **F2 fix did the exact same thing**: rewrote `vault.renameFile` to use `fs.link()` + `fs.unlink()` for atomic non-overwrite, but left the function header docstring saying *"Atomic via `fs.rename`"*. This is **overclaim #7**, occurring inside the patch designed to address overclaim #6. The pattern reproduces with high fidelity:
+
+| Instance | Release | Class |
+|---|---|---|
+| 1 | v3.6.1 CRIT-1 | "All N callsites fixed" — actually 1 of 10 |
+| 2 | v3.6.2 K-1 | "All 10 callsites fixed" — actually 4 of 10 |
+| 3 | v3.6.4 K-1 cli.ts | 5 residual callsites missed |
+| 4 | v3.7.10 D4 | `examples/` add to `package.json#files` claimed but Edit raced |
+| 5 | v3.7.11 round-13 | retroactive overclaim correction documented |
+| 6 | v3.7.14 F1 | renameNote TSDoc header drifted from M1 code change |
+| **7** | **v3.7.14 F2 (self)** | **renameFile TSDoc header drifted from F2's own internal change** |
+| **8** | **v3.7.14 release tag** | **Tagged the pre-squash-merge branch SHA (orphan, never on main); release.yml correctly refused. v3.7.14 never reached npm until corrective re-tag in this v3.7.15 release window. Different class from #1-#7 (procedural / git-tag discipline, not docstring) but same overclaim shape: CHANGELOG/release notes implied a complete ship that hadn't happened.** |
+| **9** | **v3.7.14 F5 (automation overclaim)** | **F5 added a `gh release create` step to `release.yml` claiming "auto-create GH release per tag". First end-to-end test on v3.7.14 corrected-tag re-push: `HTTP 403: Resource not accessible by integration`. Root cause: `permissions:` block at workflow top had `contents: read` (GitHub 2023 security default), but `gh release create` needs `contents: write`. F5 was code-complete but permission-incomplete — the documentation in v3.7.14 CHANGELOG implied it worked. Fix in this patch: `contents: write` on the workflow.** |
+
+The mechanism is **always the same**: a fix updates code inside a function but doesn't update the function's TSDoc header or related comments. TypeDoc + IDE hover then surface the stale (lying) description while the code does something else. There is no test gate that fires on stale docstrings.
+
+### Findings
+
+- **R17-1 — v3.7.14 F2 TSDoc drift (overclaim #7, IN-RELEASE recursion)** (`src/vault.ts:633` header). Pre-3.7.15 the docstring read *"Rename a markdown file inside the vault. Atomic via fs.rename. Refuses if source missing, target exists (unless overwrite)..."* — but v3.7.14 F2's body uses `fs.link()` + `fs.unlink()` for the non-overwrite path (because `fs.rename` silently replaces destinations on POSIX, which IS the TOCTOU race F2 fixed). Header now matches: explicit `link()+unlink()` description + EXDEV fallback + cross-reference to `renameNote` in `tools/write.ts` for orchestration context.
+- **R17-2 — `appendNote` TSDoc enhancement** (`src/vault.ts:707` header). v3.7.14 F3 fixed the stat-then-append race via single-fd `fs.open(abs, "a")` → `handle.stat()` → `handle.write()`, but the function header just said *"Refuses if the resulting file would exceed the size cap"* without explaining the (now-closed) race. Header now documents the open-fd guarantee + cites F3.
+- **R17-3 — `docs/COMPARISON.md` reranker row stale (v3.7.12 L4 missed instance)** (`docs/COMPARISON.md:31`). v3.7.12 L4 corrected `package.json#description` from *"5 cross-encoder reranker models"* to *"BGE cross-encoder reranker verified end-to-end (+4 aliases in catalog, transformers.js bump pending)"* and added a docs-consistency invariant for the new phrasing. But COMPARISON.md's feature-matrix row at line 31 still said *"Cross-encoder reranker (BGE, 5 models)"* — same class, missed instance carried 3 releases since v3.7.12. Fixed to *"Cross-encoder reranker (BGE verified end-to-end)"*.
+- **R17-4 — New invariant: COMPARISON.md reranker honesty** (`tests/docs-consistency.test.ts`). Locks the v3.7.12 L4 narrative into structural enforcement on COMPARISON.md: rejects any *"reranker (BGE, N models)"* form via regex. If a future release rewrites COMPARISON.md and reverts to the flat-count framing, this test fails on the PR.
+- **R17-5 — Overclaim #8 (v3.7.14 orphan-tag procedural error, caught and corrected).** `git tag v3.7.14 36d5c1d` pointed at the pre-squash-merge feature-branch commit (orphan, never on main); the squash-merge created a different SHA on main (`9c4172b`). `.github/workflows/release.yml`'s "Assert tag is on main" guard correctly refused to publish (this guard exists since v2.0.0 to prevent direct-push-to-tag bypass of PR review). Net effect: v3.7.14 never reached npm until this v3.7.15 release window's corrective re-tag (`git tag v3.7.14 9c4172b && git push origin v3.7.14`). The CHANGELOG / GH-release-claim for v3.7.14 thus described a ship that hadn't completed — a new shape of the overclaim class. **Fix in this patch:** the release.yml's "Assert tag is on main" guard ALREADY caught it (defense worked); the missing piece is procedural — the local `git tag` step needs to use the SQUASH-MERGE COMMIT on main, not the feature-branch HEAD. Adding to CLAUDE.md anti-patterns as a new rule (below) so the next release in this codebase avoids the trap. v3.7.12 and v3.7.13 happened to tag correctly because I used the merge-commit SHA from `git log -1 --oneline` on main — but this discipline wasn't documented as a rule.
+
+### Root-cause analysis classes documented
+
+The full root-cause sweep on v3.7.13/v3.7.14 fixes also produced these class observations:
+
+1. **TSDoc/code drift class** (F1 + R17-1 + R17-2). 7 documented instances. No structural enforcement exists because docstring↔code agreement is undecidable in general. **Mitigation discipline (added to CLAUDE.md anti-patterns):** every fix that changes function internals MUST also update the function's TSDoc header in the same commit; reviewers MUST check the header diff alongside the body diff. PR template should include a checkbox.
+2. **TOCTOU sibling sweep** (v3.7.13 M2 + v3.7.14 F2 + v3.7.14 F3). All vault stat-then-act sites swept; no remaining siblings found. Locations verified safe: `bases.ts:245`, `watcher.ts:117`, `media.ts:226/349/526/703`, `meta.ts:202`, `write.ts:1054/1089` (all read-paths, no follow-on write).
+3. **Hardcoded counts class** (R17-3). All "5 reranker / models" mentions enumerated and corrected. `docs/benchmarks.md` BGE numbers are model-version refs (not counts), `README.md` "+5-10 NDCG@10" is a metric delta (not a count) — both safe.
+4. **Silent-pass invariant class** (round-15 L4 already closed). Re-verified: only `tests/github-metadata-invariant.test.ts` has an explicit skip path; CI's `GH_TOKEN` wiring makes it loud. No additional siblings.
+
+### Stats
+
+- **816 tests** (was 815 in v3.7.14). **+1 test** (R17-4 invariant).
+- **2 TSDoc headers** updated to match code reality.
+- **1 docs surface** brought into the v3.7.12 L4 honest-framing era.
+
+### Method note added to CLAUDE.md
+
+> **Single class-sweep is not enough — same-release recursion happens.** v3.7.14 F1 fixed overclaim #6, and v3.7.14 F2 SHIPPED overclaim #7 in the very same patch. **Rule since v3.7.15**: after every audit-driven release that closes an "overclaim" or "TSDoc/code drift" finding, run a post-merge re-sweep specifically scanning the new patch's own diffs for fresh instances of the same class. The recursion rate observed across v3.6.x-v3.7.x is high enough that this is a required step, not an optional one.
+
 ## [3.7.14] — 2026-05-18
 
 > **TL;DR:** Round-16 self-audit on the v3.7.13 codebase — class-sweep methodology applied to the round-15 fixes. Found 5 findings: **F1** v3.7.13 silent overclaim (M1 fixed renameNote ordering but the TSDoc header still described the OLD buggy write order — 6th overclaim instance), **F2** M2 sibling (`vault.renameFile` had the same stat-then-rename TOCTOU race that M2 fixed for `writeNote`), **F3** `appendNote` had a stat-then-append race that let parallel writers bypass the `maxFileBytes` size cap, **F4** "8 required CI gates" hardcoded count was not gated by docs-consistency (v3.5.9 anti-pattern recurrence), **F5** automated `gh release create` in `release.yml` (M13 from round-15, originally deferred to v3.8.0 but trivial to land). **+1 test** (815 total), **+1 docs-consistency invariant** (required-gates count).

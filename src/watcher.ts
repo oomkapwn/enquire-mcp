@@ -23,6 +23,20 @@ export interface WatcherOptions {
   ftsIndex?: FtsIndex | null;
   /** Suppress the "watcher: ..." stderr lines (used by tests). */
   silent?: boolean;
+  /**
+   * v3.7.16 P1-5 — when true, the watcher also handles `.pdf` lifecycle
+   * events (add / change / unlink), keeping the FTS5 PDF chunks in sync.
+   * Mirrors the `--include-pdfs` serve flag. Pre-3.7.16 the watcher
+   * ignored everything but `.md`, so PDFs added/deleted/moved during a
+   * serve session left stale rows in FTS5 until restart.
+   *
+   * NOTE: PDF re-indexing on `change` requires re-extracting text from
+   * the new bytes via `extractPdfText` (~50-200ms per page). For large
+   * PDFs this can spike CPU — same cost as the initial-index pass but
+   * triggered by a single file. Off by default; opt in alongside
+   * `--include-pdfs` for full PDF coverage at runtime.
+   */
+  includePdfs?: boolean;
 }
 
 export class VaultWatcher {
@@ -30,12 +44,14 @@ export class VaultWatcher {
   private readonly vault: Vault;
   private readonly ftsIndex: FtsIndex | null;
   private readonly silent: boolean;
+  private readonly includePdfs: boolean;
   private closed = false;
 
   constructor(opts: WatcherOptions) {
     this.vault = opts.vault;
     this.ftsIndex = opts.ftsIndex ?? null;
     this.silent = opts.silent ?? false;
+    this.includePdfs = opts.includePdfs ?? false;
   }
 
   /** Start watching. Resolves once the watcher has reported `ready`. */
@@ -44,9 +60,16 @@ export class VaultWatcher {
     this.watcher = chokidar.watch(root, {
       ignored: (p: string, stats?: import("node:fs").Stats) => {
         if (!stats) return false;
-        // Ignore non-.md files (we still let directory events through so we
-        // notice when an entire folder is moved/deleted).
-        if (stats.isFile() && !p.toLowerCase().endsWith(".md")) return true;
+        // v3.7.16 P1-5 — accept `.md` always; accept `.pdf` when
+        // includePdfs is on. Everything else is ignored at the file
+        // level (we still let directory events through so we notice
+        // when an entire folder is moved/deleted).
+        if (stats.isFile()) {
+          const lower = p.toLowerCase();
+          const isMd = lower.endsWith(".md");
+          const isPdf = lower.endsWith(".pdf");
+          if (!isMd && !(this.includePdfs && isPdf)) return true;
+        }
         // Skip well-known directories.
         for (const skip of SKIP_DIRS) {
           if (p.includes(`${path.sep}${skip}${path.sep}`) || p.endsWith(`${path.sep}${skip}`)) return true;
@@ -93,9 +116,17 @@ export class VaultWatcher {
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
     const relPath = path.relative(this.vault.root, absPath);
     if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) return;
-    // Cache invalidation is the first thing we do regardless of kind. The
-    // next read picks up disk state.
-    this.vault.invalidateOne(absPath);
+    // v3.7.16 P1-5 — dispatch by file kind. PDFs only flow through when
+    // `--watch --include-pdfs` is on (the chokidar `ignored` filter
+    // already gates this, but we re-check defensively).
+    const isPdf = relPath.toLowerCase().endsWith(".pdf");
+    if (isPdf && !this.includePdfs) return;
+
+    if (!isPdf) {
+      // Cache invalidation is the first thing we do regardless of kind. The
+      // next read picks up disk state. (Cache only holds markdown notes.)
+      this.vault.invalidateOne(absPath);
+    }
 
     if (!this.ftsIndex) {
       if (!this.silent) {
@@ -115,6 +146,19 @@ export class VaultWatcher {
     // add / change: re-read + reindex this single file.
     try {
       const stat = await this.vault.stat(absPath);
+      if (isPdf) {
+        // v3.7.16 P1-5 — extract text and re-index PDF pages. Lazy
+        // import to keep markdown-only deployments zero-cost.
+        const buf = await this.vault.readBinaryFile(absPath);
+        const { extractPdfText } = await import("./pdf.js");
+        const result = await extractPdfText(buf);
+        const pages = result.pages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
+        this.ftsIndex.reindexPdfFile(relPath, stat.mtimeMs, pages);
+        if (!this.silent) {
+          process.stderr.write(`enquire: watcher ${kind} ${relPath} (fts5 PDF reindexed, ${pages.length} pages)\n`);
+        }
+        return;
+      }
       const note = await this.vault.readNote(absPath, stat.mtimeMs);
       const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
       this.ftsIndex.reindexFile(relPath, stat.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);

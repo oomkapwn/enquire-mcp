@@ -482,8 +482,16 @@ export class FtsIndex {
     if (opts.tag) {
       // Exact-tag membership inside the comma-separated `tags` column —
       // wrap both sides with commas so "core" doesn't match "core-team".
-      where.push("(',' || chunks.tags || ',') LIKE ?");
-      params.push(`%,${opts.tag},%`);
+      //
+      // v3.7.16 P2-15 — escape `%` and `_` (SQL LIKE wildcards) so a
+      // user-supplied tag with those characters matches LITERALLY. Pre-
+      // 3.7.16 a tag like `core_team` would match `coreXteam` (and any
+      // other 1-char-substituted variant) because `_` is the LIKE 1-char
+      // wildcard; `%` was even worse — `tag: "%"` matched every chunk.
+      // ESCAPE clause uses backslash, matching SQLite's standard form.
+      const literalTag = opts.tag.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      where.push("(',' || chunks.tags || ',') LIKE ? ESCAPE '\\'");
+      params.push(`%,${literalTag},%`);
     }
     let join = "";
     if (opts.sinceMtimeMs !== undefined) {
@@ -575,8 +583,18 @@ export function safeFts5Query(q: string): string {
   const parts = q.trim().split(/\s+/);
   const out: string[] = [];
   for (const p of parts) {
-    if (RESERVED.has(p.toUpperCase())) continue;
     if (!p) continue;
+    // v3.7.16 P3-28 — quote reserved keywords as literals instead of
+    // stripping. Pre-3.7.16 a user searching "operating systems AND
+    // databases" got their AND dropped silently AND the unrelated tokens
+    // OR'd implicitly — but they ALSO couldn't search literally for the
+    // word "AND" (the SQL boolean conjunction). Now we wrap reserved
+    // words in double-quotes so FTS5 treats them as the literal token,
+    // matching how we handle any token with non-alphanumerics below.
+    if (RESERVED.has(p.toUpperCase())) {
+      out.push(`"${p}"`);
+      continue;
+    }
     if (/[^A-Za-z0-9_]/.test(p)) {
       const escaped = p.replace(/"/g, '""');
       out.push(`"${escaped}"`);

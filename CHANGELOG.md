@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.16] — 2026-05-18
+
+> **TL;DR:** Round-18 external audit response — 5th independent external audit since v3.6.0, run on the v3.7.5 codebase (commit `b9daf39`). The cascade v3.7.6 → v3.7.15 had already closed many findings; this patch addresses the still-open critical + high-impact items. **10 fixes** landed: 5 P1 High (OCR network disclosure + 200-page cap, persistent cache + privacy filters, PDF watcher lifecycle, macOS case-insensitive write bypass), 3 P2 Medium (title-based write ambiguity = silent data corruption, validateNoteProposal privacy check, FTS5 tag LIKE wildcard escape), 2 P3 Low (PDF install hint version, FTS5 reserved-word quoting, issue template ChatGPT). Plus 1 graph-boost path bug (P2-16, C# Notes.md). **+0 tests** (1 test contract change for P3-28). 4 architectural findings deferred to v3.8.0 (serve-http parity, FTS5/embedding chunking parity, search underfill, OCR timeout/concurrency).
+
+**Patch — round-18 external audit batch.**
+
+### Already FIXED by the v3.7.6-15 cascade
+
+The audit was on v3.7.5 — these findings were closed before this patch:
+
+- **#9 FTS5 reindex non-atomic** → v3.7.10 audit #10 (transaction wrap)
+- **#17 TOOL_MANIFEST not in exports** → v3.7.12 H4
+- **#19 7 required CI gates** → v3.7.13 M5 (bumped to 8)
+- **#22 stale test counts (786/670)** → v3.7.11-15 cascade (now gated at 816)
+- **#24 reranker "5 models" misleading** → v3.7.12 L4 + v3.7.15 R17-3
+- **#19 partial** "CodeQL/Analyze workflows don't exist" — actually false positive: those run via GitHub Default Setup (no committed .yml needed); they DO execute and show on every PR
+
+### P1 High fixes (5)
+
+- **P1-1 — OCR Tesseract network policy disclosure** (`src/ocr.ts:147+`, `SECURITY.md`). Tesseract.js fetches `<lang>.traineddata` (~10 MB per language) from a CDN on first use — this is the only outbound network call possible in serve mode, contradicting the broader "zero outbound network calls" framing. Pre-3.7.16 the project's privacy-promise didn't disclose this. Fix: stderr disclosure warning fires once per OCR worker creation (`enquire OCR: Tesseract.js may fetch language pack '<lang>' from a CDN on first use...`), plus new SECURITY.md section "OCR (`obsidian_ocr_pdf`): network posture" documenting the trade-off and the v3.8.0 roadmap (offline `install-ocr-lang` subcommand + strict cache check).
+- **P1-2 — OCR `DEFAULT_OCR_MAX_PAGES` safety cap** (`src/ocr.ts`). Pre-3.7.16 a single bearer-authenticated HTTP request could trigger unbounded OCR on a 10000-page PDF — minutes-to-hours of CPU pegged. Now defaults to 200 pages per call (`maxPages` opt to override), checked BEFORE the Tesseract worker spins up so no resources allocate on adversarial inputs.
+- **P1-4 — Persistent cache + privacy filter drift** (`src/vault.ts` `loadDiskCache`). Pre-3.7.16, if a user filled the cache with all notes (no filter), then added `--exclude-glob "Personal/**"` on the next start, the excluded note bodies were loaded back from disk into the in-memory cache (and rewritten on the next save). At-rest privacy boundary broken across filter changes. Now `loadDiskCache` runs every candidate through `isExcluded()` against the LIVE filter state; misses are dropped and `cacheDirty` is set so the next save persists the pruned snapshot. Stderr disclosure when entries are dropped by privacy.
+- **P1-5 — `--watch --include-pdfs` PDF watcher lifecycle** (`src/watcher.ts`, `src/server.ts`). Pre-3.7.16 the watcher hard-coded `.md`-only event handling, so PDFs added/changed/deleted/moved during a serve session left stale rows in FTS5 until restart. New `WatcherOptions.includePdfs`; when on AND `--include-pdfs` is on, the watcher dispatches `.pdf` events to `FtsIndex.reindexPdfFile()` / `dropFile()` via lazy `import("./pdf.js")`.
+- **P1-6 — macOS / Windows case-insensitive write privacy bypass** (`src/vault.ts` `writeNote` + `renameFile`). Default macOS HFS+/APFS and Windows NTFS are case-insensitive. Pre-3.7.16 the write-path privacy check ran on the LEXICAL relative path (`personal/secret.md` ≠ `Personal/secret.md` to a case-sensitive `--exclude-glob`), but the actual write landed in the same physical directory. Fix: new private `canonicalRelForPrivacyCheck()` helper walks up from the target until it finds an existing parent, resolves its realpath (canonical case from disk), then re-joins the not-yet-existing tail. Linux ext4 unaffected (realpath is a no-op for case-sensitive FS).
+
+### P2 Medium fixes (4)
+
+- **P2-13 — Title-based write silent data corruption** (`src/vault.ts` + `src/tools/write.ts`). Pre-3.7.16 `findByTitle(title)` returned the first walk-order match; write tools (`appendToNote`, `frontmatterSet`) silently mutated whichever of `Work/Daily.md` / `Personal/Daily.md` came first. New `Vault.findAllByTitle()` + write-path now throws on `length > 1` with candidate paths listed: `Ambiguous title "Daily" — 2 notes share that basename: Personal/Daily.md, Work/Daily.md. Pass an explicit \`path\` argument instead.` Read tools keep the permissive behavior (no mutation risk).
+- **P2-14 — `validateNoteProposal` privacy check** (`src/tools/meta.ts`). Pre-3.7.16 the pre-write validator returned green-light for proposals into excluded destinations; the actual write later failed at runtime. New `path-excluded` error class returned by the validator when `vault.exclusionReason(normalizedPath)` is non-null.
+- **P2-15 — FTS5 tag LIKE wildcard injection** (`src/fts5.ts:482`). Pre-3.7.16 `where.push("(',' || chunks.tags || ',') LIKE ?")` accepted user-supplied tags containing `%` (matches anything) or `_` (matches one char). `tag: "%"` returned every chunk; `tag: "core_team"` matched `coreXteam`. Fix: escape `%`, `_`, and `\` with `\\`, add `ESCAPE '\\'` clause.
+- **P2-16 — Graph boost path mangling on `#`** (`src/tools/search.ts:1456,1493`). Pre-3.7.16 `f.id.split("#")[0]` mangled `C# Notes.md` → `C` (drops the suffix as if it were a chunk index). Now uses regex `id.replace(/#\d+$/, "")` that only strips numeric chunk suffixes at end of id.
+
+### P3 Low fixes (3)
+
+- **P3-23 — PDF install hint version** (`src/pdf.ts`, `src/ocr.ts`, `src/doctor.ts`). The "missing optional dep" error message told users to install `pdfjs-dist@^4.10.38` but the actual `optionalDependencies` pin is `^5.7.284`. Now consistent across all 3 surfaces.
+- **P3-28 — `safeFts5Query` reserved words** (`src/fts5.ts:581+`). Pre-3.7.16 `safeFts5Query("operating systems AND databases")` STRIPPED `AND`, dropping a real query term silently. AND there was no way to search for the literal word "AND". Now reserved words (`AND`/`OR`/`NOT`/`NEAR`) get double-quoted as literals — FTS5 treats them as the literal token, not the boolean operator. The existing test was updated to reflect the new contract.
+- **P3-30 — Issue template ChatGPT option** (`.github/ISSUE_TEMPLATE/bug_report.yml`). Added "Claude Desktop" + "ChatGPT (custom GPT / Actions)" to the client dropdown (both were missing despite heavy marketing).
+
+### Audit findings DEFERRED to v3.8.0
+
+- **P1-3 serve-http flag parity** (`--enable-reranker` / `--use-hnsw` / `--include-pdfs` etc. missing from `serve-http`). Multi-day refactor; on the v3.8.0 backlog since round-15 M4.
+- **#2 OCR concurrency / timeout** (per-call timeout, concurrent-request cap, HTTP-transport operation budget). Beyond the 200-page cap from P1-2.
+- **P2-7 search underfill** after privacy filter post-processing (iterative over-fetch design change).
+- **P2-8 FTS5/embedding chunking source mismatch** (standardize on parsed body — design change).
+- **P2-10 stateful maxSessions race** (concurrent initialize past cap — needs slot-reservation design).
+- **P2-11 HTTP server close cleanup** (centralized cleanup on `httpServer.close()`).
+- **P2-12 doctor privacy filters** (add `--exclude-glob` / `--read-paths` to doctor).
+- **P2-18 npm package docs broken links** (audit suggested either include `examples/bench/scripts` or rewrite docs to GitHub absolute URLs — partially handled by v3.7.13 L7 + v3.7.14 file-list explicit listing; needs follow-up sweep).
+- **P2-20 canonical CLI docs incomplete** (reranker / HNSW / PDF / late-chunking / quantization flags missing from `docs/api.md` table).
+- **P3-21 `obsidian_full_text_search` gating wording drift** in cli-help.
+- **P3-25 Heading extraction tilde fences** (`~~~` blocks not detected the same way as backticks).
+- **P3-26 Diagnostic substring search body vs raw** (decide contract — `content` includes frontmatter, docs say "body").
+- **P3-27 HNSW metadata shallow validation** (validate `meta.dim`, `meta.size`, rows shape).
+- **P3-29 setup-snippet mkdir** (`docs/http-transport.md` + `examples/chatgpt-actions.md`).
+
+### Stats
+
+- **816 tests** (unchanged). +1 test CONTRACT change for P3-28 (quotes vs strips reserved words).
+- **+0 docs-consistency invariants** (P2-13 ambiguity-fail is enforced by runtime error, P1-6 case-insensitive bypass is enforced by realpath canonicalization; neither needs a docs-consistency gate).
+- All 8 required CI gates pass locally.
+
+### Method
+
+5th independent external audit since v3.6.0. The "audit on v3.7.5 codebase but processed at v3.7.15 state" pattern is now established as the verification workflow — each external audit finds new failure modes that the previous releases' methodologies didn't cover. Round-18 added the OCR network-policy honesty (new privacy-promise class), persistent-cache filter lifecycle (new at-rest privacy class), and case-insensitive filesystem bypass (new portability class).
+
 ## [3.7.15] — 2026-05-18
 
 > **TL;DR:** Round-17 post-merge audit on v3.7.14 — **meta-recursion finding**: the v3.7.14 patch that closed overclaim #6 (F1) introduced overclaim **#7 inside its own release**. v3.7.14 F2 fixed `vault.renameFile` internals (stat→link()+unlink()) but left the function's TSDoc header claiming *"Atomic via fs.rename"* — exactly the same class as F1 it had just fixed. Plus 2 unfixed instances of v3.7.12 L4's reranker-honesty class missed in COMPARISON.md. 3 fixes + 1 new invariant. **+1 test** (816 total). Documents the methodological lesson: **a single class-sweep round isn't enough — same-release recursion is a real failure mode and requires post-merge re-sweep.**

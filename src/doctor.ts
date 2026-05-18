@@ -233,7 +233,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     label: "pdfjs-dist (PDF read + indexing)",
     status: hasPdfjs ? "ok" : "warn",
     detail: hasPdfjs ? "loaded" : "PDFs in vault won't be indexable",
-    hint: hasPdfjs ? undefined : "npm install pdfjs-dist@^4.10.38 (skip if you have no PDFs)"
+    hint: hasPdfjs ? undefined : "npm install pdfjs-dist@^5.7.284 (skip if you have no PDFs)"
   });
 
   // 5. tesseract.js + @napi-rs/canvas — gates obsidian_ocr_pdf.

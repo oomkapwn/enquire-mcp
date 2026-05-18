@@ -220,9 +220,14 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
 
   // Optional watcher — only when --watch is passed. Starts AFTER the initial
   // FTS5 sync so we don't double-index files during boot.
+  //
+  // v3.7.16 P1-5 — when --include-pdfs is also set, the watcher tracks
+  // PDF lifecycle events too, keeping the FTS5 PDF chunks in sync with
+  // adds/changes/deletes. Pre-3.7.16 only .md events were handled, so
+  // PDF moves/deletes left stale rows until restart.
   let watcher: VaultWatcher | null = null;
   if (opts.watch) {
-    watcher = new VaultWatcher({ vault, ftsIndex });
+    watcher = new VaultWatcher({ vault, ftsIndex, includePdfs: opts.includePdfs === true });
     await watcher.start();
   }
 

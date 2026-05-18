@@ -21,7 +21,9 @@ body:
       options:
         - Claude Code (CLI)
         - Claude Code (web)
+        - Claude Desktop
         - Cursor
+        - ChatGPT (custom GPT / Actions)
         - OpenClaw
         - Codex
         - Devin

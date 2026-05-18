@@ -115,6 +115,23 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     });
   }
 
+  // v3.7.16 P2-14 — privacy-filter check. Pre-3.7.16 the validator only
+  // checked structural concerns (traversal, YAML, wikilinks) and gave a
+  // green light for proposals into excluded destinations — the actual
+  // write would then fail at runtime with "destination is excluded by ...".
+  // The pre-write validator is supposed to be the dry-run check before
+  // calling createNote/appendToNote, so it should return the privacy
+  // verdict too. Adds `path-excluded` error class.
+  if (absPath !== null) {
+    const exclusion = vault.exclusionReason(normalizedPath);
+    if (exclusion !== null) {
+      errors.push({
+        kind: "path-excluded",
+        message: `Destination is excluded by ${exclusion}: ${normalizedPath}`
+      });
+    }
+  }
+
   // 2. YAML parse via gray-matter (the same parser used at write time).
   const yamlReport = { parsed: false, error: null as string | null, keys: [] as string[] };
   let bodyAfterFm = args.content;

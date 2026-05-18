@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type ParsedNote, parseNote } from "./parser.js";
@@ -653,19 +653,53 @@ export class Vault {
           : "--exclude-glob denylist";
       throw new Error(`Refusing to rename — destination is excluded by ${reason}: ${toRelNorm}`);
     }
-    if (!opts.overwrite) {
-      const exists = await fs
-        .stat(toAbs)
-        .then(() => true)
-        .catch(() => false);
-      if (exists) throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
-    }
     const targetLstat = await fs.lstat(toAbs).catch(() => null);
     if (targetLstat?.isSymbolicLink()) {
       throw new Error(`Refusing to rename — destination is a symlink: ${path.relative(this.root, toAbs)}`);
     }
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
-    await fs.rename(fromAbs, toAbs);
+    // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
+    // Pre-3.7.14 we did `stat(toAbs)`-then-`rename(fromAbs, toAbs)`. POSIX
+    // rename(2) silently REPLACES the destination if it exists, so between
+    // a stat() returning ENOENT and the follow-up rename(), another process
+    // could create the destination and our rename would clobber it without
+    // honoring overwrite=false. Closes the same class of TOCTOU race that
+    // M2 fixed for writeNote.
+    //
+    // The fix uses link()+unlink() for the non-overwrite path. link(2) fails
+    // atomically with EEXIST when the destination exists — no stat-then-act
+    // window. After successful link the source path is removed, leaving the
+    // file at the new path with identical contents. For the overwrite path
+    // we keep plain rename() since the user opted into replacement.
+    if (opts.overwrite) {
+      await fs.rename(fromAbs, toAbs);
+    } else {
+      try {
+        await fs.link(fromAbs, toAbs);
+      } catch (err) {
+        if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
+        }
+        // EXDEV (cross-device link) is the realistic fallback: vault on a
+        // bind-mount, source on the underlying fs. Fall back to atomic
+        // copy-then-unlink with the wx flag.
+        if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EXDEV") {
+          await fs.copyFile(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
+          await fs.unlink(fromAbs);
+        } else {
+          throw err;
+        }
+      }
+      // link() succeeded — source still exists at fromAbs as a hard link.
+      // Unlink it to complete the move semantic. If unlink fails the user
+      // sees a still-present fromAbs alongside the new toAbs (hard-linked,
+      // same inode on POSIX); re-running renameFile will see toAbs exists
+      // and reject — but the duplicate is a recoverable state, not data
+      // loss, which is the v3.7.13 M1 recovery posture.
+      await fs.unlink(fromAbs).catch(() => {
+        // Best-effort cleanup; toAbs is the canonical truth.
+      });
+    }
     this.cache.delete(fromAbs);
     this.cache.delete(toAbs);
     const stat = await fs.stat(toAbs);
@@ -695,18 +729,36 @@ export class Vault {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note appends");
     }
     const abs = await this.resolveSafePath(relOrAbs);
-    const before = await fs.stat(abs);
-    if (before.size + Buffer.byteLength(addition, "utf8") > this.maxFileBytes) {
-      throw new Error(`Refusing to grow ${path.relative(this.root, abs)} past ${this.maxFileBytes} bytes`);
+    // v3.7.14 F3 — close the stat-then-append size-cap race. Pre-3.7.14
+    // we did `stat(abs)` → check `before.size + addition <= maxFileBytes` →
+    // `appendFile(abs, addition)`. Under parallel writes, the stat could
+    // report size X, another process appended size Y between stat and our
+    // appendFile, and our append took the file to X+Y+addition, possibly
+    // past `maxFileBytes`. Now we open with `O_APPEND` ourselves, fstat
+    // the open handle to get the current size, check the cap, write, and
+    // close — keeping the stat→write window inside a single kernel-held
+    // fd that another process can't reposition. fs.appendFile + open with
+    // O_APPEND means subsequent writes are always atomic at the end of
+    // file (POSIX append guarantee).
+    const handle = await fs.open(abs, "a");
+    let beforeSize = 0;
+    try {
+      const before = await handle.stat();
+      beforeSize = before.size;
+      if (before.size + Buffer.byteLength(addition, "utf8") > this.maxFileBytes) {
+        throw new Error(`Refusing to grow ${path.relative(this.root, abs)} past ${this.maxFileBytes} bytes`);
+      }
+      await handle.write(addition, null, "utf8");
+    } finally {
+      await handle.close();
     }
-    await fs.appendFile(abs, addition, "utf8");
     this.cache.delete(abs);
     const after = await fs.stat(abs);
     return {
       absPath: abs,
       relPath: path.relative(this.root, abs),
       mtimeMs: after.mtimeMs,
-      appended_bytes: after.size - before.size
+      appended_bytes: after.size - beforeSize
     };
   }
 

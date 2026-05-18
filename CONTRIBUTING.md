@@ -84,5 +84,7 @@ The push of a `v*` tag triggers `.github/workflows/release.yml`, which runs
 lint + build + test then `npm publish --provenance`. Manual `npm publish`
 is no longer needed; `prepublishOnly` is still a local backstop.
 
-After release: create a GitHub Release for the tag (`gh release create`)
-with notes extracted from the matching CHANGELOG section.
+Since v3.7.14, the GitHub Release is auto-created by the same workflow —
+notes are extracted from the matching `## [X.Y.Z]` section in CHANGELOG.md,
+prereleases (rc / alpha / beta) get the `--prerelease` flag, stable
+versions land as Latest. No manual `gh release create` needed.

@@ -52,6 +52,33 @@ describe("createNote", () => {
     await expect(createNote(v, { path: "Twice.md", content: "second" })).rejects.toThrow(/already exists/);
   });
 
+  // v3.7.14 F2 — renameFile non-overwrite is atomic via link()+unlink().
+  // Pre-3.7.14 vault.renameFile had the same stat-then-rename race as
+  // v3.7.13 M2 fixed for writeNote. POSIX rename(2) silently replaces the
+  // destination; between a stat() returning ENOENT and the rename(), a
+  // parallel writer could create the destination and our rename would
+  // clobber it. Now link()+unlink() — link() fails atomically on EEXIST.
+  it("renameFile overwrite=false is atomic (parallel renames can't both succeed)", async () => {
+    const raceRoot = path.join(root, "F2-race-root");
+    await fs.mkdir(raceRoot, { recursive: true });
+    const v = new Vault(raceRoot, { enableWrite: true });
+    await v.ensureExists();
+    // Two source files vying to land at the same destination.
+    await fs.writeFile(path.join(raceRoot, "src-A.md"), "from A");
+    await fs.writeFile(path.join(raceRoot, "src-B.md"), "from B");
+    const results = await Promise.allSettled([
+      v.renameFile("src-A.md", "dest.md"),
+      v.renameFile("src-B.md", "dest.md")
+    ]);
+    const succeeded = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(succeeded.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    expect(((rejected[0] as PromiseRejectedResult).reason as Error).message).toMatch(/already exists/);
+    // Cleanup
+    await fs.rm(raceRoot, { recursive: true, force: true });
+  });
+
   // v3.7.13 M2 — overwrite=false uses the `wx` flag for atomic exclusive
   // create. Pre-3.7.13 the path was stat-then-write: stat returned ENOENT
   // → write proceeded; if another process created the file between stat

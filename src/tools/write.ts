@@ -142,10 +142,16 @@ export interface RenameNoteResult {
  * moves the file. `dry_run` returns the same plan without touching disk.
  *
  * Self-references inside the renamed file are also rewritten in the same
- * pass — the file ships with no broken self-links. Write order is
- * recoverable: backlink-bearing files first, source last, fs.rename last —
- * a mid-operation crash leaves backlinks pointing at the still-present old
- * name. WRITE TOOL — only registered when `--enable-write` is passed.
+ * pass — the file ships with no broken self-links. v3.7.13 M1 — write
+ * order is recoverable: (1) rewrite source content at OLD path → (2)
+ * `fs.rename` OLD → NEW (atomic, runs FIRST so a failure here doesn't
+ * leave updated backlinks pointing at a phantom target) → (3) rewrite
+ * backlink-bearing files (destination already exists on disk). Every
+ * failure mode is recoverable by re-running the same call (each step is
+ * idempotent on re-input). Pre-v3.7.13 the order was (backlinks → source
+ * → rename), which left backlinks rewritten to the NEW name pointing at
+ * a phantom destination when the rename step failed.
+ * WRITE TOOL — only registered when `--enable-write` is passed.
  *
  * @param vault - The vault. Must allow writes.
  * @param args - `from` and `to` are vault-relative paths (with or without

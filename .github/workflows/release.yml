@@ -121,3 +121,48 @@ jobs:
         run: npm publish --provenance --access public --tag "${{ steps.dist_tag.outputs.tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # v3.7.14 F5 — automate the GitHub Release (M13 from round-15 audit).
+      # Pre-3.7.14 the README claimed "npm + GitHub release per tag" but
+      # gh release create was a manual post-release step (CONTRIBUTING.md:87).
+      # Stable releases (latest dist-tag) get marked as Latest; prereleases
+      # (rc / alpha / beta etc.) get marked as prereleases. Notes are extracted
+      # from CHANGELOG.md for the just-published version — the per-section
+      # `## [X.Y.Z] — YYYY-MM-DD` heading is the canonical entry boundary.
+      # Skips with a warning if the release already exists (manual creation
+      # before the tag-push gets here).
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          # Skip if a release already exists for this tag (e.g. created manually).
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release $TAG already exists — skipping auto-create"
+            exit 0
+          fi
+          # Slice the CHANGELOG entry for this version: from "## [X.Y.Z]" up
+          # to the next "## [" heading. awk is the cleanest cross-platform
+          # tool for bounded section extraction.
+          NOTES=$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md#${VERSION//./}--$(date -u +%Y-%m-%d)) for full release notes."
+          fi
+          # Determine prerelease vs latest flag from the resolved dist-tag.
+          if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --latest \
+              --target main
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --prerelease \
+              --target main
+          fi

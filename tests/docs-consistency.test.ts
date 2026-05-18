@@ -459,6 +459,56 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.7.14 F4 — close the "Hardcoded counts in docs without an invariant"
+  // anti-pattern (Rule since v3.5.9). v3.7.13 M5 bumped the README+CLAUDE.md
+  // "N required CI gates" claim from 7 → 8 manually, but no test gated it
+  // against the actual release-workflow REQUIRED regex. If a 9th gate gets
+  // added to .github/workflows/release.yml later, the public claims will
+  // drift again — same recurring class as v3.5.9.
+  //
+  // This invariant counts pipe-separated entries in the release.yml REQUIRED
+  // regex (the canonical authoritative source: it's what actually blocks an
+  // npm publish) and asserts every "**N required** ... CI gates" claim in
+  // README + CLAUDE.md matches.
+  it("'N required CI gates' claims match release.yml REQUIRED regex count", async () => {
+    const releaseYml = await read(".github/workflows/release.yml");
+    // Match the REQUIRED="lint|test \(22\)|...|docs" assignment. Count
+    // pipe-delimited entries.
+    const reqMatch = /REQUIRED="([^"]+)"/.exec(releaseYml);
+    expect(reqMatch, 'release.yml must declare a REQUIRED="...|..." regex').not.toBeNull();
+    if (!reqMatch) return;
+    const required = reqMatch[1] ?? "";
+    const actualCount = required.split("|").length;
+
+    // Cross-check the REQ_COUNT variable in the same workflow agrees with the
+    // regex (these are set independently and have drifted before — this is the
+    // structural double-source-of-truth guard).
+    const reqCountMatch = /REQ_COUNT=(\d+)/.exec(releaseYml);
+    expect(reqCountMatch, "release.yml must declare REQ_COUNT=N").not.toBeNull();
+    if (reqCountMatch) {
+      const declaredCount = Number.parseInt(reqCountMatch[1] ?? "0", 10);
+      expect(
+        declaredCount,
+        `release.yml REQ_COUNT=${declaredCount} but REQUIRED regex has ${actualCount} entries`
+      ).toBe(actualCount);
+    }
+
+    // Now assert every "**N required**" claim in README + CLAUDE.md matches
+    // the actual count. Pattern: bold-wrapped N + "required" + optional "branch-
+    // protection" or no qualifier + "gates" / "CI gates".
+    for (const file of ["README.md", "CLAUDE.md"]) {
+      const body = await read(file);
+      const claims = [...body.matchAll(/\*\*?(\d+)\*?\*?\s+required\b/g)];
+      for (const m of claims) {
+        const claimed = Number.parseInt(m[1] ?? "0", 10);
+        expect(
+          claimed,
+          `${file}: "${m[0]}" claims ${claimed} required gates but release.yml REQUIRED has ${actualCount}`
+        ).toBe(actualCount);
+      }
+    }
+  });
+
   it("package.json description reranker-model count matches RERANKER_MODELS catalog", async () => {
     const pkgRaw = await read("package.json");
     const pkg = JSON.parse(pkgRaw) as { description?: string };

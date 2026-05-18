@@ -404,25 +404,99 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.7.12 H4 — every TypeScript symbol STABILITY.md promises as stable
+  // must have a matching `./<name>` entry in package.json#exports, otherwise
+  // ESM consumers can only reach it via deep imports (which TypeScript
+  // resolution flat-out refuses past Node16/NodeNext). Round-14 external
+  // audit caught `TOOL_MANIFEST` advertised as stable but missing from
+  // exports — fixed in v3.7.12 H4. This invariant locks the parity so a
+  // future module added to STABILITY.md without a matching exports entry
+  // fails CI rather than silently shipping unreachable.
+  it("every STABILITY.md-promised module has a package.json#exports entry (H4)", async () => {
+    const stability = await read("STABILITY.md");
+    const pkgRaw = await read("package.json");
+    const pkg = JSON.parse(pkgRaw) as { exports?: Record<string, unknown> };
+    const exports = pkg.exports ?? {};
+
+    // Pull every "src/<name>.ts" reference out of STABILITY.md and map to
+    // the canonical "./<name>" export key. The pattern is the parenthetical
+    // backticked source path next to each promised symbol bullet.
+    const srcRe = /\(`src\/([a-z][a-z0-9-]*)\.ts`\)/gi;
+    const promised = new Set<string>();
+    for (const m of stability.matchAll(srcRe)) {
+      const mod = m[1];
+      if (!mod) continue;
+      // `index` is the root entry `.` — covered by `"./index"` would be a
+      // duplicate of `"."` in exports, so skip it here.
+      if (mod === "index") continue;
+      promised.add(mod);
+    }
+    expect(promised.size, "STABILITY.md must promise at least one optional module").toBeGreaterThan(0);
+
+    for (const mod of promised) {
+      const key = `./${mod}`;
+      expect(
+        exports[key],
+        `STABILITY.md promises src/${mod}.ts as stable but package.json#exports is missing "${key}"`
+      ).toBeDefined();
+    }
+  });
+
   it("package.json description reranker-model count matches RERANKER_MODELS catalog", async () => {
     const pkgRaw = await read("package.json");
     const pkg = JSON.parse(pkgRaw) as { description?: string };
-    const m = /(\d+)\s+cross-encoder\s+reranker\s+models/.exec(pkg.description ?? "");
-    if (!m) return; // Claim is optional; if absent, nothing to check.
-    const claimed = Number.parseInt(m[1] ?? "0", 10);
-    // Import via the dist build so we read the same catalog production code uses.
+    const desc = pkg.description ?? "";
+
+    // Import the catalog via the dist build so we read the same shape production code uses.
     const distEntry = path.join(repoRoot, "dist", "embeddings.js");
     try {
       await fs.access(distEntry);
     } catch {
       return; // dist not built — skip rather than fail (dev watch loop case).
     }
-    const mod = (await import(distEntry)) as { RERANKER_MODELS?: Record<string, unknown> };
-    const actual = Object.keys(mod.RERANKER_MODELS ?? {}).length;
+    const mod = (await import(distEntry)) as {
+      RERANKER_MODELS?: Record<string, unknown>;
+      DEFAULT_RERANKER_ALIAS?: string;
+    };
+    const total = Object.keys(mod.RERANKER_MODELS ?? {}).length;
+
+    // Legacy form: "N cross-encoder reranker models" — kept for back-compat
+    // in case the description swings back to a flat count claim later.
+    const flatMatch = /(\d+)\s+cross-encoder\s+reranker\s+models/.exec(desc);
+    if (flatMatch) {
+      const claimed = Number.parseInt(flatMatch[1] ?? "0", 10);
+      expect(
+        claimed,
+        `package.json says "${claimed} cross-encoder reranker models" but RERANKER_MODELS has ${total}`
+      ).toBe(total);
+      return;
+    }
+
+    // v3.7.12 L4 — the honest form: "BGE cross-encoder reranker verified
+    // end-to-end (+N aliases in catalog, transformers.js bump pending)".
+    // Enforce both pieces: the verified alias must be `rerank-bge` (the
+    // DEFAULT_RERANKER_ALIAS) and N must equal `total - 1` (catalog minus
+    // the one verified entry). If neither phrasing is present, the claim is
+    // absent and there's nothing to check.
+    const honestMatch = /\+(\d+)\s+aliases\s+in\s+catalog/.exec(desc);
+    if (!honestMatch) return;
+    const claimedRemaining = Number.parseInt(honestMatch[1] ?? "0", 10);
     expect(
-      claimed,
-      `package.json says "${claimed} cross-encoder reranker models" but RERANKER_MODELS has ${actual}`
-    ).toBe(actual);
+      claimedRemaining,
+      `package.json says "+${claimedRemaining} aliases in catalog" but RERANKER_MODELS has ${total} (expected +${total - 1} after the BGE verified entry)`
+    ).toBe(total - 1);
+
+    // The "verified end-to-end" claim must reference the actual default
+    // alias (otherwise the description is honest about a different model
+    // than what users get without `--reranker-model`).
+    expect(
+      desc.includes("BGE cross-encoder reranker verified end-to-end"),
+      "package.json description must include 'BGE cross-encoder reranker verified end-to-end' when using the +N-aliases form"
+    ).toBe(true);
+    expect(
+      mod.DEFAULT_RERANKER_ALIAS,
+      "DEFAULT_RERANKER_ALIAS must be 'rerank-bge' to match the package.json 'BGE … verified end-to-end' claim"
+    ).toBe("rerank-bge");
   });
 
   it("docs/api.md first-paragraph tool count matches actual registered count", async () => {

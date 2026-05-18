@@ -58,7 +58,11 @@ export async function listCanvases(vault: Vault, args: { folder?: string; limit?
     if (out.length >= limit) break;
     let nodeCount = 0;
     let edgeCount = 0;
-    let size = e.mtimeMs; // placeholder; replaced below
+    // v3.7.12 M3 — initialize to 0 (not mtime). On the error path below
+    // (readBinaryFile failure / JSON parse failure) `size` is returned as
+    // `size_bytes`, so the previous `e.mtimeMs` placeholder leaked mtime
+    // values into a bytes field. 0 is the honest "unknown" value here.
+    let size = 0;
     try {
       const buf = await vault.readBinaryFile(e.absPath);
       size = buf.byteLength;

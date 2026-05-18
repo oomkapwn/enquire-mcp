@@ -1,6 +1,6 @@
 # HTTP transport (remote MCP) — `enquire-mcp serve-http`
 
-> Available since v2.6.0. Stateless [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server.
+> Available since v2.6.0. [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server. **Stateless** by default (one transport per request); switch to **stateful** with `--stateful` for clients that need persistent sessions and SSE notifications (ChatGPT custom GPTs, long-running agentic flows). See [Operational notes](#operational-notes) for the stateful-mode flag matrix.
 
 The default `serve` subcommand runs over **stdio** — fast, secure, but local-only. `serve-http` runs the same server (same tools, same vault, same indexes) over **HTTP**, so an agent can reach it from a browser tab, a phone, or another machine.
 
@@ -10,10 +10,13 @@ The default `serve` subcommand runs over **stdio** — fast, secure, but local-o
 # 1. Generate a bearer token (one-time, store in a password manager)
 enquire-mcp gen-token > ~/.enquire/token   # base64url, 43 chars
 
-# 2. Start the HTTP server (binds 127.0.0.1:3000 by default)
+# 2. Start the HTTP server (binds 127.0.0.1:3000 by default).
+#    Use --bearer-token-env so the token never lands in `ps`, shell history,
+#    or systemd's journal — pass the env-var NAME, not the value.
+ENQUIRE_BEARER_TOKEN="$(cat ~/.enquire/token)" \
 enquire-mcp serve-http \
   --vault ~/Obsidian/MyVault \
-  --bearer-token "$(cat ~/.enquire/token)" \
+  --bearer-token-env ENQUIRE_BEARER_TOKEN \
   --persistent-index
 
 # 3. Verify it's up
@@ -24,6 +27,11 @@ curl http://127.0.0.1:3000/health
 #    URL:           http://127.0.0.1:3000/mcp   (or your tunnel URL)
 #    Auth header:   Authorization: Bearer <your-token>
 ```
+
+> `--bearer-token <token>` works too and is fine for quick local one-offs,
+> but the value shows up in `ps auxww` while the server is running and gets
+> persisted in shell history. Prefer `--bearer-token-env` for systemd units,
+> Docker containers, and anything multi-user.
 
 ## When to use HTTP vs stdio
 
@@ -71,7 +79,7 @@ We protect against:
 - **Token logging.** Logs use the SHA-256 prefix as the rate-limit key — the raw token never appears in stderr or rate-limit state.
 - **Rate-limit abuse.** Default 120 req/min per token; tunable via `--rate-limit`.
 - **CORS-based origin spoofing.** No `Access-Control-Allow-Origin` header is sent unless the origin matches `--cors-origin`. Default deny.
-- **Body bombs.** 4 MB request-body cap per request.
+- **Body bombs.** Per-request body cap is derived from `--max-file-bytes` (default 5 MB) as `max(4 MB, max-file-bytes × 1.5)` — gives the JSON-RPC envelope and string-escaping enough headroom that a `create_note` payload at the file-size limit doesn't bounce at the HTTP layer with a misleading 413. v3.7.12 made this derivation explicit; pre-3.7.12 the cap was a hardcoded 4 MB which was BELOW the 5 MB file cap.
 
 We do **not** protect against:
 - TLS downgrade — that's the tunnel's job. Always front with HTTPS.

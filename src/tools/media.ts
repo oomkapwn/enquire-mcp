@@ -530,18 +530,28 @@ export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfR
   // Lazy import — keeps the markdown-only path zero-cost when pdfjs-dist
   // isn't installed (--omit=optional users).
   const { extractPdfText } = await import("../pdf.js");
-  const result = await extractPdfText(buf);
 
-  // Optional page-range slice (1-indexed inclusive). Validated lightly —
-  // out-of-range bounds clamp rather than throw, matching how `slice()`
-  // behaves elsewhere in the toolkit.
-  let pages = result.pages;
+  // v3.7.13 H1 — push the page range INTO extractPdfText so doc.getPage()
+  // only fires for requested pages. Pre-3.7.13 we extracted the entire
+  // PDF then sliced; that was wasted work and a bearer-token DoS vector
+  // in serve-http. Note: `result.pageCount` still reports the document
+  // total (read from pdfjs's metadata, not from page count returned),
+  // so callers can paginate. Range validation: `to >= from > 0`; an
+  // invalid range silently falls back to "all pages" via the undefined
+  // branch (kept for backward compatibility — schema-level rejection of
+  // invalid ranges is L2 territory).
+  let pageRange: { from: number; to: number } | undefined;
   if (args.pages && args.pages.length === 2) {
     const [from, to] = args.pages;
     if (typeof from === "number" && typeof to === "number" && from > 0 && to >= from) {
-      pages = result.pages.slice(from - 1, to);
+      pageRange = { from, to };
     }
   }
+  const result = await extractPdfText(buf, pageRange ? { pageRange } : {});
+
+  // The pages array already reflects the requested window (or all pages
+  // if no range was passed).
+  const pages = result.pages;
 
   const out: ReadPdfResult = {
     path: rel,

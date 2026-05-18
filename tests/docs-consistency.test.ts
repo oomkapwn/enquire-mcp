@@ -404,6 +404,23 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.7.13 M12 — extend COMPARISON.md gate to test count. The audit round-15
+  // caught "Test count (public) | **786** |" while README+package said 787;
+  // the previous COMPARISON gate covered tools+prompts but missed test count.
+  // Now any "**N**" cell in the same table row as the literal "Test count"
+  // must equal the actual test declaration count.
+  it("docs/COMPARISON.md test count matches actual", async () => {
+    const comparisonMd = await read("docs/COMPARISON.md");
+    const actualTests = await countActualTests();
+    const m = /\|\s*Test count[^|]*\|\s*\*\*(\d+)\*\*/.exec(comparisonMd);
+    if (!m) return; // Claim is optional; if absent, nothing to check.
+    const claimed = Number.parseInt(m[1] ?? "0", 10);
+    expect(
+      claimed,
+      `COMPARISON.md "Test count (public) | **${claimed}**" but actual test count is ${actualTests}`
+    ).toBe(actualTests);
+  });
+
   // v3.7.12 H4 — every TypeScript symbol STABILITY.md promises as stable
   // must have a matching `./<name>` entry in package.json#exports, otherwise
   // ESM consumers can only reach it via deep imports (which TypeScript

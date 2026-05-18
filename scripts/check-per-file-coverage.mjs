@@ -76,19 +76,28 @@ let hasError = false;
 const passing = [];
 const failing = [];
 
+// v3.7.13 M8 — fail loudly on missing floor entries. Pre-3.7.13 the
+// script emitted a warning and `continue`d, so a file rename or a
+// vitest coverage-include regex change could silently drop the floor.
+// Now any FLOORS key without a coverage entry → exit 1 with a clear
+// "update FLOORS" message. Same policy for individual missing metrics.
 for (const [relPath, floors] of Object.entries(FLOORS)) {
   const absPath = resolve(repoRoot, relPath);
   const entry = summary[absPath];
   if (!entry) {
-    console.warn(
-      `[per-file-coverage] WARN — no coverage entry for ${relPath}; was the file deleted or renamed? Update FLOORS in scripts/check-per-file-coverage.mjs.`
+    console.error(
+      `[per-file-coverage] ERROR — no coverage entry for ${relPath}; was the file deleted or renamed? Update FLOORS in scripts/check-per-file-coverage.mjs and document the change in CHANGELOG.`
     );
+    hasError = true;
     continue;
   }
   for (const [metric, floor] of Object.entries(floors)) {
     const actual = entry[metric]?.pct;
     if (typeof actual !== "number") {
-      console.warn(`[per-file-coverage] WARN — ${relPath}: no ${metric}.pct in summary`);
+      console.error(
+        `[per-file-coverage] ERROR — ${relPath}: no ${metric}.pct in coverage summary. The metric was either removed from vitest config or the file was excluded from coverage. Update FLOORS or coverage config.`
+      );
+      hasError = true;
       continue;
     }
     const ok = actual >= floor;

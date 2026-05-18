@@ -359,12 +359,21 @@ export class Vault {
       return;
     }
     const cacheDir = path.dirname(this.cacheFile);
+    // v3.7.13 M9 — only chmod the cache dir to 0700 if we CREATED it.
+    // Pre-3.7.13 we always chmod'd, which clobbered perms on a custom
+    // `--cache-file` parent (e.g. ~/.local/share/, a shared Dropbox folder,
+    // an NFS mount with group-readable defaults). FtsIndex / EmbedDb
+    // already use this `parentExisted` gate (src/fts5.ts, src/embed-db.ts);
+    // applying the same pattern here closes the inconsistency.
+    const parentExisted = await fs
+      .stat(cacheDir)
+      .then(() => true)
+      .catch(() => false);
     await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
-    // mkdir's mode option only applies on creation. If the directory already
-    // existed (e.g. from a prior run with looser perms, or a custom --cache-file
-    // path under XDG_CACHE_HOME), chmod brings it down to 0700 — matching the
-    // privacy guarantee documented in README/SECURITY.md.
-    await fs.chmod(cacheDir, 0o700).catch(() => {});
+    if (!parentExisted) {
+      // Directory didn't exist before this call — we own it, lock perms.
+      await fs.chmod(cacheDir, 0o700).catch(() => {});
+    }
     const tmp = `${this.cacheFile}.tmp`;
     // mode 0o600 — full note bodies live here, treat as private to the user account.
     await fs.writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
@@ -561,23 +570,37 @@ export class Vault {
           : "--exclude-glob denylist";
       throw new Error(`Refusing to write — destination is excluded by ${reason}: ${targetRelNorm}`);
     }
-    if (!opts.overwrite) {
-      const exists = await fs
-        .stat(abs)
-        .then(() => true)
-        .catch(() => false);
-      if (exists) throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
-    }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await this.assertParentInsideVault(abs);
     // Refuse to write through a symlink. fs.writeFile follows the link and would
     // write to wherever it points — possibly outside the vault. assertParentInsideVault
     // only guards parent dirs; the leaf target itself is checked here.
+    //
+    // v3.7.13 M2 — symlink check is BEFORE the write. For `overwrite=false`
+    // we ALSO do an exclusive-create write (`flag: "wx"`) so the stat-then-
+    // write race is closed: between an `await fs.stat()` returning ENOENT
+    // and a follow-up `fs.writeFile`, another process could create the file
+    // and then `overwrite=false` would silently overwrite it. With `wx`,
+    // the kernel atomically refuses to open the file if it exists. The
+    // legacy stat-based check stays as a no-op (writeFile-with-`wx` throws
+    // EEXIST on existing destination, which we translate to the same
+    // user-facing "Note already exists" error for back-compat).
     const targetLstat = await fs.lstat(abs).catch(() => null);
     if (targetLstat?.isSymbolicLink()) {
       throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
     }
-    await fs.writeFile(abs, content, "utf8");
+    if (opts.overwrite) {
+      await fs.writeFile(abs, content, "utf8");
+    } else {
+      try {
+        await fs.writeFile(abs, content, { encoding: "utf8", flag: "wx" });
+      } catch (err) {
+        if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
+        }
+        throw err;
+      }
+    }
     this.cache.delete(abs);
     const stat = await fs.stat(abs);
     return {

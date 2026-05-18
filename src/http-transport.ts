@@ -184,6 +184,23 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unk
   return JSON.parse(text);
 }
 
+/**
+ * v3.7.13 H2 — detect a JSON-RPC 2.0 `initialize` request without parsing
+ * the full envelope. The body can be either a single message or a batch
+ * (JSON-RPC permits arrays); we accept both, requiring AT LEAST ONE
+ * element in a batch to be `method: "initialize"`. Returns false on
+ * anything else (including malformed bodies — the caller has already
+ * parsed JSON, so the shape is unknown but not parse-error territory).
+ *
+ * @internal — exported only for tests.
+ */
+export function isInitializeRequest(body: unknown): boolean {
+  if (Array.isArray(body)) return body.some(isInitializeRequest);
+  if (!body || typeof body !== "object") return false;
+  const method = (body as { method?: unknown }).method;
+  return method === "initialize";
+}
+
 /** Send a JSON-RPC error response with the given HTTP + RPC status. */
 function sendJsonRpcError(res: ServerResponse, httpStatus: number, code: number, message: string): void {
   if (res.headersSent) return;
@@ -521,6 +538,28 @@ export function createHttpHandler(
             current: registry.size(),
             max: maxSessions
           })
+        );
+        return;
+      }
+
+      // v3.7.13 H2 — verify the body is an `initialize` JSON-RPC request
+      // BEFORE we allocate a server + transport. Pre-3.7.13, any POST
+      // without `Mcp-Session-Id` allocated both, then handed the body to
+      // the SDK; if the body wasn't `initialize`, the SDK would either
+      // reject internally or surface a protocol error — but in some
+      // failure modes `onsessioninitialized` never fires and cleanup
+      // never runs, leaking the McpServer + transport pair. Bearer-token
+      // DoS: not anonymous, but easy for any client with a valid token
+      // to fire create-and-abandon traffic until `maxSessions` blocks
+      // further work. This pre-validation short-circuits the leak by
+      // rejecting non-initialize POSTs at the JSON-RPC level before any
+      // allocation.
+      if (!isInitializeRequest(body)) {
+        sendJsonRpcError(
+          res,
+          400,
+          -32600,
+          "First POST without Mcp-Session-Id header must be a JSON-RPC `initialize` request"
         );
         return;
       }

@@ -104,15 +104,22 @@ the `enquire-mcp eval` CLI subcommand.
 
 ### Stack configurations
 
-| Stack                | Implementation                                                                                                  | Latency cost                  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| FS-grep baseline     | Strip YAML, regex-grep each note for query tokens, rank by occurrence count                                     | <1 ms / query                 |
-| BM25 only            | `FtsIndex.search` directly, chunks collapsed to notes                                                           | <1 ms / query                 |
-| TF-IDF only          | `semanticSearch` from `src/tools/search.ts`                                                                     | ~2 ms / query                 |
-| Embeddings only      | `embeddingsSearch` against an `EmbedDb` built with `bge` model (BGE-small-en, 384-dim, ~33 MB)                  | ~110 ms / query (brute force) |
-| Hybrid               | `searchHybrid` — BM25 + TF-IDF + embeddings fused via RRF (k=60) + wikilink graph-boost (α=0.005)               | ~230 ms / query               |
-| Hybrid + reranker    | `searchHybrid` + BGE-reranker-base (q8-quantized, ~280 MB) cross-encoder re-scoring top-50, injected via `rerankerOverride` | ~520 ms / query               |
-| Hybrid + reranker + HyDE-sim | Same as above, but the embeddings arm uses a hand-authored "hypothetical answer" string in place of the query (Gao et al. 2023). Scored on the 25-query subset that has authored HyDE answers. | ~730 ms / query               |
+> Latency numbers live in the TL;DR table only — they're re-measured from
+> `bench/benchmarks.json` and drift with hardware. This implementation
+> table intentionally OMITS the latency column to avoid double-source
+> drift; v3.7.13 dropped it after round-15 audit caught a contradiction
+> (TL;DR re-synced 2026-05-15 to A18 Pro numbers, while this table still
+> carried stale M1 numbers from rc.3).
+
+| Stack                | Implementation                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| FS-grep baseline     | Strip YAML, regex-grep each note for query tokens, rank by occurrence count                                     |
+| BM25 only            | `FtsIndex.search` directly, chunks collapsed to notes                                                           |
+| TF-IDF only          | `semanticSearch` from `src/tools/search.ts`                                                                     |
+| Embeddings only      | `embeddingsSearch` against an `EmbedDb` built with `bge` model (BGE-small-en, 384-dim, ~33 MB)                  |
+| Hybrid               | `searchHybrid` — BM25 + TF-IDF + embeddings fused via RRF (k=60) + wikilink graph-boost (α=0.005)               |
+| Hybrid + reranker    | `searchHybrid` + BGE-reranker-base (q8-quantized, ~280 MB) cross-encoder re-scoring top-50, injected via `rerankerOverride` |
+| Hybrid + reranker + HyDE-sim | Same as above, but the embeddings arm uses a hand-authored "hypothetical answer" string in place of the query (Gao et al. 2023). Scored on the 25-query subset that has authored HyDE answers. |
 
 **Note on quantization**: We load the q8 ONNX variant of the BGE reranker
 (~280 MB) directly via `transformers.js` `AutoModelForSequenceClassification`

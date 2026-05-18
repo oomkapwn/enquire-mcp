@@ -52,6 +52,31 @@ describe("createNote", () => {
     await expect(createNote(v, { path: "Twice.md", content: "second" })).rejects.toThrow(/already exists/);
   });
 
+  // v3.7.13 M2 — overwrite=false uses the `wx` flag for atomic exclusive
+  // create. Pre-3.7.13 the path was stat-then-write: stat returned ENOENT
+  // → write proceeded; if another process created the file between stat
+  // and write, the overwrite-false guard was bypassed and the second
+  // writer clobbered the first. With `wx`, the kernel atomically refuses
+  // the open(). This integration test confirms the original-content
+  // protection — both writers can't both succeed when overwrite=false.
+  it("overwrite=false is atomic (parallel writers can't both succeed)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Fire two simultaneous createNote() calls (which use overwrite=false)
+    // against the same path. Exactly one must succeed; the other must
+    // reject with "Note already exists".
+    const results = await Promise.allSettled([
+      createNote(v, { path: "Race.md", content: "writer-A" }),
+      createNote(v, { path: "Race.md", content: "writer-B" })
+    ]);
+    const succeeded = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(succeeded.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    const rejReason = (rejected[0] as PromiseRejectedResult).reason as Error;
+    expect(rejReason.message).toMatch(/already exists/);
+  });
+
   it("overwrites when allowed", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

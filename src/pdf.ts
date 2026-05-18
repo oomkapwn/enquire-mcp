@@ -100,6 +100,25 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 }
 
 /**
+ * Optional options for {@link extractPdfText}.
+ *
+ * v3.7.13 H1 — `pageRange` lets callers limit which pages get loaded by
+ * pdfjs. Pre-3.7.13, `extractPdfText` ALWAYS iterated `pageCount` pages
+ * even when the caller only wanted pages 1-3 of a 1000-page PDF, then
+ * `obsidian_read_pdf` sliced down to the requested window post-hoc. That
+ * was wasted CPU/memory and a bearer-token DoS vector in `serve-http`
+ * (a client with a valid token could request small page ranges of huge
+ * PDFs to peg the server). Passing the range down to `doc.getPage()`
+ * means we only deserialize the pages we need.
+ */
+export interface ExtractPdfTextOptions {
+  /** 1-indexed inclusive page range. `to >= from > 0`. Values are clamped
+   *  to the document's actual `pageCount` if out-of-range. When `undefined`,
+   *  every page is extracted (legacy behavior). */
+  pageRange?: { from: number; to: number };
+}
+
+/**
  * Extract text from a PDF buffer. Memory-mode — caller has already
  * loaded the file. Use `vault.readBinaryFile(relPath)` to get the
  * buffer with the standard privacy-filter + max-bytes guards
@@ -108,7 +127,7 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
  * Throws on encrypted PDFs without a password or on hard-corrupt files.
  * Returns empty pages (with `isEmpty: true`) for image-only scans.
  */
-export async function extractPdfText(buffer: Buffer): Promise<PdfExtractionResult> {
+export async function extractPdfText(buffer: Buffer, opts: ExtractPdfTextOptions = {}): Promise<PdfExtractionResult> {
   const pdfjs = await loadPdfjs();
   // Convert Buffer → Uint8Array (pdfjs accepts both, but the typed-array
   // path skips a copy in some Node builds).
@@ -125,7 +144,15 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfExtractionResul
   const pageCount = doc.numPages;
   const pages: PdfPage[] = [];
 
-  for (let i = 1; i <= pageCount; i++) {
+  // v3.7.13 H1 — restrict the iteration to the requested window so
+  // doc.getPage() / getTextContent() only fire on pages the caller asked
+  // for. `pageRange.from / to` are clamped against the actual pageCount;
+  // an inverted or out-of-range range yields an empty iteration (the
+  // earlier full-document extraction was the resource-leak path).
+  const fromPage = opts.pageRange ? Math.max(1, opts.pageRange.from) : 1;
+  const toPage = opts.pageRange ? Math.min(pageCount, opts.pageRange.to) : pageCount;
+
+  for (let i = fromPage; i <= toPage; i++) {
     try {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();

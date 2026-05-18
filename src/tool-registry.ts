@@ -706,8 +706,16 @@ export function registerReadTools(
       annotations: { ...READ_ONLY, title: "Read PDF" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
+        // v3.7.13 L2 — schema-level rejection of inverted ranges (parity
+        // with obsidian_ocr_pdf). Pre-3.7.13 a `[10, 5]` request flowed
+        // through to readPdf's silent fallback (range ignored, full doc
+        // extracted) — actively worse than the OCR path because the
+        // entire PDF still got iterated by pdfjs. Now rejected upfront.
         pages: z
           .tuple([z.number().int().positive(), z.number().int().positive()])
+          .refine(([from, to]) => to >= from, {
+            message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)"
+          })
           .optional()
           .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] reads pages 2..5"),
         include_metadata: z.boolean().optional().describe("Include doc-level metadata in result (default true)")
@@ -730,14 +738,34 @@ export function registerReadTools(
       annotations: { ...READ_ONLY, title: "OCR PDF" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
+        // v3.7.13 M3 — `lang` is passed straight to `tesseract.createWorker`,
+        // which downloads each requested language pack on first use (~10 MB
+        // each, cached). A bearer-token client could request many language
+        // combinations to trigger repeated downloads + slow OCR jobs — a
+        // resource-exhaustion DoS vector. Schema constraint: 1-8 entries,
+        // each a 3-letter Tesseract code (lowercase, optionally suffixed
+        // with `_<variant>` for regional packs like `chi_sim`, `chi_tra`).
+        // The pattern accepts the common Tesseract trained-data file
+        // naming (https://tesseract-ocr.github.io/tessdoc/Data-Files.html).
         lang: z
           .string()
+          .regex(
+            /^[a-z]{3}(_[a-z]+)?(\+[a-z]{3}(_[a-z]+)?){0,7}$/,
+            "lang must be 1-8 '+'-joined Tesseract codes (3 lowercase letters, optional `_variant` suffix). Example: 'eng', 'rus', 'chi_sim', 'eng+rus'."
+          )
           .optional()
           .describe(
-            "Tesseract language pack(s). Default 'eng'. Multi-lang via '+': 'eng+rus' for English+Russian mixed scans. Common: 'eng', 'rus', 'jpn', 'chi_sim', 'fra', 'deu'."
+            "Tesseract language pack(s). Default 'eng'. Multi-lang via '+': 'eng+rus' for English+Russian mixed scans (max 8 packs per call). Common: 'eng', 'rus', 'jpn', 'chi_sim', 'fra', 'deu'."
           ),
+        // v3.7.13 L2 — schema-level rejection of inverted ranges. Pre-3.7.13
+        // a `pages: [10, 5]` request flowed through to `ocr.ts:166-170` where
+        // `[from=10, to=5]` made the loop body never execute and returned an
+        // empty "success" result. Now rejected at the boundary.
         pages: z
           .tuple([z.number().int().positive(), z.number().int().positive()])
+          .refine(([from, to]) => to >= from, {
+            message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)"
+          })
           .optional()
           .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] OCRs pages 2..5"),
         scale: z

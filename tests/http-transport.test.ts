@@ -19,13 +19,16 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSessionRegistry,
+  deriveHttpBodyCap,
   generateBearerToken,
   type HttpServeOptions,
+  parseMaxFileBytes,
   RateLimiter,
   readJsonBody,
   startHttpServer,
   verifyBearer
 } from "../src/http-transport.js";
+import { DEFAULT_MAX_FILE_BYTES } from "../src/vault.js";
 
 let root: string;
 
@@ -201,6 +204,54 @@ describe("readJsonBody (v3.6 — body-size cap branch)", () => {
   it("throws when body exceeds maxBytes", async () => {
     const big = Buffer.alloc(200, 65); // 200 bytes of 'A'
     await expect(readJsonBody(asReq(big), 100)).rejects.toThrow(/exceeds max/);
+  });
+});
+
+// v3.7.12 M4 — body-cap derivation. Pre-3.7.12 the HTTP body cap was a
+// hardcoded 4MB which was BELOW the default per-file cap of 5MB; the cap is
+// now scaled from `maxFileBytes` so writes at the file limit don't 413.
+describe("deriveHttpBodyCap (v3.7.12 M4)", () => {
+  it("defaults to max(4MB, DEFAULT_MAX_FILE_BYTES * 1.5) when maxFileBytes unset", () => {
+    const cap = deriveHttpBodyCap(undefined);
+    const expected = Math.max(4 * 1024 * 1024, Math.floor(DEFAULT_MAX_FILE_BYTES * 1.5));
+    expect(cap).toBe(expected);
+    // Sanity: the derived cap MUST be ≥ DEFAULT_MAX_FILE_BYTES, otherwise
+    // a create_note at the file limit would 413 at the HTTP layer.
+    expect(cap).toBeGreaterThanOrEqual(DEFAULT_MAX_FILE_BYTES);
+  });
+
+  it("scales 1.5x from a user-provided maxFileBytes", () => {
+    const tenMb = 10 * 1024 * 1024;
+    const cap = deriveHttpBodyCap(String(tenMb));
+    expect(cap).toBe(Math.floor(tenMb * 1.5));
+  });
+
+  it("holds the 4MB floor for tiny vault caps", () => {
+    // A user passing --max-file-bytes=1048576 (1MB) still gets the 4MB
+    // floor so tools/list / search responses are unaffected.
+    const cap = deriveHttpBodyCap(String(1 * 1024 * 1024));
+    expect(cap).toBe(4 * 1024 * 1024);
+  });
+
+  it("falls back to default on malformed input", () => {
+    expect(parseMaxFileBytes("nonsense")).toBeUndefined();
+    expect(parseMaxFileBytes("-1000")).toBeUndefined();
+    expect(parseMaxFileBytes("0")).toBeUndefined();
+    expect(parseMaxFileBytes("3.14")).toBeUndefined();
+    // Each falls back to DEFAULT_MAX_FILE_BYTES inside deriveHttpBodyCap.
+    expect(deriveHttpBodyCap("nonsense")).toBe(deriveHttpBodyCap(undefined));
+  });
+
+  // Negative-control: explicit assertion that pre-3.7.12's hardcoded 4MB
+  // would have under-capped the default (5MB) file cap. If someone reverts
+  // the derivation, this test fails LOUDLY.
+  it("(negative-control) derived cap > legacy 4MB hardcoded cap under defaults", () => {
+    const cap = deriveHttpBodyCap(undefined);
+    const legacy = 4 * 1024 * 1024;
+    expect(
+      cap,
+      "v3.7.12 M4 regression: derived cap must exceed the legacy 4MB to accommodate the 5MB default file cap"
+    ).toBeGreaterThan(legacy);
   });
 });
 

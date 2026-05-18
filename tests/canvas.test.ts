@@ -87,6 +87,53 @@ describe("listCanvases (v1.7)", () => {
     expect(broken?.node_count).toBe(0);
   });
 
+  // v3.7.12 M3 — size_bytes for a malformed canvas must be 0, NOT the
+  // mtime placeholder that was previously left in `let size = e.mtimeMs`
+  // on the JSON.parse-failure path. mtime values are billions
+  // (ms-since-epoch); a billion-byte canvas file would be a flag for any
+  // caller that filters/sorts by size.
+  it("size_bytes is the real byte length, not mtime, even for malformed canvas (M3)", async () => {
+    const v = new Vault(root);
+    const out = await listCanvases(v, {});
+    const broken = out.find((c) => c.path === "Boards/Broken.canvas");
+    expect(broken).toBeTruthy();
+    // Broken.canvas is non-empty (contains the malformed JSON text); the
+    // readBinaryFile succeeds and returns its real byte length even though
+    // the subsequent JSON.parse throws. The byte length is well under
+    // 1 MB; mtime is ~1.7e12 ms.
+    expect(broken?.size_bytes).toBeGreaterThan(0);
+    expect(broken?.size_bytes).toBeLessThan(1_000_000);
+    // Negative-control sanity: mtime is a Date string, NOT a number.
+    expect(typeof broken?.mtime).toBe("string");
+    expect(broken?.mtime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  // v3.7.12 M3 — negative-control via TOCTOU race simulation. Delete the
+  // canvas between `listFilesByExtension` and `readBinaryFile` so the
+  // listing carries the entry forward but the read throws. With the bug,
+  // size_bytes is `e.mtimeMs` (~1.7e12); with the fix it's `0`.
+  it("size_bytes falls back to 0 when readBinaryFile fails (M3 negative control)", async () => {
+    const raceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-canvas-m3-"));
+    try {
+      await fs.writeFile(path.join(raceRoot, "ghost.canvas"), JSON.stringify({ nodes: [], edges: [] }));
+      const v = new Vault(raceRoot);
+      // Wrap readBinaryFile so it throws AFTER listFilesByExtension has
+      // captured the entry. Deterministic stand-in for a vault race.
+      const orig = v.readBinaryFile.bind(v);
+      v.readBinaryFile = async (rel: string) => {
+        if (rel.includes("ghost.canvas")) throw new Error("ENOENT: simulated race");
+        return orig(rel);
+      };
+      const out = await listCanvases(v, {});
+      const ghost = out.find((c) => c.path === "ghost.canvas");
+      expect(ghost).toBeTruthy();
+      // Pre-fix this was `e.mtimeMs` ≈ 1.7e12.
+      expect(ghost?.size_bytes).toBe(0);
+    } finally {
+      await fs.rm(raceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("respects --read-paths allowlist", async () => {
     const v = new Vault(root, { readPaths: ["Notes/**"] });
     await v.ensureExists();

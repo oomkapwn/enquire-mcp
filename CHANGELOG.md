@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.12] — 2026-05-18
+
+> **TL;DR:** Round-14 external audit response (3rd independent external audit; 8 High + 11 Medium + 7 Low findings on the v3.7.5 codebase, re-verified against current v3.7.11). 10 ship-ready fixes landed: 2 High (`.base` path normalization, `./tool-manifest` missing from `package.json#exports`), 4 Medium (`listCanvases` mtime-as-bytes leak, HTTP body cap below file cap, graph-boost wasted I/O on `.pdf`, HTTP docs token-env primary), 4 Low (HTTP stateless/stateful clarification, QUICKSTART version stale, reranker catalog vs verified clarification, TypeDoc `treatWarningsAsErrors`). **+14 tests** (801 total), with negative-controls on every new invariant. 2 audit findings verified as FALSE POSITIVES (audit ran on stale v3.7.5 tree — PNG asset + `examples/queries.jsonl` already present in current main). 19 architectural findings deferred to v3.8.0 backlog with reasoning.
+
+**Patch — round-14 external audit batch.**
+
+### High-severity fixes
+
+- **H2 — `.base` path normalization in `readBase` + canonical path round-trip in `queryBase`** (`src/bases.ts:219`). Pre-fix `readBase` called `vault.readBinaryFile(args.path)` directly: no extension auto-append (caller `obsidian_read_base { path: "Books" }` failed with ENOENT instead of resolving `Books.base`), no path-traversal guard via `vault.resolveInside` (relied implicitly on `readBinaryFile`'s internal safety), no extension validation (`obsidian_read_base { path: "note.md" }` would attempt to parse a markdown file as YAML and fail with a confusing parser error). Fixed: mirrors the `readCanvas` / `readPdf` pattern — `vault.resolveInside` → `vault.stat` (fail-fast on missing/excluded) → `vault.toRel(abs)` → `vault.readBinaryFile(abs)`. `queryBase` now returns `base_path: baseDoc.path` (canonical) instead of `args.path` (user input) so agents can round-trip the result back into `obsidian_read_base` without re-normalizing. **+5 tests** in `tests/bases.test.ts` covering auto-append, subfolder-qualified paths, non-`.base` extension rejection, empty-path rejection, and the queryBase round-trip invariant.
+- **H4 — `./tool-manifest` missing from `package.json#exports`** despite `STABILITY.md:55` advertising `TOOL_MANIFEST` / `ToolManifestEntry` as stable v3.x surface (since v3.6.0-rc.2). ESM consumers under Node16/NodeNext resolution couldn't reach the symbol without a deep import, which TypeScript flat-out refuses. Added `"./tool-manifest": { types: ".../tool-manifest.d.ts", import: ".../tool-manifest.js" }`. **+1 docs-consistency invariant** (`every STABILITY.md-promised module has a package.json#exports entry`) so the next time STABILITY.md gains a stable symbol without a matching exports entry, CI fails on the PR instead of silently shipping unreachable.
+
+### Medium-severity fixes
+
+- **M3 — `listCanvases` returns `mtime` as `size_bytes` on read-failure path** (`src/tools/media.ts:61`). Pre-fix `let size = e.mtimeMs; // placeholder; replaced below` left the mtime (a 13-digit ms-since-epoch number) as `size_bytes` when `readBinaryFile` threw before `size = buf.byteLength` could run. A caller filtering "canvases under 1 MB" would never match anything during a permission-denied / TOCTOU race. Fixed by initializing `size = 0`. **+2 tests** in `tests/canvas.test.ts`: the success-path size sanity + a deterministic TOCTOU simulation via a `vault.readBinaryFile` stub that throws.
+- **M4 — HTTP body cap (4 MB) was BELOW the default per-file cap (5 MB)** (`src/http-transport.ts:317`). A `create_note` with a 4.5 MB markdown body would clear `Vault.assertSize` but bounce at the HTTP layer with a misleading "413 body too large". The cap is now derived from `--max-file-bytes` (defaulting to `DEFAULT_MAX_FILE_BYTES`) via `deriveHttpBodyCap(opts.maxFileBytes) = max(4 MB, maxFileBytes × 1.5)` — leaves 50% headroom for the JSON-RPC envelope + string-escaping, with a 4 MB floor so tiny vaults don't shrink the cap below `tools/list` response size. **+5 tests** in `tests/http-transport.test.ts`, including an explicit negative-control that the derived cap MUST exceed the legacy 4 MB under defaults.
+- **M6 — graph boost wasted I/O on `.pdf` candidates** (`src/tools/search.ts:1455-1474`). When `--include-pdfs` is on, PDF chunks appear in the `fused` set alongside markdown. Pre-fix, the wikilink-graph boost iterated every fused candidate and called `vault.readNote(vault.resolveInside(candidatePath))` — for a `.pdf` path that triggers an I/O round-trip + UTF-8 decode of binary bytes + a swallowed parse error. The try/catch hid the cost but didn't eliminate it. Fix: skip non-`.md` candidates in the boost set. **+1 test** in `tests/search-hybrid.test.ts` with a `vault.readNote` spy verifying zero `.pdf` calls when graph boost runs against a blended md+PDF fused result.
+- **M11 — HTTP docs TL;DR promoted `--bearer-token-env` over `--bearer-token`** (`docs/http-transport.md`). Token-in-flag shows up in `ps auxww` while the server is running and persists in shell history; the env-var form keeps it out of both. The TL;DR's bash example now uses `--bearer-token-env`, with a callout explaining when `--bearer-token` is acceptable (quick local one-offs). The body-bomb section was also updated to reflect the new derived cap (M4) instead of the stale "4 MB" hardcoded claim.
+
+### Low-severity fixes
+
+- **L1 — HTTP transport doc opening claimed "Stateless"** but the project has supported stateful mode via `--stateful` since v2.14.0. Opening now reads "Stateless by default; switch to stateful with `--stateful` for clients that need persistent sessions and SSE notifications" with a link to the [Operational notes](docs/http-transport.md#operational-notes) section that documents the full stateful-mode flag matrix.
+- **L2 — `docs/QUICKSTART.md` showed `3.6.1` as the example `--version` output**. Bumped to `3.7.12`.
+- **L4 — `package.json#description` claimed "5 cross-encoder reranker models"** but only `rerank-bge` is verified end-to-end (the 4 other catalog aliases fail at `AutoTokenizer.from_pretrained` due to a transformers.js compat issue tracked since v3.6.1 CRIT-2 — see CHANGELOG line 1349). New phrasing: *"BGE cross-encoder reranker verified end-to-end (+4 aliases in catalog, transformers.js bump pending)"*. The existing docs-consistency invariant for the reranker count was extended to enforce BOTH phrasings: the legacy "N cross-encoder reranker models" form (must match catalog size) AND the new honest form (must match catalog-size-minus-one, and `DEFAULT_RERANKER_ALIAS === "rerank-bge"`).
+- **L6 — TypeDoc `treatWarningsAsErrors = true`** (`typedoc.json`). rc.3 ground TSDoc warnings to 0 during the Full TSDoc pass, but the flag stayed `false` "in case future drift accumulates". That's exactly the wrong direction — drift accumulating silently in published docs is what `treatWarningsAsErrors` exists to prevent. Verified 0 current warnings via `npx typedoc`, then flipped. The CI `docs` job will now exit non-zero on any new warning, surfacing it on the PR.
+
+### Audit findings VERIFIED as false positives
+
+- **H5 — "social preview PNG asset missing"**. Audit ran on the v3.7.5 codebase; PNG was regenerated in v3.7.7 (`assets/social-preview.png`, 188 KB, listed in `package.json#files`). Verified via `ls -la`.
+- **H6 — "`examples/queries.jsonl` missing"**. File present at `examples/queries.jsonl` (37 lines, real BEIR-derived eval queries). The related concern — `examples/` not in `package.json#files` — WAS valid but already closed in v3.7.11 D4.
+
+### Architectural findings DEFERRED to v3.8.0
+
+Documented inline so future audits don't re-flag them as new:
+
+- **H1, H3, H7, H8** — architectural rewrites (FTS5 trigram-vs-unicode61 unified path, embed-db migration framework, distributed rate-limit registry, HNSW persistent recall guarantees). Each is a multi-day refactor that doesn't gate user-facing correctness; v3.8.0 minor sprint scope.
+- **M1, M2, M5, M7, M8, M9, M10** — broader hardening (CI workflow exact-set enforcement vs regex, schema-evolution test corpus, RemoteMCP CORS-credentials matrix expansion, etc.).
+- **L3, L5, L7** — `docs/api.md` full rewrite (audit-suggested 30+ revisions), package-content smoke test, additional doc-consistency invariants.
+
+### Stats
+
+- **801 tests** (was 787 in v3.7.11). **+14 tests**: 5 base-normalization (`tests/bases.test.ts`), 2 listCanvases (`tests/canvas.test.ts`), 5 deriveHttpBodyCap (`tests/http-transport.test.ts`), 1 graph-boost-skip-pdf (`tests/search-hybrid.test.ts`), 1 STABILITY-exports invariant (`tests/docs-consistency.test.ts`).
+- **2 new docs-consistency invariants** locking class fixes structurally: (1) STABILITY.md ↔ `package.json#exports` parity, (2) reranker description ↔ catalog + DEFAULT_RERANKER_ALIAS consistency.
+- **CI**: all 7 required gates green expected (lint, build, tests, smoke, audit, coverage, version-consistency, docs).
+
+### Method
+
+External audits with DIFFERENT methodologies each find DIFFERENT failure modes — round-14 is now the 3rd independent external audit since v3.6.0 (Mavis on v3.6.0, anonymous on v3.6.0, this round-14 on v3.7.5). Internal multi-layer audits are necessary but NOT sufficient. Per the methodology note in `~/.claude/.../memory/method_full_system_audit.md`: every minor / major must pass ≥2 independent external auditors with different methodologies BEFORE the v3.8.0 minor (the next minor after this patch chain).
+
 ## [3.7.11] — 2026-05-17
 
 > **TL;DR:** Round-13 self-audit (analogues to round-12 v3.7.10 fixes). Closed 3 findings: (1) `EmbedDb.deleteNote` non-transactional — sibling of v3.7.10 #10 FTS5 fix that I missed in the class scan; (2) `docs/COMPARISON.md` hardcoded tool/prompt counts not gated by docs-consistency — round-12 #D1 fix was instance-only; (3) **v3.7.10 silent overclaim correction**: CHANGELOG claimed `examples/` was added to `package.json#files` but the Edit hit a file-modified race and didn't actually persist. Verified post-merge: `examples` was missing. This patch actually adds it. **+1 test** (787 total).

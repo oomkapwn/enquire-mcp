@@ -162,6 +162,65 @@ views:
     const { vault } = await makeBaseVault();
     await expect(readBase(vault, { path: "../etc/passwd" })).rejects.toThrow();
   });
+
+  // v3.7.12 H2 — path normalization parity with readCanvas/readPdf.
+  describe("v3.7.12 H2 path normalization", () => {
+    it("auto-appends .base extension when missing", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(path.join(root, "books.base"), "filters: 'tag == \"x\"'\nviews:\n  - type: table\n");
+      // Caller passes "books" without extension — should resolve to "books.base".
+      const out = await readBase(vault, { path: "books" });
+      expect(out.path).toBe("books.base"); // canonical form returned
+      expect(out.name).toBe("books");
+    });
+
+    it("auto-appends .base on subfolder-qualified path", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.mkdir(path.join(root, "Bases"), { recursive: true });
+      await fs.writeFile(path.join(root, "Bases", "tasks.base"), "views:\n  - type: table\n");
+      // Caller passes "Bases/tasks" without extension — should resolve.
+      const out = await readBase(vault, { path: "Bases/tasks" });
+      expect(out.path).toBe("Bases/tasks.base");
+      expect(out.name).toBe("tasks");
+    });
+
+    it("rejects non-.base extensions (no accidental .md reads)", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(path.join(root, "note.md"), "# hi\n");
+      await expect(readBase(vault, { path: "note.md" })).rejects.toThrow(/only accepts \.base/i);
+    });
+
+    it("rejects empty path", async () => {
+      const { vault } = await makeBaseVault();
+      await expect(readBase(vault, { path: "" })).rejects.toThrow(/path is required/i);
+    });
+
+    // ── Negative-control: removing the path normalization breaks the test
+    //    above (it would either succeed on "note.md" by reading the markdown
+    //    file as YAML, or fail with a confusing parse error instead of the
+    //    explicit "only accepts .base" message). The "auto-append" test is
+    //    the positive control; this one ensures the round-trip invariant
+    //    queryBase relies on actually holds.
+    it("queryBase round-trips the canonical base_path returned by readBase", async () => {
+      const { root, vault } = await makeBaseVault();
+      await fs.writeFile(
+        path.join(root, "round.base"),
+        `filters: 'tag == "book"'
+views:
+  - type: table
+`
+      );
+      // Caller passes "round" without extension.
+      const queried = await queryBase(vault, { path: "round" });
+      // Returned base_path should be the canonical "round.base" form, NOT
+      // the user's input "round". This is what lets agents re-issue the
+      // same base_path back into obsidian_read_base without re-normalizing.
+      expect(queried.base_path).toBe("round.base");
+      // And feeding it back works.
+      const refetched = await readBase(vault, { path: queried.base_path });
+      expect(refetched.name).toBe("round");
+    });
+  });
 });
 
 describe("queryBase — DSL execution", () => {

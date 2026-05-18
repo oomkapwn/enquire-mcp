@@ -310,4 +310,38 @@ describe("searchHybrid — kind flag (v2.8.0)", () => {
     expect(result.matches.length).toBeGreaterThan(0);
     expect(result.matches.every((m) => m.kind === "md")).toBe(true);
   });
+
+  // v3.7.12 M6 — graph boost must NOT call `vault.readNote` on `.pdf`
+  // candidates. Pre-fix the boost code path attempted `readNote(*.pdf)`
+  // for every fused PDF candidate, did a UTF-8 decode of binary bytes,
+  // and silently swallowed the parse error via try/catch. The fix
+  // restricts the candidate set to `.md` paths only.
+  it("graph_boost skips .pdf candidates (M6 negative-control)", async () => {
+    const v = new Vault(blendRoot);
+    // Spy on vault.readNote — record every absolute path it's called with.
+    const calls: string[] = [];
+    const origReadNote = v.readNote.bind(v);
+    v.readNote = async (...args: Parameters<typeof v.readNote>) => {
+      calls.push(args[0]);
+      return origReadNote(...args);
+    };
+    const result = await searchHybrid(
+      v,
+      { query: "Apollo", limit: 10, graph_boost: true },
+      { ftsIndex: blendIdx, embedFile: path.join(blendRoot, "nonexistent.embed.db") }
+    );
+    // Confirm the fused set still contains both kinds (precondition for
+    // a meaningful negative-control — otherwise the PDF skip is vacuous).
+    const kinds = new Set(result.matches.map((m) => m.kind));
+    expect(kinds).toContain("pdf");
+    expect(kinds).toContain("md");
+    // Critical: graph-boost-driven readNote calls must NEVER target .pdf.
+    // (Tag-index lookups during TF-IDF can call readNote for `.md` files;
+    // we only assert the absence of `.pdf` in the call list.)
+    const pdfReadCalls = calls.filter((p) => p.toLowerCase().endsWith(".pdf"));
+    expect(
+      pdfReadCalls.length,
+      `graph_boost called readNote on .pdf paths ${pdfReadCalls.join(", ")} — should be skipped post-3.7.12 M6`
+    ).toBe(0);
+  });
 });

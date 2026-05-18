@@ -47,10 +47,14 @@
     "notDocumented": false
   },
 
-  // Don't fail the build on the inevitable TSDoc warnings from a
-  // large codebase — rc.3 added ~369 doc-blocks and not every
-  // external-referenced symbol is annotated. The site renders fine.
-  "treatWarningsAsErrors": false,
+  // v3.7.12 L6 — promoted to true. rc.3 ground TypeDoc warnings down
+  // to 0 during the Full TSDoc pass; this lock-in catches a future
+  // regression at CI rather than letting drift accumulate silently in
+  // the published docs (which is how rc.3's 369 warnings built up in
+  // the first place — pre-rc.3 builds didn't fail on warnings either).
+  // The `npm run docs:api` step in the CI `docs` job will exit non-zero
+  // on any new warning, surfacing it on the PR before merge.
+  "treatWarningsAsErrors": true,
 
   // Emits a .nojekyll file so GH Pages serves files starting with
   // underscores (TypeDoc's internal assets directory).

@@ -216,13 +216,40 @@ export async function listBases(vault: Vault, args: { folder?: string; limit?: n
 
 // ─── obsidian_read_base ────────────────────────────────────────────────────
 
+/**
+ * Read and parse a `.base` file.
+ *
+ * v3.7.12 H2 — path normalization parity with `readCanvas` / `readPdf`:
+ *   - `path` is required (rejects empty string)
+ *   - extension auto-appended (`Books` → `Books.base`)
+ *   - non-`.base` paths rejected (caller can't accidentally read a `.md`
+ *     file through this surface and trigger parser errors)
+ *   - resolves through `vault.resolveInside` (path-traversal guard)
+ *   - `stat()` checked early — fail fast on missing/excluded files
+ *   - returned `path` is the canonical vault-relative form, so callers
+ *     can re-issue requests by the same key regardless of how they
+ *     spelled the input
+ */
 export async function readBase(vault: Vault, args: { path: string }): Promise<BaseDocument> {
   await vault.ensureExists();
-  const buf = await vault.readBinaryFile(args.path);
+  if (!args.path) throw new Error("path is required");
+  // Reject paths whose explicit extension is something other than `.base`.
+  // (An empty extension is fine — we append `.base` below.)
+  const lower = args.path.toLowerCase();
+  const ext = path.extname(lower);
+  if (ext && ext !== ".base") {
+    throw new Error(`obsidian_read_base only accepts .base files (got ${ext || "<no ext>"}): ${args.path}`);
+  }
+  const normalized = lower.endsWith(".base") ? args.path : `${args.path}.base`;
+  const abs = vault.resolveInside(normalized);
+  await vault.stat(abs); // throws if missing or excluded — fail fast
+  const rel = vault.toRel(abs);
+
+  const buf = await vault.readBinaryFile(abs);
   const parsed = await parseBase(buf.toString("utf8"));
   return {
-    path: args.path,
-    name: path.basename(args.path).replace(/\.base$/i, ""),
+    path: rel,
+    name: path.basename(rel).replace(/\.base$/i, ""),
     ...(parsed.filters !== undefined ? { filters: parsed.filters } : {}),
     ...(parsed.formulas ? { formulas: parsed.formulas } : {}),
     ...(parsed.properties ? { properties: parsed.properties } : {}),
@@ -338,7 +365,10 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
   const totalMatched = matches.length;
   const sliced = matches.slice(0, limit);
   return {
-    base_path: args.path,
+    // v3.7.12 H2 — return canonical vault-relative path (the form
+    // `readBase` normalized to) so callers can round-trip the result
+    // back into `obsidian_read_base` without re-normalizing themselves.
+    base_path: baseDoc.path,
     view: effectiveViewName,
     total_matched: totalMatched,
     truncated: totalMatched > sliced.length,

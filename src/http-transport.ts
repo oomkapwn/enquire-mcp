@@ -32,6 +32,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildMcpServer, formatReadyBanner, prepareServerDeps, type ServeOptions, type ServerDeps } from "./index.js";
+import { DEFAULT_MAX_FILE_BYTES } from "./vault.js";
 
 /**
  * Configuration for the HTTP transport. Extends ServeOptions so every
@@ -306,6 +307,34 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
   };
 }
 
+/**
+ * v3.7.12 M4 — parse the `maxFileBytes` ServeOptions field WITHOUT calling
+ * back into `prepareServerDeps` (we only need the parsed number, not the
+ * full vault). Returns `undefined` for unset / malformed / non-positive
+ * input so the caller falls back to `DEFAULT_MAX_FILE_BYTES`.
+ *
+ * @internal — exported only for tests.
+ */
+export function parseMaxFileBytes(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) return undefined;
+  return n;
+}
+
+/**
+ * v3.7.12 M4 — derive the HTTP body-size cap from the vault's `maxFileBytes`
+ * (or `DEFAULT_MAX_FILE_BYTES` when unset). Scales 1.5× to leave headroom
+ * for the JSON-RPC envelope + string-escaping overhead, with a 4 MB floor
+ * so tiny vaults don't shrink the cap below `tools/list` response size.
+ *
+ * @internal — exported only for tests.
+ */
+export function deriveHttpBodyCap(maxFileBytes: string | undefined): number {
+  const vaultMaxBytes = parseMaxFileBytes(maxFileBytes) ?? DEFAULT_MAX_FILE_BYTES;
+  return Math.max(4 * 1024 * 1024, Math.floor(vaultMaxBytes * 1.5));
+}
+
 export function createHttpHandler(
   deps: ServerDeps,
   opts: HttpServeOptions
@@ -314,7 +343,11 @@ export function createHttpHandler(
   const healthPath = opts.healthPath ?? "/health";
   const corsOrigins = opts.corsOrigins ?? [];
   const limiter = new RateLimiter(opts.rateLimitPerMinute ?? 120);
-  const maxBodyBytes = 4 * 1024 * 1024; // 4MB — generous for tools/list at the current 44-tool surface (was 36 at v2.x; count grows with each minor release)
+  // v3.7.12 M4 — body cap derived from the vault's `maxFileBytes` via
+  // `deriveHttpBodyCap`. Previously hardcoded 4 MB, which was BELOW the default
+  // per-file cap of 5 MB — a `create_note` with a 4.5 MB payload would clear
+  // `Vault.assertSize` but be rejected at the HTTP layer with a confusing 413.
+  const maxBodyBytes = deriveHttpBodyCap(opts.maxFileBytes);
 
   // v2.14.0 stateful-mode state.
   const stateful = opts.stateful === true;

@@ -1453,7 +1453,17 @@ export async function searchHybrid(
   if (graphBoost && fused.length > 1) {
     const candidatePaths = new Set<string>();
     for (const f of fused) {
-      candidatePaths.add(f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id);
+      const candidatePath = f.id.includes("#") ? (f.id.split("#")[0] ?? f.id) : f.id;
+      // v3.7.12 M6 — skip non-markdown candidates. PDF/canvas/base files
+      // can show up in `fused` (PDFs ride the same FTS5 + embeddings tables
+      // when --include-pdfs is on) but they don't have wikilinks parsable
+      // by `vault.readNote`. Calling `readNote` on `Foo.pdf` triggers an
+      // I/O round-trip + UTF-8 decode of binary bytes + a swallowed parse
+      // error — wasted work that the try/catch was hiding. Restrict to
+      // `.md` so graph boost stays a wikilinks-on-markdown signal.
+      const lower = candidatePath.toLowerCase();
+      if (!lower.endsWith(".md")) continue;
+      candidatePaths.add(candidatePath);
     }
     const outLinks = new Map<string, Set<string>>();
     for (const candidatePath of candidatePaths) {

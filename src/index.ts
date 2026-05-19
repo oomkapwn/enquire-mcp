@@ -1,6 +1,14 @@
 #!/usr/bin/env node
-// Slim entry point for enquire-mcp. Version 3.6.0-rc.2 split the previous
-// 3665-line monolith into domain modules:
+// Slim entry point for enquire-mcp. The current `VERSION` constant below
+// is the authoritative version (see `scripts/check-version-consistency.mjs`).
+//
+// History: v3.6.0-rc.2 split the previous 3665-line monolith into the
+// domain modules listed below. v3.7.x continued the consolidation. The
+// file-header comment used to read as if rc.2 was current — round-19
+// audit (v3.7.17) caught this as the "tombstone vs current-claim"
+// stale-comment class. Now reads as historical context (clearer.)
+//
+// Domain modules:
 //   - cli.ts            : `main()` + commander program definition (CLI parsing).
 //   - server.ts         : ServeOptions / ServerDeps / prepareServerDeps / buildMcpServer /
 //                         startServer / formatReadyBanner / buildEmbedText / sync* fns.
@@ -34,7 +42,7 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.7.16";
+export const VERSION = "3.7.17";
 
 // Re-exports — preserve the v3.5.x public surface so http-transport.ts and
 // tests don't need to know about the new module layout. The set below

@@ -303,8 +303,12 @@ export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.f
     maxTokens: 512
   },
   // mxbai-rerank-large-v2 — multilingual, ~280 MB. Higher quality than
-  // the xsmall variant (rerank-multilingual default). Multi-language
-  // benchmark performance is solid; cost is the larger download.
+  // the xsmall `rerank-multilingual` (which is the multilingual variant,
+  // NOT the project-wide default — see `DEFAULT_RERANKER_ALIAS` below; it
+  // was bumped to `rerank-bge` in v3.6.1 CRIT-2 because 4 of 5 catalog
+  // aliases fail at `AutoTokenizer.from_pretrained` due to a
+  // transformers.js compat issue). Multi-language benchmark performance
+  // is solid; cost is the larger download.
   "rerank-multilingual-large": {
     alias: "rerank-multilingual-large",
     hfId: "Xenova/mxbai-rerank-large-v2",

@@ -23,7 +23,9 @@
  *
  * Integration:
  *   - CI `coverage` job runs both, fails on exit 1.
- *   - Local: `npm run check:coverage-drift` after `npm run test:coverage`.
+ *   - Local: `npm run check:changelog-coverage` (NOT `coverage-drift` — the
+ *     latter never existed; round-19 audit caught the stale reference).
+ *     Run after `npm run test:coverage` to refresh `coverage-summary.json`.
  *   - `prepublishOnly` adds it to the safety net (so we never publish a
  *     release tag whose CHANGELOG has wrong stats).
  */

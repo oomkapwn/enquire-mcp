@@ -1,9 +1,9 @@
-import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
+import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
-import { chunkContent, defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
+import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
 import {
@@ -696,57 +696,12 @@ export function buildEmbedText(
 // pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed
 // notes whose mtime changed. Embedding is the bottleneck (~5-30ms per chunk
 // CPU on M1), so incremental updates are critical for vaults of any size.
-/**
- * v3.8.0-rc.2 R-7 — embed-vector pipeline for a single markdown note.
- * Extracted from the inner loop of {@link syncEmbedDb} so both the bulk
- * sync and the runtime watcher can use the same chunking + embedding +
- * upsert path without duplicating logic.
- *
- * Returns null if the note has no body chunks (empty / whitespace-only —
- * caller should `db.deleteNote(relPath)` to drop any stale rows).
- *
- * @internal
- */
-export async function embedSingleNote(
-  vault: Vault,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
-  entry: { relPath: string; absPath: string; mtimeMs: number },
-  opts: { lateChunkContext?: number } = {}
-): Promise<{
-  chunks: number;
-  rows: Array<{
-    chunkIndex: number;
-    lineStart: number;
-    lineEnd: number;
-    textPreview: string;
-    vector: Float32Array;
-  }>;
-} | null> {
-  const contextChars = opts.lateChunkContext ?? 0;
-  const note = await vault.readNote(entry.absPath, entry.mtimeMs);
-  const chunks = chunkContent(note.parsed.body);
-  if (chunks.length === 0) return null;
-  const docTitle = note.parsed.frontmatter?.title || path.basename(entry.relPath, ".md");
-  const embedTexts = chunks.map((_c, i) =>
-    buildEmbedText(chunks, i, {
-      docTitle: typeof docTitle === "string" ? docTitle : undefined,
-      contextChars
-    })
-  );
-  const vectors = await embedder.embed(embedTexts);
-  const rows = chunks.map((c, i) => {
-    const vector = vectors[i];
-    if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
-    return {
-      chunkIndex: i,
-      lineStart: c.lineStart,
-      lineEnd: c.lineEnd,
-      textPreview: c.text.slice(0, 480),
-      vector
-    };
-  });
-  return { chunks: chunks.length, rows };
-}
+//
+// v3.8.0-rc.4 — the inner-loop helpers `embedSingleNote` (rc.2) and
+// `embedSinglePdf` (rc.3) moved to `./embed-pipeline.js` so tests can
+// import them directly (server.ts is in RESTRICTED_MODULES of the
+// no-internal-imports Class A invariant). syncEmbedDb / syncPdfEmbedDb
+// stay here as they use ServerDeps + bulk-sync orchestration.
 
 export async function syncEmbedDb(
   vault: Vault,
@@ -942,59 +897,8 @@ export async function syncPdfFtsIndex(
   };
 }
 
-/**
- * v3.8.0-rc.3 R-7 (continuation) — embed-vector pipeline for a single PDF
- * file. Mirrors {@link embedSingleNote} but reads PDF bytes + extracts
- * text via pdfjs + joins pages with `[page: N]` markers before chunking.
- *
- * Returns null in two cases:
- *   - PDF is image-only (`hasText === false`); caller should
- *     `db.deleteNote(relPath)` to drop stale rows (round-22 H-4 fix).
- *   - PDF body chunks to zero (rare; would indicate all pages empty
- *     even after concatenation).
- *
- * @internal
- */
-export async function embedSinglePdf(
-  vault: Vault,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
-  entry: { relPath: string; absPath: string; mtimeMs: number },
-  opts: { lateChunkContext?: number } = {}
-): Promise<{
-  chunks: number;
-  rows: Array<{
-    chunkIndex: number;
-    lineStart: number;
-    lineEnd: number;
-    textPreview: string;
-    vector: Float32Array;
-  }>;
-} | null> {
-  const contextChars = opts.lateChunkContext ?? 0;
-  const { extractPdfText } = await import("./pdf.js");
-  const buf = await vault.readBinaryFile(entry.absPath);
-  const extracted = await extractPdfText(buf);
-  if (!extracted.hasText) return null; // image-only scan — caller drops rows
-  // Join pages with [page: N] markers so embeddings carry page-citation context.
-  const joined = extracted.pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
-  const chunks = chunkContent(joined);
-  if (chunks.length === 0) return null;
-  const docTitle = path.basename(entry.relPath, ".pdf");
-  const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
-  const vectors = await embedder.embed(embedTexts);
-  const rows = chunks.map((c, i) => {
-    const vector = vectors[i];
-    if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
-    return {
-      chunkIndex: i,
-      lineStart: c.lineStart,
-      lineEnd: c.lineEnd,
-      textPreview: c.text.slice(0, 480),
-      vector
-    };
-  });
-  return { chunks: chunks.length, rows };
-}
+// v3.8.0-rc.4 — embedSinglePdf moved to src/embed-pipeline.ts (see
+// rc.4 file header at the top of syncEmbedDb above).
 
 /**
  * v2.8.0 — sync PDF chunks into the embedding index. Mirrors syncEmbedDb

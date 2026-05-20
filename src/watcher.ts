@@ -255,7 +255,7 @@ export class VaultWatcher {
         let pdfEmbedNote = "";
         if (this.embedDb && this.embedder) {
           try {
-            const { embedSinglePdf } = await import("./server.js");
+            const { embedSinglePdf } = await import("./embed-pipeline.js");
             const pdfResult = await embedSinglePdf(
               this.vault,
               this.embedder,
@@ -296,7 +296,7 @@ export class VaultWatcher {
       let embedNote = "";
       if (this.embedDb && this.embedder) {
         try {
-          const { embedSingleNote } = await import("./server.js");
+          const { embedSingleNote } = await import("./embed-pipeline.js");
           const result = await embedSingleNote(
             this.vault,
             this.embedder,

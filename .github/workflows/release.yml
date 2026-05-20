@@ -97,10 +97,25 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+        env:
+          # v3.7.19 ι class — feed GH_TOKEN so tests/github-metadata-invariant.test.ts
+          # actually runs `gh api` against the live repo instead of silent-skip.
+          # PR CI's `test` job has this since v3.7.13 L4; release.yml never got
+          # the parity update — caught by round-21 self-audit class ι (CI vs
+          # release config drift).
+          GH_TOKEN: ${{ github.token }}
       - name: Version consistency
         run: node scripts/check-version-consistency.mjs
-      - name: npm audit (high+)
-        run: npm audit --audit-level=high
+      # v3.7.19 ι class — align audit-level with PR CI. Pre-3.7.19 release
+      # used `--audit-level=high` only; PR CI uses `moderate` for prod deps
+      # + `high` for dev deps. A moderate-severity prod vulnerability that
+      # appeared between PR-green and tag-push would pass release.yml but
+      # fail the next PR — release-time blind spot. Now: same two-step check
+      # as PR CI's audit job.
+      - name: npm audit (prod moderate+)
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: npm audit (dev high+)
+        run: npm audit --include=dev --audit-level=high
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"

@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+// Outside-In Audit (OIA) walk.
+//
+// Added in v3.7.17 (round-19) to close the meta-finding: external
+// auditors consistently find stale fragments that internal class-sweeps
+// miss because the internal methodology is CHANGE-DRIVEN (look at what
+// changed, fix the class, verify nearby) while external audits are
+// STATE-DRIVEN (read every file as it exists today, verify each claim
+// against reality).
+//
+// The internal pre-merge RCA sweep (CLAUDE.md rule since v3.7.15) only
+// scans the current patch's diff for class siblings. It does NOT scan
+// stale fragments in files the patch didn't touch — those are the
+// auditor's hunting ground.
+//
+// This script automates the cheap state-driven walks. Run before claiming
+// "no open audit items" in any release.
+//
+// Usage:
+//   node scripts/oia-walk.mjs            # walk, print findings, exit 1 if any
+//   node scripts/oia-walk.mjs --allow    # walk, print findings, always exit 0
+//
+// Checks (all evidence-based — each finding includes file:line and the
+// matched fragment):
+//
+//   1. STALE VERSION TOMBSTONES — `vX.Y.Z` or `X.Y.Z-rc.N` references
+//      in file-header docstrings (first 30 lines of every src/*.ts file)
+//      that aren't tagged as historical context (no `History:` or
+//      `Pre-3.X` lead-in).
+//
+//   2. WORKFLOW EXISTENCE — every CI workflow name referenced in README /
+//      docs (e.g. "CodeQL", "Analyze") must exist as `.github/workflows/
+//      *.yml` OR be explicitly annotated as "via GitHub default-setup".
+//
+//   3. CLI SUBCOMMAND EXISTENCE — every backticked `enquire-mcp <cmd>`
+//      reference in docs/*.md must match a `program.command("<cmd>")`
+//      in `src/cli.ts`.
+//
+//   4. NPM SCRIPT EXISTENCE — every backticked `npm run <script>` in
+//      docs/*.md and scripts/*.mjs comments must match `package.json#scripts`.
+//
+//   5. CURRENT-CLAIM vs TOMBSTONE — comments referring to a "default"
+//      value (e.g. "rerank-multilingual default") must agree with the
+//      actual exported default constant in the same file.
+//
+// Exit codes:
+//   0 — no findings (or --allow flag passed)
+//   1 — at least one finding (full diagnostic to stderr)
+
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const repoRoot = resolve(__dirname, "..");
+
+const ALLOW_MODE = process.argv.includes("--allow");
+
+/** All findings as a flat array. Each entry: { file, line, kind, evidence, hint }. */
+const findings = [];
+
+function record(kind, file, line, evidence, hint) {
+  findings.push({ kind, file, line, evidence, hint });
+}
+
+function readLines(rel) {
+  return readFileSync(join(repoRoot, rel), "utf8").split("\n");
+}
+
+function walk(dir, ext, callback) {
+  for (const entry of readdirSync(join(repoRoot, dir), { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
+      walk(join(dir, entry.name), ext, callback);
+    } else if (entry.name.endsWith(ext)) {
+      callback(join(dir, entry.name));
+    }
+  }
+}
+
+// ─── Check 1: STALE CURRENCY CLAIMS (not historical tombstones) ─────────
+//
+// The KEY DISTINCTION:
+//
+//   • `// v3.5.0 — link predicates added (uses outbound wikilink set)`
+//     → HISTORICAL TOMBSTONE (feature added in v3.5.0; legitimate)
+//
+//   • `// Version 3.6.0-rc.2 split the previous 3665-line monolith`
+//     → STALE CURRENCY CLAIM (reads as if 3.6.0-rc.2 is current)
+//
+// The first round-19 OIA run flagged 21 findings, 20 of which were
+// legitimate tombstones (the `vX.Y.Z — feature` pattern). Refined
+// heuristic now ONLY flags PATTERNS THAT CLAIM CURRENCY:
+//   - "Version X.Y.Z" (no em-dash following, no "was/since" qualifier)
+//   - "X.Y.Z-rc.N" / "X.Y.Z-alpha" / "X.Y.Z-beta" — pre-release tags
+//     should NEVER appear in a current-state claim
+//   - "current X.Y.Z" / "as of X.Y.Z"
+const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+const currentVersion = pkg.version;
+
+// Currency-claim patterns. Each pattern is a regex that captures a
+// version number AND demonstrates a currency claim (not a history note).
+const CURRENCY_CLAIM_PATTERNS = [
+  // "Version X.Y.Z" without preceding "current is" / "was" / "Pre-"
+  /(?<!\w)Version\s+(\d+\.\d+\.\d+)\b(?!\s*[-—])/,
+  // "rc.N" or "alpha.N" or "beta.N" — pre-release tags only appear in
+  // current-state claims (legit history always says "vX.Y.Z added", not
+  // "vX.Y.Z-rc.N added").
+  /\b(\d+\.\d+\.\d+-(?:rc|alpha|beta)\.\d+)/
+];
+
+walk("src", ".ts", (file) => {
+  const lines = readLines(file).slice(0, 30);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^\s*\*|^\s*\/\/|^\s*\/\*/.test(line)) continue;
+    for (const pattern of CURRENCY_CLAIM_PATTERNS) {
+      const m = pattern.exec(line);
+      if (!m) continue;
+      const ver = m[1];
+      if (ver === currentVersion) continue; // current — OK
+      // Skip if surrounding lines provide history context.
+      const context = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 3)).join(" ");
+      if (/\b(History|Pre-|was\s+|legacy|tombstone|previously)\b/i.test(context)) continue;
+      record(
+        "STALE-CURRENCY-CLAIM",
+        file,
+        i + 1,
+        line.trim(),
+        `Reads as currency claim for v${ver} but current is v${currentVersion}. Either prefix with "History:" / "Pre-" to mark as tombstone, or update.`
+      );
+    }
+  }
+});
+
+// ─── Check 2: Workflow existence ────────────────────────────────────────
+// Find every backticked "CodeQL", "Analyze", "smoke", etc. CI gate name
+// in README/docs and verify it exists either as a .github/workflows/*.yml
+// file OR is documented as "default-setup".
+const workflowDir = join(repoRoot, ".github", "workflows");
+const workflowFiles = existsSync(workflowDir) ? readdirSync(workflowDir).filter((f) => f.endsWith(".yml")) : [];
+const workflowJobs = new Set();
+for (const wf of workflowFiles) {
+  const yml = readFileSync(join(workflowDir, wf), "utf8");
+  // Job names like `lint:`, `test:`, etc. Detected by ^\s\s<name>:\n\s\s\sruns-on
+  for (const m of yml.matchAll(/^\s\s([a-z][a-z0-9-]*):\n[\s\S]*?runs-on:/gm)) {
+    workflowJobs.add(m[1]);
+  }
+}
+
+// Specific check from round-19: README claims "CodeQL ×2" + "Analyze actions"
+// in the advisory CI gates section. The actual CodeQL setup is via GitHub
+// default-setup (no workflow file). The README should mention this OR
+// the workflow files should exist. (Either path resolves the auditor's
+// "claim vs reality" finding.)
+const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
+const README_CI_CLAIMS = ["CodeQL", "Analyze actions"];
+for (const claim of README_CI_CLAIMS) {
+  if (readme.includes(claim)) {
+    const hasWorkflowFile = workflowFiles.some((f) =>
+      readFileSync(join(workflowDir, f), "utf8").toLowerCase().includes(claim.toLowerCase())
+    );
+    const hasDefaultSetupNote = readme.toLowerCase().includes("default-setup");
+    if (!hasWorkflowFile && !hasDefaultSetupNote) {
+      record(
+        "WORKFLOW-CLAIM-WITHOUT-EVIDENCE",
+        "README.md",
+        readme.split("\n").findIndex((l) => l.includes(claim)) + 1,
+        `Claims "${claim}" but no matching workflow file and no "default-setup" annotation.`,
+        `Either add the workflow YAML, or annotate the README to clarify the gate comes from GitHub default-setup.`
+      );
+    }
+  }
+}
+
+// ─── Check 3: CLI subcommand existence ──────────────────────────────────
+const cliSrc = readFileSync(join(repoRoot, "src", "cli.ts"), "utf8");
+const registeredSubs = new Set([...cliSrc.matchAll(/program\s*\n?\s*\.command\(\s*"([^"]+)"/g)].map((m) => m[1]));
+
+walk("docs", ".md", (file) => {
+  // Skip docs/audits — internal-only finding notes (excluded from npm
+  // tarball since v3.7.13 L7). These often contain HYPOTHETICAL references
+  // like "the `enquire-mcp dump-index` command if one exists" — flagging
+  // them produces false positives. The cost of skipping is that genuine
+  // stale audit-doc references slip through; we accept that for now since
+  // user-facing docs (docs/*.md root) are what end users see.
+  if (file.startsWith("docs/audits/") || file.startsWith("docs\\audits\\")) return;
+  const lines = readLines(file);
+  for (let i = 0; i < lines.length; i++) {
+    // Match `enquire-mcp <cmd>` and verify <cmd> exists in cli.ts.
+    for (const m of lines[i].matchAll(/`enquire-mcp\s+([a-z][a-z0-9-]*)\b/g)) {
+      const cmd = m[1];
+      if (!registeredSubs.has(cmd)) {
+        record(
+          "CLI-SUBCMD-MISSING",
+          file,
+          i + 1,
+          m[0],
+          `docs reference \`enquire-mcp ${cmd}\` but src/cli.ts has no program.command("${cmd}"). Either add the subcommand or drop the reference.`
+        );
+      }
+    }
+  }
+});
+
+// ─── Check 4: npm script existence ──────────────────────────────────────
+const npmScripts = new Set(Object.keys(pkg.scripts ?? {}));
+
+const npmRefSources = ["docs", "scripts"];
+for (const sourceDir of npmRefSources) {
+  walk(sourceDir, sourceDir === "scripts" ? ".mjs" : ".md", (file) => {
+    const lines = readLines(file);
+    for (let i = 0; i < lines.length; i++) {
+      for (const m of lines[i].matchAll(/`npm run\s+([a-z][a-z0-9:-]*)`/g)) {
+        const script = m[1];
+        if (!npmScripts.has(script)) {
+          record(
+            "NPM-SCRIPT-MISSING",
+            file,
+            i + 1,
+            m[0],
+            `Reference to \`npm run ${script}\` but package.json#scripts has no such entry. Either add the script or fix the reference.`
+          );
+        }
+      }
+    }
+  });
+}
+
+// ─── Check 5: Current-claim vs tombstone for "default" inline comments ──
+// Look for comments like "X is the default" / "(X default)" / "default X"
+// in src/*.ts and cross-check against exported DEFAULT_* constants in
+// the same file. This is a heuristic — false-positive-friendly.
+walk("src", ".ts", (file) => {
+  const src = readFileSync(join(repoRoot, file), "utf8");
+  const defaults = new Map();
+  for (const m of src.matchAll(/^export const (DEFAULT_[A-Z_]+)\s*=\s*"([^"]+)"/gm)) {
+    defaults.set(m[1], m[2]);
+  }
+  if (defaults.size === 0) return;
+  const lines = src.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^\s*\*|^\s*\/\/|^\s*\/\*/.test(line)) continue;
+    // Heuristic: comment mentions "<value> default" or "(<value> default)" — find quoted value.
+    for (const m of line.matchAll(/[`"']([a-z][a-z0-9-]*)[`"']\s+default\b/gi)) {
+      const claimedDefault = m[1];
+      // Check against every DEFAULT_* constant in the file.
+      for (const [constName, actualValue] of defaults) {
+        if (actualValue === claimedDefault) continue; // matches — OK
+        // Heuristic: only flag if the comment mentions the SAME alias prefix
+        // (e.g. comments about "rerank-multilingual default" near a DEFAULT_RERANKER_ALIAS).
+        const prefix = claimedDefault.split("-")[0];
+        if (!actualValue.startsWith(prefix)) continue;
+        record(
+          "STALE-DEFAULT-CLAIM",
+          file,
+          i + 1,
+          line.trim(),
+          `Comment claims "${claimedDefault}" is the default, but ${constName} = "${actualValue}". If the comment is historical, prefix with "Pre-vX.Y.Z, the default was..." to mark as tombstone.`
+        );
+      }
+    }
+  }
+});
+
+// ─── Report ─────────────────────────────────────────────────────────────
+if (findings.length === 0) {
+  console.log("[oia-walk] ✓ No outside-in findings.");
+  process.exit(0);
+}
+
+console.error(`[oia-walk] ${findings.length} finding(s):\n`);
+for (const f of findings) {
+  const relPath = f.file.startsWith(repoRoot) ? relative(repoRoot, f.file) : f.file;
+  console.error(`  • [${f.kind}] ${relPath}:${f.line}`);
+  console.error(`    > ${f.evidence}`);
+  console.error(`    hint: ${f.hint}`);
+  console.error("");
+}
+
+if (ALLOW_MODE) {
+  console.error("[oia-walk] --allow flag set; exiting 0 despite findings.");
+  process.exit(0);
+}
+console.error("[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable).");
+process.exit(1);

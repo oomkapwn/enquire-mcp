@@ -1,16 +1,18 @@
-# Project goal — v3.6.0 sprint
+# Project goal — v3.7.x maintenance + v3.8.0 architectural
 
 This file is read by Claude Code sessions on this repo. It defines the current sprint goal, scope, quality bar, and anti-patterns so any session (continuation or new) shares the same North Star.
 
+**v3.6.0 stable shipped on 2026-05-15.** The current cascade (v3.6.0 → v3.7.17+) is the post-release maintenance + audit-driven hardening line. v3.8.0 is the architectural-changes milestone (HNSW filter-during-search, embed-db migrations, distributed rate-limit, watcher embed-db sync, K-3 readOnlyHint invariant, etc.).
+
 ---
 
-## Goal
+## Goal (historical — v3.6.0 sprint, shipped 2026-05-15)
 
-Release **enquire-mcp v3.6.0** per the planned RC sequence (or better — if mid-sprint observation reveals additional drift classes or quality improvements, extend scope, don't defer).
+Released **enquire-mcp v3.6.0** per the planned RC sequence. This section is preserved as historical context — the sprint is closed.
 
 Directive: **"Максимальное качество и уверенный топ-1 из всех Obsidian MCP по технологии и надёжности."**
 
-## Scope — RC sequence + promotion
+## Scope (closed) — v3.6.0 RC sequence + promotion
 
 - **v3.6.0-rc.1**: `tools.ts` (4252 lines) → 5 domain modules in `src/tools/` + barrel
 - **v3.6.0-rc.2**: `index.ts` (3665 lines) → `src/cli.ts` + `src/server.ts` + `src/prompts.ts` + `src/tool-registry.ts` + `src/tool-manifest.ts`
@@ -18,9 +20,9 @@ Directive: **"Максимальное качество и уверенный т
 - **v3.6.0-rc.4**: TypeDoc + GH Pages auto-generated API reference + Public benchmarks (`docs/benchmarks.md`, MRR/NDCG@10/Recall@K vs 3 main competitors)
 - **v3.6.0 (stable)**: promote rc.4 → npm `latest`, GH release marked Latest
 
-## Quality bar — required on every RC (no exceptions)
+## Quality bar — required on every release (no exceptions)
 
-1. 712+ tests pass (some RCs may add tests from coverage redistribution)
+1. All tests pass (current count: 818+ at v3.7.17; tests grow with each audit cycle — see CHANGELOG)
 2. Lint clean (biome 0 warnings/errors)
 3. `tsc` strict + `noUncheckedIndexedAccess` clean
 4. Coverage thresholds met (lines ≥86, statements ≥82, functions ≥75, branches ≥74)
@@ -73,6 +75,7 @@ Directive: **"Максимальное качество и уверенный т
 - **TSDoc header drifts from function body** — every overclaim instance since v3.6.1 (7 documented) has the same shape: code changed inside a function, but the function-level TSDoc / file-header / block-comment describing the behavior wasn't updated in the same commit. TypeDoc + IDE hover then publish the stale (lying) description. **Rule since v3.7.15**: every fix that changes function internals MUST include the matching TSDoc header update in the same commit; reviewers MUST diff the header alongside the body. Examples of the drift: v3.7.14 F1 (renameNote body fixed, header lied), v3.7.14 F2 inside the SAME patch (renameFile body fixed by F2, header still said "Atomic via fs.rename").
 - **Single class-sweep is not enough — same-release recursion happens** — v3.7.14 F1 fixed overclaim #6, and v3.7.14 F2 SHIPPED overclaim #7 inside the very same patch. The author of an audit-driven fix sees the immediate problem but doesn't apply the lesson to OTHER changes in the same diff. **Rule since v3.7.15**: after every audit-driven release that closes a "class" finding (overclaim, TSDoc drift, TOCTOU, etc.), run a post-merge re-sweep specifically scanning that patch's own diff for fresh instances of the same class. The recursion rate observed across v3.6.x-v3.7.x is high enough that this is a required step, not optional.
 - **Tag the SQUASH-MERGE commit on main, not the feature-branch HEAD** — v3.7.14 was tagged against the pre-merge branch SHA (orphan, not on main), and `.github/workflows/release.yml`'s "Assert tag is on main" guard correctly refused to publish (overclaim #8). The CHANGELOG implied the ship completed before it actually did. **Rule since v3.7.15**: the post-merge release procedure is *always*: `git checkout main` → `git pull origin main` → `git log -1 --oneline` (capture the squash-merge SHA) → `git tag vX.Y.Z <that-SHA>` → `git push origin vX.Y.Z`. Never tag from a feature branch — the squash-merge produces a NEW commit whose SHA differs from the branch HEAD.
+- **Internal change-driven sweeps miss state-driven failure modes — run OIA before claiming "no open findings"** — every external auditor since v3.6.0 has found stale fragments that internal class-sweeps missed: README badges, CLAUDE.md titles, file-header comments, stale CLI references in docs, stale npm-script references in script docstrings. Root cause: my methodology is CHANGE-DRIVEN (look at what changed, fix the class, verify nearby) while external audits are STATE-DRIVEN (read every file as it exists, verify each claim against reality). These find non-overlapping failure modes. **Rule since v3.7.17**: run `npm run check:oia` (`scripts/oia-walk.mjs`) before claiming "no open audit items" in any release. The script automates the 5 cheap state-driven walks: stale currency claims in file headers, CI workflow existence vs README claims, CLI subcommand existence vs docs references, npm script existence vs script-docstring references, and inline-comment default-value claims vs exported `DEFAULT_*` constants. Default mode exits 1 on any finding; `--allow` overrides for documented architectural deferrals. **Round-19 (v3.7.17) shipped the rule + the script after the 5th external audit caught 4 cheap stale fragments my v3.7.16 pre-merge RCA missed.**
 
 ## Method note
 

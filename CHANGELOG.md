@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.17] — 2026-05-19
+
+> **TL;DR:** Round-19 external audit response — 6th independent external audit since v3.6.0, on the v3.7.5 codebase (4 days behind current main). Most findings were already closed by the v3.7.6 → v3.7.16 cascade; this patch addresses 5 **cheap stale-fragment findings** the auditor caught that my internal class-sweeps had missed (A: `src/index.ts` file-header reading as if 3.6.0-rc.2 is current, B: `CLAUDE.md` title + quality bar still saying "v3.6.0 sprint" + "712+ tests", C: `scripts/check-changelog-coverage.mjs` referencing non-existent `npm run check:coverage-drift`, D: `embeddings.ts` inline comment claiming `rerank-multilingual` is the default since v3.6.1 it's actually `rerank-bge`, E: README CI claim about CodeQL ×2 + Analyze actions — they DO run via GitHub default-setup, but the README didn't say so, looking like a workflow-file claim without evidence). **PLUS a meta-methodology fix:** the new `scripts/oia-walk.mjs` automates 5 state-driven outside-in checks that my change-driven sweeps systematically miss. **New CLAUDE.md rule** mandates `npm run check:oia` before claiming "no open audit items" in any release.
+
+**Patch — round-19 stale-fragment cleanup + Outside-In Audit (OIA) methodology fix.**
+
+### Cheap stale-fragment fixes (5)
+
+| # | Finding | File | Resolution |
+|---|---------|------|-----------|
+| A | `// Slim entry point for enquire-mcp. Version 3.6.0-rc.2 split the previous 3665-line monolith` — reads as currency claim | `src/index.ts:2` | Rewrote header to explicitly mark as History: rc.2 split, with current state separately. Same module description preserved as historical context. |
+| B | `# Project goal — v3.6.0 sprint` + `1. 712+ tests pass` — CLAUDE.md title locked at v3.6.0 sprint despite cascade running to v3.7.17 | `CLAUDE.md:1, 23` | Title now `v3.7.x maintenance + v3.8.0 architectural`; v3.6.0 sprint preserved as historical context section; test count claim re-phrased to "All tests pass (current count: 818+ at v3.7.17)" so future test additions don't require a CLAUDE.md edit. |
+| C | Docstring references `npm run check:coverage-drift` — never existed | `scripts/check-changelog-coverage.mjs:26` | Pointed to the real `npm run check:changelog-coverage`. The reference was a "would-be name" the original author never created. |
+| D | Inline comment near `rerank-multilingual-large` says `(rerank-multilingual default)` — but `DEFAULT_RERANKER_ALIAS = "rerank-bge"` since v3.6.1 CRIT-2 | `src/embeddings.ts:306` | Expanded comment to clarify `rerank-multilingual` is the MULTILINGUAL variant, NOT the project-wide default, and cross-referenced `DEFAULT_RERANKER_ALIAS`. |
+| E | README CI gates row claims `CodeQL ×2 · Analyze actions` but no matching `.github/workflows/*.yml` — auditor flagged as "claim without evidence" | `README.md:185` | Annotated the claim to clarify CodeQL/Analyze run via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (the workflow-file route is one path; default-setup is the other). Both routes produce check-runs visible in `gh pr checks`. |
+
+### Outside-In Audit (OIA) methodology fix
+
+**The meta-finding from round-19:** every external auditor since v3.6.0 has found cheap stale fragments that my internal class-sweeps systematically miss. Root cause: my methodology is **change-driven** (look at what changed, fix the class, verify nearby) while external audits are **state-driven** (read every file as it exists today, verify each claim against reality). These find non-overlapping failure modes.
+
+**My methodology's specific blind spots** (catalogued from the 6 external audit cycles):
+
+1. **Recency bias** — files I haven't edited in N releases fall out of attention. `src/index.ts:2` was never touched in v3.7.x.
+2. **Trust my own ledger** — CHANGELOG says "v3.7.13 H3 bumped engines.node"; I treat as canonical without grep-verifying every file.
+3. **Class-pattern sweeps assume the class is in my mental model** — I sweep TOCTOU, TSDoc drift, hardcoded counts. I didn't enumerate "claim about CI workflows that don't exist" or "CLI subcommand referenced in docs but not in cli.ts" as classes until the auditor named them.
+4. **Pre-merge RCA sweep (v3.7.15 rule) is narrow** — it sweeps the patch's diff for class siblings. Doesn't sweep stale fragments NOT touched by this PR.
+5. **Marketing copy = read-only** — I update gated counts but don't routinely diff hero / tagline / badge against reality.
+6. **File-level vs function-level docstrings** — round-18 catch was function-level; file-level (first 30 lines) almost never re-read.
+7. **Project meta-docs not walked** — I update bodies (e.g. CLAUDE.md "Current phase status") but never re-read titles.
+8. **Utility scripts = black box** — I *run* `scripts/check-*.mjs`; I don't *read* their docstrings.
+9. **Historical vs current inline comments** — tombstones (`// v3.6.1 CRIT-2 — was X`) are legitimate history. Current-claim comments (`(rerank-multilingual default)`) drift silently. I don't distinguish.
+10. **Internal mental model becomes the lens** — I have a model of "current project state" (3.7.17, 818 tests, BGE default). When I look at code, I VALIDATE its conformance to my model. If code drifted but the model didn't, I can't see the drift.
+
+**Solution: `scripts/oia-walk.mjs`** (`npm run check:oia`). Five state-driven walks that automate what external auditors do manually:
+
+1. **STALE-CURRENCY-CLAIM** — scan first 30 lines of every `src/**/*.ts` for currency-claim patterns ("Version X.Y.Z", "rc.N", "alpha.N", "beta.N") not marked as historical (History:, Pre-, was, since, previously). Refined heuristic after a noisy first pass that flagged 21 legitimate tombstones — now only flags claims of currency, not feature-history notes.
+2. **WORKFLOW-CLAIM-WITHOUT-EVIDENCE** — README claims about CI workflows (CodeQL, Analyze) must have either a matching `.github/workflows/*.yml` OR a "default-setup" annotation.
+3. **CLI-SUBCMD-MISSING** — every `enquire-mcp <cmd>` reference in `docs/*.md` (excluding `docs/audits/`) must match a `program.command("<cmd>")` in `src/cli.ts`.
+4. **NPM-SCRIPT-MISSING** — every `npm run <script>` reference in `docs/*.md` and `scripts/*.mjs` docstrings must match `package.json#scripts`.
+5. **STALE-DEFAULT-CLAIM** — heuristic match: inline comments claiming `"X is the default"` are cross-checked against exported `DEFAULT_*` constants in the same file.
+
+**New CLAUDE.md rule (added in this patch):** *"Internal change-driven sweeps miss state-driven failure modes — run OIA before claiming 'no open findings'."* Sits alongside the v3.7.15 "pre-merge RCA sweep" rule. Together they cover both inside-out (RCA on the patch's classes) and outside-in (OIA on the whole repo) audit dimensions.
+
+### Architectural findings still OPEN at v3.7.17 (round-19 audit)
+
+These are documented v3.8+ deferrals — the round-19 auditor found them, and they remain open by design until the next minor:
+
+- **K-3 — Generalized `readOnlyHint: true` → no destructive operations invariant.** Per v3.7.5 CHANGELOG. Closes the K-1 sibling class structurally.
+- **Watcher doesn't sync embed-db on .md changes.** P1-5 (v3.7.16) closed PDF lifecycle in watcher; embed-db sync requires the embedder pipeline in the watcher process (architectural — adds ML deps to the watcher path).
+- **No per-file mutex in watcher.** Parallel chokidar events for the same file race; last-write-wins. Acceptable for now but not for high-frequency vault changes.
+- **CHANGELOG 469 KB** — historical noise. Open by design. Periodic compaction TBD.
+- **`docs/audits/*`** — internal finding notes; some have `fixed` status in the file body that doesn't match overall file framing. Excluded from npm tarball since v3.7.13 L7.
+- **Audit level inconsistency** — PR CI: `npm audit --audit-level=moderate` for prod deps; release.yml: `--audit-level=high`. Architectural choice — should be unified or explicitly documented.
+
+### Stats
+
+- **818 tests** (unchanged; v3.7.17 is a documentation + stale-fragment patch, no new code-paths to test).
+- **+0 docs-consistency invariants** added (the OIA script's STALE-DEFAULT-CLAIM check covers the heuristic; structural invariants are added incrementally when patterns recur).
+- **+1 new gate script**: `npm run check:oia` (advisory in this release; required CI gate scheduled for v3.7.18 once it's been validated in production for one release cycle).
+- All 8 required CI gates pass locally.
+
+### Method
+
+Round-19 closes the most important methodological gap of the v3.6.0 → v3.7.17 cascade: **external audits will always find what internal audits miss UNLESS the internal methodology explicitly includes state-driven walks.** Pre-3.7.17 my methodology was 100% change-driven (class sweeps, TSDoc verification on touched files, pre-merge RCA on the patch diff). Adding `oia-walk.mjs` + the CLAUDE.md rule introduces the missing state-driven dimension. **Net effect: round-20 should find significantly fewer stale fragments — if it still does, the OIA script needs another check pattern added.**
+
 ## [3.7.16] — 2026-05-18
 
 > **TL;DR:** Round-18 external audit response — 5th independent external audit since v3.6.0, run on the v3.7.5 codebase (commit `b9daf39`). The cascade v3.7.6 → v3.7.15 had already closed many findings; this patch addresses the still-open critical + high-impact items. **10 fixes** landed: 5 P1 High (OCR network disclosure + 200-page cap, persistent cache + privacy filters, PDF watcher lifecycle, macOS case-insensitive write bypass), 3 P2 Medium (title-based write ambiguity = silent data corruption, validateNoteProposal privacy check, FTS5 tag LIKE wildcard escape), 2 P3 Low (PDF install hint version, FTS5 reserved-word quoting, issue template ChatGPT). Plus 1 graph-boost path bug (P2-16, C# Notes.md). **+0 tests** (1 test contract change for P3-28). 4 architectural findings deferred to v3.8.0 (serve-http parity, FTS5/embedding chunking parity, search underfill, OCR timeout/concurrency).

@@ -31,6 +31,64 @@ interface HttpServeCli extends ServeOptions {
   maxSessions?: string;
 }
 
+/**
+ * v3.8.0-rc.1 R-3 — shared option-registration for the 8 advanced
+ * retrieval flags. Pre-3.8.0 these lived ONLY on `serve`, so HTTP-mode
+ * users couldn't enable cross-encoder reranking, HNSW vector search,
+ * PDF indexing, or late-chunking — half the project's retrieval stack
+ * was inaccessible via remote MCP. Round-20 external audit (R-3) caught
+ * this as the "duplicate CLI surfaces" class D finding.
+ *
+ * The 8 flags (all v2.x-introduced features documented in CHANGELOG):
+ *   --include-pdfs            (v2.8.0 — FTS5 + embeddings PDF indexing)
+ *   --enable-reranker         (v2.9.0 — BGE cross-encoder post-RRF)
+ *   --reranker-model <alias>  (v2.9.0 / v3.3.0 — alias registry)
+ *   --reranker-top-n <n>      (v2.9.0 — how many fused hits to rerank)
+ *   --use-hnsw                (v2.13.0 — in-memory ANN index)
+ *   --hnsw-ef <n>             (v2.13.0 — search beam width)
+ *   --late-chunk-context <n>  (v2.15.0 — neighbor-tail context window)
+ *   --no-hnsw-persist         (v2.16.0 — disable sidecar persistence)
+ *
+ * A CLI-parity invariant test (`tests/cli-parity.test.ts`) asserts both
+ * commands accept the same set of retrieval flags so future drift fails
+ * CI rather than silently shipping an asymmetric surface.
+ */
+function addAdvancedRetrievalOptions(cmd: Command): Command {
+  return cmd
+    .option(
+      "--include-pdfs",
+      'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
+    )
+    .option(
+      "--enable-reranker",
+      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; +5-10 NDCG@10 typical for retrieval quality. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
+    )
+    .option(
+      "--reranker-model <alias>",
+      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-bge` (Xenova/bge-reranker-base, ~110 MB, English; v3.6.1 — verified working end-to-end). Other options: `rerank-multilingual` / `rerank-bge-large` / `rerank-jina-tiny` / `rerank-multilingual-large` currently fail at AutoTokenizer due to transformers.js compat issue — tracked for v3.7+ restoration. Only effective with `--enable-reranker`."
+    )
+    .option(
+      "--reranker-top-n <n>",
+      "v2.9.0 — how many top RRF-fused candidates to rerank (default 50). Larger N improves recall ceiling but costs more reranker compute (~30-50ms per 50 pairs on M1). Only effective with `--enable-reranker`."
+    )
+    .option(
+      "--use-hnsw",
+      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-node` optionalDependency (native binding via N-API)."
+    )
+    .option(
+      "--hnsw-ef <n>",
+      "v2.13.0 — HNSW search-time beam width (default 100; must be ≥ requested k). Higher = more accurate, slightly slower. Common range: 50-500. Only effective with `--use-hnsw`."
+    )
+    .option(
+      "--late-chunk-context <chars>",
+      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
+    )
+    .option(
+      "--no-hnsw-persist",
+      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
+    );
+}
+
 export async function main(): Promise<void> {
   const program = new Command();
   program
@@ -38,7 +96,7 @@ export async function main(): Promise<void> {
     .description("enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the WWW.")
     .version(VERSION);
 
-  program
+  const serveCmd = program
     .command("serve", { isDefault: true })
     .description("Start the MCP server over stdio")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
@@ -73,39 +131,8 @@ export async function main(): Promise<void> {
       "--enabled-tools <name...>",
       "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
     )
-    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
-    .option(
-      "--include-pdfs",
-      'v2.8.0 — also index PDF files into FTS5 (and embeddings, if `enquire-mcp build-embeddings --include-pdfs` ran). With `--persistent-index`, PDF chunks become first-class hits in `obsidian_search` results, surfaced with `kind: "pdf"` flag. Off by default — opt-in because PDF text extraction is slower than markdown (~50-200ms per page on M1 cold). Requires the `pdfjs-dist` optionalDependency (default-installed unless you used `--omit=optional`).'
-    )
-    .option(
-      "--enable-reranker",
-      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; +5-10 NDCG@10 typical for retrieval quality. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
-    )
-    .option(
-      "--reranker-model <alias>",
-      "v2.9.0 (registry extended in v3.3.0) — reranker alias from RERANKER_MODELS. Default `rerank-bge` (Xenova/bge-reranker-base, ~110 MB, English; v3.6.1 — verified working end-to-end). Other options: `rerank-multilingual` / `rerank-bge-large` / `rerank-jina-tiny` / `rerank-multilingual-large` currently fail at AutoTokenizer due to transformers.js compat issue — tracked for v3.7 restoration. Only effective with `--enable-reranker`."
-    )
-    .option(
-      "--reranker-top-n <n>",
-      "v2.9.0 — how many top RRF-fused candidates to rerank (default 50). Larger N improves recall ceiling but costs more reranker compute (~30-50ms per 50 pairs on M1). Only effective with `--enable-reranker`."
-    )
-    .option(
-      "--use-hnsw",
-      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-node` optionalDependency (native binding via N-API)."
-    )
-    .option(
-      "--hnsw-ef <n>",
-      "v2.13.0 — HNSW search-time beam width (default 100; must be ≥ requested k). Higher = more accurate, slightly slower. Common range: 50-500. Only effective with `--use-hnsw`."
-    )
-    .option(
-      "--late-chunk-context <chars>",
-      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
-    )
-    .option(
-      "--no-hnsw-persist",
-      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
-    )
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
+  addAdvancedRetrievalOptions(serveCmd)
     .option(
       "--quantize-embeddings <mode>",
       "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
@@ -118,7 +145,7 @@ export async function main(): Promise<void> {
 
   // v2.6.0 — remote-MCP HTTP transport. Mirrors `serve` flags + adds HTTP
   // surface (bearer auth, rate-limit, CORS). See docs/http-transport.md.
-  program
+  const serveHttpCmd = program
     .command("serve-http")
     .description(
       "Start the MCP server over HTTP (Streamable HTTP transport). For remote-MCP use with claude.ai web, ChatGPT, Cursor HTTP mode, mobile clients. Requires --bearer-token (or --bearer-token-env). Bind to 127.0.0.1 by default — front with Tailscale Funnel / Cloudflare Tunnel for remote access."
@@ -170,7 +197,13 @@ export async function main(): Promise<void> {
     .option("--watch", "Watch the vault for .md changes and refresh indexes incrementally.")
     .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
     .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
-    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP)
+    .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
+  // v3.8.0-rc.1 R-3 — apply the same advanced-retrieval flag set as
+  // `serve` so HTTP-mode users can enable reranker / HNSW / PDF indexing /
+  // late-chunking. Pre-3.8.0 these flags were SILENTLY missing from
+  // serve-http — bearer-authenticated clients got a strictly less-featured
+  // retrieval stack than stdio clients despite "same server" framing.
+  addAdvancedRetrievalOptions(serveHttpCmd)
     .option(
       "--quantize-embeddings <mode>",
       "v2.17.0 — vector storage encoding for the persistent embed db (`f32` default, `int8` for ~4× smaller BLOBs). Must match the mode used at `build-embeddings` time."

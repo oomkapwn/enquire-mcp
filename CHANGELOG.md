@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.1] — 2026-05-20
+
+> **TL;DR:** First release candidate for the v3.8.0 architectural milestone. Closes **R-3 serve-http feature parity** (round-20 audit) — 8 advanced retrieval flags that were silently missing from `serve-http` are now available, with a CLI-parity invariant test to prevent future drift. Ships under `@rc` dist-tag; v3.7.x remains `@latest` until v3.8.0 stable.
+
+**Minor — v3.8.0 release candidate.**
+
+### R-3 — serve-http feature parity (round-20 audit)
+
+Pre-3.8.0, `serve` accepted 8 advanced retrieval flags that `serve-http` did NOT register:
+- `--include-pdfs` (v2.8.0 — PDF FTS5/embedding indexing)
+- `--enable-reranker` (v2.9.0 — BGE cross-encoder)
+- `--reranker-model <alias>` (v2.9.0 / v3.3.0 — alias registry)
+- `--reranker-top-n <n>` (v2.9.0 — top-N to rerank)
+- `--use-hnsw` (v2.13.0 — in-memory ANN)
+- `--hnsw-ef <n>` (v2.13.0 — search beam width)
+- `--late-chunk-context <chars>` (v2.15.0 — context windowing)
+- `--no-hnsw-persist` (v2.16.0 — disable sidecar)
+
+**Impact**: HTTP-mode users (claude.ai web, ChatGPT, mobile MCP clients) got a strictly less-featured retrieval stack than stdio users despite the "same server, same tools, same indexes" framing in `docs/http-transport.md`. Specifically: no cross-encoder reranking, no HNSW ANN, no PDF indexing, no late-chunking — half the v3.7.x retrieval stack was inaccessible via remote MCP.
+
+**Fix**: extracted `addAdvancedRetrievalOptions(cmd: Command): Command` helper in `src/cli.ts`. Applied to BOTH `serve` and `serve-http`. Flag values flow through automatically because `ServeOptions` (in `src/server.ts`) already defines all 8 fields, and `serve-http`'s action handler does `...(opts as ServeOptions)` to spread all options into `HttpServeOptions`.
+
+### CLI-parity invariant test
+
+New `tests/cli-parity.test.ts` asserts both subcommands register the same 8 advanced retrieval flags. Two tests:
+1. **Positive**: both `serve` and `serve-http` registration blocks include all 8 flags (via the shared helper).
+2. **Negative-control**: the `addAdvancedRetrievalOptions` helper body itself must define exactly 8 flags (not more, not fewer) — catches accidental scope creep AND missing flags.
+
+If a future PR adds a new retrieval flag to only ONE command, OR drops a flag from the helper, CI fails on this test. **Structural enforcement > comment promises.**
+
+### Architectural items still deferred to v3.8.0 stable
+
+The full v3.8.0 milestone scope (multi-RC sequence):
+- **R-7 — watcher → embed-db sync** on .md changes (currently only FTS5 syncs)
+- **K-3 — `readOnlyHint: true` → no destructive operations** structural invariant
+- **R-10 — HNSW + privacy under-return** fix (over-fetch margin tuning)
+- **T-1 … T-5 — test coverage gaps** (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E)
+- **4/5 reranker E2E in CI** (model-cache strategy to avoid 110 MB download per CI run)
+
+Each is multi-day work; the rc sequence will land them incrementally.
+
+### Stats
+
+- **820 tests** (+2 from CLI parity test). Was 818 in v3.7.20.
+- Dist-tag on npm: `@rc` (NOT `@latest`). v3.7.20 remains the recommended `@latest` channel.
+- All 8 required CI gates pass locally.
+
+### How to try v3.8.0-rc.1
+
+```bash
+npm install -g @oomkapwn/enquire-mcp@rc
+# or pin
+npm install @oomkapwn/enquire-mcp@3.8.0-rc.1
+```
+
+Then in `serve-http` mode, the 8 advanced retrieval flags are now accepted:
+```bash
+enquire-mcp serve-http \
+  --vault ~/Obsidian/MyVault \
+  --bearer-token-env ENQUIRE_BEARER_TOKEN \
+  --persistent-index \
+  --include-pdfs \
+  --enable-reranker \
+  --use-hnsw \
+  --watch
+```
+
 ## [3.7.20] — 2026-05-20
 
 > **TL;DR:** Round-22 deep audit on classes never explicitly swept (ε privacy, ζ DoS caps, μ input sanitization, ν error info disclosure). **2 findings closed**, plus a class-coverage matrix added to the audit ledger. Classes μ (input sanitization) and ζ (DoS caps) verified CLEAN.

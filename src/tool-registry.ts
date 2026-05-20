@@ -1207,6 +1207,21 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
       }
       const notePathRaw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
       const decoded = decodeNotePath(notePathRaw);
+      // v3.7.20 R-9 — defense-in-depth: reject `..` / absolute-path inputs
+      // BEFORE the FTS5 lookup. Pre-3.7.20, a chunk URI like
+      // `obsidian://chunk/0/../../../etc/passwd` would not match anything
+      // in FTS5 (which only contains vault-relative paths) and return a
+      // generic "Chunk not found" — so privacy WAS preserved end-to-end,
+      // but the path-traversal attempt itself wasn't rejected at the
+      // input boundary. resolveInside() is the canonical path-traversal
+      // guard used across vault read/write surfaces; applying it here
+      // makes the error surface uniform AND prevents future regressions
+      // if someone ever indexes content keyed on non-vault-relative paths.
+      try {
+        vault.resolveInside(decoded);
+      } catch {
+        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
+      }
       // v2.0.0-beta.2 P0 fix: enforce --read-paths / --exclude-glob on the
       // chunk resource. The .fts5.db can contain entries from before the user
       // added a privacy filter, so a stale URI returned earlier in the

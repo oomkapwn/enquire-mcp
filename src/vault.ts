@@ -1010,7 +1010,13 @@ export class Vault {
       const real = await fs.realpath(abs);
       const rel = path.relative(this.root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        throw new Error(`Resolved path escapes vault root: ${abs}`);
+        // v3.7.20 ν class — error message previously interpolated `${abs}`,
+        // which leaked the vault's absolute path to MCP clients (over HTTP,
+        // that goes to anyone with a valid bearer token). The leak isn't
+        // a security boundary (vault paths aren't secrets) but it's
+        // unnecessary information disclosure. Use the resolved relative
+        // form (which shows the user's intent) instead.
+        throw new Error(`Resolved path escapes vault root: ${relOrAbs}`);
       }
       // Privacy filter — refuse to surface excluded content even via direct
       // read/write. Combined with listMarkdown filtering, the LLM has no

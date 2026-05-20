@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.20] — 2026-05-20
+
+> **TL;DR:** Round-22 deep audit on classes never explicitly swept (ε privacy, ζ DoS caps, μ input sanitization, ν error info disclosure). **2 findings closed**, plus a class-coverage matrix added to the audit ledger. Classes μ (input sanitization) and ζ (DoS caps) verified CLEAN.
+
+**Patch — round-22 deep audit batch.**
+
+### Class ν (error info disclosure) — 1 fix
+
+- **`src/vault.ts:1013`** — `throw new Error(\`Resolved path escapes vault root: ${abs}\`)` interpolated the resolved absolute path of the user's resolved filesystem. Over MCP HTTP, that error reaches any client with a valid bearer token. Vault paths aren't secrets, but the leak is unnecessary information disclosure (could reveal the user's home directory structure, vault location, OS layout). Changed to `${relOrAbs}` (the user's original input), which preserves the diagnostic info without leaking the resolved-on-disk path.
+
+### Class ε (privacy filter coverage) — 1 fix
+
+- **R-9 / chunk resource defense-in-depth (`src/tool-registry.ts:1208`)** — pre-3.7.20, a chunk URI like `obsidian://chunk/0/../../../etc/passwd` would not match anything in FTS5 (which only contains vault-relative paths) and return a generic "Chunk not found" — so privacy WAS preserved end-to-end, but the path-traversal attempt itself wasn't rejected at the input boundary. Now: explicit `vault.resolveInside(decoded)` before the FTS5 lookup; on throw (path escapes vault root), return the same "Chunk not found" framing. Defense-in-depth + uniform error surface.
+
+### Classes verified clean (no new findings)
+
+- **Class μ (input sanitization)** — YAML uses `SAFE_SCHEMA` via js-yaml directly + via gray-matter wrapper. All JSON.parse callsites are wrapped in try/catch (vault loadDiskCache, eval queries, periodic config, canvas, HTTP body). Node 22's V8 handles `__proto__` safely. No new findings.
+- **Class ζ (DoS resource caps)** — all numeric tool inputs capped via Zod schema (`.max(200)`, `.max(500)`, `.max(2000)`, `.max(50)`). `context_pack.budget_tokens.max(32000)`. HTTP body cap (~7.5 MB derived from `--max-file-bytes`) is the backstop for unbounded string fields. No DoS gaps found.
+- **Class θ ι β γ δ** — covered in v3.7.18 + v3.7.19; no regressions.
+
+### Audit ledger — class coverage matrix
+
+The cascade has now systematically swept these classes (some across multiple rounds):
+
+| Class | Description | Status |
+|-------|-------------|--------|
+| α | Stale fragment / TSDoc drift (the OIA umbrella class) | Catalog of 8 OIA checks |
+| β | Auth/permission infra (NPM_TOKEN, GH_TOKEN scopes) | Documented + actionable |
+| γ | Non-transactional DB ops | Closed (5 sites fixed v3.7.18/19) |
+| δ | Race conditions (TOCTOU writes/renames/appends) | Closed (M2/F2/F3) |
+| ε | Privacy filter coverage | 1 fix in v3.7.20; R-10 HNSW under-return = v3.8 backlog |
+| ζ | DoS resource caps | Closed (no new gaps) |
+| η | Test coverage holes | T-1..T-5 = v3.8 backlog |
+| θ | False-automation claims | 3 closed v3.7.19 |
+| ι | CI vs Release config drift | 2 closed v3.7.19 |
+| μ | Input sanitization | Verified clean v3.7.20 |
+| ν | Error info disclosure | 1 closed v3.7.20 |
+
+Remaining open items are all multi-day v3.8.0 architectural work (R-3 serve-http parity, R-7 watcher embed sync, K-3 readOnlyHint, T-1..T-5 test gaps, R-10 HNSW under-return).
+
+### Stats
+
+- **818 tests** (unchanged — both fixes are guard-additions, behavior unchanged for valid inputs).
+- All 8 required CI gates pass locally.
+- NPM_TOKEN refreshed (Granular Access Token in GitHub Secrets); v3.7.19 + v3.7.20 should publish via CI cleanly with SLSA-3 provenance restored.
+
 ## [3.7.19] — 2026-05-20
 
 > **TL;DR:** Round-21 SELF-audit on v3.7.18. Triggered after npm-side discovery (NPM_TOKEN 2FA enforcement) forced a manual `npm publish` for v3.7.18 — which broke the SLSA-3 attestation chain. The recovery exposed how many state-driven failure modes the v3.7.17/18 OIA still missed. 7 cheap fixes, all class-validated against the round-20 audit + the v3.7.18 OIA gap.

@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.4] — 2026-05-21
+
+> **TL;DR:** Fourth v3.8.0 release candidate. Closes the rc.3 architectural deferral: extracts `embedSingleNote` (rc.2) + `embedSinglePdf` (rc.3) from `src/server.ts` into a dedicated `src/embed-pipeline.ts` module. The motivation was the `tests/no-internal-imports.test.ts` Class A invariant — server.ts is in `RESTRICTED_MODULES`, so the helpers couldn't be unit-tested directly. Now they can: 10 new direct unit tests in `tests/embed-pipeline.test.ts` cover happy paths, null returns, embedder error propagation, frontmatter title resolution, late-chunk-context honoring, and the data-integrity guard against mismatched vector counts. Ships under `@rc` dist-tag.
+
+**Minor — fourth v3.8.0 release candidate.**
+
+### Architectural extraction
+
+1. **New module `src/embed-pipeline.ts`** (~135 lines) — houses `embedSingleNote` + `embedSinglePdf` + shared `EmbedRow` interface. No new code; pure relocation + re-export.
+
+2. **`src/server.ts` import** — `syncEmbedDb` and `syncPdfEmbedDb` now import the helpers from `./embed-pipeline.js` (top-level import) instead of having them inlined. No behavior change.
+
+3. **`src/watcher.ts` dynamic import** — the `await import(...)` calls inside `handle()` now target `./embed-pipeline.js` instead of `./server.js`. Same dynamic-import gating (loads only when `embedDb` + `embedder` are wired) so the no-embed code path stays zero-cost.
+
+4. **`tests/embed-pipeline.test.ts`** — 10 new unit tests. Coverage on the new file: **94.44% statements / 85% branches / 100% functions / 100% lines**. The previously-flaky chokidar-based fail-soft tests from rc.3's draft batch are no longer needed — embedder-error propagation is now tested deterministically (vault + mock embedder, no watcher overhead).
+
+### Why this matters
+
+The Class A invariant from `tests/no-internal-imports.test.ts` blocks tests from value-importing `src/{cli,server,tool-registry,prompts}.ts`. Pre-rc.4, that meant the rc.2 + rc.3 helpers had ZERO direct unit tests — they got covered only end-to-end via watcher chokidar tests, which flake at ~25% locally due to debounce timing. rc.4 splits the helpers out into a non-restricted module so:
+
+- Future audit findings on these helpers can be tested in isolation (deterministic, fast — 227ms vs ~8s for chokidar-based watcher tests).
+- The "watcher.ts branch coverage floor 71% → 69%" deferral from rc.3 stays mostly closed (embed-pipeline at 85% branches absorbs the work; watcher.ts itself unchanged at 69.23% because the inline branches were always wiring + error handling, not pipeline logic).
+- New code added to the embed pipeline gets a clean test surface to extend, not a "where do I put this test?" question.
+
+### Coverage floor decision
+
+`src/watcher.ts` per-file branch floor stays at **69%** (set in rc.3) because:
+- The extraction moved LOGIC out of watcher.ts but watcher.ts's uncovered branches (lines 314-319, 327-328) are chokidar wiring + outer try/catch for file-disappeared-mid-event — not embed-pipeline logic.
+- Adding chokidar-based tests for those branches reintroduces rc.3's 25% flake rate.
+- Lifting requires either `vi.mock` on the dynamic import (rc.5+ scope — needs testing infrastructure design) or refactoring to dependency injection (architectural — rc.6+).
+
+Floor stays documented in `scripts/check-per-file-coverage.mjs` with the same rc.3 rationale, now amended to reference embed-pipeline coverage as the architectural offset.
+
+### Stats
+
+- **832 tests** (+10 from `tests/embed-pipeline.test.ts`). Was 822 in v3.8.0-rc.3.
+- New file: `src/embed-pipeline.ts` (~135 LoC, 85% branch coverage).
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All required CI gates pass locally.
+
+### v3.8.0 remaining backlog (next RCs)
+
+- **K-3** — `readOnlyHint: true` → no destructive operations structural invariant (rc.5 candidate).
+- **R-10** — HNSW + privacy under-return fix (over-fetch margin tuning).
+- **T-1..T-5** — test coverage gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+- **4/5 reranker E2E in CI** with model-cache strategy.
+- **OCR'd PDF watcher embed-sync** (deferred from rc.3).
+- **HNSW in-memory update** alongside watcher upserts (architectural).
+- **watcher.ts catch-branch coverage via vi.mock or DI** — lift floor back to ≥71% (rc.5+).
+
 ## [3.8.0-rc.3] — 2026-05-20
 
 > **TL;DR:** Third v3.8.0 release candidate. Closes the PDF half of **R-7 watcher → embed-db sync** that rc.2 deferred. Pre-rc.3 the watcher would re-embed edited `.md` files but PDFs still drifted silently. Now both surfaces stay in sync. Refactors `syncPdfEmbedDb` onto a shared `embedSinglePdf` helper (DRY with watcher), so bulk-sync and watcher-sync share one tested code path. Ships under `@rc` dist-tag.

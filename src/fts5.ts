@@ -243,43 +243,58 @@ export class FtsIndex {
     const tokenizeMatch = meta.tokenize_mode === undefined || meta.tokenize_mode === this.tokenize;
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
     const versionMatch = meta.schema_version === undefined || meta.schema_version === String(SCHEMA_VERSION);
-    if (!tokenizeMatch || !rootMatch || !versionMatch) {
-      const reason: string[] = [];
-      if (!tokenizeMatch) reason.push(`tokenize ${meta.tokenize_mode} → ${this.tokenize}`);
-      if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
-      if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
-      process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
-      // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
-      // the `tags` column). DROP IF EXISTS handles a fresh DB too.
-      db.exec("DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS source_state;");
-    }
+    // v3.7.19 γ3 / R-6 from round-20 — wrap the DROP+CREATE+writeMeta
+    // sequence in a single db.transaction(). Pre-3.7.19 the steps ran
+    // independently; while the existing code IS self-healing on next open
+    // via CREATE IF NOT EXISTS + DROP IF EXISTS + readMeta idempotency,
+    // a transaction makes the failure mode explicit: either the rebuild
+    // completes fully OR it rolls back to the pre-rebuild state with
+    // chunks/source_state still intact. Defensive programming + removes
+    // the auditor's concern. FTS5 virtual table CREATE is supported
+    // inside transactions on SQLite >= 3.7 (better-sqlite3 ships 3.40+).
+    const txn = db.transaction(() => {
+      if (!tokenizeMatch || !rootMatch || !versionMatch) {
+        const reason: string[] = [];
+        if (!tokenizeMatch) reason.push(`tokenize ${meta.tokenize_mode} → ${this.tokenize}`);
+        if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
+        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
+        process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
+        // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
+        // the `tags` column). DROP IF EXISTS handles a fresh DB too.
+        db.exec("DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS source_state;");
+      }
 
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
-        content,
-        rel_path UNINDEXED,
-        chunk_index UNINDEXED,
-        line_start UNINDEXED,
-        line_end UNINDEXED,
-        tags UNINDEXED,
-        raw_content UNINDEXED,
-        kind UNINDEXED,
-        tokenize='${tokenizeArg}'
-      );
-      CREATE TABLE IF NOT EXISTS source_state (
-        rel_path TEXT PRIMARY KEY,
-        mtime_ms INTEGER NOT NULL,
-        n_chunks INTEGER NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'md',
-        indexed_at TEXT NOT NULL
-      );
-    `);
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
+          content,
+          rel_path UNINDEXED,
+          chunk_index UNINDEXED,
+          line_start UNINDEXED,
+          line_end UNINDEXED,
+          tags UNINDEXED,
+          raw_content UNINDEXED,
+          kind UNINDEXED,
+          tokenize='${tokenizeArg}'
+        );
+        CREATE TABLE IF NOT EXISTS source_state (
+          rel_path TEXT PRIMARY KEY,
+          mtime_ms INTEGER NOT NULL,
+          n_chunks INTEGER NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'md',
+          indexed_at TEXT NOT NULL
+        );
+      `);
 
-    this.writeMeta({
-      schema_version: String(SCHEMA_VERSION),
-      vault_root: this.vaultRoot,
-      tokenize_mode: this.tokenize
+      // writeMeta inside the same transaction — keeps meta + schema
+      // atomically in sync. (writeMeta opens its own nested transaction,
+      // but better-sqlite3 handles nesting via savepoints.)
+      this.writeMeta({
+        schema_version: String(SCHEMA_VERSION),
+        vault_root: this.vaultRoot,
+        tokenize_mode: this.tokenize
+      });
     });
+    txn();
   }
 
   private readMeta(): Record<string, string> {
@@ -293,7 +308,16 @@ export class FtsIndex {
   private writeMeta(kv: Record<string, string>): void {
     const db = this.requireDb();
     const stmt = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-    for (const [k, v] of Object.entries(kv)) stmt.run(k, v);
+    // v3.7.19 γ1 — wrap multi-key INSERT in db.transaction(). Pre-3.7.19
+    // the loop ran N independent INSERTs; a crash / SIGKILL between them
+    // left meta partially-updated, causing the next open to see e.g.
+    // schema_version bumped but tokenize_mode stale — bootstrapSchema
+    // would then drift on the inconsistent state. Sibling of v3.7.18 R-8
+    // (same class — non-transactional DB ops).
+    const txn = db.transaction(() => {
+      for (const [k, v] of Object.entries(kv)) stmt.run(k, v);
+    });
+    txn();
   }
 
   private requireDb(): Db {

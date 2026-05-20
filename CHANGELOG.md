@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.19] — 2026-05-20
+
+> **TL;DR:** Round-21 SELF-audit on v3.7.18. Triggered after npm-side discovery (NPM_TOKEN 2FA enforcement) forced a manual `npm publish` for v3.7.18 — which broke the SLSA-3 attestation chain. The recovery exposed how many state-driven failure modes the v3.7.17/18 OIA still missed. 7 cheap fixes, all class-validated against the round-20 audit + the v3.7.18 OIA gap.
+
+**Patch — round-21 self-audit batch.**
+
+### Class γ (non-transactional DB ops) — 4 new sibling instances closed
+
+R-8 (v3.7.18) wrapped `fts5.dropFile` in `db.transaction()`. The round-21 RCA sweep on the same class found **4 more sites with the same shape**:
+
+- **γ1 / `src/fts5.ts:writeMeta`** — multi-key INSERT in `for` loop without txn wrap. Crash mid-loop left meta partially-updated → next open's `bootstrapSchema` saw inconsistent state. Wrapped in `db.transaction()`.
+- **γ2 / `src/embed-db.ts:writeMeta`** — same pattern + same fix.
+- **γ3 / `src/fts5.ts:bootstrapSchema` (R-6 from round-20)** — DROP TABLE chunks + DROP TABLE source_state + CREATE chunks + CREATE source_state + writeMeta ran as separate exec calls. Self-healing on next open via IF EXISTS / IF NOT EXISTS idempotency, but a CRASH between steps left observable mid-state. Wrapped the whole sequence in one transaction. FTS5 virtual table CREATE works inside transactions on SQLite ≥3.7 (better-sqlite3 ships 3.40+).
+- **γ4 / `src/embed-db.ts:bootstrapSchema`** — same as γ3 for embeddings + source_state tables + 5-key meta write.
+
+After this patch, Class γ has been fully swept across both DB modules (5 sites total: dropFile in v3.7.18 + writeMeta×2 + bootstrapSchema×2 here).
+
+### Class θ (false-automation claims) — 3 instances closed
+
+- **θ1 / `check:oia` CI gate (added to `ci.yml`).** v3.7.17 CHANGELOG promised "advisory in v3.7.17; required CI gate in v3.7.18+ once validated for one release cycle." v3.7.18 didn't add it. Round-21 caught the omission. Added as `continue-on-error: true` advisory job (not required — heuristics still have false-positive risk; will graduate to required after one release cycle of green observations).
+- **θ2 / SLSA-3 provenance OIA check (added to `oia-walk.mjs`).** README claims "SLSA-3 build provenance on releases" but v3.7.13 + v3.7.18 (both manually published when CI was unavailable) lack the attestation. New OIA check `SLSA-PROVENANCE-MISSING` queries `npm view @oomkapwn/enquire-mcp@<current-version> dist.attestations` and flags missing provenance. Network-gated (skip on offline / `--skip-network` flag).
+- **θ3 / `publish-docs.yml` hardening.** Pre-3.7.19 the publish workflow ran ONLY `npm run docs:api` — if TypeDoc errored silently or emitted broken output, the deploy still uploaded whatever `docs/api-reference/` contained. Added `npm run lint` + `npm run build` before `docs:api` so the publish path is at least as strict as PR CI's `docs` job.
+
+### Class ι (CI vs Release config drift) — 2 instances closed
+
+- **ι1 / `GH_TOKEN` in `release.yml` `npm test` env.** Pre-3.7.19 release-time tests ran without `GH_TOKEN`, so `tests/github-metadata-invariant.test.ts` silent-skipped (no `gh` auth → early return). PR CI's `test` job has `GH_TOKEN: ${{ github.token }}` since v3.7.13 L4. Aligned. Now release-time tests verify the live repo's About + Topics state matches the invariant.
+- **ι2 / `npm audit` parity.** Pre-3.7.19 release-time audit was `--audit-level=high` only; PR CI uses `moderate` for prod deps + `high` for dev deps. A moderate-severity prod vulnerability appearing between PR-green and tag-push would pass release.yml but fail the next PR — release-time blind spot. Now: same two-step audit as PR CI.
+
+### Class β (auth/permission infra) — operational note
+
+The NPM_TOKEN 2FA enforcement caught between v3.7.16 (worked) and v3.7.17 (failed with `403 Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages`) is the first instance of this class. Recovery path documented in this CHANGELOG so the next maintainer doesn't re-discover it cold:
+
+- Classic Automation tokens are being phased out by npm.
+- Replacement: **Granular Access Token** with `Read and write` permissions for the `@oomkapwn` scope (or the specific `@oomkapwn/enquire-mcp` package) AND the `Allow to bypass 2FA` checkbox enabled.
+- Without the bypass flag, even a valid token gets `403 Forbidden` on publish.
+- Token rotation cadence: 90 days (npm's max for non-account-2FA-protected tokens).
+
+v3.7.19 ships with the same flow expected: once the maintainer refreshes `NPM_TOKEN` in [GitHub Settings → Secrets → Actions](https://github.com/oomkapwn/enquire-mcp/settings/secrets/actions), the next release auto-publishes via CI (restoring the SLSA-3 chain that v3.7.18 broke).
+
+### Methodology recursion (the meta-finding from round-21)
+
+The v3.7.15 pre-merge RCA rule + v3.7.17 OIA still left 7 findings open at v3.7.18. Root cause: my RCA and OIA only cover classes I've explicitly enumerated. Round-21 added **class γ depth** (R-8 wasn't the last instance — 4 more) and **class θ width** (false-automation claims are broader than F5 / OIA — they include CI gate claims and SLSA provenance claims).
+
+**Pattern:** every audit round teaches me a new sub-class of an already-known class. The growing catalog of OIA checks is the right model — but the RCA-on-patch rule (v3.7.15) and OIA (v3.7.17) need to be RE-RUN with the new check-classes after every audit response, not just on the patch's own diff. v3.7.19 demonstrates this: I re-swept R-8's class γ from scratch and found 4 more siblings, not just inside v3.7.18's diff.
+
+### Stats
+
+- **818 tests** (unchanged — patch is structural + workflow + scripts).
+- **+1 OIA check class**: `SLSA-PROVENANCE-MISSING`. OIA now has **8 check classes**.
+- **+1 CI advisory job**: `oia` (continue-on-error).
+- **Lint / build / smoke / version-consistency / coverage** all pass locally.
+
+### Architectural items still deferred to v3.8.0
+
+(Unchanged from round-20 status — these are multi-day refactors, not single-PR fixes.)
+
+- **R-3** — serve-http feature parity (8 missing flags). Solution: shared `addServeOptions()` helper. Next milestone candidate.
+- **R-7** — watcher → embed-db sync on .md changes.
+- **R-9** — Chunk MCP resource lacks `resolveSafePath`.
+- **R-10** — HNSW + privacy under-return.
+- **K-3** — generalized `readOnlyHint: true` → no destructive operations invariant.
+- **4/5 reranker E2E in CI** with model cache strategy.
+- **T-1 to T-5** — test gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+
 ## [3.7.18] — 2026-05-19
 
 > **TL;DR:** Round-20 external full audit response — 7th independent external audit since v3.6.0, on the v3.7.11 codebase (6 releases behind current main). Most findings already closed by the v3.7.12 → v3.7.17 cascade (11/18 from §2 of the audit report). This patch closes **5 still-open findings** the auditor identified + **closes the OIA blind spots** v3.7.17 shipped — round-20 found 3 NEW classes my v3.7.17 OIA missed (regex too narrow for list-format subcommand claims, OIA only walked `src/` not `docs/` headers, no shell-script staleness check). All 3 gaps now closed in the OIA script.

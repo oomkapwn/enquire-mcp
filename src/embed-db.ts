@@ -314,46 +314,52 @@ export class EmbedDb {
     // "f32" (the only mode v2.16- supported) for backward compatibility.
     const existingQuant = meta.quantization ?? "f32";
     const quantMatch = existingQuant === this.quantization;
-    if (!versionMatch || !rootMatch || !modelMatch || !dimMatch || !quantMatch) {
-      const reason: string[] = [];
-      if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
-      if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
-      if (!modelMatch) reason.push(`model ${meta.model_alias} → ${this.modelAlias}`);
-      if (!dimMatch) reason.push(`dim ${meta.dim} → ${this.dim}`);
-      if (!quantMatch) reason.push(`quantization ${existingQuant} → ${this.quantization}`);
-      process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
-      db.exec("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS source_state;");
-    }
+    // v3.7.19 γ4 / R-6 — wrap DROP+CREATE+writeMeta in one transaction.
+    // Same rationale as fts5.ts bootstrapSchema fix. Closes the auditor's
+    // round-20 R-6 finding (deferred from that release).
+    const txn = db.transaction(() => {
+      if (!versionMatch || !rootMatch || !modelMatch || !dimMatch || !quantMatch) {
+        const reason: string[] = [];
+        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
+        if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
+        if (!modelMatch) reason.push(`model ${meta.model_alias} → ${this.modelAlias}`);
+        if (!dimMatch) reason.push(`dim ${meta.dim} → ${this.dim}`);
+        if (!quantMatch) reason.push(`quantization ${existingQuant} → ${this.quantization}`);
+        process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
+        db.exec("DROP TABLE IF EXISTS embeddings; DROP TABLE IF EXISTS source_state;");
+      }
 
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS embeddings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        rel_path TEXT NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        line_start INTEGER NOT NULL,
-        line_end INTEGER NOT NULL,
-        text_preview TEXT NOT NULL,
-        vector BLOB NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'md',
-        UNIQUE(rel_path, chunk_index)
-      );
-      CREATE INDEX IF NOT EXISTS embeddings_rel_path ON embeddings(rel_path);
-      CREATE TABLE IF NOT EXISTS source_state (
-        rel_path TEXT PRIMARY KEY,
-        mtime_ms INTEGER NOT NULL,
-        n_chunks INTEGER NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'md',
-        indexed_at TEXT NOT NULL
-      );
-    `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS embeddings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rel_path TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          line_start INTEGER NOT NULL,
+          line_end INTEGER NOT NULL,
+          text_preview TEXT NOT NULL,
+          vector BLOB NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'md',
+          UNIQUE(rel_path, chunk_index)
+        );
+        CREATE INDEX IF NOT EXISTS embeddings_rel_path ON embeddings(rel_path);
+        CREATE TABLE IF NOT EXISTS source_state (
+          rel_path TEXT PRIMARY KEY,
+          mtime_ms INTEGER NOT NULL,
+          n_chunks INTEGER NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'md',
+          indexed_at TEXT NOT NULL
+        );
+      `);
 
-    this.writeMeta({
-      schema_version: String(SCHEMA_VERSION),
-      vault_root: this.vaultRoot,
-      model_alias: this.modelAlias,
-      dim: String(this.dim),
-      quantization: this.quantization
+      this.writeMeta({
+        schema_version: String(SCHEMA_VERSION),
+        vault_root: this.vaultRoot,
+        model_alias: this.modelAlias,
+        dim: String(this.dim),
+        quantization: this.quantization
+      });
     });
+    txn();
   }
 
   private readMeta(): Record<string, string> {
@@ -367,7 +373,13 @@ export class EmbedDb {
   private writeMeta(kv: Record<string, string>): void {
     const db = this.requireDb();
     const stmt = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-    for (const [k, v] of Object.entries(kv)) stmt.run(k, v);
+    // v3.7.19 γ2 — same fix as fts5.ts:writeMeta. Crash mid-loop could
+    // leave model/dim/quantization meta partially-updated, triggering
+    // K-1-style "embedder model mismatch" on next open. Class γ.
+    const txn = db.transaction(() => {
+      for (const [k, v] of Object.entries(kv)) stmt.run(k, v);
+    });
+    txn();
   }
 
   private requireDb(): Db {

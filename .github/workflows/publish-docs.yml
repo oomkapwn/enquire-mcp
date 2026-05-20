@@ -38,6 +38,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # v3.7.19 round-21 θ3 — lint + build before docs:api. Pre-3.7.19
+      # publish-docs.yml ran ONLY `npm run docs:api` — if TypeDoc emitted
+      # warnings or generation silently failed, the workflow still
+      # uploaded whatever `docs/api-reference` contained (possibly empty
+      # or stale from the last build). PR CI's `docs` job (added v3.7.6
+      # M-5) already gates this on PR — but the publish workflow ran
+      # separately on push-to-main and had no equivalent gate. Adding
+      # lint+build ensures the publish path is at least as strict as PR.
+      - run: npm run lint
+      - run: npm run build
       - run: npm run docs:api
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

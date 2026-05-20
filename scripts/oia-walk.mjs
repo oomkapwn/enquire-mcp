@@ -287,6 +287,55 @@ walk("scripts", ".sh", (file) => {
   }
 });
 
+// ─── Check 4d: SLSA-3 provenance attestation for the current version ───
+// v3.7.19 round-21 θ2 — README claims "SLSA-3 build provenance on releases".
+// CI-published releases via `npm publish --provenance` DO get an attestation
+// recorded in npm's dist.attestations + Sigstore transparency log. Manual
+// publishes (e.g. when NPM_TOKEN is broken and the maintainer falls back to
+// `npm publish` from their machine) typically OMIT the `--provenance` flag
+// and silently break the SLSA-3 chain.
+//
+// Round-21 caught this when v3.7.18 was manually published: every CI-shipped
+// version (v3.7.14/15/16) has provenance, but v3.7.13 + v3.7.18 (both
+// manual) do not. The README claim is technically false for those gaps.
+//
+// This check queries the live npm registry for the package's current
+// version's `dist.attestations` field. If missing, flags it — BUT only
+// in `--strict` mode (default) since the missing version state takes a
+// few seconds to propagate after publish and false positives are noisy.
+// Network-gated: skip the check if offline / npm registry unreachable.
+//
+// To skip this check explicitly (e.g. for local dev runs), pass
+// `--skip-network` flag.
+const SKIP_NETWORK = process.argv.includes("--skip-network");
+if (!SKIP_NETWORK) {
+  try {
+    const { execSync } = await import("node:child_process");
+    const npmJson = execSync(`npm view @oomkapwn/enquire-mcp@${currentVersion} --json 2>/dev/null`, {
+      encoding: "utf8",
+      timeout: 10_000
+    });
+    if (npmJson && npmJson.trim().length > 0) {
+      const npmData = JSON.parse(npmJson);
+      const hasAttestation = npmData.dist?.attestations?.provenance?.predicateType?.includes("slsa.dev");
+      if (!hasAttestation) {
+        record(
+          "SLSA-PROVENANCE-MISSING",
+          "package.json",
+          5,
+          `npm @oomkapwn/enquire-mcp@${currentVersion} has no SLSA-3 provenance attestation`,
+          `README claims "SLSA-3 build provenance on releases" but the current published version lacks dist.attestations. This typically means a manual \`npm publish\` (without --provenance flag) was used to ship this version. Future releases should go through CI (release.yml uses --provenance). Pass --skip-network to OIA to skip this check (offline environments).`
+        );
+      }
+    }
+    // npmJson empty = version not yet published — OK, no claim to verify.
+  } catch (err) {
+    // Network failure or `npm` not installed — silently skip with a stderr note.
+    // (Don't fail OIA on infrastructure issues outside the repo's control.)
+    console.error(`[oia-walk] SLSA-PROVENANCE check skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // ─── Check 4: npm script existence ──────────────────────────────────────
 const npmScripts = new Set(Object.keys(pkg.scripts ?? {}));
 

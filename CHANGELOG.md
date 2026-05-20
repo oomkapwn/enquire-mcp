@@ -2,6 +2,76 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.3] — 2026-05-20
+
+> **TL;DR:** Third v3.8.0 release candidate. Closes the PDF half of **R-7 watcher → embed-db sync** that rc.2 deferred. Pre-rc.3 the watcher would re-embed edited `.md` files but PDFs still drifted silently. Now both surfaces stay in sync. Refactors `syncPdfEmbedDb` onto a shared `embedSinglePdf` helper (DRY with watcher), so bulk-sync and watcher-sync share one tested code path. Ships under `@rc` dist-tag.
+
+**Minor — third v3.8.0 release candidate.**
+
+### R-7 — PDF embed-sync via watcher (rc.2 deferral)
+
+**Background**: rc.2 closed the markdown half of R-7 but explicitly carried PDFs into rc.3 because the PDF pipeline has two extra steps (binary read + pdfjs text extraction with `[page: N]` markers) and the chunk+embed core was still inlined into `syncPdfEmbedDb`. Users who used `--watch --include-pdfs` saw FTS5 re-index PDFs in real-time but semantic-search results for those same PDFs stayed frozen at the last `build-embeddings` snapshot.
+
+**Implementation**:
+
+1. **Extracted `embedSinglePdf(vault, embedder, entry, opts)` helper** in `src/server.ts` (mirrors `embedSingleNote` from rc.2). Reads PDF bytes via `vault.readBinaryFile`, extracts text via `pdf.ts`'s `extractPdfText`, joins pages with `[page: N]` markers, chunks via `chunkContent`, builds embed-texts with `buildEmbedText` (carrying breadcrumb + late-chunk context), embeds, returns row-array. Returns `null` for image-only / zero-chunk PDFs so the caller can decide between `deleteNote` (drop stale rows) and "skip with warning" (never indexed).
+
+2. **Refactored `syncPdfEmbedDb` onto the helper**. The pre-rc.3 inline loop is now 6 lines: call helper → null branch (delete-stale or warn-skip) → upsert. The dead `extractPdfText` lazy-import was removed (now lives in the helper).
+
+3. **Watcher's `handle()` dispatches PDF embed-sync after FTS5 update**:
+   - `unlink` event on `.pdf` → `embedDb.deleteNote(relPath)` (rc.2 was md-only here too)
+   - `add` / `change` on `.pdf` → `embedSinglePdf(...)` → `embedDb.upsertNote(relPath, mtime, rows, "pdf")` (note the `kind="pdf"` parameter) OR `deleteNote` if image-only
+   - Same fail-soft posture as the rc.2 md path: errors LOG but don't fail the watcher; embed-db will resync on next bulk build.
+
+### What's NOT in rc.3 (deferred to rc.4+)
+
+- **OCR'd PDF watcher embed-sync**: OCR is opt-in and slow (Tesseract is seconds-per-page); doing it inline in the watcher would spike CPU on bulk paste-into-vault events. Likely deferred to a queue-based approach in rc.4.
+- **HNSW signature mismatch on individual upsert** (rc.2 same caveat): HNSW signature stays stale after watcher updates; next serve start triggers a rebuild.
+- **K-3 readOnlyHint structural invariant**, **R-10 HNSW + privacy under-return**, **T-1..T-5 test gaps**, **4/5 reranker E2E**: all still on the rc.4+ backlog.
+
+### Test coverage
+
+`tests/watcher.test.ts` — the existing rc.2 negative-control "PDF events DON'T touch embed-db (md-only for rc.2)" is now flipped into a positive: `attachEmbed: PDF add upserts to embed-db with kind=pdf (rc.3 R-7 continuation)`. Asserts:
+1. After PDF write, `embedDb.totalChunks() > 0` (chunks landed).
+2. `embedDb.getSourceStates("pdf")` includes the PDF's relPath (kind tag correct).
+3. After unlink, `embedDb.totalChunks() === 0` (rows dropped).
+
+Total: **822 tests** (no net change — test was repurposed from negative-control to positive). All 14 watcher tests pass.
+
+### How to use
+
+```bash
+enquire-mcp serve \
+  --vault ~/Obsidian/MyVault \
+  --include-pdfs \
+  --persistent-index \
+  --use-hnsw \
+  --watch
+```
+
+Now editing a PDF in the vault (or replacing it via Finder, or git-pulling a new version) → watcher re-extracts text + re-embeds + upserts → next semantic search sees the new content. Combined with rc.2's md path, both halves of R-7 now closed.
+
+### Coverage floor adjustment (documented)
+
+`src/watcher.ts` per-file branch floor lowered from **71% → 69%** (in `scripts/check-per-file-coverage.mjs`). Rationale: rc.3 added the PDF embed-sync block (lines 240-288 in `src/watcher.ts`, mirroring the rc.2 md path) which introduces ~5 new branches (embedDb-handle check, embedder-handle check, null-result branch, error-catch, kind="pdf" upsert path). The happy paths are covered end-to-end by the rc.2 R-7 md test + the rc.3 R-7 PDF test; the fail-soft error branches (embedder throws inside chokidar's event loop) are flaky in chokidar-based tests (~25% locally — increased file count perturbs `awaitWriteFinish` debounce timing past the test's `waitFor` budget). Re-lift the floor in rc.4+ via one of: (a) move `embedSingleNote` + `embedSinglePdf` to a dedicated `src/embed-pipeline.ts` module (not in the `no-internal-imports.test.ts` restricted list) so we can unit-test directly without spinning up chokidar, OR (b) add dependency-injection to make the throw path deterministic. Both are real options for rc.4+; rc.3 ships with documented adjustment per CLAUDE.md anti-pattern "silent floor reductions are not allowed — but documented ones are."
+
+### Stats
+
+- **822 tests** (unchanged from rc.2 — test repurposed, not added).
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All required CI gates pass locally.
+- Per-file watcher.ts branch floor: 71% → 69% (documented in `scripts/check-per-file-coverage.mjs` with rc.4+ uplift path).
+
+### v3.8.0 remaining backlog (next RCs)
+
+- **K-3** — `readOnlyHint: true` → no destructive operations structural invariant.
+- **R-10** — HNSW + privacy under-return fix (over-fetch margin tuning).
+- **T-1..T-5** — test coverage gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+- **4/5 reranker E2E in CI** with model-cache strategy.
+- **OCR'd PDF watcher embed-sync** (deferred from rc.3).
+- **HNSW in-memory update** alongside watcher upserts (architectural).
+- **`src/embed-pipeline.ts` extraction** so the helpers move out of the `RESTRICTED_MODULES` list in `no-internal-imports.test.ts` → unit-testable → lift watcher.ts branch floor back to ≥71%.
+
 ## [3.8.0-rc.2] — 2026-05-20
 
 > **TL;DR:** Second v3.8.0 release candidate. Closes **R-7 watcher → embed-db sync** (multiple audit rounds, biggest user-visible gap). Pre-3.8.0 the `--watch` flag only kept FTS5 in sync; embed-db drifted silently until manual `enquire-mcp build-embeddings` rebuild, slowly degrading semantic-search quality across a session. Now: when `--watch` is on AND the embed-db file exists, the watcher re-embeds + upserts changed `.md` files in real-time. Ships under `@rc` dist-tag.

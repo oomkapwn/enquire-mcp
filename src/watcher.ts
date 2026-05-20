@@ -1,10 +1,17 @@
-// Vault file watcher (v1.2 — opt-in via --watch).
+// Vault file watcher (v1.2 — opt-in via --watch; expanded in v2.8 to
+// PDFs; v3.8.0-rc.2 added embed-db sync for .md; v3.8.0-rc.3 added
+// embed-db sync for .pdf).
 //
 // Closes the "edit a note → restart server → wait for FTS5 reindex" loop.
-// When enabled, watches the vault root for .md add/change/unlink events,
-// invalidates the parsed-note cache for the affected file, and (if FTS5 is
-// enabled) does an incremental reindex of just that file. Non-MD files are
-// ignored. Symlinks are skipped to match the rest of the vault walker.
+// When enabled, watches the vault root for `.md` add/change/unlink events
+// (and `.pdf` events when `--include-pdfs` is on), invalidates the
+// parsed-note cache for the affected file, and (if FTS5 is enabled) does
+// an incremental reindex of just that file. If the watcher was wired with
+// an embed-db handle via {@link VaultWatcher.attachEmbed} (v3.8.0-rc.2+),
+// the same event also re-embeds + upserts the affected file's chunks
+// into the embed-db so semantic search stays current. Files outside
+// `.md` / (`.pdf` when included) are ignored. Symlinks are skipped to
+// match the rest of the vault walker.
 //
 // Debouncing is delegated to chokidar's `awaitWriteFinish` so we don't
 // reindex five times during a single Obsidian save.
@@ -208,7 +215,8 @@ export class VaultWatcher {
       this.ftsIndex.dropFile(relPath);
       // v3.8.0-rc.2 R-7 — also drop embed-db rows so search results
       // don't surface vectors for deleted notes.
-      if (!isPdf && this.embedDb) {
+      // v3.8.0-rc.3 R-7 — extended to PDFs (rc.2 was md-only).
+      if (this.embedDb) {
         try {
           this.embedDb.deleteNote(relPath);
         } catch (err) {
@@ -220,7 +228,7 @@ export class VaultWatcher {
         }
       }
       if (!this.silent) {
-        const embedNote = !isPdf && this.embedDb ? " + embed-db dropped" : "";
+        const embedNote = this.embedDb ? " + embed-db dropped" : "";
         process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote})\n`);
       }
       return;
@@ -232,16 +240,49 @@ export class VaultWatcher {
       if (isPdf) {
         // v3.7.16 P1-5 — extract text and re-index PDF pages. Lazy
         // import to keep markdown-only deployments zero-cost.
-        // v3.8.0-rc.2 R-7 — PDF embedding sync deferred to rc.3+: needs
-        // chunking + embedder loop similar to syncPdfEmbedDb, plus the
-        // OCR fallback path. Markdown is the higher-value first cut.
+        // v3.8.0-rc.3 R-7 — PDF embedding sync (rc.2 was md-only).
         const buf = await this.vault.readBinaryFile(absPath);
         const { extractPdfText } = await import("./pdf.js");
         const result = await extractPdfText(buf);
         const pages = result.pages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
         this.ftsIndex.reindexPdfFile(relPath, stat.mtimeMs, pages);
+        // v3.8.0-rc.3 — embed-db sync for PDFs. Uses embedSinglePdf helper
+        // to match syncPdfEmbedDb's chunking + page-marker logic exactly.
+        // Image-only PDFs (hasText === false) get embed-db rows DROPPED
+        // because they have no useful embedding content (same v3.7.6 H-4
+        // staleness fix as bulk sync). Fail-soft: embed-db errors don't
+        // fail the watcher event.
+        let pdfEmbedNote = "";
+        if (this.embedDb && this.embedder) {
+          try {
+            const { embedSinglePdf } = await import("./server.js");
+            const pdfResult = await embedSinglePdf(
+              this.vault,
+              this.embedder,
+              { relPath, absPath, mtimeMs: stat.mtimeMs },
+              { lateChunkContext: this.lateChunkContext }
+            );
+            if (pdfResult === null) {
+              // Image-only or zero chunks — drop any stale embed-db rows.
+              this.embedDb.deleteNote(relPath);
+              pdfEmbedNote = " + embed-db cleared (image-only or empty)";
+            } else {
+              this.embedDb.upsertNote(relPath, stat.mtimeMs, pdfResult.rows, "pdf");
+              pdfEmbedNote = ` + embed-db upserted (${pdfResult.chunks} chunks, kind=pdf)`;
+            }
+          } catch (err) {
+            if (!this.silent) {
+              process.stderr.write(
+                `enquire: watcher embed-db PDF sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
+              );
+            }
+            pdfEmbedNote = " + embed-db FAILED (see above)";
+          }
+        }
         if (!this.silent) {
-          process.stderr.write(`enquire: watcher ${kind} ${relPath} (fts5 PDF reindexed, ${pages.length} pages)\n`);
+          process.stderr.write(
+            `enquire: watcher ${kind} ${relPath} (fts5 PDF reindexed, ${pages.length} pages${pdfEmbedNote})\n`
+          );
         }
         return;
       }

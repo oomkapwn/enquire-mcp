@@ -943,6 +943,60 @@ export async function syncPdfFtsIndex(
 }
 
 /**
+ * v3.8.0-rc.3 R-7 (continuation) — embed-vector pipeline for a single PDF
+ * file. Mirrors {@link embedSingleNote} but reads PDF bytes + extracts
+ * text via pdfjs + joins pages with `[page: N]` markers before chunking.
+ *
+ * Returns null in two cases:
+ *   - PDF is image-only (`hasText === false`); caller should
+ *     `db.deleteNote(relPath)` to drop stale rows (round-22 H-4 fix).
+ *   - PDF body chunks to zero (rare; would indicate all pages empty
+ *     even after concatenation).
+ *
+ * @internal
+ */
+export async function embedSinglePdf(
+  vault: Vault,
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
+  entry: { relPath: string; absPath: string; mtimeMs: number },
+  opts: { lateChunkContext?: number } = {}
+): Promise<{
+  chunks: number;
+  rows: Array<{
+    chunkIndex: number;
+    lineStart: number;
+    lineEnd: number;
+    textPreview: string;
+    vector: Float32Array;
+  }>;
+} | null> {
+  const contextChars = opts.lateChunkContext ?? 0;
+  const { extractPdfText } = await import("./pdf.js");
+  const buf = await vault.readBinaryFile(entry.absPath);
+  const extracted = await extractPdfText(buf);
+  if (!extracted.hasText) return null; // image-only scan — caller drops rows
+  // Join pages with [page: N] markers so embeddings carry page-citation context.
+  const joined = extracted.pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
+  const chunks = chunkContent(joined);
+  if (chunks.length === 0) return null;
+  const docTitle = path.basename(entry.relPath, ".pdf");
+  const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
+  const vectors = await embedder.embed(embedTexts);
+  const rows = chunks.map((c, i) => {
+    const vector = vectors[i];
+    if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
+    return {
+      chunkIndex: i,
+      lineStart: c.lineStart,
+      lineEnd: c.lineEnd,
+      textPreview: c.text.slice(0, 480),
+      vector
+    };
+  });
+  return { chunks: chunks.length, rows };
+}
+
+/**
  * v2.8.0 — sync PDF chunks into the embedding index. Mirrors syncEmbedDb
  * but for PDFs. Page boundaries are preserved as `[page: N]` markers
  * before chunking so embeddings carry page-citation context.
@@ -973,7 +1027,7 @@ export async function syncPdfEmbedDb(
     }
     return { added: 0, updated: 0, deleted, unchanged: 0, total_chunks: db.totalChunks() };
   }
-  const { extractPdfText } = await import("./pdf.js");
+  // v3.8.0-rc.3 — extractPdfText lazy-import moved into embedSinglePdf helper.
   const logEvery = Math.max(1, Math.floor(totalToProcess / 20));
   let processed = 0;
   const startMs = Date.now();
@@ -986,16 +1040,16 @@ export async function syncPdfEmbedDb(
       continue;
     }
     try {
-      const buf = await vault.readBinaryFile(e.absPath);
-      const extracted = await extractPdfText(buf);
-      if (!extracted.hasText) {
-        // v3.7.6 H-4 (external audit) — drop stale embed-db rows when a
-        // previously-indexed PDF becomes image-only. Same data-staleness
-        // class as the FTS5 fix above.
+      // v3.8.0-rc.3 R-7 — delegate single-PDF chunk+embed work to the
+      // shared helper (DRY with watcher PDF path).
+      const result = await embedSinglePdf(vault, embedder, e, { lateChunkContext: contextChars });
+      if (result === null) {
+        // Image-only PDF OR zero chunks. Drop stale rows if previously
+        // indexed; otherwise skip with a stderr note.
         if (prevMtime !== undefined) {
           db.deleteNote(e.relPath);
           process.stderr.write(
-            `enquire: dropping stale embed rows for ${e.relPath} — PDF is now image-only / scanned\n`
+            `enquire: dropping stale embed rows for ${e.relPath} — PDF is now image-only / scanned (or empty after extraction)\n`
           );
         } else {
           process.stderr.write(`enquire: skipping ${e.relPath} during pdf-embed sync — image-only / scanned\n`);
@@ -1004,33 +1058,7 @@ export async function syncPdfEmbedDb(
         processed += 1;
         continue;
       }
-      // Reuse the same chunker as markdown so chunk identity matches across
-      // BM25 / TF-IDF / embeddings rankers. Page markers travel inline.
-      const joined = extracted.pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
-      const chunks = chunkContent(joined);
-      if (chunks.length === 0) {
-        db.deleteNote(e.relPath);
-        processed += 1;
-        continue;
-      }
-      // Same breadcrumb-prepending logic as syncEmbedDb (no-op for PDFs
-      // since chunkContent returns no breadcrumb on non-markdown).
-      // v2.15.0: late-chunking context windowing applies here too.
-      const docTitle = path.basename(e.relPath, ".pdf");
-      const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
-      const vectors = await embedder.embed(embedTexts);
-      const rows = chunks.map((c, i) => {
-        const vector = vectors[i];
-        if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);
-        return {
-          chunkIndex: i,
-          lineStart: c.lineStart,
-          lineEnd: c.lineEnd,
-          textPreview: c.text.slice(0, 480),
-          vector
-        };
-      });
-      db.upsertNote(e.relPath, e.mtimeMs, rows, "pdf");
+      db.upsertNote(e.relPath, e.mtimeMs, result.rows, "pdf");
       if (prevMtime === undefined) added += 1;
       else updated += 1;
     } catch (err) {

@@ -373,7 +373,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 
-  it("attachEmbed: PDF events DON'T touch embed-db (md-only for rc.2)", async () => {
+  // v3.8.0-rc.3 — PDF embed-sync via watcher (rc.2 was md-only; rc.3
+  // closes the PDF gap). PDF chunks should appear in embed-db with
+  // kind="pdf" after add, and disappear on unlink.
+  it("attachEmbed: PDF add upserts to embed-db with kind=pdf (rc.3 R-7 continuation)", async () => {
     const { EmbedDb } = await import("../src/embed-db.js");
     const v = new Vault(root);
     await v.ensureExists();
@@ -404,14 +407,21 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await w.start();
       try {
         const pdfPath = path.join(root, "doc.pdf");
-        const pdfBuf = makePdf({ pages: ["PDF body for test"] });
+        const pdfBuf = makePdf({ pages: ["PDF body for test embedding sync"] });
         await fs.writeFile(pdfPath, pdfBuf);
-        // FTS5 should index the PDF chunks, but embed-db should NOT receive them
-        // (PDF embed-sync via watcher deferred to rc.3+).
+        // FTS5 + embed-db should BOTH receive PDF chunks.
         const ftsIndexed = await waitFor(() => fts.totalFiles() >= 1);
         expect(ftsIndexed).toBe(true);
-        // Embed-db should remain empty (no .md path was indexed).
-        expect(embedDb.totalChunks()).toBe(0);
+        const embedded = await waitFor(() => embedDb.totalChunks() > 0);
+        expect(embedded).toBe(true);
+        // Verify kind="pdf" by inspecting source_states.
+        const pdfStates = embedDb.getSourceStates("pdf");
+        expect(pdfStates.some((s) => s.rel_path === "doc.pdf")).toBe(true);
+
+        // Unlink should drop embed-db rows for the PDF.
+        await fs.unlink(pdfPath);
+        const dropped = await waitFor(() => embedDb.totalChunks() === 0);
+        expect(dropped).toBe(true);
       } finally {
         await w.close();
       }

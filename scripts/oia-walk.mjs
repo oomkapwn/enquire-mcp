@@ -201,6 +201,89 @@ walk("docs", ".md", (file) => {
         );
       }
     }
+    // v3.7.18 round-20 R-2 — also catch the LIST format:
+    //   "...the `install-model` / `build-embeddings` / ... / `bench` subcommands."
+    // where each backticked entry IS a CLI subcommand even though no
+    // `enquire-mcp` prefix appears. Heuristic: line containing the literal
+    // word "subcommand" AND ≥2 backticked tokens — treat all backticked
+    // hyphen-tokens on that line as subcommand claims to verify.
+    if (/\bsubcommand/i.test(lines[i])) {
+      const tokens = [...lines[i].matchAll(/`([a-z][a-z0-9-]*)`/g)].map((m) => m[1]);
+      if (tokens.length >= 2) {
+        for (const cmd of tokens) {
+          if (!registeredSubs.has(cmd)) {
+            record(
+              "CLI-SUBCMD-MISSING-LIST",
+              file,
+              i + 1,
+              `\`${cmd}\` in subcommand list`,
+              `docs lists \`${cmd}\` as a subcommand in a "/ X / Y / Z subcommands." sentence but src/cli.ts has no program.command("${cmd}"). Round-20 R-2 caught \`bench\` via this pattern.`
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
+// ─── Check 4b: STALE-CURRENCY-CLAIM in docs/*.md headers ────────────────
+// v3.7.18 round-20 B-1 — extends Check 1 (which scans src/**.ts) to docs/.
+// The benchmarks.md "v3.7.0" header drift sat in plain sight for 4 releases
+// (v3.7.10→v3.7.13 actually re-measured latency but didn't bump the header).
+// Heuristic: scan first 10 lines of every docs/*.md (root, NOT audits) for
+// the same currency-claim patterns as src/.
+walk("docs", ".md", (file) => {
+  if (file.startsWith("docs/audits/") || file.startsWith("docs\\audits\\")) return;
+  const lines = readLines(file).slice(0, 10);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const pattern of CURRENCY_CLAIM_PATTERNS) {
+      const m = pattern.exec(line);
+      if (!m) continue;
+      const ver = m[1];
+      if (ver === currentVersion) continue;
+      // For docs/, the historical-marker check applies to the same line
+      // (docs typically don't span 5 lines for one fact).
+      if (
+        /\b(History|Pre-|was\s+|legacy|tombstone|previously|originally|re-measured|recomputed|bumped\s+to)\b/i.test(
+          line
+        )
+      )
+        continue;
+      record(
+        "STALE-CURRENCY-CLAIM-DOC",
+        file,
+        i + 1,
+        line.trim(),
+        `docs/*.md header reads as currency claim for v${ver} but current is v${currentVersion}. Either prefix with "History:" / "Pre-" or update.`
+      );
+    }
+  }
+});
+
+// ─── Check 4c: SHELL-SCRIPT-STALENESS ───────────────────────────────────
+// v3.7.18 round-20 S-C1/S-C2 — maintainer scripts (`scripts/*.sh`) can drift
+// silently because they're never re-run after the first invocation. Examples
+// caught by round-20: post-public-setup.sh required dropped `test (20)` gate,
+// repo-setup.sh hardcoded v0.3.1 description. Heuristic: a .sh file that
+// references a specific version (`v0.X.Y` / `vX.Y.Z`) or a CI gate name
+// (`test (20)`, `test (22)`, etc.) without a DEPRECATED guard at the top.
+walk("scripts", ".sh", (file) => {
+  const content = readFileSync(join(repoRoot, file), "utf8");
+  const head = content.split("\n").slice(0, 5).join("\n");
+  if (/DEPRECATED|ARCHIVED|exit\s+1/i.test(head)) return; // guarded — OK
+  // Look for stale signals.
+  const staleSignals = [];
+  for (const m of content.matchAll(/\bv0\.\d+\.\d+\b/g)) staleSignals.push(m[0]);
+  for (const m of content.matchAll(/test \((20|18|16|14)\)/g)) staleSignals.push(m[0]);
+  if (staleSignals.length > 0) {
+    record(
+      "SHELL-SCRIPT-STALE",
+      file,
+      1,
+      `Found stale references: ${staleSignals.slice(0, 3).join(", ")}`,
+      `Maintainer script references old version / dropped CI gate but has no DEPRECATED guard. Either add an "exit 1" deprecation guard at the top OR update the contents to match current state.`
+    );
   }
 });
 

@@ -2,6 +2,93 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.18] — 2026-05-19
+
+> **TL;DR:** Round-20 external full audit response — 7th independent external audit since v3.6.0, on the v3.7.11 codebase (6 releases behind current main). Most findings already closed by the v3.7.12 → v3.7.17 cascade (11/18 from §2 of the audit report). This patch closes **5 still-open findings** the auditor identified + **closes the OIA blind spots** v3.7.17 shipped — round-20 found 3 NEW classes my v3.7.17 OIA missed (regex too narrow for list-format subcommand claims, OIA only walked `src/` not `docs/` headers, no shell-script staleness check). All 3 gaps now closed in the OIA script.
+
+**Patch — round-20 stale-fragment cleanup + OIA recursion fix.**
+
+### Stale-fragment fixes (5)
+
+| ID | File | Issue | Fix |
+|----|------|-------|-----|
+| **R-2** | `docs/api.md:5` | "`/ install-model / ... / eval / bench` subcommands" — `bench` is not a CLI subcommand, only `npm run bench:retrieval` | Removed `bench` from the list; added explicit note that benchmarks are an npm script. **OIA gap:** my v3.7.17 OIA matched only `enquire-mcp <cmd>` pattern; missed the list-format `/ A / B / C subcommands.` pattern. Fixed in OIA (new check `CLI-SUBCMD-MISSING-LIST`). |
+| **B-1** | `docs/benchmarks.md:3` | "Last updated: ... (v3.7.0)" — header drifted across 4 latency re-measurements (v3.7.10 / v3.7.13 / v3.7.18) | Rewrote the "Last updated" line to enumerate the actual re-measurement / methodology updates. **OIA gap:** my v3.7.17 OIA only scanned `src/**.ts` first-30-lines for currency claims. Extended to `docs/*.md` first-10-lines (new check `STALE-CURRENCY-CLAIM-DOC`). |
+| **B-3** | `docs/benchmarks.md:275` | "+5.1 NDCG@10 over FS-grep at **4900×** the latency" — but `bench/benchmarks.json` shows 1028 ms / 0.14 ms = **~7,300×** | Recomputed against actual numbers from the JSON. Annotated the recalculation with provenance + the historical 4900× figure for traceability. |
+| **S-C1** | `scripts/post-public-setup.sh` | Bootstrap script from v0.3.x repo-public flip; still required dropped `test (20)` CI gate, didn't require the `docs` gate (added v3.7.10) — running it today would DOWNGRADE branch protection | Replaced contents with a DEPRECATED stub that explains the history + `exit 1` guard. |
+| **S-C2** | `scripts/repo-setup.sh` | One-shot bootstrap from v0.3.1 — hardcoded v0.3.1 description / topics / release; would CLOBBER current marketing surface (gated by `tests/github-metadata-invariant.test.ts`) | Same treatment: DEPRECATED stub + `exit 1` guard. |
+
+### Real correctness fix (1)
+
+- **R-8** — `FtsIndex.dropFile()` was NOT wrapped in `db.transaction()` (`src/fts5.ts:351`). Two independent DELETE statements (`chunks` then `source_state`) could partially apply on crash / SIGKILL / DB-lock contention, leaving `source_state` indicating "file is indexed at mtime X" while `chunks` has no rows — causing the next watcher event to skip re-indexing (state matches) but search to miss the file (no chunks). Sibling of v3.7.10 audit-#10 fix that wrapped `reindexFile` / `reindexPdfFile` / `source_state` updates in `db.transaction()` for the same reason. Fix: wrap both DELETEs in `db.transaction()`. Round-20 external auditor caught this as Class B (Non-transactional DB mutations) — that class has now had three full sweeps (v3.7.10 / v3.7.11 / v3.7.18); R-8 was the last open instance.
+
+### OIA recursion meta-fix (3 new checks)
+
+The v3.7.17 OIA script closed the change-driven vs state-driven methodology gap — but round-20 found 3 stale fragments that v3.7.17's OIA STILL missed. This is the predicted **OIA recursion** (each external audit reveals MORE state-driven classes I didn't enumerate). v3.7.18 closes the round-20 gaps:
+
+1. **`CLI-SUBCMD-MISSING-LIST`** (new) — detects list-format subcommand claims like `\`A\` / \`B\` / \`C\` subcommands.`. Heuristic: line contains the literal word "subcommand" AND ≥2 backticked tokens — each backticked hyphen-token treated as a subcommand claim to verify.
+
+2. **`STALE-CURRENCY-CLAIM-DOC`** (new) — extends `STALE-CURRENCY-CLAIM` from `src/*.ts` to `docs/*.md` first-10-lines (excluding `docs/audits/`). Catches "Last updated: ... (v3.7.0)" type drift in benchmark/comparison/quickstart headers.
+
+3. **`SHELL-SCRIPT-STALE`** (new) — walks `scripts/*.sh` and flags files that reference `v0.X.Y` or `test (20|18|16|14)` AND don't have a DEPRECATED / `exit 1` guard at the top. Catches one-time-bootstrap scripts that drifted out of currency.
+
+After v3.7.18: `npm run check:oia` returns clean across all 7 checks (`STALE-CURRENCY-CLAIM`, `STALE-CURRENCY-CLAIM-DOC`, `WORKFLOW-CLAIM-WITHOUT-EVIDENCE`, `CLI-SUBCMD-MISSING`, `CLI-SUBCMD-MISSING-LIST`, `NPM-SCRIPT-MISSING`, `SHELL-SCRIPT-STALE`, `STALE-DEFAULT-CLAIM`).
+
+### Methodology lesson (the deeper finding)
+
+**OIA recursion is structural, not anecdotal.** v3.7.17 added 5 OIA checks based on round-19's findings. Round-20 found 3 more classes that map to checks v3.7.17 didn't add. The pattern is:
+
+> Each external auditor's methodology samples a different subset of the state-driven failure space. No single OIA pass can enumerate all possible classes a priori. The honest framing: OIA closes the SPECIFIC blind spots prior audits revealed — not "all" state-driven blind spots forever.
+
+This isn't a flaw in OIA; it's the nature of static analysis vs human reading. The mitigation is: every external audit response release should EXTEND OIA with that round's new check classes. The OIA script is a growing catalog of historically-found drift patterns, not a complete one.
+
+**Rule (extended in this release):** when responding to round-N audit, add OIA checks for each NEW class the auditor found that's automatable. v3.7.18 adds 3 checks from round-20.
+
+### Auditor findings VERIFIED as already closed (11)
+
+Per §2 of the round-20 report, these were closed by v3.7.6 → v3.7.17 before round-20 ran:
+
+| # | Finding | Closed in |
+|---|---------|-----------|
+| 1 | README badge v3.6.x → v3.7.x | v3.7.8 positioning calibration |
+| 4 | examples not in npm | v3.7.11 |
+| 5–6 | K-1, K-2 | v3.7.5 (external audit #4) |
+| 12 | release docs gate | v3.7.10 |
+| 13–16 | DQL, FTS txn, deleteNote txn, benchmark sync | v3.7.10 / v3.7.11 |
+| 17 | COMPARISON tools/prompts gate | v3.7.11 |
+| 18 | QUICKSTART version 3.6.1 → 3.7.x | v3.7.12 L2 |
+| 10 | engines >=20 → >=22.13.0 | v3.7.13 H3 |
+| 11 | CodeQL "claim without evidence" | v3.7.17 E (default-setup annotation) |
+| R-14 | CLAUDE.md sprint v3.6.0 / 712+ tests | v3.7.17 B |
+
+### Architectural findings deferred to v3.8.0
+
+Round-20 confirmed (no change from prior audits):
+
+- **R-3** — `serve-http` missing 8 serve-only flags (`--include-pdfs`, `--enable-reranker`, `--reranker-model`, `--reranker-top-n`, `--use-hnsw`, `--hnsw-ef`, `--late-chunk-context`, `--no-hnsw-persist`). Solution: shared `addServeOptions()` + CLI-parity invariant test. Multi-day refactor.
+- **R-7** — watcher doesn't sync embed-db on .md changes. PDF sync closed v3.7.16 P1-5; embed-db requires ML pipeline in watcher process.
+- **R-9** — Chunk MCP resource lacks `resolveSafePath` normalization.
+- **K-3** — generalized `readOnlyHint: true` → no destructive operations invariant.
+- **4/5 reranker E2E** — `ENQUIRE_LOAD_RERANKER_SMOKE=1` opt-in only; not in default CI (model weights ~110 MB).
+- **R-4 / R-15** — `context_pack` soft budget + missing HNSW in ctx.
+- **R-6** — `bootstrapSchema` DROP+CREATE not in single transaction (cross-database migration; needs careful design).
+- **R-10** — HNSW + privacy under-return.
+- **T-1 to T-5** — test coverage gaps (`contextPack`, `get_communities` handler, `hyde_search` E2E, `serve-http` E2E in cli.test, github-metadata no-op).
+- **V-1** — no CI diff between `bench/benchmarks.json` and `docs/benchmarks.md`.
+- **V-2** — PR template doesn't enumerate CI gates.
+- **B-2** — benchmarks methodology section may still have stale narrative latencies (v3.7.13 M11 dropped the duplicate latency column; partial fix).
+- **CHANGELOG 469 KB** — historical noise; open by design.
+
+### Stats
+
+- **818 tests** (unchanged). v3.7.18 is documentation + correctness + tooling; no new code paths to test (R-8 transaction is structural, not test-surfaced).
+- **+3 OIA checks** added: `CLI-SUBCMD-MISSING-LIST`, `STALE-CURRENCY-CLAIM-DOC`, `SHELL-SCRIPT-STALE`.
+- **All 8 required CI gates pass locally.**
+
+### Method note
+
+7 external audit cycles processed in 5 days. The cascade is now self-sustaining: external audits find what internal sweeps miss → OIA gains the new check class → next external audit's blind spots get smaller. The auditor's §0 verdict ("аудит достаточно глубокий для open-source MCP") signals diminishing returns of further static-code-only audits; the outstanding work is in runtime/scale/ML-E2E surfaces (already in v3.8 backlog).
+
 ## [3.7.17] — 2026-05-19
 
 > **TL;DR:** Round-19 external audit response — 6th independent external audit since v3.6.0, on the v3.7.5 codebase (4 days behind current main). Most findings were already closed by the v3.7.6 → v3.7.16 cascade; this patch addresses 5 **cheap stale-fragment findings** the auditor caught that my internal class-sweeps had missed (A: `src/index.ts` file-header reading as if 3.6.0-rc.2 is current, B: `CLAUDE.md` title + quality bar still saying "v3.6.0 sprint" + "712+ tests", C: `scripts/check-changelog-coverage.mjs` referencing non-existent `npm run check:coverage-drift`, D: `embeddings.ts` inline comment claiming `rerank-multilingual` is the default since v3.6.1 it's actually `rerank-bge`, E: README CI claim about CodeQL ×2 + Analyze actions — they DO run via GitHub default-setup, but the README didn't say so, looking like a workflow-file claim without evidence). **PLUS a meta-methodology fix:** the new `scripts/oia-walk.mjs` automates 5 state-driven outside-in checks that my change-driven sweeps systematically miss. **New CLAUDE.md rule** mandates `npm run check:oia` before claiming "no open audit items" in any release.

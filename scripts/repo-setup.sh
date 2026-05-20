@@ -1,56 +1,34 @@
 #!/usr/bin/env bash
-# One-shot GitHub repo polish: description, homepage, topics, and create the latest release.
-# Run after `gh auth login` (GH CLI not authenticated on this machine).
+# DEPRECATED — one-time bootstrap script from v0.3.1 (initial public release).
+#
+# Originally set the GitHub repo's description / homepage / topics +
+# created the first GitHub Release. The current repo state (v3.7.x) has
+# DIFFERENT topics + description, all updated via `gh repo edit` runs
+# documented in CHANGELOG (round-9 / round-11 marketing calibration).
+#
+# v3.7.18 round-20 audit caught this script as STALE:
+#   - Description: v0.3.1 stub ("MCP server for Obsidian vaults...")
+#     vs current "The most advanced Obsidian MCP — long-term memory for
+#     AI agents..." (gated by `tests/github-metadata-invariant.test.ts`).
+#   - Topics: only ~15 v0.3.x topics vs current 20 (8 hype-keyword set
+#     from v3.6.3 + 8 keyword set from v3.7.8/9 calibration).
+#   - Release: hardcoded to v0.3.1.
+#
+# Running it today would CLOBBER the current marketing surface with
+# stale data. Hence the explicit refusal below.
+#
+# To inspect / modify the current repo metadata, use:
+#   gh repo view oomkapwn/enquire-mcp --json description,homepageUrl,repositoryTopics
+# or the GitHub UI.
 
 set -euo pipefail
 
-REPO="oomkapwn/enquire-mcp"
-
-echo "== Setting description + homepage =="
-gh repo edit "$REPO" \
-  --description "enquire — MCP server for Obsidian vaults. Wikilinks, backlinks, frontmatter, basic Dataview, MCP resources & prompts. Read-only by default; opt-in writes. For Claude Code, Cursor, Codex, Devin and any MCP-compatible client." \
-  --homepage "https://www.npmjs.com/package/@oomkapwn/enquire-mcp"
-
-echo "== Setting topics =="
-gh repo edit "$REPO" \
-  --add-topic mcp \
-  --add-topic model-context-protocol \
-  --add-topic obsidian \
-  --add-topic claude \
-  --add-topic claude-code \
-  --add-topic cursor \
-  --add-topic typescript \
-  --add-topic markdown \
-  --add-topic wikilinks \
-  --add-topic backlinks \
-  --add-topic dataview \
-  --add-topic frontmatter \
-  --add-topic pkm \
-  --add-topic knowledge-management \
-  --add-topic ai-agent
-
-echo "== Enabling Discussions (for the FAQ link in issue templates) =="
-gh repo edit "$REPO" --enable-discussions
-
-echo "== Creating GitHub Release for v0.3.1 =="
-RELEASE_NOTES=$(awk '
-  /^## \[0\.3\.1\]/ { capture=1; next }
-  /^## \[/ && capture { exit }
-  capture { print }
-' CHANGELOG.md)
-
-gh release create v0.3.1 \
-  --repo "$REPO" \
-  --title "v0.3.1 — audit pass, launch-ready hardening + docs" \
-  --notes "$RELEASE_NOTES"
-
-echo
-echo "Done. Verify at https://github.com/$REPO"
-echo
-echo "MANUAL STEP — Social preview image:"
-echo "  GitHub doesn't expose a 'set social preview' API, so this one needs"
-echo "  the web UI:"
-echo "    1. https://github.com/$REPO/settings"
-echo "    2. Scroll to 'Social preview' → 'Edit' → 'Upload an image…'"
-echo "    3. Pick assets/social-preview.png from the repo (1280×640, ~150kB)."
-echo "  Regenerate with: npm run render:preview"
+echo "DEPRECATED: scripts/repo-setup.sh is a v0.3.1 bootstrap artifact."
+echo "Running it now would CLOBBER the current repo metadata (description,"
+echo "topics, release) with v0.3.x stale values."
+echo ""
+echo "Current metadata is gated by tests/github-metadata-invariant.test.ts;"
+echo "to audit / modify, use:"
+echo "  gh repo view oomkapwn/enquire-mcp --json description,homepageUrl,repositoryTopics"
+echo "or the GitHub UI."
+exit 1

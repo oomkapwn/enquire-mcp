@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.5] — 2026-05-21
+
+> **TL;DR:** Fifth v3.8.0 release candidate. Adds **K-3 readOnlyHint structural invariant** — pins the tool-registry's `READ_ONLY` ↔ read-handler / `WRITE` ↔ write-handler mapping so the annotations can't drift away from the wired handlers. Catches the class of bug an MCP client's `readOnlyHint`-driven confirmation gate would silently swallow. Ships under `@rc` dist-tag.
+
+**Minor — fifth v3.8.0 release candidate.**
+
+### K-3 — readOnlyHint structural invariant
+
+**Background.** MCP tool annotations advertise to the client and the agent orchestrator what each tool can do. Specifically:
+- `readOnlyHint: true` → MCP clients that gate destructive operations behind user confirmation will SKIP that gate for this tool.
+- `destructiveHint: true` → MCP clients show a "destructive" badge and may ask for explicit confirmation per call.
+
+If a tool annotated `readOnlyHint: true` is silently wired to a write handler (e.g. `createNote`, `appendToNote`, `renameNote`, `replaceInNotes`, `archiveNote`, `chatThreadAppend`, `frontmatterSet`), the client won't confirm, and the agent can mutate the vault without the user knowing.
+
+`src/tool-registry.ts` already follows the convention (two shorthand annotation objects — `READ_ONLY` + `WRITE` — at lines 57, 138, 1028 — plus 7 known write-handler names). But there was no automated check that the convention is maintained. K-3 pins it.
+
+### What's enforced
+
+1. **Every `READ_ONLY`-annotated tool's handler block does NOT reference any function in `KNOWN_WRITE_HANDLERS`.**
+2. **Every `WRITE`-annotated tool's handler block references at least one function from `KNOWN_WRITE_HANDLERS`.**
+3. **Every tool in `tool-registry.ts` has an explicit `READ_ONLY` or `WRITE` annotation** (no UNKNOWN).
+
+`KNOWN_WRITE_HANDLERS` is a set of 7 names: `createNote`, `appendToNote`, `renameNote`, `replaceInNotes`, `archiveNote`, `chatThreadAppend`, `frontmatterSet`. If a future PR adds a new write operation, it MUST register its handler name in this set, OR the K-3 invariant test will reject it as UNKNOWN/violation.
+
+### Implementation
+
+- **`tests/k3-readonly-hint-invariant.test.ts`** — 3 production tests + 3 negative-control fixture tests = 6 new tests.
+- **`scanRegistry(source)`** — exposed as a pure function so fixture-based negative controls can exercise the scanner directly (per CLAUDE.md anti-pattern "Invariant test without negative-control — Rule since v3.6.4").
+- **Block boundary fix** — the scanner bounds each `registerTool(...)` block by the NEXT `registerTool(` call (or end of file), not a fixed line window. Caught during initial test: a fixed 60-line window allowed the last READ_ONLY tool's window to extend into `registerWriteTools()` and grab the first WRITE tool's `createNote(` call. The block-bounding fix was found via the test failing on initial run — exactly the kind of class-of-bug discovery the invariant is designed for.
+
+### Fixture coverage (negative-control)
+
+3 fixture files under `tests/fixtures/k3-invariant/`:
+- **`good.fixture.ts`** — positive control: canonical READ_ONLY + WRITE patterns, both correctly wired.
+- **`bad-readonly-with-write.fixture.ts`** — READ_ONLY tool wired to `createNote` (the exact bug shape K-3 catches).
+- **`bad-write-no-handler.fixture.ts`** — WRITE tool wired to `readNote` (inverse drift).
+
+Each fixture is parseable by `scanRegistry` independently, so the negative-control sibling tests prove the scanner classifies each case correctly without requiring production code violations.
+
+### Stats
+
+- **838 tests** (+6 from K-3). Was 832 in v3.8.0-rc.4.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All required CI gates pass locally.
+
+### v3.8.0 remaining backlog (next RCs)
+
+- **R-10** — HNSW + privacy under-return fix (over-fetch margin tuning).
+- **T-1..T-5** — test coverage gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+- **4/5 reranker E2E in CI** with model-cache strategy.
+- **OCR'd PDF watcher embed-sync** (deferred from rc.3).
+- **HNSW in-memory update** alongside watcher upserts (architectural).
+- **watcher.ts catch-branch coverage via vi.mock or DI** — lift floor back to ≥71%.
+- **External audit on rc.N** before promotion to stable.
+
 ## [3.8.0-rc.4] — 2026-05-21
 
 > **TL;DR:** Fourth v3.8.0 release candidate. Closes the rc.3 architectural deferral: extracts `embedSingleNote` (rc.2) + `embedSinglePdf` (rc.3) from `src/server.ts` into a dedicated `src/embed-pipeline.ts` module. The motivation was the `tests/no-internal-imports.test.ts` Class A invariant — server.ts is in `RESTRICTED_MODULES`, so the helpers couldn't be unit-tested directly. Now they can: 10 new direct unit tests in `tests/embed-pipeline.test.ts` cover happy paths, null returns, embedder error propagation, frontmatter title resolution, late-chunk-context honoring, and the data-integrity guard against mismatched vector counts. Ships under `@rc` dist-tag.

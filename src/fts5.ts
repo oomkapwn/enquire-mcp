@@ -347,11 +347,24 @@ export class FtsIndex {
     return { added, updated, deleted, unchanged };
   }
 
-  /** Drop a file's chunks + state row. Idempotent. */
+  /** Drop a file's chunks + state row. Idempotent.
+   *
+   * v3.7.18 R-8 — wrapped in `db.transaction()` for atomicity. Pre-3.7.18
+   * the two DELETE statements ran independently; a crash / SIGKILL / DB
+   * lock contention between them could leave `source_state` saying "this
+   * file is indexed at mtime X" while `chunks` had no rows — causing the
+   * next watcher event to skip re-indexing (state matches) but search to
+   * miss the file (no chunks). Sibling of v3.7.10 audit #10 fix that
+   * wrapped `reindexFile` / `reindexPdfFile` / source_state in a txn for
+   * the same reason. Caught by round-20 external audit.
+   */
   dropFile(relPath: string): void {
     const db = this.requireDb();
-    db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
-    db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+    const txn = db.transaction(() => {
+      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+    });
+    txn();
   }
 
   /** Re-chunk a single markdown file, replacing its existing chunks atomically.

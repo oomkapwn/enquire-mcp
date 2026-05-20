@@ -1,10 +1,17 @@
-// Vault file watcher (v1.2 — opt-in via --watch).
+// Vault file watcher (v1.2 — opt-in via --watch; expanded in v2.8 to
+// PDFs; v3.8.0-rc.2 added embed-db sync for .md; v3.8.0-rc.3 added
+// embed-db sync for .pdf).
 //
 // Closes the "edit a note → restart server → wait for FTS5 reindex" loop.
-// When enabled, watches the vault root for .md add/change/unlink events,
-// invalidates the parsed-note cache for the affected file, and (if FTS5 is
-// enabled) does an incremental reindex of just that file. Non-MD files are
-// ignored. Symlinks are skipped to match the rest of the vault walker.
+// When enabled, watches the vault root for `.md` add/change/unlink events
+// (and `.pdf` events when `--include-pdfs` is on), invalidates the
+// parsed-note cache for the affected file, and (if FTS5 is enabled) does
+// an incremental reindex of just that file. If the watcher was wired with
+// an embed-db handle via {@link VaultWatcher.attachEmbed} (v3.8.0-rc.2+),
+// the same event also re-embeds + upserts the affected file's chunks
+// into the embed-db so semantic search stays current. Files outside
+// `.md` / (`.pdf` when included) are ignored. Symlinks are skipped to
+// match the rest of the vault walker.
 //
 // Debouncing is delegated to chokidar's `awaitWriteFinish` so we don't
 // reindex five times during a single Obsidian save.

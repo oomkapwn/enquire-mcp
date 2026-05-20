@@ -703,7 +703,11 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
       });
     }
     if (deps.watcher) {
-      const closeWatcher = () => void deps.watcher?.close();
+      const closeWatcher = () => {
+        void deps.watcher?.close();
+        // v3.8.0-rc.2 R-7 — close watcher-owned embed-db handle (HTTP path).
+        deps.watcherEmbedDb?.close();
+      };
       process.once("SIGINT", closeWatcher);
       process.once("SIGTERM", closeWatcher);
       process.on("beforeExit", closeWatcher);

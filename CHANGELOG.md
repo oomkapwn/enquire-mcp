@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.2] — 2026-05-20
+
+> **TL;DR:** Second v3.8.0 release candidate. Closes **R-7 watcher → embed-db sync** (multiple audit rounds, biggest user-visible gap). Pre-3.8.0 the `--watch` flag only kept FTS5 in sync; embed-db drifted silently until manual `enquire-mcp build-embeddings` rebuild, slowly degrading semantic-search quality across a session. Now: when `--watch` is on AND the embed-db file exists, the watcher re-embeds + upserts changed `.md` files in real-time. Ships under `@rc` dist-tag.
+
+**Minor — second v3.8.0 release candidate.**
+
+### R-7 — Watcher → embed-db sync (multi-audit round backlog)
+
+**Background**: this was the largest open architectural item in the round-14 → round-22 cascade. Users on `--use-hnsw` or persistent semantic search edited their vault, saw FTS5 results update via the watcher, but semantic-search results stayed frozen at the last `build-embeddings` snapshot. The drift was invisible until the user noticed a search result not finding a recently-edited note.
+
+**Implementation**:
+
+1. **Extracted `embedSingleNote(vault, embedder, entry, opts)` helper** in `src/server.ts`. Pre-3.8.0 the chunk + embed + row-build logic lived inline inside `syncEmbedDb`'s loop; not reusable. Now shared between bulk sync + watcher.
+
+2. **Added `VaultWatcher.attachEmbed(embedDb, embedder, lateChunkContext)`** method in `src/watcher.ts`. Allows post-construction wiring of the embed-db + embedder pair (necessary because the watcher boots BEFORE HNSW init completes — HNSW build can take 25s+; the watcher needs to be capturing file events the moment serve starts).
+
+3. **`prepareServerDeps` opens a watcher-owned embed-db handle** when `--watch` is on AND the embed-db file exists. Separate handle from the HNSW init's short-lived rebuild scan handle. SQLite WAL mode allows concurrent opens; MVCC keeps state consistent. Peek-before-open pattern (CRIT-1 v3.6.1) honored: existing meta drives model alias + dim + quantization to avoid DROP TABLE on mismatch.
+
+4. **Watcher's `handle()` dispatches embed-sync after FTS5 update**:
+   - `unlink` event on `.md` → `embedDb.deleteNote(relPath)`
+   - `add` / `change` on `.md` → `embedSingleNote(...)` → `embedDb.upsertNote(relPath, mtime, rows)` (or `deleteNote` if note becomes empty)
+   - Failures are LOGGED but DON'T fail the watcher — FTS5 update already succeeded; embed-db will resync on next bulk build. Same fail-soft posture as existing FTS5 path.
+
+5. **Shutdown handler closes the watcher-owned embed-db** via SIGINT / SIGTERM / beforeExit — both stdio path (`server.ts`) and HTTP path (`http-transport.ts`).
+
+### What's NOT in rc.2 (deferred to rc.3)
+
+- **PDF embed-db sync via watcher**: rc.2 handles only `.md` for embed-sync. PDF embed updates need to also re-chunk via pdf.ts + embed each chunk — slightly larger refactor. Markdown is the higher-value first cut (most user vaults are markdown-heavy).
+- **OCR'd PDF embed sync**: same as above + the OCR path is opt-in.
+- **HNSW signature mismatch on individual upsert**: rc.2 leaves HNSW signature stale after watcher updates. On next serve start, the signature-mismatch detection triggers a rebuild. Real-time HNSW index update would require maintaining the in-memory HNSW alongside upserts (architectural).
+
+### Test coverage
+
+`tests/watcher.test.ts` — 2 new R-7 tests:
+- **Positive**: `.md` add → embed-db chunks appear (uses MOCK embedder, no 120MB model download in CI). Subsequent `.md` unlink → chunks dropped.
+- **Negative-control**: PDF events DO NOT touch embed-db (md-only for rc.2).
+
+Plus the existing 4 watcher tests still pass.
+
+### How to use
+
+```bash
+enquire-mcp serve \
+  --vault ~/Obsidian/MyVault \
+  --persistent-index \
+  --use-hnsw \
+  --watch
+```
+
+(or `serve-http` with same flags via the v3.8.0-rc.1 R-3 fix.)
+
+Now editing a note in Obsidian → ~250-500ms later → embeddings auto-update → next semantic search includes the latest changes.
+
+### Stats
+
+- **822 tests** (+2 from R-7 tests). Was 820 in v3.8.0-rc.1.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All required CI gates pass locally.
+
+### v3.8.0 remaining backlog (next RCs)
+
+- **K-3** — `readOnlyHint: true` → no destructive operations structural invariant.
+- **R-10** — HNSW + privacy under-return fix (over-fetch margin tuning).
+- **T-1..T-5** — test coverage gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+- **4/5 reranker E2E in CI** with model-cache strategy.
+- PDF embed-sync via watcher (deferred from rc.2).
+
 ## [3.8.0-rc.1] — 2026-05-20
 
 > **TL;DR:** First release candidate for the v3.8.0 architectural milestone. Closes **R-3 serve-http feature parity** (round-20 audit) — 8 advanced retrieval flags that were silently missing from `serve-http` are now available, with a CLI-parity invariant test to prevent future drift. Ships under `@rc` dist-tag; v3.7.x remains `@latest` until v3.8.0 stable.

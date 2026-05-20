@@ -310,6 +310,117 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 
+  // v3.8.0-rc.2 R-7 — watcher → embed-db sync. Closes the "edit-then-rebuild"
+  // loop for users on --use-hnsw or persistent embedding search. Uses a
+  // MOCK embedder (no 120MB HuggingFace model download) — testing the
+  // wiring, not the model. The real-model smoke test stays opt-in via
+  // ENQUIRE_LOAD_RERANKER_SMOKE pattern.
+  it("attachEmbed: .md change re-embeds + upserts to embed-db (R-7)", async () => {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+
+    // Mock embedder — returns Float32Array of fixed dim per chunk. Deterministic
+    // so we can assert the upsert went through.
+    const mockDim = 4;
+    const mockEmbedder = {
+      model: { alias: "test-mock", hfId: "mock", dim: mockDim, multilingual: false, maxTokens: 128 },
+      async embed(texts: readonly string[]): Promise<Float32Array[]> {
+        return texts.map((_, i) => {
+          const vec = new Float32Array(mockDim);
+          for (let j = 0; j < mockDim; j++) vec[j] = (i + 1) / (j + 1);
+          return vec;
+        });
+      }
+    };
+
+    const embedDbFile = path.join(root, ".cache", "test.embed.db");
+    await fs.mkdir(path.dirname(embedDbFile), { recursive: true });
+    const embedDb = new EmbedDb({
+      file: embedDbFile,
+      vaultRoot: root,
+      modelAlias: "test-mock",
+      dim: mockDim,
+      quantization: "f32"
+    });
+    await embedDb.open();
+
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+      w.attachEmbed(embedDb, mockEmbedder, 0);
+      await w.start();
+      try {
+        const filePath = path.join(root, "note-embed.md");
+        await fs.writeFile(filePath, "# Heading\n\nFirst paragraph body.\n\nSecond paragraph here.\n");
+        // Wait for watcher to process — embed-sync should fire AFTER fts5 reindex.
+        const synced = await waitFor(() => embedDb.totalChunks() > 0);
+        expect(synced).toBe(true);
+        const chunks = embedDb.totalChunks();
+        expect(chunks).toBeGreaterThanOrEqual(1);
+
+        // Unlink should drop both fts5 chunks AND embed-db rows.
+        await fs.unlink(filePath);
+        const dropped = await waitFor(() => embedDb.totalChunks() === 0);
+        expect(dropped).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      embedDb.close();
+      fts.close();
+    }
+  });
+
+  it("attachEmbed: PDF events DON'T touch embed-db (md-only for rc.2)", async () => {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+
+    const mockEmbedder = {
+      model: { alias: "test-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
+      async embed(texts: readonly string[]): Promise<Float32Array[]> {
+        return texts.map(() => new Float32Array(4));
+      }
+    };
+
+    const embedDbFile = path.join(root, ".cache", "test-pdf.embed.db");
+    await fs.mkdir(path.dirname(embedDbFile), { recursive: true });
+    const embedDb = new EmbedDb({
+      file: embedDbFile,
+      vaultRoot: root,
+      modelAlias: "test-mock",
+      dim: 4,
+      quantization: "f32"
+    });
+    await embedDb.open();
+
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, includePdfs: true, silent: true });
+      w.attachEmbed(embedDb, mockEmbedder, 0);
+      await w.start();
+      try {
+        const pdfPath = path.join(root, "doc.pdf");
+        const pdfBuf = makePdf({ pages: ["PDF body for test"] });
+        await fs.writeFile(pdfPath, pdfBuf);
+        // FTS5 should index the PDF chunks, but embed-db should NOT receive them
+        // (PDF embed-sync via watcher deferred to rc.3+).
+        const ftsIndexed = await waitFor(() => fts.totalFiles() >= 1);
+        expect(ftsIndexed).toBe(true);
+        // Embed-db should remain empty (no .md path was indexed).
+        expect(embedDb.totalChunks()).toBe(0);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      embedDb.close();
+      fts.close();
+    }
+  });
+
   it("includePdfs=false: PDF events are silently ignored (P1-5 default safety)", async () => {
     const v = new Vault(root);
     await v.ensureExists();

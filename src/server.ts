@@ -110,6 +110,16 @@ export interface ServerDeps {
   vault: Vault;
   ftsIndex: FtsIndex | null;
   watcher: VaultWatcher | null;
+  /**
+   * v3.8.0-rc.2 R-7 — embed-db handle owned by the watcher for runtime
+   * incremental sync. Opened in `prepareServerDeps` when `--watch` is
+   * on AND the embed-db file exists, separate from the HNSW init path
+   * (which opens its own short-lived handle for the rebuild scan).
+   * SQLite WAL mode allows concurrent opens to the same file; the two
+   * handles see consistent state via MVCC. Closed by the shutdown
+   * handler in {@link startServer}.
+   */
+  watcherEmbedDb: EmbedDb | null;
   disabledTools: Set<string>;
   enabledTools: Set<string>;
   warningTracker: { printed: boolean };
@@ -226,9 +236,61 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // adds/changes/deletes. Pre-3.7.16 only .md events were handled, so
   // PDF moves/deletes left stale rows until restart.
   let watcher: VaultWatcher | null = null;
+  // v3.8.0-rc.2 R-7 — watcher-owned embed-db handle (separate from HNSW
+  // init's short-lived handle). Opened below if `--watch` + the embed-db
+  // file exists; closed by startServer's shutdown handler.
+  let watcherEmbedDb: EmbedDb | null = null;
   if (opts.watch) {
     watcher = new VaultWatcher({ vault, ftsIndex, includePdfs: opts.includePdfs === true });
     await watcher.start();
+    // v3.8.0-rc.2 R-7 — wire embed-db sync. Pre-3.8.0 the watcher only
+    // updated FTS5 on .md edits; embed-db drifted silently until manual
+    // `enquire-mcp build-embeddings` ran. Users on `--use-hnsw` or
+    // semantic search saw retrieval quality slowly degrade across a
+    // session. Now: if the embed-db file exists, open a watcher-owned
+    // handle (WAL mode safe alongside HNSW init's separate handle),
+    // load the embedder lazily, attach to the watcher. Failures are
+    // logged as warnings — the FTS5-only watcher continues working.
+    try {
+      const embedFile = embedDbPath(vault.root);
+      const fsMod = await import("node:fs");
+      if (fsMod.existsSync(embedFile)) {
+        // Peek the existing embed-db meta to match the model alias +
+        // dim + quantization the file was built with. Same posture as
+        // HNSW init (CRIT-1 v3.6.1) — never DROP TABLE on mismatch.
+        const existingMeta = await peekEmbedDbMeta(embedFile);
+        const model = resolveModel(existingMeta?.model_alias);
+        const quantization =
+          (existingMeta?.quantization as "f32" | "int8" | undefined) ?? opts.quantizeEmbeddings ?? "f32";
+        watcherEmbedDb = new EmbedDb({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: model.alias,
+          dim: model.dim,
+          quantization
+        });
+        await watcherEmbedDb.open();
+        // Lazy-load the embedder. ~120MB multilingual model first call
+        // (~2-5s warm); subsequent calls reuse the cached transformers.js
+        // pipeline. Done synchronously here so any failure surfaces
+        // BEFORE watcher events start arriving.
+        const { loadEmbedder } = await import("./embeddings.js");
+        const embedder = await loadEmbedder(model.alias);
+        const lateChunk = opts.lateChunkContext ? parsePositiveInt(opts.lateChunkContext, "--late-chunk-context") : 0;
+        watcher.attachEmbed(watcherEmbedDb, embedder, lateChunk);
+        process.stderr.write(
+          `enquire: watcher embed-db sync enabled (model=${model.alias}, dim=${model.dim}, quantization=${quantization}, late-chunk-context=${lateChunk})\n`
+        );
+      }
+    } catch (err) {
+      process.stderr.write(
+        `enquire: watcher embed-db sync DISABLED (will continue with fts5-only) — ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      if (watcherEmbedDb) {
+        watcherEmbedDb.close();
+        watcherEmbedDb = null;
+      }
+    }
   }
 
   // v2.13.0 — opt-in HNSW vector index. Built in-memory on serve start
@@ -389,6 +451,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     vault,
     ftsIndex,
     watcher,
+    watcherEmbedDb,
     disabledTools: new Set(opts.disabledTools ?? []),
     enabledTools: new Set(opts.enabledTools ?? []),
     warningTracker: { printed: false },
@@ -542,6 +605,10 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   if (watcher) {
     const closeWatcher = () => {
       void watcher?.close();
+      // v3.8.0-rc.2 R-7 — close the watcher-owned embed-db handle too.
+      // Safe to call multiple times (idempotent close); WAL checkpoint
+      // happens at close time so no data loss on graceful shutdown.
+      deps.watcherEmbedDb?.close();
     };
     process.once("SIGINT", closeWatcher);
     process.once("SIGTERM", closeWatcher);
@@ -629,6 +696,58 @@ export function buildEmbedText(
 // pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed
 // notes whose mtime changed. Embedding is the bottleneck (~5-30ms per chunk
 // CPU on M1), so incremental updates are critical for vaults of any size.
+/**
+ * v3.8.0-rc.2 R-7 — embed-vector pipeline for a single markdown note.
+ * Extracted from the inner loop of {@link syncEmbedDb} so both the bulk
+ * sync and the runtime watcher can use the same chunking + embedding +
+ * upsert path without duplicating logic.
+ *
+ * Returns null if the note has no body chunks (empty / whitespace-only —
+ * caller should `db.deleteNote(relPath)` to drop any stale rows).
+ *
+ * @internal
+ */
+export async function embedSingleNote(
+  vault: Vault,
+  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
+  entry: { relPath: string; absPath: string; mtimeMs: number },
+  opts: { lateChunkContext?: number } = {}
+): Promise<{
+  chunks: number;
+  rows: Array<{
+    chunkIndex: number;
+    lineStart: number;
+    lineEnd: number;
+    textPreview: string;
+    vector: Float32Array;
+  }>;
+} | null> {
+  const contextChars = opts.lateChunkContext ?? 0;
+  const note = await vault.readNote(entry.absPath, entry.mtimeMs);
+  const chunks = chunkContent(note.parsed.body);
+  if (chunks.length === 0) return null;
+  const docTitle = note.parsed.frontmatter?.title || path.basename(entry.relPath, ".md");
+  const embedTexts = chunks.map((_c, i) =>
+    buildEmbedText(chunks, i, {
+      docTitle: typeof docTitle === "string" ? docTitle : undefined,
+      contextChars
+    })
+  );
+  const vectors = await embedder.embed(embedTexts);
+  const rows = chunks.map((c, i) => {
+    const vector = vectors[i];
+    if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
+    return {
+      chunkIndex: i,
+      lineStart: c.lineStart,
+      lineEnd: c.lineEnd,
+      textPreview: c.text.slice(0, 480),
+      vector
+    };
+  });
+  return { chunks: chunks.length, rows };
+}
+
 export async function syncEmbedDb(
   vault: Vault,
   db: EmbedDb,
@@ -665,48 +784,22 @@ export async function syncEmbedDb(
       continue;
     }
     try {
-      const note = await vault.readNote(e.absPath, e.mtimeMs);
-      const chunks = chunkContent(note.parsed.body);
-      if (chunks.length === 0) {
+      // v3.8.0-rc.2 R-7 — delegate single-note chunk+embed work to the
+      // shared helper so the watcher can use the same pipeline. The
+      // many-chunks warning stays here (bulk-sync context only).
+      const result = await embedSingleNote(vault, embedder, e, { lateChunkContext: contextChars });
+      if (result === null) {
         // No body — drop any stale entries.
         db.deleteNote(e.relPath);
         processed += 1;
         continue;
       }
-      // v2.0.0-beta.4: warn when a single note produces many chunks, so the
-      // user knows WHY their build is slow on this specific file.
-      if (chunks.length >= 30) {
+      if (result.chunks >= 30) {
         process.stderr.write(
-          `enquire: ${e.relPath} → ${chunks.length} chunks (this one will be slow; consider splitting the note)\n`
+          `enquire: ${e.relPath} → ${result.chunks} chunks (this one will be slow; consider splitting the note)\n`
         );
       }
-      // v2.1.0: prepend heading breadcrumb to embedded text so the model sees
-      // structural context. Free win at zero token cost — Chroma 2024 +
-      // NAACL 2025 show +2-5 NDCG@10 from breadcrumb prepending.
-      // v2.15.0: when `--late-chunk-context <n>` is set, also include
-      // doc title + neighbor-chunk tails so the embedding captures
-      // cross-paragraph context. The text stored in `text_preview`
-      // (for snippets) stays clean.
-      const docTitle = note.parsed.frontmatter?.title || path.basename(e.relPath, ".md");
-      const embedTexts = chunks.map((_c, i) =>
-        buildEmbedText(chunks, i, {
-          docTitle: typeof docTitle === "string" ? docTitle : undefined,
-          contextChars
-        })
-      );
-      const vectors = await embedder.embed(embedTexts);
-      const rows = chunks.map((c, i) => {
-        const vector = vectors[i];
-        if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${e.relPath}`);
-        return {
-          chunkIndex: i,
-          lineStart: c.lineStart,
-          lineEnd: c.lineEnd,
-          textPreview: c.text.slice(0, 480),
-          vector
-        };
-      });
-      db.upsertNote(e.relPath, e.mtimeMs, rows);
+      db.upsertNote(e.relPath, e.mtimeMs, result.rows);
       if (prevMtime === undefined) added += 1;
       else updated += 1;
     } catch (err) {

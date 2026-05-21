@@ -395,6 +395,12 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(metaAfter?.tokenize_mode).toBe("trigram");
   });
 
+  // v3.8.0-rc.6 T-FLAKE-1 — per-it timeout MUST exceed the spawnSync
+  // timeout, otherwise vitest kills the test before the subprocess
+  // finishes (subprocess loads the embedder which can take 30-60s cold
+  // on macOS CI). Round-23 external audit caught the mismatch: vitest
+  // global testTimeout=15s vs spawnSync=60s. Per-it override to 90s
+  // gives subprocess room to finish + 30s assertion budget after.
   it("`enquire-mcp build-embeddings` (no --embedding-model) HONORS existing model_alias=bge in stderr message (v3.7.0 M-1)", async () => {
     if (!distExists()) return;
     if (!canRunFts5) return;
@@ -430,5 +436,5 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // must NOT have been silently rewritten to "multilingual".
     const metaAfter = await peekEmbedDbMeta(embedFile);
     expect(metaAfter?.model_alias).toBe("bge");
-  });
+  }, 90_000);
 });

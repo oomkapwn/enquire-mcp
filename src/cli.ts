@@ -194,7 +194,10 @@ export async function main(): Promise<void> {
     .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
     .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
     .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
-    .option("--watch", "Watch the vault for .md changes and refresh indexes incrementally.")
+    .option(
+      "--watch",
+      "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available)."
+    )
     .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
     .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);

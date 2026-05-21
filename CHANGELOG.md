@@ -2,6 +2,74 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.6] — 2026-05-21
+
+> **TL;DR:** Sixth v3.8.0 release candidate. **Round-23 external audit response** — 6 fixes: T-FLAKE-1 vitest per-it timeout (build-embeddings test), N-4 protobufjs GHSA-jggg-4jg4-v7c6 bump, N-5 serve-http `--watch` help text parity, ARCH-1 circular import (`buildEmbedText` moved to `embed-pipeline.ts`), R-4 contextPack hard budget cap, and OIA promoted from advisory → required (9th CI gate). Ships under `@rc` dist-tag.
+
+**Minor — sixth v3.8.0 release candidate.**
+
+### Fix 1 — T-FLAKE-1: vitest per-it timeout on `build-embeddings` test
+
+`tests/cli.test.ts` `build-embeddings HONORS model_alias=bge` test was flaking in CI because the global `testTimeout: 15_000` (vitest.config.ts) killed the test before the `spawnSync` subprocess finished (subprocess loads the BGE embedder: 30–60s cold). Root cause: two independent timeout sources with inverted priority — vitest kills at 15s, subprocess is allowed 60s.
+
+Fix: added the vitest per-it timeout override (third argument to `it(name, fn, 90_000)`) so vitest allows 90s for that test, while the subprocess-level `timeout: 60_000` stays as the inner guard. 30s assertion budget remains after subprocess exits. No new test added — this is a timing fix on an existing test.
+
+### Fix 2 — N-4: protobufjs GHSA-jggg-4jg4-v7c6 (moderate DoS)
+
+`npm audit fix` updated protobufjs 7.5.7 → 7.6.0. The advisory describes unbounded recursive JSON descriptor expansion (moderate severity, DoS vector). `package-lock.json` updated.
+
+### Fix 3 — N-5: `serve-http --watch` CLI help text parity with api.md
+
+`src/cli.ts` serve-http `--watch` option help string previously read "Watch the vault for .md changes and refresh indexes incrementally." — omitting `.pdf` and embed-db re-sync. Updated to match `docs/api.md` which accurately describes watcher behavior since v3.8.0-rc.2 + rc.3: "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available)."
+
+### Fix 4 — ARCH-1: break circular import (`buildEmbedText`)
+
+`src/embed-pipeline.ts` (introduced in rc.4) imported `buildEmbedText` from `./server.js`, while `src/server.ts` imported `embedSingleNote`/`embedSinglePdf` from `./embed-pipeline.js` — a circular dependency. ESM live bindings made the build succeed, but the architecture was unsound.
+
+Fix: moved `buildEmbedText` from `server.ts` to `embed-pipeline.ts` (where it's consumed). `server.ts` now re-exports it via `export { buildEmbedText } from "./embed-pipeline.js"` for backward compat — `src/index.ts` and `tests/late-chunking.test.ts` see no API change. Circular eliminated.
+
+**TSDoc rule** (CLAUDE.md anti-pattern "TSDoc header drifts from function body"): `buildEmbedText` TSDoc preserved verbatim + annotated with the move in the same commit.
+
+### Fix 5 — R-4: contextPack hard budget cap
+
+`contextPack` in `src/tools/meta.ts` tracked `charsUsed` per-section but had systematic gaps: section headers like `"## Top notes"` were pushed to the sections array without adding their length to `charsUsed`, and `join("\n")` overhead accumulated unchecked. Result: the returned `bundle` could slightly exceed `charBudget`.
+
+Fix: after `sections.join("\n")`, apply a hard cap: if `raw.length > charBudget`, truncate to `charBudget` chars and append `\n[…budget cap reached…]` so callers can detect the truncation. The per-section checks remain as the primary mechanism; the slice is defense-in-depth.
+
+### Fix 6 — OIA promoted from advisory → required (9th CI gate)
+
+`check:oia` (`scripts/oia-walk.mjs`, added v3.7.17, added as advisory CI job in v3.7.19) had zero false positives across v3.7.19 → v3.8.0-rc.5 (6 releases). Round-23 audit report identified the failure to promote as a gap.
+
+Changes:
+- `.github/workflows/ci.yml` — removed `continue-on-error: true` from `oia` job.
+- `.github/workflows/release.yml` — added `|oia` to `REQUIRED` regex; bumped `REQ_COUNT` 8 → 9; updated comment.
+- `README.md` — updated "8 required" → "9 required" in feature matrix + CI security table; added `oia` to the gate list.
+- `CLAUDE.md` quality bar item 7 — updated 8 → 9.
+
+The `tests/docs-consistency.test.ts` "N required CI gates" invariant (added v3.7.14 F4) immediately caught the `REQ_COUNT` mismatch during local test run — exactly as designed.
+
+### Method note
+
+Round-23 was the first full-round external audit on v3.8.0-rc.5 (post-K-3). All 6 findings in this patch are from that audit report (`enquire-mcp-audit-report-2026-05-21-reaudit-v3.8.0-rc.5-FULL.md`). No open audit items remain from rounds 1–23 as of this release.
+
+**Post-merge self-audit sweep (CLAUDE.md rule since v3.7.15):** checked this diff for fresh TSDoc drift — ARCH-1 (buildEmbedText move) TSDoc preserved + migration note added in same commit; R-4 contextPack has no header (anonymous helper block); no function bodies changed without header update.
+
+### Stats
+
+- **838 tests** (unchanged from rc.5). No new tests in rc.6 — all fixes are runtime/config changes.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally (including the newly-required `oia`).
+
+### v3.8.0 remaining backlog (next RCs)
+
+- **R-10** — HNSW + privacy under-return fix (over-fetch margin tuning).
+- **T-1..T-5** — test coverage gaps (`contextPack`, `get_communities` handler E2E, `hyde_search` E2E, `serve-http` cli.test E2E).
+- **4/5 reranker E2E in CI** with model-cache strategy.
+- **OCR'd PDF watcher embed-sync** (deferred from rc.3).
+- **HNSW in-memory update** alongside watcher upserts (architectural).
+- **watcher.ts catch-branch coverage via vi.mock or DI** — lift floor back to ≥71%.
+- **External audit on rc.N** before promotion to stable.
+
 ## [3.8.0-rc.5] — 2026-05-21
 
 > **TL;DR:** Fifth v3.8.0 release candidate. Adds **K-3 readOnlyHint structural invariant** — pins the tool-registry's `READ_ONLY` ↔ read-handler / `WRITE` ↔ write-handler mapping so the annotations can't drift away from the wired handlers. Catches the class of bug an MCP client's `readOnlyHint`-driven confirmation gate would silently swallow. Ships under `@rc` dist-tag.

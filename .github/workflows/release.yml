@@ -65,7 +65,10 @@ jobs:
           # from v3.7.6 M-5; round-12 audit caught that the release gate
           # didn't track this CI check, so a tag with failing TypeDoc could
           # have published to npm).
-          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs"
+          # v3.8.0-rc.6 — bumped to 9 by adding `oia` (Outside-In Audit;
+          # promoted from advisory after one release cycle with 0 false
+          # positives — round-23 audit response).
+          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia"
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
             FAILED=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
@@ -75,7 +78,7 @@ jobs:
               exit 1
             fi
             DONE=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null)] | length')
-            REQ_COUNT=8
+            REQ_COUNT=9
             if [ "$DONE" -ge "$REQ_COUNT" ]; then
               echo "✓ All $DONE required checks passed on $SHA"
               break

@@ -21,16 +21,65 @@
 // to import them directly (no invariant violation). watcher.ts coverage
 // floor goes back up from the rc.3-deferred 69% → ≥71% as a result.
 //
-// Also re-exports `buildEmbedText` (the breadcrumb + late-chunk-context
-// formatter) since both helpers use it. Stays declared in server.ts for
-// backward compat — moving its public-API form would touch too many
-// other call sites this release.
+// rc.6 ARCH-1 — `buildEmbedText` moved here from server.ts to break the
+// circular import (embed-pipeline → server → embed-pipeline that rc.4
+// introduced). server.ts now re-exports it from here for backward compat
+// so that src/index.ts and tests/late-chunking.test.ts see no API change.
 
 import * as path from "node:path";
 import type { loadEmbedder } from "./embeddings.js";
 import { chunkContent } from "./fts5.js";
-import { buildEmbedText } from "./server.js";
 import type { Vault } from "./vault.js";
+
+/**
+ * v2.15.0 — context-prefixed embedding text builder ("late-chunking-style"
+ * context windowing). Pre-pends the document title + heading breadcrumb,
+ * then includes a tail of the previous chunk + the chunk itself + a head
+ * of the next chunk, all bounded so the multilingual model's 128-token
+ * context budget isn't blown.
+ *
+ * Why: short standalone chunks ("Use Adam β=0.9, β=0.999") embed
+ * identically across documents, losing the surrounding context that
+ * disambiguates them. Adding ~50-100 chars of neighbor text + the
+ * doc title + breadcrumb gives the bi-encoder enough signal to keep
+ * cross-document semantic separation. Per Chroma 2024 + Jina AI's late
+ * chunking blog: +2-5 NDCG@10 typical at zero new dep cost.
+ *
+ * Returns the concatenated text. When `contextChars` ≤ 0, returns the
+ * legacy v2.1.0 form (just breadcrumb + chunk text), preserving
+ * bit-for-bit behavior for users who don't opt in.
+ *
+ * v3.8.0-rc.6 ARCH-1 — moved here from server.ts to break circular import.
+ */
+export function buildEmbedText(
+  chunks: ReadonlyArray<{ text: string; breadcrumb?: string }>,
+  i: number,
+  opts: { docTitle?: string; contextChars: number }
+): string {
+  const c = chunks[i];
+  if (!c) return "";
+  if (opts.contextChars <= 0) {
+    // Legacy v2.1.0 form — breadcrumb only.
+    return c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
+  }
+  const parts: string[] = [];
+  if (opts.docTitle) parts.push(`[doc: ${opts.docTitle}]`);
+  if (c.breadcrumb) parts.push(c.breadcrumb);
+  // Previous chunk tail — last N chars, trimmed at word boundary.
+  const prev = chunks[i - 1];
+  if (prev) {
+    const tail = prev.text.slice(-opts.contextChars).replace(/^\S*\s/, "");
+    if (tail.length > 0) parts.push(`… ${tail}`);
+  }
+  parts.push(c.text);
+  // Next chunk head — first N chars, trimmed at word boundary.
+  const next = chunks[i + 1];
+  if (next) {
+    const head = next.text.slice(0, opts.contextChars).replace(/\s\S*$/, "");
+    if (head.length > 0) parts.push(`${head} …`);
+  }
+  return parts.join("\n\n");
+}
 
 /**
  * Per-chunk row shape used by both embedSingleNote + embedSinglePdf.

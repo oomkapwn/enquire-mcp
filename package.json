@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.8.0-rc.6",
+  "version": "3.8.0-rc.7",
   "description": "The most advanced Obsidian MCP — long-term memory for AI agents. Hybrid retrieval (BM25 + TF-IDF + multilingual ML embeddings, RRF-fused) with BGE cross-encoder reranking, HNSW + int8 quantization, late-chunking, HyDE + sub-question decomposition, agentic RAG, PDFs (with OCR), standalone Bases (.base query execution — no Obsidian needed), GraphRAG-light (Louvain wikilink community detection), wikilinks, backlinks, Dataview, frontmatter, canvas. Open-source long-term memory / second brain for Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and any MCP client. 44 tools, 19 MCP prompts, BGE cross-encoder reranker verified end-to-end (+4 aliases in catalog, transformers.js bump pending), 838 tests, SLSA-3, semver-bound, MIT.",
   "type": "module",
   "bin": {

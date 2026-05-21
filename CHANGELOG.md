@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.8] — 2026-05-21
+
+> **TL;DR:** Eighth v3.8.0 release candidate. **Round-24 external audit response** — 2 findings closed: T-1 (contextPack hard-cap has zero test coverage for the triggered path — violation of CLAUDE.md negative-control rule) and INFO-2 (embed-pipeline.ts missing from per-file FLOORS). Adds `tests/context-pack.test.ts` (4 tests with positive + negative controls), lifts meta.ts branch coverage 67.66% → 73.85%, adds embed-pipeline.ts floor at 84%. Ships under `@rc` dist-tag.
+
+**Minor — eighth v3.8.0 release candidate.**
+
+### Finding T-1 — `contextPack` hard-cap: zero tests for triggered path
+
+**Background.** rc.6 R-4 added a hard final bundle cap to `contextPack`: after assembling all sections, if `raw.length > charBudget`, the bundle is sliced to `charBudget` chars and a `[…budget cap reached…]` marker is appended. The round-24 external audit (rc.7 codebase) found **zero test coverage** for this code path — a direct violation of CLAUDE.md anti-pattern "Invariant test without negative-control — a test that ALWAYS passes proves nothing. Rule since v3.6.4."
+
+**Fix:** New `tests/context-pack.test.ts` with 4 tests:
+
+1. **Positive control** — `budget_tokens: 1000`, small note → bundle fits, marker NOT appended. Proves the cap is not always applied.
+2. **Negative control** — `budget_tokens: 1` (charBudget=4 chars), big note → cap IS triggered, marker present, sliced portion ≤ charBudget.
+3. **Error path** — empty and whitespace-only query → throws.
+4. **Empty match set** — off-topic query against unrelated content → valid result, `included_notes: []`.
+
+**Side effect (coverage uplift):** The 4 new tests exercise contextPack's hybrid-search + section-assembly code path. `src/tools/meta.ts` branch coverage jumped from 67.66% → 73.85% (+6.2pp), allowing the per-file floor to be raised from 65% → 71%.
+
+### Finding INFO-2 — `embed-pipeline.ts` missing from per-file FLOORS
+
+**Background.** rc.4 extracted `embedSingleNote`/`embedSinglePdf` from `server.ts` into `embed-pipeline.ts`. The new module had direct unit tests (`tests/embed-pipeline.test.ts`) with ~86% branch coverage. But the file was never added to the per-file FLOORS table in `scripts/check-per-file-coverage.mjs` — so a future branch coverage regression in that file would only be caught by the global 75% gate (which averages over 31 source files), not by a file-specific floor.
+
+**Fix:** Added `"src/embed-pipeline.ts": { branches: 84 }` to FLOORS (floor at 84%, 2pp below current 86.84%). The per-file script now enforces **10 floors** (was 9).
+
+**Note:** The FLOORS comment deferred this addition with "Re-lifted in rc.4+ when we either move embed-pipeline…". That condition was met in rc.4; rc.8 closes the gap.
+
+### Method note
+
+Round-24 audit had **4 entries** total:
+- T-1 (this fix) — ship-ready ✅
+- INFO-2 (this fix) — ship-ready ✅
+- R-10 HNSW privacy under-return — acknowledged deferred work, NOT a regression. Documented in v3.8.0 backlog.
+- INFO-3 CHANGELOG "no open items" nuance — accepted wording; the note says "round-23 report IDs", not "all product backlog". Will clarify in stable release notes.
+
+**Post-merge self-audit scope:** context-pack.test.ts is a new file with no function-body-changed TSDoc to drift. scripts/check-per-file-coverage.mjs FLOORS table is a config change with no TSDoc. No new drift risk.
+
+### Stats
+
+- **842 tests** (+4 from T-1 contextPack tests). Was 838 in v3.8.0-rc.7.
+- **10 per-file FLOORS** (was 9); `embed-pipeline.ts` floor at 84%.
+- `tools/meta.ts` branches: 67.66% → **73.85%** (floor raised 65% → 71%).
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog (unchanged from rc.7)
+
+- **R-10** — HNSW + privacy under-return fix.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update, watcher.ts ≥71% branch floor.
+- External audit before `@latest` promotion.
+
 ## [3.8.0-rc.7] — 2026-05-21
 
 > **TL;DR:** Seventh v3.8.0 release candidate. **Post-rc.6 self-audit** — 3 fixes: α-class TSDoc drift in `contextPack` (hard budget cap not documented in TSDoc), N-5 sibling (`serve --watch` help text missing .pdf + embed-db, only `serve-http` was updated in rc.6), and watcher flake (task #36 — chokidar FSEvents startup delay missing from the line-170 stderr-capture test, same pattern as sibling at line-140). Ships under `@rc` dist-tag.

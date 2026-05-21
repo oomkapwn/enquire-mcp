@@ -1095,7 +1095,9 @@ export interface ContextPackResult {
  *
  * Budget enforcement: each note's body is truncated to ~50% of remaining
  * budget so room remains for backlinks + dailies; oversize bodies get a
- * `[…truncated…]` marker. Top-3 included notes get 1-line backlink
+ * `[…truncated…]` marker. As a final defense-in-depth, the assembled bundle
+ * is hard-capped at `budget_tokens × 4` chars and marked `[…budget cap
+ * reached…]` if truncated. Top-3 included notes get 1-line backlink
  * summaries when `include_backlinks` is true.
  *
  * @param vault - The vault.

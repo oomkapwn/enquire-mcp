@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.7] — 2026-05-21
+
+> **TL;DR:** Seventh v3.8.0 release candidate. **Post-rc.6 self-audit** — 3 fixes: α-class TSDoc drift in `contextPack` (hard budget cap not documented in TSDoc), N-5 sibling (`serve --watch` help text missing .pdf + embed-db, only `serve-http` was updated in rc.6), and watcher flake (task #36 — chokidar FSEvents startup delay missing from the line-170 stderr-capture test, same pattern as sibling at line-140). Ships under `@rc` dist-tag.
+
+**Minor — seventh v3.8.0 release candidate.**
+
+### Fix 1 — α-class TSDoc drift: `contextPack` budget-cap paragraph
+
+The rc.6 R-4 fix added a hard final bundle cap (`bundle.slice(0, charBudget)` with marker) to `contextPack` but the function-level TSDoc "Budget enforcement" paragraph was NOT updated in the same commit — describing only the per-section truncation, omitting the hard cap. Detected by the mandatory post-merge self-audit sweep (CLAUDE.md rule since v3.7.15).
+
+Fix: added one sentence to the TSDoc paragraph: "As a final defense-in-depth, the assembled bundle is hard-capped at `budget_tokens × 4` chars and marked `[…budget cap reached…]` if truncated."
+
+**Overclaim class note**: this is the 10th TSDoc drift instance in the project ledger (v3.6.1 was #1, …, v3.7.14 F1 + F2 were #6/#7, v3.7.15 R17-1 was #8, the rc.6 ARCH-1 TSDoc update + migration note would have been #10 if missed — but it was caught in the same commit). rc.7 Fix 1 is instance #10 (missed because the R-4 contextPack change was a small add-on to meta.ts, not a standalone "function body changed" commit).
+
+### Fix 2 — N-5 sibling: `serve --watch` help text
+
+rc.6 N-5 updated the `serve-http --watch` option help string but missed the parallel `serve` command option (line 124 of `src/cli.ts`). Both now read the canonical form: "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available)." Detected by post-rc.6 sibling sweep (CLAUDE.md rule: "sweep that patch's own diff for fresh instances of the same class").
+
+### Fix 3 — watcher.test.ts chokidar FSEvents startup delay (task #36)
+
+The line-170 `"logs reindexed / unlink lines to stderr"` test had no delay between `w.start()` and the first `fs.writeFile()`. On macOS CI runners with slower FSEvents initialization, the write event fires before chokidar finishes attaching its listener — causing a flake (~25% on macOS CI, observed once in rc.5 test-macos). The sibling test at line 140 correctly had `await new Promise(r => setTimeout(r, 20))` as a warm-up guard.
+
+Fix: added `await new Promise(r => setTimeout(r, 50))` after `w.start()` in the line-170 test. Also bumped the line-140 test's warm-up from 20ms → 50ms (both tests on the same macOS risk surface). Root cause is identical to T-FLAKE-1 class: a time-based assumption where two independent clocks (OS event system + test) aren't synchronized.
+
+### Method note
+
+Post-merge self-audit sweep applied per CLAUDE.md rule (since v3.7.15). Three findings, all in the rc.6 diff's own scope:
+- Fix 1: body-changed-without-header-update (same class as v3.7.14 F1/F2, v3.7.15 R17-1)
+- Fix 2: incomplete N-class sweep (only one of two sibling options updated)
+- Fix 3: chokidar warm-up gap (parallel to T-FLAKE-1 timing class)
+
+No new tests added (all fixes are documentation/timing corrections on existing code).
+
+### Stats
+
+- **838 tests** (unchanged). All fixes are doc/timing changes.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
 ## [3.8.0-rc.6] — 2026-05-21
 
 > **TL;DR:** Sixth v3.8.0 release candidate. **Round-23 external audit response** — 6 fixes: T-FLAKE-1 vitest per-it timeout (build-embeddings test), N-4 protobufjs GHSA-jggg-4jg4-v7c6 bump, N-5 serve-http `--watch` help text parity, ARCH-1 circular import (`buildEmbedText` moved to `embed-pipeline.ts`), R-4 contextPack hard budget cap, and OIA promoted from advisory → required (9th CI gate). Ships under `@rc` dist-tag.

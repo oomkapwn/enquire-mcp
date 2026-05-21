@@ -121,7 +121,7 @@ export async function main(): Promise<void> {
     )
     .option(
       "--watch",
-      "Watch the vault for .md add/change/unlink events and incrementally invalidate the parsed-note cache (and refresh the FTS5 index when --persistent-index is also enabled). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
+      "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
     )
     .option(
       "--disabled-tools <name...>",

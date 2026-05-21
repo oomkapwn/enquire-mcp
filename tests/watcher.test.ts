@@ -153,7 +153,7 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
       const w = new VaultWatcher({ vault: v, silent: false });
       await w.start();
       try {
-        await new Promise((r) => setTimeout(r, 20));
+        await new Promise((r) => setTimeout(r, 50));
         await fs.writeFile(path.join(root, "n.md"), "v2");
         const ok = await waitFor(() =>
           captured.some((s) => s.includes("watcher change") && s.includes("cache-invalidated"))
@@ -183,6 +183,11 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
       const w = new VaultWatcher({ vault: v, silent: false, ftsIndex: fts });
       await w.start();
       try {
+        // Allow chokidar to finish initializing its FSEvents listener before
+        // the first write — macOS CI runners can be slow enough that an
+        // immediate write is missed (same pattern as the sibling test at
+        // line ~140 which had the same race and uses a 20ms warm-up).
+        await new Promise((r) => setTimeout(r, 50));
         const abs = path.join(root, "logged.md");
         await fs.writeFile(abs, "# T\n\nbody\n");
         const indexed = await waitFor(() => captured.some((s) => s.includes("fts5 reindexed")));

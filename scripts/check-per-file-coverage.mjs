@@ -64,7 +64,9 @@ const FLOORS = {
   "src/http-transport.ts": { branches: 65 }, // current 66.86%
   "src/doctor.ts": { branches: 64 }, // current 66.05%
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
-  "src/tools/meta.ts": { branches: 65 }, // current 67.66%
+  // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
+  // raised per-file branches from 67.66% → 73.85%.
+  "src/tools/meta.ts": { branches: 71 }, // current 73.85% (rc.8 T-1 uplift)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
   "src/bases.ts": { branches: 71 }, // current 73.17%
   // v3.8.0-rc.3 — lowered from 71% → 69% (current ~69.23%) because
@@ -77,7 +79,11 @@ const FLOORS = {
   // when we either move embed-pipeline to its own module (enabling
   // direct unit tests without watcher overhead) OR add dependency
   // injection to make the throw path deterministic.
-  "src/watcher.ts": { branches: 69 } // current ~69.23% (rc.3 expanded)
+  "src/watcher.ts": { branches: 69 }, // current ~69.23% (rc.3 expanded)
+  // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
+  // (round-24 audit) noted it was missing from FLOORS; added here in
+  // rc.8 at floor 84% (2pp below current 86.84%).
+  "src/embed-pipeline.ts": { branches: 84 } // current 86.84% (rc.8+)
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

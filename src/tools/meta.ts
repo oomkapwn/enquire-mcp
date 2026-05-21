@@ -1210,7 +1210,13 @@ export async function contextPack(
     }
   }
 
-  const bundle = sections.join("\n");
+  // v3.8.0-rc.6 R-4 — hard budget cap. The per-section checks above leave
+  // small gaps (section headers like "## Top notes" aren't tracked, and
+  // join("\n") overhead accumulates). Slice as defense-in-depth so the
+  // returned bundle can never exceed the token budget regardless of those
+  // small systematic underestimates.
+  const raw = sections.join("\n");
+  const bundle = raw.length > charBudget ? `${raw.slice(0, charBudget)}\n[…budget cap reached…]` : raw;
   return {
     query: args.query,
     bundle,

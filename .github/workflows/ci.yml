@@ -138,21 +138,18 @@ jobs:
             exit 1
           fi
 
-  # v3.7.19 (round-21 self-audit θ1) — Outside-In Audit advisory job.
+  # v3.7.19 (round-21 self-audit θ1) — Outside-In Audit job.
   # The OIA script (added v3.7.17) catches "state-driven" drift that
   # internal change-driven sweeps miss (stale CLI subcommands in docs,
   # version-drifted file headers, shell-script staleness, etc.).
   #
-  # The v3.7.17 CHANGELOG claimed "required CI gate in v3.7.18+ once
-  # validated for one release cycle". The gate was never actually added
-  # until this patch (caught by the round-21 RCA sweep on v3.7.18 — class θ
-  # "false automation claim"). Added here as ADVISORY (continue-on-error)
-  # because the OIA heuristics still have a false-positive risk and we want
-  # one release of production observation before flipping to required.
+  # v3.7.19: added as ADVISORY (continue-on-error=true) for one release
+  # cycle of production observation. v3.8.0-rc.6 (round-23 audit response):
+  # promoted to REQUIRED — one full release cycle confirmed zero false
+  # positives. Also added to the release.yml REQUIRED gate list (9 total).
   oia:
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

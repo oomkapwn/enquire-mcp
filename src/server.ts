@@ -644,53 +644,10 @@ export function formatReadyBanner(deps: ServerDeps): string {
   return `enquire ${VERSION} ready (${writeMode}, vault=${vault.root}${cacheMode}${ftsMode}${privacyMode}${watchMode}${disabledMode}${enabledMode})`;
 }
 
-/**
- * v2.15.0 — context-prefixed embedding text builder ("late-chunking-style"
- * context windowing). Pre-pends the document title + heading breadcrumb,
- * then includes a tail of the previous chunk + the chunk itself + a head
- * of the next chunk, all bounded so the multilingual model's 128-token
- * context budget isn't blown.
- *
- * Why: short standalone chunks ("Use Adam β=0.9, β=0.999") embed
- * identically across documents, losing the surrounding context that
- * disambiguates them. Adding ~50-100 chars of neighbor text + the
- * doc title + breadcrumb gives the bi-encoder enough signal to keep
- * cross-document semantic separation. Per Chroma 2024 + Jina AI's late
- * chunking blog: +2-5 NDCG@10 typical at zero new dep cost.
- *
- * Returns the concatenated text. When `contextChars` ≤ 0, returns the
- * legacy v2.1.0 form (just breadcrumb + chunk text), preserving
- * bit-for-bit behavior for users who don't opt in.
- */
-export function buildEmbedText(
-  chunks: ReadonlyArray<{ text: string; breadcrumb?: string }>,
-  i: number,
-  opts: { docTitle?: string; contextChars: number }
-): string {
-  const c = chunks[i];
-  if (!c) return "";
-  if (opts.contextChars <= 0) {
-    // Legacy v2.1.0 form — breadcrumb only.
-    return c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
-  }
-  const parts: string[] = [];
-  if (opts.docTitle) parts.push(`[doc: ${opts.docTitle}]`);
-  if (c.breadcrumb) parts.push(c.breadcrumb);
-  // Previous chunk tail — last N chars, trimmed at word boundary.
-  const prev = chunks[i - 1];
-  if (prev) {
-    const tail = prev.text.slice(-opts.contextChars).replace(/^\S*\s/, "");
-    if (tail.length > 0) parts.push(`… ${tail}`);
-  }
-  parts.push(c.text);
-  // Next chunk head — first N chars, trimmed at word boundary.
-  const next = chunks[i + 1];
-  if (next) {
-    const head = next.text.slice(0, opts.contextChars).replace(/\s\S*$/, "");
-    if (head.length > 0) parts.push(`${head} …`);
-  }
-  return parts.join("\n\n");
-}
+// v3.8.0-rc.6 ARCH-1 — `buildEmbedText` moved to embed-pipeline.ts to break
+// the circular import (embed-pipeline → server → embed-pipeline). Re-exported
+// here so that src/index.ts + tests/late-chunking.test.ts see no API change.
+export { buildEmbedText } from "./embed-pipeline.js";
 
 // v2.0 alpha — sync the persistent embedding index. Same incremental-rebuild
 // pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed

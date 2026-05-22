@@ -209,7 +209,8 @@ export async function readNote(
 
 /** Pull ATX headings (`#`, `##`, `###`, etc.) out of note body for the
  *  document-map projection. Skips ATX inside fenced code blocks via a simple
- *  line-by-line backtick toggle. */
+ *  line-by-line toggle on both backtick fences (` ``` `) and tilde fences
+ *  (`~~~`) per CommonMark spec (v3.8.0-rc.10 P3-25). */
 function extractHeadings(body: string): Array<{ level: number; text: string; line: number }> {
   const out: Array<{ level: number; text: string; line: number }> = [];
   const lines = body.split("\n");

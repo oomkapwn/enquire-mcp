@@ -326,6 +326,9 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
  *   • Either the .bin or .meta.json file is missing
  *   • The meta's `signature` doesn't match the caller's current signature
  *   • The meta's `formatVersion` doesn't match
+ *   • The meta's `dim` is not a positive integer (v3.8.0-rc.10 P3-27)
+ *   • The meta's `size` is not a non-negative integer (v3.8.0-rc.10 P3-27)
+ *   • The meta's `rowsByLabel` is not a plain object (v3.8.0-rc.10 P3-27)
  *   • The native lib fails to load the .bin (corrupt / dim mismatch)
  *
  * On success returns `{ index, rowsByLabel }` so the caller can wire

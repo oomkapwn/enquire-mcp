@@ -58,10 +58,18 @@ This exercises the `try/catch` branch in `attachEmbed` that was previously uncov
 
 ### Method note
 
-Post-merge self-audit scope for rc.10 (CLAUDE.md rule since v3.7.15):
-- `src/tools/read.ts` `extractHeadings`: regex body change only. TSDoc for `extractHeadings` describes the fence behavior — updated in-line with fix. α-class clear.
-- `src/cli-help.ts` `PERSISTENT_INDEX_HELP`: string replacement. Comment header above the export already stated the intent; updated. No other caller-side TSDoc mentions this constant by value. α-class clear.
-- `src/hnsw.ts` `loadHnswFromDisk`: added early-return guards. TSDoc for `loadHnswFromDisk` says "returns null on any load error" — the new guards are consistent with that contract, no header update needed. α-class clear.
+**Post-merge self-audit** (CLAUDE.md rule since v3.7.15) — found 2 α-class (TSDoc drift) instances in the rc.10 diff itself:
+
+1. `extractHeadings` TSDoc header (line 210, `src/tools/read.ts`): said "Skips ATX inside fenced code blocks via a simple line-by-line **backtick** toggle" — P3-25 changed the body to handle both backtick AND tilde fences, but the header wasn't updated in the same commit. Fixed inline: "backtick toggle" → "toggle on both backtick fences and tilde fences per CommonMark spec".
+
+2. `loadHnswFromDisk` TSDoc `returns null` bullet list (lines 325-329, `src/hnsw.ts`): P3-27 added 3 new early-return paths (invalid dim, size, rowsByLabel) but none appeared in the bullet list. Fixed inline: 3 new bullets added.
+
+Both fixes are doc-only with no test-count change; committed directly to `main` in a post-merge follow-up without opening a new RC (same pattern as v3.7.15 R17-1 and R17-2).
+
+Per-production-file self-audit scope:
+- `src/tools/read.ts` `extractHeadings`: ✅ fixed (header updated this commit).
+- `src/cli-help.ts` `PERSISTENT_INDEX_HELP`: ✅ clear (comment header above export was updated in the rc.10 commit itself).
+- `src/hnsw.ts` `loadHnswFromDisk`: ✅ fixed (returns-null bullet list updated this commit).
 - `tests/watcher.test.ts`: test-only addition, no production code change.
 
 Docs-consistency: test count updated 842 → 846 across README.md (badge + tagline + feature matrix + npm test line), package.json description, docs/COMPARISON.md.

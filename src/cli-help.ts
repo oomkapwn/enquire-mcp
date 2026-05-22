@@ -48,3 +48,12 @@ export const DIAGNOSTIC_SEARCH_TOOLS_HELP =
  */
 export const PERSISTENT_INDEX_HELP =
   "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Required for obsidian_full_text_search — also pass --diagnostic-search-tools to surface it alongside the default hybrid obsidian_search.";
+
+/**
+ * `--watch` flag help. Shared between `serve` and `serve-http` so the text
+ * cannot drift between subcommands (v3.8.0-rc.11 M-1 — N-5 recurrence fix:
+ * rc.6 updated serve-http, rc.7 updated serve to a *longer* string, leaving
+ * them still different; lifting here makes drift structurally impossible).
+ */
+export const WATCH_HELP =
+  "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting.";

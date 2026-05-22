@@ -69,17 +69,12 @@ const FLOORS = {
   "src/tools/meta.ts": { branches: 71 }, // current 73.85% (rc.8 T-1 uplift)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
   "src/bases.ts": { branches: 71 }, // current 73.17%
-  // v3.8.0-rc.3 — lowered from 71% → 69% (current ~69.23%) because
-  // rc.3 expanded watcher.ts with a PDF embed-sync block (lines 240-288)
-  // that mirrors the rc.2 md path. The happy paths are covered by the
-  // rc.2 R-7 test + rc.3 R-7 PDF test in tests/watcher.test.ts; the
-  // fail-soft error branches (embedder throws) are integration-dep
-  // heavy (chokidar timing + pdfjs binary read) so chokidar-based
-  // tests for them flake at ~25% rate locally. Re-lifted in rc.4+
-  // when we either move embed-pipeline to its own module (enabling
-  // direct unit tests without watcher overhead) OR add dependency
-  // injection to make the throw path deterministic.
-  "src/watcher.ts": { branches: 69 }, // current ~69.23% (rc.3 expanded)
+  // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts
+  // with a PDF embed-sync block (lines 240-288); the fail-soft error branches
+  // (embedder throws) required dependency injection to test deterministically.
+  // v3.8.0-rc.10 — the attachEmbed error-path NEGATIVE control test lifted
+  // coverage from ~69.23% → 71.15%; floor stays at 69% (2pp safety margin).
+  "src/watcher.ts": { branches: 69 }, // current ~71.15% (rc.10 attachEmbed error test)
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).

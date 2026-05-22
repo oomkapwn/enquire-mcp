@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP } from "./cli-help.js";
+import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP, WATCH_HELP } from "./cli-help.js";
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
@@ -119,10 +119,7 @@ export async function main(): Promise<void> {
       "--read-paths <pattern...>",
       "Strict allowlist — when set, ONLY paths matching one of these glob patterns are visible. Complement to --exclude-glob (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics as --exclude-glob (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`."
     )
-    .option(
-      "--watch",
-      "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting."
-    )
+    .option("--watch", WATCH_HELP)
     .option(
       "--disabled-tools <name...>",
       "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`."
@@ -194,10 +191,7 @@ export async function main(): Promise<void> {
     .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
     .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
     .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
-    .option(
-      "--watch",
-      "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available)."
-    )
+    .option("--watch", WATCH_HELP)
     .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
     .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);

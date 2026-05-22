@@ -827,7 +827,11 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *
  * Privacy contract: hits are filtered through `vault.isExcluded()` before
  * return — entries in the `.embed.db` for paths now matched by
- * `--exclude-glob` / `--read-paths` never leak through.
+ * `--exclude-glob` / `--read-paths` never leak through. To keep the returned
+ * count stable under normal exclude-glob use, the search over-fetches by 2×
+ * (brute-force) or 6× (HNSW). Under extreme configurations where the majority
+ * of the embed-db is excluded, fewer than `limit` results may be returned —
+ * this is accepted behavior: privacy takes precedence over result count.
  *
  * @param vault - The vault. Used for path-exclusion filtering and to error
  *   on missing index with a guidance message.
@@ -991,9 +995,14 @@ export async function embeddingsSearch(
       // side; this is the corresponding search-side guard.
       assertHnswModelMatchesEmbedder(embedder.model.alias, hnsw.modelAlias);
       // v2.13.0 — HNSW path. Sub-10ms top-K at any scale. We over-fetch
-      // slightly more (3×) than brute-force because HNSW can occasionally
-      // miss a true nearest neighbor; the privacy filter then pares down.
-      const k = Math.min(Math.max(overFetch * 2, 30), Math.max(hnsw.rowByLabel.size, 1));
+      // more than brute-force because HNSW can occasionally miss a true
+      // nearest neighbor AND because the privacy filter pares down the pool.
+      // v3.8.0-rc.9 R-10 — bumped multiplier from ×2 → ×3 (effective 4× →
+      // 6× limit) to reduce under-return when many embed-db entries are
+      // excluded by --exclude-glob / --read-paths. Bounded by rowByLabel.size
+      // so there is no regression on small vaults. Residual under-return can
+      // still occur when >66% of the index is excluded (see TSDoc).
+      const k = Math.min(Math.max(overFetch * 3, 50), Math.max(hnsw.rowByLabel.size, 1));
       const result = hnsw.index.searchKnn(qVec, k, hnsw.ef !== undefined ? { ef: hnsw.ef } : undefined);
       const { hnswResultsToHits } = await import("../hnsw.js");
       rawHits = hnswResultsToHits(result, hnsw.rowByLabel);

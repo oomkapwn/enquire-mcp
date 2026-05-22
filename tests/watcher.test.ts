@@ -447,6 +447,72 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 
+  // v3.8.0-rc.10 — watcher embed-db sync error path: silent=false branch
+  // (lines 314-319 in watcher.ts). When the embedder throws, the watcher
+  // MUST: (a) still update FTS5 (fail-soft), (b) log the error to stderr
+  // when silent=false, (c) NOT update embed-db chunks. Tests the uncovered
+  // `if (!this.silent)` branch in the embed-db sync catch block.
+  it("attachEmbed: embed-db sync failure is logged to stderr (silent=false) and FTS5 still updates — NEGATIVE control", async () => {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const v = new Vault(root);
+    await v.ensureExists();
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+
+    // An embedder that always throws — simulates embed pipeline failure.
+    const throwingEmbedder = {
+      model: { alias: "throwing-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
+      async embed(_texts: readonly string[]): Promise<Float32Array[]> {
+        throw new Error("synthetic embed failure for watcher test");
+      }
+    };
+    const embedDbFile = path.join(root, ".cache", "throwing.embed.db");
+    await fs.mkdir(path.dirname(embedDbFile), { recursive: true });
+    const embedDb = new EmbedDb({
+      file: embedDbFile,
+      vaultRoot: root,
+      modelAlias: "throwing-mock",
+      dim: 4,
+      quantization: "f32"
+    });
+    await embedDb.open();
+
+    const captured: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    // biome-ignore lint/suspicious/noExplicitAny: stderr.write has overloads
+    process.stderr.write = ((chunk: any) => {
+      if (typeof chunk === "string") captured.push(chunk);
+      return true;
+    }) as unknown as typeof process.stderr.write;
+
+    try {
+      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: false });
+      w.attachEmbed(embedDb, throwingEmbedder, 0);
+      await w.start();
+      try {
+        await new Promise((r) => setTimeout(r, 50)); // chokidar FSEvents warmup
+        const filePath = path.join(root, "embed-error.md");
+        await fs.writeFile(filePath, "# Heading\n\nBody for embed error test.\n");
+        // FTS5 must still be updated (fail-soft) even though embed-db throws.
+        const ftsOk = await waitFor(() => fts.totalFiles() >= 1, 6000);
+        expect(ftsOk).toBe(true);
+        // Embed-db must NOT have been updated (the sync failed).
+        expect(embedDb.totalChunks()).toBe(0);
+        // Stderr must contain the embed-db sync failed message.
+        const hasEmbedError = captured.some(
+          (s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure")
+        );
+        expect(hasEmbedError).toBe(true);
+      } finally {
+        await w.close();
+      }
+    } finally {
+      process.stderr.write = origWrite;
+      embedDb.close();
+      fts.close();
+    }
+  });
+
   it("includePdfs=false: PDF events are silently ignored (P1-5 default safety)", async () => {
     const v = new Vault(root);
     await v.ensureExists();

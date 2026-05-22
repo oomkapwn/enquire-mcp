@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.10] — 2026-05-22
+
+> **TL;DR:** Tenth v3.8.0 release candidate. **Backlog items P3-25, P3-21, P3-27** from the v3.8.0 pre-stable queue, plus **watcher.ts branch-floor lift** (69% → 71% target). Tilde-fence headings now correctly excluded from `extractHeadings`; `--persistent-index` help text no longer implies sole-flag sufficiency for `obsidian_full_text_search`; HNSW metadata (dim/size/rowsByLabel) validated before native constructor call. **846 tests** (+4 negative-controls). Ships under `@rc` dist-tag.
+
+**Minor — tenth v3.8.0 release candidate.**
+
+### Fix P3-25 — tilde fences (`~~~`) excluded from heading extraction
+
+**Background.** `extractHeadings` in `src/tools/read.ts` used `/^\s*```/` to detect fenced code blocks. The CommonMark spec allows fences with `~~~` (three or more tildes) as an alternative to backtick fences. A Markdown note like:
+
+```
+# Real heading
+
+~~~sh
+## fake heading inside tilde fence
+~~~
+
+## Also real
+```
+
+would previously return three headings (including the fake inside the tilde fence) — polluting the document-map projection.
+
+**Fix (`src/tools/read.ts`, `extractHeadings`):** Extended regex to `/^\s*(`{3,}|~{3,})/` — detects both backtick fences and tilde fences of length ≥ 3.
+
+**Negative-control test** (`tests/tools.test.ts`, `readNote — document-map projection` describe block): verifies `format: "map"` returns exactly `["# Real heading", "## Also real"]` for a note with a tilde-fenced block containing `## fake heading inside tilde fence`.
+
+### Fix P3-21 — `--persistent-index` help text wording drift
+
+**Background.** `PERSISTENT_INDEX_HELP` in `src/cli-help.ts` read: *"Registers obsidian_full_text_search."* This implied `--persistent-index` alone was sufficient to expose the tool. In fact, **both** `--persistent-index` AND `--diagnostic-search-tools` are required (the tool is gated on both flags independently). The old phrasing was a gating-wording drift bug introduced in v3.5.14 and never caught by the subsequent OIA walks because the string lived in a new module (`cli-help.ts`) not yet in the walk's scan path.
+
+**Fix (`src/cli-help.ts`):** Rewrote `PERSISTENT_INDEX_HELP` to: *"Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Required for obsidian_full_text_search — also pass --diagnostic-search-tools to surface it alongside the default hybrid obsidian_search."* Both flags are now explicitly called out. The `DIAGNOSTIC_SEARCH_TOOLS_HELP` string already had this correct wording.
+
+### Fix P3-27 — HNSW metadata shallow validation before native constructor
+
+**Background.** `loadHnswFromDisk` in `src/hnsw.ts` passed `meta.dim`, `meta.size`, and `meta.rowsByLabel` from a JSON-parsed `.meta` sidecar directly to the native hnswlib constructor without validating the types. A corrupted or hand-edited `.meta` file with `dim: -1` or `rowsByLabel: null` would crash the native module with an opaque C-level exception rather than triggering a clean rebuild.
+
+**Fix (`src/hnsw.ts`, `loadHnswFromDisk`):** Added three guard blocks after the existing signature check — before any native constructor call:
+- `dim` must be a positive integer (rejects ≤ 0, NaN, non-integer).
+- `size` must be a non-negative integer.
+- `rowsByLabel` must be a plain object (rejects `null`, arrays, primitives).
+
+Each guard emits a `process.stderr.write` warning and returns `null` (triggering a clean rebuild), consistent with the existing pattern for sig-mismatch.
+
+**Negative-control tests** (`tests/hnsw.test.ts`): two new `it` blocks — one with `dim: -1` (invalid int), one with `rowsByLabel: null` (non-object) — verify that `loadHnswFromDisk` returns `null` rather than throwing.
+
+### Watcher branch-floor lift (69% → 71%)
+
+Added `tests/watcher.test.ts` test: *"attachEmbed: embed-db sync failure is logged to stderr (silent=false) and FTS5 still updates — NEGATIVE control"*. Uses a throwing embedder to verify:
+1. FTS5 still updates (fail-soft path in `attachEmbed`).
+2. `embedDb.totalChunks() === 0` (embed-db write skipped).
+3. `stderr` contains `"embed-db sync failed"` plus the synthetic error message.
+
+This exercises the `try/catch` branch in `attachEmbed` that was previously uncovered, lifting `watcher.ts` from 69% to ≥71% branch coverage.
+
+### Method note
+
+Post-merge self-audit scope for rc.10 (CLAUDE.md rule since v3.7.15):
+- `src/tools/read.ts` `extractHeadings`: regex body change only. TSDoc for `extractHeadings` describes the fence behavior — updated in-line with fix. α-class clear.
+- `src/cli-help.ts` `PERSISTENT_INDEX_HELP`: string replacement. Comment header above the export already stated the intent; updated. No other caller-side TSDoc mentions this constant by value. α-class clear.
+- `src/hnsw.ts` `loadHnswFromDisk`: added early-return guards. TSDoc for `loadHnswFromDisk` says "returns null on any load error" — the new guards are consistent with that contract, no header update needed. α-class clear.
+- `tests/watcher.test.ts`: test-only addition, no production code change.
+
+Docs-consistency: test count updated 842 → 846 across README.md (badge + tagline + feature matrix + npm test line), package.json description, docs/COMPARISON.md.
+
+### Stats
+
+- **846 tests** (+4 negative-controls vs rc.9).
+- `watcher.ts` branch coverage: 69% → ≥71%.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+- External audit before `@latest` promotion.
+
+---
+
 ## [3.8.0-rc.9] — 2026-05-22
 
 > **TL;DR:** Ninth v3.8.0 release candidate. **Round-7 external audit response** — 3 fixes: W-FLAKE-2 (chokidar FSEvents startup warmup missing from R-7 embed tests — sibling of rc.7 #36 fix), R-10 (HNSW k multiplier 4× → 6× to reduce post-privacy-filter under-return), and N-new (qs 6.15.1 → 6.15.2, GHSA-q8mj-m7cp-5q26, DoS in `qs.stringify` with comma-format arrays). Ships under `@rc` dist-tag.

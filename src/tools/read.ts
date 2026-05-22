@@ -216,7 +216,10 @@ function extractHeadings(body: string): Array<{ level: number; text: string; lin
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    if (/^\s*```/.test(line)) {
+    // v3.8.0-rc.10 P3-25 — detect both backtick (```) AND tilde (~~~) fences.
+    // Pre-rc.10 only backtick fences toggled `inFence`, so headings inside
+    // tilde-delimited code blocks were incorrectly extracted.
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
       inFence = !inFence;
       continue;
     }

@@ -367,6 +367,22 @@ export async function loadHnswFromDisk(
     );
     return null;
   }
+  // v3.8.0-rc.10 P3-27 — shallow validation of dim/size/rowsByLabel before
+  // passing them to the native hnswlib constructor. Malformed-but-valid-JSON
+  // meta files with negative/non-integer dim or missing rowsByLabel would
+  // previously produce a native crash or garbage results.
+  if (!Number.isInteger(meta.dim) || meta.dim <= 0) {
+    process.stderr.write(`enquire: HNSW meta at ${metaFile} has invalid dim=${meta.dim}; rebuilding\n`);
+    return null;
+  }
+  if (!Number.isInteger(meta.size) || meta.size < 0) {
+    process.stderr.write(`enquire: HNSW meta at ${metaFile} has invalid size=${meta.size}; rebuilding\n`);
+    return null;
+  }
+  if (typeof meta.rowsByLabel !== "object" || meta.rowsByLabel === null || Array.isArray(meta.rowsByLabel)) {
+    process.stderr.write(`enquire: HNSW meta at ${metaFile} has invalid rowsByLabel; rebuilding\n`);
+    return null;
+  }
   // Bin file present?
   try {
     await fs.access(binFile);

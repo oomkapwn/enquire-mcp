@@ -428,6 +428,27 @@ describe("readNote — document-map projection (v0.11)", () => {
     }
   });
 
+  // v3.8.0-rc.10 P3-25 — tilde fence (~~~) heading extraction negative-control.
+  // Pre-rc.10 extractHeadings only toggled inFence on backtick fences (`),
+  // so headings inside ~~~ blocks were incorrectly included in the map.
+  it("tilde-fence (~~~) headings are NOT extracted — NEGATIVE control (P3-25)", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(
+      path.join(root, "TildeFence.md"),
+      "# Real heading\n\n~~~sh\n## fake heading inside tilde fence\n~~~\n\n## Also real\n"
+    );
+    try {
+      const result = await readNote(v, { path: "TildeFence.md", format: "map" });
+      if (!("format" in result)) throw new Error("expected map projection");
+      expect(result.headings.map((h) => `${"#".repeat(h.level)} ${h.text}`)).toEqual([
+        "# Real heading",
+        "## Also real" // ## inside ~~~ must NOT appear
+      ]);
+    } finally {
+      await fs.unlink(path.join(root, "TildeFence.md")).catch(() => {});
+    }
+  });
+
   it('`format: "full"` (default) keeps existing shape', async () => {
     const v = new Vault(root);
     const result = await readNote(v, { path: "Alpha.md" });

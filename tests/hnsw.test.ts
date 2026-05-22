@@ -401,6 +401,41 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(loaded).toBeNull();
   });
 
+  // v3.8.0-rc.10 P3-27 — shallow validation of dim/size/rowsByLabel.
+  // Pre-rc.10 these were used without validation: a malformed-but-valid-JSON
+  // meta with dim=-1 or rowsByLabel:null would crash or produce garbage.
+  it("returns null when meta has invalid dim (P3-27 NEGATIVE control)", async () => {
+    const persistFile = path.join(dir, "bad-dim.hnsw");
+    const meta = {
+      formatVersion: 1,
+      dim: -1,
+      size: 0,
+      signature: "match",
+      rowsByLabel: {},
+      writtenAt: new Date().toISOString()
+    };
+    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
+    const loaded = await loadHnswFromDisk(persistFile, "match");
+    expect(loaded).toBeNull();
+  });
+
+  it("returns null when meta has invalid rowsByLabel (P3-27 NEGATIVE control)", async () => {
+    const persistFile = path.join(dir, "bad-rows.hnsw");
+    const meta = {
+      formatVersion: 1,
+      dim: 4,
+      size: 0,
+      signature: "match",
+      rowsByLabel: null,
+      writtenAt: new Date().toISOString()
+    };
+    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
+    const loaded = await loadHnswFromDisk(persistFile, "match");
+    expect(loaded).toBeNull();
+  });
+
   it("returns null on formatVersion mismatch (future-proof)", async () => {
     const persistFile = path.join(dir, "future.hnsw");
     const meta = {

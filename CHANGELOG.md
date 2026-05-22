@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.9] — 2026-05-22
+
+> **TL;DR:** Ninth v3.8.0 release candidate. **Round-7 external audit response** — 3 fixes: W-FLAKE-2 (chokidar FSEvents startup warmup missing from R-7 embed tests — sibling of rc.7 #36 fix), R-10 (HNSW k multiplier 4× → 6× to reduce post-privacy-filter under-return), and N-new (qs 6.15.1 → 6.15.2, GHSA-q8mj-m7cp-5q26, DoS in `qs.stringify` with comma-format arrays). Ships under `@rc` dist-tag.
+
+**Minor — ninth v3.8.0 release candidate.**
+
+### Fix W-FLAKE-2 — R-7 embed tests missing chokidar FSEvents warmup
+
+**Background.** rc.7 fix #36 added a 50ms chokidar FSEvents startup warmup to the stderr-capture watcher tests (lines ~156 and ~190) to prevent race conditions where the first `fs.writeFile` landed before chokidar's FSEvents listener was ready. The round-7 external audit (rc.8 codebase) found that the sibling R-7 embed tests (`attachEmbed: .md change re-embeds`, line ~358; `attachEmbed: PDF add`, line ~412) were missing the same warmup. Under `npm run test:coverage` (parallel vitest workers + V8 coverage instrumentation overhead), the chokidar debounce path could be slow enough that `waitFor(() => embedDb.totalChunks() > 0, 4000)` timed out intermittently — producing 1 failed test in 1/3 coverage runs.
+
+**Fix:** Added `await new Promise((r) => setTimeout(r, 50))` after `await w.start()` in both R-7 embed tests (same pattern as rc.7 fix at lines 156/190). Also bumped the `waitFor` timeout from 4000ms → 6000ms in those two tests as defense-in-depth against instrumentation slowdown. No test count change — warmup and timeout are existing-test hardening.
+
+**Sibling analysis:** The original rc.7 #36 fix (stderr tests) and this fix (embed tests) now cover all 4 chokidar watcher test sites that do a `w.start()` + immediate first write. Sweep complete.
+
+### Fix R-10 — HNSW k multiplier: 4× → 6× limit to reduce post-privacy-filter under-return
+
+**Background.** The HNSW k-NN path in `embeddingsSearch` fetches `k = Math.min(Math.max(overFetch * 2, 30), N)` candidates (effective 4× limit), then applies the privacy filter (`vault.isExcluded`), then slices to `limit`. Under dense `--exclude-glob` configurations (large fraction of the embed-db excluded), the privacy filter removes a disproportionate share of the over-fetched pool → `matches.length < limit`. For brute-force cosine the multiplier is 2× limit; HNSW used 4× — which helped somewhat but was insufficient under heavy exclusion.
+
+**Fix (`src/tools/search.ts`):** Changed `overFetch * 2` → `overFetch * 3` (effective 4× → 6× limit, baseline floor 30 → 50). Residual under-return can still occur when >66% of the index is excluded — documented in the `embeddingsSearch` TSDoc privacy-contract paragraph as accepted behavior (privacy > completeness).
+
+**Root cause class:** Post-search privacy filter shrinks the result set below the requested limit. Same class applies to the brute-force path (2× over-fetch) and reranker candidate pool, but those are lower-risk: brute-force fetches the entire db anyway, and rerankers typically run on already-filtered hits.
+
+### Fix N-new — qs 6.15.1 → 6.15.2 (GHSA-q8mj-m7cp-5q26, moderate DoS)
+
+**Vulnerability:** `qs.stringify` crashes with `TypeError` when `encodeValuesOnly: true` and an array in comma format contains `null`/`undefined` entries. This is a remotely triggerable DoS for any application that exposes `qs.stringify` to untrusted input. Affected range: `qs` 6.11.1 – 6.15.1. Fixed in 6.15.2.
+
+**Scope:** `qs` is a transitive dep: `@modelcontextprotocol/sdk@1.29.0 → express@5.2.1 → qs`. enquire-mcp uses express for the `serve-http` MCP transport. The HTTP body is pre-validated by Zod before any query-string serialization path, so exploitability is low; nonetheless a patch is available and applied.
+
+**Fix:** `npm audit fix` updated `package-lock.json` to pin `qs@6.15.2`. No `package.json` change needed (this is a lock-file-only fix to a transitive dep).
+
+### Method note
+
+Round-7 audit verdict: **all round-24 findings confirmed closed** in rc.8. New items surfaced:
+- W-FLAKE-2 — closed in this release (rc.9)
+- R-10 — closed in this release (rc.9, implementation + docs)
+- N-new (qs) — closed in this release (rc.9)
+
+**Post-merge self-audit scope for rc.9:**
+- `watcher.test.ts`: only warmup + timeout changes, no new runtime guards → no new negative-control obligation.
+- `search.ts`: HNSW k multiplier change + TSDoc paragraph. No TSDoc header drift risk (the function body change IS the TSDoc update). α-class clear.
+- `package-lock.json`: lock-only change, no code.
+
+### Stats
+
+- **842 tests** (unchanged from rc.8).
+- `npm audit`: 0 vulnerabilities.
+- HNSW effective over-fetch: **4×** → **6× limit**.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update, watcher.ts ≥71% branch floor.
+- External audit before `@latest` promotion.
+
 ## [3.8.0-rc.8] — 2026-05-21
 
 > **TL;DR:** Eighth v3.8.0 release candidate. **Round-24 external audit response** — 2 findings closed: T-1 (contextPack hard-cap has zero test coverage for the triggered path — violation of CLAUDE.md negative-control rule) and INFO-2 (embed-pipeline.ts missing from per-file FLOORS). Adds `tests/context-pack.test.ts` (4 tests with positive + negative controls), lifts meta.ts branch coverage 67.66% → 73.85%, adds embed-pipeline.ts floor at 84%. Ships under `@rc` dist-tag.

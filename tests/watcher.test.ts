@@ -357,10 +357,17 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       w.attachEmbed(embedDb, mockEmbedder, 0);
       await w.start();
       try {
+        // v3.8.0-rc.9 W-FLAKE-2 — chokidar FSEvents warm-up (same class as rc.7 #36
+        // fix at lines 156/190). The R-7 embed tests were missing this warm-up; under
+        // `npm run test:coverage` (parallel workers + coverage instrumentation slowdown)
+        // the first write could land before chokidar's FSEvents listener was ready,
+        // causing the waitFor(embedDb.totalChunks > 0) to time out intermittently.
+        await new Promise((r) => setTimeout(r, 50));
         const filePath = path.join(root, "note-embed.md");
         await fs.writeFile(filePath, "# Heading\n\nFirst paragraph body.\n\nSecond paragraph here.\n");
         // Wait for watcher to process — embed-sync should fire AFTER fts5 reindex.
-        const synced = await waitFor(() => embedDb.totalChunks() > 0);
+        // Timeout bumped to 6000ms (default 4000) for coverage-instrumented runs.
+        const synced = await waitFor(() => embedDb.totalChunks() > 0, 6000);
         expect(synced).toBe(true);
         const chunks = embedDb.totalChunks();
         expect(chunks).toBeGreaterThanOrEqual(1);
@@ -411,11 +418,15 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       w.attachEmbed(embedDb, mockEmbedder, 0);
       await w.start();
       try {
+        // v3.8.0-rc.9 W-FLAKE-2 — same chokidar FSEvents warm-up fix as the .md
+        // embed test above and rc.7 sibling fix at lines 156/190.
+        await new Promise((r) => setTimeout(r, 50));
         const pdfPath = path.join(root, "doc.pdf");
         const pdfBuf = makePdf({ pages: ["PDF body for test embedding sync"] });
         await fs.writeFile(pdfPath, pdfBuf);
         // FTS5 + embed-db should BOTH receive PDF chunks.
-        const ftsIndexed = await waitFor(() => fts.totalFiles() >= 1);
+        // Timeout bumped to 6000ms for coverage-instrumented runs.
+        const ftsIndexed = await waitFor(() => fts.totalFiles() >= 1, 6000);
         expect(ftsIndexed).toBe(true);
         const embedded = await waitFor(() => embedDb.totalChunks() > 0);
         expect(embedded).toBe(true);

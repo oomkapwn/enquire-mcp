@@ -8,6 +8,7 @@ Drop-in configs and recipes for connecting `enquire-mcp` to common MCP clients.
 | [`claude-desktop-hybrid.json`](./claude-desktop-hybrid.json) | Full hybrid stack — BM25 + TF-IDF + ML embeddings + reranker + HNSW |
 | [`cursor-mcp.json`](./cursor-mcp.json) | Cursor MCP stdio config |
 | [`chatgpt-actions.md`](./chatgpt-actions.md) | ChatGPT custom GPT — remote MCP over HTTP with bearer auth + tunnel |
+| [`tweetclaw-openclaw.md`](./tweetclaw-openclaw.md) | OpenClaw recipe for capturing public X/Twitter signals with TweetClaw, storing reviewed notes in an Obsidian vault, then retrieving them with enquire |
 | [`queries.jsonl`](./queries.jsonl) | Sample query set for the eval harness (`enquire-mcp eval --queries examples/queries.jsonl`) |
 
 ## Workflow

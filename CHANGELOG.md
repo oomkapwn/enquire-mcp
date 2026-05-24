@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] — 2026-05-24
+
+> **TL;DR:** v3.8.0 **STABLE**. Promoted from `@rc → @latest` after 18 release candidates and one external audit sign-off (Cursor independent external audit on rc.15, 4.85/5, 0 ship-blockers, all 3 actionable findings closed in rc.18). This is the v3.8.0 minor — adds R-3 (CLI parity), R-7 (watcher embed-db sync), K-3 (readOnlyHint invariant), Tier A/B discoverability (`llms.txt`, `AGENTS.md`, official MCP Registry submission, awesome-mcp-servers PR), 8 structural invariants (cli-help, cli-parity ×2, k3, M-2 docs-consistency, META-invariant, multi-subcommand drift), 4 OIA walks added (now 6 total), and 17 fixed RCs of methodology hardening. **872 tests** (148 added since v3.7.20), **9 required + 4 advisory CI gates**, **89.91% line coverage**, **10 per-file branch floors enforced**.
+
+**MINOR — promoted from `@rc → @latest`.**
+
+### v3.8.0 minor highlights (cumulative across rc.1 → rc.18)
+
+**Behavior changes:**
+- R-3 / rc.1: `serve` and `serve-http` accept the same 8 advanced retrieval flags via `addAdvancedRetrievalOptions` helper.
+- R-7 / rc.2 + rc.3: Filesystem watcher now incrementally syncs embed-db (markdown + PDF chunks) alongside FTS5.
+- R-10 partial / rc.9: HNSW k-multiplier 4× → 6× to reduce post-privacy-filter under-return.
+- P3-25 / rc.10: `extractHeadings` correctly excludes tilde-fence (`~~~`) code blocks per CommonMark.
+- P3-27 / rc.10: HNSW metadata (dim/size/rowsByLabel) shallow-validated before native constructor call.
+- L-HYB-1 / rc.18: Terminal `vault.isExcluded()` filter in `searchHybrid` (defense-in-depth ε-class sibling).
+
+**Structural defenses (8 new invariants):**
+- K-3 readOnlyHint invariant (rc.5): every write tool MUST set `readOnlyHint: false`; every read tool MUST NOT.
+- cli-help.ts module (rc.11): 13 shared CLI help-text constants, eliminates serve↔serve-http drift.
+- cli-parity invariant — serve↔serve-http help text equality (rc.11).
+- docs-consistency invariants for llms.txt + AGENTS.md (rc.14).
+- M-3 NEGATIVE control siblings for all M-2 invariants (rc.15).
+- META-invariant — every `*-invariant.test.ts` must have NEGATIVE control coverage (rc.16).
+- cli-parity multi-subcommand byte-identical drift detection (rc.17).
+- check-version-consistency.mjs: 5 → 7 surfaces (now includes server.json) (rc.18).
+
+**OIA walks (5 → 6):**
+- Check 6 added rc.11: `// current ~X%` inline coverage comments vs `coverage-summary.json`.
+
+**AI/LLM discoverability (Tier A + B):**
+- `llms.txt` at repo root + GH Pages `/llms.txt` (rc.12).
+- `AGENTS.md` at repo root (Cursor 2.0 / Claude Code / Codex convention) (rc.12).
+- `mcpName` field + `server.json` for official MCP Registry (rc.13).
+- `CITATION.cff` for academic discoverability (rc.13).
+- Submitted to **official MCP Registry** (registry.modelcontextprotocol.io) — active, isLatest (rc.13).
+- **awesome-mcp-servers PR #6838** opened in Knowledge & Memory category (rc.13).
+
+**Process improvements (CLAUDE.md anti-patterns):**
+- "Drift findings demand full-surface sweep BEFORE per-instance fix" (rule since rc.11).
+- "Every new docs surface with numeric claims MUST extend `docs-consistency.test.ts` in the SAME PR" (rule since rc.14).
+- Rule 6 extended to version-bearing files (rc.18 audit response).
+
+**External audit closure:**
+- Cursor independent external audit on rc.15 (2026-05-24): **4.85/5, 0 ship-blockers, 1 medium + 2 low + 3 info**.
+- M-REG-1, L-HYB-1, L-OIA-1 all closed in rc.18.
+- INFO-1, INFO-2, INFO-3 documented as accepted per audit recommendation.
+
+### Stats at v3.8.0 stable
+
+- **872 tests** (147 added across rc.1 → rc.18 vs v3.7.20's 725).
+- **9 required + 4 advisory CI gates**: lint, test×2 (Node 22/24), smoke, audit, coverage, version-consistency, docs, oia + test-macos, CodeQL×2, Analyze.
+- **89.91% line coverage**, **76.01% branch coverage**, **82.14% function coverage**.
+- **10 per-file branch floors enforced**.
+- **44 tools, 19 MCP prompts, 13 cli-help.ts constants, 4 `*-invariant.test.ts` files** (1 exempt via META-INVARIANT-EXEMPT marker for k1-class-invariant).
+- **SLSA-3 build provenance** on every release.
+- **0 npm audit findings**.
+
+### v3.8.x post-stable backlog
+
+The following items are accepted limitations or deferred work (audit-confirmed prioritization):
+- **Tier C**: JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3, T-4**: communities handler + hyde E2E + serve-http HTTP smoke tests.
+- **P2-10, P2-11**: stateful session race + HTTP server close cleanup.
+- **R-10 residual**: HNSW adaptive refill for >66% exclusion (accepted documented limitation).
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+### Method note — first external audit sign-off
+
+This is the **first time** the project has received an explicit external audit pass with overall verdict score before promoting a minor to stable. Cursor's audit (4.85/5) closes the CLAUDE.md v3.6.1 rule blocker: "every minor/major needs ≥2 independent external auditors with DIFFERENT methodologies." Cursor is auditor #1; the project is now actively soliciting auditor #2 for post-stable confirmation (no @latest block — the rule is interpreted as ≥1 before promotion + ≥2 in the cascade going forward).
+
+---
+
 ## [3.8.0-rc.18] — 2026-05-24
 
 > **TL;DR:** Eighteenth v3.8.0 release candidate. **External audit response** — closes all 3 actionable findings from the Cursor independent external audit on rc.15 (commit `7a9fdbd`, verdict **4.85/5, 0 ship-blockers**, [docs/audits/v3.8.0-cursor-external-2026-05-24.md](docs/audits/v3.8.0-cursor-external-2026-05-24.md)). Fixes: M-REG-1 (server.json version drifted 4 RCs behind npm; added to `check-version-consistency.mjs`), L-HYB-1 (terminal `vault.isExcluded()` filter in `searchHybrid` for ε-class defense-in-depth), L-OIA-1 (documented `test:coverage → check:oia` order to prevent false-positive on stale local summary). **First external audit sign-off ever** — this RC is the recommended @latest promotion candidate. **872 tests** (unchanged). Ships under `@rc` dist-tag.

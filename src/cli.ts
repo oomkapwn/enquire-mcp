@@ -1,5 +1,19 @@
 import { Command } from "commander";
-import { DIAGNOSTIC_SEARCH_TOOLS_HELP, ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP, WATCH_HELP } from "./cli-help.js";
+import {
+  CACHE_FILE_HELP,
+  CACHE_SIZE_HELP,
+  DIAGNOSTIC_SEARCH_TOOLS_HELP,
+  DISABLED_TOOLS_HELP,
+  ENABLE_WRITE_HELP,
+  ENABLED_TOOLS_HELP,
+  INDEX_FILE_HELP,
+  MAX_FILE_BYTES_HELP,
+  PERSISTENT_CACHE_HELP,
+  PERSISTENT_INDEX_HELP,
+  QUANTIZE_EMBEDDINGS_HELP,
+  TOKENIZE_HELP,
+  WATCH_HELP
+} from "./cli-help.js";
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
@@ -101,16 +115,13 @@ export async function main(): Promise<void> {
     .description("Start the MCP server over stdio")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--enable-write", ENABLE_WRITE_HELP)
-    .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
-    .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
-    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
-    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--max-file-bytes <n>", MAX_FILE_BYTES_HELP)
+    .option("--cache-size <n>", CACHE_SIZE_HELP)
+    .option("--persistent-cache", PERSISTENT_CACHE_HELP)
+    .option("--cache-file <path>", CACHE_FILE_HELP)
     .option("--persistent-index", PERSISTENT_INDEX_HELP)
-    .option("--index-file <path>", "Override the FTS5 index file location")
-    .option(
-      "--tokenize <mode>",
-      "FTS5 tokenize mode: 'unicode61' (default; Latin/Cyrillic) or 'trigram' (CJK/mixed-script)"
-    )
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--tokenize <mode>", TOKENIZE_HELP)
     .option(
       "--exclude-glob <pattern...>",
       "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
@@ -120,20 +131,11 @@ export async function main(): Promise<void> {
       "Strict allowlist — when set, ONLY paths matching one of these glob patterns are visible. Complement to --exclude-glob (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics as --exclude-glob (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`."
     )
     .option("--watch", WATCH_HELP)
-    .option(
-      "--disabled-tools <name...>",
-      "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`."
-    )
-    .option(
-      "--enabled-tools <name...>",
-      "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`."
-    )
+    .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
+    .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
   addAdvancedRetrievalOptions(serveCmd)
-    .option(
-      "--quantize-embeddings <mode>",
-      "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
-    )
+    .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(async (opts: ServeOptions) => {
       // Validate up-front so a bad value fails before we touch the vault.
       parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
@@ -182,18 +184,18 @@ export async function main(): Promise<void> {
       "v2.14.0 — max concurrent stateful sessions. New sessions beyond this cap return 503 + Retry-After. Default 100. Only effective with --stateful."
     )
     .option("--enable-write", ENABLE_WRITE_HELP)
-    .option("--max-file-bytes <n>", "Max bytes for any single file read/write (default 5MB)")
-    .option("--cache-size <n>", "Max parsed-note cache entries (default 1024)")
-    .option("--persistent-cache", "Persist parsed-note cache to disk so cold starts skip re-parsing")
-    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--max-file-bytes <n>", MAX_FILE_BYTES_HELP)
+    .option("--cache-size <n>", CACHE_SIZE_HELP)
+    .option("--persistent-cache", PERSISTENT_CACHE_HELP)
+    .option("--cache-file <path>", CACHE_FILE_HELP)
     .option("--persistent-index", PERSISTENT_INDEX_HELP)
-    .option("--index-file <path>", "Override the FTS5 index file location")
-    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--tokenize <mode>", TOKENIZE_HELP)
     .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
     .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
     .option("--watch", WATCH_HELP)
-    .option("--disabled-tools <name...>", "Skip registration of specific tools by name.")
-    .option("--enabled-tools <name...>", "Strict allowlist — when set, ONLY listed tools register.")
+    .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
+    .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
   // v3.8.0-rc.1 R-3 — apply the same advanced-retrieval flag set as
   // `serve` so HTTP-mode users can enable reranker / HNSW / PDF indexing /
@@ -201,10 +203,7 @@ export async function main(): Promise<void> {
   // serve-http — bearer-authenticated clients got a strictly less-featured
   // retrieval stack than stdio clients despite "same server" framing.
   addAdvancedRetrievalOptions(serveHttpCmd)
-    .option(
-      "--quantize-embeddings <mode>",
-      "v2.17.0 — vector storage encoding for the persistent embed db (`f32` default, `int8` for ~4× smaller BLOBs). Must match the mode used at `build-embeddings` time."
-    )
+    .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(async (opts: HttpServeCli) => {
       const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
       const tokenFromEnv =

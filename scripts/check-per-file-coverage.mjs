@@ -60,8 +60,8 @@ if (!existsSync(SUMMARY_PATH)) {
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
   "src/embeddings.ts": { branches: 28 }, // current 30% (integration-dep)
-  "src/ocr.ts": { branches: 22 }, // current 24% (integration-dep)
-  "src/http-transport.ts": { branches: 65 }, // current 66.86%
+  "src/ocr.ts": { branches: 22 }, // current 31.03% (integration-dep)
+  "src/http-transport.ts": { branches: 65 }, // current 69.39%
   "src/doctor.ts": { branches: 64 }, // current 66.05%
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests

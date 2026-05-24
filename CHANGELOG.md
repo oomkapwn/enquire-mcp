@@ -2,6 +2,80 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.3] — 2026-05-24
+
+> **TL;DR:** **OIA Check 7 — extend stale-currency-claim detection from `src/*.ts` to `docs/*.md` + `CLAUDE.md`.** Closes the methodology gap exposed by v3.8.2: state-driven sweep found 6 stale-version refs in docs that OIA Check 1 had been silently skipping because it only walked `src/`. Same recursion meta-class as M-1 (lift only some flags to cli-help.ts) and M-2 (extend invariants only to some docs surfaces). Generalized: Check 7 walks `docs/*.md` + `CLAUDE.md`, matches present-tense currency-claim patterns ("stable v3.X.x", "@latest ships v3.X.x", "accurate as of v3.X.Y", "exact for v3.X.x", "covers the v3.X.x"), compares against `package.json` current major.minor, fails on mismatch (unless explicit history context: "initial", "from", "since", "Pre-", "added", "fix", etc.). `docs/audits/` excluded (historical snapshots by definition). Bonus: removed stale Cursor audit ref in `scripts/oia-walk.mjs` header comment (v3.8.1 retraction missed it). **No code changes; 872 tests unchanged.**
+
+**Patch — structural defense expansion.**
+
+### Background
+
+v3.8.2 state-driven audit found 6 stale-version references across `CLAUDE.md` + `docs/api.md` + `docs/COMPARISON.md`. The lesson noted in v3.8.2 CHANGELOG:
+> The current OIA walk does NOT scan docs/ for version-string staleness. Backlog item: extend OIA Check 1 to walk docs/*.md and CLAUDE.md looking for "v3.X.Y" references that mention current state.
+
+v3.8.3 ships that backlog item.
+
+### What Check 7 does
+
+For each file in `CLAUDE.md` + `docs/*.md` (excluding `docs/audits/`):
+1. Read line by line.
+2. For each line, try 5 currency-claim patterns:
+   - `stable v(\d+\.\d+)\.x` — "stable v3.X.x" stability claims
+   - `(@latest|ships) v(\d+\.\d+)\.x` — npm @latest claims
+   - `covers the v(\d+\.\d+)\.x` — scope claims
+   - `exact for v(\d+\.\d+)\.x` — exactness claims
+   - `accurate as of v(\d+\.\d+\.\d+)` — accuracy timestamp claims
+3. If matched version's major.minor ≠ current major.minor, AND no history-context marker in surrounding 3 lines (`initial`, `from`, `since`, `Pre-`, `was`, `added`, `fix`, `bumped`, etc.), record `STALE-DOC-CURRENCY-CLAIM` finding.
+
+### Empirical validation
+
+- On main HEAD (post v3.8.2 docs refresh): **0 findings** ✓ (proves the fix worked).
+- On a synthetic test fixture with intentionally stale claims: all 4 patterns fire correctly, history-context detection correctly skips legitimate tombstones.
+- Initial pre-refinement run on `docs/audits/` flagged 4 historical audit-report quotes — root-caused as legitimate (those files are by-definition snapshots) and excluded via path filter.
+
+### Why this is the right shape for the recursion class
+
+The methodology pattern is:
+1. Find a class of bug (e.g. drift)
+2. Build a structural defense (e.g. cli-help.ts, OIA Check N)
+3. **Apply defense to ONE surface, leave siblings unprotected**
+4. Discover sibling surface drifts the next audit cycle
+5. Extend defense to the sibling surface
+
+Step 4 is the recurring failure. The defense is correct but its scope is too narrow. The fix shape is always "lift the defense to cover all siblings."
+
+Cf. M-1 lift to cli-help.ts (rc.11), M-2 extend docs-consistency to llms.txt + AGENTS.md (rc.14), M-REG-1 extend check-version-consistency to server.json (rc.18, retracted in v3.8.1 but kept technical fix). v3.8.3 Check 7 is the same shape applied to OIA Check 1.
+
+### Bonus fix — Cursor audit reference removal from oia-walk.mjs
+
+v3.8.1 retraction removed Cursor audit references from CHANGELOG + CLAUDE.md but missed the inline comment at `scripts/oia-walk.mjs:416`:
+> IMPORTANT (v3.8.0-rc.18 L-OIA-1, per Cursor external audit on rc.15)
+
+Updated to:
+> IMPORTANT (v3.8.0-rc.18 S-AUDIT-3, self-audit on rc.17)
+
+This is a small consequence of the v3.8.1 retraction (one stale ref slipped through the cleanup). Documented openly here.
+
+### Stats
+
+- **872 tests** (unchanged — script enhancement only).
+- `scripts/oia-walk.mjs`: 6 checks → 7 checks.
+- 0 code changes in `src/`.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@latest = 3.8.3` after publish.
+- All 9 required CI gates pass locally.
+
+### What's next
+
+Backlog (no scope changes):
+- T-2/T-3/T-4 E2E tests
+- OCR'd PDF watcher embed-sync, HNSW in-memory live update
+- HTTP P2-10/P2-11 lifecycle hardening
+- Tier C discoverability
+- v3.9.0 architectural items (HNSW filter-during-search, embed-db migrations, distributed rate-limit)
+
+---
+
 ## [3.8.2] — 2026-05-24
 
 > **TL;DR:** **State-driven audit findings — 6 stale-version fixes across CLAUDE.md + docs/api.md + docs/COMPARISON.md.** Post-v3.8.1 full self-audit (using OIA methodology applied broadly) found 6 stale-version references across documentation that survived the v3.6.0→v3.8.1 cascade: CLAUDE.md header still said "v3.7.x maintenance" (we're at v3.8.x stable), backlog status said "before promotion to v3.8.0 stable" (already promoted), docs/api.md said "stable v3.7.x @latest" (npm @latest = 3.8.1 → 3.8.2 with this patch), docs/COMPARISON.md timestamps still pinned to v3.7.0 (2026-05-15). All fixed in this docs-only patch. **No code changes; 872 tests unchanged.**

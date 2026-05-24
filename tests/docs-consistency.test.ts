@@ -677,6 +677,95 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 // Same class as M-1 (CLI help text drift between serve and serve-http
 // before rc.11 lifted to cli-help.ts). Fix: extend invariants to cover
 // every numeric claim in these new files.
+//
+// v3.8.0-rc.15 M-3 — meta-recursion fix. rc.14 added 7 invariants here but
+// NONE had NEGATIVE control siblings, violating CLAUDE.md rule since v3.6.4.
+// Refactored: each check is now a pure function returning `null` on OK or
+// an error string on drift. Positive `it()` tests call against real files;
+// NEGATIVE control `it()` tests call against intentionally-drifted inline
+// fixtures and assert non-null. Pattern matches tests/peek-meta.test.ts +
+// tests/k1-class-invariant.test.ts.
+
+/** Pure check: llms.txt unit-test claim must match actual count.
+ *  Returns null on OK, error string on drift / missing claim. */
+function checkLlmsTestCount(llms: string, actual: number): string | null {
+  const m = /(\d+)\s+unit tests/.exec(llms);
+  if (!m) return "llms.txt must declare 'N unit tests'";
+  const claimed = Number.parseInt(m[1] ?? "0", 10);
+  if (claimed !== actual) return `llms.txt mentions "${m[0]}" but actual test count is ${actual}`;
+  return null;
+}
+
+/** Pure check: llms.txt tool breakdown "N tools (A always-on read + B opt-in + C gated writes)". */
+function checkLlmsToolBreakdown(
+  llms: string,
+  total: number,
+  alwaysOn: number,
+  optIn: number,
+  writes: number
+): string | null {
+  const m = /(\d+)\s+tools\s*\((\d+)\s+always-on read\s*\+\s*(\d+)\s+opt-in\s*\+\s*(\d+)\s+gated writes\)/.exec(llms);
+  if (!m) return "llms.txt must declare 'N tools (A always-on read + B opt-in + C gated writes)'";
+  if (Number.parseInt(m[1] ?? "0", 10) !== total) return `llms.txt total ${m[1]} ≠ ${total}`;
+  if (Number.parseInt(m[2] ?? "0", 10) !== alwaysOn) return `llms.txt always-on ${m[2]} ≠ ${alwaysOn}`;
+  if (Number.parseInt(m[3] ?? "0", 10) !== optIn) return `llms.txt opt-in ${m[3]} ≠ ${optIn}`;
+  if (Number.parseInt(m[4] ?? "0", 10) !== writes) return `llms.txt writes ${m[4]} ≠ ${writes}`;
+  return null;
+}
+
+/** Pure check: llms.txt MCP prompt count. */
+function checkLlmsPromptCount(llms: string, actual: number): string | null {
+  const m = /(\d+)\s+MCP prompts/.exec(llms);
+  if (!m) return "llms.txt must declare 'N MCP prompts'";
+  const claimed = Number.parseInt(m[1] ?? "0", 10);
+  if (claimed !== actual) return `llms.txt prompts ${claimed} ≠ ${actual}`;
+  return null;
+}
+
+/** Pure check: llms.txt 'N required + M advisory CI gates'. */
+function checkLlmsCiGates(llms: string, actualRequired: number): string | null {
+  const m = /(\d+)\s+required\s*\+\s*\d+\s+advisory CI gates/.exec(llms);
+  if (!m) return "llms.txt must declare 'N required + M advisory CI gates'";
+  const claimed = Number.parseInt(m[1] ?? "0", 10);
+  if (claimed !== actualRequired)
+    return `llms.txt says "${m[0]}" but release.yml REQUIRED has ${actualRequired} entries`;
+  return null;
+}
+
+/** Pure check: AGENTS.md 'X+ tests' is a valid lower bound (and not far below actual). */
+function checkAgentsTestFloor(agents: string, actual: number): string | null {
+  const m = /(\d+)\+\s+tests/.exec(agents);
+  if (!m) return "AGENTS.md must declare 'X+ tests'";
+  const claimed = Number.parseInt(m[1] ?? "0", 10);
+  if (claimed > actual)
+    return `AGENTS.md says "${m[0]}" (lower bound) but actual is ${actual} — floor is above reality`;
+  if (actual - claimed >= 50)
+    return `AGENTS.md '${claimed}+ tests' is ${actual - claimed} below actual ${actual} — bump the floor`;
+  return null;
+}
+
+/** Pure check: AGENTS.md 'N per-file branch floors'. */
+function checkAgentsPerFileFloors(agents: string, actualFloors: number): string | null {
+  const m = /(\d+)\s+per-file branch floors/.exec(agents);
+  if (!m) return "AGENTS.md must declare 'N per-file branch floors enforced'";
+  const claimed = Number.parseInt(m[1] ?? "0", 10);
+  if (claimed !== actualFloors)
+    return `AGENTS.md says "${m[0]}" but scripts/check-per-file-coverage.mjs has ${actualFloors} entries`;
+  return null;
+}
+
+/** Pure check: AGENTS.md 'N required CI gates' (multiple mentions, all must agree). */
+function checkAgentsCiGates(agents: string, actualRequired: number): string | null {
+  const mentions = [...agents.matchAll(/(\d+)\s+required\s+(?:CI\s+)?gates/g)];
+  if (mentions.length === 0) return "AGENTS.md must mention 'N required gates' at least once";
+  for (const m of mentions) {
+    const claimed = Number.parseInt(m[1] ?? "0", 10);
+    if (claimed !== actualRequired)
+      return `AGENTS.md mentions "${m[0]}" but release.yml REQUIRED has ${actualRequired} entries`;
+  }
+  return null;
+}
+
 describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-rc.14 M-2)", () => {
   async function countActualTests(): Promise<number> {
     const fs = await import("node:fs/promises");
@@ -717,8 +806,6 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     return { allTools, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
   }
 
-  /** Count pipe-separated entries in release.yml's REQUIRED regex.
-   *  Reuses the canonical source from the v3.7.14 F4 invariant. */
   async function countRequiredCiGates(): Promise<number> {
     const releaseYml = await read(".github/workflows/release.yml");
     const m = /REQUIRED="([^"]+)"/.exec(releaseYml);
@@ -726,97 +813,126 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     return (m[1] ?? "").split("|").length;
   }
 
-  /** Count entries in scripts/check-per-file-coverage.mjs's FLOORS object. */
   async function countPerFileFloors(): Promise<number> {
     const script = await read("scripts/check-per-file-coverage.mjs");
-    // Match every `"src/foo.ts": { branches: N }` entry.
     const matches = [...script.matchAll(/"src\/[\w./-]+":\s*\{\s*branches:\s*\d+\s*\}/g)];
     return matches.length;
   }
 
+  // ─── Positive tests (real files must pass) ────────────────────────────
+
   it("llms.txt test count matches actual it() count", async () => {
-    const llms = await read("llms.txt");
-    const actual = await countActualTests();
-    const m = /(\d+)\s+unit tests/.exec(llms);
-    expect(m, "llms.txt must declare 'N unit tests'").not.toBeNull();
-    expect(Number.parseInt(m?.[1] ?? "0", 10), `llms.txt mentions "${m?.[0]}" but actual test count is ${actual}`).toBe(
-      actual
-    );
+    const err = checkLlmsTestCount(await read("llms.txt"), await countActualTests());
+    expect(err, err ?? "").toBeNull();
   });
 
   it("llms.txt tool count matches actual", async () => {
-    const llms = await read("llms.txt");
     const counts = await getActualCounts();
-    // Match "44 tools (33 always-on read + 4 opt-in + 7 gated writes)"
-    const m = /(\d+)\s+tools\s*\((\d+)\s+always-on read\s*\+\s*(\d+)\s+opt-in\s*\+\s*(\d+)\s+gated writes\)/.exec(llms);
-    expect(m, "llms.txt must declare 'N tools (A always-on read + B opt-in + C gated writes)'").not.toBeNull();
-    if (!m) return;
-    expect(Number.parseInt(m[1] ?? "0", 10), "llms.txt total tool count").toBe(counts.allTools);
-    expect(Number.parseInt(m[2] ?? "0", 10), "llms.txt always-on count").toBe(counts.alwaysOn);
-    expect(Number.parseInt(m[3] ?? "0", 10), "llms.txt opt-in count").toBe(counts.ftsOptIn + counts.diagnostic);
-    expect(Number.parseInt(m[4] ?? "0", 10), "llms.txt write count").toBe(counts.writes);
+    const err = checkLlmsToolBreakdown(
+      await read("llms.txt"),
+      counts.allTools,
+      counts.alwaysOn,
+      counts.ftsOptIn + counts.diagnostic,
+      counts.writes
+    );
+    expect(err, err ?? "").toBeNull();
   });
 
   it("llms.txt MCP prompt count matches actual", async () => {
-    const llms = await read("llms.txt");
     const counts = await getActualCounts();
-    const m = /(\d+)\s+MCP prompts/.exec(llms);
-    expect(m, "llms.txt must declare 'N MCP prompts'").not.toBeNull();
-    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
+    const err = checkLlmsPromptCount(await read("llms.txt"), counts.prompts);
+    expect(err, err ?? "").toBeNull();
   });
 
   it("llms.txt 'N required + M advisory CI gates' matches release.yml REQUIRED count", async () => {
-    const llms = await read("llms.txt");
-    const required = await countRequiredCiGates();
-    const m = /(\d+)\s+required\s*\+\s*\d+\s+advisory CI gates/.exec(llms);
-    expect(m, "llms.txt must declare 'N required + M advisory CI gates'").not.toBeNull();
-    expect(
-      Number.parseInt(m?.[1] ?? "0", 10),
-      `llms.txt says "${m?.[0]}" but release.yml REQUIRED has ${required} entries`
-    ).toBe(required);
+    const err = checkLlmsCiGates(await read("llms.txt"), await countRequiredCiGates());
+    expect(err, err ?? "").toBeNull();
   });
 
   it("AGENTS.md test count claim (X+ tests) is a valid lower bound", async () => {
-    const agents = await read("AGENTS.md");
-    const actual = await countActualTests();
-    // AGENTS.md uses "848+ tests" — a lower bound. Actual must be >= claimed.
-    const m = /(\d+)\+\s+tests/.exec(agents);
-    expect(m, "AGENTS.md must declare 'X+ tests'").not.toBeNull();
-    const claimed = Number.parseInt(m?.[1] ?? "0", 10);
-    expect(
-      claimed,
-      `AGENTS.md says "${m?.[0]}" (lower bound) but actual is ${actual} — if actual is far above (>50), bump the floor in AGENTS.md`
-    ).toBeLessThanOrEqual(actual);
-    // Drift detection: if actual is more than 50 above claimed, prompt update.
-    expect(
-      actual - claimed,
-      `AGENTS.md '${claimed}+ tests' is ${actual - claimed} below actual ${actual} — bump the floor`
-    ).toBeLessThan(50);
+    const err = checkAgentsTestFloor(await read("AGENTS.md"), await countActualTests());
+    expect(err, err ?? "").toBeNull();
   });
 
   it("AGENTS.md per-file branch floor count matches actual entries in scripts/check-per-file-coverage.mjs", async () => {
-    const agents = await read("AGENTS.md");
-    const actualFloors = await countPerFileFloors();
-    const m = /(\d+)\s+per-file branch floors/.exec(agents);
-    expect(m, "AGENTS.md must declare 'N per-file branch floors enforced'").not.toBeNull();
-    expect(
-      Number.parseInt(m?.[1] ?? "0", 10),
-      `AGENTS.md says "${m?.[0]}" but scripts/check-per-file-coverage.mjs has ${actualFloors} entries`
-    ).toBe(actualFloors);
+    const err = checkAgentsPerFileFloors(await read("AGENTS.md"), await countPerFileFloors());
+    expect(err, err ?? "").toBeNull();
   });
 
   it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
-    const agents = await read("AGENTS.md");
-    const required = await countRequiredCiGates();
-    // AGENTS.md has multiple "9 required" mentions (CI gates section header,
-    // do-NOT rules, etc.) — all must agree with release.yml.
-    const mentions = [...agents.matchAll(/(\d+)\s+required\s+(?:CI\s+)?gates/g)];
-    expect(mentions.length, "AGENTS.md must mention 'N required gates' at least once").toBeGreaterThan(0);
-    for (const m of mentions) {
-      expect(
-        Number.parseInt(m[1] ?? "0", 10),
-        `AGENTS.md mentions "${m[0]}" but release.yml REQUIRED has ${required} entries`
-      ).toBe(required);
-    }
+    const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
+    expect(err, err ?? "").toBeNull();
+  });
+
+  // ─── NEGATIVE control tests (rc.15 M-3): intentionally-drifted fixtures
+  // must trigger non-null error. Without these, the positive tests above
+  // could silently pass against a regex that happens to match anything
+  // (e.g. typo in the pattern), which is the trivial-pass class.
+  // Pattern matches v3.6.4 NEGATIVE-control rule + peek-meta.test.ts.
+
+  it("NEGATIVE: checkLlmsTestCount catches drift", () => {
+    // Claim 100, actual 855 → must fail
+    expect(checkLlmsTestCount("- 100 unit tests passing", 855)).toMatch(/100.*855|855.*100/);
+    // Missing claim entirely → must fail
+    expect(checkLlmsTestCount("no test claim here", 855)).toMatch(/must declare/);
+    // Matching claim → must pass
+    expect(checkLlmsTestCount("- 855 unit tests passing", 855)).toBeNull();
+  });
+
+  it("NEGATIVE: checkLlmsToolBreakdown catches drift in any of 4 fields", () => {
+    const good = "44 tools (33 always-on read + 4 opt-in + 7 gated writes)";
+    expect(checkLlmsToolBreakdown(good, 44, 33, 4, 7)).toBeNull();
+    // Drift in total
+    expect(checkLlmsToolBreakdown(good, 45, 33, 4, 7)).toMatch(/total/);
+    // Drift in always-on
+    expect(checkLlmsToolBreakdown(good, 44, 32, 4, 7)).toMatch(/always-on/);
+    // Drift in opt-in
+    expect(checkLlmsToolBreakdown(good, 44, 33, 5, 7)).toMatch(/opt-in/);
+    // Drift in writes
+    expect(checkLlmsToolBreakdown(good, 44, 33, 4, 8)).toMatch(/writes/);
+    // Missing claim
+    expect(checkLlmsToolBreakdown("no breakdown", 44, 33, 4, 7)).toMatch(/must declare/);
+  });
+
+  it("NEGATIVE: checkLlmsPromptCount catches drift", () => {
+    expect(checkLlmsPromptCount("19 MCP prompts", 19)).toBeNull();
+    expect(checkLlmsPromptCount("20 MCP prompts", 19)).toMatch(/prompts/);
+    expect(checkLlmsPromptCount("no prompt claim", 19)).toMatch(/must declare/);
+  });
+
+  it("NEGATIVE: checkLlmsCiGates catches drift", () => {
+    expect(checkLlmsCiGates("9 required + 4 advisory CI gates", 9)).toBeNull();
+    expect(checkLlmsCiGates("10 required + 4 advisory CI gates", 9)).toMatch(/10.*9/);
+    expect(checkLlmsCiGates("no gates claim", 9)).toMatch(/must declare/);
+  });
+
+  it("NEGATIVE: checkAgentsTestFloor catches floor above actual + missing claim", () => {
+    // Exact match → pass
+    expect(checkAgentsTestFloor("855+ tests", 855)).toBeNull();
+    // Floor slightly below actual (within 50 threshold) → pass
+    expect(checkAgentsTestFloor("840+ tests", 855)).toBeNull(); // 15 below — within threshold
+    // Floor far below actual (>= 50 below) → fail
+    expect(checkAgentsTestFloor("800+ tests", 855)).toMatch(/bump the floor/); // 55 below — exceeds threshold
+    // Floor above actual → fail
+    expect(checkAgentsTestFloor("900+ tests", 855)).toMatch(/above reality/);
+    // Missing claim → fail
+    expect(checkAgentsTestFloor("no floor claim", 855)).toMatch(/must declare/);
+  });
+
+  it("NEGATIVE: checkAgentsPerFileFloors catches drift", () => {
+    expect(checkAgentsPerFileFloors("10 per-file branch floors enforced", 10)).toBeNull();
+    expect(checkAgentsPerFileFloors("11 per-file branch floors", 10)).toMatch(/11/);
+    expect(checkAgentsPerFileFloors("no floor claim", 10)).toMatch(/must declare/);
+  });
+
+  it("NEGATIVE: checkAgentsCiGates catches ANY drifted mention", () => {
+    // All match → pass
+    expect(checkAgentsCiGates("9 required gates, 9 required CI gates", 9)).toBeNull();
+    // First mention drifts → fail
+    expect(checkAgentsCiGates("10 required gates, 9 required CI gates", 9)).toMatch(/10/);
+    // Last mention drifts → fail (multiple-mention coverage)
+    expect(checkAgentsCiGates("9 required gates, 10 required CI gates", 9)).toMatch(/10/);
+    // Zero mentions → fail
+    expect(checkAgentsCiGates("no claim", 9)).toMatch(/at least once/);
   });
 });

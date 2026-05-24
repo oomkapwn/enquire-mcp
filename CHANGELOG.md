@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.15] — 2026-05-24
+
+> **TL;DR:** Fifteenth v3.8.0 release candidate. **M-3 root-class fix — meta-recursion overclaim instance #10**: rc.14 added 7 new `docs-consistency.test.ts` invariants for the M-2 fix, but NONE had NEGATIVE control siblings — violating the CLAUDE.md rule since v3.6.4 ("every invariant test must have a sibling test that fails when the invariant is violated"). Same class as v3.7.14 F1+F2 (added a fix that itself shipped the same drift inside the same patch). Refactored 7 M-2 checks into pure functions, added 7 NEGATIVE control sibling tests (positive-negative pairs). Plus L-5 snapshot header on the audit-request doc. **862 tests** (+7 NEGATIVE controls vs rc.14). Ships under `@rc` dist-tag.
+
+**Minor — fifteenth v3.8.0 release candidate.**
+
+### Fix M-3 (MEDIUM) — meta-recursion: rc.14 invariants lacked NEGATIVE controls
+
+**Background.** CLAUDE.md anti-pattern since v3.6.4:
+> "Invariant test without negative-control — a test that ALWAYS passes proves nothing. Every new invariant test must have a sibling test that fails when the invariant is violated."
+
+rc.14 fixed M-2 by adding 7 invariants to `tests/docs-consistency.test.ts` covering llms.txt + AGENTS.md numeric claims. But all 7 used inline regex matching against real files — if the regex pattern had a typo (`/(\d) tests/` instead of `/(\d+) tests/`), the test would trivially pass on any input with at least one digit. No negative control = no proof the invariant actually detects drift.
+
+This is the **10th documented overclaim instance** in the cascade, and the 2nd "meta-recursion" instance: a methodology rule violation inside the very patch that implemented that rule's class fix. Same shape as v3.7.14 F1 (renameNote ordering fix shipped with stale TSDoc) → v3.7.14 F2 (renameFile ordering fix in same patch ALSO shipped with stale TSDoc — overclaim #6 followed by #7).
+
+**Fix** (`tests/docs-consistency.test.ts`): refactored each of the 7 M-2 checks into a pure function returning `null` on OK or an error string on drift:
+- `checkLlmsTestCount(llms, actual)` — "N unit tests" matches actual count
+- `checkLlmsToolBreakdown(llms, total, alwaysOn, optIn, writes)` — "N tools (A always-on + B opt-in + C writes)" matches all 4
+- `checkLlmsPromptCount(llms, actual)` — "N MCP prompts" matches
+- `checkLlmsCiGates(llms, required)` — "N required + M advisory CI gates" matches
+- `checkAgentsTestFloor(agents, actual)` — "X+ tests" is valid lower bound (claimed ≤ actual, gap < 50)
+- `checkAgentsPerFileFloors(agents, actualFloors)` — "N per-file branch floors" matches
+- `checkAgentsCiGates(agents, required)` — every "N required gates" mention matches
+
+Then 7 NEGATIVE control `it()` blocks call each function with intentionally-drifted inline fixtures:
+- Wrong count → assert non-null error matching the count
+- Missing claim → assert non-null error matching "must declare"
+- Matching claim → assert null (sanity)
+- Multi-field breakdowns: drift in each individual field → assert non-null with that field name in error
+
+Pattern matches `tests/peek-meta.test.ts` and `tests/k1-class-invariant.test.ts` (the canonical "extract pure function + fixture-based negative" template per v3.7.3).
+
+**Verification.** The negative tests caught one real logic bug in my own assertions during development (I had written `expect(checkAgentsTestFloor("800+ tests", 855)).toBeNull()` for a case that should actually fail because 855-800=55 exceeds the 50pp threshold). The NEGATIVE controls do their job: they pin the contract of the checker function itself, not just the file content.
+
+### Fix L-5 (LOW) — snapshot header on audit-request doc
+
+**Background.** `docs/audits/AUDIT-REQUEST-v3.8.0-2026-05-24.md` (created in rc.14 ship) contains numeric claims ("855 tests, 14 release candidates, 44 tools, 19 prompts") with no explicit indication these are a point-in-time snapshot. An auditor reading the doc after rc.16 or rc.17 ships would see stale-looking numbers and potentially question the documentation's reliability.
+
+**Fix.** Added a snapshot callout at the top of the doc:
+
+> 📌 Snapshot notice. This document is a snapshot from commit `bad0518` / `v3.8.0-rc.14` / 2026-05-24. Numeric figures cited below reflect the project state on that date. Later release candidates will increment some of these numbers; the auditor should target the commit SHA cited here (or the closest later release-candidate tag) for the actual review.
+
+The file's name already datestamps it (`AUDIT-REQUEST-v3.8.0-2026-05-24.md`), but the callout makes the snapshot semantics explicit in the rendered view.
+
+### Method note — documented overclaim instances
+
+Updated CLAUDE.md status section: overclaim count goes 9 → 10 with this rc.15 finding. Pattern of recurrence:
+- #1: v3.6.1 CRIT-1 — claimed 10 of 10 callsites fixed, was 1 of 10
+- #2: v3.6.2 K-1 — claimed all 10 callsites, was 4 of 10
+- #4: v3.7.11 D4 — claimed examples/ added in v3.7.10, actually v3.7.11
+- #6: v3.7.14 F1 — renameNote impl fixed but TSDoc lied
+- #7: v3.7.14 F2 — renameFile fix in same patch as #6 ALSO shipped TSDoc drift
+- #8: v3.7.14 — orphan-tag procedural error
+- #9: v3.7.14 F5 — release.yml permission-incomplete (HTTP 403)
+- **#10: v3.8.0-rc.14 M-2** — 7 invariants without negative-control siblings (this fix)
+
+The recursion-pair shape (#6+#7 in v3.7.14; #2 inside the "K-1 final" patch; #10 inside the rc.14 M-2 patch) keeps appearing. Documented in CHANGELOG so the next external auditor sees the methodology IS aware of this failure mode and treating it explicitly.
+
+### Stats
+
+- **862 tests** (+7 NEGATIVE control siblings for rc.14 M-2 invariants).
+- `tests/docs-consistency.test.ts`: 7 inline-regex invariants → 7 pure-function checks + 7 NEGATIVE controls.
+- All 5 surfaces re-bumped: README (×3), package.json, COMPARISON.md, llms.txt, AGENTS.md (855→862).
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **External audit** before `@latest` promotion (CLAUDE.md rule since v3.6.1).
+- **Tier C** (deferred): JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- **Multi-subcommand CLI drift audit** (from rc.11 RCA).
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+---
+
 ## [3.8.0-rc.14] — 2026-05-24
 
 > **TL;DR:** Fourteenth v3.8.0 release candidate. **Post-rc.13 audit closure** — 4 findings: M-2 (root-class fix: new files `llms.txt` + `AGENTS.md` introduced drift surface without invariant coverage), L-2 (`CLAUDE.md` status section stale at rc.12 — same α-class drift the methodology keeps fighting), L-3 (Tier B0 MCP Registry submission successfully completed but not documented in CHANGELOG), L-4 (PR #117 `server.json` schema validation fix had no CHANGELOG entry). 7 new docs-consistency invariants extend coverage to llms.txt + AGENTS.md numeric claims (test count, tool breakdown, MCP prompt count, CI gate count, per-file floor count). **855 tests** (+7 invariants vs rc.13). Ships under `@rc` dist-tag.

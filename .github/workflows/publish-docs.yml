@@ -49,6 +49,12 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run docs:api
+      # v3.8.0-rc.12 — also serve llms.txt from GH Pages so AI agents
+      # (ChatGPT browsing, Perplexity, Claude.ai web fetches) discover
+      # the project via the https://llmstxt.org/ standard. Copied from
+      # the repo root into the upload artifact dir so it's served at
+      # https://oomkapwn.github.io/enquire-mcp/llms.txt
+      - run: cp llms.txt docs/api-reference/llms.txt
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

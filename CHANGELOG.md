@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.5] — 2026-05-25
+
+> **TL;DR:** **T-2/T-3/T-4 E2E backlog closure.** All three E2E tests deferred since v3.8.0 backlog now ship. T-2 (communities handler), T-3 (HyDE search), T-4 (serve-http HTTP smoke) — new `tests/e2e-handlers.test.ts` with 7 tests using spawn-dist + JSON-RPC pattern (mirrors `scripts/smoke.mjs`). T-3 has cheap-path coverage (no embedder needed) + gated full-embedder test behind `ENQUIRE_LOAD_HYDE_E2E=1` env (same pattern as reranker-smoke). T-4 covers health endpoint, bearer-auth rejection, and authenticated MCP initialize handshake. **879 tests** (+7 vs v3.8.4). 0 src/ changes.
+
+**Patch — backlog closure (E2E tests).**
+
+### T-2 — `obsidian_get_communities` E2E
+
+Two tests in `tests/e2e-handlers.test.ts` `T-2` describe block:
+1. Spawns server on a synthetic 6-note vault with planted 2-cluster wikilink graph ({A,B,C} interlinked + {X,Y,Z} interlinked + 1 bridge A↔X). Verifies Louvain detects ≥ 2 communities with modularity > 0.2. Asserts response structure (community_count, modularity, iterations, node_count, communities[].{id,size,members,representative}, membership map).
+2. NEGATIVE control — `min_size: 10` filter exercises arg-handling: communities list returns empty, but raw `community_count` is still > 0 (count is pre-filter).
+
+### T-3 — `obsidian_hyde_search` E2E
+
+Two tests. The embedder model (~120 MB HuggingFace download) is too slow for default CI, so:
+1. **Cheap-path (always runs):** spawns server on a synthetic 3-topic vault, calls `obsidian_hyde_search` with no embed-db built. Asserts no crash, response contains informative text (either guidance about missing embed-db OR empty matches with diagnostic). Validates the handler's cold-vault error path.
+2. **Full-embedder (gated):** `it.skipIf(!process.env.ENQUIRE_LOAD_HYDE_E2E)` — runs only when env set. Asserts HyDE returns hits, with `Music` ranking above `Cooking`/`Code` for a music query. Pattern matches `reranker-smoke.test.ts` env-gating.
+
+### T-4 — `serve-http` HTTP smoke
+
+Three tests. Spawns `enquire-mcp serve-http --vault <path> --port <free> --bearer-token <tok>` and waits for "Listening" log (fallback 3s timeout):
+1. `GET /health` returns 200 OK (unauthenticated health probe).
+2. `POST /mcp` without `Authorization: Bearer <tok>` returns 401.
+3. `POST /mcp` with valid bearer + JSON-RPC `initialize` returns 200 with response containing `serverInfo` or `enquire-mcp`.
+
+Uses `net.createServer().listen(0)` to pick a free port — avoids hardcoded port collisions in parallel CI runs.
+
+### Implementation notes
+
+- All tests skip gracefully via `if (!distExists()) return` — matches `cli.test.ts` pattern for runs without `npm run build`.
+- E2E test file shares helpers: `spawnServer()` (returns RPC client), `makeWikilinkVault()`, `makeSemanticVault()`, `pickFreePort()`.
+- 20s per-RPC timeout; 30s beforeAll; tests cleanup spawned processes + tmpdirs in afterAll.
+- T-3 cheap-path was fixed mid-development when server returned plain-text guidance ("Embedding model not found...") not JSON — assertion relaxed to accept either format, both demonstrate no-crash behavior.
+
+### Stats
+
+- **879 tests** (+7 vs v3.8.4: 2 T-2 + 2 T-3 + 3 T-4).
+- 1 new test file: `tests/e2e-handlers.test.ts` (~330 lines).
+- 0 src/ changes.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@latest = 3.8.5` after publish.
+- All 9 required CI gates pass locally.
+
+### What's next
+
+Continuing v3.8.x backlog closure (no deferrals):
+- **v3.8.6** — Tier C discoverability: `.github/FUNDING.yml` + JSON-LD `SoftwareApplication` schema on GH Pages.
+- **v3.8.7** — HTTP P2-10 (stateful session race) + P2-11 (HTTP server close cleanup).
+- **v3.8.8** — META structural-defense scope completeness audit (the recurring recursion-pair class).
+- **v3.9.0-rc.1** — OCR'd PDF watcher embed-sync + HNSW in-memory live update (architectural minor bump).
+
+---
+
 ## [3.8.4] — 2026-05-24
 
 > **TL;DR:** **OIA Check 7 scope expansion (overclaim instance #12) + 2 inline fixes (B-1, B-2).** v3.8.3 shipped OIA Check 7 (extend stale-currency detection to docs/) explicitly claiming "Same recursion class as M-1/M-2/M-REG-1 (structural defense built but scope too narrow)" and "Closes the methodology gap." Post-v3.8.3 sweep found **the same recursion pattern inside the v3.8.3 fix itself**: Check 7 scope was CLAUDE.md + docs/ but **omitted** README.md, AGENTS.md, llms.txt, examples/. Found B-1 (README.md:185 "capabilities as of v3.7.0") and B-2 (examples/chatgpt-actions.md:25 "wait for v3.8.0" — already shipped). This is the **6th recursion-pair shape** (#6+#7, #2 inside K-1 "final", #10 inside M-2, #12 inside v3.8.3 Check 7) and the **12th documented overclaim instance**. v3.8.4 expands Check 7 scope to ALL user-visible markdown surfaces (README.md, AGENTS.md, llms.txt, examples/*.md), adds "capabilities|claims|features|snapshot as of" patterns to catch B-1's wording, adds "wait for vX.Y.0 / coming in / planned for / will land in" forthcoming-claim detection for B-2's class. 2 inline fixes for B-1/B-2. **No code changes; 872 tests unchanged.**

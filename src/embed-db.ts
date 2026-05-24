@@ -113,7 +113,11 @@ interface Db {
   transaction(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => unknown;
 }
 interface Stmt {
-  run(...params: unknown[]): { changes: number };
+  // better-sqlite3's `run` returns `{ changes, lastInsertRowid }`. We type
+  // `lastInsertRowid` as `bigint | number` because better-sqlite3 returns
+  // bigint by default (and number when `safeIntegers(false)` is set). The
+  // single use site in v3.9.0-rc.2 (`upsertNote`) coerces via `Number(...)`.
+  run(...params: unknown[]): { changes: number; lastInsertRowid: bigint | number };
   all<T = unknown>(...params: unknown[]): T[];
   get<T = unknown>(...params: unknown[]): T | undefined;
 }
@@ -392,6 +396,17 @@ export class EmbedDb {
    * v2.8.0: optional `kind` parameter ("md" | "pdf"); defaults to "md" so
    * existing callers (markdown indexing path) need no changes.
    */
+  /**
+   * @returns v3.9.0-rc.2 — `{ oldIds, newIds }`. `oldIds` is the set of
+   *   `embeddings.id` values that were deleted (the file's previous
+   *   chunks, before this upsert); `newIds` is the set of fresh ids
+   *   assigned by AUTOINCREMENT, in the same order as the input `chunks`
+   *   array. Callers maintaining a parallel in-memory index (HNSW) use
+   *   these to `markDelete(oldIds)` + `addPoint(vectors, newIds)` so the
+   *   index stays in sync with the embed-db without rebuilding. Pre-3.9.0
+   *   the method returned `void`; existing callers that ignore the
+   *   return value continue working unchanged.
+   */
   upsertNote(
     relPath: string,
     mtimeMs: number,
@@ -403,11 +418,19 @@ export class EmbedDb {
       vector: Float32Array;
     }>,
     kind: EmbedChunkKind = "md"
-  ): void {
+  ): { oldIds: number[]; newIds: number[] } {
     const db = this.requireDb();
     const dim = this.dim;
+    const out = { oldIds: [] as number[], newIds: [] as number[] };
     const tx = db.transaction((...args: unknown[]) => {
       const rows = args[0] as typeof chunks;
+      // v3.9.0-rc.2 — capture the old ids BEFORE the DELETE so the
+      // watcher can markDelete them in HNSW. Sorted ascending so callers
+      // get stable ordering for snapshot diffing.
+      const oldRows = db
+        .prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id")
+        .all<{ id: number }>(relPath);
+      out.oldIds = oldRows.map((r) => r.id);
       db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
       const insert = db.prepare(
         `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
@@ -426,7 +449,12 @@ export class EmbedDb {
           this.quantization === "int8"
             ? encodeInt8Vector(c.vector)
             : Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength);
-        insert.run(relPath, c.chunkIndex, c.lineStart, c.lineEnd, c.textPreview, blob, kind);
+        const result = insert.run(relPath, c.chunkIndex, c.lineStart, c.lineEnd, c.textPreview, blob, kind);
+        // v3.9.0-rc.2 — capture the AUTOINCREMENT id assigned to this row.
+        // better-sqlite3 returns `lastInsertRowid` as bigint or number; cast
+        // to number since embedding ids are within Number.MAX_SAFE_INTEGER
+        // for all realistic vault sizes (~10^15 chunks).
+        out.newIds.push(Number(result.lastInsertRowid));
       }
       db.prepare(
         `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
@@ -434,6 +462,7 @@ export class EmbedDb {
       ).run(relPath, mtimeMs, rows.length, kind);
     });
     tx(chunks);
+    return out;
   }
 
   /** Drop a note's embeddings entirely (used on file deletion).
@@ -446,13 +475,25 @@ export class EmbedDb {
    * upsertNote (already transactional) + reindexFile (v3.7.10) +
    * reindexPdfFile (v3.7.10), this completes the atomicity class fix.
    */
-  deleteNote(relPath: string): void {
+  /**
+   * @returns v3.9.0-rc.2 — the set of `embeddings.id` values that were
+   *   deleted (empty if the file had no embed-db rows). Callers use this
+   *   to `markDelete(deletedIds)` on a parallel HNSW index. Pre-3.9.0
+   *   the method returned `void`; existing callers that ignore the
+   *   return value continue working unchanged.
+   */
+  deleteNote(relPath: string): number[] {
     const db = this.requireDb();
+    const deletedIds: number[] = [];
     const txn = db.transaction(() => {
+      // v3.9.0-rc.2 — capture deleted ids BEFORE the DELETE for HNSW sync.
+      const rows = db.prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id").all<{ id: number }>(relPath);
+      for (const r of rows) deletedIds.push(r.id);
       db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
       db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
     });
     txn();
+    return deletedIds;
   }
 
   /**

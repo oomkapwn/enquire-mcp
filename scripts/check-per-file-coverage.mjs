@@ -61,7 +61,7 @@ if (!existsSync(SUMMARY_PATH)) {
 const FLOORS = {
   "src/embeddings.ts": { branches: 28 }, // current 30% (integration-dep)
   "src/ocr.ts": { branches: 22 }, // current 31.03% (integration-dep)
-  "src/http-transport.ts": { branches: 65 }, // current 69.39%
+  "src/http-transport.ts": { branches: 65 }, // current 72.85% (v3.8.7 P2-10/P2-11 raised branch coverage with 10 new tests)
   "src/doctor.ts": { branches: 64 }, // current 66.05%
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
@@ -85,7 +85,7 @@ const FLOORS = {
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).
-  "src/embed-pipeline.ts": { branches: 84 } // current 86.84% (rc.8+)
+  "src/embed-pipeline.ts": { branches: 84 } // current 88.09% (v3.9.0-rc.2 preExtractedPages branches)
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

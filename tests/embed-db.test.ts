@@ -645,3 +645,96 @@ describe("EmbedDb int8 quantization", () => {
     }
   });
 });
+
+// v3.9.0-rc.2 — return-value contract for upsertNote / deleteNote.
+// The watcher's HNSW live-update path consumes oldIds + newIds to
+// keep the in-memory graph in sync with embed-db. These tests pin
+// the contract so a future refactor that loses the IDs breaks here
+// rather than silently breaking watcher → HNSW sync.
+describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
+  it("upsertNote returns oldIds=[] + newIds for a fresh file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-db-"));
+    const file = path.join(dir, "x.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+    await db.open();
+    try {
+      const v = l2([1, 0, 0, 0]);
+      const r = db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "first", vector: v },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "second", vector: v }
+      ]);
+      expect(r.oldIds).toEqual([]);
+      expect(r.newIds).toHaveLength(2);
+      // AUTOINCREMENT IDs are positive integers, monotonically increasing.
+      expect(r.newIds[0]).toBeGreaterThan(0);
+      expect(r.newIds[1]).toBeGreaterThan(r.newIds[0] ?? 0);
+    } finally {
+      db.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("upsertNote returns oldIds=existing + newIds=fresh on re-upsert", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-db-"));
+    const file = path.join(dir, "x.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+    await db.open();
+    try {
+      const v = l2([1, 0, 0, 0]);
+      // First upsert assigns ids 1, 2.
+      const first = db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: v },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "a1", vector: v }
+      ]);
+      // Second upsert: DELETE old (ids 1,2), INSERT new (ids 3,4,5).
+      const second = db.upsertNote("a.md", 2000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "b0", vector: v },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "b1", vector: v },
+        { chunkIndex: 2, lineStart: 3, lineEnd: 3, textPreview: "b2", vector: v }
+      ]);
+      expect(second.oldIds).toEqual(first.newIds);
+      expect(second.newIds).toHaveLength(3);
+      // New ids must NOT overlap old ids — AUTOINCREMENT guarantees monotonic.
+      for (const newId of second.newIds) {
+        expect(second.oldIds.includes(newId)).toBe(false);
+      }
+    } finally {
+      db.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deleteNote returns the ids that were dropped", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-db-"));
+    const file = path.join(dir, "x.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+    await db.open();
+    try {
+      const v = l2([1, 0, 0, 0]);
+      const r = db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "first", vector: v },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "second", vector: v }
+      ]);
+      const deletedIds = db.deleteNote("a.md");
+      expect(deletedIds).toEqual(r.newIds);
+    } finally {
+      db.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // NEGATIVE control: deleteNote on a file with no embed-db rows returns [].
+  it("(NEGATIVE control) — deleteNote on absent file returns empty array", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-db-"));
+    const file = path.join(dir, "x.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+    await db.open();
+    try {
+      const deletedIds = db.deleteNote("ghost.md");
+      expect(deletedIds).toEqual([]);
+    } finally {
+      db.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

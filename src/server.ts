@@ -430,6 +430,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               modelAlias: model.alias,
               ...(efOverride !== undefined ? { ef: efOverride } : {})
             };
+            // v3.9.0-rc.2 — wire HNSW live-update on the disk-loaded path
+            // too. Same posture as the freshly-built path below: the
+            // loaded index supports applyDiff() through the same wrapper.
+            if (watcher) {
+              try {
+                watcher.attachHnsw(loaded.index, loaded.rowByLabel);
+                process.stderr.write(`enquire: watcher HNSW live-update enabled (loaded-from-disk index)\n`);
+              } catch (err) {
+                process.stderr.write(
+                  `enquire: watcher HNSW live-update DISABLED — ${err instanceof Error ? err.message : String(err)}\n`
+                );
+              }
+            }
           } else {
             const rows = db.getAllVectors();
             if (rows.length === 0) {
@@ -479,6 +492,23 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   // Non-fatal — persistence is an optimization. Log + continue.
                   process.stderr.write(
                     `enquire: HNSW persist failed (continuing with in-memory index) — ${err instanceof Error ? err.message : String(err)}\n`
+                  );
+                }
+              }
+              // v3.9.0-rc.2 — wire HNSW into the watcher for live updates.
+              // After this call, every md/pdf edit ALSO updates the in-memory
+              // HNSW graph via applyDiff(), so semantic-search reflects the
+              // change immediately. Pre-3.9.0 the HNSW index was rebuilt only
+              // at serve startup; long-running sessions slowly drifted out of
+              // sync with the freshly-upserted embed-db rows.
+              if (watcher) {
+                try {
+                  watcher.attachHnsw(index, rowByLabel);
+                  process.stderr.write(`enquire: watcher HNSW live-update enabled\n`);
+                } catch (err) {
+                  // Fail-soft. Log + continue; watcher still does embed-db sync.
+                  process.stderr.write(
+                    `enquire: watcher HNSW live-update DISABLED — ${err instanceof Error ? err.message : String(err)}\n`
                   );
                 }
               }

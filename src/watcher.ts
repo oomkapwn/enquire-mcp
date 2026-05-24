@@ -21,7 +21,24 @@ import chokidar, { type FSWatcher } from "chokidar";
 import type { EmbedDb } from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
 import type { FtsIndex } from "./fts5.js";
+import type { HnswIndex } from "./hnsw.js";
 import type { Vault } from "./vault.js";
+
+/**
+ * v3.9.0-rc.2 — shape of the row-metadata entries the HNSW index keeps
+ * alongside each label. Mirrors `HnswPersistedMeta["rowsByLabel"][k]`
+ * but defined here so the watcher's TypeScript surface stays
+ * self-contained (no circular imports between watcher.ts and hnsw.ts's
+ * persistence types).
+ */
+export interface HnswRowMeta {
+  rel_path: string;
+  chunk_index: number;
+  line_start: number;
+  line_end: number;
+  text_preview: string;
+  kind: "md" | "pdf";
+}
 
 const SKIP_DIRS = [".git", ".obsidian", ".trash", "node_modules", ".DS_Store"];
 
@@ -127,6 +144,15 @@ export class VaultWatcher {
   private ocrPdfs: boolean;
   private ocrLangs: string;
   private ocrMaxPages: number | undefined;
+  // v3.9.0-rc.2 — HNSW in-memory live update wiring. The watcher
+  // boots before HNSW initializes (similar pattern to embedDb above),
+  // so attachHnsw() is the late-binding entry point. When wired, every
+  // md/pdf event that mutates embed-db also calls
+  // `hnsw.applyDiff(oldIds, newPoints)` so search reflects the change
+  // immediately (pre-3.9.0 the in-memory HNSW went stale until the
+  // next serve restart rebuilt from the freshly-upserted embed-db).
+  private hnsw: HnswIndex | null = null;
+  private hnswRowsByLabel: Map<number, HnswRowMeta> | null = null;
   private closed = false;
 
   constructor(opts: WatcherOptions) {
@@ -201,6 +227,85 @@ export class VaultWatcher {
     this.embedDb = embedDb;
     this.embedder = embedder;
     this.lateChunkContext = lateChunkContext;
+  }
+
+  /**
+   * v3.9.0-rc.2 — wire an in-memory HNSW index for live updates. After
+   * this call, every md/pdf event that mutates embed-db ALSO updates
+   * the HNSW graph via `hnsw.applyDiff(oldIds, newPoints)` so search
+   * results reflect the change immediately. Pre-3.9.0, the HNSW index
+   * was rebuilt from embed-db only at serve startup; vault edits during
+   * the session left the HNSW stale until restart, and `--use-hnsw`
+   * users saw new content omitted from semantic-search results.
+   *
+   * Must be called AFTER `attachEmbed` (the HNSW + embed-db handles
+   * share a lifecycle — server.ts opens both during HNSW init).
+   *
+   * @param hnsw - the in-memory HNSW index built by server.ts.
+   * @param rowsByLabel - the mutable label→row map shared with
+   *   `searchHybrid` (the live update writes into it so subsequent
+   *   searches see the new chunks).
+   */
+  attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>): void {
+    if (!this.embedDb) {
+      throw new Error(
+        "VaultWatcher.attachHnsw: embedDb not attached — call attachEmbed first (HNSW live update requires it)"
+      );
+    }
+    this.hnsw = hnsw;
+    this.hnswRowsByLabel = rowsByLabel;
+  }
+
+  /**
+   * v3.9.0-rc.2 — internal helper. Apply an embed-db {oldIds, newIds}
+   * diff to the wired HNSW index + rowsByLabel map. Called by both the
+   * md and pdf event handlers after upsertNote / deleteNote returns.
+   * Fail-soft: on any error, logs to stderr and returns — the embed-db
+   * is already updated, so the next serve restart will rebuild HNSW
+   * from the correct state. (Same posture as the watcher's existing
+   * embed-db fail-soft.)
+   */
+  private syncHnswForFile(
+    relPath: string,
+    kind: "md" | "pdf",
+    oldIds: ReadonlyArray<number>,
+    newRows: ReadonlyArray<{
+      id: number;
+      vector: Float32Array;
+      chunkIndex: number;
+      lineStart: number;
+      lineEnd: number;
+      textPreview: string;
+    }>
+  ): { removed: number; added: number } | null {
+    if (!this.hnsw || !this.hnswRowsByLabel) return null;
+    try {
+      const result = this.hnsw.applyDiff(
+        oldIds,
+        newRows.map((r) => ({ label: r.id, vector: r.vector }))
+      );
+      // Update the rowsByLabel map: drop old, add new. The map is shared
+      // with searchHybrid via reference; mutations are visible immediately.
+      for (const oldId of oldIds) this.hnswRowsByLabel.delete(oldId);
+      for (const r of newRows) {
+        this.hnswRowsByLabel.set(r.id, {
+          rel_path: relPath,
+          chunk_index: r.chunkIndex,
+          line_start: r.lineStart,
+          line_end: r.lineEnd,
+          text_preview: r.textPreview,
+          kind
+        });
+      }
+      return result;
+    } catch (err) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher HNSW live-update failed for ${relPath} — ${err instanceof Error ? err.message : String(err)} (search results may be stale until next serve restart)\n`
+        );
+      }
+      return null;
+    }
   }
 
   /** Start watching. Resolves once the watcher has reported `ready`. */
@@ -289,9 +394,19 @@ export class VaultWatcher {
       // v3.8.0-rc.2 R-7 — also drop embed-db rows so search results
       // don't surface vectors for deleted notes.
       // v3.8.0-rc.3 R-7 — extended to PDFs (rc.2 was md-only).
+      // v3.9.0-rc.2 — propagate the deletion to the in-memory HNSW
+      // index too via syncHnswForFile (with empty newRows = pure-delete
+      // diff). Pre-3.9.0 HNSW retained deleted-file labels until next
+      // serve restart; semantic-search results would surface vectors
+      // for files no longer in the vault.
+      let unlinkHnswNote = "";
       if (this.embedDb) {
         try {
-          this.embedDb.deleteNote(relPath);
+          const deletedIds = this.embedDb.deleteNote(relPath);
+          if (deletedIds.length > 0 && this.hnsw) {
+            const result = this.syncHnswForFile(relPath, "md", deletedIds, []);
+            if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
+          }
         } catch (err) {
           if (!this.silent) {
             process.stderr.write(
@@ -302,7 +417,7 @@ export class VaultWatcher {
       }
       if (!this.silent) {
         const embedNote = this.embedDb ? " + embed-db dropped" : "";
-        process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote})\n`);
+        process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote}${unlinkHnswNote})\n`);
       }
       return;
     }
@@ -382,14 +497,38 @@ export class VaultWatcher {
             );
             if (pdfResult === null) {
               // Image-only or zero chunks — drop any stale embed-db rows.
-              this.embedDb.deleteNote(relPath);
+              const deletedIds = this.embedDb.deleteNote(relPath);
               pdfEmbedNote = preExtractedPages
                 ? " + embed-db cleared (OCR also empty)"
                 : " + embed-db cleared (image-only or empty)";
+              // v3.9.0-rc.2 — propagate cleared rows to HNSW live update.
+              if (deletedIds.length > 0 && this.hnsw) {
+                const hnswResult = this.syncHnswForFile(relPath, "pdf", deletedIds, []);
+                if (hnswResult) pdfEmbedNote += ` + hnsw -${hnswResult.removed}`;
+              }
             } else {
-              this.embedDb.upsertNote(relPath, stat.mtimeMs, pdfResult.rows, "pdf");
+              const { oldIds, newIds } = this.embedDb.upsertNote(relPath, stat.mtimeMs, pdfResult.rows, "pdf");
               const sourceLabel = preExtractedPages ? "OCR" : "pdfjs";
               pdfEmbedNote = ` + embed-db upserted (${pdfResult.chunks} chunks, kind=pdf, src=${sourceLabel})`;
+              // v3.9.0-rc.2 — keep HNSW in sync with the embed-db change.
+              // The newIds array runs parallel to pdfResult.rows (same order)
+              // so we can zip them into HNSW add-points by index.
+              if (this.hnsw) {
+                const hnswResult = this.syncHnswForFile(
+                  relPath,
+                  "pdf",
+                  oldIds,
+                  pdfResult.rows.map((r, i) => ({
+                    id: newIds[i] ?? -1,
+                    vector: r.vector,
+                    chunkIndex: r.chunkIndex,
+                    lineStart: r.lineStart,
+                    lineEnd: r.lineEnd,
+                    textPreview: r.textPreview
+                  }))
+                );
+                if (hnswResult) pdfEmbedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+              }
             }
           } catch (err) {
             if (!this.silent) {
@@ -425,11 +564,34 @@ export class VaultWatcher {
             { lateChunkContext: this.lateChunkContext }
           );
           if (result === null) {
-            this.embedDb.deleteNote(relPath);
+            const deletedIds = this.embedDb.deleteNote(relPath);
             embedNote = " + embed-db cleared (empty note)";
+            // v3.9.0-rc.2 — propagate cleared rows to HNSW live update.
+            if (deletedIds.length > 0 && this.hnsw) {
+              const hnswResult = this.syncHnswForFile(relPath, "md", deletedIds, []);
+              if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
+            }
           } else {
-            this.embedDb.upsertNote(relPath, stat.mtimeMs, result.rows);
+            const { oldIds, newIds } = this.embedDb.upsertNote(relPath, stat.mtimeMs, result.rows);
             embedNote = ` + embed-db upserted (${result.chunks} chunks)`;
+            // v3.9.0-rc.2 — keep HNSW in sync. newIds and result.rows run
+            // parallel (same order), so we zip them into HNSW add-points.
+            if (this.hnsw) {
+              const hnswResult = this.syncHnswForFile(
+                relPath,
+                "md",
+                oldIds,
+                result.rows.map((r, i) => ({
+                  id: newIds[i] ?? -1,
+                  vector: r.vector,
+                  chunkIndex: r.chunkIndex,
+                  lineStart: r.lineStart,
+                  lineEnd: r.lineEnd,
+                  textPreview: r.textPreview
+                }))
+              );
+              if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+            }
           }
         } catch (err) {
           if (!this.silent) {

@@ -619,6 +619,39 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   }
 }
 
+// ─── Check 8: SCOPE-COMPLETENESS for structural defenses ───────────────
+// v3.8.8 META — for every existing numeric-claim defense in
+// `tests/docs-consistency.test.ts`, sweep the entire repo for the
+// pattern and report any file containing it that's not in the
+// defense's scope or exempts list. The audit script
+// `scripts/scope-completeness-audit.mjs` owns the DEFENSES manifest;
+// this OIA check is a thin wrapper that calls into it so a gap is
+// surfaced by both `npm run check:oia` and the matching
+// `tests/scope-completeness-invariant.test.ts`.
+//
+// Rationale: the recursion-pair shape pattern (6 documented instances
+// across v3.6.x→v3.8.x) keeps recurring because each new structural
+// defense is narrower than the problem class. Catching gaps in BOTH
+// OIA (state-driven sweep) and the invariant test (change-driven gate)
+// makes the recursion structurally impossible: a new doc file with an
+// uncovered numeric claim fails CI immediately, regardless of whether
+// the author ran the test locally.
+{
+  const { runAudit } = await import("./scope-completeness-audit.mjs");
+  for (const f of runAudit()) {
+    record(
+      "SCOPE-COMPLETENESS-GAP",
+      join(repoRoot, f.file),
+      f.line,
+      f.evidence,
+      `Defense '${f.defense}' missing coverage. Either (a) extend tests/docs-consistency.test.ts ` +
+        `to cover this file, then add it to DEFENSES['${f.defense}'].scope in ` +
+        `scripts/scope-completeness-audit.mjs, OR (b) add the file to ` +
+        `DEFENSES['${f.defense}'].exempts with reasoning. ${f.rationale}`
+    );
+  }
+}
+
 // ─── Report ─────────────────────────────────────────────────────────────
 if (findings.length === 0) {
   console.log("[oia-walk] ✓ No outside-in findings.");

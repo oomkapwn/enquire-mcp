@@ -1,0 +1,135 @@
+# Citation File Format v1.2.0 — https://citation-file-format.github.io/
+# Adopted v3.8.0-rc.12 for academic discoverability (Google Scholar,
+# Semantic Scholar, OpenAlex). The retrieval stack is research-heritage
+# (HyDE, RRF, BM25, Louvain) so registering the citation enables
+# academic cross-linking from papers that benchmark / build on it.
+cff-version: 1.2.0
+message: "If you use enquire-mcp in research, please cite it as below."
+type: software
+title: "enquire-mcp"
+abstract: >-
+  MCP server providing long-term memory for AI agents (Claude Code,
+  Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) backed by a local
+  Obsidian markdown vault. Hybrid retrieval (BM25 + TF-IDF + multilingual
+  ML embeddings, RRF-fused), BGE cross-encoder reranking, HNSW + int8
+  quantization, HyDE + sub-question decomposition for agentic RAG,
+  Louvain wikilink community detection (GraphRAG-light), standalone
+  Obsidian Bases query execution, PDFs blended into search with
+  Tesseract OCR. Vendor-neutral, open-source, MIT.
+authors:
+  - given-names: "Alex"
+    family-names: "Oomka"
+    alias: "oomkapwn"
+    orcid: ""
+repository-code: "https://github.com/oomkapwn/enquire-mcp"
+url: "https://www.npmjs.com/package/@oomkapwn/enquire-mcp"
+license: MIT
+keywords:
+  - "MCP"
+  - "Model Context Protocol"
+  - "long-term memory"
+  - "AI agents"
+  - "Obsidian"
+  - "hybrid retrieval"
+  - "BM25"
+  - "RRF"
+  - "reciprocal rank fusion"
+  - "HNSW"
+  - "agentic RAG"
+  - "HyDE"
+  - "GraphRAG"
+  - "Louvain community detection"
+  - "BGE reranker"
+  - "vector quantization"
+  - "semantic search"
+  - "retrieval-augmented generation"
+references:
+  - type: article
+    title: "Precise Zero-Shot Dense Retrieval without Relevance Labels"
+    authors:
+      - family-names: "Gao"
+        given-names: "Luyu"
+      - family-names: "Ma"
+        given-names: "Xueguang"
+      - family-names: "Lin"
+        given-names: "Jimmy"
+      - family-names: "Callan"
+        given-names: "Jamie"
+    year: 2023
+    journal: "arXiv preprint"
+    notes: "HyDE — Hypothetical Document Embeddings. enquire-mcp implements this in obsidian_hyde_search."
+    url: "https://arxiv.org/abs/2212.10496"
+  - type: article
+    title: "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods"
+    authors:
+      - family-names: "Cormack"
+        given-names: "Gordon V."
+      - family-names: "Clarke"
+        given-names: "Charles L. A."
+      - family-names: "Buettcher"
+        given-names: "Stefan"
+    year: 2009
+    conference:
+      name: "SIGIR '09 — Proceedings of the 32nd international ACM SIGIR conference on Research and development in information retrieval"
+    notes: "RRF with k=60. enquire-mcp fuses BM25, TF-IDF, and embedding rankings via this method."
+    url: "https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf"
+  - type: article
+    title: "Okapi at TREC-3"
+    authors:
+      - family-names: "Robertson"
+        given-names: "Stephen E."
+      - family-names: "Walker"
+        given-names: "Steve"
+      - family-names: "Jones"
+        given-names: "Susan"
+      - family-names: "Hancock-Beaulieu"
+        given-names: "Micheline M."
+      - family-names: "Gatford"
+        given-names: "Mike"
+    year: 1995
+    journal: "NIST Special Publication"
+    notes: "BM25 ranking function. enquire-mcp uses SQLite FTS5's BM25 implementation."
+    url: "https://www.microsoft.com/en-us/research/publication/okapi-at-trec-3/"
+  - type: article
+    title: "Fast unfolding of communities in large networks"
+    authors:
+      - family-names: "Blondel"
+        given-names: "Vincent D."
+      - family-names: "Guillaume"
+        given-names: "Jean-Loup"
+      - family-names: "Lambiotte"
+        given-names: "Renaud"
+      - family-names: "Lefebvre"
+        given-names: "Etienne"
+    year: 2008
+    journal: "Journal of Statistical Mechanics: Theory and Experiment"
+    notes: "Louvain modularity optimization. enquire-mcp uses this for wikilink community detection (GraphRAG-light)."
+    url: "https://arxiv.org/abs/0803.0476"
+  - type: article
+    title: "Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs"
+    authors:
+      - family-names: "Malkov"
+        given-names: "Yu A."
+      - family-names: "Yashunin"
+        given-names: "D. A."
+    year: 2020
+    journal: "IEEE Transactions on Pattern Analysis and Machine Intelligence"
+    volume: "42"
+    issue: "4"
+    notes: "HNSW vector index. enquire-mcp uses hnswlib-node for sub-10ms top-K vector retrieval."
+    url: "https://arxiv.org/abs/1603.09320"
+  - type: article
+    title: "C-Pack: Packed Resources For General Chinese Embeddings"
+    authors:
+      - family-names: "Xiao"
+        given-names: "Shitao"
+      - family-names: "Liu"
+        given-names: "Zheng"
+      - family-names: "Zhang"
+        given-names: "Peitian"
+      - family-names: "Muennighoff"
+        given-names: "Niklas"
+    year: 2023
+    journal: "arXiv preprint"
+    notes: "BAAI BGE embedding + reranker models. enquire-mcp uses bge-multilingual-gemma2 and bge-reranker-base."
+    url: "https://arxiv.org/abs/2309.07597"

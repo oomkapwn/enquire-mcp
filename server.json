@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.oomkapwn/enquire-mcp",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent.",
+  "repository": {
+    "url": "https://github.com/oomkapwn/enquire-mcp",
+    "source": "github"
+  },
+  "version": "3.8.0-rc.13",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@oomkapwn/enquire-mcp",
+      "version": "3.8.0-rc.13",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "description": "Subcommand (serve = stdio MCP server; serve-http = remote MCP over HTTP; setup = download model + build indexes; doctor = health check)",
+          "isRequired": true,
+          "format": "string",
+          "default": "serve",
+          "type": "positional"
+        },
+        {
+          "description": "Path to your Obsidian vault root directory",
+          "isRequired": true,
+          "format": "string",
+          "type": "named",
+          "name": "--vault"
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,8 @@
 
 # enquire-mcp
 
+<sub>**TL;DR for AI agents** — MCP server exposing a local Obsidian markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](./llms.txt) · [AGENTS.md](./AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
+
 ### The most advanced Obsidian MCP. Long-term memory for AI agents.
 
 **Stop re-explaining context to Claude, Cursor, ChatGPT, Codex, OpenClaw every session. Your Obsidian notes become shared, searchable memory across every MCP-compatible agent — your knowledge, every model, forever yours.**
@@ -69,6 +71,68 @@ enquire-mcp setup --vault <path>     # downloads model, builds FTS5 + embed-db
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
 enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 ```
+
+---
+
+## 🤖 Set up in your AI agent — copy-paste prompts
+
+Once `enquire-mcp` is installed, paste these prompts into your agent so it knows the vault is available as memory.
+
+<details>
+<summary><b>Claude Code (terminal)</b> — add MCP server + first prompt</summary>
+
+```bash
+# Add the MCP server to your Claude Code config (one time)
+claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
+```
+
+Then in any Claude Code session:
+
+> You now have `obsidian_*` tools that search and read my Obsidian vault — my long-term memory. Before answering questions about projects, decisions, people, or technical context, call `obsidian_search` with the relevant terms. Cite each fact with the source note (and `[page: N]` for PDFs). If you don't find a relevant note, say so — don't guess.
+
+</details>
+
+<details>
+<summary><b>Claude Desktop</b> — config file + first prompt</summary>
+
+Drop [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) into Claude Desktop's MCP config (edit the vault path first). Restart Claude Desktop, then:
+
+> You have my Obsidian vault wired up as searchable memory via `obsidian_*` tools. Always check `obsidian_search` first when I ask about anything in my notes — meeting context, research, decisions, journal entries. Quote the source note path on every fact.
+
+</details>
+
+<details>
+<summary><b>Cursor</b> — MCP stdio config + agent rule</summary>
+
+Drop [`examples/cursor-mcp.json`](./examples/cursor-mcp.json) at `~/.cursor/mcp.json` (edit the vault path). In your `.cursorrules` file or chat:
+
+> Before suggesting code that touches a topic I might have notes on (architecture decisions, API contracts, vendor evaluations), call `obsidian_search` first. Treat my Obsidian vault as authoritative context.
+
+</details>
+
+<details>
+<summary><b>ChatGPT custom GPT</b> — remote MCP over HTTP</summary>
+
+Follow [`examples/chatgpt-actions.md`](./examples/chatgpt-actions.md) to expose `serve-http` via a tunnel with bearer auth. In your custom GPT's instructions:
+
+> You have read access to my Obsidian vault via the `obsidian_*` tool family. Search before answering anything that might be in my notes; cite the source filepath on every claim.
+
+</details>
+
+<details>
+<summary><b>OpenClaw / Codex / any other MCP client</b></summary>
+
+Same `npx -y @oomkapwn/enquire-mcp serve --vault <path>` command works for any MCP-compatible client. See the client's own MCP-config docs for where to drop the server entry, then use any of the prompts above.
+
+</details>
+
+### Example queries that work well
+
+- *"Find every note where I discussed pricing strategy, summarize the evolution."* — RRF fusion + reranker handles "evolution" semantically
+- *"What was my decision on PostgreSQL vs MongoDB? Cite the daily note."* — wikilink graph-boost surfaces the central decision doc
+- *"Анализируй мои заметки о RAG за последние 3 месяца"* — multilingual embeddings + frontmatter date filter
+- *"What pages of the LLaMA-3 paper PDF talk about scaling?"* — PDFs blended into search with `[page: N]` citations
+- *"Show me topical communities in my research vault — what themes have I been exploring?"* — `obsidian_get_communities` (GraphRAG-light)
 
 ---
 

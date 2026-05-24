@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.12] — 2026-05-24
+
+> **TL;DR:** Twelfth v3.8.0 release candidate. **AI/LLM discoverability improvements (Tier A)** — adds `llms.txt` (https://llmstxt.org/ standard for AI agent discovery), `AGENTS.md` (Cursor 2.0 / Claude Code / Codex coding-agent convention), tightens npm `description` from 756 → 506 chars (better truncation handling in npm search UI), adds "TL;DR for AI agents" callout + "Set up in your AI agent" copy-paste prompts section in README. `llms.txt` also served from GH Pages at https://oomkapwn.github.io/enquire-mcp/llms.txt so ChatGPT browsing, Perplexity, Claude.ai web fetches discover the project via the standard URL. **No code changes; documentation + metadata only.** 848 tests unchanged. Ships under `@rc` dist-tag.
+
+**Minor — twelfth v3.8.0 release candidate.**
+
+### Add llms.txt — AI agent discovery standard
+
+**Background.** `https://llmstxt.org/` is the emerging convention (analogous to `robots.txt`) for AI agents to discover what a project does and where to read more. ChatGPT browsing, Perplexity, Claude.ai web fetches, Bing Copilot, and similar LLM-powered search tools look for `/llms.txt` at a site root. Without it, the AI sees only an HTML site map and has to scrape/summarize the README; with it, the AI gets a curated overview with section labels and links.
+
+**Fix:** Added `llms.txt` at repo root with the standard format (H1 title → blockquote one-paragraph summary → `## Quick start` / `## Documentation` / `## Configuration examples` / `## What enquire-mcp does` / `## What enquire-mcp is NOT` / `## How retrieval works` / `## Trust and stability` / `## Optional` sections, each with curated links).
+
+Also extended `.github/workflows/publish-docs.yml` to copy `llms.txt` into the GH Pages upload artifact dir so it's served at `https://oomkapwn.github.io/enquire-mcp/llms.txt` (the canonical discovery URL for the project's homepage on GH Pages).
+
+### Add AGENTS.md — coding-agent convention
+
+**Background.** Cursor 2.0, Claude Code, Codex, Aider, Devin, and similar AI coding agents look for `AGENTS.md` at repo root when first opening a project. The file conventionally contains operational notes (how to test, what conventions, what NOT to do) — distinct from `README.md` (humans) and `CLAUDE.md` (sprint methodology for project maintainers).
+
+**Fix:** Added `AGENTS.md` at repo root with: TL;DR (5-line orientation), Architecture (file-tree of `src/`, `tests/`, `scripts/`, `docs/`), Conventions (TypeScript strict, TSDoc, Vitest, CLI help-text rule, CHANGELOG, commits, PRs), Commands cheat sheet (15 most-used npm/node commands), CI gates (9 required + 4 advisory list), Do NOT rules (8 items including "do not modify shared CLI help strings inline", "do not tag pre-merge branch SHA", etc.), Helpful entrypoints (where to start when adding a tool / fixing a retrieval bug / extending the watcher), Project-specific style.
+
+### Tighten package.json description (756 → 506 chars)
+
+**Background.** npm search UI and most npm-aggregator websites truncate package descriptions at ~250 chars. The pre-rc.12 description (756 chars) was truncated mid-clause in many surfaces, losing the agent-list and the trust signals (44 tools, 19 prompts, etc.).
+
+**Fix:** Rewrote to put the core value-prop in the first 250 chars (agent list + capability summary), with trust signals as a self-contained second clause. Preserved every keyword that the existing `docs-consistency.test.ts` regex checks (44 tools, 19 MCP prompts, 848 tests, SLSA-3).
+
+### Add README "TL;DR for AI agents" callout
+
+**Background.** LLM-based readers tokenize the first ~500 tokens of a README for indexing/summary purposes. Pre-rc.12 the first 500 tokens of README were marketing-hero prose ("Stop re-explaining context to Claude..."), which is emotionally strong for humans but less efficient for AI parsers building a functional understanding.
+
+**Fix:** Added a dense, functional `<sub>` blockquote between the H1 and the marketing hero. Lists every agent name (Claude Code/Desktop, Cursor, ChatGPT, Codex, OpenClaw), every capability tier (BM25/embeddings/reranker/HNSW/HyDE/GraphRAG/PDFs/Bases), install command, and links to the AI-specific docs (`llms.txt`, `AGENTS.md`, API ref). Marketing hero immediately follows — both audiences served.
+
+### Add README "Set up in your AI agent — copy-paste prompts" section
+
+**Background.** Users installing enquire-mcp asked "what do I tell my agent so it uses the vault?". Documentation pre-rc.12 covered the *install*, not the *prompt template*. The right prompt becomes shareable content — gets posted to Reddit/Twitter/Discord, indexed by Google, propagates the project.
+
+**Fix:** Added a new section after Quick Start with 5 `<details>` collapsible blocks (one per major agent: Claude Code terminal, Claude Desktop, Cursor, ChatGPT custom GPT, OpenClaw/Codex/other). Each block includes the install one-liner + a ready-to-paste agent prompt that tells the agent to use `obsidian_*` tools. Plus "Example queries that work well" with 5 use-case-driven query examples (multilingual, multi-hop, PDF page citations, GraphRAG communities).
+
+### Stats
+
+- **848 tests** (unchanged — documentation + metadata only).
+- 2 new repo-root files: `llms.txt` (4.7 KB), `AGENTS.md` (7.3 KB).
+- `package.json` description: 756 → 506 chars.
+- `README.md`: +75 lines (TL;DR callout + AI agent copy-paste section).
+- `publish-docs.yml`: +6 lines (serve `llms.txt` from GH Pages).
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **Tier B** (next): submit to awesome-mcp-servers, glama.ai/mcp.so/smithery.ai MCP registries, add CITATION.cff for academic discovery.
+- **Tier C** (later): JSON-LD `SoftwareApplication` schema on GH Pages (TypeDoc theme tweak), GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- **Multi-subcommand CLI drift audit** (from rc.11 RCA).
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+- External audit before `@latest` promotion.
+
+---
+
 ## [3.8.0-rc.11] — 2026-05-24
 
 > **TL;DR:** Eleventh v3.8.0 release candidate. **Post-rc.10 audit response — root-class fix of M-1 (CLI help text drift) + L-1 (stale inline coverage comments).** rc.10 audit found `--watch` was still drifting between serve and serve-http after two "fixes" (rc.6 + rc.7), and a deeper sweep revealed 9 more flags in the same class (--disabled-tools 205↔44 chars, --enabled-tools, --tokenize, --quantize-embeddings). rc.11 lifts all shared flags to `cli-help.ts` + adds a structural invariant: every flag in BOTH serve and serve-http MUST have identical help text (allowlist for intentional short-form). Plus OIA walk extension that catches stale `// current X%` inline coverage comments. **848 tests** (+2 cli-parity invariants). Ships under `@rc` dist-tag.

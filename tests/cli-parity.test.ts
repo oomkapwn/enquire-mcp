@@ -223,3 +223,126 @@ describe("CLI parity — serve and serve-http shared-flag help text equality (v3
     }
   });
 });
+
+// v3.8.0-rc.17 — multi-subcommand drift invariant. Generalizes the serve↔serve-http
+// parity (cli-parity rc.11) to ALL subcommands. If a flag appears as inline
+// literal text in 2+ subcommands AND the text is byte-identical, that's a
+// "lift candidate" — should have been added to cli-help.ts. The invariant
+// fails to force the lift.
+//
+// Drifted text across subcommands is ALLOWED if intentional (different
+// operational semantics per subcommand, e.g. --include-pdfs does different
+// things in install-model vs build-embeddings vs setup). Document those
+// inline with comments — the invariant doesn't flag them.
+//
+// META-INVARIANT-EXEMPT: NEGATIVE control coverage provided by the
+// fixture-based test below (intentionally-drifted inline strings).
+
+describe("CLI parity — no byte-identical inline help text across subcommands (v3.8.0-rc.17)", () => {
+  /** Extract every (subcommand, flag, text) triple from cli.ts.
+   *  Returns Map<flag, Map<subcommand, text>>. */
+  function extractAllFlagHelp(cliSrc: string): Map<string, Map<string, string>> {
+    const out = new Map<string, Map<string, string>>();
+    // Find subcommand starts: .command("foo") or .command("foo", { ... })
+    const subcmds: { name: string; start: number }[] = [];
+    for (const m of cliSrc.matchAll(/\.command\(\s*"([\w-]+)"/g)) {
+      subcmds.push({ name: m[1] ?? "", start: m.index ?? 0 });
+    }
+    subcmds.push({ name: "_END_", start: cliSrc.length });
+    for (let i = 0; i < subcmds.length - 1; i++) {
+      const block = cliSrc.slice(subcmds[i]?.start ?? 0, subcmds[i + 1]?.start ?? cliSrc.length);
+      // Match .option("--flag[ <arg>]", "literal" | CONST | template) — captures both inline and constant
+      const re = /\.option\(\s*"(--[a-z][a-z0-9-]*)(?:\s+<[^>]+>)?"\s*,\s*(?:"([^"]+)"|([A-Z][A-Z0-9_]*))/g;
+      for (const om of block.matchAll(re)) {
+        const flag = om[1] ?? "";
+        const inlineText = om[2];
+        const constant = om[3];
+        if (inlineText !== undefined) {
+          // Track inline text only — constants are already drift-proof
+          const key = subcmds[i]?.name ?? "";
+          if (!out.has(flag)) out.set(flag, new Map());
+          out.get(flag)?.set(key, inlineText);
+        } else if (constant) {
+          const key = subcmds[i]?.name ?? "";
+          if (!out.has(flag)) out.set(flag, new Map());
+          out.get(flag)?.set(key, `:CONST:${constant}`);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Pure check: byte-identical inline text in 2+ subcommands should be lifted.
+   *  Returns null on OK, error string on violation. */
+  function checkNoIdenticalInlineDrift(flagMap: Map<string, Map<string, string>>): string | null {
+    const violations: string[] = [];
+    for (const [flag, perCmd] of flagMap) {
+      // Group by text — only inline literals (skip :CONST: entries)
+      const inlineEntries = [...perCmd.entries()].filter(([_, txt]) => !txt.startsWith(":CONST:"));
+      if (inlineEntries.length < 2) continue;
+      const byText = new Map<string, string[]>();
+      for (const [cmd, txt] of inlineEntries) {
+        const list = byText.get(txt) ?? [];
+        list.push(cmd);
+        byText.set(txt, list);
+      }
+      for (const [txt, cmds] of byText) {
+        if (cmds.length >= 2) {
+          violations.push(
+            `${flag}: byte-identical inline text "${txt.slice(0, 60)}..." in ${cmds.length} subcommands [${cmds.join(", ")}] — lift to cli-help.ts as a constant`
+          );
+        }
+      }
+    }
+    return violations.length === 0 ? null : violations.join("\n");
+  }
+
+  it("no flag has byte-identical inline help text in 2+ subcommands (should be lifted)", async () => {
+    const cliSrc = await readCli();
+    const flagMap = extractAllFlagHelp(cliSrc);
+    const err = checkNoIdenticalInlineDrift(flagMap);
+    expect(err, err ?? "").toBeNull();
+  });
+
+  it("NEGATIVE: checkNoIdenticalInlineDrift detects identical inline text", () => {
+    // Two subcommands with the SAME inline text → must fail
+    const flagMap = new Map([
+      [
+        "--cache-file",
+        new Map([
+          ["clear-cache", "Override the cache file location"],
+          ["serve", "Override the cache file location"]
+        ])
+      ]
+    ]);
+    expect(checkNoIdenticalInlineDrift(flagMap)).toMatch(/cache-file.*byte-identical/);
+  });
+
+  it("NEGATIVE: checkNoIdenticalInlineDrift allows different inline text (intentional context-specific)", () => {
+    // Different text across subcommands → OK (intentional drift)
+    const flagMap = new Map([
+      [
+        "--include-pdfs",
+        new Map([
+          ["index", "Index PDFs into FTS5"],
+          ["build-embeddings", "Embed PDF chunks"]
+        ])
+      ]
+    ]);
+    expect(checkNoIdenticalInlineDrift(flagMap)).toBeNull();
+  });
+
+  it("NEGATIVE: checkNoIdenticalInlineDrift allows constant references (already drift-proof)", () => {
+    // Constants don't count as inline drift
+    const flagMap = new Map([
+      [
+        "--watch",
+        new Map([
+          ["serve", ":CONST:WATCH_HELP"],
+          ["serve-http", ":CONST:WATCH_HELP"]
+        ])
+      ]
+    ]);
+    expect(checkNoIdenticalInlineDrift(flagMap)).toBeNull();
+  });
+});

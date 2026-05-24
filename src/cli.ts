@@ -274,7 +274,7 @@ export async function main(): Promise<void> {
     .command("clear-cache")
     .description("Delete the persistent-cache file for a given vault")
     .requiredOption("--vault <path>", "Vault whose cache to delete")
-    .option("--cache-file <path>", "Override the persistent-cache file location")
+    .option("--cache-file <path>", CACHE_FILE_HELP)
     .action(async (opts: { vault: string; cacheFile?: string }) => {
       const vault = new Vault(opts.vault, { persistentCache: true, cacheFile: opts.cacheFile });
       await vault.ensureExists();
@@ -290,7 +290,7 @@ export async function main(): Promise<void> {
     .command("clear-index")
     .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM sidecar) for a given vault")
     .requiredOption("--vault <path>", "Vault whose index to delete")
-    .option("--index-file <path>", "Override the FTS5 index file location")
+    .option("--index-file <path>", INDEX_FILE_HELP)
     .action(async (opts: { vault: string; indexFile?: string }) => {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
@@ -313,8 +313,8 @@ export async function main(): Promise<void> {
       "Cold-build (or refresh) the FTS5 search index for a vault. Useful before first --persistent-index use."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
-    .option("--index-file <path>", "Override the FTS5 index file location")
-    .option("--tokenize <mode>", "FTS5 tokenize mode: 'unicode61' (default) or 'trigram'")
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--tokenize <mode>", TOKENIZE_HELP)
     .option(
       "--include-pdfs",
       "v2.8.0 — also index PDFs into the FTS5 index. Off by default; PDF extraction is slower than markdown."
@@ -423,10 +423,7 @@ export async function main(): Promise<void> {
       "--late-chunk-context <chars>",
       "v2.15.0 — context-windowed embedding text (doc title + breadcrumb + neighbor-chunk tails of N chars). Default 0 (off). Typical 100-200 for +2-5 NDCG@10."
     )
-    .option(
-      "--quantize-embeddings <mode>",
-      "v2.17.0 — vector storage encoding. `f32` (default) is identical to v2.16- behavior. `int8` uses asymmetric scalar quantization (per-vector min + scale + int8 bytes) for ~4× smaller BLOBs at ~1-2% recall@10 cost. Switching modes triggers a full rebuild via the schema-mismatch path. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`."
-    )
+    .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(
       async (
         opts: {
@@ -560,10 +557,7 @@ export async function main(): Promise<void> {
       "Also index PDFs (FTS5 + embeddings). Off by default; opt-in because PDF extraction is slower."
     )
     .option("--skip-embeddings", "Skip the install-model + build-embeddings steps (only build FTS5)")
-    .option(
-      "--quantize-embeddings <mode>",
-      "v2.17.0 — vector storage encoding for the embed db (`f32` default, `int8` for ~4× smaller BLOBs). Same semantics as the `build-embeddings` flag."
-    )
+    .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .option(
       "--exclude-glob <pattern...>",
       "v3.6.2 (audit M-8) — privacy denylist (same semantics as `serve`). Paths matching any pattern are skipped during BOTH the FTS5 index build AND the embedding build so neither db contains private content at rest. Repeatable."

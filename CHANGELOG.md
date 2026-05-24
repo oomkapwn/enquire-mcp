@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.17] — 2026-05-24
+
+> **TL;DR:** Seventeenth v3.8.0 release candidate. **Multi-subcommand CLI drift audit** — closes the rc.11 RCA finding by extending the cli-parity invariant from serve↔serve-http to ALL subcommands. Sweep found 4 "lift candidates" (byte-identical inline text across 2+ subcommands) and 5 intentional context-specific drifts. Lifted: `--cache-file` (clear-cache), `--index-file` (clear-index + index), `--quantize-embeddings` (build-embeddings + setup), `--tokenize` (index). New invariant `tests/cli-parity.test.ts` rc.17 block fails CI if a flag has byte-identical inline text in 2+ subcommands (forces lift). Context-specific drifts (--include-pdfs, --json, --persistent-index, --exclude-glob/--read-paths build-embeddings) intentionally kept — invariant doesn't flag them. **872 tests** (+4 cli-parity invariants vs rc.16). Ships under `@rc` dist-tag.
+
+**Minor — seventeenth v3.8.0 release candidate.**
+
+### Fix multi-subcommand CLI drift (rc.11 RCA finding)
+
+**Background.** rc.11 lifted 9 CLI help strings from `serve` ↔ `serve-http` to `cli-help.ts` and added the cli-parity invariant for those two subcommands. RCA noted that `serve`, `serve-http`, `install-model`, `build-embeddings`, `eval`, `bench`, `clear-cache`, `clear-index`, `clear-embeddings`, `index`, `setup`, `doctor` are 12 distinct subcommands — and multi-subcommand drift (e.g. `--include-pdfs` having 4 different descriptions across 4 subcommands) was deferred to "Multi-subcommand CLI drift audit". rc.17 closes that finding.
+
+**Sweep methodology.** Python script extracted every `(subcommand, flag, text)` triple from `src/cli.ts`. For each flag appearing in 2+ subcommands, classified the texts:
+- **✓ Already via constant** (8 flags): served via `cli-help.ts` since rc.11
+- **✗ Byte-identical inline (lift candidates — 4 flags)**: same text duplicated across subcommands = drift surface
+- **✗ Drifted with intentional context (5 flags)**: text differs because operation differs per subcommand = OK as-is
+
+**Lifts applied** (4 flags, byte-identical lift to existing `cli-help.ts` constants):
+- `--cache-file` in `clear-cache` → `CACHE_FILE_HELP`
+- `--index-file` in `clear-index` and `index` → `INDEX_FILE_HELP`
+- `--quantize-embeddings` in `build-embeddings` and `setup` → `QUANTIZE_EMBEDDINGS_HELP`
+- `--tokenize` in `index` → `TOKENIZE_HELP`
+
+**Kept context-specific** (documented as intentional):
+- `--include-pdfs` across `index`, `build-embeddings`, `setup`: each subcommand does a DIFFERENT operation (index PDFs into FTS5 / embed PDFs / both). Text accurately describes per-subcommand semantics.
+- `--json` across `doctor` and `eval`: different default output formats (colored banner vs pretty table) — the "instead of X" clause is informative.
+- `--persistent-index` in `eval`: different semantics ("Open the FTS5 index for BM25 retrieval" vs serve's "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search") — eval is read-only.
+- `--exclude-glob` / `--read-paths` in `build-embeddings`: short-form ("Exclude paths matching glob (repeatable)") vs serve's full privacy explanation. Different audience: build-time vs runtime.
+- `--exclude-glob` / `--read-paths` in `index` and `setup`: "v3.6.2 (audit M-8)" tombstones explaining when the privacy semantics were added — historical attribution preserved.
+
+### New invariant — byte-identical inline drift detection
+
+Added `describe("CLI parity — no byte-identical inline help text across subcommands (v3.8.0-rc.17)")` block to `tests/cli-parity.test.ts`:
+
+1. **Positive test** — scans all subcommands, asserts no flag has byte-identical inline text in 2+ subcommands. Currently passes (after the 4 lifts above).
+
+2. **3 NEGATIVE control tests**:
+   - Detects identical inline text in 2 subcommands (must fail)
+   - Allows different inline text across subcommands (intentional context-specific OK)
+   - Allows constant references (already drift-proof, ignored)
+
+The invariant uses the META-INVARIANT-EXEMPT marker pattern from rc.16 — NEGATIVE controls live inside the same `describe` block as fixture-based tests, not in a separate file.
+
+**Forward defense.** Any future PR that adds a flag inline in 2+ subcommands with byte-identical text fails CI. The author must either (a) lift to `cli-help.ts`, or (b) deliberately diverge the text to make it context-specific.
+
+### Stats
+
+- **872 tests** (+4 cli-parity invariants vs rc.16: 1 positive + 3 NEGATIVE controls).
+- `cli.ts`: 4 inline literals → 4 constant references.
+- `cli-help.ts`: 13 constants (unchanged — reusing existing).
+- 5 surfaces re-bumped: README (×3), package.json, COMPARISON.md, llms.txt, AGENTS.md (868→872).
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **External audit** before `@latest` promotion (CLAUDE.md rule since v3.6.1).
+- **Tier C** (deferred): JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+---
+
 ## [3.8.0-rc.16] — 2026-05-24
 
 > **TL;DR:** Sixteenth v3.8.0 release candidate. **META-invariant**: structural enforcement of CLAUDE.md rule since v3.6.4 ("every invariant test must have a NEGATIVE control sibling"). The rule has been violated 6 times across the v3.6.x→v3.8.0 cascade (overclaim instances #2, #4, #6, #7, #10), each time rediscovered manually. rc.16 adds `tests/meta-invariant-coverage.test.ts` that scans every `tests/*-invariant.test.ts` file and fails if any lacks NEGATIVE control coverage. Recursion class now structurally impossible. Plus inline `META-INVARIANT-EXEMPT` exemption marker added to `k1-class-invariant.test.ts` (covered by 3 sibling files). **868 tests** (+6 META-invariant tests vs rc.15). Ships under `@rc` dist-tag.

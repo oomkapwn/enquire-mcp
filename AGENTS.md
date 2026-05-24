@@ -120,7 +120,10 @@ npm run test:coverage               # full suite + coverage-summary.json
 node scripts/check-per-file-coverage.mjs  # enforce per-file floors
 
 # State-driven audit (catches stale docs / drift)
-npm run check:oia                   # exit 1 on findings
+# IMPORTANT: Check 6 (coverage drift) reads coverage/coverage-summary.json.
+# On dirty dev trees with stale summary, it false-positives. Always run
+# coverage IMMEDIATELY BEFORE OIA locally (rule since v3.8.0-rc.18 L-OIA-1):
+npm run test:coverage && npm run check:oia   # local dev order
 node scripts/oia-walk.mjs --allow   # always exit 0 (override for documented deferrals)
 
 # Version consistency

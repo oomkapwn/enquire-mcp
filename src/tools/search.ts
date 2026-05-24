@@ -1603,6 +1603,19 @@ export async function searchHybrid(
   for (const f of fused) {
     const numSignals = Object.keys(f.per_signal).length;
     if (numSignals < minSignals) continue;
+    // v3.8.0-rc.18 L-HYB-1 (Cursor external audit on rc.15) — terminal
+    // defense-in-depth privacy filter. Per-ranker arms (BM25 ~1262,
+    // embeddings ~1019, TF-IDF via listMarkdown) already exclude private
+    // paths, but RRF fusion trusts ranker inputs. If a future ranker arm
+    // ships without the per-arm filter, this terminal guard prevents leakage
+    // into the final SearchHybridHit[]. Cheap (string-glob match) and closes
+    // the ε-class sibling gap noted by the audit.
+    let pathForFilter = f.id;
+    if (granularity === "block") {
+      const hashIdx = f.id.lastIndexOf("#");
+      if (hashIdx > 0) pathForFilter = f.id.slice(0, hashIdx);
+    }
+    if (vault.isExcluded(pathForFilter)) continue;
     // Snippet preference: BM25 > embeddings > TF-IDF (BM25 snippets bracket
     // the matched terms with «…», highest signal-to-noise).
     const bm = bm25Map.get(f.id);

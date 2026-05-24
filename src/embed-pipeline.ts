@@ -153,15 +153,40 @@ export async function embedSinglePdf(
   vault: Vault,
   embedder: Awaited<ReturnType<typeof loadEmbedder>>,
   entry: { relPath: string; absPath: string; mtimeMs: number },
-  opts: { lateChunkContext?: number } = {}
+  opts: {
+    lateChunkContext?: number;
+    /**
+     * v3.9.0-rc.1 — optional pre-extracted pages (e.g. from OCR). When
+     * provided, skips the cheap pdfjs text extraction step entirely
+     * and uses the supplied text directly. Each page needs `pageNumber`
+     * + `text`. Caller is responsible for the source — common case is
+     * `extractPdfWithOcr()` for image-only / scanned PDFs that pdfjs
+     * can't read text from but Tesseract can.
+     *
+     * Supplying this for a PDF that pdfjs CAN read text from is also
+     * valid (e.g. an explicit OCR re-pass for higher-quality
+     * embeddings); we don't second-guess the caller.
+     */
+    preExtractedPages?: ReadonlyArray<{ pageNumber: number; text: string }>;
+  } = {}
 ): Promise<{ chunks: number; rows: EmbedRow[] } | null> {
   const contextChars = opts.lateChunkContext ?? 0;
-  const { extractPdfText } = await import("./pdf.js");
-  const buf = await vault.readBinaryFile(entry.absPath);
-  const extracted = await extractPdfText(buf);
-  if (!extracted.hasText) return null; // image-only scan — caller drops rows
+  // v3.9.0-rc.1 — fast path: caller already extracted text (e.g. via
+  // OCR), skip the pdfjs read+extract. Empty pre-extracted list is
+  // treated the same as image-only (caller drops rows).
+  let pagesForEmbed: ReadonlyArray<{ pageNumber: number; text: string }>;
+  if (opts.preExtractedPages) {
+    if (opts.preExtractedPages.length === 0) return null;
+    pagesForEmbed = opts.preExtractedPages;
+  } else {
+    const { extractPdfText } = await import("./pdf.js");
+    const buf = await vault.readBinaryFile(entry.absPath);
+    const extracted = await extractPdfText(buf);
+    if (!extracted.hasText) return null; // image-only scan — caller drops rows
+    pagesForEmbed = extracted.pages;
+  }
   // Join pages with [page: N] markers so embeddings carry page-citation context.
-  const joined = extracted.pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
+  const joined = pagesForEmbed.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
   const chunks = chunkContent(joined);
   if (chunks.length === 0) return null;
   const docTitle = path.basename(entry.relPath, ".pdf");

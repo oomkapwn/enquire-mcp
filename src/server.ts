@@ -64,6 +64,22 @@ export interface ServeOptions {
    *  with --include-pdfs ran). Off by default; opt-in because PDF extraction
    *  is slower than markdown. */
   includePdfs?: boolean;
+  /** v3.9.0-rc.1 — also run Tesseract OCR on image-only / scanned PDFs that
+   *  pdfjs can't read text from, so the watcher's embed-db sync keeps
+   *  OCR'd PDFs in sync with edits during a long serve session. Requires
+   *  `--watch` + `--include-pdfs` + the `tesseract.js` / `@napi-rs/canvas`
+   *  optional dependencies. Off by default — OCR is slow (~1-2s per page
+   *  on M1 CPU; bounded by `--ocr-max-pages`, default 200). */
+  ocrPdfs?: boolean;
+  /** v3.9.0-rc.1 — Tesseract language pack for OCR-on-watch. Default `"eng"`.
+   *  Multi-lang via `+`, e.g. `"eng+rus"`. Languages must be pre-installed
+   *  via `enquire-mcp install-ocr-lang <code>` (no runtime download). */
+  ocrLangs?: string;
+  /** v3.9.0-rc.1 — page cap for OCR-on-watch runs. Default 200 (matches
+   *  `DEFAULT_OCR_MAX_PAGES`). Image-only PDFs exceeding this skip embed-sync
+   *  (FTS5 still updates from the pdfjs `extractPdfText` result, which
+   *  returns empty pages for image-only PDFs). */
+  ocrMaxPages?: string;
   /** v2.9.0 — enable BGE cross-encoder reranking on top of RRF in
    *  obsidian_search. Off by default; adds ~30-50ms per query at top-50. */
   enableReranker?: boolean;
@@ -241,6 +257,17 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // file exists; closed by startServer's shutdown handler.
   let watcherEmbedDb: EmbedDb | null = null;
   if (opts.watch) {
+    // v3.9.0-rc.1 — OCR-on-watch is wired here when both `--ocr-pdfs` and
+    // `--include-pdfs` are set. The constructor fail-loud check enforces
+    // the pairing (OCR without includePdfs is wasted CPU because PDF
+    // events would be filtered out before the OCR codepath runs). Note
+    // we DON'T pass `ocrPdfs` at this point — the watcher's constructor
+    // also requires an `embedDb`, which we wire below via attachEmbed()
+    // because the embed-db open happens AFTER watcher start so file
+    // events from boot-time edits aren't dropped. The ocrPdfs flag is
+    // therefore set during attachEmbed (passed as a synthetic constructor
+    // option once the embed handle is ready). Until attachEmbed runs,
+    // PDF events take the no-embed-db path (FTS5 reindex + skip).
     watcher = new VaultWatcher({ vault, ftsIndex, includePdfs: opts.includePdfs === true });
     await watcher.start();
     // v3.8.0-rc.2 R-7 — wire embed-db sync. Pre-3.8.0 the watcher only
@@ -281,6 +308,30 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         process.stderr.write(
           `enquire: watcher embed-db sync enabled (model=${model.alias}, dim=${model.dim}, quantization=${quantization}, late-chunk-context=${lateChunk})\n`
         );
+        // v3.9.0-rc.1 — wire OCR-on-watch AFTER attachEmbed. setOcrPdfs
+        // fails loud if includePdfs is off, which is the right posture:
+        // a user passing `--ocr-pdfs` without `--include-pdfs` would
+        // otherwise silently watch nothing. opts.ocrPdfs is the CLI flag
+        // value; opts.ocrLangs + opts.ocrMaxPages cascade through.
+        if (opts.ocrPdfs) {
+          try {
+            const maxPages =
+              opts.ocrMaxPages !== undefined ? parsePositiveInt(opts.ocrMaxPages, "--ocr-max-pages") : undefined;
+            watcher.setOcrPdfs(true, opts.ocrLangs, maxPages);
+            process.stderr.write(
+              `enquire: watcher OCR-on-watch enabled (langs=${opts.ocrLangs ?? "eng"}${
+                maxPages !== undefined ? `, max-pages=${maxPages}` : ""
+              })\n`
+            );
+          } catch (ocrErr) {
+            // Fail-loud-but-soft: the error is logged + the rest of
+            // watcher startup continues. This matches the existing
+            // attachEmbed catch above.
+            process.stderr.write(
+              `enquire: watcher OCR-on-watch DISABLED — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
+            );
+          }
+        }
       }
     } catch (err) {
       process.stderr.write(

@@ -74,6 +74,37 @@ export interface WatcherOptions {
    * vector space and search recall would drift over the session.
    */
   lateChunkContext?: number;
+  /**
+   * v3.9.0-rc.1 — when true, the watcher runs Tesseract OCR on
+   * image-only / scanned PDFs that pdfjs can't extract text from, then
+   * pipes the OCR-derived text through the standard embed pipeline so
+   * the embed-db keeps OCR'd PDFs in sync with edits during a long
+   * serve session. Off by default (OCR is slow: ~1-2s per page on M1
+   * CPU; a 100-page paper takes minutes and blocks the event loop).
+   *
+   * Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies
+   * + the requested language trained-data files pre-installed via
+   * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
+   * enforcement). If those aren't available, OCR fails-soft — the
+   * watcher still updates FTS5 + clears any stale embed-db rows.
+   *
+   * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
+   * for users with scanned-document vaults that change during sessions.
+   */
+  ocrPdfs?: boolean;
+  /**
+   * v3.9.0-rc.1 — language pack(s) passed to `extractPdfWithOcr`.
+   * Default `'eng'`. Multi-lang via `'+'`, e.g. `'eng+rus'`. See
+   * `src/ocr.ts` for the full language model.
+   */
+  ocrLangs?: string;
+  /**
+   * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
+   * (200) — image-only PDFs that exceed this won't be embed-sync'd
+   * (the watcher logs the skip + still updates FTS5). Operators can
+   * lift the cap when they trust their PDF set.
+   */
+  ocrMaxPages?: number;
 }
 
 export class VaultWatcher {
@@ -89,6 +120,13 @@ export class VaultWatcher {
   private embedDb: EmbedDb | null;
   private embedder: Awaited<ReturnType<typeof loadEmbedder>> | null;
   private lateChunkContext: number;
+  // v3.9.0-rc.1 — OCR-on-watch options. Mutable so server.ts can wire
+  // them via setOcrPdfs() AFTER attachEmbed() runs — the embed-db opens
+  // late, but the watcher boots early so file events from boot-time
+  // edits are captured.
+  private ocrPdfs: boolean;
+  private ocrLangs: string;
+  private ocrMaxPages: number | undefined;
   private closed = false;
 
   constructor(opts: WatcherOptions) {
@@ -99,11 +137,46 @@ export class VaultWatcher {
     this.embedDb = opts.embedDb ?? null;
     this.embedder = opts.embedder ?? null;
     this.lateChunkContext = opts.lateChunkContext ?? 0;
+    // v3.9.0-rc.1 — OCR-on-watch wiring. Constructor accepts the flags
+    // but defers validation: when the watcher is built BEFORE attachEmbed
+    // runs (the normal startup order in server.ts), ocrPdfs would fail
+    // the embedDb-required check. Instead, the PDF event handler checks
+    // `ocrPdfs && embedDb && includePdfs` at runtime and skips the OCR
+    // codepath silently if any leg is missing.
+    this.ocrPdfs = opts.ocrPdfs ?? false;
+    this.ocrLangs = opts.ocrLangs ?? "eng";
+    this.ocrMaxPages = opts.ocrMaxPages;
     // v3.8.0-rc.2 R-7 — fail loud if embedDb is wired without embedder.
     // Pre-flight check vs silently no-op'ing the embed sync.
     if (this.embedDb && !this.embedder) {
       throw new Error("VaultWatcher: embedDb wired without embedder — both must be set together");
     }
+  }
+
+  /**
+   * v3.9.0-rc.1 — enable / configure OCR-on-watch after construction.
+   * Called by server.ts after attachEmbed() runs (since OCR fallback
+   * only makes sense once embed-db is wired). Fails loud if includePdfs
+   * is off — without it, PDF events are filtered before the OCR
+   * codepath runs.
+   *
+   * @param enabled - When true, image-only PDFs that pdfjs can't read
+   *   trigger a Tesseract OCR pass; the OCR-derived text feeds the
+   *   normal embed pipeline via embedSinglePdf's preExtractedPages path.
+   * @param langs - Tesseract language pack (default "eng"). Multi-lang
+   *   via `+`, e.g. "eng+rus".
+   * @param maxPages - Page cap for OCR runs. Default 200 (DEFAULT_OCR_MAX_PAGES).
+   */
+  setOcrPdfs(enabled: boolean, langs?: string, maxPages?: number): void {
+    if (enabled && !this.includePdfs) {
+      throw new Error("VaultWatcher.setOcrPdfs: enabling OCR requires includePdfs=true at construction time");
+    }
+    if (enabled && !this.embedDb) {
+      throw new Error("VaultWatcher.setOcrPdfs: enabling OCR requires embedDb (call attachEmbed first)");
+    }
+    this.ocrPdfs = enabled;
+    if (langs !== undefined) this.ocrLangs = langs;
+    if (maxPages !== undefined) this.ocrMaxPages = maxPages;
   }
 
   /**
@@ -252,23 +325,71 @@ export class VaultWatcher {
         // because they have no useful embedding content (same v3.7.6 H-4
         // staleness fix as bulk sync). Fail-soft: embed-db errors don't
         // fail the watcher event.
+        //
+        // v3.9.0-rc.1 — when `ocrPdfs` is on AND the cheap pdfjs path
+        // returns hasText=false, fall back to Tesseract OCR + feed
+        // OCR-derived pages through embedSinglePdf's new preExtractedPages
+        // mode. Without this, scanned PDFs that change during a serve
+        // session lose their embed rows + slowly degrade hybrid recall
+        // until the next manual `enquire-mcp build-embeddings` run.
         let pdfEmbedNote = "";
         if (this.embedDb && this.embedder) {
           try {
+            let preExtractedPages: ReadonlyArray<{ pageNumber: number; text: string }> | undefined;
+            // OCR fallback path. The cheap pdfjs result already lives in
+            // `result` (from the FTS5 reindex above); if it's image-only,
+            // we run Tesseract + use the OCR pages directly.
+            if (this.ocrPdfs && !result.hasText) {
+              try {
+                const { extractPdfWithOcr } = await import("./ocr.js");
+                const ocrResult = await extractPdfWithOcr(buf, {
+                  langs: this.ocrLangs,
+                  ...(this.ocrMaxPages !== undefined ? { maxPages: this.ocrMaxPages } : {})
+                });
+                // Filter empty pages so we don't emit `[page: N]\n` blocks
+                // that the chunker would otherwise group with surrounding
+                // text. (Tesseract returns isEmpty=true for blank pages.)
+                preExtractedPages = ocrResult.pages
+                  .filter((p) => !p.isEmpty)
+                  .map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
+                if (preExtractedPages.length === 0) {
+                  // OCR returned zero pages with text — treat as image-only
+                  // (drop rows). Don't pass empty preExtractedPages; that
+                  // would short-circuit to null on the embed-pipeline side.
+                  preExtractedPages = undefined;
+                }
+              } catch (ocrErr) {
+                // OCR fails-soft. Log, then fall through to the default
+                // path (which will treat the PDF as image-only and drop
+                // stale rows). Common failure: tesseract.js / canvas not
+                // installed, or language file missing.
+                if (!this.silent) {
+                  process.stderr.write(
+                    `enquire: watcher PDF OCR failed for ${relPath} — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
+                  );
+                }
+              }
+            }
             const { embedSinglePdf } = await import("./embed-pipeline.js");
             const pdfResult = await embedSinglePdf(
               this.vault,
               this.embedder,
               { relPath, absPath, mtimeMs: stat.mtimeMs },
-              { lateChunkContext: this.lateChunkContext }
+              {
+                lateChunkContext: this.lateChunkContext,
+                ...(preExtractedPages ? { preExtractedPages } : {})
+              }
             );
             if (pdfResult === null) {
               // Image-only or zero chunks — drop any stale embed-db rows.
               this.embedDb.deleteNote(relPath);
-              pdfEmbedNote = " + embed-db cleared (image-only or empty)";
+              pdfEmbedNote = preExtractedPages
+                ? " + embed-db cleared (OCR also empty)"
+                : " + embed-db cleared (image-only or empty)";
             } else {
               this.embedDb.upsertNote(relPath, stat.mtimeMs, pdfResult.rows, "pdf");
-              pdfEmbedNote = ` + embed-db upserted (${pdfResult.chunks} chunks, kind=pdf)`;
+              const sourceLabel = preExtractedPages ? "OCR" : "pdfjs";
+              pdfEmbedNote = ` + embed-db upserted (${pdfResult.chunks} chunks, kind=pdf, src=${sourceLabel})`;
             }
           } catch (err) {
             if (!this.silent) {

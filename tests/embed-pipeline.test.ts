@@ -234,4 +234,57 @@ describe("embedSinglePdf", () => {
     );
     expect(result).not.toBeNull();
   });
+
+  // v3.9.0-rc.1 — preExtractedPages bypasses the pdfjs extraction path.
+  // Verifies the OCR-feed branch end-to-end: caller supplies pages
+  // (typically from extractPdfWithOcr); embedSinglePdf chunks + embeds
+  // without ever touching the bytes on disk.
+  it("uses preExtractedPages and skips pdfjs extraction (OCR-feed path, v3.9.0)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    // The on-disk PDF is intentionally a TEXT file that pdfjs would
+    // reject — we're proving the pre-extracted shortcut bypasses
+    // disk read entirely. If the code still falls into pdfjs, the
+    // call would throw on the malformed PDF buffer.
+    const filePath = path.join(root, "ocr-source.pdf");
+    await fs.writeFile(filePath, "not actually a real PDF — should be bypassed by preExtractedPages");
+    const stat = await fs.stat(filePath);
+    const result = await embedSinglePdf(
+      v,
+      mockEmbedder,
+      { relPath: "ocr-source.pdf", absPath: filePath, mtimeMs: stat.mtimeMs },
+      {
+        preExtractedPages: [
+          { pageNumber: 1, text: "OCR'd page one with enough content to chunk meaningfully." },
+          { pageNumber: 2, text: "OCR'd page two with continuation of the OCR-derived prose." }
+        ]
+      }
+    );
+    expect(result).not.toBeNull();
+    if (result === null) throw new Error("unreachable — already asserted not-null");
+    expect(result.chunks).toBeGreaterThanOrEqual(1);
+    // The [page: N] markers in the joined input should appear in the
+    // chunk previews — proves the OCR pages went through the same
+    // chunking pipeline as the pdfjs path.
+    const previewBlob = result.rows.map((r) => r.textPreview).join("\n");
+    expect(previewBlob).toMatch(/\[page: 1\]/);
+    expect(previewBlob).toMatch(/\[page: 2\]/);
+  });
+
+  // v3.9.0-rc.1 NEGATIVE control — empty preExtractedPages returns null
+  // (caller drops rows; same semantics as pdfjs hasText=false).
+  it("(NEGATIVE control) — preExtractedPages with zero entries returns null", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const filePath = path.join(root, "empty-ocr.pdf");
+    await fs.writeFile(filePath, "irrelevant — preExtractedPages [] short-circuits");
+    const stat = await fs.stat(filePath);
+    const result = await embedSinglePdf(
+      v,
+      mockEmbedder,
+      { relPath: "empty-ocr.pdf", absPath: filePath, mtimeMs: stat.mtimeMs },
+      { preExtractedPages: [] }
+    );
+    expect(result).toBeNull();
+  });
 });

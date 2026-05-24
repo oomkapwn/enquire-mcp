@@ -100,6 +100,18 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     .option(
       "--no-hnsw-persist",
       "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
+    )
+    .option(
+      "--ocr-pdfs",
+      "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the requested language pack pre-installed via `enquire-mcp install-ocr-lang <code>` (no runtime download per the v3.7.16 P1-1 offline-only enforcement)."
+    )
+    .option(
+      "--ocr-langs <langs>",
+      "v3.9.0-rc.1 — Tesseract language pack for --ocr-pdfs. Default `eng`. Multi-language via `+` (e.g. `eng+rus` for English+Russian mixed documents). Each language file (`<lang>.traineddata`, ~10 MB) must be pre-installed in the Tesseract cache via `enquire-mcp install-ocr-lang <code>` — runtime CDN download is blocked per the offline-only posture documented in SECURITY.md."
+    )
+    .option(
+      "--ocr-max-pages <n>",
+      "v3.9.0-rc.1 — page cap for OCR runs invoked by --ocr-pdfs. Default 200 (matches DEFAULT_OCR_MAX_PAGES). Image-only PDFs exceeding this skip the OCR pass entirely (FTS5 still reindexes from pdfjs's empty pages; embed-db rows are cleared). Lift the cap (or pass a large value) for trusted PDF sets; lower it on shared deployments to bound per-event CPU."
     );
 }
 

@@ -22,7 +22,7 @@ enquire-mcp serve-http \
   --cors-origin https://chatgpt.com
 ```
 
-> **v3.7.6 audit fix**: previously this example showed `--enable-reranker`, `--use-hnsw`, and `--include-pdfs` — none of which `serve-http` currently accepts. Those flags are `serve`-only as of v3.7.6. To run a remote-MCP endpoint with reranker/HNSW/PDFs, either (a) use `serve` over stdio (recommended for local agents), or (b) wait for v3.8.0 which adds full `serve-http` flag parity. The example above shows only the flags `serve-http` actually accepts. See [`docs/http-transport.md`](../docs/http-transport.md) for the supported flag matrix.
+> **v3.7.6 audit fix + v3.8.0 update**: Pre-v3.7.6 this example showed `--enable-reranker`, `--use-hnsw`, and `--include-pdfs`. As of v3.8.0 (R-3 closure, rc.1 `addAdvancedRetrievalOptions` helper), `serve-http` now accepts the same 8 advanced retrieval flags as `serve`. The example above is the minimal config; for the full hybrid stack add `--enable-reranker --use-hnsw --include-pdfs` (same as `serve`). See [`docs/http-transport.md`](../docs/http-transport.md) for the full supported flag matrix.
 
 Set the env var first: `export ENQUIRE_TOKEN=$(cat ~/.config/enquire/token)`.
 

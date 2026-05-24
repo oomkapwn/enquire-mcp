@@ -182,7 +182,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
 | License | MIT, free | proprietary, paid | varies |
 
-<sub>Comparison based on each project's public capabilities as of v3.7.0 (2026-05-15). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
+<sub>Comparison based on each project's public capabilities as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
 
 > Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 

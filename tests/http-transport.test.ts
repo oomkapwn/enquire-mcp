@@ -26,6 +26,7 @@ import {
   parseMaxFileBytes,
   RateLimiter,
   readJsonBody,
+  shutdownHttpServer,
   startHttpServer,
   verifyBearer
 } from "../src/http-transport.js";
@@ -120,6 +121,127 @@ describe("SessionRegistry (v2.14.0)", () => {
     const r = createSessionRegistry(60_000);
     expect(r.sweepIdle()).toBe(0);
     expect(r.sweepIdle()).toBe(0);
+  });
+
+  // v3.8.7 P2-10 — in-flight session must survive idle sweep even when
+  // lastActivityMs is past the cutoff. Closing the transport while a
+  // handler is awaiting handleRequest produces broken responses.
+  it("sweepIdle skips in-flight sessions even if lastActivityMs is past cutoff", () => {
+    const r = createSessionRegistry(60_000);
+    const stub = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} }
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    // Stale BUT in-flight.
+    r.sessions.set("busy", { ...stub, lastActivityMs: Date.now() - 90_000, inFlight: 1, closing: false });
+    // Stale AND idle.
+    r.sessions.set("idle", { ...stub, lastActivityMs: Date.now() - 90_000, inFlight: 0, closing: false });
+    expect(r.sweepIdle()).toBe(1);
+    expect(r.sessions.has("busy")).toBe(true);
+    expect(r.sessions.has("idle")).toBe(false);
+  });
+
+  // v3.8.7 P2-10 — NEGATIVE control: if we DIDN'T track inFlight, sweep
+  // would evict a busy session (the original v2.14.0 behavior).
+  it("(NEGATIVE control) — without inFlight tracking, sweep would evict busy entries", () => {
+    const r = createSessionRegistry(60_000);
+    const stub = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} }
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    // Simulate the pre-3.8.7 shape: lastActivityMs past cutoff, inFlight=0.
+    r.sessions.set("busy-but-untracked", {
+      ...stub,
+      lastActivityMs: Date.now() - 90_000,
+      inFlight: 0,
+      closing: false
+    });
+    // Sweep should evict (inFlight=0 means "not tracked as busy").
+    expect(r.sweepIdle()).toBe(1);
+    expect(r.sessions.has("busy-but-untracked")).toBe(false);
+  });
+
+  // v3.8.7 P2-10 — closing entries are skipped by sweep (idempotency
+  // guard so a closeAll-in-progress entry isn't double-closed).
+  it("sweepIdle skips already-closing sessions", () => {
+    const r = createSessionRegistry(60_000);
+    const stub = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} }
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    r.sessions.set("dying", {
+      ...stub,
+      lastActivityMs: Date.now() - 90_000,
+      inFlight: 0,
+      closing: true
+    });
+    expect(r.sweepIdle()).toBe(0);
+    // Entry remains in the map — the caller that set closing=true is
+    // responsible for the actual delete.
+    expect(r.sessions.has("dying")).toBe(true);
+  });
+
+  // v3.8.7 P2-11 — closeAll drains the registry, closing every transport
+  // + server pair. Returns the count.
+  it("closeAll drains all sessions + invokes transport.close + server.close", async () => {
+    const r = createSessionRegistry(60_000);
+    let transportClosed = 0;
+    let serverClosed = 0;
+    const makeStub = () =>
+      ({
+        transport: {
+          close: async () => {
+            transportClosed += 1;
+          }
+        },
+        server: {
+          close: async () => {
+            serverClosed += 1;
+          }
+        }
+      }) as unknown as Parameters<typeof r.sessions.set>[1];
+    r.sessions.set("a", { ...makeStub(), lastActivityMs: Date.now(), inFlight: 0, closing: false });
+    r.sessions.set("b", { ...makeStub(), lastActivityMs: Date.now(), inFlight: 0, closing: false });
+    expect(r.size()).toBe(2);
+    const closed = await r.closeAll(1000);
+    expect(closed).toBe(2);
+    expect(transportClosed).toBe(2);
+    expect(serverClosed).toBe(2);
+    expect(r.size()).toBe(0);
+  });
+
+  // v3.8.7 P2-11 — closeAll waits for in-flight handlers up to timeoutMs
+  // then force-closes. We simulate a slow in-flight by counting down via
+  // setTimeout (no real handler available in this unit test).
+  it("closeAll waits for in-flight to drain (bounded by timeoutMs)", async () => {
+    const r = createSessionRegistry(60_000);
+    const session = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} },
+      lastActivityMs: Date.now(),
+      inFlight: 1,
+      closing: false
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    r.sessions.set("slow", session);
+    // Drop inFlight to 0 after a short delay → closeAll should return
+    // soon after that.
+    setTimeout(() => {
+      (session as unknown as { inFlight: number }).inFlight = 0;
+    }, 50);
+    const start = Date.now();
+    const closed = await r.closeAll(1000);
+    const elapsed = Date.now() - start;
+    expect(closed).toBe(1);
+    // Finished close-to but not at the timeoutMs cap — confirms we
+    // observed the drain instead of waiting the full 1s.
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  // v3.8.7 P2-10 — pendingInits counter exposed so the cap-check can
+  // include it; starts at 0, never negative.
+  it("pendingInits starts at 0", () => {
+    const r = createSessionRegistry(60_000);
+    expect(r.pendingInits).toBe(0);
   });
 });
 
@@ -900,6 +1022,129 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       expect(r.status).toBe(400);
       const body = (await r.json()) as { error: { code: number } };
       expect(body.error.code).toBe(-32700);
+    } finally {
+      await s.close();
+    }
+  });
+
+  // v3.8.7 P2-11 — shutdownHttpServer drains the registry. After the
+  // call returns, a subsequent fetch to the bound address should fail
+  // (TCP listener closed).
+  it("shutdownHttpServer drains stateful sessions + closes the TCP listener", async () => {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      healthPath: "/health",
+      rateLimitPerMinute: 0,
+      stateful: true,
+      maxSessions: 100,
+      installSignalHandlers: false
+    });
+    const addr = httpServer.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+    // Open a stateful session.
+    const init = await fetch(`${url}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${TOKEN}`
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "0" } }
+      })
+    });
+    const sid = init.headers.get("Mcp-Session-Id");
+    expect(sid).toBeTruthy();
+    await init.text();
+    // Now drain. After this returns the port is free + session is gone.
+    await shutdownHttpServer(httpServer);
+    // Trying to reach the dead port should error out (ECONNREFUSED) —
+    // we just check the fetch rejects rather than asserting on the
+    // exact code, since Node's error shape varies across versions.
+    let failed = false;
+    try {
+      await fetch(`${url}/health`);
+    } catch {
+      failed = true;
+    }
+    expect(failed).toBe(true);
+  });
+
+  // v3.8.7 P2-11 — shutdownHttpServer on a stateless server is also a
+  // valid path: no registry to drain, just close the TCP listener.
+  it("shutdownHttpServer works on stateless servers (no registry to drain)", async () => {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      rateLimitPerMinute: 0,
+      stateful: false,
+      installSignalHandlers: false
+    });
+    // Should not throw and should leave the listener closed.
+    await shutdownHttpServer(httpServer);
+    const addr = httpServer.address();
+    // After close, .address() returns null on a server that has been closed.
+    expect(addr).toBeNull();
+  });
+
+  // v3.8.7 P2-11 — second call to shutdownHttpServer is a no-op + safe.
+  it("shutdownHttpServer is idempotent — second call is a safe no-op", async () => {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      stateful: true,
+      installSignalHandlers: false
+    });
+    await shutdownHttpServer(httpServer);
+    // Second call should not throw.
+    await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
+  });
+
+  // v3.8.7 P2-10 — fire many concurrent initialize POSTs at a low-cap
+  // server. Without the pendingInits guard, several would all pass the
+  // size() check and overshoot. With it, only `maxSessions` succeed +
+  // the rest get 503.
+  it("concurrent initialize POSTs cannot exceed maxSessions (TOCTOU defense)", async () => {
+    const s = await spawnStateful({ maxSessions: 2 });
+    try {
+      // Fire 6 concurrent initializes at a cap of 2.
+      const promises = Array.from({ length: 6 }, (_, i) =>
+        fetch(`${s.url}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${TOKEN}`
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: i + 1,
+            method: "initialize",
+            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: `c${i}`, version: "0" } }
+          })
+        })
+      );
+      const results = await Promise.all(promises);
+      // Drain bodies so connections close.
+      await Promise.all(results.map((r) => r.text().catch(() => "")));
+      const successful = results.filter((r) => r.status === 200);
+      const rejected = results.filter((r) => r.status === 503);
+      // CAP DEFENSE — at most `maxSessions` (2) should succeed; the
+      // others must be 503'd. Without pendingInits, this could be 6/6.
+      expect(successful.length).toBeLessThanOrEqual(2);
+      expect(successful.length + rejected.length).toBe(6);
     } finally {
       await s.close();
     }

@@ -541,6 +541,35 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 
+  // v3.9.0-rc.1 — setOcrPdfs validation: requires includePdfs.
+  // Without --include-pdfs the watcher filters out PDF events before the
+  // OCR codepath; enabling OCR in that state would be silently broken.
+  it("setOcrPdfs(true) throws when includePdfs was not enabled at construction", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true /* includePdfs omitted */ });
+    expect(() => w.setOcrPdfs(true)).toThrow(/includePdfs=true/);
+  });
+
+  // v3.9.0-rc.1 — setOcrPdfs validation: requires embedDb (via attachEmbed).
+  // OCR fallback only makes sense if the embed-db path runs; without it,
+  // OCR-derived text wouldn't reach storage.
+  it("setOcrPdfs(true) throws when embedDb has not been attached", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true, includePdfs: true });
+    expect(() => w.setOcrPdfs(true)).toThrow(/embedDb/);
+  });
+
+  // v3.9.0-rc.1 NEGATIVE control: setOcrPdfs(false) is always safe to
+  // call. Proves we're not over-restricting the API.
+  it("(NEGATIVE control) — setOcrPdfs(false) is a no-op even without includePdfs/embedDb", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    expect(() => w.setOcrPdfs(false)).not.toThrow();
+  });
+
   it("survives an add event for a file that disappears before stat (skip branch)", async () => {
     // Race: chokidar fires `add`, but the file is unlinked before the
     // watcher's stat() runs. The handle() try/catch should swallow it

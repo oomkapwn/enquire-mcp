@@ -89,8 +89,11 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
   });
 
   // Negative-control: if the helper itself loses a flag, both subcommands
-  // lose it — this asserts that the helper still defines all 8.
-  it("addAdvancedRetrievalOptions helper defines all 8 retrieval flags", async () => {
+  // lose it — this asserts that the helper still defines all retrieval
+  // flags. v3.9.0-rc.1 grew the helper from 8 to 11 (added --ocr-pdfs,
+  // --ocr-langs, --ocr-max-pages — the OCR-on-watch options that both
+  // serve and serve-http share). Sanity cap raised accordingly.
+  it("addAdvancedRetrievalOptions helper defines all retrieval flags (11 as of v3.9.0-rc.1)", async () => {
     const cliSrc = await readCli();
     const helperMatch = /function addAdvancedRetrievalOptions\([\s\S]*?^}/m.exec(cliSrc);
     expect(helperMatch, "addAdvancedRetrievalOptions function must exist in src/cli.ts").not.toBeNull();
@@ -103,10 +106,10 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     for (const flag of REQUIRED_RETRIEVAL_FLAGS) {
       expect(helperFlags.has(flag), `addAdvancedRetrievalOptions missing ${flag}`).toBe(true);
     }
-    // Sanity: helper should not have stray extra flags beyond the documented 8.
+    // Sanity: helper should not have stray extra flags beyond the documented set.
     // (Catches accidental scope creep — if helper grows beyond retrieval flags,
     // explicit rename / refactor is required.)
-    expect(helperFlags.size, `addAdvancedRetrievalOptions has ${helperFlags.size} flags; expected exactly 8`).toBe(8);
+    expect(helperFlags.size, `addAdvancedRetrievalOptions has ${helperFlags.size} flags; expected exactly 11`).toBe(11);
   });
 });
 

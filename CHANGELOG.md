@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.1] — 2026-05-25
+
+> **TL;DR:** **OCR'd PDF watcher embed-sync — closes the last deferred v3.8.0 backlog item.** When `--watch` + `--include-pdfs` + `--ocr-pdfs` are all set, the watcher now runs Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, then pipes the OCR-derived text through `embedSinglePdf`'s new `preExtractedPages` path so the embed-db stays in sync with edits during a long serve session. Pre-3.9.0 the watcher cleared embed rows for image-only PDFs on change — search recall slowly degraded across sessions for scanned-document vaults. New `VaultWatcher.setOcrPdfs(enabled, langs?, maxPages?)` method wires the OCR fallback after `attachEmbed()` runs. **+5 tests (4 POSITIVE + 1 NEGATIVE control); 898 unit tests total. No API breaks. RC.1 — HNSW in-memory live update deferred to rc.2.**
+
+**Minor — architectural watcher feature.**
+
+### What changes
+
+`src/watcher.ts` — new OCR-on-watch path in the PDF event handler:
+
+```ts
+// PDF change event fires
+const result = await extractPdfText(buf); // cheap pdfjs path
+this.ftsIndex.reindexPdfFile(relPath, mtimeMs, result.pages); // FTS5 update
+
+if (this.embedDb && this.embedder) {
+  let preExtractedPages;
+  if (this.ocrPdfs && !result.hasText) {
+    // NEW v3.9.0-rc.1: image-only PDF + OCR enabled → run Tesseract
+    const ocrResult = await extractPdfWithOcr(buf, { langs, maxPages });
+    preExtractedPages = ocrResult.pages.filter((p) => !p.isEmpty)
+      .map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
+  }
+  const pdfResult = await embedSinglePdf(vault, embedder, fileMeta, {
+    lateChunkContext,
+    ...(preExtractedPages ? { preExtractedPages } : {})
+  });
+  // embed-db upsert as usual; source label in log says src=OCR or src=pdfjs
+}
+```
+
+`src/embed-pipeline.ts` — `embedSinglePdf` gains an optional `preExtractedPages` parameter. When supplied, the pdfjs read + extract step is skipped; the supplied pages feed the existing chunk + embed pipeline directly. Same `[page: N]` markers, same chunking logic — only the text source changes. Empty array → returns null (caller drops rows, parity with pdfjs `hasText=false`).
+
+`src/cli.ts` + `src/server.ts` — three new CLI flags lifted into `addAdvancedRetrievalOptions` (so both `serve` and `serve-http` get them):
+
+- `--ocr-pdfs` — enable the OCR fallback. Requires `--watch` + `--include-pdfs`.
+- `--ocr-langs <langs>` — Tesseract language pack (default `eng`). Multi-lang via `+`, e.g. `eng+rus`.
+- `--ocr-max-pages <n>` — per-event OCR page cap (default `DEFAULT_OCR_MAX_PAGES = 200`).
+
+### Why the wiring is two-stage
+
+The watcher constructs BEFORE `attachEmbed()` runs in `startServer` (so file events from boot-time edits are captured). OCR validation can't happen at construction time because embed-db isn't open yet. Instead:
+
+1. Watcher constructor accepts `ocrPdfs` flag but defers validation.
+2. PDF event handler checks `ocrPdfs && embedDb && includePdfs` at runtime — skips OCR silently if any leg is missing.
+3. `setOcrPdfs(enabled, langs?, maxPages?)` is the explicit late-binding API. server.ts calls it AFTER `attachEmbed` succeeds; throws loud if `includePdfs=false` or `embedDb` is null (caught + logged + watcher continues without OCR).
+
+This matches the v3.8.0-rc.2 R-7 pattern for `attachEmbed` itself: the watcher boots minimal, gets feature-attachments later, gracefully degrades when a leg is missing.
+
+### Fail-soft posture
+
+OCR can fail for legitimate reasons: optional deps not installed (`tesseract.js` / `@napi-rs/canvas`), language pack not pre-downloaded, page count > maxPages cap, encrypted PDF. All of these:
+- Log a single stderr line (when not in silent mode)
+- Continue with the default pdfjs path (which will return empty pages for image-only PDFs and drop the embed rows)
+- FTS5 reindex still runs (it doesn't depend on OCR)
+
+This matches the existing v3.8.0-rc.3 fail-soft posture for the non-OCR PDF embed sync.
+
+### Tests added
+
+`tests/embed-pipeline.test.ts` — 2 new tests for the `preExtractedPages` branch:
+- POSITIVE: supplies 2 synthetic pages; asserts chunks + `[page: N]` markers in preview blob; verifies pdfjs is bypassed (the on-disk PDF is intentionally a TEXT file that pdfjs would reject — proves the bypass works).
+- NEGATIVE control: empty `preExtractedPages: []` returns null (parity with `hasText=false`).
+
+`tests/watcher.test.ts` — 3 new tests for `setOcrPdfs`:
+- Throws when `includePdfs=false` (validation)
+- Throws when `embedDb` not attached (validation)
+- NEGATIVE control: `setOcrPdfs(false)` is a no-op regardless of other state
+
+End-to-end OCR with real Tesseract is gated by env var (TODO rc.2 — same pattern as `ENQUIRE_LOAD_HYDE_E2E`).
+
+### What's in scope vs deferred for v3.9.0
+
+- ✅ **rc.1 (this patch)**: OCR'd PDF watcher embed-sync.
+- 🔜 **rc.2**: HNSW in-memory live update (when an embed-db row changes, mark-delete the old HNSW labels + add new ones with `replaceDeleted=true`, persist on a debounced timer). Requires extending `HnswIndex` interface + careful concurrency handling with serve-time search queries.
+- 🔜 **rc.3+ → stable**: HNSW filter-during-search architectural (the longest-deferred item — currently we post-filter HNSW top-K against the privacy/exclude list, which can leave the response under-filled. Filter-during-search would push the filter into the HNSW graph traversal itself).
+
+### Files changed
+
+- `src/watcher.ts` — `ocrPdfs/ocrLangs/ocrMaxPages` options + `setOcrPdfs` method + PDF event handler OCR branch (+90 lines)
+- `src/embed-pipeline.ts` — `preExtractedPages` option in `embedSinglePdf` (+20 lines)
+- `src/server.ts` — `ServeOptions` extensions + `setOcrPdfs` wiring after `attachEmbed` (+30 lines)
+- `src/cli.ts` — 3 new `addAdvancedRetrievalOptions` flags (+15 lines)
+- `tests/embed-pipeline.test.ts` — 2 new tests (+50 lines)
+- `tests/watcher.test.ts` — 3 new tests (+30 lines)
+- `tests/cli-parity.test.ts` — sanity-cap bumped 8 → 11 to match grown helper
+- `docs/api.md` — Channels paragraph acknowledges v3.9.0-rc.1
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 893 → 898
+- version bump 3.8.8 → 3.9.0-rc.1 (7 surfaces)
+
+---
+
 ## [3.8.8] — 2026-05-25
 
 > **TL;DR:** **META structural-defense scope completeness audit — closes the recurring "recursion-pair shape" class (6 documented instances since v3.6.x).** New `scripts/scope-completeness-audit.mjs` enumerates every numeric-claim defense's scope (which files it covers + which it exempts) and sweeps the entire repo for matching patterns; any file containing a tracked pattern that's NOT in the defense's scope or exempts list fails CI. Wired into both `tests/scope-completeness-invariant.test.ts` (change-driven gate) and `scripts/oia-walk.mjs` Check 8 (state-driven sweep). Discovered + fixed one immediate gap: STABILITY.md "44 tools" reference was already covered by `docs-consistency.test.ts` line 183 but missing from the audit manifest. **+5 tests (3 POSITIVE + 2 NEGATIVE controls); 893 unit tests total.**

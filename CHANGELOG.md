@@ -2,6 +2,86 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.4] — 2026-05-24
+
+> **TL;DR:** **OIA Check 7 scope expansion (overclaim instance #12) + 2 inline fixes (B-1, B-2).** v3.8.3 shipped OIA Check 7 (extend stale-currency detection to docs/) explicitly claiming "Same recursion class as M-1/M-2/M-REG-1 (structural defense built but scope too narrow)" and "Closes the methodology gap." Post-v3.8.3 sweep found **the same recursion pattern inside the v3.8.3 fix itself**: Check 7 scope was CLAUDE.md + docs/ but **omitted** README.md, AGENTS.md, llms.txt, examples/. Found B-1 (README.md:185 "capabilities as of v3.7.0") and B-2 (examples/chatgpt-actions.md:25 "wait for v3.8.0" — already shipped). This is the **6th recursion-pair shape** (#6+#7, #2 inside K-1 "final", #10 inside M-2, #12 inside v3.8.3 Check 7) and the **12th documented overclaim instance**. v3.8.4 expands Check 7 scope to ALL user-visible markdown surfaces (README.md, AGENTS.md, llms.txt, examples/*.md), adds "capabilities|claims|features|snapshot as of" patterns to catch B-1's wording, adds "wait for vX.Y.0 / coming in / planned for / will land in" forthcoming-claim detection for B-2's class. 2 inline fixes for B-1/B-2. **No code changes; 872 tests unchanged.**
+
+**Patch — recursion-class closure (sixth attempt).**
+
+### Background
+
+v3.8.3 shipped OIA Check 7 with the explicit framing:
+> "Same recursion class as M-1/M-2/M-REG-1 (structural defense built but scope too narrow). The fix shape is always 'lift the defense to cover all siblings.'"
+
+But Check 7's scope was `CLAUDE.md + docs/*.md` — only TWO surface classes. Sibling surfaces (`README.md`, `AGENTS.md`, `llms.txt`, `examples/*.md`) were unprotected. This is **the exact pattern Check 7 was built to close, recurring inside Check 7's own implementation**.
+
+A post-v3.8.3 state-driven sweep found:
+- **B-1 (MEDIUM)**: `README.md:185` — "Comparison based on each project's public capabilities as of v3.7.0 (2026-05-15)" — same drift class as v3.8.2 A-8 (which was fixed in `docs/COMPARISON.md`) but the README version was missed because Check 7 doesn't walk README.md.
+- **B-2 (MEDIUM)**: `examples/chatgpt-actions.md:25` — "wait for v3.8.0 which adds full serve-http flag parity" — v3.8.0 already shipped (R-3 closure in rc.1). The "wait for" framing implies forthcoming, but it's been shipped for several months at this point.
+
+### Why this is overclaim instance #12
+
+v3.8.3 CHANGELOG made two strong claims, both wrong in hindsight:
+1. "Closes the methodology gap exposed by v3.8.2" — gap was only partially closed; sibling surfaces still leaked.
+2. "Same recursion class as M-1/M-2/M-REG-1 (defense built but scope too narrow). The fix shape is always 'lift the defense to cover all siblings.'" — and yet my fix did NOT lift to all siblings.
+
+**This is the same recursion-pair shape we've seen 5 times before:**
+- #2 inside v3.6.4 K-1 "TRULY FINAL closure" (the alleged final closure missed siblings)
+- #6 inside v3.7.14 F1 (renameNote ordering fix) + #7 inside same patch F2 (renameFile sibling shipped with same TSDoc drift)
+- #10 inside v3.8.0-rc.14 M-2 (7 invariants without NEGATIVE controls)
+- **#12 inside v3.8.3 Check 7 (scope too narrow despite explicit "lift to all siblings" framing)**
+
+The recursion has a name now: **"narrow-scope recursion-pair"** — the fix's scope is structurally narrower than the class it claims to close, and post-fix sweeps find new sibling instances.
+
+### Fixes
+
+**B-1 (`README.md:185`):** "as of v3.7.0 (2026-05-15)" → "as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4)" — matches the wording in `docs/COMPARISON.md` (which was fixed in v3.8.2).
+
+**B-2 (`examples/chatgpt-actions.md:25`):** "wait for v3.8.0 which adds full serve-http flag parity" → "As of v3.8.0 (R-3 closure, rc.1 `addAdvancedRetrievalOptions` helper), `serve-http` now accepts the same 8 advanced retrieval flags as `serve`." — replaces forthcoming-claim with past-tense factual statement.
+
+**OIA Check 7 scope expansion (`scripts/oia-walk.mjs`):**
+- Added: `README.md`, `AGENTS.md`, `llms.txt` to top-level scan list
+- Added: `walk("examples", ".md", ...)` to recursively scan `examples/`
+- Broadened currency-claim pattern: `accurate as of v3.X.Y` → `(accurate|capabilities|claims|features|snapshot) as of v3.X.Y` (would have caught B-1 with broader wording)
+- Added new pattern: `(wait for|coming in|planned for|will land in) v3.X.0` — compares against current major.minor; if claimed ≤ current, fires `STALE-FORTHCOMING-CLAIM` (would have caught B-2)
+- Added pure function `cmpMajorMinor(a, b)` for version comparison
+
+**Empirical validation:**
+- Pre-fix simulated revert (B-1, B-2 reverted in fixture): both fire correctly under expanded patterns.
+- Post-fix `npm run check:oia`: 0 findings across all 7 checks ✓.
+- Forward case ("planned for v3.9.0" with current 3.8.x): correctly NOT flagged (v3.9 > current 3.8 → legitimate forthcoming claim).
+
+### Methodology note — when does the recursion finally close?
+
+After 6 instances of the same pattern, an empirical pattern emerges:
+1. Every claim of "Closes the recursion class" has been wrong.
+2. The next audit always finds the same recursion shape inside the alleged closure.
+
+**Honest reframing for v3.8.4:** This patch expands Check 7 scope. It does NOT close the recursion class — the next audit may well find Check 7 doesn't cover some other surface I haven't thought of (CHANGELOG.md? GitHub Pages dist artifacts? .github/PULL_REQUEST_TEMPLATE? SECURITY.md?). Each future audit cycle is likely to find one more sibling surface.
+
+The structural-defense pattern works for individual classes (K-1, cli-help, docs-consistency) but the META-class "every defense is too narrow" requires a different fix: an automated **scope completeness audit** that checks every defense covers every plausible sibling surface. That's likely v3.9.0+ work — too speculative to ship as part of v3.8.4.
+
+### Stats
+
+- **872 tests** (unchanged — script + docs changes only).
+- `scripts/oia-walk.mjs`: Check 7 scope = 4 → 8+ surface types (CLAUDE.md, README.md, AGENTS.md, llms.txt, docs/*.md, examples/*.md).
+- 2 inline doc fixes: `README.md`, `examples/chatgpt-actions.md`.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@latest = 3.8.4` after publish.
+- All 9 required CI gates pass locally.
+
+### What's next
+
+Same backlog as v3.8.3 (no scope changes):
+- T-2/T-3/T-4 E2E tests
+- HTTP P2-10/P2-11 lifecycle, OCR watcher, HNSW live update
+- Tier C discoverability
+- v3.9.0 architectural items
+
+Possible v3.9.0 methodology item: **structural defense scope completeness audit** (automated check that every OIA walk / invariant test covers all relevant sibling surfaces). Would close the "narrow-scope recursion-pair" meta-class permanently — currently the only mitigation is post-fix manual audits, which is what spawned v3.8.3 → v3.8.4.
+
+---
+
 ## [3.8.3] — 2026-05-24
 
 > **TL;DR:** **OIA Check 7 — extend stale-currency-claim detection from `src/*.ts` to `docs/*.md` + `CLAUDE.md`.** Closes the methodology gap exposed by v3.8.2: state-driven sweep found 6 stale-version refs in docs that OIA Check 1 had been silently skipping because it only walked `src/`. Same recursion meta-class as M-1 (lift only some flags to cli-help.ts) and M-2 (extend invariants only to some docs surfaces). Generalized: Check 7 walks `docs/*.md` + `CLAUDE.md`, matches present-tense currency-claim patterns ("stable v3.X.x", "@latest ships v3.X.x", "accurate as of v3.X.Y", "exact for v3.X.x", "covers the v3.X.x"), compares against `package.json` current major.minor, fails on mismatch (unless explicit history context: "initial", "from", "since", "Pre-", "added", "fix", etc.). `docs/audits/` excluded (historical snapshots by definition). Bonus: removed stale Cursor audit ref in `scripts/oia-walk.mjs` header comment (v3.8.1 retraction missed it). **No code changes; 872 tests unchanged.**

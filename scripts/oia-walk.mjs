@@ -505,9 +505,27 @@ const DOC_CURRENT_STATE_PATTERNS = [
   [/covers\s+the\s+\*?\*?v?(\d+\.\d+)\.[\dx]/i, "coverage scope claim"],
   // "exact for v3.X.x" — claim of current accuracy
   [/exact\s+for\s+v?(\d+\.\d+)\.[\dx]/i, "exactness claim"],
-  // "accurate as of v3.X.Y" — claim that numbers/facts are current at this version
-  [/accurate\s+as\s+of\s+v?(\d+\.\d+\.\d+)/i, "accuracy timestamp claim"]
+  // "(accurate|capabilities|claims|features|snapshot) as of v3.X.Y" — accuracy
+  // timestamp claim. v3.8.4 broadened from just "accurate as of" after B-1
+  // ("capabilities as of v3.7.0" in README.md) slipped past the narrower pattern.
+  [/\b(?:accurate|capabilities|claims|features|snapshot)\s+as\s+of\s+v?(\d+\.\d+\.\d+)/i, "as-of timestamp claim"]
 ];
+
+// "(wait for|coming in|planned for|will land in) v3.X.0" — forthcoming-feature
+// claim. If current major.minor >= claimed, the claim is stale (the feature
+// already shipped or was deferred). v3.8.4 added this after B-2 ("wait for
+// v3.8.0 which adds full serve-http flag parity" in examples/chatgpt-actions.md
+// when v3.8.0 already shipped).
+const DOC_FORTHCOMING_PATTERN = /(?:wait\s+for|coming\s+in|planned\s+for|will\s+land\s+in)\s+v?(\d+\.\d+)\.\d/i;
+
+/** Compare two major.minor versions. Returns -1 if a<b, 0 if equal, 1 if a>b. */
+function cmpMajorMinor(a, b) {
+  const [aMa, aMi] = a.split(".").map(Number);
+  const [bMa, bMi] = b.split(".").map(Number);
+  if (aMa !== bMa) return aMa < bMa ? -1 : 1;
+  if (aMi !== bMi) return aMi < bMi ? -1 : 1;
+  return 0;
+}
 
 // Phrases that mark a version reference as INTENTIONAL HISTORY (skip flag).
 // Conservative — only obvious history markers.
@@ -520,13 +538,27 @@ const HISTORY_CONTEXT_MARKERS = [
   /\bv?\d+\.\d+\.\d+\s+(added|fix|bumped|introduced|deferred|patched|shipped|closed)\b/i
 ];
 
-const DOCS_FILES_TO_SCAN = ["CLAUDE.md"];
+// v3.8.4 META-12 — Check 7 scope expanded to ALL user-visible markdown
+// surfaces. Pre-v3.8.4 the scope was just CLAUDE.md + docs/*.md, which
+// turned out to be the same recursion class the check was built to close:
+// defense scoped too narrowly, sibling surfaces (README.md, AGENTS.md,
+// examples/*.md, llms.txt) unprotected. v3.8.4 post-merge audit found
+// stale "v3.7.0" claim in README.md:185 and "wait for v3.8.0" in
+// examples/chatgpt-actions.md:25 — both already-shipped versions, both
+// would have been caught if Check 7 walked these files.
+const DOCS_FILES_TO_SCAN = ["CLAUDE.md", "README.md", "AGENTS.md", "llms.txt"];
 // Walk docs/ for .md files — but skip docs/audits/ since those are by
 // definition historical snapshots (auditor reports timestamped at submission).
 // Stale version refs in audit reports are accurate history of what was current
 // at that time, not stale current-state claims about NOW.
 walk("docs", ".md", (file) => {
   if (file.startsWith(join("docs", "audits"))) return;
+  DOCS_FILES_TO_SCAN.push(file);
+});
+// Walk examples/ for .md files — user-visible drop-in config examples;
+// stale version claims here mislead users ("wait for v3.8.0" when v3.8.0
+// already shipped).
+walk("examples", ".md", (file) => {
   DOCS_FILES_TO_SCAN.push(file);
 });
 
@@ -554,6 +586,35 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
         `${claimType} for v${claimedVersion} but current major.minor is v${currentMajorMinor}. Either update the version, OR prefix with "Pre-vX.Y.Z" / "initial" / "from" / "since" to mark as legitimate historical reference.`
       );
+    }
+    // Forthcoming-feature claim: "wait for v3.8.0 which adds X". If current
+    // major.minor >= claimed, the feature already shipped (or was deferred);
+    // either way the "wait for" framing is stale.
+    const fm = DOC_FORTHCOMING_PATTERN.exec(line);
+    if (fm) {
+      const claimedMM = fm[1];
+      if (cmpMajorMinor(claimedMM, currentMajorMinor) <= 0) {
+        // v3.8.4 self-audit — skip if the matched text is QUOTED in the
+        // source (ASCII "..." or backtick `...`). CHANGELOG/CLAUDE.md
+        // status sections legitimately quote past stale claims when
+        // describing audit history; those are tombstone references, not
+        // present-tense assertions. Heuristic: if the match start index
+        // is preceded by an opening quote within 80 chars without an
+        // intervening close quote, skip.
+        const matchStart = fm.index;
+        const preceding = line.slice(Math.max(0, matchStart - 80), matchStart);
+        const describeRegex =
+          /\b(quote|quoted|describing|described as|originally|previously said|retracted|incorrectly|stale claim)\b/i;
+        const isQuoted = /["`][^"`]*$/.test(preceding) || describeRegex.test(preceding);
+        if (isQuoted) continue;
+        record(
+          "STALE-FORTHCOMING-CLAIM",
+          docFile,
+          i + 1,
+          line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
+          `Forthcoming-feature claim for v${claimedMM} but current is v${currentMajorMinor} (already shipped or past that version). Either remove the "wait for" framing, OR rephrase as "as of v${claimedMM}, X works" if the feature shipped.`
+        );
+      }
     }
   }
 }

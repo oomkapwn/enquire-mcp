@@ -109,3 +109,117 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     expect(helperFlags.size, `addAdvancedRetrievalOptions has ${helperFlags.size} flags; expected exactly 8`).toBe(8);
   });
 });
+
+// v3.8.0-rc.11 M-1 root-class fix.
+//
+// Background: N-5 (round-18 audit) was about `--watch` help text differing
+// between serve and serve-http. rc.6 updated serve-http inline. rc.7 updated
+// serve inline (longer string, not identical) — still drifted. rc.10 audit
+// caught this AND found 8 more flags with the same drift class
+// (--disabled-tools 205↔44 chars, --enabled-tools 98↔56, --tokenize, etc.).
+//
+// Root cause: shared flags between serve and serve-http were defined inline
+// in both subcommand blocks (two sources → drift). The `cli-help.ts` module
+// existed to prevent this (ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP, etc.)
+// but only a few flags were lifted into it. New flags went inline.
+//
+// Structural fix: rc.11 lifted 8 more shared flags into cli-help.ts (now 12
+// constants total) and replaced both inline literals with the constant. This
+// invariant pins the structural property: every flag that appears in BOTH
+// serve and serve-http with inline help text must have IDENTICAL text. The
+// only exception is short-form cross-references where serve-http says
+// "(same semantics as `serve`)" — those are explicitly allowlisted.
+//
+// If a future PR adds a new shared flag with inline text and the texts
+// differ, this test fails before merge.
+
+describe("CLI parity — serve and serve-http shared-flag help text equality (v3.8.0-rc.11 M-1)", () => {
+  /**
+   * Flags where serve-http intentionally uses a short cross-reference like
+   * "(same semantics as `serve`)" instead of repeating the long serve text.
+   * Adding to this allowlist must be a deliberate design decision documented
+   * in the CHANGELOG.
+   */
+  const INTENTIONAL_SHORT_FORM = new Set(["--exclude-glob", "--read-paths"]);
+
+  /** Extract `.option("--flag", "literal text")` pairs from a block.
+   *  Constants (UPPER_SNAKE_CASE identifiers as second arg) are normalized
+   *  to the marker `:CONSTANT:<NAME>` so identical constant usage is
+   *  trivially equal across blocks. */
+  function extractInlineHelp(block: string): Map<string, string> {
+    const out = new Map<string, string>();
+    // Match .option("--flag[ <arg>]", "literal" | IDENTIFIER)
+    // Both single-line and multi-line .option() invocations.
+    const re = /\.option\(\s*"(--[a-z][a-z0-9-]*)(?:\s+<[^>]+>)?"\s*,\s*("([^"]+)"|([A-Z][A-Z0-9_]*))\s*\)/g;
+    for (const m of block.matchAll(re)) {
+      const flag = m[1] ?? "";
+      const literal = m[3];
+      const constant = m[4];
+      if (constant) {
+        out.set(flag, `:CONSTANT:${constant}`);
+      } else if (literal !== undefined) {
+        out.set(flag, literal);
+      }
+    }
+    return out;
+  }
+
+  function extractCommandBlock(cliSrc: string, anchorRe: RegExp): string {
+    const startMatch = anchorRe.exec(cliSrc);
+    if (!startMatch) return "";
+    const startIdx = startMatch.index;
+    const actionIdx = cliSrc.indexOf(".action(", startIdx);
+    return cliSrc.slice(startIdx, actionIdx > startIdx ? actionIdx : startIdx + 20000);
+  }
+
+  it("every flag appearing in BOTH serve and serve-http has identical help text", async () => {
+    const cliSrc = await readCli();
+    const serveBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve"\s*,/);
+    const serveHttpBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve-http"\s*\)/);
+
+    const serveHelp = extractInlineHelp(serveBlock);
+    const httpHelp = extractInlineHelp(serveHttpBlock);
+
+    const sharedFlags = [...serveHelp.keys()].filter((f) => httpHelp.has(f));
+    expect(sharedFlags.length, "expected at least 10 shared flags between serve and serve-http").toBeGreaterThan(10);
+
+    const drifts: string[] = [];
+    for (const flag of sharedFlags) {
+      if (INTENTIONAL_SHORT_FORM.has(flag)) continue;
+      const s = serveHelp.get(flag) ?? "";
+      const h = httpHelp.get(flag) ?? "";
+      if (s !== h) {
+        drifts.push(
+          `${flag}:\n  serve      (${s.length}): ${s.slice(0, 100)}\n  serve-http (${h.length}): ${h.slice(0, 100)}`
+        );
+      }
+    }
+
+    expect(
+      drifts,
+      `${drifts.length} flag(s) drifted between serve and serve-http. Fix: lift the help text into src/cli-help.ts as a constant and use it in both .option() calls. If the asymmetry is intentional (cross-reference short-form), add the flag to INTENTIONAL_SHORT_FORM allowlist.\n\n${drifts.join("\n\n")}`
+    ).toEqual([]);
+  });
+
+  it("INTENTIONAL_SHORT_FORM allowlist matches reality — NEGATIVE control", async () => {
+    // Sanity: each flag in the allowlist must actually appear in BOTH
+    // commands AND have asymmetric help text (else it doesn't need to be
+    // allowlisted — clean it up to keep the allowlist minimal).
+    const cliSrc = await readCli();
+    const serveBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve"\s*,/);
+    const serveHttpBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve-http"\s*\)/);
+    const serveHelp = extractInlineHelp(serveBlock);
+    const httpHelp = extractInlineHelp(serveHttpBlock);
+
+    for (const flag of INTENTIONAL_SHORT_FORM) {
+      expect(serveHelp.has(flag), `${flag} in allowlist but not in serve`).toBe(true);
+      expect(httpHelp.has(flag), `${flag} in allowlist but not in serve-http`).toBe(true);
+      const s = serveHelp.get(flag) ?? "";
+      const h = httpHelp.get(flag) ?? "";
+      expect(
+        s === h ? "IDENTICAL" : "DIFFERENT",
+        `${flag} is in allowlist but help texts are actually identical — remove from allowlist`
+      ).toBe("DIFFERENT");
+    }
+  });
+});

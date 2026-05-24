@@ -57,3 +57,70 @@ export const PERSISTENT_INDEX_HELP =
  */
 export const WATCH_HELP =
   "Watch the vault for .md and .pdf changes; incrementally re-syncs FTS5 and embed-db (when available). Off by default. Use this for long-running servers where you keep editing in Obsidian and want search to stay fresh without restarting.";
+
+/**
+ * `--disabled-tools` flag help (v3.8.0-rc.11 M-1 root-class fix). Pre-rc.11
+ * serve had a 205-char explanation with rationale + example; serve-http had a
+ * 44-char one-liner. Lifting here makes drift impossible. Uses serve's text
+ * as canonical (more informative; serve-http inherits the full guidance).
+ */
+export const DISABLED_TOOLS_HELP =
+  "Skip registration of specific tools by exact name. Useful when you want to expose a smaller surface to a particular agent (e.g. read-only research agent gets only obsidian_search_text + obsidian_read_note). Repeatable. Names are the same as in `tools/list` — `obsidian_*`. Example: `--disabled-tools obsidian_dataview_query obsidian_full_text_search`.";
+
+/**
+ * `--enabled-tools` flag help (v3.8.0-rc.11 M-1 root-class fix). Pre-rc.11
+ * serve had a 98-char full description, serve-http had a 56-char abbreviated
+ * one. Canonical text uses serve's full version.
+ */
+export const ENABLED_TOOLS_HELP =
+  "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`.";
+
+/**
+ * `--tokenize` flag help (v3.8.0-rc.11 M-1 root-class fix). Pre-rc.11 serve
+ * mentioned "Latin/Cyrillic" and "CJK/mixed-script", serve-http omitted these
+ * — script-coverage hint matters for users picking a mode. Canonical text
+ * keeps the script guidance from serve.
+ */
+export const TOKENIZE_HELP =
+  "FTS5 tokenize mode: 'unicode61' (default; Latin/Cyrillic) or 'trigram' (CJK/mixed-script)";
+
+/**
+ * `--max-file-bytes` flag help (v3.8.0-rc.11 M-1 defensive lift). Both serve
+ * and serve-http had identical inline text; lifting prevents future drift.
+ */
+export const MAX_FILE_BYTES_HELP = "Max bytes for any single file read/write (default 5MB)";
+
+/**
+ * `--cache-size` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
+ * between serve and serve-http pre-rc.11.
+ */
+export const CACHE_SIZE_HELP = "Max parsed-note cache entries (default 1024)";
+
+/**
+ * `--persistent-cache` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
+ * between serve and serve-http pre-rc.11.
+ */
+export const PERSISTENT_CACHE_HELP = "Persist parsed-note cache to disk so cold starts skip re-parsing";
+
+/**
+ * `--cache-file` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
+ * between serve, serve-http, and other subcommands pre-rc.11.
+ */
+export const CACHE_FILE_HELP = "Override the persistent-cache file location";
+
+/**
+ * `--index-file` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
+ * between serve, serve-http, and other subcommands pre-rc.11.
+ */
+export const INDEX_FILE_HELP = "Override the FTS5 index file location";
+
+/**
+ * `--quantize-embeddings` flag help (v3.8.0-rc.11 M-1 root-class fix; caught
+ * by the new cli-parity invariant). Pre-rc.11 serve had a 355-char detailed
+ * description with v2.16 history + recall numbers + accepted aliases; serve-http
+ * had a 161-char abbreviated form missing the alias enumeration. The alias list
+ * is contractual (users pass any of these — silently dropping documentation of
+ * `i8`/`q8`/`float32`/`none` was a real omission).
+ */
+export const QUANTIZE_EMBEDDINGS_HELP =
+  "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`.";

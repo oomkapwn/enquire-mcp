@@ -397,6 +397,69 @@ walk("src", ".ts", (file) => {
   }
 });
 
+// ─── Check 6: Inline "// current ~X%" coverage comments vs actuals ────
+// Background: v3.8.0-rc.10 audit (L-1) caught a stale comment in
+// scripts/check-per-file-coverage.mjs — line said "// current ~69.23%"
+// but the actual file coverage was 71.15% after the rc.10 watcher test
+// uplift. The floor (69%) was correct, the test passed, but the inline
+// comment created false expectations for readers.
+//
+// Pattern: per-file coverage entries in check-per-file-coverage.mjs have
+// "// current X%" annotations. This check scans them and compares against
+// coverage/coverage-summary.json (when present from a recent `npm run
+// test:coverage` run). Drift > 1pp triggers a finding.
+//
+// Skipped when coverage-summary.json doesn't exist (cold CI without
+// coverage run) — this is not an authoritative check, just a state-driven
+// confirmation that documentation matches measurement.
+{
+  const summaryPath = join(repoRoot, "coverage", "coverage-summary.json");
+  if (existsSync(summaryPath)) {
+    let summary;
+    try {
+      summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+    } catch {
+      summary = null;
+    }
+    if (summary) {
+      const checkerPath = "scripts/check-per-file-coverage.mjs";
+      const checkerSrc = readFileSync(join(repoRoot, checkerPath), "utf8");
+      const checkerLines = checkerSrc.split("\n");
+      // Pattern: "src/foo.ts": { branches: N }, // current X% [...rest]
+      // OR     :                                 // current ~X% [...rest]
+      const lineRe = /"(src\/[\w./-]+)":\s*\{\s*branches:\s*\d+\s*\}\s*,?\s*\/\/\s*current\s*~?(\d+(?:\.\d+)?)%/;
+      for (let i = 0; i < checkerLines.length; i++) {
+        const line = checkerLines[i] ?? "";
+        const m = lineRe.exec(line);
+        if (!m) continue;
+        const filePath = m[1];
+        const claimedPercent = parseFloat(m[2] ?? "0");
+        // Find the matching entry in coverage-summary.json. Keys are
+        // absolute paths; normalize to relative.
+        let actualPercent = null;
+        for (const [absPath, metrics] of Object.entries(summary)) {
+          if (absPath === "total") continue;
+          if (absPath.endsWith(`/${filePath}`) && metrics?.branches?.pct !== undefined) {
+            actualPercent = metrics.branches.pct;
+            break;
+          }
+        }
+        if (actualPercent === null) continue; // file not in coverage report
+        const drift = Math.abs(actualPercent - claimedPercent);
+        if (drift > 1.0) {
+          record(
+            "STALE-COVERAGE-COMMENT",
+            checkerPath,
+            i + 1,
+            line.trim(),
+            `Inline comment claims ~${claimedPercent}% for ${filePath} but coverage-summary.json says ${actualPercent.toFixed(2)}% (drift ${drift.toFixed(2)}pp). Update the comment to match reality, or remove the percentage annotation if maintenance burden outweighs value.`
+          );
+        }
+      }
+    }
+  }
+}
+
 // ─── Report ─────────────────────────────────────────────────────────────
 if (findings.length === 0) {
   console.log("[oia-walk] ✓ No outside-in findings.");

@@ -14,7 +14,7 @@
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-872%20passing-brightgreen.svg)](#trust)
-[![stable](https://img.shields.io/badge/v3.7.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.8.x-stable-brightgreen.svg)](./STABILITY.md)
 [![SLSA-3](https://img.shields.io/badge/SLSA-3-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -38,7 +38,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 2. **Best-in-class retrieval.** Hybrid BM25 + multilingual embeddings + BGE cross-encoder reranker fused via RRF, scaled with HNSW + int8 quantization. The same IR stack a search startup would build — open-sourced, in one binary.
 > 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
 
-**44 tools · 19 MCP prompts · 872 unit tests · 50+ languages · v3.7.x stable · semver-bound · MIT · SLSA-3 signed.**
+**44 tools · 19 MCP prompts · 872 unit tests · 50+ languages · v3.8.x stable · semver-bound · MIT · SLSA-3 signed.**
 
 ---
 

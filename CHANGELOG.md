@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.7] — 2026-05-25
+
+> **TL;DR:** **HTTP transport hardening — P2-10 stateful session races (3 conditions) + P2-11 close cleanup gap (registry leak).** `src/http-transport.ts` now uses an in-flight refcount on each `StatefulSession` so the idle sweep skips busy sessions instead of force-closing them mid-stream; the max-sessions cap-check includes a `pendingInits` counter so concurrent initialize POSTs can't TOCTOU past the limit; DELETE marks `closing=true` and removes from the registry BEFORE the protocol-level shutdown runs (concurrent fetchers 404 instead of joining a half-closed session). New `shutdownHttpServer(server)` helper drains the registry + closes the TCP listener + closes vault/fts/watcher/embed-db handles — the production signal handlers + tests both use it now. **+10 negative-control tests; 888 unit tests; no API breaks.**
+
+**Patch — HTTP transport correctness.**
+
+### Why this matters
+
+The v2.14.0 stateful-mode HTTP transport had three latent race conditions and one cleanup gap that were deferred from the v3.7.16 round-18 audit:
+
+- **P2-10 race 1 (cap-check TOCTOU)**: `if (registry.size() >= maxSessions) reject` happens BEFORE the async server+transport allocation. N concurrent initialize POSTs all see `size() < maxSessions`, all proceed to allocate, all `onsessioninitialized` callbacks register — overshooting the cap. With `maxSessions: 100`, an adversary holding a valid bearer token could spawn 200+ sessions before the registry catches up.
+- **P2-10 race 2 (sweep vs in-flight)**: The idle sweep checks `lastActivityMs < cutoff` and immediately calls `transport.close()` + `server.close()`. For a long-running SSE GET stream that touched `lastActivityMs` once at the start, the sweep eventually fires (after `idleTimeoutMs`) and closes the transport mid-stream — the response stream goes inconsistent, the SDK's internal queue trips, the client sees a broken connection.
+- **P2-10 race 3 (DELETE vs concurrent use)**: DELETE fetches the session, calls `await session.transport.handleRequest(req, res)` for protocol shutdown, then closes. A concurrent POST/GET that arrives during the DELETE's `handleRequest` await can `registry.sessions.get(sessionId)` successfully, increment `lastActivityMs`, and start its own `handleRequest` on a transport that's about to be torn down.
+- **P2-11 (registry leak on close)**: `httpServer.close()` stops accepting new connections but doesn't iterate the stateful-mode registry — every active session leaks its McpServer + StreamableHTTPServerTransport pair, plus the per-session SQLite handles those entrain. Tests passing `installSignalHandlers: false` had no clean way to drain.
+
+### Fixes
+
+`src/http-transport.ts` — `StatefulSession` interface + `SessionRegistry` interface + handler:
+
+- **In-flight refcount.** New `inFlight: number` + `closing: boolean` fields on every `StatefulSession`. A `runWithRefcount(session, fn)` helper wraps every `handleRequest` call: increment synchronously, decrement in `finally`. Sweep now skips sessions with `inFlight > 0` (they're not idle, they're busy) and sessions with `closing=true` (already being torn down).
+- **`pendingInits` counter.** Cap-check is now `size + pendingInits >= maxSessions`. Each initialize handler increments before `buildMcpServer`/`new StreamableHTTPServerTransport` and decrements in a `finally`. Concurrent inits no longer TOCTOU past the limit. New `tests/http-transport.test.ts` test fires 6 concurrent inits at `maxSessions: 2` and asserts ≤2 succeed.
+- **DELETE marks-then-deletes.** Before the SDK's protocol-level `handleRequest`, the handler sets `session.closing = true` + `registry.sessions.delete(sessionId)` synchronously. Concurrent fetchers find no entry → 404. The DELETE itself uses `runWithRefcount` so the close phase waits for its own + any pre-existing in-flight to drain (bounded 5s) before `transport.close()` + `server.close()`.
+- **`SessionRegistry.closeAll(timeoutMs?)`.** Snapshots all sessions, marks them `closing`, clears the map, waits up to `timeoutMs` (default 5s) for `inFlight` to reach 0, then `await`s `transport.close()` + `server.close()` on each. Idempotent.
+- **`shutdownHttpServer(server)` helper.** Tracks the registry + `ServerDeps` via a module-private `WeakMap<HttpServer, HttpServerExtras>` set inside `startHttpServer`. Drains registry → `httpServer.close()` → flushes persistent cache → closes ftsIndex/watcher/watcherEmbedDb. Both the SIGINT/SIGTERM handlers and tests now call this; idempotent on second call.
+
+### Tests added
+
+`tests/http-transport.test.ts` — 10 new tests, mix of unit + integration, all with explicit POSITIVE + NEGATIVE controls per the CLAUDE.md rule since v3.6.4:
+
+- **SessionRegistry unit (7 tests)**:
+  - `sweepIdle skips in-flight sessions even if lastActivityMs is past cutoff` (POSITIVE)
+  - `(NEGATIVE control) — without inFlight tracking, sweep would evict busy entries` (validates the test would catch a regression)
+  - `sweepIdle skips already-closing sessions` (idempotency under closeAll)
+  - `closeAll drains all sessions + invokes transport.close + server.close` (counter-tracking stubs)
+  - `closeAll waits for in-flight to drain (bounded by timeoutMs)` (simulated slow handler)
+  - `pendingInits starts at 0` (initial-state guard)
+- **End-to-end (3 tests)**:
+  - `shutdownHttpServer drains stateful sessions + closes the TCP listener` (verifies subsequent fetch fails)
+  - `shutdownHttpServer works on stateless servers (no registry to drain)`
+  - `shutdownHttpServer is idempotent — second call is a safe no-op`
+  - `concurrent initialize POSTs cannot exceed maxSessions (TOCTOU defense)` — fires 6 parallel inits at cap=2, asserts ≤2 success + remainder 503
+
+### Behavior changes (none breaking)
+
+- No public-API breaks. `createSessionRegistry` now returns an object with two new members (`pendingInits` field + `closeAll` method) but the existing surface is unchanged.
+- `createHttpHandler` gained an OPTIONAL third parameter `out?: { registry: SessionRegistry | null }`. Backwards-compatible (omit = unaffected).
+- `shutdownHttpServer(server)` is the new recommended way to close servers from `startHttpServer`. Direct `server.close()` still works but doesn't drain the registry.
+
+### Files changed
+
+- `src/http-transport.ts` — refcount + pendingInits + closeAll + shutdownHttpServer (+150 lines)
+- `tests/http-transport.test.ts` — 10 new tests (~180 lines)
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test-count claims 878 → 888
+- version bump 3.8.6 → 3.8.7 (7 surfaces)
+
+### What's next
+
+Continuing the no-deferrals run:
+- **v3.8.8** — META structural-defense scope completeness audit (the recurring recursion-pair class — pattern "every claim of 'closes the recursion' is wrong" has 6 documented instances; structural-defense scope completeness audit may be the only real fix).
+- **v3.9.0-rc.1** — OCR'd PDF watcher embed-sync + HNSW in-memory live update (architectural minor bump).
+
+---
+
 ## [3.8.6] — 2026-05-25
 
 > **TL;DR:** **Tier C discoverability completion — Schema.org JSON-LD injection on GH Pages.** Adds `scripts/inject-jsonld.mjs` that runs after `npm run docs:api` in `publish-docs.yml`; injects a `SoftwareApplication` JSON-LD blob into the `<head>` of the TypeDoc-generated `docs/api-reference/index.html`. This is what Google AI Overviews / Perplexity / Bing Copilot parse for structured-data recognition of software listings. Idempotent (skips if marker present). FUNDING.yml already present from prior config. **No code changes; 878 tests unchanged.**

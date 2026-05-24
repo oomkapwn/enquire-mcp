@@ -281,18 +281,56 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
  * stateful mode the SDK keys requests by the session id we assign at
  * `initialize` time) and tracks the last activity timestamp for
  * idle-eviction.
+ *
+ * v3.8.7 P2-10 — added `inFlight` refcount + `closing` flag to make
+ * session lifecycle safe under concurrent requests:
+ *   - `inFlight > 0` means at least one HTTP handler is currently
+ *     awaiting `transport.handleRequest` on this session. The idle sweep
+ *     skips such sessions even if their `lastActivityMs` is past the
+ *     cutoff — closing a transport with an in-flight SSE/POST mid-stream
+ *     produces broken responses and dangling McpServer state.
+ *   - `closing` is set by the explicit shutdown paths (DELETE + sweep +
+ *     `closeAll`) right before we begin teardown. Once true, the entry
+ *     is also removed from `registry.sessions` so new gets return 404 —
+ *     concurrent requests that already hold a `session` reference can
+ *     finish naturally but won't be joined by new ones.
  */
 interface StatefulSession {
   server: ReturnType<typeof buildMcpServer>;
   transport: InstanceType<typeof StreamableHTTPServerTransport>;
   /** Epoch-ms of the last `handleRequest` for this session. */
   lastActivityMs: number;
+  /**
+   * v3.8.7 — count of handlers currently inside `transport.handleRequest`
+   * for this session. Incremented by `runWithRefcount`. Sweep + closeAll
+   * wait for this to drop to 0 before tearing down the transport.
+   */
+  inFlight: number;
+  /**
+   * v3.8.7 — once set, the session is being torn down. The entry has
+   * already been removed from `registry.sessions`; new requests will
+   * 404. Existing in-flight requests are allowed to finish.
+   */
+  closing: boolean;
 }
 
 /**
  * v2.14.0 — exported for tests so they can poke at the session map
  * directly (idle eviction, max-cap, etc.) without spinning up a real
  * HTTP server.
+ *
+ * v3.8.7 P2-10/P2-11 — extended:
+ *   - `pendingInits` makes the maxSessions cap-check atomic across
+ *     concurrent initialize POSTs. The check is now
+ *     `sessions.size + pendingInits >= maxSessions`. Each init handler
+ *     increments before allocating server+transport and decrements in a
+ *     finally. Without this, N concurrent inits could all pass the
+ *     plain `size()` check and create N+ sessions.
+ *   - `closeAll(timeoutMs)` is the graceful-shutdown drain: waits for
+ *     in-flight requests up to `timeoutMs`, then closes every transport
+ *     + McpServer pair. Used by `shutdownHttpServer` so tests +
+ *     production both leave a clean process state (no leaked SQLite
+ *     handles via the per-session embedder + watcher hooks).
  */
 export interface SessionRegistry {
   readonly sessions: Map<string, StatefulSession>;
@@ -300,28 +338,90 @@ export interface SessionRegistry {
   sweepIdle(nowMs?: number): number;
   /** Total sessions currently tracked. */
   size(): number;
+  /**
+   * v3.8.7 — count of in-flight `initialize` POSTs that have passed the
+   * cap-check but not yet been inserted into `sessions`. Used by the
+   * cap-check to prevent the TOCTOU race where N concurrent inits all
+   * see `size() < maxSessions` and overshoot. Public so tests can
+   * assert it stays balanced (always returns to 0 after init resolves).
+   */
+  pendingInits: number;
+  /**
+   * v3.8.7 — graceful drain: mark all sessions as `closing`, wait up to
+   * `timeoutMs` for in-flight requests to finish, then close every
+   * transport + McpServer pair and clear the map. Returns the number of
+   * sessions actually closed. Idempotent (second call is a no-op).
+   */
+  closeAll(timeoutMs?: number): Promise<number>;
 }
 
 export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
   const sessions = new Map<string, StatefulSession>();
-  return {
+  const registry: SessionRegistry = {
     sessions,
+    pendingInits: 0,
     sweepIdle(nowMs = Date.now()): number {
       const cutoff = nowMs - idleTimeoutMs;
       let evicted = 0;
       for (const [sid, session] of sessions) {
+        if (session.closing) continue; // already being torn down
+        // v3.8.7 P2-10 — skip in-flight sessions. Closing a transport
+        // while a handler is awaiting handleRequest on it leaves the
+        // response stream in an inconsistent state (the SDK's internal
+        // queue still expects to drain). Next sweep will catch it once
+        // the in-flight request finishes.
+        if (session.inFlight > 0) continue;
         if (session.lastActivityMs < cutoff) {
+          session.closing = true;
+          sessions.delete(sid);
           // Best-effort cleanup — don't block on slow close.
           void session.transport.close().catch(() => {});
           void session.server.close().catch(() => {});
-          sessions.delete(sid);
           evicted += 1;
         }
       }
       return evicted;
     },
-    size: () => sessions.size
+    size: () => sessions.size,
+    async closeAll(timeoutMs = 5000): Promise<number> {
+      // Snapshot the sessions we're closing; mark `closing` synchronously
+      // so new requests bounce with 404 while we drain in-flight.
+      const snapshot = Array.from(sessions.values());
+      for (const s of snapshot) s.closing = true;
+      sessions.clear();
+      // Wait (bounded) for in-flight handlers to finish naturally.
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (snapshot.every((s) => s.inFlight === 0)) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      // Close everything regardless — best-effort. After timeoutMs an
+      // in-flight handler is "stuck" and we'd rather hand back the port
+      // than wait forever.
+      for (const s of snapshot) {
+        await s.transport.close().catch(() => {});
+        await s.server.close().catch(() => {});
+      }
+      return snapshot.length;
+    }
   };
+  return registry;
+}
+
+/**
+ * v3.8.7 P2-10 — wrap a `handleRequest` call with the in-flight refcount.
+ * The increment is synchronous (no `await` between increment + the work
+ * starting), so the idle sweep can never see `inFlight === 0` while a
+ * handler is mid-flight. The decrement runs in a `finally` so it fires
+ * on both success + rejection paths.
+ */
+async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>): Promise<T> {
+  session.inFlight += 1;
+  try {
+    return await fn();
+  } finally {
+    session.inFlight -= 1;
+  }
 }
 
 /**
@@ -354,7 +454,16 @@ export function deriveHttpBodyCap(maxFileBytes: string | undefined): number {
 
 export function createHttpHandler(
   deps: ServerDeps,
-  opts: HttpServeOptions
+  opts: HttpServeOptions,
+  /**
+   * v3.8.7 P2-11 — optional out-param. If provided, the function
+   * assigns `.registry` to the stateful-mode `SessionRegistry` (or
+   * `null` in stateless mode). `startHttpServer` uses this to wire the
+   * registry into the `shutdownHttpServer` helper via the
+   * `httpServerExtras` WeakMap. Existing call sites that don't pass
+   * `out` are unaffected (backwards compatible).
+   */
+  out?: { registry: SessionRegistry | null }
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const mcpPath = opts.mcpPath ?? "/mcp";
   const healthPath = opts.healthPath ?? "/health";
@@ -371,6 +480,7 @@ export function createHttpHandler(
   const idleTimeoutMs = opts.sessionIdleTimeoutMs ?? 30 * 60 * 1000; // 30 min default
   const maxSessions = opts.maxSessions ?? 100;
   const registry = stateful ? createSessionRegistry(idleTimeoutMs) : null;
+  if (out) out.registry = registry;
 
   return async (req, res) => {
     try {
@@ -449,22 +559,37 @@ export function createHttpHandler(
           return;
         }
         const session = registry.sessions.get(sessionId);
-        if (!session) {
-          // Idempotent — if the session is already gone, treat as success.
+        if (!session || session.closing) {
+          // Idempotent — if the session is already gone (or being torn
+          // down), treat as success.
           res.statusCode = 204;
           res.end();
           return;
         }
-        // Let the transport's handleRequest run the protocol shutdown,
-        // then drop our entry.
+        // v3.8.7 P2-10 — mark closing + remove from map BEFORE handleRequest.
+        // Concurrent gets that arrive during the SDK's protocol-level
+        // shutdown then 404 instead of joining a half-closed session.
+        // The DELETE itself is in-flight, so we increment the refcount;
+        // the actual close waits for that (and any pre-existing in-flight)
+        // to drain. (Snapshot the entry locally first — `delete` removes
+        // it from the map but the entry stays referenced by `session`.)
+        session.closing = true;
+        registry.sessions.delete(sessionId);
         try {
-          await session.transport.handleRequest(req, res);
+          await runWithRefcount(session, () => session.transport.handleRequest(req, res));
         } catch {
           /* shutdown errors don't matter — we're killing the session anyway */
         }
-        void session.transport.close().catch(() => {});
-        void session.server.close().catch(() => {});
-        registry.sessions.delete(sessionId);
+        // Drain other in-flight (e.g. an SSE GET held the refcount up)
+        // up to a small bound, then close. The bound matches closeAll's
+        // default — long enough for normal completion, short enough that
+        // a stuck client doesn't pin the McpServer + SQLite handles.
+        const deadline = Date.now() + 5000;
+        while (session.inFlight > 0 && Date.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        }
+        await session.transport.close().catch(() => {});
+        await session.server.close().catch(() => {});
         return;
       }
 
@@ -477,13 +602,17 @@ export function createHttpHandler(
           return;
         }
         const session = registry.sessions.get(sessionId);
-        if (!session) {
+        // v3.8.7 P2-10 — also reject `closing` sessions. A closing entry
+        // has been removed from `sessions` so this branch is normally
+        // unreachable, but the explicit check documents intent + keeps
+        // us safe if someone later changes when `closing` is set.
+        if (!session || session.closing) {
           sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId}`);
           return;
         }
         session.lastActivityMs = Date.now();
         try {
-          await session.transport.handleRequest(req, res);
+          await runWithRefcount(session, () => session.transport.handleRequest(req, res));
         } catch (err) {
           process.stderr.write(`enquire http: SSE error — ${err instanceof Error ? err.message : String(err)}\n`);
         }
@@ -509,13 +638,15 @@ export function createHttpHandler(
       if (sessionId) {
         // Existing session — route to its transport.
         const session = registry.sessions.get(sessionId);
-        if (!session) {
+        // v3.8.7 P2-10 — same `closing` defense as the GET branch. A
+        // session marked `closing` is mid-shutdown and not safe to use.
+        if (!session || session.closing) {
           sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId} (it may have expired)`);
           return;
         }
         session.lastActivityMs = Date.now();
         try {
-          await session.transport.handleRequest(req, res, body);
+          await runWithRefcount(session, () => session.transport.handleRequest(req, res, body));
         } catch (err) {
           process.stderr.write(
             `enquire http: stateful transport error — ${err instanceof Error ? err.message : String(err)}\n`
@@ -528,7 +659,11 @@ export function createHttpHandler(
       }
 
       // No session id — must be a fresh `initialize`. Cap before allocating.
-      if (registry.size() >= maxSessions) {
+      // v3.8.7 P2-10 — include `pendingInits` so concurrent inits that
+      // have passed this check but not yet inserted into `sessions`
+      // count toward the cap. Without this, the check is a TOCTOU race
+      // (N concurrent inits all see `size() < maxSessions` and overshoot).
+      if (registry.size() + registry.pendingInits >= maxSessions) {
         res.statusCode = 503;
         res.setHeader("Retry-After", "60");
         res.setHeader("Content-Type", "application/json");
@@ -564,37 +699,71 @@ export function createHttpHandler(
         return;
       }
 
+      // v3.8.7 P2-10 — reserve the slot synchronously. Between this
+      // line and the `onsessioninitialized` callback (which inserts
+      // into `sessions`), the cap-check above can see this reservation
+      // via `pendingInits` and reject concurrent inits that would
+      // overshoot the cap.
+      registry.pendingInits += 1;
       // Allocate session: server + transport with a fresh session id.
       // The SDK's `sessionIdGenerator` returns a UUID; the transport
       // sets the `Mcp-Session-Id` response header automatically on
-      // initialize.
+      // initialize. The session object is constructed up-front so the
+      // onsessioninitialized callback can insert it atomically and the
+      // refcount wrapper can use it during the initialize POST itself.
       const server = buildMcpServer(deps, opts);
+      const session: StatefulSession = {
+        server,
+        // Filled in below once `transport` is constructed.
+        transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
+        lastActivityMs: Date.now(),
+        inFlight: 0,
+        closing: false
+      };
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomBytes(16).toString("hex"),
         onsessioninitialized: (sid: string) => {
           // The SDK guarantees this fires before initialize's response
           // ships, so the entry exists when subsequent requests arrive.
-          registry.sessions.set(sid, { server, transport, lastActivityMs: Date.now() });
+          registry.sessions.set(sid, session);
         }
       });
+      session.transport = transport;
       // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
       transport.onclose = () => {
         const sid = transport.sessionId;
-        if (sid) registry.sessions.delete(sid);
+        if (sid) {
+          const tracked = registry.sessions.get(sid);
+          // v3.8.7 P2-10 — only mark + delete if WE inserted this entry.
+          // (Defensive — onclose can fire after closeAll already removed
+          // it, in which case `tracked` is undefined and there's nothing
+          // to do.)
+          if (tracked) {
+            tracked.closing = true;
+            registry.sessions.delete(sid);
+          }
+        }
       };
       try {
         await server.connect(transport);
-        await transport.handleRequest(req, res, body);
+        await runWithRefcount(session, () => transport.handleRequest(req, res, body));
       } catch (err) {
         process.stderr.write(
           `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
         );
-        // Best-effort: free resources we allocated.
+        // Best-effort: free resources we allocated. If the session was
+        // already registered, mark it closing + drop from map so concurrent
+        // requests don't grab a half-dead entry.
+        session.closing = true;
+        const sid = transport.sessionId;
+        if (sid) registry.sessions.delete(sid);
         void transport.close().catch(() => {});
         void server.close().catch(() => {});
         if (!res.headersSent) {
           sendJsonRpcError(res, 500, -32603, "Internal server error");
         }
+      } finally {
+        registry.pendingInits -= 1;
       }
     } catch (err) {
       // Final safety net — if anything in the outer block throws (URL
@@ -656,6 +825,95 @@ export function generateBearerToken(): string {
 }
 
 /**
+ * v3.8.7 P2-11 — track the SessionRegistry + ServerDeps associated with
+ * each `http.Server` we hand back from `startHttpServer`. WeakMap keys
+ * means we don't pin the server in memory after it's gone.
+ *
+ * Used by `shutdownHttpServer(server)` so callers (tests + the
+ * SIGINT/SIGTERM handlers below) can drain in-flight sessions + close
+ * underlying SQLite/watcher resources without threading the dep handles
+ * back through their own code.
+ */
+interface HttpServerExtras {
+  /** Stateful-mode registry; null in stateless mode. */
+  registry: SessionRegistry | null;
+  /** Server deps so shutdownHttpServer can close watcher/fts/embed-db cleanly. */
+  deps: ServerDeps;
+}
+const httpServerExtras = new WeakMap<HttpServer, HttpServerExtras>();
+
+/**
+ * v3.8.7 P2-11 — graceful shutdown helper for an `http.Server` returned
+ * by {@link startHttpServer}. Drains stateful sessions (if any), closes
+ * the underlying TCP listener, then closes vault/fts/watcher/embed-db
+ * handles owned by `prepareServerDeps`.
+ *
+ * Without this, callers that pass `installSignalHandlers: false` (the
+ * test path, plus anyone managing the process lifecycle externally)
+ * would silently leak: `httpServer.close()` alone closes only the TCP
+ * accept loop, NOT the per-session McpServer + transport pairs in
+ * stateful mode, and NOT the vault/fts/embed-db SQLite handles that
+ * `prepareServerDeps` opens once at boot.
+ *
+ * Order matters:
+ *   1. `registry.closeAll()` — bounded wait for in-flight requests to
+ *      finish, then close every transport + McpServer in stateful mode.
+ *   2. `httpServer.close()` — stop accepting new connections + wait for
+ *      existing ones to drain. Node's http.Server doesn't actively
+ *      terminate keep-alive sockets unless we ask it to.
+ *   3. Close vault, fts5 index, watcher, watcherEmbedDb — same order
+ *      as the SIGINT cleanup chain in startHttpServer.
+ *
+ * Idempotent: a second call on the same server is a no-op once extras
+ * are unset.
+ */
+export async function shutdownHttpServer(server: HttpServer): Promise<void> {
+  const extras = httpServerExtras.get(server);
+  if (!extras) {
+    // Already cleaned up (or not from startHttpServer). Still close the
+    // TCP listener for safety.
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    return;
+  }
+  httpServerExtras.delete(server);
+  try {
+    if (extras.registry) {
+      await extras.registry.closeAll().catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  // Close deps last — they own SQLite + chokidar handles that should
+  // outlive in-flight requests (which we drained above). Vault doesn't
+  // own a SQLite handle (no `close()` method), but it owns the
+  // persistent disk cache that we should flush before exit so a
+  // SIGKILL-followed-by-cold-start doesn't reread an empty vault.
+  if (extras.deps.vault.persistentCacheEnabled) {
+    try {
+      await extras.deps.vault.saveDiskCache();
+    } catch {
+      /* best-effort */
+    }
+  }
+  try {
+    extras.deps.ftsIndex?.close();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await extras.deps.watcher?.close();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    extras.deps.watcherEmbedDb?.close();
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
  * Bind and start the HTTP transport. Returns the underlying http.Server
  * so callers (tests + CLI) can listen for `listening` / close it.
  */
@@ -667,10 +925,14 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
     );
   }
   const deps = await prepareServerDeps(opts);
-  const handler = createHttpHandler(deps, opts);
+  // v3.8.7 P2-11 — capture the stateful registry via the out-param so
+  // we can wire it into `shutdownHttpServer` via the WeakMap below.
+  const handlerOut: { registry: SessionRegistry | null } = { registry: null };
+  const handler = createHttpHandler(deps, opts, handlerOut);
   const httpServer = createServer((req, res) => {
     void handler(req, res);
   });
+  httpServerExtras.set(httpServer, { registry: handlerOut.registry, deps });
 
   // Persistent-cache flush + watcher cleanup on signal. Same hooks as
   // stdio mode — the deps own the lifecycle. Skipped under
@@ -719,10 +981,15 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
       process.on("beforeExit", closeFts);
     }
     // Graceful HTTP-server shutdown on signal.
+    // v3.8.7 P2-11 — drain registered stateful sessions BEFORE closing
+    // the TCP listener so in-flight requests get a chance to finish and
+    // we don't leak per-session McpServer + transport pairs. The
+    // pre-existing flush/watcher/fts handlers above still fire (they're
+    // registered separately on the same signal) — `shutdownHttpServer`
+    // calls them again as a defense-in-depth no-op (idempotent thanks
+    // to the WeakMap-delete-on-shutdown pattern).
     const shutdown = () => {
-      httpServer.close(() => {
-        // Cascade-close happens via beforeExit hooks.
-      });
+      void shutdownHttpServer(httpServer).catch(() => {});
     };
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);

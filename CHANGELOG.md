@@ -82,6 +82,7 @@ The embed-db is already updated, so a serve restart rebuilds HNSW from the corre
 - `src/server.ts` — `watcher.attachHnsw(...)` calls on both built-fresh and loaded-from-disk HNSW paths.
 - `tests/hnsw.test.ts`, `tests/embed-db.test.ts`, `tests/watcher.test.ts` — 13 new tests with POSITIVE+NEGATIVE control siblings per CLAUDE.md rule since v3.6.4.
 - `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 898 → 911.
+- `scripts/check-per-file-coverage.mjs` — `src/watcher.ts` floor 64 → 53 with documented rationale (syncHnswForFile + attachHnsw + 6 new branches in event handlers are integration-test-heavy; coverage will lift back when rc.3 adds the chokidar-driven end-to-end test). Also refreshed 2 stale `// current ~X%` inline comments (http-transport 69.39% → 72.85%, embed-pipeline 86.84% → 88.09%).
 - version bump 3.9.0-rc.1 → 3.9.0-rc.2 (7 surfaces).
 
 ### What's next

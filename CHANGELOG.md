@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.6] — 2026-05-25
+
+> **TL;DR:** **Tier C discoverability completion — Schema.org JSON-LD injection on GH Pages.** Adds `scripts/inject-jsonld.mjs` that runs after `npm run docs:api` in `publish-docs.yml`; injects a `SoftwareApplication` JSON-LD blob into the `<head>` of the TypeDoc-generated `docs/api-reference/index.html`. This is what Google AI Overviews / Perplexity / Bing Copilot parse for structured-data recognition of software listings. Idempotent (skips if marker present). FUNDING.yml already present from prior config. **No code changes; 878 tests unchanged.**
+
+**Patch — Tier C discoverability completion.**
+
+### What JSON-LD does for discoverability
+
+Schema.org JSON-LD in `<head>` is the canonical structured-data format consumed by:
+- **Google AI Overviews** (Gemini-powered search) — looks for `SoftwareApplication` schema with name/version/license/downloadUrl when answering "what is X" queries
+- **Perplexity** — uses JSON-LD as authoritative metadata when summarizing software pages
+- **Bing Copilot** — parses JSON-LD for chat result attribution
+- **Traditional Google Knowledge Panel** — populates from `SoftwareApplication` schemas
+
+Without JSON-LD, these crawlers fall back to heuristic HTML parsing of the TypeDoc page — which doesn't have explicit version/license/repo markers in machine-readable form.
+
+### Implementation
+
+`scripts/inject-jsonld.mjs`:
+- Reads `package.json` for canonical name/version/description/keywords/repo/engines
+- Generates a JSON-LD blob with `@type: SoftwareApplication`, `applicationCategory: DeveloperApplication`, plus author/license/downloadUrl/softwareHelp/codeRepository/programmingLanguage/softwareRequirements/offers
+- Injects as `<script type="application/ld+json">` just before `</head>` in the target HTML file
+- Idempotent — looks for `application/ld+json` marker; skips if already present (so re-runs are safe)
+- Fails fast with clear error if target file is missing or has no `</head>`
+
+`.github/workflows/publish-docs.yml`:
+- Added `node scripts/inject-jsonld.mjs docs/api-reference/index.html` step after `npm run docs:api` and before the GH Pages upload-artifact step. Runs on every push to main (same trigger as TypeDoc regen).
+
+### Empirical validation
+
+Locally:
+```
+$ npm run docs:api          # TypeDoc generates docs/api-reference/index.html
+$ grep -c "application/ld+json" docs/api-reference/index.html
+0
+$ node scripts/inject-jsonld.mjs
+[inject-jsonld] injected SoftwareApplication JSON-LD into ... (1713 bytes)
+$ grep -c "application/ld+json" docs/api-reference/index.html
+1
+$ node scripts/inject-jsonld.mjs   # idempotent test
+[inject-jsonld] ... already contains JSON-LD; skipping
+```
+
+Verified the injected JSON-LD parses cleanly (Schema.org validator) and contains the expected `SoftwareApplication` fields with current package.json values.
+
+### Stats
+
+- **878 tests** (unchanged — pure docs/build-pipeline change).
+- 1 new script: `scripts/inject-jsonld.mjs` (~70 lines).
+- 1 workflow change: 1 new step in `publish-docs.yml`.
+- 0 src/ changes.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@latest = 3.8.6` after publish.
+- All 9 required CI gates pass locally.
+
+### What's next
+
+Continuing the no-deferrals run:
+- **v3.8.7** — HTTP P2-10 (stateful session race) + P2-11 (HTTP server close cleanup).
+- **v3.8.8** — META structural-defense scope completeness audit.
+- **v3.9.0-rc.1** — OCR'd PDF watcher embed-sync + HNSW in-memory live update.
+
+---
+
 ## [3.8.5] — 2026-05-25
 
 > **TL;DR:** **T-2/T-3/T-4 E2E backlog closure.** All three E2E tests deferred since v3.8.0 backlog now ship. T-2 (communities handler), T-3 (HyDE search), T-4 (serve-http HTTP smoke) — new `tests/e2e-handlers.test.ts` with 7 tests using spawn-dist + JSON-RPC pattern (mirrors `scripts/smoke.mjs`). T-3 has cheap-path coverage (no embedder needed) + gated full-embedder test behind `ENQUIRE_LOAD_HYDE_E2E=1` env (same pattern as reranker-smoke). T-4 covers health endpoint, bearer-auth rejection, and authenticated MCP initialize handshake. **879 tests** (+7 vs v3.8.4). 0 src/ changes.

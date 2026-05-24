@@ -55,6 +55,11 @@ jobs:
       # the repo root into the upload artifact dir so it's served at
       # https://oomkapwn.github.io/enquire-mcp/llms.txt
       - run: cp llms.txt docs/api-reference/llms.txt
+      # v3.8.6 — inject Schema.org JSON-LD into the API ref index.html so
+      # Google AI Overviews / Perplexity / Bing Copilot recognize enquire-mcp
+      # as a SoftwareApplication with structured metadata. Reads package.json
+      # for canonical name/version/desc; idempotent (skips if already injected).
+      - run: node scripts/inject-jsonld.mjs docs/api-reference/index.html
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

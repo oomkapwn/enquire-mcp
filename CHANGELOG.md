@@ -2,6 +2,79 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.8] — 2026-05-25
+
+> **TL;DR:** **META structural-defense scope completeness audit — closes the recurring "recursion-pair shape" class (6 documented instances since v3.6.x).** New `scripts/scope-completeness-audit.mjs` enumerates every numeric-claim defense's scope (which files it covers + which it exempts) and sweeps the entire repo for matching patterns; any file containing a tracked pattern that's NOT in the defense's scope or exempts list fails CI. Wired into both `tests/scope-completeness-invariant.test.ts` (change-driven gate) and `scripts/oia-walk.mjs` Check 8 (state-driven sweep). Discovered + fixed one immediate gap: STABILITY.md "44 tools" reference was already covered by `docs-consistency.test.ts` line 183 but missing from the audit manifest. **+5 tests (3 POSITIVE + 2 NEGATIVE controls); 893 unit tests total.**
+
+**Patch — META structural-defense.**
+
+### The problem this closes
+
+Every external auditor since v3.6.0 has found stale fragments that internal class-sweeps missed: README badges, file headers, CLAUDE.md titles, inline comments, doc fragments. After 6 documented "recursion-pair" instances we now know the root cause:
+
+> When we add a structural defense (test invariant, OIA check, gate), the defense has a SCOPE — a set of files + claim patterns it covers. Defenses we add to close one finding almost always turn out to be NARROWER than the actual problem class. The next bug then shows the narrowness.
+
+Examples:
+- **rp-1 (v3.7.14 F1+F2)**: F1 closed overclaim #6 in `renameNote`; F2 in the same PR shipped overclaim #7 in `renameFile` (TSDoc still said "Atomic via fs.rename" after impl changed to `link()+unlink()`).
+- **rp-2 (rc.14 → rc.15)**: rc.14 added 7 docs-consistency invariants for llms.txt + AGENTS.md — rc.15 found they lacked NEGATIVE controls (META violation; M-3).
+- **rp-3 (rc.15 → rc.16)**: M-3 fixed the missing NEGATIVE controls per-instance — rc.16 added the META-invariant that structurally enforces NEGATIVE control coverage on EVERY invariant test going forward.
+- **rp-4 (v3.8.3 → v3.8.4)**: v3.8.3 added OIA Check 7 for currency claims in `docs/+CLAUDE.md` only — v3.8.4 found the same drift in `README.md+AGENTS.md+examples/` (out of Check 7's scope).
+- **rp-5 (v3.8.4 itself)**: Check 7 scope expansion claim was narrow ("closes the recursion") when it only expanded ONE defense's scope, not the meta-class.
+- **rp-6 (the "every claim of closes the recursion is wrong" recursion)**: each time we say "closed the recursion" we trigger another instance.
+
+This patch is the META fix: instead of expanding individual defenses reactively, we now have a single audit that proves SCOPE-COMPLETENESS across the entire defense set.
+
+### What the audit does
+
+`scripts/scope-completeness-audit.mjs` exports a `DEFENSES` array. Each entry:
+- `id`: stable short name (e.g. `test-count`, `tool-count`)
+- `pattern`: regex applied per-line; matching → a "claim instance"
+- `scope`: file paths the defense IS responsible for (e.g. README, llms.txt). Files in scope are gated by the matching `docs-consistency.test.ts` invariant — those are out of this audit's concern.
+- `exempts`: file paths where the pattern naturally appears in historical-narrative context (CHANGELOG, CLAUDE.md status entries, docs/audits/*). These are skipped.
+- `rationale`: human-readable explanation of WHY this defense exists + which previous overclaim or drift triggered it.
+
+The audit scans every user-visible doc + manifest file (.md, .txt, .json, .cff — 20 files total). For each defense × file: if the pattern matches AND the file is NOT in scope AND NOT in exempts → that's a gap. Each gap reports the file:line, evidence, rationale, and explicit fix instructions ("either add to scope and extend docs-consistency, OR add to exempts with reasoning").
+
+### Initial defense set (5 patterns)
+
+- **test-count** (`\d{3,4} (unit )?tests`) — covered files: README, llms.txt, AGENTS.md, COMPARISON.md, package.json
+- **tool-count** (`\d{2} tools`) — covered files: README, llms.txt, AGENTS.md, COMPARISON.md, api.md, package.json, STABILITY.md
+- **prompt-count** (`\d{2} (MCP )?prompts`) — covered files: README, llms.txt, AGENTS.md, COMPARISON.md, api.md, package.json
+- **ci-gate-count** (`\d+ required (\+ \d+ advisory )?(CI )?gates`) — covered files: README, llms.txt, AGENTS.md
+- **per-file-floor-count** (`\d{1,2} per-file (branch )?floors?`) — covered files: llms.txt, AGENTS.md
+
+Extending the audit is mechanical: add a new entry to `DEFENSES` with the regex, scope, exempts, and rationale. The audit picks it up automatically.
+
+### Integration points
+
+- **`tests/scope-completeness-invariant.test.ts`** (5 tests: 3 POSITIVE + 2 NEGATIVE controls):
+  - Live invariant: current repo has 0 gaps
+  - Manifest integrity: every DEFENSES entry has all required fields
+  - Manifest integrity: defense ids are unique
+  - NEGATIVE control: synthetic gap is detected by the classifier (proves audit isn't a no-op)
+  - NEGATIVE control: exempt mechanism actually suppresses gaps
+  - Tagged with `META-INVARIANT-EXEMPT` marker (this file IS the META-invariant for the audit; its NEGATIVE controls are in-file)
+- **`scripts/oia-walk.mjs` Check 8**: thin wrapper that imports `runAudit()` and converts gaps into OIA findings. Same gap surfaced by both the test (change-driven) AND OIA (state-driven) — defense in depth.
+
+### Immediate gap closed during audit construction
+
+`STABILITY.md` line 11 ("### MCP tool names (44 tools)") + line 13 ("44 tools total = …") were already covered by `docs-consistency.test.ts` line 183 — but missing from the audit's `tool-count` scope. Added during audit bootstrap; the first audit run flagged the gap; manifest updated; second run clean.
+
+### Files changed
+
+- `scripts/scope-completeness-audit.mjs` — new file (~200 lines)
+- `tests/scope-completeness-invariant.test.ts` — new file (5 tests, ~140 lines)
+- `scripts/oia-walk.mjs` — Check 8 added (+22 lines)
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test-count claims 888 → 893
+- version bump 3.8.7 → 3.8.8 (7 surfaces)
+
+### What's next
+
+Continuing the no-deferrals run:
+- **v3.9.0-rc.1** — OCR'd PDF watcher embed-sync + HNSW in-memory live update (architectural minor bump). These were the last items deferred from the v3.8.0 backlog.
+
+---
+
 ## [3.8.7] — 2026-05-25
 
 > **TL;DR:** **HTTP transport hardening — P2-10 stateful session races (3 conditions) + P2-11 close cleanup gap (registry leak).** `src/http-transport.ts` now uses an in-flight refcount on each `StatefulSession` so the idle sweep skips busy sessions instead of force-closing them mid-stream; the max-sessions cap-check includes a `pendingInits` counter so concurrent initialize POSTs can't TOCTOU past the limit; DELETE marks `closing=true` and removes from the registry BEFORE the protocol-level shutdown runs (concurrent fetchers 404 instead of joining a half-closed session). New `shutdownHttpServer(server)` helper drains the registry + closes the TCP listener + closes vault/fts/watcher/embed-db handles — the production signal handlers + tests both use it now. **+10 negative-control tests; 888 unit tests; no API breaks.**

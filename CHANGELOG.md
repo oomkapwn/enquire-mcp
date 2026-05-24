@@ -2,6 +2,86 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.14] — 2026-05-24
+
+> **TL;DR:** Fourteenth v3.8.0 release candidate. **Post-rc.13 audit closure** — 4 findings: M-2 (root-class fix: new files `llms.txt` + `AGENTS.md` introduced drift surface without invariant coverage), L-2 (`CLAUDE.md` status section stale at rc.12 — same α-class drift the methodology keeps fighting), L-3 (Tier B0 MCP Registry submission successfully completed but not documented in CHANGELOG), L-4 (PR #117 `server.json` schema validation fix had no CHANGELOG entry). 7 new docs-consistency invariants extend coverage to llms.txt + AGENTS.md numeric claims (test count, tool breakdown, MCP prompt count, CI gate count, per-file floor count). **855 tests** (+7 invariants vs rc.13). Ships under `@rc` dist-tag.
+
+**Minor — fourteenth v3.8.0 release candidate.**
+
+### Fix M-2 (MEDIUM) — root-class fix for new-file drift-surface gap
+
+**Background.** rc.12 added `llms.txt` (https://llmstxt.org/ standard for AI agents) and `AGENTS.md` (Cursor 2.0 / Claude Code / Codex coding-agent convention). Both contain numeric/structural claims — "848 unit tests", "44 tools", "19 MCP prompts", "9 required CI gates", "10 per-file branch floors" — that were NOT covered by the existing `docs-consistency.test.ts` invariants. Existing invariants checked README, STABILITY.md, COMPARISON.md, package.json description, and docs/api.md, but new files were a fresh drift surface.
+
+Post-rc.13 audit found this as a class-level methodology gap: **whenever we add a new docs surface with numeric claims, we must extend docs-consistency at the same time**, otherwise the surface will silently drift. Same class as M-1 (CLI help text drift before rc.11 lifted to `cli-help.ts`) — but for a *new* surface we created in rc.12 rather than a pre-existing one.
+
+**Fix** (`tests/docs-consistency.test.ts`): added a new `describe` block "llms.txt + AGENTS.md numeric claims (v3.8.0-rc.14 M-2)" with 7 invariants:
+1. `llms.txt` test count = actual `it()` count across `tests/*.test.ts`
+2. `llms.txt` tool breakdown `N tools (A always-on read + B opt-in + C gated writes)` = TOOL_MANIFEST counts per kind
+3. `llms.txt` MCP prompt count = `registerPrompt` count in `src/prompts.ts`
+4. `llms.txt` `N required + M advisory CI gates` count = `REQUIRED="..."` regex entries in `.github/workflows/release.yml`
+5. `AGENTS.md` `X+ tests` lower-bound assertion (≤ actual, with drift detection if actual >50 above floor)
+6. `AGENTS.md` per-file branch floor count = entries in `scripts/check-per-file-coverage.mjs` FLOORS object
+7. `AGENTS.md` `N required CI gates` (multiple mentions) all = `release.yml` REQUIRED count
+
+Tested empirically: invariants caught 7 fresh drift instances (test count now 855, not 848 — the 7 new invariants themselves changed the count). All surfaces updated to 855 in same commit.
+
+**Defense-in-depth.** This now means EVERY new docs surface in this repo must either (a) avoid numeric claims, OR (b) be added to docs-consistency invariants at the same time. CLAUDE.md anti-patterns updated with new rule.
+
+### Fix L-2 (LOW) — CLAUDE.md status section was stale at rc.12
+
+**Background.** CLAUDE.md line 119 said `**v3.8.0-rc.12 shipped (current)**` after rc.13 was already shipped + MCP Registry submission successful. Classic α-class drift the methodology specifically warns against.
+
+**Fix** (`CLAUDE.md`): updated status section to reflect rc.12 (shipped), rc.13 (shipped, includes MCP Registry submission confirmation), rc.14 (current). Same edit pattern as previous status updates.
+
+### Fix L-3 (LOW) — MCP Registry submission was not documented in CHANGELOG
+
+**Background.** rc.13 CHANGELOG entry predicted "After this RC publishes to npm, `mcp-publisher publish` submits server.json to the canonical MCP Registry." — but the *actual* successful submission was never recorded in any CHANGELOG entry. Audit trail gap.
+
+**Confirmation.** Successfully published to `https://registry.modelcontextprotocol.io` on 2026-05-24 09:18:29 UTC:
+- Server name: `io.github.oomkapwn/enquire-mcp`
+- Version: `3.8.0-rc.13`
+- Status: `active`
+- `isLatest`: `true`
+
+Live verification: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=enquire"` → 1 listing. Glama.ai, mcp.so, smithery.ai will auto-sync from this canonical source over 24-48 hours.
+
+Also opened **awesome-mcp-servers PR #6838** at `https://github.com/punkpeye/awesome-mcp-servers/pull/6838` in the Knowledge & Memory category. Awaiting maintainer review.
+
+### Fix L-4 (LOW) — PR #117 server.json validation fix was not documented
+
+**Background.** rc.13 shipped with `server.json` that failed MCP Registry validation (description >100 chars, runtimeArguments missing required `valueHint`/`value`/`name` fields per the v2025-12-11 schema). Fixed during the registry submission session and merged via PR #117 — but no CHANGELOG entry was added.
+
+**Confirmation.** PR #117 merged to main at commit ea3a4cc. Changes:
+1. `server.json` description: 489 chars → 91 chars (matches MCP Registry `length ≤ 100` constraint)
+2. PositionalArgument: added `valueHint: "subcommand"`, `value: "serve"`, ordered fields per schema
+3. NamedArgument: explicit `type: "named"` + `name: "--vault"` fields
+
+`mcp-publisher validate` now passes cleanly. The corrected `server.json` is what was published to the registry; this RC documents the gap.
+
+### Stats
+
+- **855 tests** (+7 docs-consistency invariants vs rc.13).
+- 2 surfaces newly covered by invariants: `llms.txt`, `AGENTS.md`.
+- 5 surfaces with test-count bumps: README (×3), package.json, COMPARISON.md, llms.txt, AGENTS.md.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### Method note
+
+**New rule (CLAUDE.md anti-patterns):** whenever a PR adds a new docs surface with numeric claims, the SAME PR must extend `docs-consistency.test.ts` to cover those claims. Otherwise the new surface becomes a fresh drift surface that the next external audit will catch. This generalizes the v3.7.17 OIA rule from "state-driven walks for existing files" to "structural invariants for new files".
+
+### v3.8.0 remaining backlog
+
+- **External audit** before `@latest` promotion (CLAUDE.md rule since v3.6.1 — required ≥2 independent external auditors per major).
+- **Tier C** (deferred): JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- **Multi-subcommand CLI drift audit** (from rc.11 RCA): install-model/build-embeddings/eval/bench for --include-pdfs/--embed-file/--json/etc.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+---
+
 ## [3.8.0-rc.13] — 2026-05-24
 
 > **TL;DR:** Thirteenth v3.8.0 release candidate. **AI/LLM discoverability Tier B** — adds `mcpName` field to `package.json` (`io.github.oomkapwn/enquire-mcp`) and ships `server.json` at repo root, both required by the official MCP Registry verification (registry.modelcontextprotocol.io). Adds `CITATION.cff` for academic discoverability (Google Scholar / Semantic Scholar) citing the underlying research papers (HyDE, RRF, BM25, Louvain, HNSW, BGE). After this RC ships to npm, mcp-publisher can submit to the canonical MCP Registry — which auto-propagates to glama.ai, mcp.so, smithery.ai, and other downstream registries. **No code changes; metadata + documentation only.** 848 tests unchanged. Ships under `@rc` dist-tag.

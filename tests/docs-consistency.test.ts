@@ -664,3 +664,159 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ).toBe(0);
   });
 });
+
+// v3.8.0-rc.14 M-2 — root-class fix for "new files introduce drift surface
+// without invariant coverage". rc.12 added llms.txt + AGENTS.md (Tier A
+// discoverability for AI agents). Both contain numeric/structural claims —
+// "848 unit tests", "44 tools", "19 MCP prompts", "9 required CI gates",
+// "10 per-file branch floors" — that are NOT covered by the existing
+// docs-consistency invariants (those check README/STABILITY/COMPARISON/
+// package.json/api.md). When tests grow to 850+, llms.txt and AGENTS.md
+// would silently drift.
+//
+// Same class as M-1 (CLI help text drift between serve and serve-http
+// before rc.11 lifted to cli-help.ts). Fix: extend invariants to cover
+// every numeric claim in these new files.
+describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-rc.14 M-2)", () => {
+  async function countActualTests(): Promise<number> {
+    const fs = await import("node:fs/promises");
+    const files: string[] = [];
+    async function walk(dir: string) {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) await walk(full);
+        else if (e.name.endsWith(".test.ts")) files.push(full);
+      }
+    }
+    await walk(path.join(repoRoot, "tests"));
+    let count = 0;
+    for (const f of files) {
+      const body = await fs.readFile(f, "utf8");
+      const matches = [...body.matchAll(/^\s*it\s*[(]/gm)];
+      count += matches.length;
+    }
+    return count;
+  }
+
+  async function getActualCounts(): Promise<{
+    allTools: number;
+    alwaysOn: number;
+    ftsOptIn: number;
+    diagnostic: number;
+    writes: number;
+    prompts: number;
+  }> {
+    const allTools = TOOL_MANIFEST.length;
+    const alwaysOn = TOOL_MANIFEST.filter((t) => t.kind === "read").length;
+    const ftsOptIn = TOOL_MANIFEST.filter((t) => t.kind === "fts").length;
+    const diagnostic = TOOL_MANIFEST.filter((t) => t.kind === "diagnostic").length;
+    const writes = TOOL_MANIFEST.filter((t) => t.kind === "write").length;
+    const promptsSrc = await read("src/prompts.ts");
+    const prompts = registeredNames(promptsSrc, "registerPrompt").size;
+    return { allTools, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
+  }
+
+  /** Count pipe-separated entries in release.yml's REQUIRED regex.
+   *  Reuses the canonical source from the v3.7.14 F4 invariant. */
+  async function countRequiredCiGates(): Promise<number> {
+    const releaseYml = await read(".github/workflows/release.yml");
+    const m = /REQUIRED="([^"]+)"/.exec(releaseYml);
+    if (!m) throw new Error('release.yml must declare REQUIRED="...|..." regex');
+    return (m[1] ?? "").split("|").length;
+  }
+
+  /** Count entries in scripts/check-per-file-coverage.mjs's FLOORS object. */
+  async function countPerFileFloors(): Promise<number> {
+    const script = await read("scripts/check-per-file-coverage.mjs");
+    // Match every `"src/foo.ts": { branches: N }` entry.
+    const matches = [...script.matchAll(/"src\/[\w./-]+":\s*\{\s*branches:\s*\d+\s*\}/g)];
+    return matches.length;
+  }
+
+  it("llms.txt test count matches actual it() count", async () => {
+    const llms = await read("llms.txt");
+    const actual = await countActualTests();
+    const m = /(\d+)\s+unit tests/.exec(llms);
+    expect(m, "llms.txt must declare 'N unit tests'").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10), `llms.txt mentions "${m?.[0]}" but actual test count is ${actual}`).toBe(
+      actual
+    );
+  });
+
+  it("llms.txt tool count matches actual", async () => {
+    const llms = await read("llms.txt");
+    const counts = await getActualCounts();
+    // Match "44 tools (33 always-on read + 4 opt-in + 7 gated writes)"
+    const m = /(\d+)\s+tools\s*\((\d+)\s+always-on read\s*\+\s*(\d+)\s+opt-in\s*\+\s*(\d+)\s+gated writes\)/.exec(llms);
+    expect(m, "llms.txt must declare 'N tools (A always-on read + B opt-in + C gated writes)'").not.toBeNull();
+    if (!m) return;
+    expect(Number.parseInt(m[1] ?? "0", 10), "llms.txt total tool count").toBe(counts.allTools);
+    expect(Number.parseInt(m[2] ?? "0", 10), "llms.txt always-on count").toBe(counts.alwaysOn);
+    expect(Number.parseInt(m[3] ?? "0", 10), "llms.txt opt-in count").toBe(counts.ftsOptIn + counts.diagnostic);
+    expect(Number.parseInt(m[4] ?? "0", 10), "llms.txt write count").toBe(counts.writes);
+  });
+
+  it("llms.txt MCP prompt count matches actual", async () => {
+    const llms = await read("llms.txt");
+    const counts = await getActualCounts();
+    const m = /(\d+)\s+MCP prompts/.exec(llms);
+    expect(m, "llms.txt must declare 'N MCP prompts'").not.toBeNull();
+    expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
+  });
+
+  it("llms.txt 'N required + M advisory CI gates' matches release.yml REQUIRED count", async () => {
+    const llms = await read("llms.txt");
+    const required = await countRequiredCiGates();
+    const m = /(\d+)\s+required\s*\+\s*\d+\s+advisory CI gates/.exec(llms);
+    expect(m, "llms.txt must declare 'N required + M advisory CI gates'").not.toBeNull();
+    expect(
+      Number.parseInt(m?.[1] ?? "0", 10),
+      `llms.txt says "${m?.[0]}" but release.yml REQUIRED has ${required} entries`
+    ).toBe(required);
+  });
+
+  it("AGENTS.md test count claim (X+ tests) is a valid lower bound", async () => {
+    const agents = await read("AGENTS.md");
+    const actual = await countActualTests();
+    // AGENTS.md uses "848+ tests" — a lower bound. Actual must be >= claimed.
+    const m = /(\d+)\+\s+tests/.exec(agents);
+    expect(m, "AGENTS.md must declare 'X+ tests'").not.toBeNull();
+    const claimed = Number.parseInt(m?.[1] ?? "0", 10);
+    expect(
+      claimed,
+      `AGENTS.md says "${m?.[0]}" (lower bound) but actual is ${actual} — if actual is far above (>50), bump the floor in AGENTS.md`
+    ).toBeLessThanOrEqual(actual);
+    // Drift detection: if actual is more than 50 above claimed, prompt update.
+    expect(
+      actual - claimed,
+      `AGENTS.md '${claimed}+ tests' is ${actual - claimed} below actual ${actual} — bump the floor`
+    ).toBeLessThan(50);
+  });
+
+  it("AGENTS.md per-file branch floor count matches actual entries in scripts/check-per-file-coverage.mjs", async () => {
+    const agents = await read("AGENTS.md");
+    const actualFloors = await countPerFileFloors();
+    const m = /(\d+)\s+per-file branch floors/.exec(agents);
+    expect(m, "AGENTS.md must declare 'N per-file branch floors enforced'").not.toBeNull();
+    expect(
+      Number.parseInt(m?.[1] ?? "0", 10),
+      `AGENTS.md says "${m?.[0]}" but scripts/check-per-file-coverage.mjs has ${actualFloors} entries`
+    ).toBe(actualFloors);
+  });
+
+  it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
+    const agents = await read("AGENTS.md");
+    const required = await countRequiredCiGates();
+    // AGENTS.md has multiple "9 required" mentions (CI gates section header,
+    // do-NOT rules, etc.) — all must agree with release.yml.
+    const mentions = [...agents.matchAll(/(\d+)\s+required\s+(?:CI\s+)?gates/g)];
+    expect(mentions.length, "AGENTS.md must mention 'N required gates' at least once").toBeGreaterThan(0);
+    for (const m of mentions) {
+      expect(
+        Number.parseInt(m[1] ?? "0", 10),
+        `AGENTS.md mentions "${m[0]}" but release.yml REQUIRED has ${required} entries`
+      ).toBe(required);
+    }
+  });
+});

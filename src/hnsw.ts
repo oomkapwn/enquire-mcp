@@ -162,6 +162,50 @@ export interface HnswIndex {
     >,
     signature: string
   ): Promise<boolean>;
+  /**
+   * v3.9.0-rc.2 — apply a live-update diff to the in-memory index. The
+   * watcher calls this after `embedDb.upsertNote()` returns its
+   * `{ oldIds, newIds }` so search reflects the change immediately
+   * (pre-3.9.0, search was stale until the next serve restart rebuilt
+   * the index from the freshly upserted embed-db).
+   *
+   * Semantics:
+   *   1. Each id in `removeLabels` is `markDelete`'d. Missing labels
+   *      (e.g. a stale watcher tracking a label that was already evicted)
+   *      are silently skipped.
+   *   2. Each entry in `addPoints` is `addPoint`'d with `replaceDeleted`
+   *      = true so deleted-but-allocated slots are reused before the
+   *      index grows. Throws (wrapped) if capacity is exhausted AND the
+   *      caller didn't pre-grow via {@link resize}.
+   *
+   * Atomicity: the SDK's underlying mutations are synchronous, but
+   * `applyDiff` does not wrap them in a transaction. A throw mid-loop
+   * leaves the index in a partial-update state (some labels removed,
+   * some new points added, others not). Callers MUST treat throws as
+   * "rebuild required" — there's no rollback path in hnswlib.
+   *
+   * @returns the number of labels removed + the number of points added
+   *   (for logging / instrumentation). Sum should equal
+   *   `removeLabels.length + addPoints.length` on success.
+   */
+  applyDiff(
+    removeLabels: ReadonlyArray<number>,
+    addPoints: ReadonlyArray<{ label: number; vector: Float32Array }>
+  ): { removed: number; added: number };
+  /**
+   * v3.9.0-rc.2 — grow the index to at least `newMaxElements`. No-op if
+   * already large enough. Used by the watcher before `applyDiff` when
+   * the live-update would push us past current capacity. Native call
+   * is synchronous (in-place re-allocation).
+   */
+  resize(newMaxElements: number): void;
+  /**
+   * v3.9.0-rc.2 — capacity introspection. `currentCount` is the number
+   * of live points (deleted points still count toward this); `maxElements`
+   * is the pre-allocated cap. Caller uses these to decide whether
+   * {@link resize} is needed before {@link applyDiff}.
+   */
+  capacity(): { currentCount: number; maxElements: number };
 }
 
 /**
@@ -177,7 +221,13 @@ interface HnswlibNodeModule {
 }
 
 interface HnswNativeIndex {
-  initIndex(maxElements: number, m?: number, efConstruction?: number, randomSeed?: number): void;
+  initIndex(
+    maxElements: number,
+    m?: number,
+    efConstruction?: number,
+    randomSeed?: number,
+    allowReplaceDeleted?: boolean
+  ): void;
   addPoint(point: number[], label: number, replaceDeleted?: boolean): void;
   searchKnn(
     query: number[],
@@ -188,6 +238,18 @@ interface HnswNativeIndex {
   /** v2.16.0 — persistence (hnswlib-node@^3 API). */
   writeIndex(filename: string): Promise<boolean>;
   readIndex(filename: string, allowReplaceDeleted?: boolean): Promise<boolean>;
+  /** v3.9.0-rc.2 — mark a label as deleted (the slot stays allocated; a
+   *  later `addPoint(..., replaceDeleted=true)` can reuse it). Throws if
+   *  the label was never added. */
+  markDelete(label: number): void;
+  /** v3.9.0-rc.2 — current allocated slot count + max capacity. Used by
+   *  HnswIndex.applyDiff to detect capacity exhaustion BEFORE addPoint
+   *  throws (the native error is "The number of elements exceeds the
+   *  specified limit." which we want to wrap in a clearer message). */
+  getCurrentCount(): number;
+  getMaxElements(): number;
+  /** v3.9.0-rc.2 — grow the index in place. Native call is sync. */
+  resizeIndex(newMaxElements: number): void;
 }
 
 let cachedModule: HnswlibNodeModule | null = null;
@@ -249,7 +311,13 @@ export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: Hns
   // Pre-size the index. `m=16` and `efConstruction=200` are HNSW defaults
   // (Malkov & Yashunin, 2018) and produce ≥98% recall@10 vs brute-force on
   // typical PKM corpora.
-  ctor.initIndex(Math.max(opts.maxElements, 1), m, efConstruction, seed);
+  // v3.9.0-rc.2 — pass `allowReplaceDeleted=true` so the live-update
+  // path (`applyDiff` → `addPoint(replaceDeleted=true)`) can reuse
+  // markDelete'd slots. Hnswlib defaults this to false; calling addPoint
+  // with replaceDeleted=true on an index that wasn't initialized with
+  // this flag throws "Replacement of deleted elements is disabled in
+  // constructor". Always-on costs nothing for the read-only path.
+  ctor.initIndex(Math.max(opts.maxElements, 1), m, efConstruction, seed, /* allowReplaceDeleted */ true);
 
   for (let i = 0; i < vectors.length; i++) {
     const v = vectors[i];
@@ -269,9 +337,23 @@ export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: Hns
  * load-from-disk path returns the same shape without re-running addPoint.
  */
 function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): HnswIndex {
+  // v3.9.0-rc.2 — `size` is a fallback. When the live-update methods
+  // (`applyDiff`, `resize`) are unavailable on the native lib (older
+  // hnswlib-node, or some platforms with a missing prebuild), the index
+  // is read-only and `size` stays at the buildHnsw-time value. When the
+  // methods ARE available, the `size` getter delegates to
+  // `ctor.getCurrentCount()` so callers always see the live count after
+  // mutations. We probe once at wrap time.
+  const hasLiveUpdate =
+    typeof ctor.markDelete === "function" &&
+    typeof ctor.getCurrentCount === "function" &&
+    typeof ctor.getMaxElements === "function" &&
+    typeof ctor.resizeIndex === "function";
   return {
     dim,
-    size,
+    get size(): number {
+      return hasLiveUpdate ? ctor.getCurrentCount() : size;
+    },
     searchKnn(queryVec: Float32Array, k: number, qOpts?: HnswQueryOptions): { labels: number[]; distances: number[] } {
       if (queryVec.length !== dim) {
         throw new Error(`HnswIndex.searchKnn: query dim ${queryVec.length} ≠ index dim ${dim}`);
@@ -282,6 +364,63 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       ctor.setEf(ef);
       const result = ctor.searchKnn(Array.from(queryVec), k, undefined);
       return { labels: result.neighbors, distances: result.distances };
+    },
+    applyDiff(removeLabels, addPoints): { removed: number; added: number } {
+      if (!hasLiveUpdate) {
+        throw new Error(
+          "HnswIndex.applyDiff: hnswlib-node native binding does not expose markDelete/addPoint/resizeIndex — " +
+            "upgrade hnswlib-node to ≥3.0 (or rebuild from source) to use live-update; falling back to full rebuild on next serve restart"
+        );
+      }
+      let removed = 0;
+      for (const label of removeLabels) {
+        try {
+          ctor.markDelete(label);
+          removed += 1;
+        } catch {
+          // Silently skip labels that were never added (or already deleted).
+          // The watcher's view can lag behind reality after a sweep eviction;
+          // it shouldn't fail the live-update for this.
+        }
+      }
+      let added = 0;
+      // Pre-grow if needed so addPoint doesn't throw mid-loop with a
+      // half-applied diff. We size to currentCount + addPoints.length
+      // with a small headroom multiplier so successive small diffs don't
+      // ping-pong the resize call (allocations are O(n)).
+      const needed = ctor.getCurrentCount() + addPoints.length;
+      const current = ctor.getMaxElements();
+      if (needed > current) {
+        // 1.5× the requested target — same growth factor most JS array
+        // implementations use; balances allocation cost vs. memory waste.
+        ctor.resizeIndex(Math.max(needed, Math.ceil(current * 1.5)));
+      }
+      for (const pt of addPoints) {
+        if (pt.vector.length !== dim) {
+          throw new Error(
+            `HnswIndex.applyDiff: vector for label ${pt.label} has dim ${pt.vector.length}, expected ${dim}`
+          );
+        }
+        ctor.addPoint(Array.from(pt.vector), pt.label, /* replaceDeleted */ true);
+        added += 1;
+      }
+      return { removed, added };
+    },
+    resize(newMaxElements: number): void {
+      if (!hasLiveUpdate) {
+        throw new Error("HnswIndex.resize: hnswlib-node native binding does not expose resizeIndex");
+      }
+      if (newMaxElements > ctor.getMaxElements()) {
+        ctor.resizeIndex(newMaxElements);
+      }
+    },
+    capacity(): { currentCount: number; maxElements: number } {
+      if (!hasLiveUpdate) {
+        // Best-effort fallback — we know `size` at build time but not
+        // maxElements (it was passed to initIndex internally).
+        return { currentCount: size, maxElements: size };
+      }
+      return { currentCount: ctor.getCurrentCount(), maxElements: ctor.getMaxElements() };
     },
     async saveTo(file, rowsByLabel, signature): Promise<boolean> {
       const fs = await import("node:fs/promises");

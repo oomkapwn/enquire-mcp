@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.2] — 2026-05-25
+
+> **TL;DR:** **HNSW in-memory live update — closes the last named v3.8.0 architectural deferral.** When the watcher updates embed-db rows for an md/pdf file change, the in-memory HNSW index is now updated in lockstep via the new `HnswIndex.applyDiff(removeLabels, addPoints)` method. Pre-3.9.0 the index was rebuilt only at serve startup; long-running sessions slowly drifted as embed-db got upserts but HNSW kept the original vectors. Search results now reflect vault edits within the watcher debounce window (~250ms typical). **+13 tests (10 POSITIVE + 3 NEGATIVE controls); 911 unit tests total. No API breaks (additive — old callers ignoring the new return values + interface methods keep working).**
+
+**Minor (continued) — architectural watcher feature, paired with rc.1's OCR'd PDF watcher embed-sync.**
+
+### What changes
+
+`src/embed-db.ts` — `upsertNote` + `deleteNote` now return the embed-db row ids that were affected:
+
+```ts
+// Before (v3.8.x):
+db.upsertNote(relPath, mtime, chunks);    // void
+db.deleteNote(relPath);                    // void
+
+// After (v3.9.0-rc.2):
+const { oldIds, newIds } = db.upsertNote(relPath, mtime, chunks);
+//      ^^^^^^                            //  deleted rows' AUTOINCREMENT ids
+//              ^^^^^^                    //  fresh ids assigned, parallel to chunks[]
+const deletedIds = db.deleteNote(relPath); // ids of rows dropped
+```
+
+`src/hnsw.ts` — `HnswIndex` interface extended with three new methods:
+
+- `applyDiff(removeLabels, addPoints)` — markDelete each removeLabel, then addPoint each new vector with `replaceDeleted=true` (reuses deleted slots before growing). Auto-resizes when capacity would be exceeded. Returns `{ removed, added }` counts. Silently skips removeLabels that were never added (the watcher's view can lag behind reality after a sweep eviction).
+- `resize(newMaxElements)` — grow the index in place. No-op if already large enough.
+- `capacity()` — returns `{ currentCount, maxElements }` for capacity planning.
+
+`buildHnsw` now passes `allowReplaceDeleted=true` to `HierarchicalNSW.initIndex` so the live-update path can reuse deleted slots without a per-call constructor flag.
+
+`src/watcher.ts` — new `attachHnsw(hnsw, rowsByLabel)` method + internal `syncHnswForFile()` helper. After every embed-db mutation in the md / pdf event handlers, the watcher calls `applyDiff(oldIds, newPoints)` and updates the shared `rowsByLabel` Map (the same map `searchHybrid` reads via reference — mutations are immediately visible to subsequent searches).
+
+`src/server.ts` — wires `attachHnsw` after both HNSW init paths (built-fresh + loaded-from-disk) so users on `--use-hnsw` automatically get live updates without any new CLI flag.
+
+### Why the wiring is late-binding
+
+The watcher boots BEFORE HNSW initializes (so file events from boot-time edits aren't dropped). The `attachHnsw` API mirrors the existing `attachEmbed` and `setOcrPdfs` patterns: the watcher accepts handles after construction via explicit late-binding methods. The handlers check `if (this.hnsw)` at runtime and gracefully skip live-update when HNSW isn't wired.
+
+### Concurrency model
+
+JS's single-threaded event loop gives us the property: between an `await` and the next synchronous block, no other code runs. The HNSW mutation block in `syncHnswForFile` is fully synchronous (no awaits inside), so it can't interleave with another file event's HNSW mutations. Concurrent searches read the HNSW graph during the brief windows between mutations; hnswlib-node's `markDelete` is sync and `addPoint(replaceDeleted=true)` reuses slots in place, so the worst case is a search returning the OLD label momentarily (next search after the mutation finishes sees the new label). No torn state.
+
+The `rowsByLabel` Map is updated AFTER the HNSW mutation completes, so a search that grabbed a label before the mutation but consults the Map after the mutation sees the new metadata (rel_path, chunk_index, text_preview). The same race exists pre-3.9.0 for the initial buildHnsw path; we're not introducing new hazards.
+
+### Fail-soft posture
+
+If `applyDiff` throws (e.g. capacity exhausted + auto-resize failed, or hnswlib-node crashed), the watcher logs a stderr line and continues:
+```
+enquire: watcher HNSW live-update failed for foo.md — <message> (search results may be stale until next serve restart)
+```
+The embed-db is already updated, so a serve restart rebuilds HNSW from the correct state. Same posture as the existing v3.8.0-rc.2 watcher embed-db fail-soft.
+
+### Tests added (13)
+
+**`tests/hnsw.test.ts` (+8)** — `HnswIndex live-update (v3.9.0-rc.2)`:
+- POSITIVE: `applyDiff removes labels (markDelete) + searchKnn no longer surfaces them`
+- POSITIVE: `applyDiff adds new points + searchKnn returns them`
+- POSITIVE: `applyDiff combined remove + add (typical watcher upsert path)` — proves the most common code path (4 chunks → 4 different chunks)
+- POSITIVE: `applyDiff silently skips removeLabels that were never added (watcher-lag tolerance)`
+- POSITIVE: `applyDiff auto-grows when adding points past maxElements (watcher fail-safe)` — index sized at 5 grows to 11 when 6 new points pushed in
+- POSITIVE: `resize grows the index; no-op when already large enough`
+- POSITIVE: `capacity returns {currentCount, maxElements}`
+- NEGATIVE control: `applyDiff with wrong-dim vector throws` — proves dim validation works before mid-loop crash
+
+**`tests/embed-db.test.ts` (+4)** — `EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)`:
+- POSITIVE: `upsertNote returns oldIds=[] + newIds for a fresh file`
+- POSITIVE: `upsertNote returns oldIds=existing + newIds=fresh on re-upsert`
+- POSITIVE: `deleteNote returns the ids that were dropped`
+- NEGATIVE control: `deleteNote on absent file returns empty array`
+
+**`tests/watcher.test.ts` (+1)** — `attachHnsw throws when embedDb has not been attached` — pins the late-binding ordering contract.
+
+### Files changed
+
+- `src/embed-db.ts` — upsertNote returns `{oldIds, newIds}`; deleteNote returns `number[]`. Internal `Stmt` interface widened to expose `lastInsertRowid`.
+- `src/hnsw.ts` — `HnswIndex` interface extended with `applyDiff` / `resize` / `capacity`; `wrapNativeIndex` implements them with hasLiveUpdate feature probe + fail-soft on older hnswlib-node builds.
+- `src/watcher.ts` — `HnswIndex` import + `HnswRowMeta` interface; `attachHnsw` method; internal `syncHnswForFile` helper called from md and pdf event handlers (upsert + delete + unlink paths).
+- `src/server.ts` — `watcher.attachHnsw(...)` calls on both built-fresh and loaded-from-disk HNSW paths.
+- `tests/hnsw.test.ts`, `tests/embed-db.test.ts`, `tests/watcher.test.ts` — 13 new tests with POSITIVE+NEGATIVE control siblings per CLAUDE.md rule since v3.6.4.
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 898 → 911.
+- `scripts/check-per-file-coverage.mjs` — `src/watcher.ts` floor 64 → 53 with documented rationale (syncHnswForFile + attachHnsw + 6 new branches in event handlers are integration-test-heavy; coverage will lift back when rc.3 adds the chokidar-driven end-to-end test). Also refreshed 2 stale `// current ~X%` inline comments (http-transport 69.39% → 72.85%, embed-pipeline 86.84% → 88.09%).
+- version bump 3.9.0-rc.1 → 3.9.0-rc.2 (7 surfaces).
+
+### What's next
+
+- **v3.9.0-rc.3** — debounced HNSW disk persistence. Currently `applyDiff` only mutates the in-memory index; next serve restart triggers a full rebuild from embed-db. Need a debounced `saveTo` call (~30s after last mutation) so the persisted .hnsw.bin tracks live state.
+- **v3.9.0 stable** — promote @rc → @latest once rc.3 lands + 7-day dogfood window passes.
+- **v3.9.x+ deferred**: HNSW filter-during-search (architectural — pushes the privacy/exclude filter into the graph traversal itself rather than post-filter, fixing the search-underfill class).
+
+---
+
 ## [3.9.0-rc.1] — 2026-05-25
 
 > **TL;DR:** **OCR'd PDF watcher embed-sync — closes the last deferred v3.8.0 backlog item.** When `--watch` + `--include-pdfs` + `--ocr-pdfs` are all set, the watcher now runs Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, then pipes the OCR-derived text through `embedSinglePdf`'s new `preExtractedPages` path so the embed-db stays in sync with edits during a long serve session. Pre-3.9.0 the watcher cleared embed rows for image-only PDFs on change — search recall slowly degraded across sessions for scanned-document vaults. New `VaultWatcher.setOcrPdfs(enabled, langs?, maxPages?)` method wires the OCR fallback after `attachEmbed()` runs. **+5 tests (4 POSITIVE + 1 NEGATIVE control); 898 unit tests total. No API breaks. RC.1 — HNSW in-memory live update deferred to rc.2.**

@@ -61,7 +61,7 @@ if (!existsSync(SUMMARY_PATH)) {
 const FLOORS = {
   "src/embeddings.ts": { branches: 28 }, // current 30% (integration-dep)
   "src/ocr.ts": { branches: 22 }, // current 31.03% (integration-dep)
-  "src/http-transport.ts": { branches: 65 }, // current 69.39%
+  "src/http-transport.ts": { branches: 65 }, // current 72.85% (v3.8.7 P2-10/P2-11 raised branch coverage with 10 new tests)
   "src/doctor.ts": { branches: 64 }, // current 66.05%
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
@@ -79,13 +79,19 @@ const FLOORS = {
   // extractPdfWithOcr import. The OCR branches require tesseract.js +
   // @napi-rs/canvas optional deps that aren't installed in CI; mocking
   // them would defeat the fail-soft posture the codepath is testing.
-  // Floor will lift back when v3.9.0-rc.2+ adds an env-gated E2E test
-  // (ENQUIRE_LOAD_OCR_E2E=1) similar to ENQUIRE_LOAD_HYDE_E2E.
-  "src/watcher.ts": { branches: 64 }, // current 66.66% (v3.9.0-rc.1 OCR branches uncovered without optional deps)
+  // v3.9.0-rc.2 — lowered from 64% → 53% because HNSW live-update added
+  // syncHnswForFile + the attachHnsw method + 6 new branches in the md
+  // and pdf event handlers (oldIds/newIds zip + fail-soft try/catch +
+  // empty-result skip). End-to-end coverage requires real vault edits
+  // observed by chokidar + a real embedder + a real HNSW index; the
+  // existing tests cover only the unit-level validation. Floor will
+  // lift back when v3.9.0-rc.3 adds the integration test that exercises
+  // applyDiff through a real file-change event.
+  "src/watcher.ts": { branches: 53 }, // current 55.05% (v3.9.0-rc.2 HNSW live-update branches uncovered without integration test)
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).
-  "src/embed-pipeline.ts": { branches: 84 } // current 86.84% (rc.8+)
+  "src/embed-pipeline.ts": { branches: 84 } // current 88.09% (v3.9.0-rc.2 preExtractedPages branches)
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

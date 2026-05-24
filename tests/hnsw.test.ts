@@ -595,3 +595,150 @@ describe("assertHnswModelMatchesEmbedder (v3.6.2 HN-4)", () => {
     }
   });
 });
+
+// v3.9.0-rc.2 — HnswIndex live-update API (applyDiff, resize, capacity).
+// These exercise the new methods the watcher uses to keep the in-memory
+// graph in sync with embed-db mutations during a serve session, without
+// rebuilding the index from scratch.
+describe("HnswIndex live-update (v3.9.0-rc.2 applyDiff / resize / capacity)", () => {
+  // L2-normalize a synthetic vector so cosine distances are meaningful.
+  function makeNormVector(dim: number, seed: number): Float32Array {
+    const v = new Float32Array(dim);
+    let norm2 = 0;
+    for (let i = 0; i < dim; i++) {
+      const x = Math.sin(seed * 7.31 + i * 0.17);
+      v[i] = x;
+      norm2 += x * x;
+    }
+    const inv = 1 / Math.sqrt(norm2);
+    for (let i = 0; i < dim; i++) v[i] *= inv;
+    return v;
+  }
+
+  it("applyDiff removes labels (markDelete) + searchKnn no longer surfaces them", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 20 }, (_, i) => ({ label: i + 100, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 50 });
+    expect(idx.size).toBe(20);
+    // Remove labels 100–104 (the first 5).
+    const { removed, added } = idx.applyDiff([100, 101, 102, 103, 104], []);
+    expect(removed).toBe(5);
+    expect(added).toBe(0);
+    // hnswlib-node's getCurrentCount returns SLOT count (deleted slots
+    // still count), not live count. Size therefore stays at 20 after
+    // markDelete; the observable defense is that searchKnn never
+    // surfaces a markDelete'd label.
+    const result = idx.searchKnn(makeNormVector(dim, 0), 15, { ef: 50 });
+    for (const removedLabel of [100, 101, 102, 103, 104]) {
+      expect(result.labels.includes(removedLabel), `searchKnn surfaced markDelete'd label ${removedLabel}`).toBe(false);
+    }
+  });
+
+  it("applyDiff adds new points + searchKnn returns them", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 10 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 30 });
+    // Add 3 new points with labels 1000-1002. Use distinct seeds so they
+    // form their own "cluster" in vector space.
+    const newPoints = [1000, 1001, 1002].map((label) => ({
+      label,
+      vector: makeNormVector(dim, label) // seed = label → unique direction
+    }));
+    const { removed, added } = idx.applyDiff([], newPoints);
+    expect(removed).toBe(0);
+    expect(added).toBe(3);
+    expect(idx.size).toBe(13);
+    // Query a vector close to label 1000 → it should be top-1.
+    const result = idx.searchKnn(makeNormVector(dim, 1000), 5, { ef: 30 });
+    expect(result.labels).toContain(1000);
+    expect(result.labels[0]).toBe(1000);
+  });
+
+  it("applyDiff combined remove + add (typical watcher upsert path)", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 10 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 30 });
+    // Simulate a file edit: remove labels 0,1,2 and add new labels 10,11,12,13 (one extra chunk).
+    // The addPoint(replaceDeleted=true) path reuses deleted slots (3 of
+    // the 4 adds), so getCurrentCount only grows by 1 (the fourth add
+    // beyond the available deleted slots).
+    const newPoints = [10, 11, 12, 13].map((label) => ({ label, vector: makeNormVector(dim, label + 500) }));
+    const { removed, added } = idx.applyDiff([0, 1, 2], newPoints);
+    expect(removed).toBe(3);
+    expect(added).toBe(4);
+    // Old labels are absent, new ones are present.
+    const result = idx.searchKnn(makeNormVector(dim, 510), 8, { ef: 30 });
+    expect(result.labels).toContain(10); // seed 510 = 10 + 500
+    for (const oldLabel of [0, 1, 2]) {
+      expect(result.labels.includes(oldLabel), `surfaced removed label ${oldLabel}`).toBe(false);
+    }
+  });
+
+  it("applyDiff silently skips removeLabels that were never added (watcher-lag tolerance)", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 5 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 20 });
+    // Mix real + bogus labels in the remove list.
+    const { removed } = idx.applyDiff([0, 999, 1, 1000], []);
+    // Only the 2 real labels (0, 1) were actually removed; bogus 999,
+    // 1000 silently skipped (the watcher's view can lag behind reality
+    // after a sweep eviction; it shouldn't fail the live-update).
+    expect(removed).toBe(2);
+    // Observable: 0 and 1 are absent from search results; 2, 3, 4 still
+    // present. (Don't rely on idx.size because hnswlib-node's
+    // getCurrentCount returns SLOT count including deleted.)
+    const result = idx.searchKnn(makeNormVector(dim, 2), 5, { ef: 20 });
+    expect(result.labels.includes(0)).toBe(false);
+    expect(result.labels.includes(1)).toBe(false);
+    expect(result.labels.includes(2)).toBe(true);
+  });
+
+  it("applyDiff auto-grows when adding points past maxElements (watcher fail-safe)", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 5 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    // maxElements = 5 (exact). Add 6 more → must auto-resize.
+    const idx = await buildHnsw(labeled, { dim, maxElements: 5 });
+    const newPoints = Array.from({ length: 6 }, (_, i) => ({
+      label: 100 + i,
+      vector: makeNormVector(dim, 100 + i)
+    }));
+    const { added } = idx.applyDiff([], newPoints);
+    expect(added).toBe(6);
+    // Capacity should have grown to fit the new total (11 = 5 + 6).
+    const cap = idx.capacity();
+    expect(cap.maxElements).toBeGreaterThanOrEqual(11);
+    // All new labels searchable.
+    const result = idx.searchKnn(makeNormVector(dim, 100), 8, { ef: 20 });
+    expect(result.labels).toContain(100);
+  });
+
+  it("resize grows the index; no-op when already large enough", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 5 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 5 });
+    expect(idx.capacity().maxElements).toBe(5);
+    idx.resize(50);
+    expect(idx.capacity().maxElements).toBe(50);
+    idx.resize(20); // smaller — no-op
+    expect(idx.capacity().maxElements).toBe(50);
+  });
+
+  it("capacity returns {currentCount, maxElements}", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 7 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 100 });
+    const cap = idx.capacity();
+    expect(cap.currentCount).toBe(7);
+    expect(cap.maxElements).toBe(100);
+  });
+
+  // NEGATIVE control: addPoints with wrong dim throws (would have left the
+  // index in a partial-update state if applyDiff didn't validate first).
+  it("(NEGATIVE control) — applyDiff with wrong-dim vector throws", async () => {
+    const dim = 8;
+    const labeled = Array.from({ length: 5 }, (_, i) => ({ label: i, vector: makeNormVector(dim, i) }));
+    const idx = await buildHnsw(labeled, { dim, maxElements: 20 });
+    const wrongDim = new Float32Array(16); // dim=16 ≠ 8
+    expect(() => idx.applyDiff([], [{ label: 99, vector: wrongDim }])).toThrow(/dim 16, expected 8/);
+  });
+});

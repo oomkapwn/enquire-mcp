@@ -570,6 +570,28 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     expect(() => w.setOcrPdfs(false)).not.toThrow();
   });
 
+  // v3.9.0-rc.2 — attachHnsw validation: requires embedDb (via attachEmbed).
+  // The HNSW live-update path consumes embed-db's {oldIds, newIds} return
+  // value; without embed-db wired there's nothing to mirror into HNSW.
+  it("attachHnsw throws when embedDb has not been attached", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    // Stub HnswIndex — never called, just satisfies the param type. Cast
+    // via unknown to skip the strict type check (we're testing the
+    // validation path, not the index behavior).
+    const fakeHnsw = {
+      dim: 8,
+      size: 0,
+      searchKnn: () => ({ labels: [], distances: [] }),
+      applyDiff: () => ({ removed: 0, added: 0 }),
+      resize: () => {},
+      capacity: () => ({ currentCount: 0, maxElements: 0 }),
+      saveTo: async () => true
+    } as unknown as Parameters<typeof w.attachHnsw>[0];
+    expect(() => w.attachHnsw(fakeHnsw, new Map())).toThrow(/embedDb not attached/);
+  });
+
   it("survives an add event for a file that disappears before stat (skip branch)", async () => {
     // Race: chokidar fires `add`, but the file is unlinked before the
     // watcher's stat() runs. The handle() try/catch should swallow it

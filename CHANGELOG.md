@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.2] — 2026-05-24
+
+> **TL;DR:** **State-driven audit findings — 6 stale-version fixes across CLAUDE.md + docs/api.md + docs/COMPARISON.md.** Post-v3.8.1 full self-audit (using OIA methodology applied broadly) found 6 stale-version references across documentation that survived the v3.6.0→v3.8.1 cascade: CLAUDE.md header still said "v3.7.x maintenance" (we're at v3.8.x stable), backlog status said "before promotion to v3.8.0 stable" (already promoted), docs/api.md said "stable v3.7.x @latest" (npm @latest = 3.8.1 → 3.8.2 with this patch), docs/COMPARISON.md timestamps still pinned to v3.7.0 (2026-05-15). All fixed in this docs-only patch. **No code changes; 872 tests unchanged.**
+
+**Patch — state-driven docs refresh.**
+
+### Background
+
+After v3.8.1 retraction shipped (overclaim #11), ran a full state-driven sweep of the repo to find other stale fragments. The methodology lesson from v3.7.17 OIA ("internal change-driven sweeps miss state-driven failure modes") was applied broadly: read every doc file as-it-is, verify each claim against current reality.
+
+The sweep found 6 findings, all stale-version drift:
+- **A-1 / A-2 / A-3** (MEDIUM): `CLAUDE.md` header and intro paragraph stuck at "v3.7.x maintenance + v3.8.0 architectural" framing. v3.8.0 already shipped + v3.8.1 retraction + v3.8.2 here means current state is "v3.8.x stable maintenance + v3.9.0 architectural deferrals."
+- **A-5** (LOW): `CLAUDE.md` v3.8.x backlog status said "External audit before promotion to v3.8.0 stable" — v3.8.0 already promoted (without audit, overclaim #11), so phrasing should be "External audit STILL OPEN per v3.6.1 (v3.8.0 promoted without it)."
+- **A-7** (MEDIUM): `docs/api.md:5` said "stable v3.7.x (@latest on npm)" — externally visible incorrect claim; npm @latest = 3.8.1 → 3.8.2.
+- **A-8** (LOW): `docs/COMPARISON.md` timestamps at v3.7.0 (intro, table footer, signature) — should reference v3.8.x stable.
+
+A-4 (MCP Registry version drift) is separately tracked as a manual action item (requires OAuth re-publish, scheduled for after this RC ships).
+
+### Fixes
+
+**`CLAUDE.md` header:**
+- "Project goal — v3.7.x maintenance + v3.8.0 architectural" → "v3.8.x stable maintenance + v3.9.0 architectural"
+- Intro paragraph rewritten to acknowledge v3.8.0 + v3.8.1 shipped, list what v3.8.0 minor delivered, what was deferred to v3.9.0+, and that external audit blocker remains OPEN.
+
+**`CLAUDE.md` backlog bullet:**
+- "Remaining v3.8.0 items: ... External audit before promotion to v3.8.0 stable" → "Remaining v3.8.x/v3.9.0 items: ... External audit blocker per v3.6.1 STILL OPEN — v3.8.0 was promoted without it (overclaim #11, retracted v3.8.1)."
+
+**`docs/api.md:5`:**
+- "stable v3.7.x (@latest on npm)" → "stable v3.8.x (@latest on npm)"
+- Removed v3.7.0 quality-batch reference; replaced with v3.8.0 minor highlights + v3.8.1 retraction note.
+
+**`docs/COMPARISON.md`** (4 sites):
+- Intro paragraph: "accurate as of v3.7.0 (2026-05-15)" → "accurate as of v3.8.x stable (initial 2026-05-15 for v3.7.0; refreshed in v3.8.2 docs patch)"
+- Table footer: "44-tool count is exact for v3.7.x" → "exact for v3.8.x stable"
+- Snapshot date: "snapshot as of 2026-05-15 (v3.7.0)" → "snapshot as of 2026-05-24 (v3.8.x stable; initial v3.7.0 from 2026-05-15)"
+- Signature: "— enquire-mcp maintainer, v3.7.0" → "— enquire-mcp maintainer, v3.8.x stable"
+
+### Why this is a class lesson (not just isolated drift)
+
+The v3.8.0 cascade (rc.1 → rc.18) had 18 chances to update these surfaces. None did. **Reason:** my change-driven sweeps only inspect files I'm actively editing in the current RC. Files I'm not touching get a "no drift detected" signal even when they're full of stale current-state claims.
+
+This is exactly the failure mode the v3.7.17 OIA walk was added to prevent — but OIA Check 1 (stale version tombstones in src/*.ts file headers) covers only `src/` files, not docs/. The current OIA walk does NOT scan docs/ for version-string staleness.
+
+**Backlog item (deferred to v3.8.3+):** extend OIA Check 1 to walk `docs/*.md` and `CLAUDE.md` looking for "v3.X.Y" references that mention current state ("stable v3.X.x", "as of v3.X.Y", "exact for v3.X.x") and compare against current major.minor. Tombstones (`vX.Y.Z added Z`, `vX.Y.Z fix W`) are legitimate history and should not flag. Distinguishing "current claim" from "historical tombstone" is the hard part — likely needs a comment-marker convention.
+
+Not blocking v3.8.2: this drift is now refreshed manually. The structural defense is a separate improvement.
+
+### Stats
+
+- **872 tests** (unchanged — pure docs patch).
+- 4 files touched: CLAUDE.md, docs/api.md, docs/COMPARISON.md, CHANGELOG.md (this entry).
+- 0 code changes.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@latest = 3.8.2` after publish (v3.8.1 demoted automatically; users on @latest get 3.8.2).
+- All 9 required CI gates pass locally.
+
+### What's next
+
+- **MCP Registry re-publish** (was action item from A-4): bump registry from v3.8.0-rc.13 → v3.8.2 via `mcp-publisher publish`. Requires user OAuth approval (same flow as v3.8.0-rc.13 original publish).
+- **External audit outreach** — blocker per v3.6.1 still open, primary work item.
+- **Backlog**: T-2/T-3/T-4 E2E, OCR watcher embed-sync, HNSW live update, P2-X HTTP lifecycle, Tier C discoverability, OIA Check 1 extension to docs/.
+
+---
+
 ## [3.8.1] — 2026-05-24
 
 > **TL;DR:** **Retroactive correction patch (overclaim instance #11).** v3.8.0 STABLE (shipped earlier today) and v3.8.0-rc.18 both referenced a "Cursor external audit" with verdict 4.85/5 as the basis for `@rc → @latest` promotion. **That audit reference was incorrect** — the document was for a different project and was mistakenly applied to enquire-mcp. **The 3 technical fixes in rc.18 remain valid** (server.json version drift was real, terminal `vault.isExcluded` in `searchHybrid` is safe defense-in-depth, OIA workflow ordering doc is useful) — these would have been found by the next internal self-audit regardless. **What is retracted** is the audit attribution narrative and the "first external audit sign-off" claim in the v3.8.0 entry. v3.8.0 STABLE @latest stays on npm (no rollback — users who already installed shouldn't be disrupted, and the codebase quality is independently verifiable via 872 tests + 9 required CI gates + 89.91% coverage). External audit per CLAUDE.md v3.6.1 rule (≥2 independent auditors) is **still pending**; the v3.8.0 promotion was on internal confidence alone, which is documented honestly in this patch. **No code changes; documentation correction only.** 872 tests unchanged.

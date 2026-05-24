@@ -412,6 +412,19 @@ walk("src", ".ts", (file) => {
 // Skipped when coverage-summary.json doesn't exist (cold CI without
 // coverage run) — this is not an authoritative check, just a state-driven
 // confirmation that documentation matches measurement.
+//
+// IMPORTANT (v3.8.0-rc.18 L-OIA-1, per Cursor external audit on rc.15):
+// On dirty dev trees with STALE coverage-summary.json (e.g. from a
+// previous run before the watcher uplift), this check fires a
+// false-positive STALE-COVERAGE-COMMENT finding even when the floor is
+// still met. Workflow: ALWAYS run `npm run test:coverage` IMMEDIATELY
+// BEFORE `npm run check:oia` so the summary.json reflects current code.
+// CI's `coverage` job runs before the `oia` job — fine in CI. For local
+// dev, the recommended sequence is:
+//   npm run test:coverage && npm run check:oia
+// This script does NOT auto-run test:coverage to keep the check fast in
+// CI (where coverage already ran) and to avoid masking the staleness
+// signal — surfaced explicitly in the error message for clarity.
 {
   const summaryPath = join(repoRoot, "coverage", "coverage-summary.json");
   if (existsSync(summaryPath)) {

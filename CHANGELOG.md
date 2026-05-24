@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.18] — 2026-05-24
+
+> **TL;DR:** Eighteenth v3.8.0 release candidate. **External audit response** — closes all 3 actionable findings from the Cursor independent external audit on rc.15 (commit `7a9fdbd`, verdict **4.85/5, 0 ship-blockers**, [docs/audits/v3.8.0-cursor-external-2026-05-24.md](docs/audits/v3.8.0-cursor-external-2026-05-24.md)). Fixes: M-REG-1 (server.json version drifted 4 RCs behind npm; added to `check-version-consistency.mjs`), L-HYB-1 (terminal `vault.isExcluded()` filter in `searchHybrid` for ε-class defense-in-depth), L-OIA-1 (documented `test:coverage → check:oia` order to prevent false-positive on stale local summary). **First external audit sign-off ever** — this RC is the recommended @latest promotion candidate. **872 tests** (unchanged). Ships under `@rc` dist-tag.
+
+**Minor — eighteenth v3.8.0 release candidate.**
+
+### Fix M-REG-1 (MEDIUM) — server.json version sync + invariant
+
+**Background.** Cursor external audit caught: `server.json` (MCP Registry manifest, added in rc.13) showed `"version": "3.8.0-rc.13"` while npm `@rc` had advanced through rc.14, rc.15, rc.16, rc.17. The existing `scripts/check-version-consistency.mjs` covers 5 surfaces (package.json, package-lock.json root + `packages[""]`, src/index.ts, CHANGELOG) but does NOT include server.json. Result: 4-RC drift before external audit caught it.
+
+This is **direct evidence that the rc.14 Rule 6** ("Every new docs surface with numeric claims MUST extend `docs-consistency.test.ts` in the SAME PR") **applies to version-bearing files too**, not just numeric-claims files. rc.13 shipped server.json without extending check-version-consistency.
+
+**Fix:**
+- Bumped `server.json` `version` and `packages[0].version` to `3.8.0-rc.18`
+- Extended `scripts/check-version-consistency.mjs` to read server.json — now checks 7 surfaces. Drift on any of the 7 fails CI.
+- The version-consistency CI gate (already required) will now catch this class for ALL future RCs.
+
+**Class-fix sibling note:** future registry-adjacent files (npm provenance URLs, MCP Registry policy fields, GitHub Pages manifests, etc.) need the same treatment. Updated CLAUDE.md anti-pattern rule to explicitly mention registry metadata.
+
+### Fix L-HYB-1 (LOW) — terminal isExcluded in searchHybrid
+
+**Background.** Cursor audit noted: `searchHybrid` final assembly loop in `src/tools/search.ts:1602–1660` builds `matches[]` from RRF-fused candidates but has NO terminal `vault.isExcluded()` filter. Per-ranker arms already filter (BM25 ~1262, embeddings ~1019, TF-IDF via `listMarkdown`), so the current production path is safe. However, defense-in-depth: if a FUTURE ranker arm ships without the per-arm filter, the fusion layer would silently leak excluded paths.
+
+**Fix (`src/tools/search.ts`):** Added terminal `isExcluded` guard before `matches.push`. For block-granularity, splits `f.id` on `#` to get the path part before checking exclusion. Cheap (one string-glob match per fused candidate, typically < 50 items). Closes the ε-class sibling gap that the prior per-arm sweeps left.
+
+### Fix L-OIA-1 (LOW) — document test:coverage → check:oia order
+
+**Background.** Cursor audit noted: OIA Check 6 (coverage drift, added rc.11) reads `coverage/coverage-summary.json`. On dirty local dev trees with a STALE summary from a previous run, Check 6 fires false-positive `STALE-COVERAGE-COMMENT` findings. CI is fine (coverage job runs before oia job), but local dev workflow lacks explicit ordering documentation.
+
+**Fix:**
+- Extended Check 6 header comment in `scripts/oia-walk.mjs` with explicit IMPORTANT note: workflow is `npm run test:coverage && npm run check:oia` locally.
+- Updated `AGENTS.md` commands cheat sheet: replaced bare `npm run check:oia` with `npm run test:coverage && npm run check:oia` and added rationale comment citing rc.18 L-OIA-1.
+
+### Audit closure summary
+
+All 3 actionable findings from the Cursor audit are closed:
+- ✅ M-REG-1 (P0) — server.json sync + invariant extension
+- ✅ L-HYB-1 (P1) — terminal isExcluded filter
+- ✅ L-OIA-1 (P2) — workflow ordering documented
+
+Informational findings (no action required per audit recommendation):
+- INFO-1: AUDIT-REQUEST body cites "855 tests" — L-5 snapshot header (rc.15) clarifies; acceptable
+- INFO-2: R-10 HNSW residual under-return >66% exclusion — accepted, documented in CHANGELOG rc.9
+- INFO-3: T-2/T-3/T-4 deferrals correctly listed in backlog
+
+### Method note — Rule 6 extension to version-bearing files
+
+CLAUDE.md anti-pattern Rule 6 (rc.14) originally targeted numeric-claims drift in new docs surfaces. M-REG-1 proves the same rule applies to **version-bearing** files: any new file with a version field that gets republished on each RC needs to be added to `check-version-consistency.mjs` in the SAME PR.
+
+The pattern shows up across all 10 documented overclaim instances: a fix lands without extending the structural defense. rc.18 explicitly broadens Rule 6 to include registry metadata files (server.json being the canonical case).
+
+### Stats
+
+- **872 tests** (unchanged — only metadata + filter changes).
+- `check-version-consistency.mjs`: 5 → 7 surfaces.
+- `server.json`: rc.13 → rc.18.
+- `src/tools/search.ts`: +1 terminal privacy guard in `searchHybrid`.
+- `AGENTS.md` + `scripts/oia-walk.mjs`: workflow ordering documented.
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest` until rc.18 ships + verified).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 status after rc.18
+
+**Recommended for stable promotion.** First external audit sign-off received: Cursor independent external audit, 4.85/5, 0 ship-blockers, all 3 actionable findings closed in this RC.
+
+**Remaining post-stable backlog** (audit confirmed prioritization):
+- **Tier C** (deferred): JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3, T-4** — communities handler + hyde E2E + serve-http HTTP smoke.
+- **P2-10/P2-11** — stateful session race + HTTP server close cleanup.
+- **R-10 residual** — HNSW adaptive refill for >66% exclusion (accepted limitation).
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+---
+
 ## [3.8.0-rc.17] — 2026-05-24
 
 > **TL;DR:** Seventeenth v3.8.0 release candidate. **Multi-subcommand CLI drift audit** — closes the rc.11 RCA finding by extending the cli-parity invariant from serve↔serve-http to ALL subcommands. Sweep found 4 "lift candidates" (byte-identical inline text across 2+ subcommands) and 5 intentional context-specific drifts. Lifted: `--cache-file` (clear-cache), `--index-file` (clear-index + index), `--quantize-embeddings` (build-embeddings + setup), `--tokenize` (index). New invariant `tests/cli-parity.test.ts` rc.17 block fails CI if a flag has byte-identical inline text in 2+ subcommands (forces lift). Context-specific drifts (--include-pdfs, --json, --persistent-index, --exclude-glob/--read-paths build-embeddings) intentionally kept — invariant doesn't flag them. **872 tests** (+4 cli-parity invariants vs rc.16). Ships under `@rc` dist-tag.

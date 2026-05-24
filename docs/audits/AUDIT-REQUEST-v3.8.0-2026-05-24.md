@@ -1,5 +1,7 @@
 # External Audit Request — enquire-mcp v3.8.0
 
+> **📌 Snapshot notice.** This document is a snapshot from **commit `bad0518` / `v3.8.0-rc.14` / 2026-05-24**. Numeric figures cited below (test counts, CI gate counts, release-candidate index, etc.) reflect the project state on that date. Later release candidates (rc.15, rc.16, …) will increment some of these numbers; the auditor should target the commit SHA cited here (or the closest later release-candidate tag, e.g. `v3.8.0-rc.15`) for the actual review. Architectural areas, methodology rules, and known deferrals remain valid through any pre-stable RC.
+
 **Prepared:** 2026-05-24
 **Commit SHA:** [`bad0518`](https://github.com/oomkapwn/enquire-mcp/commit/bad0518) (`main` HEAD at time of writing)
 **Audit target version:** `3.8.0-rc.14` (npm `@rc` dist-tag)

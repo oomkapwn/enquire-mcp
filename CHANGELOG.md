@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.13] — 2026-05-24
+
+> **TL;DR:** Thirteenth v3.8.0 release candidate. **AI/LLM discoverability Tier B** — adds `mcpName` field to `package.json` (`io.github.oomkapwn/enquire-mcp`) and ships `server.json` at repo root, both required by the official MCP Registry verification (registry.modelcontextprotocol.io). Adds `CITATION.cff` for academic discoverability (Google Scholar / Semantic Scholar) citing the underlying research papers (HyDE, RRF, BM25, Louvain, HNSW, BGE). After this RC ships to npm, mcp-publisher can submit to the canonical MCP Registry — which auto-propagates to glama.ai, mcp.so, smithery.ai, and other downstream registries. **No code changes; metadata + documentation only.** 848 tests unchanged. Ships under `@rc` dist-tag.
+
+**Minor — thirteenth v3.8.0 release candidate.**
+
+### Add `mcpName` to package.json + `server.json` at repo root
+
+**Background.** The official MCP Registry (registry.modelcontextprotocol.io, launched September 2025, API v0.1 frozen October 2025) is the canonical source of MCP server metadata. Maintained by Anthropic + GitHub + PulseMCP + Stacklok, it's the upstream that glama.ai, mcp.so, smithery.ai, and other downstream registries sync from. Publishing here = auto-discovery on every downstream registry.
+
+Verification requires two things on the npm package side:
+1. `mcpName` field in `package.json` set to `io.github.<github-username>/<repo-name>` for GitHub-auth submissions
+2. The npm package must be published with this field present
+
+**Fix:**
+- Added `"mcpName": "io.github.oomkapwn/enquire-mcp"` to `package.json`
+- Created `server.json` at repo root using the v2025-12-11 schema with: name, description, repository, version, npm package identifier, stdio transport, runtime arguments (`serve` subcommand + `--vault` named arg)
+
+After rc.13 publishes to npm with the new field, the `mcp-publisher` CLI can be run locally to submit `server.json` to the official MCP Registry (GitHub OAuth auth). Downstream registries (glama, mcp.so, smithery) typically sync within 24-48 hours.
+
+### Add `CITATION.cff` for academic discoverability
+
+**Background.** enquire-mcp's retrieval stack is research-heritage: HyDE (Gao et al 2023), RRF (Cormack et al 2009), BM25 (Robertson et al 1995), Louvain modularity (Blondel et al 2008), HNSW (Malkov & Yashunin 2020), BGE (Xiao et al 2023). Academic search engines (Google Scholar, Semantic Scholar, OpenAlex) parse `CITATION.cff` files at repo roots to register the project as a citable software artifact and to cross-reference it with the underlying papers.
+
+**Fix:** Created `CITATION.cff` at repo root following the Citation File Format v1.2.0. Includes: project metadata (title, abstract, repository, license, keywords) + 6 paper references for the core retrieval algorithms with authors, year, journal, DOI URL, and explanatory `notes` field linking each paper to the enquire-mcp feature that implements it.
+
+### Stats
+
+- **848 tests** (unchanged — metadata + docs only).
+- 2 new repo-root files: `server.json` (1.0 KB), `CITATION.cff` (4.5 KB).
+- `package.json`: +1 field (`mcpName`).
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **Tier B0** (this RC enables): run `mcp-publisher publish` locally to submit `server.json` to the official MCP Registry after rc.13 hits npm.
+- **Tier B4**: PR to punkpeye/awesome-mcp-servers — Knowledge & Memory category.
+- **Tier C**: JSON-LD `SoftwareApplication` schema on GH Pages (TypeDoc theme tweak), GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- **Multi-subcommand CLI drift audit** (from rc.11 RCA).
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+- External audit before `@latest` promotion.
+
+---
+
 ## [3.8.0-rc.12] — 2026-05-24
 
 > **TL;DR:** Twelfth v3.8.0 release candidate. **AI/LLM discoverability improvements (Tier A)** — adds `llms.txt` (https://llmstxt.org/ standard for AI agent discovery), `AGENTS.md` (Cursor 2.0 / Claude Code / Codex coding-agent convention), tightens npm `description` from 756 → 506 chars (better truncation handling in npm search UI), adds "TL;DR for AI agents" callout + "Set up in your AI agent" copy-paste prompts section in README. `llms.txt` also served from GH Pages at https://oomkapwn.github.io/enquire-mcp/llms.txt so ChatGPT browsing, Perplexity, Claude.ai web fetches discover the project via the standard URL. **No code changes; documentation + metadata only.** 848 tests unchanged. Ships under `@rc` dist-tag.

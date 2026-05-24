@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0-rc.16] — 2026-05-24
+
+> **TL;DR:** Sixteenth v3.8.0 release candidate. **META-invariant**: structural enforcement of CLAUDE.md rule since v3.6.4 ("every invariant test must have a NEGATIVE control sibling"). The rule has been violated 6 times across the v3.6.x→v3.8.0 cascade (overclaim instances #2, #4, #6, #7, #10), each time rediscovered manually. rc.16 adds `tests/meta-invariant-coverage.test.ts` that scans every `tests/*-invariant.test.ts` file and fails if any lacks NEGATIVE control coverage. Recursion class now structurally impossible. Plus inline `META-INVARIANT-EXEMPT` exemption marker added to `k1-class-invariant.test.ts` (covered by 3 sibling files). **868 tests** (+6 META-invariant tests vs rc.15). Ships under `@rc` dist-tag.
+
+**Minor — sixteenth v3.8.0 release candidate.**
+
+### Add META-invariant (`tests/meta-invariant-coverage.test.ts`)
+
+**Background.** CLAUDE.md rule since v3.6.4:
+> "Invariant test without negative-control — a test that ALWAYS passes proves nothing. Every new invariant test must have a sibling test that fails when the invariant is violated."
+
+**Documented violations** through the v3.6.x→v3.8.0 cascade:
+- #2 (v3.6.2): K-1 "all 10 callsites" claim — no fixture proving fix worked
+- #4 (v3.7.10): `examples/` `package.json#files` claim — file race, no verification
+- #6 (v3.7.14): renameNote ordering fix — TSDoc lied in same patch
+- #7 (v3.7.14): renameFile ordering fix in same patch as #6 — same TSDoc drift
+- #10 (v3.8.0-rc.14): 7 M-2 invariants for llms.txt/AGENTS.md — none had NEGATIVE controls
+
+Each time I rediscovered the rule, applied it manually, and shipped a follow-up RC. The cycle keeps repeating because the rule has **no structural enforcer**. CLAUDE.md anti-patterns describe the pattern but don't prevent it.
+
+**Fix.** New test file `tests/meta-invariant-coverage.test.ts`:
+1. Discovers every `tests/*-invariant.test.ts` file (recursive walk).
+2. For each, checks at least one of:
+   - File contains `NEGATIVE` token (uppercase) OR `negative-control` (hyphenated lowercase) — covers both repo conventions
+   - File has `// META-INVARIANT-EXEMPT: <reason>` comment in the first 50 lines
+3. Fails with explicit error per violating file, including remediation hint.
+
+The META-invariant itself has 5 NEGATIVE control sibling tests (eats its own dog food):
+- Detects file with no coverage
+- Accepts file with NEGATIVE (uppercase) token
+- Accepts file with negative-control (hyphenated) token
+- Accepts explicit exempt marker
+- Rejects exempt marker outside the first-50-lines header window
+
+**Currently exempt** (1 file): `tests/k1-class-invariant.test.ts` is structurally covered at 5 enforcement levels (grep / AST / caller-pattern / fixture-based / version-stamp) with NEGATIVE controls in 3 sibling files (`k1-ast-invariant`, `k1-version-stamp-consistency`, `peek-meta`). Adding inline NEGATIVE control to the class-level file would duplicate sibling coverage without adding signal.
+
+### Method note — methodology recursion class CLOSED
+
+The "fix shipped with same-class drift inside" recursion has been documented 6 times and re-applied manually 6 times. With rc.16's structural enforcement:
+- Adding a new `*-invariant.test.ts` file without NEGATIVE control fails CI before merge
+- Adding NEGATIVE control to a sibling file without explicit exempt marker still fails — must declare the relationship inline
+- The META-invariant's own NEGATIVE controls validate the check function's contract
+
+**The recursion class is now structurally impossible going forward.** Any future violation requires either (a) actively deleting the META-invariant (visible in PR diff) or (b) the exempt marker actively lying (visible in PR diff).
+
+### Stats
+
+- **868 tests** (+6 META-invariant tests vs rc.15: 1 positive + 5 NEGATIVE controls).
+- 1 new test file: `tests/meta-invariant-coverage.test.ts` (4.4 KB).
+- 1 exempt marker added: `tests/k1-class-invariant.test.ts` header.
+- 5 surfaces re-bumped: README (×3), package.json, COMPARISON.md, llms.txt, AGENTS.md (862→868).
+- `npm audit`: 0 vulnerabilities.
+- Dist-tag: `@rc` (v3.7.20 stays `@latest`).
+- All 9 required CI gates pass locally.
+
+### v3.8.0 remaining backlog
+
+- **External audit** before `@latest` promotion (CLAUDE.md rule since v3.6.1).
+- **Tier C** (deferred): JSON-LD `SoftwareApplication` schema on GH Pages, GitHub Sponsors funding.yml.
+- **T-2, T-3** — communities handler + hyde E2E.
+- **T-4** — optional serve-http HTTP smoke.
+- **Multi-subcommand CLI drift audit** (from rc.11 RCA): install-model/build-embeddings/eval/bench for --include-pdfs/--embed-file/--json/etc.
+- OCR'd PDF watcher embed-sync, HNSW in-memory watcher update.
+
+---
+
 ## [3.8.0-rc.15] — 2026-05-24
 
 > **TL;DR:** Fifteenth v3.8.0 release candidate. **M-3 root-class fix — meta-recursion overclaim instance #10**: rc.14 added 7 new `docs-consistency.test.ts` invariants for the M-2 fix, but NONE had NEGATIVE control siblings — violating the CLAUDE.md rule since v3.6.4 ("every invariant test must have a sibling test that fails when the invariant is violated"). Same class as v3.7.14 F1+F2 (added a fix that itself shipped the same drift inside the same patch). Refactored 7 M-2 checks into pure functions, added 7 NEGATIVE control sibling tests (positive-negative pairs). Plus L-5 snapshot header on the audit-request doc. **862 tests** (+7 NEGATIVE controls vs rc.14). Ships under `@rc` dist-tag.

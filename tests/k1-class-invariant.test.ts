@@ -4,6 +4,16 @@
 //  v3.6.3 was the marketing-only patch and K-1 actually closed in v3.6.4.
 //  Strengthened to v3.7.0 with the AST def-use trace sibling test.)
 //
+// META-INVARIANT-EXEMPT: K-1 class invariant is structurally enforced at
+// 5 levels (grep / AST / caller-pattern / fixture-based / version-stamp).
+// NEGATIVE control coverage lives in sibling files:
+//   - tests/k1-ast-invariant.test.ts (2 NEGATIVE blocks)
+//   - tests/k1-version-stamp-consistency.test.ts (1 NEGATIVE block via scanK1Stamps fixture)
+//   - tests/peek-meta.test.ts (4+ caller-pattern NEGATIVE controls)
+// Adding a NEGATIVE control inline here would duplicate sibling coverage
+// without adding signal. This exempt marker is required by the rc.16
+// META-invariant (tests/meta-invariant-coverage.test.ts).
+//
 // Background. v3.6.1 fixed ONE callsite of the destructive-bootstrap-schema
 // class and claimed "CRIT-1 closed" — overclaim; 9 callsites remained.
 // v3.6.2 fixed 3 more callsites and claimed "all 10 callsites" — still an

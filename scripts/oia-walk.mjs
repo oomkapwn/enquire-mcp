@@ -413,7 +413,7 @@ walk("src", ".ts", (file) => {
 // coverage run) — this is not an authoritative check, just a state-driven
 // confirmation that documentation matches measurement.
 //
-// IMPORTANT (v3.8.0-rc.18 L-OIA-1, per Cursor external audit on rc.15):
+// IMPORTANT (v3.8.0-rc.18 S-AUDIT-3, self-audit on rc.17):
 // On dirty dev trees with STALE coverage-summary.json (e.g. from a
 // previous run before the watcher uplift), this check fires a
 // false-positive STALE-COVERAGE-COMMENT finding even when the floor is
@@ -469,6 +469,91 @@ walk("src", ".ts", (file) => {
           );
         }
       }
+    }
+  }
+}
+
+// ─── Check 7: STALE CURRENT-STATE VERSION CLAIMS in docs/ + CLAUDE.md ──
+//
+// Background: v3.8.2 (state-driven audit) found 6 stale-version refs
+// in CLAUDE.md + docs/api.md + docs/COMPARISON.md that survived the
+// v3.6.0→v3.8.1 cascade. They survived because Check 1 only walks
+// src/*.ts file headers — never visits docs/*.md or CLAUDE.md.
+//
+// This is the same recursion meta-class: my methodology defines a
+// structural defense (Check 1) but applies it only to ONE surface,
+// leaving sibling surfaces (docs/) unprotected. The fix is the same
+// shape as M-1 (lift to cli-help.ts) and M-2 (extend docs-consistency):
+// generalize the existing defense to cover all sibling surfaces.
+//
+// Pattern strategy: match phrases that pair a VERSION with a
+// CURRENT-STATE VERB ("is", "ships", "stable", "covers", "accurate as
+// of", "exact for", "@latest on npm ships"). Compare the matched version
+// against current major.minor. Skip if explicit historical contextualization
+// is present ("initial", "from", "Pre-", "since", "added in").
+//
+// Cf. v3.6.4 rule on tombstone vs current-claim semantics.
+const currentMajorMinor = currentVersion.replace(/^(\d+\.\d+).*$/, "$1");
+
+// Each tuple: [regex (must capture version in group 1), human-readable claim type]
+const DOC_CURRENT_STATE_PATTERNS = [
+  // "stable v3.X.x" or "stable v3.X.0" — claim of stability for that line
+  [/\bstable\s+v?(\d+\.\d+)\.[\dx]/i, "stable version claim"],
+  // "@latest on npm ... v3.X.x" or "ships v3.X.x" — current npm channel claim
+  [/(?:@latest|ships)\s+v?(\d+\.\d+)\.[\dx]/i, "npm @latest claim"],
+  // "covers the v3.X.x stable surface" — scope claim
+  [/covers\s+the\s+\*?\*?v?(\d+\.\d+)\.[\dx]/i, "coverage scope claim"],
+  // "exact for v3.X.x" — claim of current accuracy
+  [/exact\s+for\s+v?(\d+\.\d+)\.[\dx]/i, "exactness claim"],
+  // "accurate as of v3.X.Y" — claim that numbers/facts are current at this version
+  [/accurate\s+as\s+of\s+v?(\d+\.\d+\.\d+)/i, "accuracy timestamp claim"]
+];
+
+// Phrases that mark a version reference as INTENTIONAL HISTORY (skip flag).
+// Conservative — only obvious history markers.
+const HISTORY_CONTEXT_MARKERS = [
+  /\binitial\b/i,
+  /\bfrom\b.*\bv?\d+\.\d+/i, // "initial v3.7.0 from 2026-..."
+  /\bsince\b/i,
+  /\bPre-v?\d/i,
+  /\b(history|legacy|tombstone|previously|was)\b/i,
+  /\bv?\d+\.\d+\.\d+\s+(added|fix|bumped|introduced|deferred|patched|shipped|closed)\b/i
+];
+
+const DOCS_FILES_TO_SCAN = ["CLAUDE.md"];
+// Walk docs/ for .md files — but skip docs/audits/ since those are by
+// definition historical snapshots (auditor reports timestamped at submission).
+// Stale version refs in audit reports are accurate history of what was current
+// at that time, not stale current-state claims about NOW.
+walk("docs", ".md", (file) => {
+  if (file.startsWith(join("docs", "audits"))) return;
+  DOCS_FILES_TO_SCAN.push(file);
+});
+
+for (const docFile of DOCS_FILES_TO_SCAN) {
+  const fullPath = join(repoRoot, docFile);
+  if (!existsSync(fullPath)) continue;
+  const lines = readFileSync(fullPath, "utf8").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    for (const [pattern, claimType] of DOC_CURRENT_STATE_PATTERNS) {
+      const m = pattern.exec(line);
+      if (!m) continue;
+      const claimedVersion = m[1];
+      // Normalize: "3.8" matches current "3.8". For 3-part like "3.8.0",
+      // also extract major.minor.
+      const claimedMajorMinor = claimedVersion.replace(/^(\d+\.\d+).*$/, "$1");
+      if (claimedMajorMinor === currentMajorMinor) continue; // current — OK
+      // Skip if line OR surrounding 2 lines have explicit history context.
+      const context = lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 2)).join(" ");
+      if (HISTORY_CONTEXT_MARKERS.some((rx) => rx.test(context))) continue;
+      record(
+        "STALE-DOC-CURRENCY-CLAIM",
+        docFile,
+        i + 1,
+        line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
+        `${claimType} for v${claimedVersion} but current major.minor is v${currentMajorMinor}. Either update the version, OR prefix with "Pre-vX.Y.Z" / "initial" / "from" / "since" to mark as legitimate historical reference.`
+      );
     }
   }
 }

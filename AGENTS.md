@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 918+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 923+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -168,7 +168,7 @@ Advisory (don't block, but tracked):
 
 1. Want to add a new MCP tool? Read `src/tools/read.ts` for a representative example. Add to `src/tool-manifest.ts`. Register in `src/tool-registry.ts`. Add to `docs/api.md`. Add tests.
 2. Want to fix a retrieval bug? Start in `src/search.ts` (RRF fusion + rerank orchestration). The unit tests in `tests/rrf.test.ts` show the contract.
-3. Want to extend the watcher? `src/watcher.ts` + `tests/watcher.test.ts`. Note: chokidar requires a 50ms warmup after `w.start()` before the first file write in tests (rule since v3.7.15 — see W-FLAKE-1/2 history).
+3. Want to extend the watcher? `src/watcher.ts` + `tests/watcher.test.ts`. Note: chokidar requires a 50ms warmup after `w.start()` before the first file write in tests (rule since v3.7.15 — see W-FLAKE-1/2 history). **v3.9.0-rc.1+** added `setOcrPdfs(enabled, langs?, maxPages?)` for OCR-on-watch; **v3.9.0-rc.2+** added `attachHnsw(hnsw, rowsByLabel)` for HNSW in-memory live update — both are late-binding methods called by `server.ts` after `attachEmbed()`.
 4. Want to add a CHANGELOG entry? Follow the format in existing entries. TL;DR blockquote at the top, ### sections per finding, ### Stats at the bottom.
 
 ## Project-specific style

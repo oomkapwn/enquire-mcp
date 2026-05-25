@@ -103,11 +103,11 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--ocr-pdfs",
-      "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the requested language pack pre-installed via `enquire-mcp install-ocr-lang <code>` (no runtime download per the v3.7.16 P1-1 offline-only enforcement)."
+      "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the requested language pack pre-installed manually: download `<lang>.traineddata` from https://github.com/tesseract-ocr/tessdata_fast and place in the Tesseract cache dir (no runtime CDN download per the v3.7.16 P1-1 offline-only enforcement)."
     )
     .option(
       "--ocr-langs <langs>",
-      "v3.9.0-rc.1 — Tesseract language pack for --ocr-pdfs. Default `eng`. Multi-language via `+` (e.g. `eng+rus` for English+Russian mixed documents). Each language file (`<lang>.traineddata`, ~10 MB) must be pre-installed in the Tesseract cache via `enquire-mcp install-ocr-lang <code>` — runtime CDN download is blocked per the offline-only posture documented in SECURITY.md."
+      "v3.9.0-rc.1 — Tesseract language pack for --ocr-pdfs. Default `eng`. Multi-language via `+` (e.g. `eng+rus` for English+Russian mixed documents). Each language file (`<lang>.traineddata`, ~10 MB) must be downloaded manually from https://github.com/tesseract-ocr/tessdata_fast and placed in the Tesseract cache dir — runtime CDN download is blocked per the offline-only posture documented in SECURITY.md."
     )
     .option(
       "--ocr-max-pages <n>",

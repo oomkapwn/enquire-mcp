@@ -41,6 +41,9 @@
 - Privacy filter (`--exclude-glob`, `--read-paths`) enforced at every search and write path
 - Late-chunking: doc-title + heading-breadcrumb + neighbor-tail context windowing on embeddings
 - Watcher mode (`--watch`) for incremental re-indexing as you edit in Obsidian
+- **v3.9.0-rc.1+:** OCR'd PDF watcher embed-sync (`--ocr-pdfs`) — scanned PDFs that change during a session stay in semantic-search via Tesseract OCR feeding the embed pipeline
+- **v3.9.0-rc.2+:** HNSW in-memory live update — semantic search reflects vault edits within the watcher debounce window (~250ms); pre-3.9.0 needed serve restart
+- **v3.9.0-rc.3+:** R-10 adaptive HNSW refill — auto-doubles k up to 3 attempts when post-filter hits < limit, closing the >66% excluded under-return class
 
 ## What enquire-mcp is NOT
 
@@ -61,7 +64,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 918 unit tests passing on every PR
+- 923 unit tests passing on every PR
 - 9 required + 4 advisory CI gates per merge (lint, test ×2 [Node 22/24], smoke, audit, coverage, version-consistency, docs, oia + macOS + CodeQL + Analyze)
 - SLSA-3 build provenance on every npm release
 - Semver-bound public surface — see [STABILITY.md](https://github.com/oomkapwn/enquire-mcp/blob/main/STABILITY.md)

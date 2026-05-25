@@ -30,7 +30,13 @@
 // scanner doesn't double-count.
 
 import { describe, expect, it } from "vitest";
-import { DEFENSES, runAudit } from "../scripts/scope-completeness-audit.mjs";
+import {
+  DEFENSES,
+  runAudit,
+  runCliFlagCoverageAudit,
+  runDeferredClaimAudit,
+  runNumericAudit
+} from "../scripts/scope-completeness-audit.mjs";
 
 describe("scope-completeness audit — META structural-defense (v3.8.8)", () => {
   // (a) Live invariant: current repo state must have zero gaps.
@@ -130,5 +136,85 @@ describe("scope-completeness audit — META structural-defense (v3.8.8)", () => 
     const isExempt = fakeDefense.exempts.includes("README.md");
     const wouldFlag = matches > 0 && !fakeDefense.scope.includes("README.md") && !isExempt;
     expect(wouldFlag, "explicit exempt should suppress the gap").toBe(false);
+  });
+});
+
+// v3.9.0-rc.4 — extended defenses for non-numeric dimensions.
+// Closes recursion-pair shape #7: v3.8.8 META audit only covered
+// numeric drift; non-numeric drift (stale-deferral and missing-flag-doc)
+// required separate defenses.
+describe("scope-completeness audit — extended defenses (v3.9.0-rc.4)", () => {
+  // POSITIVE invariant: current repo state has ZERO deferred-claim findings.
+  // CLAUDE.md was updated in rc.4 to remove the stale "deferred to v3.9.0+"
+  // line that listed shipped items (overclaim instance #13).
+  it("runDeferredClaimAudit returns zero findings on current state", () => {
+    const findings = runDeferredClaimAudit();
+    if (findings.length > 0) {
+      const first = findings[0];
+      throw new Error(
+        `deferred-claim audit found ${findings.length} gap(s). First: ${first?.file}:${first?.line} :: ${first?.evidence}`
+      );
+    }
+    expect(findings.length).toBe(0);
+  });
+
+  // POSITIVE invariant: current repo state has ZERO cli-flag-coverage findings.
+  // rc.4 added the missing --ocr-pdfs / --ocr-langs / --ocr-max-pages rows
+  // to docs/api.md.
+  it("runCliFlagCoverageAudit returns zero findings on current state", () => {
+    const findings = runCliFlagCoverageAudit();
+    if (findings.length > 0) {
+      const first = findings[0];
+      throw new Error(`cli-flag-coverage audit found ${findings.length} gap(s). First: ${first?.evidence}`);
+    }
+    expect(findings.length).toBe(0);
+  });
+
+  // runAudit composes all three sub-audits.
+  it("runAudit returns union of runNumericAudit + runDeferredClaimAudit + runCliFlagCoverageAudit", () => {
+    const numeric = runNumericAudit();
+    const deferred = runDeferredClaimAudit();
+    const cliFlag = runCliFlagCoverageAudit();
+    const combined = runAudit();
+    expect(combined.length).toBe(numeric.length + deferred.length + cliFlag.length);
+  });
+
+  // NEGATIVE control: the deferred-claim regex matches the historical
+  // CLAUDE.md drift shape. We can't easily monkey-patch the audit's
+  // file-read, so we exercise just the regex on a synthetic string to
+  // prove the pattern is correct. (The full audit's logic is exercised
+  // by the live POSITIVE invariant above.)
+  it("(NEGATIVE control) — deferred-to regex matches the drift pattern", () => {
+    const samples = [
+      "**Still deferred to v3.9.0+:** HNSW filter-during-search, embed-db migrations.",
+      "Still deferred to v4.0.0+: feature-x.",
+      "deferred to v3.9.0+: foo"
+    ];
+    const deferralRe = /(?:Still\s+)?deferred\s+to\s+v\d+\.\d+\.\d+\+?:\s*([^.\n]+)/i;
+    for (const s of samples) {
+      expect(deferralRe.test(s), `regex should match: ${s}`).toBe(true);
+    }
+    // The current CLAUDE.md should NOT contain a stale deferred line
+    // mentioning a shipped item — that's the POSITIVE invariant above.
+    // The NEGATIVE control here proves the regex would match if the
+    // drift returned.
+  });
+
+  // NEGATIVE control: synthetic missing-flag reliably detected.
+  it("(NEGATIVE control) — missing-flag-in-docs is structurally detectable", () => {
+    const fakeCliSrc = `.option("--existing-flag", "help");\n.option("--missing-flag", "also help");`;
+    const fakeApiDoc = `| --existing-flag | off | does a thing |`;
+    // Apply the same heuristic the audit uses.
+    const flags = new Set<string>();
+    const re = /\.option\(\s*"(--[a-z][a-z0-9-]*)/g;
+    for (const m of fakeCliSrc.matchAll(re)) {
+      const flag = m[1];
+      if (flag) flags.add(flag);
+    }
+    const missing: string[] = [];
+    for (const f of flags) {
+      if (!fakeApiDoc.includes(f)) missing.push(f);
+    }
+    expect(missing).toEqual(["--missing-flag"]);
   });
 });

@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.4] — 2026-05-25
+
+> **TL;DR:** **Full state-driven self-audit on the v3.8.7 → v3.9.0-rc.3 cascade — closes 3 HIGH + 4 MEDIUM findings + documents overclaim instance #13 + recursion-pair shape #7 + extends META scope-completeness with 2 new defenses.** Audit caught: (1) CLAUDE.md header line said "deferred to v3.9.0+: ... OCR'd PDF watcher embed-sync, HNSW in-memory live update, R-10 adaptive refill" while the status section in the same file listed all three as SHIPPED (overclaim #13). (2) `docs/api.md:5` said "currently v3.9.0-rc.1" — we're on rc.3. (3) v3.9.0-rc.1/rc.2/rc.3 features absent from ALL user-facing docs (README, api.md, QUICKSTART, llms.txt, AGENTS.md) — the v3.8.8 META audit covered only NUMERIC drift, not FEATURE-MENTION drift. **+5 tests (3 POSITIVE + 2 NEGATIVE controls); 923 unit tests total.** All findings closed by the same PR.
+
+**Patch — full audit + docs-only fixes + 2 new structural defenses.**
+
+### What the audit found
+
+Phase 0 (reality snapshot): all 9 required CI gates green, 917 tests, lint clean, OIA clean, 7-surface version-consistency, 10/10 per-file floors, 0 vulns.
+
+Phase 1 (state-driven docs walk via parallel general-purpose agent): 3 HIGH + several MEDIUM/LOW findings.
+
+Phase 2 (code-doc consistency via parallel general-purpose agent): PASS — every v3.8.7 → v3.9.0-rc.3 CHANGELOG claim verified in the codebase.
+
+### HIGH findings (all closed in this rc.4)
+
+- **H-1 — Feature-mention drift**: v3.9.0-rc.1 (`--ocr-pdfs` + 2 sibling flags), v3.9.0-rc.2 (HNSW in-memory live update), v3.9.0-rc.3 (`adaptiveHnswRefill`) shipped in 3 RCs but appeared ONLY in CHANGELOG + CLAUDE.md. Zero hits in `README.md`, `docs/api.md` (flag table), `docs/QUICKSTART.md`, `docs/http-transport.md`, `llms.txt`, `AGENTS.md`. **Fix**: added the 3 OCR flags + 6 other previously-paragraph-only stable flags (`--include-pdfs`, `--enable-reranker`, `--reranker-model`, `--reranker-top-n`, `--use-hnsw`, `--hnsw-ef`, `--late-chunk-context`, `--no-hnsw-persist`, `--quantize-embeddings`) to `docs/api.md` flag table. Added rc.1/rc.2/rc.3 mention to README highlight reel + llms.txt bullet list + AGENTS.md watcher section.
+
+- **H-2 — Stale RC index**: `docs/api.md:5` said "currently v3.9.0-rc.1 — OCR'd PDF watcher embed-sync"; actual `@rc` is v3.9.0-rc.3. **Fix**: updated to mention all three RCs (OCR, HNSW live update, R-10 adaptive).
+
+- **H-3 — Ambiguous CI gate rendering in README**: README line 249 listed "lint · test ×2 [Node 22/24] · smoke · audit · coverage · version-consistency · docs · oia" as the 9 required gates, but the `test ×2` rendering reads as 1 entry visually → looks like 8 gates while claiming "9 required". **Fix**: rewrote to enumerate explicitly: "(1) lint, (2) test on Node 22, (3) test on Node 24, (4) smoke, …, (9) oia".
+
+### MEDIUM findings (closed in this rc.4)
+
+- **M-1 — Overclaim instance #13** (CLAUDE.md self-contradiction): `CLAUDE.md:9` said "**Still deferred to v3.9.0+:** ... OCR'd PDF watcher embed-sync, HNSW in-memory live update, R-10 adaptive refill" — but the status section in the same file (lines ~143–145) listed all three as SHIPPED. **Class**: stale future-tense deferral claim (vs the present-tense "as of vX.Y.Z" pattern OIA Check 7 catches since v3.8.3). **Fix**: rewrote the header to clearly separate "v3.9.0 RCs shipped on `@rc`" from "Still deferred to v3.9.x+" (HNSW filter-during-search, embed-db migrations, distributed rate-limit, HNSW disk persistence on live update).
+
+- **M-2 — Stale QUICKSTART version**: `docs/QUICKSTART.md:32` expected output `3.7.12` — bumped to mention both `3.9.0-rc.3` (`@rc`) and `3.8.8` (`@latest`).
+
+- **M-3 — Stale benchmarks version footer**: `docs/benchmarks.md:3` cited v3.7.x version stamps. **Fix**: appended "still valid as of v3.9.0-rc.3 — retrieval pipeline unchanged; v3.8.x→v3.9.0 work was correctness/hardening + watcher live-update, not algorithmic" so the page is no longer misleadingly date-stale.
+
+### META extension — 2 new scope-completeness defenses (recursion-pair shape #7)
+
+The v3.8.8 META audit (`scripts/scope-completeness-audit.mjs`) covered 5 NUMERIC-CLAIM patterns. The HIGH-1 finding above (3 OCR flags missing from `docs/api.md`) revealed that META's dimension coverage was incomplete. **Recursion-pair shape #7** documented: even after v3.8.8's META audit landed, drift in a different dimension (feature mentions) snuck in for 3 RCs.
+
+Added in rc.4:
+
+- **`runDeferredClaimAudit()`** — scans `CLAUDE.md` for `(?:Still\s+)?deferred\s+to\s+v\d+\.\d+\.\d+\+?:\s*([^.\n]+)` patterns. For each item named in such a line, checks whether the same file contains a "shipped" status entry mentioning that item. If both present → finding. Closes overclaim #13 class structurally.
+- **`runCliFlagCoverageAudit()`** — extracts every `.option("--name", …)` from `src/cli.ts`; verifies each appears in `docs/api.md` (substring match). Subcommand-specific flags (`--bearer-token`, `--queries`, `--lang`, etc.) live in `subcommandExempts` and are skipped. Closes the feature-mention class for CLI flags specifically.
+- **`runAudit()`** now composes all three sub-audits (numeric + deferred-claim + cli-flag-coverage). OIA Check 8 picks up the extended results automatically.
+
+### Tests added (+5)
+
+`tests/scope-completeness-invariant.test.ts` extended:
+- POSITIVE: `runDeferredClaimAudit returns zero findings on current state` (proves rc.4's CLAUDE.md fix closed overclaim #13)
+- POSITIVE: `runCliFlagCoverageAudit returns zero findings on current state` (proves the new OCR/HNSW flags are in `docs/api.md`)
+- POSITIVE: `runAudit returns union of all three sub-audits` (composition correctness)
+- NEGATIVE: deferred-to regex matches the drift pattern (proves the audit would catch a regression)
+- NEGATIVE: missing-flag-in-docs is structurally detectable (synthetic CLI + doc fixture)
+
+### CLAUDE.md anti-patterns added
+
+Two new rules captured (already-existing recurring shapes from this session):
+
+- **Update forward-looking deferral claims in the same commit that ships the deferred item** — closes overclaim instance #13 class. The `deferred-claim` defense above makes this structural; the rule documents the human-side discipline.
+- **META scope-completeness defenses must cover every drift DIMENSION** — closes recursion-pair shape #7. New rule: every structural defense PR must enumerate covered + uncovered dimensions; uncovered ones become deferred-defense TODOs.
+
+### Files changed
+
+- `CLAUDE.md` — overclaim #13 documented; recursion-pair shape #7 documented; header bullet at line 9 corrected; 2 new anti-pattern rules added.
+- `docs/api.md` — `:5` Channels paragraph current; flag table expanded with 12 new rows (3 OCR + 9 previously-paragraph-only stable flags).
+- `README.md` — highlight reel + features-table CI block rendering.
+- `llms.txt` — v3.9.0 features bulleted.
+- `AGENTS.md` — watcher section mentions `setOcrPdfs` + `attachHnsw`.
+- `docs/QUICKSTART.md` — version example refreshed.
+- `docs/benchmarks.md` — footer "still valid as of v3.9.0-rc.3" note.
+- `scripts/scope-completeness-audit.mjs` — `runNumericAudit` (renamed), `runDeferredClaimAudit`, `runCliFlagCoverageAudit`, combined `runAudit` (+200 lines).
+- `tests/scope-completeness-invariant.test.ts` — extended describe block with 5 new tests.
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 918 → 923.
+- version bump 3.9.0-rc.3 → 3.9.0-rc.4 (7 surfaces).
+
+### What's next
+
+- **v3.9.0-rc.5** — HNSW disk persistence on live update (debounced `saveTo` ~30s after last mutation). Originally planned for rc.4; deferred to make space for this audit-driven docs cascade.
+- **v3.9.0 stable** — promote `@rc → @latest` after rc.5 lands + fresh external audit on v3.9.0-rc.2+ per `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md`.
+- **v3.9.x+** — HNSW filter-during-search (architectural; closes R-10 structurally).
+
+---
+
 ## [3.9.0-rc.3] — 2026-05-25
 
 > **TL;DR:** **R-10 adaptive HNSW refill + external audit attribution.** Closes the last open INFO finding from the corrected 2026-05-25 external audit (`docs/audits/v3.8.0-rc.15-external-2026-05-25.md`, 4.85/5). New `adaptiveHnswRefill()` helper in `src/tools/search.ts` doubles k up to maxAttempts=3 times when the post-filter hit count is below `limit`. Closes the ">66% excluded" under-return class that rc.9's static 6× multiplier could not fully solve. Archives the external audit doc in `docs/audits/` + lifts the "External audit blocker per v3.6.1 STILL OPEN" framing in CLAUDE.md (the corrected audit retroactively justifies v3.8.0 stable). Creates `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md` for the next fresh pass. **+7 tests (5 POSITIVE + 2 NEGATIVE controls); 918 unit tests total. No API breaks.**

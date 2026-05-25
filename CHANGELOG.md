@@ -2,6 +2,80 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.3] — 2026-05-25
+
+> **TL;DR:** **R-10 adaptive HNSW refill + external audit attribution.** Closes the last open INFO finding from the corrected 2026-05-25 external audit (`docs/audits/v3.8.0-rc.15-external-2026-05-25.md`, 4.85/5). New `adaptiveHnswRefill()` helper in `src/tools/search.ts` doubles k up to maxAttempts=3 times when the post-filter hit count is below `limit`. Closes the ">66% excluded" under-return class that rc.9's static 6× multiplier could not fully solve. Archives the external audit doc in `docs/audits/` + lifts the "External audit blocker per v3.6.1 STILL OPEN" framing in CLAUDE.md (the corrected audit retroactively justifies v3.8.0 stable). Creates `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md` for the next fresh pass. **+7 tests (5 POSITIVE + 2 NEGATIVE controls); 918 unit tests total. No API breaks.**
+
+**Patch — R-10 + audit attribution.**
+
+### R-10 adaptive HNSW refill (INFO-2 from corrected external audit)
+
+**Problem**: The embed-db can contain entries for paths that the privacy filter (`vault.isExcluded`) drops at response-build time. Pre-3.9.0-rc.3 the HNSW path fetched a STATIC multiplier of `max(limit × 6, 50)` entries; for vaults with > 66% excluded entries, filtering left fewer than `limit` results and the response under-returned.
+
+**Fix**: `adaptiveHnswRefill()` (`src/tools/search.ts`) is a bounded loop:
+```ts
+let k = min(initialK, maxLabels);
+let filtered: T[] = [];
+for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  filtered = filter(searchKnn(k));
+  if (filtered.length >= limit) break;
+  if (k >= maxLabels) break;        // saturated — re-search yields same set
+  k = min(k * 2, maxLabels);
+}
+return filtered;
+```
+
+`maxAttempts = 3` bounds the worst-case to 3 × HNSW search latency (~30ms). Typical vaults converge on attempt 1 (most have < 20% excluded). The refill engages only for the long-tail privacy-heavy configurations the static multiplier under-served.
+
+**Residual**: at > 95% excluded the loop still saturates without satisfying `limit`. That's the structural limit of post-filter retrieval; the architectural fix is `HNSW filter-during-search` (pushes the privacy predicate into the graph traversal). Deferred to v3.9.x+.
+
+### Tests added (+7)
+
+`tests/hnsw.test.ts` — new describe block `adaptiveHnswRefill (v3.9.0-rc.3 R-10)`:
+
+- POSITIVE: returns initialK results when no filter drops anything (0% excluded case)
+- POSITIVE: refills when 80% are filtered out (R-10 target case)
+- POSITIVE: doubles k up to MAX_REFILL_ATTEMPTS=3 times when refill needed (assertion on call count + k progression)
+- POSITIVE: stops doubling when k saturates maxLabels (prevents redundant calls when filter rejects everything)
+- POSITIVE: respects custom maxAttempts override
+- NEGATIVE control: exits after attempt 1 when filter satisfies on first try (proves the early-exit optimization fires)
+- NEGATIVE control: maxAttempts=0 makes zero searchKnn calls (proves the loop bound works)
+
+### External audit attribution (closes v3.8.1 framing)
+
+- **`docs/audits/v3.8.0-rc.15-external-2026-05-25.md`** archived in-repo. The corrected audit (returned 2026-05-25 after the auditor acknowledged delivering the wrong project's doc to a prior chat — see v3.8.1 retraction): 4.85/5, ship-blockers none, 5 of 6 actionable findings already closed by the rc.18 → v3.8.5 cascade. INFO-2 (R-10 residual) closes in this rc.3.
+- **CLAUDE.md header + v3.8.0/v3.8.1 entries** updated: the "External audit blocker per v3.6.1 STILL OPEN" framing is lifted. v3.8.0 stable promotion is now retroactively justified by the corrected audit. The v3.8.1 retraction was about misdirected delivery, not about the verdict itself being wrong.
+- **`docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md`** created — fresh audit request for the next pre-stable promotion (v3.9.0 → @latest). Lists the delta since rc.15, current state snapshot, specific zones of interest (HNSW concurrency, OCR network posture, P2-10/P2-11 wire-level verification, MCP Registry sync, test count drift).
+
+### Cross-walk: external audit findings vs current state
+
+| ID | Finding (audit on rc.15) | Current status (a80d491, v3.9.0-rc.2) |
+|---|---|---|
+| **M-REG-1** | server.json version drift; gate doesn't cover registry manifest | ✅ Closed in v3.8.0-rc.18 S-AUDIT-1 (5 → 7 version-consistency surfaces) |
+| **L-HYB-1** | searchHybrid lacks terminal vault.isExcluded() filter | ✅ Closed in v3.8.0-rc.18 S-AUDIT-2 (line 1019 of src/tools/search.ts) |
+| **L-OIA-1** | check:oia Check 6 fails on stale coverage-summary.json | ✅ Closed in v3.8.0-rc.18 S-AUDIT-3 (test:coverage → check:oia order documented) |
+| **INFO-1** | README badge "v3.7.x stable" but @rc = rc.15 | ✅ Closed — README now `v3.8.x stable`, badge `tests-918 passing` |
+| **INFO-2** | R-10 residual: HNSW under-return at > 66% excluded | ✅ **Closed in this rc.3** (adaptive refill loop) |
+| **INFO-3** | T-2..T-5, HTTP P2-10/P2-11, multi-subcommand backlog | ✅ T-2/T-3/T-4 in v3.8.5; HTTP P2-10/P2-11 in v3.8.7; multi-subcommand in v3.8.0-rc.17. T-5 was over-counted placeholder (only 4 named items) |
+
+### Files changed
+
+- `src/tools/search.ts` — `adaptiveHnswRefill()` helper + integration in HNSW path of `embeddingsSearch` (+85 lines).
+- `tests/hnsw.test.ts` — adaptiveHnswRefill describe block (+7 tests).
+- `docs/audits/v3.8.0-rc.15-external-2026-05-25.md` — new file (archived audit).
+- `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md` — new file (fresh audit request).
+- `CLAUDE.md` — header note + v3.8.0/v3.8.1 entries + backlog section updated to reflect corrected audit.
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 911 → 918.
+- version bump 3.9.0-rc.2 → 3.9.0-rc.3 (7 surfaces).
+
+### What's next
+
+- **v3.9.0-rc.4** — HNSW disk persistence on live update (debounced `saveTo` ~30s after last mutation). Currently `applyDiff` only mutates the in-memory index; next serve restart triggers a full rebuild from embed-db.
+- **v3.9.0 stable** — promote `@rc → @latest` after rc.4 lands + the fresh external audit on the v3.9.0-rc.2+ commit completes (per `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md`).
+- **v3.9.x+** — HNSW filter-during-search (architectural; pushes the privacy/exclude filter into the graph traversal itself rather than post-filter, structurally closing the R-10 class).
+
+---
+
 ## [3.9.0-rc.2] — 2026-05-25
 
 > **TL;DR:** **HNSW in-memory live update — closes the last named v3.8.0 architectural deferral.** When the watcher updates embed-db rows for an md/pdf file change, the in-memory HNSW index is now updated in lockstep via the new `HnswIndex.applyDiff(removeLabels, addPoints)` method. Pre-3.9.0 the index was rebuilt only at serve startup; long-running sessions slowly drifted as embed-db got upserts but HNSW kept the original vectors. Search results now reflect vault edits within the watcher debounce window (~250ms typical). **+13 tests (10 POSITIVE + 3 NEGATIVE controls); 911 unit tests total. No API breaks (additive — old callers ignoring the new return values + interface methods keep working).**

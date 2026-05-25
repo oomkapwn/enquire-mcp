@@ -792,6 +792,60 @@ export function assertHnswModelMatchesEmbedder(embedderAlias: string, hnswAlias:
 }
 
 /**
+ * v3.9.0-rc.3 R-10 — adaptive HNSW refill loop for under-returned
+ * semantic-search queries.
+ *
+ * Background: the embed-db can contain entries for paths that the
+ * privacy filter (`vault.isExcluded`) then drops at response-build
+ * time. Pre-3.9.0-rc.3:
+ *   - v2.13.0 fetched `limit * 2` from HNSW.
+ *   - v3.8.0-rc.9 raised to `max(overFetch * 3, 50)` (effective 6× limit).
+ *   - But both were STATIC multipliers — a vault with 80% excluded
+ *     entries still under-returned because filtering left < limit.
+ *
+ * The adaptive loop solves this self-tuningly: if after filtering
+ * the result set is < limit AND k < maxLabels, double k and try again.
+ * Bounded by `maxAttempts` (default 3) so a fully-exhausted query
+ * doesn't burn arbitrary CPU. Most vaults converge on the first
+ * attempt (typical exclude ratio < 20%); the refill engages only
+ * for long-tail privacy-heavy configurations.
+ *
+ * Pure function. The HNSW search and filter callbacks are injected so
+ * tests can drive the loop with stub searchKnn + filter implementations.
+ *
+ * @param ctx - Loop inputs:
+ *   - `initialK`: first attempt's k (typically `max(overFetch * 3, 50)`)
+ *   - `maxLabels`: index size; k is capped at this
+ *   - `limit`: caller's desired top-K (loop stops once filtered ≥ limit)
+ *   - `searchKnn(k)`: HNSW search returning labels + distances arrays
+ *   - `filter(labels, distances)`: apply min_score / folder / privacy
+ *     filters; returns a post-filtered hit array
+ *   - `maxAttempts`: bound on iterations (default 3)
+ * @returns the final filtered hit array (may still be < limit if even
+ *   the saturated k+filter couldn't satisfy — caller must handle).
+ */
+export function adaptiveHnswRefill<T>(ctx: {
+  initialK: number;
+  maxLabels: number;
+  limit: number;
+  searchKnn: (k: number) => { labels: number[]; distances: number[] };
+  filter: (labels: number[], distances: number[]) => T[];
+  maxAttempts?: number;
+}): T[] {
+  const maxAttempts = ctx.maxAttempts ?? 3;
+  let k = Math.min(ctx.initialK, ctx.maxLabels);
+  let filtered: T[] = [];
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const result = ctx.searchKnn(k);
+    filtered = ctx.filter(result.labels, result.distances);
+    if (filtered.length >= ctx.limit) break;
+    if (k >= ctx.maxLabels) break; // saturated — re-search would yield same set
+    k = Math.min(k * 2, ctx.maxLabels);
+  }
+  return filtered;
+}
+
+/**
  * v3.1.0 — pick the text that should be embedded for an embeddings-search
  * call. HyDE-augmented retrieval prefers the agent-supplied
  * `hypothetical_answer` (Gao et al 2023); falls back to the raw query
@@ -999,20 +1053,30 @@ export async function embeddingsSearch(
       // nearest neighbor AND because the privacy filter pares down the pool.
       // v3.8.0-rc.9 R-10 — bumped multiplier from ×2 → ×3 (effective 4× →
       // 6× limit) to reduce under-return when many embed-db entries are
-      // excluded by --exclude-glob / --read-paths. Bounded by rowByLabel.size
-      // so there is no regression on small vaults. Residual under-return can
-      // still occur when >66% of the index is excluded (see TSDoc).
-      const k = Math.min(Math.max(overFetch * 3, 50), Math.max(hnsw.rowByLabel.size, 1));
-      const result = hnsw.index.searchKnn(qVec, k, hnsw.ef !== undefined ? { ef: hnsw.ef } : undefined);
+      // excluded by --exclude-glob / --read-paths.
+      // v3.9.0-rc.3 R-10 — adaptive refill loop. Closes the ">66% excluded"
+      // under-return class that rc.9's static multiplier could not fully
+      // solve. See `adaptiveHnswRefill` for the algorithm.
+      const maxLabels = Math.max(hnsw.rowByLabel.size, 1);
+      const initialK = Math.min(Math.max(overFetch * 3, 50), maxLabels);
       const { hnswResultsToHits } = await import("../hnsw.js");
-      rawHits = hnswResultsToHits(result, hnsw.rowByLabel);
-      // HNSW returns scores in [-1, 1] like brute-force cosine. Apply the
-      // same min_score floor + folder filter brute-force does.
-      if (args.folder) {
-        const prefix = `${args.folder.replace(/\/+$/, "")}/`;
-        rawHits = rawHits.filter((h) => h.rel_path.startsWith(prefix));
-      }
-      rawHits = rawHits.filter((h) => h.score >= minScore);
+      const folderPrefix = args.folder ? `${args.folder.replace(/\/+$/, "")}/` : null;
+      rawHits = adaptiveHnswRefill({
+        initialK,
+        maxLabels,
+        limit,
+        searchKnn: (k) => hnsw.index.searchKnn(qVec, k, hnsw.ef !== undefined ? { ef: hnsw.ef } : undefined),
+        filter: (labels, distances) => {
+          let h = hnswResultsToHits({ labels, distances }, hnsw.rowByLabel);
+          if (folderPrefix) h = h.filter((row) => row.rel_path.startsWith(folderPrefix));
+          h = h.filter((row) => row.score >= minScore);
+          // Privacy filter applied here too so the refill loop's "did we
+          // get enough?" check is accurate. The downstream filter at
+          // line ~1019 then re-applies (idempotent — already-filtered hits
+          // pass through).
+          return h.filter((row) => !vault.isExcluded(row.rel_path));
+        }
+      });
     } else {
       rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
     }

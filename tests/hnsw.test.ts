@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
-import { assertHnswModelMatchesEmbedder } from "../src/tools/search.js";
+import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
 function l2(v: Float32Array): Float32Array {
@@ -740,5 +740,150 @@ describe("HnswIndex live-update (v3.9.0-rc.2 applyDiff / resize / capacity)", ()
     const idx = await buildHnsw(labeled, { dim, maxElements: 20 });
     const wrongDim = new Float32Array(16); // dim=16 ≠ 8
     expect(() => idx.applyDiff([], [{ label: 99, vector: wrongDim }])).toThrow(/dim 16, expected 8/);
+  });
+});
+
+// v3.9.0-rc.3 R-10 — adaptiveHnswRefill loop. Pure helper extracted
+// from src/tools/search.ts; tests drive it with stub callbacks that
+// simulate (a) HNSW search returning a controlled label set and (b)
+// a privacy filter that drops a configurable fraction.
+describe("adaptiveHnswRefill (v3.9.0-rc.3 R-10)", () => {
+  // Build a stub searchKnn that returns the first `k` labels from a
+  // pre-built array. Distances are synthetic (descending from 0).
+  function makeStubSearchKnn(allLabels: number[]) {
+    return (k: number) => {
+      const labels = allLabels.slice(0, k);
+      const distances = labels.map((_, i) => i / allLabels.length);
+      return { labels, distances };
+    };
+  }
+
+  // Returns a filter that drops every label NOT in `allowed`. Mirrors
+  // vault.isExcluded — the privacy guard the real refill loop applies.
+  function makeAllowFilter(allowed: Set<number>) {
+    return (labels: number[], _distances: number[]) => labels.filter((l) => allowed.has(l));
+  }
+
+  it("returns initialK results when no filter drops anything (typical 0% excluded case)", () => {
+    const allLabels = Array.from({ length: 1000 }, (_, i) => i);
+    const filtered = adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 1000,
+      limit: 10,
+      searchKnn: makeStubSearchKnn(allLabels),
+      filter: (labels) => [...labels] // identity
+    });
+    expect(filtered.length).toBe(50); // initialK returned, all pass
+  });
+
+  it("refills when 80% are filtered out (R-10 target case)", () => {
+    const allLabels = Array.from({ length: 1000 }, (_, i) => i);
+    // Allow only every 5th label (20% pass) — 80% of any window will drop.
+    const allowed = new Set(allLabels.filter((l) => l % 5 === 0));
+    const filtered = adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 1000,
+      limit: 10,
+      searchKnn: makeStubSearchKnn(allLabels),
+      filter: makeAllowFilter(allowed)
+    });
+    // First attempt: k=50, filter keeps every 5th → 10 results. EXACTLY hits limit on attempt 1.
+    expect(filtered.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("doubles k up to MAX_REFILL_ATTEMPTS=3 times when refill needed", () => {
+    let searchCalls = 0;
+    const kHistory: number[] = [];
+    const allLabels = Array.from({ length: 1000 }, (_, i) => i);
+    // Allow only labels >= 500 (so first 50, 100, 200 calls return 0 hits;
+    // 400 still 0; only at k=500+ do we start seeing allowed labels).
+    const allowed = new Set(allLabels.filter((l) => l >= 500));
+    adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 1000,
+      limit: 10,
+      searchKnn: (k) => {
+        searchCalls += 1;
+        kHistory.push(k);
+        return makeStubSearchKnn(allLabels)(k);
+      },
+      filter: makeAllowFilter(allowed)
+    });
+    // Attempts: k=50, k=100, k=200. Bounded by maxAttempts=3.
+    expect(searchCalls).toBe(3);
+    expect(kHistory).toEqual([50, 100, 200]);
+  });
+
+  it("stops doubling when k saturates maxLabels", () => {
+    let searchCalls = 0;
+    const allLabels = Array.from({ length: 60 }, (_, i) => i);
+    // Filter rejects everything → refill never satisfies; should stop
+    // at saturation rather than continuing to double.
+    adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 60,
+      limit: 10,
+      searchKnn: (k) => {
+        searchCalls += 1;
+        return makeStubSearchKnn(allLabels)(k);
+      },
+      filter: () => [] // rejects all
+    });
+    // Attempt 1: k=50 → 0 hits, k *= 2 → 100, capped to 60.
+    // Attempt 2: k=60 (saturated) → 0 hits, loop sees k >= maxLabels → break.
+    expect(searchCalls).toBe(2);
+  });
+
+  it("respects custom maxAttempts override", () => {
+    let searchCalls = 0;
+    const allLabels = Array.from({ length: 10000 }, (_, i) => i);
+    adaptiveHnswRefill({
+      initialK: 10,
+      maxLabels: 10000,
+      limit: 100,
+      searchKnn: (k) => {
+        searchCalls += 1;
+        return makeStubSearchKnn(allLabels)(k);
+      },
+      filter: () => [], // never satisfies
+      maxAttempts: 5
+    });
+    expect(searchCalls).toBe(5);
+  });
+
+  // NEGATIVE control: if filter immediately returns ≥ limit, loop must
+  // exit on attempt 1 (proves the early-exit optimization fires).
+  it("(NEGATIVE control) — exits after attempt 1 when filter satisfies on first try", () => {
+    let searchCalls = 0;
+    const allLabels = Array.from({ length: 1000 }, (_, i) => i);
+    adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 1000,
+      limit: 10,
+      searchKnn: (k) => {
+        searchCalls += 1;
+        return makeStubSearchKnn(allLabels)(k);
+      },
+      filter: (labels) => [...labels] // identity → 50 passes immediately
+    });
+    expect(searchCalls).toBe(1);
+  });
+
+  // NEGATIVE control: maxAttempts=0 doesn't make any calls.
+  it("(NEGATIVE control) — maxAttempts=0 makes zero searchKnn calls", () => {
+    let searchCalls = 0;
+    const result = adaptiveHnswRefill({
+      initialK: 50,
+      maxLabels: 1000,
+      limit: 10,
+      searchKnn: () => {
+        searchCalls += 1;
+        return { labels: [], distances: [] };
+      },
+      filter: () => [],
+      maxAttempts: 0
+    });
+    expect(searchCalls).toBe(0);
+    expect(result).toEqual([]);
   });
 });

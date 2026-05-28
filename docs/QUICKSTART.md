@@ -29,7 +29,7 @@ Verify the install:
 enquire-mcp --version
 ```
 
-Expected output: the current version string (e.g. `3.9.0-rc.6` on `@rc` or `3.8.8` on `@latest`).
+Expected output: the current version string (e.g. `3.9.0-rc.N` on `@rc` or `3.8.8` on `@latest`).
 
 ## Step 2 — Smoke test (30 seconds)
 
@@ -126,7 +126,7 @@ You now have working TF-IDF search. To unlock the full hybrid stack:
 
 - **One-command full setup** — `enquire-mcp setup --vault /absolute/path/to/your/vault` downloads the multilingual embedding model (~120 MB, one-time), builds the FTS5 BM25 index, and builds the embedding index. Idempotent.
 - **PDF search** — add `--include-pdfs` to your Claude Desktop args. PDFs get blended into `obsidian_search` results with `[page: N]` citation markers.
-- **Cross-encoder reranking** — add `--enable-reranker`. Typical +5-10 NDCG@10 retrieval-quality boost.
+- **Cross-encoder reranking** — add `--enable-reranker`. Measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation).
 - **Sub-10ms top-K at scale** — add `--use-hnsw`. HNSW vector index, persisted to disk so cold starts stay ~50ms.
 - **Harder questions** — try `obsidian_hyde_search` (HyDE retrieval, Gao et al 2023) when the literal query phrasing doesn't match how the notes are written.
 - **Full 44-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.

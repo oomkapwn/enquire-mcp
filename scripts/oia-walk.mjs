@@ -48,7 +48,9 @@
 //   6.  COVERAGE-COMMENT DRIFT — inline `// current ~X%` in
 //       check-per-file-coverage.mjs vs coverage-summary.json (>1pp fails).
 //   7.  STALE CURRENT-STATE VERSION CLAIMS in docs/ + CLAUDE.md (present-
-//       and future-tense currency claims vs the actual current major.minor).
+//       and future-tense currency claims vs the actual current major.minor;
+//       v3.9.0-rc.12 added an RC-LEVEL sub-check — "currently/valid as of
+//       vX.Y.Z-rc.N" must match the EXACT current version, not just maj.minor).
 //   8.  SCOPE-COMPLETENESS — delegates to scope-completeness-audit.mjs
 //       (numeric-claim + deferred-claim + cli-flag-coverage dimensions).
 //
@@ -707,6 +709,39 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           i + 1,
           line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
           `Forthcoming-feature claim for v${claimedMM} but current is v${currentMajorMinor} (already shipped or past that version). Either remove the "wait for" framing, OR rephrase as "as of v${claimedMM}, X works" if the feature shipped.`
+        );
+      }
+    }
+    // v3.9.0-rc.12 — RC-LEVEL currency drift. The major.minor patterns above
+    // treat "v3.9.0-rc.3" as current (3.9 == 3.9), so a pinned "currently
+    // v3.9.0-rc.N" / "as of v3.9.0-rc.N" / "still valid as of v3.9.0-rc.N"
+    // silently goes stale every RC (the audit found 3 such instances). Match
+    // the FULL rc-pinned version and compare to the EXACT current version.
+    // Prefer version-agnostic phrasing ("the @rc dist-tag carries the latest
+    // RC — see CHANGELOG"); if a doc DOES pin an RC it must be the current one.
+    // Match only UNAMBIGUOUS currency phrasings — "currently vX" / "still
+    // valid as of vX" / "valid as of vX". Bare "as of vX, <feature> ships" is
+    // a SINCE/history claim (e.g. "As of v3.6.0-rc.4, benchmarks ship"), not a
+    // currency claim, so it's excluded.
+    const rcm = /\b(?:currently|(?:still\s+)?valid\s+as\s+of)\s+`?v?(\d+\.\d+\.\d+-rc\.\d+)`?/i.exec(line);
+    if (rcm) {
+      const claimedFull = rcm[1];
+      // Tight tombstone skip: only when the RC version is IMMEDIATELY followed
+      // by a history verb (e.g. "v3.9.0-rc.6 shipped"). The broad
+      // HISTORY_CONTEXT_MARKERS skip is wrong here — it false-negatives on
+      // lines that merely mention an unrelated older version nearby (e.g.
+      // "stable since v3.8.x ... currently v3.9.0-rc.3").
+      const after = line.slice(rcm.index + rcm[0].length, rcm.index + rcm[0].length + 24);
+      const isTombstone = /^\s*(?:added|fixed?|shipped|closed|introduced|deferred|patched|bumped|retracted)\b/i.test(
+        after
+      );
+      if (claimedFull !== currentVersion && !isTombstone) {
+        record(
+          "STALE-RC-CURRENCY-CLAIM",
+          docFile,
+          i + 1,
+          line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
+          `Pins RC-currency to v${claimedFull} but the current version is v${currentVersion}. RC-pinned currency drifts every release — prefer version-agnostic phrasing (e.g. "the @rc dist-tag carries the latest RC — see CHANGELOG"), or update to the current version.`
         );
       }
     }

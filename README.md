@@ -277,7 +277,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 `v2.0` hybrid retrieval (BM25+TF-IDF+embeddings via RRF) · `v2.6` remote MCP · `v2.7-2.8` PDFs blended · `v2.9` BGE reranker · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` eval harness · `v2.13` HNSW · `v2.14` stateful sessions · `v2.15` late-chunking · `v2.16` HNSW persistence · `v2.17` int8 quantization · `v3.8.0` stable · `v3.8.7` HTTP transport hardening · **`v3.9.0` (on `@rc`)**: OCR'd PDF watcher embed-sync, HNSW in-memory live update on file changes, R-10 adaptive HNSW refill (closes the >66% excluded under-return).
 
-Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.8.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` (currently v3.9.0-rc.6). Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](./ROADMAP.md)**.
+Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.8.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` (the latest release candidate — see [CHANGELOG.md](./CHANGELOG.md)). Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](./ROADMAP.md)**.
 
 ---
 

@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.12] — 2026-05-29
+
+> **TL;DR:** **Claim-accuracy: a structural RC-level currency guard + the stale-doc instances it surfaces (sprint RC 4).** The audit's root-cause theme — "the stale-claim findings stem from a defense gap" — gets its second structural fix (the first was rc.10's OIA Check 4e for OCR). OIA Check 7 only compared **major.minor** (so `v3.9.0-rc.3` read as "current" because `3.9 == 3.9`), letting a pinned "currently v3.9.0-rc.N" drift every release. New **RC-level sub-check** compares the **full** version: a "currently / valid as of vX.Y.Z-rc.N" claim must match the exact current version. It immediately caught 3 stale instances (README, api.md, benchmarks.md, all pinned to rc.3/rc.6); all rephrased to version-agnostic. Also closes the **reranker-number undersell** that rc.7's "corrected everywhere" sweep missed (4 sites still said the generic "+5-10 NDCG@10" vs the measured **+15.5 NDCG@10 / +24.7 MRR**). **Docs + audit-script only; 966 tests unchanged.**
+
+**Patch — audit-driven claim-accuracy (sprint RC 4).**
+
+### Fixed
+
+- **RC-level currency drift (structural + instances).** `scripts/oia-walk.mjs` Check 7 gains an RC sub-check: `/(?:currently|(?:still )?valid as of) vX.Y.Z-rc.N/` must equal the exact `package.json` version (a tombstone-verb-after-version skip avoids flagging "vX shipped" history; bare "As of vX, <feature> ships" is excluded as a *since* claim). **Detection-power verified**: with the instances still stale it flagged README:280, docs/api.md:5, docs/benchmarks.md:3; after rephrasing to version-agnostic ("the latest release candidate — see CHANGELOG", "still valid through the v3.9.0-rc cascade", `3.9.0-rc.N` placeholder) it's silent. The api.md RC feature-list (rc.1/rc.2/rc.3) — already incomplete (missing rc.10/rc.11) and unmaintainable — was replaced with a CHANGELOG pointer.
+- **Reranker number undersell (brand credibility).** 4 surfaces (docs/api.md ×2, docs/QUICKSTART.md, docs/COMPARISON.md) still claimed the generic literature figure "+5-10 NDCG@10" for our BGE reranker; corrected to the **measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation)** that COMPARISON's headline + benchmarks.md already report. (benchmarks.md:396's "+5-10 across BEIR" is a legitimate *literature* citation about rerankers in general, not our self-claim — left as-is.)
+
+### Deferred to rc.13 (state-driven backlog, batched with the correctness cleanup)
+
+CITATION.cff model names, the retracted-Cursor-audit comment in `check-version-consistency.mjs`, AGENTS.md "5 surfaces"→7 + the phantom `bench` subcommand, broken packaged-doc relative links → absolute URLs, the rc.7↔rc.8 CHANGELOG sequencing note, `ROADMAP`/`AGENTS` into `scope-completeness-audit.mjs` AUDIT_FILES, and **SHA-pinning GitHub Actions + OpenSSF Scorecard** (a separable supply-chain batch).
+
+### Files changed
+
+- `scripts/oia-walk.mjs` — Check 7 RC-level currency sub-check + header note.
+- `README.md`, `docs/api.md`, `docs/QUICKSTART.md`, `docs/benchmarks.md` — RC-currency → version-agnostic.
+- `docs/api.md` (×2), `docs/QUICKSTART.md`, `docs/COMPARISON.md` — reranker "+5-10" → measured +15.5/+24.7.
+- version bump 3.9.0-rc.11 → 3.9.0-rc.12 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.11] — 2026-05-28
 
 > **TL;DR:** **Watcher / HNSW live-update correctness (sprint RC 3).** Two HIGH concurrency/integrity findings from the audit: **H1** — the watcher's file-change handler was fire-and-forget, so concurrent saves to the *same* file could interleave their embed-db upsert + HNSW `applyDiff` + the shared `rowsByLabel` mutation → silent index drift (ghost labels live in HNSW but absent from the embed-db → stale search hits). Now a **per-file promise queue** serializes same-file events (different files stay parallel), and `close()` drains in-flight handlers before the HNSW flush. **`-1` sentinel-label corruption** — the HNSW add-zip used `newIds[i] ?? -1`, which on any row/id length mismatch inserted a vector under label `-1`, corrupting the index + `rowsByLabel` + the persisted sidecar; the new `zipHnswAddPoints` throws fail-closed instead. Plus **M1** (`saveTo` persists the live `getCurrentCount()`, not the stale build-time `size`) and **L2** (correct `kind` on PDF unlink). **959 → 966 tests** (+7, positive + NEGATIVE controls). No API breaks.

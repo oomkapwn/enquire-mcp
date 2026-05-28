@@ -146,7 +146,7 @@ Conversely, the scenarios where the trade-offs land in enquire-mcp's favor:
 
 **Symptom:** you ask the agent a conceptual question, and it gets a note that happens to contain one of your keywords but isn't actually the right note.
 
-If you have 5k+ notes and you've already noticed that simple grep / BM25 search returns wrong-but-keyword-matching results, the **BM25 + TF-IDF + dense-embeddings → RRF → cross-encoder reranker** stack is exactly what closes that gap. Typical +5–10 NDCG@10 over single-ranker baselines (BGE reranker, v2.9+). None of the other four servers in the matrix does multi-signal fusion or reranking.
+If you have 5k+ notes and you've already noticed that simple grep / BM25 search returns wrong-but-keyword-matching results, the **BM25 + TF-IDF + dense-embeddings → RRF → cross-encoder reranker** stack is exactly what closes that gap. Measured +15.5 NDCG@10 / +24.7 MRR over single-ranker baselines (BGE reranker, 60-query ablation). None of the other four servers in the matrix does multi-signal fusion or reranking.
 
 What enquire-mcp gives you, specifically:
 

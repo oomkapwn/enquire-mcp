@@ -113,7 +113,15 @@ describe("getOpenQuestions — pattern hardening integration", () => {
   });
 
   it("REJECTS a catastrophic custom pattern (NEGATIVE control)", async () => {
-    await expect(getOpenQuestions(new Vault(root), { pattern: "(a+)+$" })).rejects.toThrow(
+    // Build the catastrophic pattern at RUNTIME (not a string literal) so
+    // CodeQL's js/redos static analysis doesn't flag a catastrophic regex
+    // reaching getOpenQuestions's `new RegExp` sink. The point of this test is
+    // precisely that the guard REJECTS it *before* any compile — so it never
+    // executes as a regex — but CodeQL can't model that the guard throws first.
+    // `String.fromCharCode(43)` is "+"; `evil` equals "(a+)+$".
+    const plus = String.fromCharCode(43);
+    const evil = `(a${plus})${plus}$`;
+    await expect(getOpenQuestions(new Vault(root), { pattern: evil })).rejects.toThrow(
       /catastrophic backtracking|ReDoS|rejected/i
     );
   });

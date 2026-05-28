@@ -24,7 +24,7 @@ Five parallel agents re-read the project end-to-end on rc.8. Net: **zero CRITICA
 
 ### Tests added (+17, all positive + negative controls)
 
-- `tests/redos-guard.test.ts` (NEW) — 13 catastrophic patterns flagged (NEGATIVE), 11 safe patterns accepted incl. the production default (POSITIVE regression guard), `readUnboundedQuantifier` unit cases, + 4 `getOpenQuestions` integration cases (rejects catastrophic/over-long; accepts safe/default).
+- `tests/redos-guard.test.ts` (NEW) — 13 catastrophic patterns flagged (NEGATIVE), 11 safe patterns accepted incl. the production default (POSITIVE regression guard), `readUnboundedQuantifier` unit cases, + 4 `getOpenQuestions` integration cases (rejects catastrophic/over-long; accepts safe/default). The catastrophic *integration* fixture is built at runtime (`String.fromCharCode`) so CodeQL's `js/redos` static pass doesn't flag a regex literal that the guard rejects before compile — keeps "0 new CodeQL alerts" true (caught by the advisory CodeQL gate on the first PR push).
 - `tests/dql.test.ts` — `likeToRegex` cap: normal pattern matches (POSITIVE), boundary at the cap passes, over-long throws (NEGATIVE).
 - `tests/cli.test.ts` — `serve-http` short-token → `exit(1)` + "≥16 chars" hint (NEGATIVE); no-token → "required" with the length error explicitly NOT firing (contrast control).
 

@@ -12,7 +12,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
 - Coverage: `npm run test:coverage` (10 per-file branch floors enforced)
-- OIA: `npm run check:oia` (state-driven drift scan — 6 checks)
+- OIA: `npm run check:oia` (state-driven drift scan — 8 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
 All 9 required CI gates run on every PR. Local checks above must pass before pushing.
@@ -41,7 +41,7 @@ src/
 └── doctor.ts           — health check (color-coded ✓/⚠/✗)
 
 scripts/
-├── oia-walk.mjs                       — state-driven drift scan (6 checks)
+├── oia-walk.mjs                       — state-driven drift scan (8 checks)
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
 ├── check-version-consistency.mjs      — version sync across 5 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality

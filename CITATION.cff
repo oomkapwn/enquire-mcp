@@ -24,6 +24,12 @@ authors:
 repository-code: "https://github.com/oomkapwn/enquire-mcp"
 url: "https://www.npmjs.com/package/@oomkapwn/enquire-mcp"
 license: MIT
+# `version` tracks the @latest STABLE line (not the @rc pre-release train),
+# so it updates only on a stable promotion — no per-RC sync burden, and it's
+# deliberately NOT in check-version-consistency.mjs (which pins the current
+# in-flight version across the 7 build surfaces).
+version: "3.8.8"
+date-released: "2026-05-25"
 keywords:
   - "MCP"
   - "Model Context Protocol"

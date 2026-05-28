@@ -437,7 +437,11 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       const meta: HnswPersistedMeta = {
         formatVersion: 1,
         dim,
-        size,
+        // v3.9.0-rc.11 (audit M1) — persist the LIVE element count after any
+        // applyDiff, not the stale build-time `size` closure. After watcher
+        // live updates the closure `size` is wrong; the live count comes from
+        // the native getCurrentCount() (same source the `size` getter uses).
+        size: hasLiveUpdate ? ctor.getCurrentCount() : size,
         signature,
         rowsByLabel: Object.fromEntries(rowsByLabel),
         writtenAt: new Date().toISOString()

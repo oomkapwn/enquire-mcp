@@ -124,6 +124,60 @@ export interface WatcherOptions {
   ocrMaxPages?: number;
 }
 
+/** Row shape shared by `embedSingleNote` / `embedSinglePdf` results. */
+interface EmbedRowLike {
+  vector: Float32Array;
+  chunkIndex: number;
+  lineStart: number;
+  lineEnd: number;
+  textPreview: string;
+}
+
+/**
+ * v3.9.0-rc.11 (audit) — zip embed-db rows with their freshly-assigned row ids
+ * for an HNSW add-diff. `EmbedDb.upsertNote` returns exactly one id per row in
+ * the same order, so a length mismatch is a bug. The pre-rc.11 code used
+ * `newIds[i] ?? -1`, which silently inserted a vector under SENTINEL label
+ * `-1` on any mismatch — corrupting the in-memory index, the shared
+ * `rowsByLabel` map, AND the persisted `.hnsw.bin` sidecar (a later
+ * `markDelete(-1)` or a real row colliding on `-1` then scrambles results).
+ * This throws (fail-closed) instead: the watcher's per-event try/catch logs it
+ * and skips the HNSW update for that file, and the signature guard rebuilds a
+ * correct index on the next serve. A corrupt sentinel label is never inserted.
+ *
+ * @param rows - The embed rows (vector + chunk metadata), in insertion order.
+ * @param newIds - The row ids `upsertNote` assigned, parallel to `rows`.
+ * @returns Add-points for `syncHnswForFile`, each id guaranteed defined.
+ * @throws {Error} If `newIds.length !== rows.length`.
+ */
+export function zipHnswAddPoints(
+  rows: ReadonlyArray<EmbedRowLike>,
+  newIds: ReadonlyArray<number>
+): Array<EmbedRowLike & { id: number }> {
+  if (newIds.length !== rows.length) {
+    throw new Error(
+      `HNSW sync: embed-db returned ${newIds.length} ids for ${rows.length} rows — refusing to insert a sentinel label (would corrupt the index).`
+    );
+  }
+  const points: Array<EmbedRowLike & { id: number }> = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const id = newIds[i];
+    if (r === undefined || id === undefined) {
+      throw new Error("HNSW sync: unexpected undefined row/id during zip.");
+    }
+    points.push({
+      id,
+      vector: r.vector,
+      chunkIndex: r.chunkIndex,
+      lineStart: r.lineStart,
+      lineEnd: r.lineEnd,
+      textPreview: r.textPreview
+    });
+  }
+  return points;
+}
+
 export class VaultWatcher {
   private watcher: FSWatcher | null = null;
   private readonly vault: Vault;
@@ -169,6 +223,15 @@ export class VaultWatcher {
   private hnswPersistFile: string | null = null;
   private hnswDirty = false;
   private closed = false;
+  // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
+  // events concurrently; without this, two rapid saves to the SAME file
+  // interleave their embed-db upsert + HNSW applyDiff + shared-`rowsByLabel`
+  // mutation → silent index drift (ghost labels live in HNSW but absent from
+  // the embed-db → stale search hits). Each event chains on the file's prior
+  // handle so same-file events run strictly sequentially while different files
+  // keep independent chains and stay parallel. Keyed by absolute path; entries
+  // self-evict when a file's chain drains (bounded memory over a long serve).
+  private readonly fileQueues = new Map<string, Promise<void>>();
 
   constructor(opts: WatcherOptions) {
     this.vault = opts.vault;
@@ -408,15 +471,27 @@ export class VaultWatcher {
     });
 
     const onChange = (absPath: string, kind: "add" | "change" | "unlink") => {
-      // Fire-and-forget; failures are logged, not propagated.
-      this.handle(absPath, kind).catch((err) => {
-        if (!this.silent) {
-          process.stderr.write(
-            `enquire: watcher error on ${path.relative(root, absPath)} (${kind}) — ${
-              err instanceof Error ? err.message : String(err)
-            }\n`
-          );
-        }
+      // v3.9.0-rc.11 (H1) — serialize per file. Chain this event on the file's
+      // prior handle (which always resolves — it catches its own errors) so
+      // same-file events run sequentially and never interleave their embed-db
+      // + HNSW mutations; different files keep independent chains → parallel.
+      const prev = this.fileQueues.get(absPath) ?? Promise.resolve();
+      const tail = prev
+        .then(() => this.handle(absPath, kind))
+        .catch((err) => {
+          if (!this.silent) {
+            process.stderr.write(
+              `enquire: watcher error on ${path.relative(root, absPath)} (${kind}) — ${
+                err instanceof Error ? err.message : String(err)
+              }\n`
+            );
+          }
+        });
+      this.fileQueues.set(absPath, tail);
+      // Self-evict once this is the last queued event for the file so the map
+      // stays bounded. If a newer event chained after us it owns the entry.
+      void tail.finally(() => {
+        if (this.fileQueues.get(absPath) === tail) this.fileQueues.delete(absPath);
       });
     };
 
@@ -466,7 +541,11 @@ export class VaultWatcher {
         try {
           const deletedIds = this.embedDb.deleteNote(relPath);
           if (deletedIds.length > 0 && this.hnsw) {
-            const result = this.syncHnswForFile(relPath, "md", deletedIds, []);
+            // v3.9.0-rc.11 (L2) — pass the correct kind for PDF unlinks (was
+            // hardcoded "md"). Cosmetic on a pure-delete diff today since no
+            // new rows are set, but correct + future-proof if the delete path
+            // ever records kind.
+            const result = this.syncHnswForFile(relPath, isPdf ? "pdf" : "md", deletedIds, []);
             if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
           }
         } catch (err) {
@@ -580,14 +659,7 @@ export class VaultWatcher {
                   relPath,
                   "pdf",
                   oldIds,
-                  pdfResult.rows.map((r, i) => ({
-                    id: newIds[i] ?? -1,
-                    vector: r.vector,
-                    chunkIndex: r.chunkIndex,
-                    lineStart: r.lineStart,
-                    lineEnd: r.lineEnd,
-                    textPreview: r.textPreview
-                  }))
+                  zipHnswAddPoints(pdfResult.rows, newIds)
                 );
                 if (hnswResult) pdfEmbedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
               }
@@ -639,19 +711,7 @@ export class VaultWatcher {
             // v3.9.0-rc.2 — keep HNSW in sync. newIds and result.rows run
             // parallel (same order), so we zip them into HNSW add-points.
             if (this.hnsw) {
-              const hnswResult = this.syncHnswForFile(
-                relPath,
-                "md",
-                oldIds,
-                result.rows.map((r, i) => ({
-                  id: newIds[i] ?? -1,
-                  vector: r.vector,
-                  chunkIndex: r.chunkIndex,
-                  lineStart: r.lineStart,
-                  lineEnd: r.lineEnd,
-                  textPreview: r.textPreview
-                }))
-              );
+              const hnswResult = this.syncHnswForFile(relPath, "md", oldIds, zipHnswAddPoints(result.rows, newIds));
               if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
             }
           }
@@ -680,6 +740,11 @@ export class VaultWatcher {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // v3.9.0-rc.11 (H1) — drain in-flight per-file handlers first so a pending
+    // upsert + applyDiff completes and the flushed sidecar reflects it (rather
+    // than racing close vs. an in-progress live update). allSettled: a failed
+    // handler shouldn't block shutdown.
+    await Promise.allSettled([...this.fileQueues.values()]);
     // v3.9.0-rc.6 — flush the live-updated HNSW index before shutting
     // down so the next serve loads the up-to-date sidecar. No-op if no
     // live updates occurred or persistence is disabled. Fail-soft.

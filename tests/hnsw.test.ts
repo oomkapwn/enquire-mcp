@@ -358,6 +358,31 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(afterLoad.labels).toEqual(beforePersist.labels);
   });
 
+  it("M1 (v3.9.0-rc.11) — saveTo persists the LIVE element count after applyDiff, not the build-time size", async () => {
+    const dim = 4;
+    const n = 3;
+    const norm = (a: number[]) => {
+      const s = Math.sqrt(a.reduce((t, x) => t + x * x, 0)) || 1;
+      return new Float32Array(a.map((x) => x / s));
+    };
+    const labeled = Array.from({ length: n }, (_, i) => ({ label: i, vector: norm([i + 1, 1, 1, 1]) }));
+    const index = await buildHnsw(labeled, { dim, maxElements: 50 });
+    expect(index.size).toBe(n); // build-time count
+
+    // Live update: add one new point → live count becomes n + 1. Pre-rc.11
+    // saveTo persisted the stale closure `size` (n); now it persists the live
+    // getCurrentCount().
+    index.applyDiff([], [{ label: 99, vector: norm([9, 9, 9, 9]) }]);
+    const liveCount = index.size; // delegates to getCurrentCount()
+    expect(liveCount).toBeGreaterThan(n);
+
+    const persistFile = path.join(dir, "m1.hnsw");
+    await index.saveTo(persistFile, new Map(), "m1-sig");
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { size: number };
+    expect(meta.size, "persisted meta.size must be the live count").toBe(liveCount);
+    expect(meta.size, "NEGATIVE control: must NOT be the stale build-time size").not.toBe(n);
+  });
+
   it("returns null when signature doesn't match (stale index)", async () => {
     const persistFile = path.join(dir, "stale.hnsw");
     const v = new Float32Array(4).fill(0.5);

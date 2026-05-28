@@ -763,4 +763,29 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
     embedDb.close();
     fts.close();
   });
+
+  // v3.9.0-rc.11 (H1) — per-file serialization + close() drain. chokidar
+  // coalesces rapid writes within its 250ms awaitWriteFinish window, so a
+  // deterministic race-reproducer isn't feasible; instead we assert the
+  // INVARIANT the serialization + zipHnswAddPoints guard guarantee: after the
+  // close() drain, the HNSW rowsByLabel never holds a -1 sentinel and never a
+  // ghost label (one live in HNSW but absent from the embed-db).
+  it("H1 (v3.9.0-rc.11) — after close() drains: no -1 sentinel, no ghost labels", async () => {
+    const { w, embedDb, rowsByLabel, fts } = await setup(true);
+    await w.start();
+    await new Promise((r) => setTimeout(r, 50)); // chokidar FSEvents warm-up
+    // Edit the file; give chokidar a beat to enqueue, then close — the per-file
+    // queue drain in close() guarantees the in-flight upsert+applyDiff finishes
+    // before we inspect state (rather than racing close vs. the handler).
+    await fs.writeFile(path.join(root, "a.md"), "# Title\n\nH1 drain edit with several distinct words.\n");
+    await new Promise((r) => setTimeout(r, 100));
+    await w.close();
+    const dbLabels = new Set(embedDb.getAllVectors().map((r) => r.label));
+    expect([...rowsByLabel.keys()].includes(-1), "no -1 sentinel label").toBe(false);
+    for (const label of rowsByLabel.keys()) {
+      expect(dbLabels.has(label), `rowsByLabel label ${label} must exist in embed-db (no ghost)`).toBe(true);
+    }
+    embedDb.close();
+    fts.close();
+  });
 });

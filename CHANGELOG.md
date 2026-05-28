@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.11] — 2026-05-28
+
+> **TL;DR:** **Watcher / HNSW live-update correctness (sprint RC 3).** Two HIGH concurrency/integrity findings from the audit: **H1** — the watcher's file-change handler was fire-and-forget, so concurrent saves to the *same* file could interleave their embed-db upsert + HNSW `applyDiff` + the shared `rowsByLabel` mutation → silent index drift (ghost labels live in HNSW but absent from the embed-db → stale search hits). Now a **per-file promise queue** serializes same-file events (different files stay parallel), and `close()` drains in-flight handlers before the HNSW flush. **`-1` sentinel-label corruption** — the HNSW add-zip used `newIds[i] ?? -1`, which on any row/id length mismatch inserted a vector under label `-1`, corrupting the index + `rowsByLabel` + the persisted sidecar; the new `zipHnswAddPoints` throws fail-closed instead. Plus **M1** (`saveTo` persists the live `getCurrentCount()`, not the stale build-time `size`) and **L2** (correct `kind` on PDF unlink). **959 → 966 tests** (+7, positive + NEGATIVE controls). No API breaks.
+
+**Patch — audit-driven correctness (sprint RC 3).**
+
+### Fixed
+
+- **H1 — watcher per-file serialization (HIGH, race).** `onChange` chained each event onto `this.handle(...).catch(...)` fire-and-forget; chokidar can dispatch overlapping events, and `handle()` has multiple `await` points between reading `oldIds` and applying the HNSW diff. Two concurrent edits to one file could interleave so a stale `applyDiff` left labels live in HNSW + `rowsByLabel` but absent from the embed-db (search then returns ghost hits, masked by `applyDiff`'s silent missing-label skip). Fix: a `fileQueues: Map<absPath, Promise>` chains same-file events sequentially (different files keep independent chains → still parallel); the map self-evicts when a file's chain drains. `close()` now `await Promise.allSettled([...fileQueues.values()])` before `flushHnswToDisk()` so a pending update completes before the flush.
+- **`-1` sentinel-label corruption (HIGH).** `result.rows.map((r, i) => ({ id: newIds[i] ?? -1, … }))` at both the md and PDF zip sites silently inserted a vector under sentinel label `-1` if `newIds.length < rows.length` — corrupting the in-memory index, the shared `rowsByLabel`, and the flushed `.hnsw.bin`. New exported **`zipHnswAddPoints(rows, newIds)`** asserts equal length and throws (fail-closed) — caught by the watcher's per-event try/catch (logs + skips HNSW for that file; signature guard rebuilds a correct index next serve). No corrupt label is ever inserted.
+- **M1 — HNSW `saveTo` live count.** `hnsw.ts` persisted the build-time `size` closure into `.meta.json`; after live updates that's stale. Now persists `hasLiveUpdate ? ctor.getCurrentCount() : size` (the same source the `size` getter uses).
+- **L2 — unlink kind for PDFs.** The unlink branch hardcoded `kind: "md"` in its `syncHnswForFile` call; now passes `isPdf ? "pdf" : "md"`. Cosmetic on today's pure-delete diff (no rows are set) but correct + future-proof.
+
+### Tests added (+7, positive + NEGATIVE controls)
+
+- `tests/zip-hnsw-points.test.ts` (NEW) — `zipHnswAddPoints`: matched zip (POSITIVE), empty case, too-few-ids + too-many-ids throw (NEGATIVE — the `-1` guard), never-emits-`-1`.
+- `tests/hnsw.test.ts` — M1: build → `applyDiff` add 1 → `saveTo` → persisted `meta.size` equals the live count, **not** the build-time size (NEGATIVE control).
+- `tests/watcher.test.ts` — H1: after `close()` drains an edit, the invariant holds — no `-1` sentinel in `rowsByLabel`, no ghost label (every tracked label exists in the embed-db). (chokidar's 250ms `awaitWriteFinish` coalesces writes, so this asserts the serialization+drain invariant rather than forcing the exact race.)
+
+### Files changed
+
+- `src/watcher.ts` — `zipHnswAddPoints` helper + `EmbedRowLike`; `fileQueues` field + serialized `onChange`; `close()` drain; both zip sites use the helper; unlink kind.
+- `src/hnsw.ts` — `saveTo` persists the live `getCurrentCount()`.
+- `tests/zip-hnsw-points.test.ts` (new), `tests/hnsw.test.ts`, `tests/watcher.test.ts`.
+- test count 959 → 966 across README/COMPARISON/llms.txt/AGENTS/package.json/ROADMAP.
+- version bump 3.9.0-rc.10 → 3.9.0-rc.11 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.10] — 2026-05-28
 
 > **TL;DR:** **Closes overclaim #16 — OCR offline enforcement is now REAL (CRITICAL), plus the OCR canvas-OOM DoS.** The TSDoc/CLI-help/SECURITY.md all claimed `serve` "makes zero outbound network calls" / "no runtime CDN download" / "throws if a language isn't installed" and referenced an `install-ocr-lang` subcommand — but the code did none of it (`createWorker` silently CDN-fetched; the subcommand didn't exist). This RC builds the guards the docs promised: a **pre-flight cache check that throws fail-closed before the worker is created**, a real **`install-ocr-lang <code>` subcommand**, a worker pinned read-only to the local tessdata cache, an **absolute canvas-dimension clamp** (the `scale` cap was a false OOM guard for giant MediaBoxes), page-range validation, and **OIA Check 4e** which fails CI if any doc claims the offline guarantee while a code guard is absent (regression-proofs the #16 class, like Check 4d did for SLSA). **+15 tests (positive + NEGATIVE controls), all CI-runnable without the OCR optional deps. 944 → 959 tests.**

@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.9] — 2026-05-28
+
+> **TL;DR:** **First RC of the post-audit sprint — input-validation security.** A second, five-agent comprehensive audit (core-retrieval code · server/transport/CLI code · docs/workflows/config · competitor landscape · repo-page/discoverability) ran against rc.8; `ROADMAP.md` is rewritten around its findings + the competitive read (we are capability-ahead of every Obsidian-MCP peer; the gap to the memory leaders is published benchmarks + discoverability, not tech). This RC ships the **P0 input-validation** findings: a real **ReDoS guard** on `obsidian_open_questions` (an always-registered tool that compiled a caller-supplied `pattern` straight into V8's backtracking engine and ran it over every line of every note — a remote DoS on `serve-http`), a defensive length cap on DQL `like`, and reconciliation of the bearer-token min-length check between the CLI and the transport. **No behavior change for legitimate callers. 927 → 944 tests** (+17, all with positive + negative controls).
+
+**Patch — audit-driven security (sprint RC 1 of N).**
+
+### The audit (sprint kickoff)
+
+Five parallel agents re-read the project end-to-end on rc.8. Net: **zero CRITICAL beyond the already-tracked #16 OCR overclaim**; the codebase's path-safety, FTS5 escaping, int8 quantization, RRF/IR-metric, bearer-compare, CORS, and P2-10/11 session-lifecycle layers were all re-confirmed solid. New actionable findings were sequenced into a phased sprint (see `ROADMAP.md` Tier 1): **rc.9 input-validation (this RC) → rc.10 OCR offline enforcement + canvas-OOM → rc.11 watcher/HNSW correctness → rc.12 structural defenses + state-driven docs + supply-chain → rc.13 remaining correctness → rc.14 discoverability**. Audit checkpoint after each RC.
+
+### Fixed (input-validation security)
+
+- **ReDoS in `obsidian_open_questions` (HIGH).** `tools/meta.ts` compiled `args.pattern` (zod `z.string().optional()`, no constraint) into a `RegExp` and ran it per-line across the whole vault. The tool is **always registered** (not gated), so any stdio or bearer-authenticated `serve-http` client could submit a catastrophic-backtracking pattern (`(a+)+$`, `(.*)*`) and freeze the single-threaded event loop. Fix: a dependency-free **`isCatastrophicRegex`** guard that rejects "star height ≥ 2" patterns (an unbounded/amplifying quantifier applied to a group whose body also has one — honoring char-classes + escapes) **before** compile, plus a hard **`MAX_QUESTION_PATTERN_LEN` = 200** cap mirrored on the zod schema. The safe default pattern is unaffected (regression-guarded in tests).
+- **DQL `like` length cap (defensive).** `dql.ts`'s `likeToRegex` is catastrophic-backtracking-**safe by construction** (it only ever emits `.*`, never a nested quantifier — re-confirmed by the audit), so this is **not** a ReDoS fix; it just bounds regex-compile/match CPU on an absurdly long user-supplied LIKE value via **`MAX_LIKE_PATTERN_LEN` = 512** (throws above it).
+- **Bearer min-length reconciliation.** `cli.ts` accepted any non-empty `--bearer-token` while `startHttpServer` independently threw on `< 16` — so a short token passed the CLI gate then failed deeper with a less-friendly error. The `≥16` check now also fires in the CLI action (before any server setup), giving the user the `gen-token` hint + a clean `exit(1)`. The transport-layer check stays as defense-in-depth.
+
+### ROADMAP refresh
+
+`ROADMAP.md` rewritten after the second audit + competitive/discoverability survey: sharpened "#1 in our spheres" thesis, the phased rc.9→rc.14 sprint, a Tier-3 push to **publish LongMemEval scores** (the #1 credibility lever — no Obsidian MCP has any) + a "forgetting-aware" note-staleness signal (a frontier every memory competitor fails), and a "Requires the maintainer" section for the account/OAuth-gated discoverability actions (Glama claim, MCP Registry re-submit, forum post).
+
+### Tests added (+17, all positive + negative controls)
+
+- `tests/redos-guard.test.ts` (NEW) — 13 catastrophic patterns flagged (NEGATIVE), 11 safe patterns accepted incl. the production default (POSITIVE regression guard), `readUnboundedQuantifier` unit cases, + 4 `getOpenQuestions` integration cases (rejects catastrophic/over-long; accepts safe/default). The catastrophic *integration* fixture is built at runtime (`String.fromCharCode`) so CodeQL's `js/redos` static pass doesn't flag a regex literal that the guard rejects before compile — keeps "0 new CodeQL alerts" true (caught by the advisory CodeQL gate on the first PR push).
+- `tests/dql.test.ts` — `likeToRegex` cap: normal pattern matches (POSITIVE), boundary at the cap passes, over-long throws (NEGATIVE).
+- `tests/cli.test.ts` — `serve-http` short-token → `exit(1)` + "≥16 chars" hint (NEGATIVE); no-token → "required" with the length error explicitly NOT firing (contrast control).
+
+### Files changed
+
+- `src/tools/meta.ts` — `isCatastrophicRegex` + `readUnboundedQuantifier` + `MAX_QUESTION_PATTERN_LEN` + guarded compile in `getOpenQuestions`.
+- `src/tool-registry.ts` — `.max(MAX_QUESTION_PATTERN_LEN)` on the `pattern` schema + import.
+- `src/dql.ts` — `MAX_LIKE_PATTERN_LEN` + cap in `likeToRegex` (exported for tests).
+- `src/cli.ts` — bearer `≥16` check in the `serve-http` action.
+- `ROADMAP.md` — full rewrite (post-audit).
+- `tests/redos-guard.test.ts` (new), `tests/dql.test.ts`, `tests/cli.test.ts`.
+- test count 927 → 944 across README/COMPARISON/llms.txt/AGENTS/package.json; README suite-timing ~5s → ~12s (audit LOW).
+- version bump 3.9.0-rc.8 → 3.9.0-rc.9 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.8] — 2026-05-28
 
 > **TL;DR:** **Integrity-batch #2 from the exhaustive file-by-file audit** (every `src/` module, every doc, every workflow, every script re-read on Opus 4.8). Closes the cheap-but-real drift the audit surfaced and adds the FIRST structural defense for the "claimed-guarantee vs code-guard" class introduced in rc.7: a new **OIA Check 4d** that reads `.github/workflows/release.yml`, computes the SLSA Build Level it actually earns, and fails CI if any doc claims a higher level. Also: a bench-harness honesty fix (a 5-sample "p99" that always returned the max — relabeled `max`), determinism fix (`Date.now()` tag → stable), the privacy-test soft-skips made VISIBLE via `ctx.skip()` + a CI tripwire that fails loudly if the native deps that gate them ever go missing in CI, two stale test-title positioning claims, a benchmarks rounding drift, a biome binary/schema unification (2.4.14/2.4.15 → 2.4.16), and a stale Node placeholder in the bug template. **Docs/tests/scripts/config only — zero `src/` runtime logic changed. 926 → 927 tests (+1 CI tripwire).**

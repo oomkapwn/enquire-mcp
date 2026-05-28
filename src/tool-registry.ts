@@ -30,6 +30,7 @@ import {
   listNotes,
   listPdfs,
   listTags,
+  MAX_QUESTION_PATTERN_LEN,
   ocrPdf,
   openInUi,
   paperAudit,
@@ -452,9 +453,10 @@ export function registerReadTools(
         limit: z.number().int().positive().max(500).optional().describe("Max questions to return (default 100)"),
         pattern: z
           .string()
+          .max(MAX_QUESTION_PATTERN_LEN)
           .optional()
           .describe(
-            "Override the regex (case-insensitive). Default matches Open question:/Q:/TODO?/?? at line start with optional list/quote/heading prefix."
+            "Override the regex (case-insensitive). Default matches Open question:/Q:/TODO?/?? at line start with optional list/quote/heading prefix. Capped length; patterns with nested unbounded quantifiers (ReDoS risk) are rejected."
           )
       }
     },

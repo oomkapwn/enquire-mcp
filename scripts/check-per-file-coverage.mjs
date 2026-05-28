@@ -66,7 +66,7 @@ const FLOORS = {
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.
-  "src/tools/meta.ts": { branches: 71 }, // current 73.85% (rc.8 T-1 uplift)
+  "src/tools/meta.ts": { branches: 74 }, // current 76.90% (rc.9 ReDoS-guard tests lifted it +3pp)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
   "src/bases.ts": { branches: 71 }, // current 73.17%
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts

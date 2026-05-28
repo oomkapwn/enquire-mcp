@@ -567,6 +567,114 @@ export interface OpenQuestion {
 }
 
 /**
+ * Max length of a caller-supplied `obsidian_open_questions` pattern. A hard
+ * cap is the first line of defense (paired with {@link isCatastrophicRegex})
+ * against an unbounded user regex compiled into V8's backtracking engine.
+ */
+export const MAX_QUESTION_PATTERN_LEN = 200;
+
+/**
+ * Read the regex quantifier (if any) starting at `pos` in `src`. Returns
+ * whether it is "unbounded/amplifying" — `*`, `+`, an open-ended `{n,}`, or
+ * a brace whose max repetition exceeds {@link REPEAT_AMPLIFY_THRESHOLD} — and
+ * how many source chars it spans (so the scanner can skip them). A trailing
+ * lazy `?` is folded into the span. Non-quantifier positions return length 0.
+ *
+ * @internal exported only for unit tests of {@link isCatastrophicRegex}.
+ */
+const REPEAT_AMPLIFY_THRESHOLD = 10;
+export function readUnboundedQuantifier(src: string, pos: number): { unbounded: boolean; length: number } {
+  const c = src[pos];
+  if (c === "*" || c === "+") {
+    const next = src[pos + 1];
+    const extra = next === "?" || next === "+" ? 1 : 0; // lazy/possessive marker
+    return { unbounded: true, length: 1 + extra };
+  }
+  if (c === "{") {
+    const close = src.indexOf("}", pos);
+    if (close === -1) return { unbounded: false, length: 0 }; // literal `{`
+    const body = src.slice(pos + 1, close);
+    const m = /^(\d*)(,(\d*))?$/.exec(body);
+    // Reject non-quantifier braces (e.g. `{}`, `{a}`) — treat as literals.
+    if (!m || (m[1] === "" && m[2] === undefined)) return { unbounded: false, length: 0 };
+    const lower = m[1] === "" ? 0 : Number(m[1]);
+    const hasComma = m[2] !== undefined;
+    const upper = m[3];
+    const maxRep = !hasComma ? lower : upper === "" || upper === undefined ? Number.POSITIVE_INFINITY : Number(upper);
+    const next = src[close + 1];
+    const extra = next === "?" || next === "+" ? 1 : 0;
+    return { unbounded: maxRep > REPEAT_AMPLIFY_THRESHOLD, length: close - pos + 1 + extra };
+  }
+  return { unbounded: false, length: 0 };
+}
+
+/**
+ * Conservative, dependency-free guard against catastrophic-backtracking
+ * (ReDoS) in a caller-supplied regex. V8's Irregexp engine backtracks, so
+ * `(a+)+$`, `(.*)*`, or `(.*a){20}` can freeze the event loop for seconds on
+ * a single long line. `obsidian_open_questions` runs the caller's `pattern`
+ * against every line of every note, so an unvalidated regex is a remote DoS
+ * on a bearer-authenticated `serve-http` (the tool is always registered).
+ *
+ * Detects "star height ≥ 2": an unbounded/amplifying quantifier (see
+ * {@link readUnboundedQuantifier}) applied to a group whose body ALSO
+ * contains one — the classic catastrophic shape. Honors char-classes
+ * (`[...]` contents are literal) and backslash escapes (`\(`, `\+` are
+ * literals). Best-effort by design (it can't prove safety for every regex —
+ * e.g. overlapping-alternation ReDoS like `(a|a)+` is out of scope), so the
+ * caller pairs it with {@link MAX_QUESTION_PATTERN_LEN}.
+ *
+ * @param src - The raw regex source the caller wants to compile.
+ * @returns true if the pattern risks catastrophic backtracking.
+ * @example
+ * ```ts
+ * isCatastrophicRegex("(a+)+$");        // true  — nested unbounded quantifiers
+ * isCatastrophicRegex("^Q: (.+)$");     // false — single-level
+ * ```
+ */
+export function isCatastrophicRegex(src: string): boolean {
+  const hadUnbounded: boolean[] = [false]; // per-group-frame flag; [0] = top level
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === "\\") {
+      i++; // skip the escaped char — it's a literal / class shorthand, never meta
+      continue;
+    }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") {
+      inClass = true;
+      continue;
+    }
+    if (ch === "(") {
+      hadUnbounded.push(false);
+      continue;
+    }
+    if (ch === ")") {
+      const frameHad = hadUnbounded.pop() ?? false;
+      const q = readUnboundedQuantifier(src, i + 1);
+      if (q.unbounded && frameHad) return true; // star height ≥ 2 → catastrophic
+      // Propagate: a group that is unbounded-quantified OR whose body already
+      // had an unbounded quantifier counts as one in its parent frame.
+      if (hadUnbounded.length > 0 && (q.unbounded || frameHad)) {
+        hadUnbounded[hadUnbounded.length - 1] = true;
+      }
+      i += q.length; // skip the quantifier chars we just consumed
+      continue;
+    }
+    const q = readUnboundedQuantifier(src, i);
+    if (q.unbounded && hadUnbounded.length > 0) {
+      hadUnbounded[hadUnbounded.length - 1] = true;
+    }
+    if (q.length > 1) i += q.length - 1; // skip multi-char brace quantifiers
+  }
+  return false;
+}
+
+/**
  * Surface unresolved threads — `Open question:` / `Q:` / `TODO?` / `??`
  * markers across the vault.
  *
@@ -606,7 +714,30 @@ export async function getOpenQuestions(
   // optional list-bullet / quote / heading prefix). Single-line `i` flag —
   // we apply it line-by-line below.
   const defaultPat = "^\\s*(?:[#\\->\\*\\d\\.]+\\s+)?(?:open\\s+question|q|todo\\?|\\?\\?)\\s*[:\\-]?\\s*(.+)$";
-  const re = new RegExp(args.pattern ?? defaultPat, "i");
+  // ReDoS guard (v3.9.0-rc.9 audit): the default pattern is safe, but a
+  // caller-supplied override is compiled into V8's backtracking engine and
+  // run against every line of every note — an unbounded regex would be a
+  // remote DoS on serve-http. Reject over-long or catastrophic patterns
+  // BEFORE compiling. See isCatastrophicRegex / MAX_QUESTION_PATTERN_LEN.
+  let re: RegExp;
+  if (args.pattern !== undefined) {
+    if (args.pattern.length > MAX_QUESTION_PATTERN_LEN) {
+      throw new Error(
+        `obsidian_open_questions: pattern too long (${args.pattern.length} > ${MAX_QUESTION_PATTERN_LEN} chars). ` +
+          "Simplify it or omit it to use the safe default."
+      );
+    }
+    if (isCatastrophicRegex(args.pattern)) {
+      throw new Error(
+        "obsidian_open_questions: pattern rejected — it contains nested unbounded quantifiers " +
+          "(e.g. `(a+)+`, `(.*)*`) that risk catastrophic backtracking (ReDoS). " +
+          "Simplify the pattern or omit it to use the safe default."
+      );
+    }
+    re = new RegExp(args.pattern, "i");
+  } else {
+    re = new RegExp(defaultPat, "i");
+  }
 
   const entries = await vault.listMarkdown(args.folder);
   const out: OpenQuestion[] = [];

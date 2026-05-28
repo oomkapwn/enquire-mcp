@@ -228,6 +228,17 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
+      // v3.9.0-rc.9 audit — reconcile the bearer min-length check with
+      // startHttpServer (which independently throws if < 16). Enforcing it
+      // here too gives the user the friendly gen-token hint + a clean exit(1)
+      // instead of a deeper thrown Error from the transport layer.
+      if (bearerToken.length < 16) {
+        process.stderr.write(
+          `enquire serve-http: --bearer-token must be ≥16 chars (got ${bearerToken.length}).\n` +
+            "  Generate a strong one with: enquire-mcp gen-token\n"
+        );
+        process.exit(1);
+      }
       // --port accepts 0 as "kernel-assigned ephemeral" — useful for tests
       // and for scenarios where the user binds via a tunnel and doesn't
       // care which local port. So we use a non-negative-integer check

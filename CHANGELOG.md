@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.5] — 2026-05-25
+
+> **TL;DR:** **OCR install-instruction unification — closes the μ-class doc inconsistency the v3.9.0-rc.4 fix itself introduced (overclaim #14 residual).** rc.4's fix for overclaim #14 replaced the (non-existent) `install-ocr-lang` references in `cli.ts`/`api.md` with a "download from github tessdata_fast" instruction — but `SECURITY.md:167` documented a *different* procedure ("run OCR once online, copy `tessdata/`"). Two divergent install paths. This rc.5 unifies all three surfaces on the canonical run-once-then-copy procedure (SECURITY.md is the single source of truth), and refreshes the stale `SECURITY.md` roadmap stamp ("(v3.8.0)" → "planned, not yet shipped as of v3.9.0") with the deferral rationale (the `install-ocr-lang` subcommand needs `langPath`/`cachePath` wiring in `src/ocr.ts` that CI can't exercise — tesseract.js + canvas are optional deps absent from the matrix). **Docs-only; 923 unit tests unchanged.**
+
+**Patch — docs consistency (audit-driven self-correction).**
+
+### Why this exists
+
+This is a self-audit finding on rc.4's own diff (the CLAUDE.md "post-merge re-sweep" rule since v3.7.15 — after every audit-driven release that closes a class finding, scan that patch's own diff for fresh instances of the same class). rc.4 closed overclaim #14 (the `install-ocr-lang` subcommand was referenced as if it existed) by swapping the references for a manual `tessdata_fast` download instruction. But that swap was hasty — it created a NEW inconsistency: `SECURITY.md` already documented the canonical "run OCR once online to populate the `tessdata/` cache, then copy to the offline host" procedure, and rc.4's `tessdata_fast` instruction diverged from it without specifying the exact cache dir.
+
+This is the **μ-class** (instruction inconsistency across docs) — same class swept in v3.7.20 task #24.
+
+### Fixes
+
+- **`src/cli.ts`** (`--ocr-pdfs` + `--ocr-langs` help text): now point at SECURITY.md's canonical procedure instead of a standalone `tessdata_fast` instruction.
+- **`docs/api.md`** (`--ocr-pdfs` flag row): same — references the canonical procedure.
+- **`SECURITY.md`**: added an explicit "**Current install procedure (canonical)**" paragraph (the run-once-then-copy approach, with `tessdata_fast` as a documented alternative). Refreshed the "**Roadmap (v3.8.0)**" heading → "**Roadmap (planned, not yet shipped as of v3.9.0 — re-targeted from the original v3.8.0 plan)**" and documented WHY `install-ocr-lang` is deferred: it requires wiring a stable `langPath`/`cachePath` into `src/ocr.ts`'s `createWorker`, and the network-download path can't be exercised in CI, so it needs an env-gated integration test before shipping.
+
+### Why NOT implement the full `install-ocr-lang` subcommand now
+
+The honest answer is testability. The subcommand would:
+1. Download `<lang>.traineddata` into a cache dir (network op — fine, mirrors `install-model`).
+2. Require `src/ocr.ts`'s `createWorker` to read from that same dir via `langPath`/`cachePath`.
+
+Step 2 is the risk: `src/ocr.ts` currently calls `createWorker(langs, undefined, { logger })` with no explicit `langPath`, so tesseract.js uses its default cache behavior. Changing that to a custom dir could break OCR in a way CI can't catch — there are no CI tests that actually run OCR (tesseract.js + `@napi-rs/canvas` are optional deps absent from the CI matrix; the only OCR test is env-gated). Shipping an untestable change to the OCR worker config violates the "audit BEFORE ship" discipline. Tracked as a v3.9.x backlog item that must land WITH an env-gated integration test (`ENQUIRE_LOAD_OCR_E2E=1`, same pattern as the reranker smoke).
+
+### Files changed
+
+- `src/cli.ts` — `--ocr-pdfs` + `--ocr-langs` help text reference SECURITY.md canonical procedure.
+- `docs/api.md` — `--ocr-pdfs` flag row reference.
+- `SECURITY.md` — canonical-procedure paragraph + roadmap re-target.
+- version bump 3.9.0-rc.4 → 3.9.0-rc.5 (7 surfaces).
+
+### What's next
+
+- **v3.9.0-rc.6** — HNSW disk persistence on live update (debounced `saveTo` ~30s after the last watcher mutation; recompute embed-db signature so the persisted `.hnsw.bin` tracks live state).
+- **v3.9.0 stable** — promote `@rc → @latest` after rc.6 + fresh external audit per `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md`.
+- **v3.9.x+** — `install-ocr-lang` subcommand (with env-gated integration test); HNSW filter-during-search (structural R-10 closure).
+
+---
+
 ## [3.9.0-rc.4] — 2026-05-25
 
 > **TL;DR:** **Full state-driven self-audit on the v3.8.7 → v3.9.0-rc.3 cascade — closes 3 HIGH + 4 MEDIUM findings + documents overclaim instance #13 + recursion-pair shape #7 + extends META scope-completeness with 2 new defenses.** Audit caught: (1) CLAUDE.md header line said "deferred to v3.9.0+: ... OCR'd PDF watcher embed-sync, HNSW in-memory live update, R-10 adaptive refill" while the status section in the same file listed all three as SHIPPED (overclaim #13). (2) `docs/api.md:5` said "currently v3.9.0-rc.1" — we're on rc.3. (3) v3.9.0-rc.1/rc.2/rc.3 features absent from ALL user-facing docs (README, api.md, QUICKSTART, llms.txt, AGENTS.md) — the v3.8.8 META audit covered only NUMERIC drift, not FEATURE-MENTION drift. **+5 tests (3 POSITIVE + 2 NEGATIVE controls); 923 unit tests total.** All findings closed by the same PR.

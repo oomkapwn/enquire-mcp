@@ -27,7 +27,7 @@ reproducible from this repository — there are no hand-edited numbers.** Run
 **Headline takeaways:**
 
 - The cross-encoder reranker is the single biggest top-K-precision win:
-  **+25 MRR points** and **+16 NDCG@10 points** vs. plain hybrid RRF — at a
+  **+24.7 MRR points** and **+15.5 NDCG@10 points** vs. plain hybrid RRF — at a
   ~290 ms latency cost per query on M-series CPU.
 - Hybrid retrieval maximizes **recall** (every relevant note is somewhere
   in the top-10 96 % of the time) but base RRF without a reranker has weak

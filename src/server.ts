@@ -435,7 +435,13 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             // loaded index supports applyDiff() through the same wrapper.
             if (watcher) {
               try {
-                watcher.attachHnsw(loaded.index, loaded.rowByLabel);
+                // v3.9.0-rc.6 — pass persistFile so the watcher re-persists
+                // the live-updated index at close time (unless --no-hnsw-persist).
+                watcher.attachHnsw(
+                  loaded.index,
+                  loaded.rowByLabel,
+                  opts.hnswPersist !== false ? persistFile : undefined
+                );
                 process.stderr.write(`enquire: watcher HNSW live-update enabled (loaded-from-disk index)\n`);
               } catch (err) {
                 process.stderr.write(
@@ -503,7 +509,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               // sync with the freshly-upserted embed-db rows.
               if (watcher) {
                 try {
-                  watcher.attachHnsw(index, rowByLabel);
+                  // v3.9.0-rc.6 — pass persistFile so the watcher re-persists
+                  // the live-updated index at close time (unless --no-hnsw-persist).
+                  watcher.attachHnsw(index, rowByLabel, opts.hnswPersist !== false ? persistFile : undefined);
                   process.stderr.write(`enquire: watcher HNSW live-update enabled\n`);
                 } catch (err) {
                   // Fail-soft. Log + continue; watcher still does embed-db sync.

@@ -82,12 +82,12 @@ const FLOORS = {
   // v3.9.0-rc.2 — lowered from 64% → 53% because HNSW live-update added
   // syncHnswForFile + the attachHnsw method + 6 new branches in the md
   // and pdf event handlers (oldIds/newIds zip + fail-soft try/catch +
-  // empty-result skip). End-to-end coverage requires real vault edits
-  // observed by chokidar + a real embedder + a real HNSW index; the
-  // existing tests cover only the unit-level validation. Floor will
-  // lift back when v3.9.0-rc.3 adds the integration test that exercises
-  // applyDiff through a real file-change event.
-  "src/watcher.ts": { branches: 53 }, // current 55.05% (v3.9.0-rc.2 HNSW live-update branches uncovered without integration test)
+  // empty-result skip). End-to-end coverage required real vault edits.
+  // v3.9.0-rc.6 — the integration test (file-change → applyDiff → close
+  // → flushHnswToDisk → loadHnswFromDisk round-trip) lifted coverage
+  // 55.05% → 59.58%; floor stays at 53% (kept the conservative margin
+  // because OCR branches still need tesseract.js + canvas, absent from CI).
+  "src/watcher.ts": { branches: 53 }, // current 59.58% (v3.9.0-rc.6 integration test exercises HNSW live-update + flush)
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).

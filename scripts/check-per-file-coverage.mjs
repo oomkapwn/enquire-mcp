@@ -60,7 +60,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
   "src/embeddings.ts": { branches: 28 }, // current 30% (integration-dep)
-  "src/ocr.ts": { branches: 22 }, // current 31.03% (integration-dep)
+  "src/ocr.ts": { branches: 60 }, // current 66.66% (rc.10 offline-enforcement + geometry-helper tests lifted it +35pp)
   "src/http-transport.ts": { branches: 65 }, // current 72.85% (v3.8.7 P2-10/P2-11 raised branch coverage with 10 new tests)
   "src/doctor.ts": { branches: 64 }, // current 66.05%
   "src/tools/search.ts": { branches: 66 }, // current 68.27%

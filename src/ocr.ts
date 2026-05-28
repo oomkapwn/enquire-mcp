@@ -36,6 +36,9 @@
 //   • No outbound HTTP except the one-time language-data download
 
 import type { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 /** Per-page OCR result. Shape mirrors `PdfPage` from src/pdf.ts. */
 export interface OcrPdfPage {
@@ -111,18 +114,26 @@ export interface ExtractPdfWithOcrOptions {
    * Tesseract language pack(s). Default `'eng'`. Multi-lang via `'+'`,
    * e.g. `'eng+rus'` for English+Russian mixed documents.
    *
-   * v3.7.16 P1-1 — language trained-data files (`<lang>.traineddata`,
-   * ~10 MB each) must be PRE-DOWNLOADED into the Tesseract cache.
-   * The runtime download path that Tesseract.js enables by default is
-   * a privacy-promise violation against README/SECURITY.md's "zero
-   * outbound network calls in serve mode" claim. The OCR pipeline now
-   * checks that the requested language files exist locally BEFORE
-   * spinning up the worker, and throws a clear "language not installed"
-   * error if any are missing — directing the user to run
-   * `enquire-mcp install-ocr-lang <code>` as a separate, EXPLICIT,
-   * documented network step (parity with `install-model` for embeddings).
+   * v3.9.0-rc.10 (overclaim #16, ENFORCED) — language trained-data files
+   * (`<lang>.traineddata`, ~10 MB each) must be PRE-DOWNLOADED into the local
+   * tessdata cache ({@link resolveTessdataDir}). Tesseract.js would otherwise
+   * silently CDN-fetch them on first use, violating README/SECURITY.md's "zero
+   * outbound network calls in serve mode" guarantee. {@link assertOcrLangsInstalled}
+   * verifies every requested pack exists locally BEFORE the worker is created
+   * and throws (fail-closed) if any are missing — directing the user to run
+   * `enquire-mcp install-ocr-lang <code>` (an explicit, opt-in network step,
+   * parity with `install-model` for embeddings). The worker is additionally
+   * pinned to the local cache (`langPath` + `cacheMethod: "readOnly"`), so no
+   * runtime download path remains.
    */
   langs?: string;
+  /**
+   * Directory holding the Tesseract `<lang>.traineddata` packs. Defaults to
+   * {@link resolveTessdataDir}. Overriding it points both the pre-flight
+   * existence check and the worker's `langPath` at a custom location (used by
+   * the env-gated offline test).
+   */
+  langPath?: string;
   /**
    * Page range (1-indexed inclusive). Default: all pages. Useful for
    * partial OCR of long documents — OCR is the slowest step in the
@@ -161,17 +172,124 @@ export interface ExtractPdfWithOcrOptions {
 export const DEFAULT_OCR_MAX_PAGES = 200;
 
 /**
+ * v3.9.0-rc.10 — absolute cap on a rendered OCR page's largest pixel side.
+ * The `scale` clamp ([0.5, 4]) bounds the MULTIPLIER, not the absolute pixel
+ * count: a PDF MediaBox can be up to 14400×14400 pt (per the PDF spec), which
+ * even at scale 1 renders to a multi-GB canvas → OOM. `extractPdfWithOcr`
+ * lowers the per-page scale so the larger rendered side never exceeds this.
+ */
+export const MAX_OCR_CANVAS_DIM = 5000;
+
+/**
+ * v3.9.0-rc.10 — compute the effective render scale so the LARGER rendered page
+ * side never exceeds {@link MAX_OCR_CANVAS_DIM}. The `scale` clamp ([0.5, 4])
+ * bounds only the multiplier; this bounds the absolute pixel count, preventing
+ * an OOM on an adversarially huge PDF MediaBox. Returns the requested scale
+ * unchanged for normal-size pages.
+ *
+ * @param baseWidth - Page width in pt at scale 1.
+ * @param baseHeight - Page height in pt at scale 1.
+ * @param requestedScale - The caller's (already [0.5,4]-clamped) scale.
+ * @returns The effective scale to render at (≤ requestedScale).
+ */
+export function clampOcrScale(baseWidth: number, baseHeight: number, requestedScale: number): number {
+  const maxBaseDim = Math.max(baseWidth, baseHeight, 1);
+  return Math.max(0.1, Math.min(requestedScale, MAX_OCR_CANVAS_DIM / maxBaseDim));
+}
+
+/**
+ * v3.9.0-rc.10 — resolve + validate a 1-indexed inclusive OCR page range
+ * against the document's page count. Clamps to `[1, pageCount]`; throws on an
+ * inverted/empty range (e.g. `pages:[5,2]`) instead of silently returning zero
+ * pages (which a caller could misread as "image-only scan, no text").
+ *
+ * @param pages - Optional `[from, to]` request (1-indexed inclusive).
+ * @param pageCount - Total pages in the document.
+ * @returns The clamped `[from, to]` range.
+ * @throws {Error} If the resolved range is empty/inverted.
+ */
+export function resolveOcrPageRange(pages: [number, number] | undefined, pageCount: number): [number, number] {
+  const from = pages && pages.length === 2 ? Math.max(1, pages[0]) : 1;
+  const to = pages && pages.length === 2 ? Math.min(pageCount, pages[1]) : pageCount;
+  if (to - from + 1 < 1) {
+    throw new Error(
+      `enquire OCR: invalid page range — resolved to [${from}, ${to}]. 'from' must be ≤ 'to' and within the document.`
+    );
+  }
+  return [from, to];
+}
+
+/**
+ * Resolve the local directory that holds Tesseract `<lang>.traineddata` packs
+ * (v3.9.0-rc.10 — overclaim #16 offline enforcement). Precedence:
+ *   1. `$ENQUIRE_TESSDATA_DIR` (explicit override),
+ *   2. `$XDG_CACHE_HOME/enquire-mcp/tessdata`,
+ *   3. `~/.cache/enquire-mcp/tessdata`.
+ * This is where `enquire-mcp install-ocr-lang <code>` downloads packs and where
+ * `extractPdfWithOcr` reads them — so `serve` makes no runtime CDN fetch.
+ *
+ * @returns Absolute path to the tessdata cache directory.
+ */
+export function resolveTessdataDir(): string {
+  const override = process.env.ENQUIRE_TESSDATA_DIR;
+  if (override && override.trim().length > 0) return override.trim();
+  const xdg = process.env.XDG_CACHE_HOME;
+  const base = xdg && xdg.trim().length > 0 ? xdg.trim() : path.join(os.homedir(), ".cache");
+  return path.join(base, "enquire-mcp", "tessdata");
+}
+
+/**
+ * True iff a Tesseract language pack for `lang` exists under `dir` (either the
+ * uncompressed `<lang>.traineddata` that `install-ocr-lang` writes, or a
+ * `<lang>.traineddata.gz` from Tesseract's own cache).
+ */
+export function ocrLangIsInstalled(lang: string, dir: string = resolveTessdataDir()): boolean {
+  return existsSync(path.join(dir, `${lang}.traineddata`)) || existsSync(path.join(dir, `${lang}.traineddata.gz`));
+}
+
+/**
+ * Offline-enforcement guard (v3.9.0-rc.10 — overclaim #16). Throws, FAIL-CLOSED,
+ * if any requested language in `langs` (a `+`-joined Tesseract spec, e.g.
+ * `"eng+rus"`) has no locally-cached trained-data under `dir`. Runs BEFORE the
+ * Tesseract worker is created, so a missing pack never triggers the silent CDN
+ * download that would violate the "zero outbound network calls in serve mode"
+ * guarantee. The error names the exact `install-ocr-lang` command to run.
+ *
+ * @param langs - `+`-joined Tesseract language spec.
+ * @param dir - Tessdata cache dir (defaults to {@link resolveTessdataDir}).
+ * @throws {Error} If any requested language pack is not installed locally.
+ */
+export function assertOcrLangsInstalled(langs: string, dir: string = resolveTessdataDir()): void {
+  const requested = langs
+    .split("+")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const missing = requested.filter((lang) => !ocrLangIsInstalled(lang, dir));
+  if (missing.length > 0) {
+    const installCmds = missing.map((l) => `enquire-mcp install-ocr-lang ${l}`).join("  &&  ");
+    throw new Error(
+      `enquire OCR: language pack(s) not installed locally: ${missing.join(", ")}. ` +
+        "enquire serve makes ZERO outbound network calls, so Tesseract trained-data must be pre-cached. " +
+        `Install (explicit, opt-in network): ${installCmds}  — downloads <lang>.traineddata into ${dir}. ` +
+        'See SECURITY.md "OCR network posture".'
+    );
+  }
+}
+
+/**
  * Extract text from an image-only / scanned PDF via Tesseract OCR.
  *
  * Caller has already loaded the file into a Buffer (use
  * `vault.readBinaryFile(relPath)` for vault-aware reading with
  * privacy-filter + max-bytes guards applied).
  *
- * v3.7.16 P1-1 — fires a stderr disclosure warning once per worker
- * creation: Tesseract.js may fetch the requested `<lang>.traineddata`
- * file from a CDN on first use, contradicting the broader "zero
- * outbound network calls in serve mode" framing. See SECURITY.md
- * "OCR network posture" for the v3.8.0 offline-only roadmap.
+ * v3.9.0-rc.10 (overclaim #16, ENFORCED) — offline guarantee. Calls
+ * {@link assertOcrLangsInstalled} BEFORE loading any optional dep or creating
+ * the worker, throwing (fail-closed) if a requested `<lang>.traineddata` isn't
+ * cached locally — Tesseract.js would otherwise silently CDN-fetch it, the one
+ * thing that could violate "zero outbound network calls in serve mode". The
+ * worker is additionally pinned to the local cache (`langPath` +
+ * `cacheMethod: "readOnly"`). Install packs via `enquire-mcp install-ocr-lang`.
  *
  * v3.7.16 P1-2 — refuses to process more than `opts.maxPages` (default
  * {@link DEFAULT_OCR_MAX_PAGES} = 200) in a single call. The check
@@ -179,29 +297,30 @@ export const DEFAULT_OCR_MAX_PAGES = 200;
  * allocate resources. Pass an explicit `pages: [from, to]` slice to
  * narrow the work, or raise `maxPages` to opt out of the default cap.
  *
- * Throws on encrypted PDFs, hard-corrupt files, missing optional deps,
- * or when the requested page span exceeds `maxPages`.
- * Returns empty pages (with `isEmpty: true`) for pages where Tesseract
- * found nothing.
+ * v3.9.0-rc.10 — additionally clamps each rendered page's ABSOLUTE pixel
+ * dimensions to {@link MAX_OCR_CANVAS_DIM} (the `scale` clamp alone doesn't
+ * bound a giant-MediaBox OOM) and rejects an inverted/empty page range.
+ *
+ * Throws on encrypted PDFs, hard-corrupt files, missing optional deps, an
+ * uninstalled language pack, an invalid page range, or when the requested page
+ * span exceeds `maxPages`. Returns empty pages (`isEmpty: true`) where
+ * Tesseract found nothing.
  */
 export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrOptions = {}): Promise<OcrPdfResult> {
   const langs = opts.langs ?? "eng";
   const scale = Math.max(0.5, Math.min(opts.scale ?? 2, 4)); // clamp to [0.5, 4]
   const maxPages = opts.maxPages ?? DEFAULT_OCR_MAX_PAGES;
+  const langPath = opts.langPath ?? resolveTessdataDir();
 
-  // v3.7.16 P1-1 — disclosure warning. Tesseract.js fetches the
-  // `<lang>.traineddata` file (~10 MB per language) from a CDN on first
-  // use. This is the ONE serve-time network path in the project and it
-  // contradicts README/SECURITY.md's broader "zero outbound network calls
-  // in serve mode" framing. The warning fires once per worker creation
-  // so operators see the disclosure in stderr / journald. Full offline-
-  // only enforcement (cache check + `install-ocr-lang` subcommand) is
-  // tracked for v3.8.0.
-  process.stderr.write(
-    `enquire OCR: Tesseract.js may fetch language pack '${langs}' from a CDN on first use ` +
-      `(~10 MB per language, cached in tessdata/). This is the only outbound network call in serve mode. ` +
-      `See SECURITY.md "OCR network posture" for the v3.8.0 offline-only roadmap.\n`
-  );
+  // v3.9.0-rc.10 (overclaim #16, ENFORCED) — offline pre-flight. Verify every
+  // requested language pack is cached LOCALLY before doing anything else.
+  // Tesseract.js's default behavior is to CDN-fetch a missing `<lang>.traineddata`
+  // on first use, which would be the only outbound network call in serve mode and
+  // would break the "zero outbound network calls" guarantee. This throws (fail-
+  // closed) with the exact `install-ocr-lang` command if a pack is missing. It
+  // runs BEFORE the optional deps load, so the guarantee holds even on hosts
+  // where tesseract.js / canvas aren't installed.
+  assertOcrLangsInstalled(langs, langPath);
 
   // Load all three lazy deps in parallel — they're independent.
   const [pdfjs, canvasMod, tesseract] = await Promise.all([loadPdfjs(), loadCanvas(), loadTesseract()]);
@@ -218,11 +337,10 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
   const doc = await loadingTask.promise;
   const pageCount = doc.numPages;
 
-  // Page range (1-indexed inclusive).
-  const [from, to] =
-    opts.pages && opts.pages.length === 2
-      ? [Math.max(1, opts.pages[0]), Math.min(pageCount, opts.pages[1])]
-      : [1, pageCount];
+  // Page range (1-indexed inclusive). v3.9.0-rc.10 — resolveOcrPageRange clamps
+  // to [1, pageCount] and throws on an inverted/empty range rather than
+  // silently returning zero pages.
+  const [from, to] = resolveOcrPageRange(opts.pages, pageCount);
 
   // v3.7.16 P1-2 — refuse to OCR more than `maxPages` in a single call.
   // The explicit `pages` slice can request any size (caller opted in),
@@ -243,6 +361,15 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
   // cost is small (~200ms warm cache) and avoids cross-request state
   // leakage in the HTTP transport.
   const worker = await tesseract.createWorker(langs, undefined, {
+    // v3.9.0-rc.10 — pin the worker to the LOCAL tessdata cache, read-only, so
+    // it never writes or CDN-fetches. assertOcrLangsInstalled above already
+    // guaranteed the packs exist here; this is defense-in-depth on the offline
+    // guarantee. gzip:false — install-ocr-lang stores uncompressed
+    // `<lang>.traineddata` (tessdata_fast format).
+    langPath,
+    cachePath: langPath,
+    cacheMethod: "readOnly",
+    gzip: false,
     // Quiet — Tesseract is chatty by default. Real errors still throw.
     logger: () => {}
   });
@@ -254,7 +381,14 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
     for (let pageNum = from; pageNum <= to; pageNum++) {
       try {
         const page = await doc.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
+        // v3.9.0-rc.10 — clamp ABSOLUTE canvas dimensions (OOM DoS guard). The
+        // `scale` clamp bounds the multiplier, not the pixel count; a giant
+        // MediaBox (the PDF spec allows up to 14400×14400 pt) would OOM the
+        // process at any scale. Lower the effective scale so the larger
+        // rendered side never exceeds MAX_OCR_CANVAS_DIM.
+        const baseVp = page.getViewport({ scale: 1 });
+        const effScale = clampOcrScale(baseVp.width, baseVp.height, scale);
+        const viewport = page.getViewport({ scale: effScale });
         const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
         // pdfjs's render() expects a CanvasRenderingContext2D-like object.
         // @napi-rs/canvas's getContext('2d') returns SKRSContext2D which is

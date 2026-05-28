@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-05-25 after a full state-driven audit (code + docs + workflows) and a competitive survey of the Obsidian-MCP, AI-memory, and RAG-MCP landscapes.
+> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-05-28 after a second full, multi-agent audit (core code + server/transport code + docs/workflows/config) and a refreshed competitive + discoverability survey of the Obsidian-MCP, AI-memory, and RAG-MCP landscapes.
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -8,61 +8,82 @@ This is the *public* roadmap. Per-release detail lives in [`CHANGELOG.md`](./CHA
 
 ---
 
-## Where we are (v3.9.0-rc train, on `@rc`; stable `@latest` = v3.8.x)
+## Where we are (v3.9.0-rc train on `@rc`; stable `@latest` = v3.8.x)
 
 Already shipped and differentiating:
 
 - **Full hybrid retrieval** — BM25 + TF-IDF + multilingual ML embeddings, RRF-fused, with optional BGE cross-encoder reranking (**+15.5 NDCG@10 / +24.7 MRR** measured on a 60-query ablation).
-- **HNSW vector index** with **in-memory live update** on file changes (search reflects edits within ~250ms) + close-time disk persistence + int8 quantization + adaptive refill under heavy privacy filtering.
+- **HNSW vector index** with **in-memory live update** on file changes (search reflects edits within ~250 ms) + close-time disk persistence + int8 quantization + adaptive refill under heavy privacy filtering.
 - **Agentic RAG** — HyDE (Gao et al 2023) + sub-question decomposition.
 - **GraphRAG-light** — Louvain community detection over the wikilink graph.
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
-- **Process maturity** — 926 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 8 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 944 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 8 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 
-- **vs other Obsidian MCPs** (bitbonsai/mcpvault, jacksteamdev/obsidian-mcp-tools, …): we are technically ahead — most are CRUD + keyword; the semantic ones need the Obsidian REST plugin. We are standalone + full hybrid. The gap is **stars/discoverability**, not capability.
-- **vs local-RAG MCPs** (knowledge-rag, shinpr/mcp-local-rag, …): near-parity on the hybrid stack; we lead on HNSW-live-update, Bases, HyDE, eval harness.
-- **vs AI-memory frameworks** (mem0 41k★, cognee 14k★, Letta, Zep): they publish **LoCoMo / LongMemEval** numbers and have **entity knowledge graphs** + **conversational write-back**; we don't yet. Letta's finding that *filesystem memory* alone scores 74% on LoCoMo **validates our vault-as-memory thesis** — we should claim and measure it.
+The May-2026 survey confirms the strategic picture: **we are capability-ahead in our category; the gap to the memory leaders is published benchmarks + discoverability, not technology.**
+
+- **vs other Obsidian MCPs** — we are the *only* Obsidian MCP combining standalone (no plugin / no REST bridge) operation + BM25+embedding hybrid + cross-encoder reranker + HyDE + sub-question + GraphRAG-light + PDF/OCR + HTTP transport. The visible leaders are *plugins* (Obsidian Copilot ~7.1k★, Smart Connections ~5.1k★ — both require Obsidian running) or *CRUD/REST bridges* (MarkusPfundstein/mcp-obsidian ~3.8k★, cyanheads/obsidian-mcp-server ~562★ — both require the Local REST plugin). The closest standalone-architecture peer (sweir1/obsidian-brain) has ~7★ and lacks reranker/HyDE/HNSW/PDF/HTTP. **Our gap is stars/discoverability, not capability.**
+- **vs local-RAG MCPs** — knowledge-rag (~86★, actively developed, *has a Glama score badge*) is the closest generic peer: hybrid + reranker + watcher + zero-cloud. We lead on Obsidian-native features (Bases DSL, wikilink graph, frontmatter parsing), HNSW int8 + live update, HyDE + sub-question, HTTP transport, and PDF OCR. chroma-mcp (~551★) is vector-only.
+- **vs AI-memory frameworks** — mem0 (~57k★, LoCoMo 92.5 / LongMemEval 94.4), Zep/Graphiti (~27k★, peer-reviewed arXiv:2501.13956, DMR 94.8 / strong LongMemEval), Letta (~23k★), cognee (~17.5k★). They publish standard benchmark numbers and do conversational write-back + entity KGs; we don't *yet*. Two findings reshape our plan: (1) **Letta's own result that a trivial filesystem-storage baseline scores 74% on LoCoMo validates the vault-as-memory thesis** — we should measure and claim it; (2) the **Memora benchmark (arXiv:2604.20006, Apr 2026) shows ALL memory systems fail on stale-memory reuse** — a documented frontier we can address cheaply because every note carries an `mtime`.
+
+**The single highest-leverage move is publishing a LongMemEval score** (no Obsidian MCP has any) — it moves us from the "Obsidian plugin" tier into the "serious memory infrastructure" peer tier (Zep/Mem0), and it plays to our strongest suit (retrieval). Second: own the precise message **"the only local memory layer grounded in *your* knowledge — not extracted and re-stored from conversations"** (mem0/Zep/Letta all extract; our vault *is* the source of truth — structurally simpler and privacy-superior).
 
 ---
 
 ## Tier 0 — Integrity: every claim verifiable (gates v3.9.0 stable)
 
-The audit found two brand-critical overclaims. The whole pitch is rigor, so these come first.
+The whole pitch is rigor, so unverifiable claims come first. The second audit surfaced concrete security findings alongside the integrity items.
 
-- [x] **#15 SLSA-3 → SLSA L2** (v3.9.0-rc.7). Badge/hero/table/package.json/llms.txt/COMPARISON corrected to "signed build provenance (SLSA Build L2)". Real **L3** (isolated builder via `slsa-framework/slsa-github-generator`) is now a tracked Tier-4 item, not a claim.
-- [ ] **#16 OCR offline enforcement** (v3.9.0-rc.9). Implement the documented guarantee: pre-flight `tessdata/<lang>.traineddata` existence check that throws before `createWorker`, `langPath` wiring so a cached pack is used (no CDN), and a real `install-ocr-lang <code>` subcommand (mirrors `install-model`). Makes "zero outbound network calls in serve mode" actually true. Ships with an env-gated integration test.
-- [x] **Version/RC drift** (v3.9.0-rc.7) — README/QUICKSTART/benchmarks/AGENTS synced; reranker claim corrected to the measured number.
-- [ ] **Close the drift class structurally** — extend `check-version-consistency.mjs` to the README "currently vX" + QUICKSTART example strings; add an OIA check that pins its own "N checks" self-count; add a GENERAL OIA "enforcement-verb" check (grep for "blocked"/"zero outbound"/"fails closed"/"throws if" → flag for code-guard verification). Closes overclaim classes #12/#13/#15/#16 permanently. _Partial progress (v3.9.0-rc.8): OIA **Check 4d** now enforces the SLSA-level claim against `release.yml` (the #15-specific code-guard) + the OIA header self-count was made honest (8 checks). The generalized enforcement-verb grep + version-consistency string extension remain open._
+- [x] **#15 SLSA-3 → SLSA L2** (v3.9.0-rc.7) — corrected across all surfaces; OIA **Check 4d** now statically enforces the SLSA-level claim against `release.yml` (negative-control verified in rc.8). Real **L3** is a tracked Tier-4 item, not a claim.
+- [x] **Version/RC + reranker-number drift** (v3.9.0-rc.7, partial) — README/QUICKSTART/benchmarks/AGENTS synced; reranker corrected to the measured +15.5/+24.7. _Residual instances found in the rc.8 audit (4× stale "currently rc.N", 4× stale "+5-10 NDCG@10" in api.md/COMPARISON/QUICKSTART, ROADMAP "926→927") → closed in **rc.12** below._
+- [ ] **#16 OCR offline enforcement** (**rc.10**, CRITICAL). The TSDoc/CLI-help/SECURITY all claim an enforced "throws if language not installed / no runtime CDN download / zero outbound" guarantee that the code does **not** implement (`createWorker` silently CDN-fetches; `install-ocr-lang` doesn't exist). Implement: pre-flight `tessdata/<lang>.traineddata` existence check that throws before `createWorker`; `langPath`/`cachePath` + `cacheMethod: readOnly` wiring; a real `install-ocr-lang <code>` subcommand (mirrors `install-model`); env-gated offline integration test. Makes "zero outbound network calls in serve mode" actually true.
+- [ ] **Close the overclaim class STRUCTURALLY** (**rc.10 + rc.12**). The rc.8 audit's root-cause: two unbuilt defenses explain *both* the #16 and the stale-claim findings. (a) **OIA "enforcement-verb" check** — grep SECURITY.md / TSDoc / CLI help for "blocked"/"zero outbound"/"fails closed"/"throws if"/"no … download" and require each to point at a real code guard (ships with #16 in rc.10). (b) **RC-level currency check** — extend `check-version-consistency.mjs` / OIA to the "currently v…-rc.N" + QUICKSTART example strings (current OIA Check 7 treats 3.9==3.9 as current, so RC drift never trips) (rc.12). Together these close overclaim classes #12/#13/#15/#16 permanently.
 
-## Tier 1 — Correctness (v3.9.0-rc.10)
+## Tier 1 — Security & correctness hardening (the rc.9 → rc.13 sprint)
 
-- [ ] **Watcher per-file serialization** (audit H1). The v3.9.0 live-update path is fire-and-forget; concurrent saves to one file can interleave `applyDiff` + the shared `rowsByLabel` mutation and drift the in-memory HNSW. Add a per-relPath promise queue + a concurrent-event test (the suite currently has none).
-- [ ] **HNSW `saveTo` live count** (audit M1) — persist `getCurrentCount()`, not the stale build-time `size`.
-- [ ] Minor: watcher `unlink` `kind` for `.pdf` (L2); reranker × min_signals ordering doc note (M5); frontmatter double-parse (M2); graph-boost O(n²) → inbound-count map (M3).
+Severity-ordered, phased per the project's "no big-bang" rule; audit checkpoint after each RC.
 
-## Tier 2 — The #1 credibility lever: standard memory benchmarks (v3.10)
+- [ ] **rc.9 — Input-validation security.** **ReDoS** in `obsidian_open_questions` (`tools/meta.ts` compiles a user-supplied `pattern` arg into a `RegExp` with no length/quantifier guard; the tool is always-registered, so any stdio/HTTP client can peg the event loop) → cap length + reject the unsafe override (or bounded-time match). + `dql.ts` `like`-pattern length cap (defensive). + bearer-token min-length reconciliation (`cli.ts` accepts any non-empty; `http-transport.ts` requires ≥16 — move the friendly check up). + this ROADMAP refresh.
+- [ ] **rc.10 — OCR offline enforcement + DoS** (Tier-0 #16 above) **plus the OCR canvas-OOM DoS**: the `scale ≤ 4` cap is a *false* guard — a PDF with a giant MediaBox (spec allows 14400×14400 pt) renders to a multi-GB single-page canvas → OOM. Clamp absolute canvas dimensions (pixel budget), and validate inverted/empty page ranges. + the enforcement-verb OIA check.
+- [ ] **rc.11 — Watcher / HNSW correctness.** **H1**: fire-and-forget file handler lets concurrent saves to one file interleave `applyDiff` + the shared `rowsByLabel` mutation → silent in-memory index drift / ghost search hits. Add a per-`relPath` promise queue + a concurrent-event test (none today). **`-1` sentinel-label**: the watcher zips `newIds[i] ?? -1`; assert `newIds.length === rows.length` and throw (→ clean rebuild) instead of inserting a corrupt label. + M1 (`saveTo` persists `getCurrentCount()`, not the stale build-time `size`) + L2 (`unlink` `kind` for `.pdf`).
+- [ ] **rc.12 — Structural defenses + state-driven docs + supply-chain.** Build the RC-level currency check + add `ROADMAP.md`/`AGENTS.md` to `scope-completeness-audit.mjs` `AUDIT_FILES`; backfill every stale instance the audit found (currently-rc.N ×4, +5-10 ×4, ROADMAP test count, broken packaged-doc relative links → absolute GitHub URLs, `api.md` SECURITY anchor, AGENTS "5 surfaces"→7 + phantom `bench` subcommand, CITATION.cff model names, the retracted-Cursor-audit comment, stale SECURITY.md "v3.8.0" stamps, README/AGENTS suite-timing, the rc.7↔rc.8 CHANGELOG sequencing contradiction). **SHA-pin all GitHub Actions** + add OpenSSF Scorecard + `dependency-review-action` (supply-chain rigor matching the SLSA brand).
+- [ ] **rc.13 — Remaining correctness / cleanup.** `bases.ts` unbounded `warnedUnknownPredicates` Set (memory growth) · `tools/search.ts` citation line/kind mis-attribution across rankers · `embeddings.ts`/`tool-registry.ts` reranker/model default doc drift ("multilingual" vs `rerank-bge`) · `eval.ts` surface a `query_errors` count (don't fold failures into zero-scores) · `doctor` privacy-glob flags (P2-12) · stateless HTTP handler cleanup parity with the stateful path · `--ocr-pdfs` "no embed-db" warning · `communities.ts` non-convergence flag.
 
-- [ ] **Adopt LoCoMo + LongMemEval.** Add a harness that runs the industry-standard long-term-memory benchmarks and publish numbers **head-to-head vs mem0 / Letta / Zep**. This is what converts "best Obsidian MCP" → "credible best local AI-memory layer." Lead the README with it + the "filesystem memory, done right" framing.
+## Tier 2 — Discoverability & AI-indexability (rc.14+)
 
-## Tier 3 — Extend the lead (pick 1–2 after Tier 2)
+The capability gap is won; this closes the *visibility* gap. (Several items below need an account/OAuth action and are listed under "Requires the maintainer".)
 
-- [ ] **GraphRAG-full** — entity/relationship extraction from note *content* (not just wikilinks), to match cognee/Zep-class knowledge graphs while staying local.
-- [ ] **Conversational / episodic write-back** — a `remember` / distill-to-vault tool that turns an agent conversation into durable markdown memory (the mem0/Zep core use-case), entering that niche directly.
+- [ ] **rc.14 — AI-search + repo-page.** **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) to the stat-pill design (44 tools / 944 tests / +15.5 NDCG@10, dark GitHub-native palette).
+- [ ] **TDQS pass on all 44 tool descriptions** — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". Add explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool. Highest-leverage discoverability work; likely its own RC.
+- [ ] **Obsidian-MCP COMPARISON table** — extend `docs/COMPARISON.md` with a head-to-head vs knowledge-rag, cyanheads, mcp-obsidian, Smart Connections, obsidian-brain (today it compares only to plugins / mem0-class). Make the standalone + hybrid + reranker + HyDE + Bases + OCR exclusivity explicit.
 
-## Tier 4 — Win the category (discoverability + supply-chain)
+## Tier 3 — Memory-layer credibility (v3.10)
 
-- [ ] **Listings** — punkpeye/awesome-mcp-servers (canonical), awesomeclaude.ai, abordage/awesome-mcp, mcp.so, glama.ai, smithery.ai. (Already on the official MCP Registry.)
-- [ ] **Comparison vs mem0 / cognee** in COMPARISON.md (today it only compares to other Obsidian MCPs).
-- [ ] **Earn real SLSA Build L3** via `slsa-framework/slsa-github-generator`; restore an L3 badge once verified on a real release.
-- [ ] **Supply-chain signals** — OpenSSF Scorecard workflow, `dependency-review-action` on PRs, CycloneDX SBOM on release, `step-security/harden-runner` egress auditing.
-- [ ] **OSS-health files** — CODEOWNERS, SUPPORT.md; gate `publish-docs.yml` on CI success.
+- [ ] **Publish LongMemEval scores** (THE #1 credibility lever). Run the harness (github.com/xiaowu0162/longmemeval) with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes); publish head-to-head vs mem0 (94.4) / Zep (71.2) / Supermemory (81.6) in `docs/benchmarks.md` + lead the README with it. First Obsidian MCP with a published number.
+- [ ] **"Forgetting-aware" note-staleness scoring** (Priority 2; Memora frontier). Optional `mtime`-decay soft signal in RRF (down-weight chunks from long-stale notes for preference/fact queries). <100 LOC; addresses a documented failure mode of *every* competitor.
+- [ ] **Messaging reposition** — "the only local memory layer grounded in your own knowledge, not extracted from conversations" across README/llms.txt/COMPARISON; "what comes after Obsidian Copilot when you want agents, not just chat".
+
+## Tier 4 — Extend the lead (pick after Tier 3)
+
+- [ ] **Late chunking** opt-in at markdown-heading boundaries (GraLC-RAG, arXiv:2603.22633) — preserves cross-section context; measurable via structural-coverage metrics.
+- [ ] **GraphRAG-full** — entity/relationship extraction from note *content* (not just wikilinks), staying local — to match cognee/Zep-class KGs.
+- [ ] **Conversational write-back** — a `remember` / distill-to-vault tool turning an agent conversation into durable markdown memory (the mem0/Zep core use-case), entering that niche directly.
+- [ ] **Queryable wikilink graph tool** — expose shortest-path / entity-neighborhood over the graph already built for community detection (reframes GraphRAG-light as a queryable KG).
+- [ ] **ColBERT-style late-interaction reranker** as an opt-in `--reranker colbert` for long documents.
+- [ ] **Earn real SLSA Build L3** via `slsa-framework/slsa-github-generator`; restore an L3 badge once verified. + CycloneDX SBOM on release, `step-security/harden-runner` egress auditing, CODEOWNERS / SUPPORT.md.
+
+## Requires the maintainer (account / OAuth / external — I can't do these for you)
+
+- **Claim the Glama server** (GitHub OAuth) + deploy the Dockerfile + publish a Glama release → moves it from "withheld from search" (17% score) to indexed for 50k+ Glama users. (I'll add `glama.json` + the Dockerfile; you claim + deploy.)
+- **Re-submit / verify the official MCP Registry entry** (currently 404s) via `mcp-publisher`.
+- **Post to the Obsidian forum thread** (81.2k views — the primary organic discovery surface) with the comparison table; submit to **PulseMCP**, **mcp.so**, **smithery.ai**, **Cursor MCP marketplace**; update the awesome-mcp-servers PR with the Glama badge.
+- **Enable GitHub Discussions** + pin the repo on your profile.
 
 ## Explicit non-goals
 
-- Multi-vault support · OAuth (bearer-only is a deliberate security-positive choice) · live Obsidian-plugin integration via Local REST API (different positioning) · multi-source cloud ingestion (vault-only is the privacy thesis) · distributed/multi-process rate-limiting.
+- Multi-vault support · OAuth for the server (bearer-only is a deliberate security-positive choice) · live Obsidian-plugin integration via Local REST API (different positioning) · multi-source cloud ingestion (vault-only is the privacy thesis) · distributed/multi-process rate-limiting.
 
 ---
 

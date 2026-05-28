@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DqlParseError, parseDql, runDql } from "../src/dql.js";
+import { DqlParseError, likeToRegex, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
 import { dataviewQuery, listTags } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
@@ -312,5 +312,19 @@ describe("DQL — LIMIT must be a positive integer (audit v0.7.6 P4)", () => {
   });
   it("still accepts plain positive integers", () => {
     expect(parseDql("LIST LIMIT 50").limit).toBe(50);
+  });
+});
+
+describe("likeToRegex length cap (v3.9.0-rc.9 audit — defensive CPU bound)", () => {
+  it("compiles and matches a normal LIKE pattern (POSITIVE control)", () => {
+    const re = likeToRegex("foo*bar");
+    expect(re.test("fooXYZbar")).toBe(true);
+    expect(re.test("nope")).toBe(false);
+  });
+  it("passes a pattern exactly at the cap (boundary POSITIVE control)", () => {
+    expect(() => likeToRegex("a".repeat(MAX_LIKE_PATTERN_LEN))).not.toThrow();
+  });
+  it("throws on an over-long pattern (NEGATIVE control)", () => {
+    expect(() => likeToRegex("a".repeat(MAX_LIKE_PATTERN_LEN + 1))).toThrow(/too long/i);
   });
 });

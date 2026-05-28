@@ -405,7 +405,20 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
   }
 }
 
-function likeToRegex(pattern: string): RegExp {
+/**
+ * Defensive cap on a DQL `like` pattern length (v3.9.0-rc.9 audit). NOT a
+ * ReDoS guard — {@link likeToRegex} is catastrophic-backtracking-SAFE by
+ * construction (it only ever emits `.*` for `*`, never a nested quantifier).
+ * This solely bounds regex-compile / match CPU on an absurdly long
+ * user-supplied LIKE value from a `.base` / DQL query.
+ */
+export const MAX_LIKE_PATTERN_LEN = 512;
+
+/** @internal exported for unit tests; not part of the package `exports` map. */
+export function likeToRegex(pattern: string): RegExp {
+  if (pattern.length > MAX_LIKE_PATTERN_LEN) {
+    throw new Error(`dql: LIKE pattern too long (${pattern.length} > ${MAX_LIKE_PATTERN_LEN} chars).`);
+  }
   // Single-pass walker so escaping is unambiguous:
   //   *  → .*   (SQL-LIKE-style wildcard, any run of chars)
   //   \* → \*   (literal asterisk; the \ is an escape)

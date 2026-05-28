@@ -202,6 +202,33 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("index");
   });
 
+  // v3.9.0-rc.9 audit — the bearer min-length check now fires in the CLI
+  // action (reconciled with startHttpServer's ≥16 throw) so the user gets a
+  // friendly hint + clean exit(1) before any server setup. Both branches exit
+  // before binding, so spawnSync returns fast.
+  it("`serve-http --bearer-token <short>` exits 1 with a ≥16-char hint (NEGATIVE control)", () => {
+    if (!distExists()) return;
+    const res = spawnSync(process.execPath, [distEntry, "serve-http", "--vault", vault, "--bearer-token", "short"], {
+      encoding: "utf8",
+      timeout: 20000
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/≥16 chars|must be ≥16/i);
+    expect(res.stderr).toContain("gen-token");
+  });
+
+  it("`serve-http` with NO bearer token exits 1 with a 'required' message (contrast control)", () => {
+    if (!distExists()) return;
+    const res = spawnSync(process.execPath, [distEntry, "serve-http", "--vault", vault], {
+      encoding: "utf8",
+      timeout: 20000
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/is required/i);
+    // The length-specific error must NOT fire when the token is simply absent.
+    expect(res.stderr).not.toMatch(/≥16 chars/);
+  });
+
   it("`enquire-mcp clear-cache` reports 'no cache file' when none exists", () => {
     if (!distExists()) return;
     const cacheFile = path.join(tmpdir, "no-such.json");

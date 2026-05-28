@@ -153,6 +153,21 @@ export class VaultWatcher {
   // next serve restart rebuilt from the freshly-upserted embed-db).
   private hnsw: HnswIndex | null = null;
   private hnswRowsByLabel: Map<number, HnswRowMeta> | null = null;
+  // v3.9.0-rc.6 — HNSW disk persistence on live update. The in-memory
+  // HNSW index diverges from the persisted `.hnsw.bin` after every
+  // applyDiff. Correctness is already guaranteed by the signature guard
+  // (a stale `.hnsw.bin` is ignored on next serve because
+  // loadHnswFromDisk recomputes the embed-db signature and rebuilds on
+  // mismatch). The ONLY benefit of re-persisting is restart SPEED:
+  // keeping the sidecar current avoids the ~25s rebuild on next serve.
+  // We persist at watcher CLOSE time (not on a debounced during-serve
+  // timer): the close-time flush delivers the restart-speed benefit
+  // without timer-lifecycle complexity or mid-serve disk I/O. An
+  // ungraceful SIGKILL skips the flush, but the signature guard makes
+  // that safe (falls back to rebuild). `hnswPersistFile` is null when
+  // `--no-hnsw-persist` was passed (no sidecar to keep current).
+  private hnswPersistFile: string | null = null;
+  private hnswDirty = false;
   private closed = false;
 
   constructor(opts: WatcherOptions) {
@@ -245,8 +260,14 @@ export class VaultWatcher {
    * @param rowsByLabel - the mutable label→row map shared with
    *   `searchHybrid` (the live update writes into it so subsequent
    *   searches see the new chunks).
+   * @param persistFile - v3.9.0-rc.6: optional sidecar base path
+   *   (`<embed-db-without-suffix>.hnsw`). When provided AND HNSW live
+   *   updates occurred, the watcher re-persists the index at close time
+   *   so the next serve loads the up-to-date sidecar instead of
+   *   rebuilding. Omit (or pass when `--no-hnsw-persist`) to skip
+   *   persistence — correctness is unaffected (signature guard).
    */
-  attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>): void {
+  attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>, persistFile?: string): void {
     if (!this.embedDb) {
       throw new Error(
         "VaultWatcher.attachHnsw: embedDb not attached — call attachEmbed first (HNSW live update requires it)"
@@ -254,6 +275,43 @@ export class VaultWatcher {
     }
     this.hnsw = hnsw;
     this.hnswRowsByLabel = rowsByLabel;
+    this.hnswPersistFile = persistFile ?? null;
+  }
+
+  /**
+   * v3.9.0-rc.6 — flush the live-updated HNSW index to its disk sidecar.
+   * No-op unless ALL of: the index is dirty (had ≥1 applyDiff since the
+   * last flush), an index + rowsByLabel + persistFile + embedDb are all
+   * wired. Recomputes the embed-db signature so the persisted
+   * `.meta.json` matches what `loadHnswFromDisk` will expect on the next
+   * serve (any external embed-db change since then → signature mismatch
+   * → safe rebuild). Fail-soft: a save error is logged + swallowed (the
+   * signature guard means a stale/missing sidecar just triggers rebuild).
+   *
+   * @returns true if a flush was performed, false if it was a no-op.
+   */
+  async flushHnswToDisk(): Promise<boolean> {
+    if (!this.hnswDirty || !this.hnsw || !this.hnswRowsByLabel || !this.hnswPersistFile || !this.embedDb) {
+      return false;
+    }
+    try {
+      const signature = this.embedDb.computeSignature();
+      await this.hnsw.saveTo(this.hnswPersistFile, this.hnswRowsByLabel, signature);
+      this.hnswDirty = false;
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher persisted live-updated HNSW index to ${this.hnswPersistFile}.bin (+ .meta.json)\n`
+        );
+      }
+      return true;
+    } catch (err) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher HNSW persist failed — ${err instanceof Error ? err.message : String(err)} (next serve will rebuild from embed-db; correctness unaffected)\n`
+        );
+      }
+      return false;
+    }
   }
 
   /**
@@ -284,6 +342,10 @@ export class VaultWatcher {
         oldIds,
         newRows.map((r) => ({ label: r.id, vector: r.vector }))
       );
+      // v3.9.0-rc.6 — mark the index dirty so close-time flushHnswToDisk
+      // re-persists it. Set only after applyDiff succeeds (a thrown diff
+      // leaves the on-disk sidecar as the last-known-good state).
+      this.hnswDirty = true;
       // Update the rowsByLabel map: drop old, add new. The map is shared
       // with searchHybrid via reference; mutations are visible immediately.
       for (const oldId of oldIds) this.hnswRowsByLabel.delete(oldId);
@@ -618,6 +680,10 @@ export class VaultWatcher {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // v3.9.0-rc.6 — flush the live-updated HNSW index before shutting
+    // down so the next serve loads the up-to-date sidecar. No-op if no
+    // live updates occurred or persistence is disabled. Fail-soft.
+    await this.flushHnswToDisk();
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;

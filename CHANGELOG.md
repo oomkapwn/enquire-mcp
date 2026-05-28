@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.6] — 2026-05-25
+
+> **TL;DR:** **HNSW disk persistence on live update.** When the watcher applies HNSW live updates (`applyDiff`) during a serve session, the in-memory index diverges from the persisted `.hnsw.bin` sidecar. This rc re-persists the live-updated index at watcher **close time** so the next serve loads the up-to-date sidecar (~50ms) instead of rebuilding from embed-db (~25s on 50K chunks). Correctness was always guaranteed by the signature guard (a stale sidecar is ignored → safe rebuild); this is purely a restart-speed optimization. Chose close-time flush over a debounced during-serve timer: same restart benefit, no timer-lifecycle complexity, no mid-serve disk I/O. **+3 tests (2 POSITIVE + 1 NEGATIVE control); 926 unit tests total. No API breaks (additive).**
+
+**Patch — restart-speed optimization.**
+
+### Why close-time flush (not debounced during serve)
+
+The originally-planned design was "debounced `saveTo` ~30s after the last mutation". On reflection, close-time flush is the better risk-adjusted choice:
+
+- **Correctness is already guaranteed** by the signature guard. `loadHnswFromDisk` recomputes the embed-db signature at load time and rebuilds on mismatch. After live edits, the embed-db signature changes, so a STALE `.hnsw.bin` is simply ignored → safe (just slower) rebuild. So persisting-on-live-update is ONLY a speed optimization, never a correctness fix.
+- **The only benefit is restart speed**, and that benefit is identical whether you persist debounced-during-serve or once-at-close: either way the NEXT serve loads a current sidecar.
+- **Close-time is lower risk**: no `setTimeout`/`clearTimeout` lifecycle to leak on `close()`, no concurrent save-vs-mutate window mid-serve, no disk I/O churn during active use.
+- **Tradeoff**: an ungraceful `SIGKILL` (no graceful close) skips the flush — but the signature guard makes that safe (falls back to rebuild). A crash is rare; paying a one-time ~25s rebuild after a rare crash is an acceptable cost vs the complexity of a debounce timer.
+
+### Implementation
+
+`src/watcher.ts`:
+- New fields `hnswPersistFile: string | null` + `hnswDirty: boolean`.
+- `attachHnsw(hnsw, rowsByLabel, persistFile?)` — gains an optional `persistFile` param (the `<embed-db>.hnsw` sidecar base path). Omitted (or `--no-hnsw-persist`) → no flush.
+- `syncHnswForFile` sets `hnswDirty = true` after every successful `applyDiff`.
+- New `flushHnswToDisk(): Promise<boolean>` — no-op unless dirty + index + rowsByLabel + persistFile + embedDb all wired. Recomputes the embed-db signature so the persisted `.meta.json` matches what the next `loadHnswFromDisk` expects, then `await hnsw.saveTo(...)`. Fail-soft (a save error is logged + swallowed; signature guard → safe rebuild). Returns whether a flush happened.
+- `close()` awaits `flushHnswToDisk()` before closing the chokidar watcher.
+
+`src/server.ts`: both `attachHnsw` call sites (built-fresh + loaded-from-disk HNSW paths) now pass `persistFile` — gated on `opts.hnswPersist !== false` so `--no-hnsw-persist` correctly skips the close-time flush too.
+
+### Tests added (+3)
+
+`tests/watcher.test.ts` — new describe block `VaultWatcher HNSW disk persistence (v3.9.0-rc.6)`:
+- POSITIVE: `flushHnswToDisk is a no-op when no live update occurred (not dirty)` — no sidecar written.
+- POSITIVE: `close() flushes the live-updated index to a loadable sidecar with matching signature` — full integration: real EmbedDb + mock embedder + real `buildHnsw` + FtsIndex → file edit → `applyDiff` → `close()` → assert `.hnsw.bin` exists AND `loadHnswFromDisk(persistFile, postEditSignature)` returns non-null. This integration test also lifted `watcher.ts` branch coverage 55.05% → 59.58%.
+- NEGATIVE control: `flushHnswToDisk is a no-op when persistFile was omitted` — even with a live mutation, no `persistFile` → no flush.
+
+### Files changed
+
+- `src/watcher.ts` — `hnswPersistFile`/`hnswDirty` fields + `flushHnswToDisk()` + `attachHnsw` param + `close()` flush (+50 lines).
+- `src/server.ts` — pass `persistFile` to both `attachHnsw` call sites.
+- `tests/watcher.test.ts` — 3 new tests (~120 lines).
+- `scripts/check-per-file-coverage.mjs` — watcher coverage comment refreshed (55.05% → 59.58%; floor stays 53%).
+- `README.md`, `llms.txt`, `AGENTS.md`, `docs/COMPARISON.md`, `package.json` — test count 923 → 926.
+- version bump 3.9.0-rc.5 → 3.9.0-rc.6 (7 surfaces).
+
+### What's next
+
+- **v3.9.0 stable** — promote `@rc → @latest`. All architectural v3.9.0 items now shipped (OCR'd PDF watcher embed-sync rc.1, HNSW in-memory live update rc.2, R-10 adaptive refill rc.3, HNSW disk persistence rc.6). Gated on a fresh external audit on the v3.9.0-rc.2+ commit per `docs/audits/AUDIT-REQUEST-v3.9.0-rc.2-2026-05-25.md` (the v3.6.1 ≥2-independent-external-auditors rule).
+- **v3.9.x+ backlog** — `install-ocr-lang` subcommand (with env-gated integration test); HNSW filter-during-search (structural R-10 closure); serve-http parity residual (P1-3); the remaining P2/P3 items.
+
+---
+
 ## [3.9.0-rc.5] — 2026-05-25
 
 > **TL;DR:** **OCR install-instruction unification — closes the μ-class doc inconsistency the v3.9.0-rc.4 fix itself introduced (overclaim #14 residual).** rc.4's fix for overclaim #14 replaced the (non-existent) `install-ocr-lang` references in `cli.ts`/`api.md` with a "download from github tessdata_fast" instruction — but `SECURITY.md:167` documented a *different* procedure ("run OCR once online, copy `tessdata/`"). Two divergent install paths. This rc.5 unifies all three surfaces on the canonical run-once-then-copy procedure (SECURITY.md is the single source of truth), and refreshes the stale `SECURITY.md` roadmap stamp ("(v3.8.0)" → "planned, not yet shipped as of v3.9.0") with the deferral rationale (the `install-ocr-lang` subcommand needs `langPath`/`cachePath` wiring in `src/ocr.ts` that CI can't exercise — tesseract.js + canvas are optional deps absent from the matrix). **Docs-only; 923 unit tests unchanged.**

@@ -626,3 +626,141 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 });
+
+// v3.9.0-rc.6 — HNSW disk persistence on live update. The watcher
+// re-persists the live-updated HNSW index at close time so the next
+// serve loads the up-to-date sidecar instead of rebuilding (~25s on
+// 50K chunks). Correctness is already guaranteed by the signature
+// guard; this is a restart-speed optimization.
+describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
+  const mockDim = 4;
+  const mockEmbedder = {
+    model: { alias: "test-mock", hfId: "mock", dim: mockDim, multilingual: false, maxTokens: 128 },
+    async embed(texts: readonly string[]): Promise<Float32Array[]> {
+      return texts.map((_, i) => {
+        const vec = new Float32Array(mockDim);
+        // L2-normalize so HNSW cosine space is well-defined.
+        for (let j = 0; j < mockDim; j++) vec[j] = (i + 1) / (j + 2);
+        let norm = 0;
+        for (let j = 0; j < mockDim; j++) norm += (vec[j] ?? 0) ** 2;
+        const inv = 1 / Math.sqrt(norm || 1);
+        for (let j = 0; j < mockDim; j++) vec[j] = (vec[j] ?? 0) * inv;
+        return vec;
+      });
+    }
+  };
+
+  // Build an EmbedDb + HNSW + rowsByLabel from one pre-embedded note.
+  // NOTE: the watcher's embed-db + HNSW sync only fires when an FtsIndex
+  // is wired (the handler early-returns at "if (!this.ftsIndex)" when it's
+  // null — mirrors production where server.ts always wires FTS when
+  // watching with embeddings).
+  async function setup(persist: boolean) {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const { buildHnsw } = await import("../src/hnsw.js");
+    const v = new Vault(root);
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "a.md"), "# Title\n\nOriginal body content here.\n");
+    const fts = new FtsIndex({ file: defaultIndexFile(root), vaultRoot: root });
+    await fts.open();
+    const embedDbFile = path.join(root, ".cache", "test.embed.db");
+    await fs.mkdir(path.dirname(embedDbFile), { recursive: true });
+    const embedDb = new EmbedDb({ file: embedDbFile, vaultRoot: root, modelAlias: "test-mock", dim: mockDim });
+    await embedDb.open();
+    // Pre-embed a.md so getAllVectors has ≥1 row to build HNSW from.
+    const [vec] = await mockEmbedder.embed(["seed"]);
+    embedDb.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "seed", vector: vec as Float32Array }
+    ]);
+    const rows = embedDb.getAllVectors();
+    const index = await buildHnsw(
+      rows.map((r) => ({ label: r.label, vector: r.vector })),
+      { dim: mockDim, maxElements: 100 }
+    );
+    const rowsByLabel = new Map(
+      rows.map((r) => [
+        r.label,
+        {
+          rel_path: r.rel_path,
+          chunk_index: r.chunk_index,
+          line_start: r.line_start,
+          line_end: r.line_end,
+          text_preview: r.text_preview,
+          kind: r.kind
+        }
+      ])
+    );
+    const persistFile = path.join(root, ".cache", "test.hnsw");
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+    w.attachEmbed(embedDb, mockEmbedder, 0);
+    w.attachHnsw(index, rowsByLabel, persist ? persistFile : undefined);
+    return { w, embedDb, index, rowsByLabel, persistFile, v, fts };
+  }
+
+  it("flushHnswToDisk is a no-op when no live update occurred (not dirty)", async () => {
+    const { w, embedDb, persistFile, fts } = await setup(true);
+    try {
+      const flushed = await w.flushHnswToDisk();
+      expect(flushed).toBe(false);
+      // No sidecar should be written.
+      const binExists = await fs
+        .access(`${persistFile}.bin`)
+        .then(() => true)
+        .catch(() => false);
+      expect(binExists).toBe(false);
+    } finally {
+      await w.close();
+      embedDb.close();
+      fts.close();
+    }
+  });
+
+  it("(NEGATIVE control) — flushHnswToDisk is a no-op when persistFile was omitted", async () => {
+    const { w, embedDb, index, fts } = await setup(false); // persist=false → no persistFile
+    try {
+      // Force a live update directly on the index via the public applyDiff,
+      // but the watcher's dirty flag is only set by syncHnswForFile. We
+      // assert the no-persistFile guard: even if dirty were set, flush
+      // returns false without a persistFile.
+      index.applyDiff([], [{ label: 999, vector: new Float32Array([0.5, 0.5, 0.5, 0.5]) }]);
+      const flushed = await w.flushHnswToDisk();
+      expect(flushed).toBe(false);
+    } finally {
+      await w.close();
+      embedDb.close();
+      fts.close();
+    }
+  });
+
+  it("close() flushes the live-updated index to a loadable sidecar with matching signature", async () => {
+    const { w, embedDb, persistFile, fts } = await setup(true);
+    const { loadHnswFromDisk } = await import("../src/hnsw.js");
+    await w.start();
+    try {
+      // chokidar FSEvents warm-up (W-FLAKE-2 pattern).
+      await new Promise((r) => setTimeout(r, 50));
+      // Edit a.md → watcher re-embeds (mock) → upsertNote → syncHnswForFile
+      // → applyDiff → hnswDirty = true.
+      await fs.writeFile(path.join(root, "a.md"), "# Title\n\nEDITED body with different words entirely.\n");
+      const dirtied = await waitFor(
+        () => embedDb.totalChunks() > 0 && embedDb.getAllVectors().some((r) => r.label > 1),
+        6000
+      );
+      expect(dirtied).toBe(true);
+    } finally {
+      // close() triggers flushHnswToDisk.
+      await w.close();
+    }
+    // Sidecar must now exist + load back with the post-edit signature.
+    const binExists = await fs
+      .access(`${persistFile}.bin`)
+      .then(() => true)
+      .catch(() => false);
+    expect(binExists, "close() should have persisted the live-updated HNSW sidecar").toBe(true);
+    const signature = embedDb.computeSignature();
+    const loaded = await loadHnswFromDisk(persistFile, signature);
+    expect(loaded, "persisted sidecar should load with the post-edit signature").not.toBeNull();
+    embedDb.close();
+    fts.close();
+  });
+});

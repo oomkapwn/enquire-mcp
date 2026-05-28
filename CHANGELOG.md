@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.7] — 2026-05-25
+
+> **TL;DR:** **Tier 0 integrity batch from a full project audit** (deep code audit of all 31 src/ modules + docs/workflows/config audit + competitive survey of the Obsidian-MCP / AI-memory / RAG-MCP landscapes). Fixes the two brand-critical overclaims the audit surfaced — **#15 SLSA-3** (badge linked to the slsa.dev **L3** spec + 8+ surfaces claimed "SLSA-3", but `release.yml` only runs `npm publish --provenance` = SLSA Build **L2**) and corrects pervasive version/RC drift + an undersold reranker number. Adds a public **ROADMAP.md**, gitignores the stray `false/` npm-cache tree, adds `CITATION.cff` version field, and documents a new overclaim anti-pattern (the "claimed-guarantee vs code-guard" class behind #15 + #16). **Docs/config-only; 926 tests unchanged. The OCR-offline-enforcement overclaim (#16, "implement" decision) ships in rc.8; the watcher live-update race (H1) in rc.9.**
+
+**Patch — audit-driven integrity (Tier 0).**
+
+### The audit
+
+Three parallel passes:
+1. **Deep code audit** (all `src/*.ts` + `src/tools/*.ts`, whole files): **zero CRITICAL**. The codebase is well-hardened (constant-time bearer compare, ReDoS-safe glob/like walkers, fail-closed `.base` predicates, transactional SQLite). Residual: 1 HIGH (watcher race, H1), 1 HIGH (OCR offline overclaim, #16), 5 MEDIUM, 5 LOW.
+2. **Docs/workflows/config audit**: SLSA-3 overclaim (#15), version drift, OIA self-count drift (docs say "6 checks", code has 8), reranker undersell, `false/` junk dir, no ROADMAP, missing OSS-health files.
+3. **Competitive survey**: enquire is technically ahead of every Obsidian-MCP peer (CRUD-only or REST-plugin-dependent); near-parity with local-RAG MCPs (knowledge-rag); behind AI-memory frameworks (mem0/cognee/Letta/Zep) only on **published LoCoMo numbers**, **entity knowledge graph**, and **discoverability** (8★). Letta's "filesystem memory scores 74% LoCoMo" validates our vault-as-memory thesis.
+
+### Fixed in this rc.7 (Tier 0)
+
+- **#15 SLSA-3 → SLSA L2 (overclaim instance #15).** Real mechanism is `npm publish --provenance` + GitHub OIDC = a Sigstore-signed provenance attestation = **SLSA Build Level 2** (hosted builder + non-forgeable-by-author provenance). Level 3 needs an isolated builder via `slsa-framework/slsa-github-generator`. Corrected every surface: README badge (now links to the L2 spec) + hero line + comparison table + releases row, package.json description + keyword (`slsa-3` → `build-provenance`), llms.txt (×2), docs/COMPARISON.md (×2). Earning real L3 is now a tracked **ROADMAP Tier 4** item, not a claim.
+- **Version/RC drift.** README "Pre-release: currently v3.9.0-rc.3" → rc.6; QUICKSTART version example → rc.6; benchmarks.md "still valid as of rc.3" → rc.6; AGENTS.md "OIA — 6 checks" → 8 (×2); CLAUDE.md OIA-walk description "6 cheap walks" → 8 + the rc.4 "(current)" marker corrected.
+- **Reranker undersold → measured numbers.** README (3 sites) + llms.txt: "+5-10 NDCG@10 typical" → **+15.5 NDCG@10 / +24.7 MRR measured** (the figure already in COMPARISON.md + benchmarks.md). The repo was undercutting its own measured, reproducible result by ~50%.
+- **`false/` npm-cache junk → `.gitignore`.** A stray `--cache false` / `npm_config_cache=false` mis-parse created an untracked `_cacache`/`_logs` tree at repo root; one `git add .` would have committed it.
+- **CITATION.cff** gains `version` (tracks the @latest stable line, deliberately not in version-consistency) + `date-released`.
+- **New `ROADMAP.md`** — public, tiered (Tier 0 integrity → Tier 1 correctness → Tier 2 LoCoMo benchmarks → Tier 3 GraphRAG-full / conversational write-back → Tier 4 discoverability + real SLSA-L3). Linked from README.
+- **New anti-pattern documented (CLAUDE.md):** "Never claim an ENFORCED guarantee the code doesn't actually enforce" — the class behind overclaim #15 (SLSA) + #16 (OCR offline). The invariant apparatus checks numeric/doc drift but had no defense for "we promise enforcement X; does a code path enforce X?". Candidate structural defense (deferred): an OIA enforcement-verb grep.
+
+### Deferred to the next RCs (tracked in ROADMAP.md)
+
+- **rc.8 — #16 OCR offline enforcement (HIGH, "implement" decision).** SECURITY.md claims "zero outbound network calls in serve mode" and `ocr.ts` TSDoc claims a pre-flight "throws if language not installed" check, but `extractPdfWithOcr` only warns then `createWorker` silently CDN-fetches; `install-ocr-lang` is referenced in 4 files but never existed. Implement: pre-flight cache check + `langPath` wiring + real `install-ocr-lang` subcommand + env-gated integration test.
+- **rc.9 — H1 watcher per-file serialization (HIGH).** Fire-and-forget `handle()` lets concurrent saves to one file interleave `applyDiff` + the shared `rowsByLabel` mutation → in-memory HNSW drift. Add a per-relPath promise queue + concurrent-event test. Plus M1 (HNSW `saveTo` live count), L2 (unlink kind).
+
+### Files changed
+
+- `README.md` — SLSA badge/hero/table/releases; reranker numbers (×3); RC currency; ROADMAP link.
+- `package.json` — description SLSA wording + `slsa-3`→`build-provenance` keyword.
+- `llms.txt` — SLSA (×2) + reranker number.
+- `docs/COMPARISON.md` — SLSA row + provenance paragraph.
+- `docs/QUICKSTART.md`, `docs/benchmarks.md` — RC currency.
+- `AGENTS.md`, `CLAUDE.md` — OIA check count (6→8); CLAUDE status rc.7 entry + new anti-pattern.
+- `CITATION.cff` — version + date-released.
+- `.gitignore` — `false/`.
+- `ROADMAP.md` — new file.
+- version bump 3.9.0-rc.6 → 3.9.0-rc.7 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.6] — 2026-05-25
 
 > **TL;DR:** **HNSW disk persistence on live update.** When the watcher applies HNSW live updates (`applyDiff`) during a serve session, the in-memory index diverges from the persisted `.hnsw.bin` sidecar. This rc re-persists the live-updated index at watcher **close time** so the next serve loads the up-to-date sidecar (~50ms) instead of rebuilding from embed-db (~25s on 50K chunks). Correctness was always guaranteed by the signature guard (a stale sidecar is ignored → safe rebuild); this is purely a restart-speed optimization. Chose close-time flush over a debounced during-serve timer: same restart benefit, no timer-lifecycle complexity, no mid-serve disk I/O. **+3 tests (2 POSITIVE + 1 NEGATIVE control); 926 unit tests total. No API breaks (additive).**

@@ -42,7 +42,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Invoke Obsidian palette commands / hotkeys    | **No**              | **Yes**          | Limited          | No               | No               |
 | Read open editor state, active note, etc.     | **No**              | **Yes**          | Limited          | No               | No               |
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
-| SLSA-3 build provenance on releases           | **Yes**             | No               | No               | No               | No               |
+| Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
 | Test count (public)                           | **926**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
@@ -193,7 +193,7 @@ The alternatives expose tools but not curated agent-facing prompts. If your clie
 
 ### 6. Supply-chain hygiene matters
 
-enquire-mcp publishes **SLSA-3 build provenance** with every release — npm artifacts are signed and verifiable against the GitHub Actions build. If your org's MCP install path requires verifying that the binary you got from npm was built from the commit it claims, that's available out of the box.
+enquire-mcp publishes **signed build provenance** with every release — npm artifacts carry a Sigstore-signed provenance attestation (via `npm publish --provenance` + GitHub OIDC), verifiable with `npm audit signatures` against the GitHub Actions build. This is **SLSA Build Level 2** (hosted builder + signed, non-forgeable-by-author provenance). Isolated-builder **Level 3** (via the `slsa-github-generator` reusable workflow) is on the roadmap. If your org's MCP install path requires verifying that the binary you got from npm was built from the commit it claims, that's available out of the box.
 
 None of the four alternatives currently ships SLSA provenance. For some users this is a hard "no" on installing anything else; for most it's a "nice to have".
 

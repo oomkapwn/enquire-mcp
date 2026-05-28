@@ -22,3 +22,8 @@ bench/results.md
 # every push to main (see .github/workflows/publish-docs.yml) and
 # deployed to GH Pages from there. Never commit the generated HTML.
 docs/api-reference/
+
+# v3.9.0-rc.7 — stray npm cache tree created when an `npm` invocation
+# mis-parses `--cache false` / `npm_config_cache=false` as a path. Junk;
+# never commit. Guards against an accidental `git add .`.
+false/

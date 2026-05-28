@@ -33,6 +33,7 @@ All nine are state-driven findings from re-reading the repo file-by-file (the me
 - `docs/benchmarks.md` — +25/+16 → +24.7/+15.5.
 - `biome.json` + `package.json` — biome 2.4.15 → 2.4.16.
 - `.github/ISSUE_TEMPLATE/bug_report.yml` — Node placeholder v20.11.0 → v22.13.0.
+- `ROADMAP.md` — re-sequenced #16 OCR offline (rc.8 → rc.9) + Tier 1 watcher/H1 (rc.9 → rc.10) since rc.8 became the integrity-batch; noted Check 4d as partial progress on the structural drift-class item.
 - `README.md`, `docs/COMPARISON.md`, `llms.txt`, `AGENTS.md`, `package.json` — test count 926 → 927.
 - version bump 3.9.0-rc.7 → 3.9.0-rc.8 (7 surfaces).
 

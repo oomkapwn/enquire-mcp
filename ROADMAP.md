@@ -33,11 +33,11 @@ Already shipped and differentiating:
 The audit found two brand-critical overclaims. The whole pitch is rigor, so these come first.
 
 - [x] **#15 SLSA-3 → SLSA L2** (v3.9.0-rc.7). Badge/hero/table/package.json/llms.txt/COMPARISON corrected to "signed build provenance (SLSA Build L2)". Real **L3** (isolated builder via `slsa-framework/slsa-github-generator`) is now a tracked Tier-4 item, not a claim.
-- [ ] **#16 OCR offline enforcement** (v3.9.0-rc.8). Implement the documented guarantee: pre-flight `tessdata/<lang>.traineddata` existence check that throws before `createWorker`, `langPath` wiring so a cached pack is used (no CDN), and a real `install-ocr-lang <code>` subcommand (mirrors `install-model`). Makes "zero outbound network calls in serve mode" actually true. Ships with an env-gated integration test.
+- [ ] **#16 OCR offline enforcement** (v3.9.0-rc.9). Implement the documented guarantee: pre-flight `tessdata/<lang>.traineddata` existence check that throws before `createWorker`, `langPath` wiring so a cached pack is used (no CDN), and a real `install-ocr-lang <code>` subcommand (mirrors `install-model`). Makes "zero outbound network calls in serve mode" actually true. Ships with an env-gated integration test.
 - [x] **Version/RC drift** (v3.9.0-rc.7) — README/QUICKSTART/benchmarks/AGENTS synced; reranker claim corrected to the measured number.
-- [ ] **Close the drift class structurally** — extend `check-version-consistency.mjs` to the README "currently vX" + QUICKSTART example strings; add an OIA check that pins its own "N checks" self-count; add an OIA "enforcement-verb" check (grep for "blocked"/"zero outbound"/"fails closed"/"throws if" → flag for code-guard verification). Closes overclaim classes #12/#13/#15/#16 permanently.
+- [ ] **Close the drift class structurally** — extend `check-version-consistency.mjs` to the README "currently vX" + QUICKSTART example strings; add an OIA check that pins its own "N checks" self-count; add a GENERAL OIA "enforcement-verb" check (grep for "blocked"/"zero outbound"/"fails closed"/"throws if" → flag for code-guard verification). Closes overclaim classes #12/#13/#15/#16 permanently. _Partial progress (v3.9.0-rc.8): OIA **Check 4d** now enforces the SLSA-level claim against `release.yml` (the #15-specific code-guard) + the OIA header self-count was made honest (8 checks). The generalized enforcement-verb grep + version-consistency string extension remain open._
 
-## Tier 1 — Correctness (v3.9.0-rc.9)
+## Tier 1 — Correctness (v3.9.0-rc.10)
 
 - [ ] **Watcher per-file serialization** (audit H1). The v3.9.0 live-update path is fire-and-forget; concurrent saves to one file can interleave `applyDiff` + the shared `rowsByLabel` mutation and drift the in-memory HNSW. Add a per-relPath promise queue + a concurrent-event test (the suite currently has none).
 - [ ] **HNSW `saveTo` live count** (audit M1) — persist `getCurrentCount()`, not the stale build-time `size`.

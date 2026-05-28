@@ -197,7 +197,7 @@
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@napi-rs/canvas": "^1.0.0",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^12.10.0",
     "hnswlib-node": "^3.0.0",
     "pdfjs-dist": "^5.7.284",
     "tesseract.js": "^7.0.0"

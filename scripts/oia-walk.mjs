@@ -24,7 +24,7 @@
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
 // canonical count is "8" (the top-level numbered checks 1–8), but check 4
-// has historically accreted sub-checks (4b/4c/4d), so 11 distinct walks
+// has historically accreted sub-checks (4b/4c/4d/4e), so 12 distinct walks
 // actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
@@ -37,6 +37,10 @@
 //   4c. SHELL-SCRIPT-STALENESS — scripts/*.sh referencing removed commands.
 //   4d. SLSA build-provenance LEVEL claim vs release.yml mechanism +
 //       (network) published-attestation presence. [rewritten rc.8 / audit S2]
+//   4e. OCR OFFLINE-GUARD — docs claiming "zero outbound / no runtime CDN /
+//       install-ocr-lang" must be backed by the real code guards in ocr.ts
+//       (assertOcrLangsInstalled + cacheMethod:"readOnly") + cli.ts
+//       (install-ocr-lang subcommand). [added rc.10 / overclaim #16]
 //   4.  NPM SCRIPT EXISTENCE — backticked `npm run <script>` in docs +
 //       script comments must match `package.json#scripts`.
 //   5.  CURRENT-CLAIM vs TOMBSTONE — "default" value comments must agree
@@ -48,7 +52,7 @@
 //   8.  SCOPE-COMPLETENESS — delegates to scope-completeness-audit.mjs
 //       (numeric-claim + deferred-claim + cli-flag-coverage dimensions).
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4,5,6,7,8 — check 4d/4
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8 — check 4d/4e/4
 // appear after the 4b/4c sub-checks for historical-accretion reasons; the
 // numbering is kept stable because CHANGELOG entries reference these IDs.
 //
@@ -380,6 +384,49 @@ if (!SKIP_NETWORK) {
     console.error(
       `[oia-walk] SLSA-PROVENANCE network check skipped: ${err instanceof Error ? err.message : String(err)}`
     );
+  }
+}
+
+// ─── Check 4e: OCR offline-enforcement claim vs actual code-guard ────────
+// v3.9.0-rc.10 (overclaim #16) — the "claimed-guarantee vs code-guard" class,
+// applied to the OCR offline guarantee (mirrors Check 4d for SLSA). Docs claim
+// `serve` makes "zero outbound network calls" / "no runtime CDN download" and
+// reference an `install-ocr-lang` subcommand. That is only TRUE if three code
+// guards exist: (1) `extractPdfWithOcr` calls `assertOcrLangsInstalled` (the
+// pre-flight throw), (2) the worker is pinned to the local cache
+// (`cacheMethod: "readOnly"`), (3) `install-ocr-lang` is a registered CLI
+// subcommand. If a doc makes the enforced claim but a guard is missing, fail —
+// exactly the regression that shipped as overclaim #16 before rc.10.
+{
+  const ocrSrc = readLines("src/ocr.ts").join("\n");
+  const cliSrc = readLines("src/cli.ts").join("\n");
+  const guardCalled = /assertOcrLangsInstalled\s*\(/.test(ocrSrc);
+  const readOnlyPin = /cacheMethod\s*:\s*["']readOnly["']/.test(ocrSrc);
+  const installCmd = /\.command\(\s*["']install-ocr-lang["']\s*\)/.test(cliSrc);
+  if (!(guardCalled && readOnlyPin && installCmd)) {
+    const missing = [
+      !guardCalled && "src/ocr.ts must call assertOcrLangsInstalled() (offline pre-flight)",
+      !readOnlyPin && 'src/ocr.ts createWorker must set cacheMethod:"readOnly"',
+      !installCmd && 'src/cli.ts must register the "install-ocr-lang" subcommand'
+    ].filter(Boolean);
+    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "docs/api.md", "llms.txt"];
+    const claimRe =
+      /no runtime CDN download|offline-only (?:posture|enforcement)|install-ocr-lang|zero outbound network calls in serve/i;
+    for (const file of claimFiles) {
+      const lines = readLines(file);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        if (!claimRe.test(line)) continue;
+        if (/roadmap|planned|deferred|not yet|will (?:ship|land)/i.test(line)) continue; // roadmap framing is legal
+        record(
+          "OCR-OFFLINE-GUARD-MISSING",
+          file,
+          i + 1,
+          line.trim().slice(0, 140),
+          `Doc claims an ENFORCED offline-OCR guarantee but the code guard is incomplete: ${missing.join("; ")}. Either restore the guard(s) OR phrase the claim as a roadmap target.`
+        );
+      }
+    }
   }
 }
 

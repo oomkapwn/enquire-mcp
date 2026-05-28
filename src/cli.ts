@@ -1,3 +1,6 @@
+import { Buffer } from "node:buffer";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import { Command } from "commander";
 import {
   CACHE_FILE_HELP,
@@ -18,6 +21,7 @@ import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
+import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import {
   type ServeOptions,
   startServer,
@@ -103,11 +107,11 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--ocr-pdfs",
-      "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the language pack pre-cached: run OCR once per language on an online machine (Tesseract.js auto-downloads `<lang>.traineddata` into its `tessdata/` cache), then copy that `tessdata/` to the offline host — or fetch `<lang>.traineddata` from https://github.com/tesseract-ocr/tessdata_fast into the same cache dir. See SECURITY.md \"OCR network posture\" for the canonical procedure (no runtime CDN download during serve per the v3.7.16 P1-1 offline-only enforcement)."
+      "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the language pack pre-installed via `enquire-mcp install-ocr-lang <code>` (the explicit, opt-in download). serve itself makes NO outbound network call — a missing pack throws fail-closed before the worker starts (v3.9.0-rc.10 offline enforcement). See SECURITY.md \"OCR network posture\"."
     )
     .option(
       "--ocr-langs <langs>",
-      'v3.9.0-rc.1 — Tesseract language pack for --ocr-pdfs. Default `eng`. Multi-language via `+` (e.g. `eng+rus` for English+Russian mixed documents). Each language file (`<lang>.traineddata`, ~10 MB) must be pre-cached — see SECURITY.md "OCR network posture" for the canonical procedure (run OCR once online to populate the `tessdata/` cache, then copy to the offline host). Runtime CDN download during serve is blocked per the offline-only posture.'
+      'v3.9.0-rc.1 — Tesseract language pack for --ocr-pdfs. Default `eng`. Multi-language via `+` (e.g. `eng+rus` for English+Russian mixed documents). Each language pack (`<lang>.traineddata`, ~10 MB) must be pre-installed via `enquire-mcp install-ocr-lang <code>` (one code per invocation, e.g. `eng`, `rus`, `chi_sim`). serve makes no runtime CDN download — a missing pack throws fail-closed (v3.9.0-rc.10). See SECURITY.md "OCR network posture".'
     )
     .option(
       "--ocr-max-pages <n>",
@@ -425,6 +429,57 @@ export async function main(): Promise<void> {
       }
       process.stdout.write(
         `enquire: model ${alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+      );
+    });
+
+  program
+    .command("install-ocr-lang")
+    .description(
+      "Download a Tesseract OCR language pack (`<code>.traineddata`, ~10 MB) into the local tessdata cache so `--ocr-pdfs` works fully offline during serve — no runtime CDN fetch. This is the ONLY OCR-related network call and it is explicit + opt-in (mirrors `install-model` for embeddings). Codes: https://github.com/tesseract-ocr/tessdata_fast (e.g. eng, rus, jpn, chi_sim, deu, fra, spa). One code per invocation."
+    )
+    .argument("<code>", "Tesseract language code (e.g. eng, rus, jpn, chi_sim)")
+    .action(async (code: string) => {
+      const lang = code.trim();
+      // `lang` is interpolated into BOTH a URL and a filesystem path, so reject
+      // anything but a plain Tesseract code (prevents path traversal + URL
+      // injection). Tesseract codes are alphanumeric + underscore (e.g. chi_sim).
+      if (!/^[a-z0-9_]+$/i.test(lang)) {
+        process.stderr.write(
+          `enquire install-ocr-lang: invalid language code '${code}'. Use a plain Tesseract code like 'eng', 'rus', 'chi_sim' (one per invocation, no '+').\n`
+        );
+        process.exit(1);
+      }
+      const dir = resolveTessdataDir();
+      const dest = path.join(dir, `${lang}.traineddata`);
+      if (ocrLangIsInstalled(lang, dir)) {
+        process.stdout.write(`enquire: OCR language '${lang}' already installed (${dest}).\n`);
+        return;
+      }
+      const url = `https://github.com/tesseract-ocr/tessdata_fast/raw/main/${lang}.traineddata`;
+      process.stderr.write(`enquire: downloading Tesseract language pack '${lang}' from ${url} ...\n`);
+      let res: Response;
+      try {
+        res = await fetch(url);
+      } catch (err) {
+        process.stderr.write(
+          `enquire install-ocr-lang: network error fetching '${lang}': ${err instanceof Error ? err.message : String(err)}\n`
+        );
+        process.exit(1);
+        return;
+      }
+      if (!res.ok) {
+        process.stderr.write(
+          `enquire install-ocr-lang: download failed (HTTP ${res.status}) for '${lang}'. ` +
+            "Verify the code exists at https://github.com/tesseract-ocr/tessdata_fast.\n"
+        );
+        process.exit(1);
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(dest, bytes);
+      process.stdout.write(
+        `enquire: OCR language '${lang}' ready (${(bytes.length / 1e6).toFixed(1)} MB, cached at ${dest}). ` +
+          "`serve --ocr-pdfs` now OCRs this language fully offline.\n"
       );
     });
 

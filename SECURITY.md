@@ -156,25 +156,29 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## OCR (`obsidian_ocr_pdf`): network posture (v3.7.16 disclosure)
+<a id="ocr-network-posture"></a>
 
-The `obsidian_ocr_pdf` tool (v2.10+) uses `tesseract.js` for image-PDF OCR. Tesseract.js's default behavior is to fetch the `<lang>.traineddata` file (~10 MB per language) from `https://tessdata.projectnaptha.com/4.0.0/` on first use of each language.
+## OCR (`obsidian_ocr_pdf`): network posture (offline-ENFORCED since v3.9.0-rc.10)
 
-**This is the only outbound network call possible in serve mode** — broader "zero outbound network calls in serve mode" framing in README needs this caveat. v3.7.16 added a stderr disclosure warning that fires once per OCR worker creation, so operators see the network-fetch behavior clearly in their logs / journald.
+The `obsidian_ocr_pdf` tool (v2.10+) uses `tesseract.js` for image-PDF OCR. Tesseract.js's *default* behavior is to fetch the `<lang>.traineddata` file (~10 MB per language) from a CDN on first use of each language. **enquire `serve` blocks that path entirely** — so the "zero outbound network calls in serve mode" guarantee holds even for OCR.
 
-**Mitigations:**
-- The OCR tool is only registered when the optional dependencies (`tesseract.js`, `@napi-rs/canvas`) are installed — `npm install --omit=optional` leaves OCR fully unavailable, restoring the strict offline posture.
-- Pre-download trained-data files by running OCR once per language on a known-online machine, then copy the resulting `tessdata/` directory to the offline deployment.
-- The runtime warning is unconditional — it fires whether the trained-data is cached or not, because the WORKER COULD fall back to the CDN if the cache is somehow incomplete.
+**How it is enforced (the code guards, verifiable):**
+- **Pre-flight throw.** Before any Tesseract worker is created, `extractPdfWithOcr` calls `assertOcrLangsInstalled(langs, langPath)` (`src/ocr.ts`), which `existsSync`-checks every requested `<lang>.traineddata` in the local tessdata cache and **throws, fail-closed**, if any is missing — naming the exact `install-ocr-lang` command. The check runs *before* the optional deps even load, so the guarantee holds on hosts without `tesseract.js`/`canvas`.
+- **Read-only local cache.** The worker is created with `langPath` + `cachePath` pointed at the local tessdata dir and `cacheMethod: "readOnly"` — it never writes or re-fetches.
+- **OIA Check 4e** (`scripts/oia-walk.mjs`) fails CI if any doc claims this offline guarantee while a code guard is absent (regression-proofs the claim).
 
-**Current install procedure (canonical):** the language pack must be pre-cached before offline OCR. Run OCR once per language on an online machine — Tesseract.js auto-downloads `<lang>.traineddata` into its `tessdata/` cache — then copy that `tessdata/` directory to the offline host. Alternatively, fetch `<lang>.traineddata` directly from [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast) into the same cache dir. This is the documented path until the `install-ocr-lang` subcommand below ships.
+**Installing a language pack (the ONLY OCR-related network call — explicit + opt-in, never during `serve`):**
+```
+enquire-mcp install-ocr-lang eng      # downloads eng.traineddata into the local tessdata cache
+enquire-mcp install-ocr-lang chi_sim  # one code per invocation
+```
+Packs are cached under `$ENQUIRE_TESSDATA_DIR` → `$XDG_CACHE_HOME/enquire-mcp/tessdata` → `~/.cache/enquire-mcp/tessdata` (see `resolveTessdataDir`). For air-gapped hosts, run `install-ocr-lang` on an online machine and copy that directory across.
 
-**Roadmap (planned, not yet shipped as of v3.9.0 — re-targeted from the original v3.8.0 plan):**
-- An `enquire-mcp install-ocr-lang <code>` subcommand to mirror `install-model` for embeddings (explicit, opt-in network call; offline posture for `serve`). **Deferred** because it requires wiring a stable `langPath`/`cachePath` into `src/ocr.ts`'s `createWorker` call, and the network-download path can't be exercised in CI (tesseract.js + canvas are optional deps absent from the CI matrix) — so it needs an env-gated integration test before shipping.
-- Strict cache check before `createWorker()` that fails fast on missing trained-data, with a clear "pre-cache the language pack (see above)" message.
-- `--enable-ocr-online` flag for users who explicitly want the CDN fallback.
+**Other mitigations:**
+- The OCR tool is only registered when the optional deps (`tesseract.js`, `@napi-rs/canvas`) are installed — `npm install --omit=optional` leaves OCR unavailable, the strictest posture.
+- Each rendered page's absolute pixel dimensions are clamped (`MAX_OCR_CANVAS_DIM`) so an adversarially huge PDF MediaBox can't OOM the process; per-call page count is capped (`--ocr-max-pages`, default 200).
 
-Tracked in CHANGELOG under v3.7.16 P1-1; install-procedure unification + roadmap re-target in v3.9.0-rc.5.
+Tracked in CHANGELOG under v3.7.16 P1-1 (original disclosure) → v3.9.0-rc.10 (offline enforcement shipped: pre-flight guard + `install-ocr-lang` + read-only cache + OIA Check 4e).
 
 ### OCR resource limits (v3.7.16 P1-2)
 

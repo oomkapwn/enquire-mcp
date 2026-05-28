@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.10] — 2026-05-28
+
+> **TL;DR:** **Closes overclaim #16 — OCR offline enforcement is now REAL (CRITICAL), plus the OCR canvas-OOM DoS.** The TSDoc/CLI-help/SECURITY.md all claimed `serve` "makes zero outbound network calls" / "no runtime CDN download" / "throws if a language isn't installed" and referenced an `install-ocr-lang` subcommand — but the code did none of it (`createWorker` silently CDN-fetched; the subcommand didn't exist). This RC builds the guards the docs promised: a **pre-flight cache check that throws fail-closed before the worker is created**, a real **`install-ocr-lang <code>` subcommand**, a worker pinned read-only to the local tessdata cache, an **absolute canvas-dimension clamp** (the `scale` cap was a false OOM guard for giant MediaBoxes), page-range validation, and **OIA Check 4e** which fails CI if any doc claims the offline guarantee while a code guard is absent (regression-proofs the #16 class, like Check 4d did for SLSA). **+15 tests (positive + NEGATIVE controls), all CI-runnable without the OCR optional deps. 944 → 959 tests.**
+
+**Patch — audit-driven security (sprint RC 2): #16 + DoS.**
+
+### Fixed
+
+- **#16 OCR offline enforcement (CRITICAL — claimed-guarantee vs code-guard).** `src/ocr.ts`: `extractPdfWithOcr` now calls **`assertOcrLangsInstalled(langs, langPath)`** BEFORE loading any optional dep — it `existsSync`-checks every requested `<lang>.traineddata` in the local tessdata cache and throws (fail-closed), naming the exact `install-ocr-lang` command, if any is missing. The Tesseract worker is created with `langPath` + `cachePath` at the local cache and **`cacheMethod: "readOnly"`** (never writes/refetches). New **`resolveTessdataDir()`** (`$ENQUIRE_TESSDATA_DIR` → `$XDG_CACHE_HOME/enquire-mcp/tessdata` → `~/.cache/enquire-mcp/tessdata`). New CLI **`install-ocr-lang <code>`** subcommand (mirrors `install-model`) downloads `<code>.traineddata` from tessdata_fast into that dir — the ONLY OCR network call, explicit + opt-in, with strict `^[a-z0-9_]+$` code validation (no path-traversal / URL-injection). `serve` now makes **zero** outbound calls for OCR.
+- **OCR canvas-OOM DoS (HIGH).** The `scale ∈ [0.5,4]` clamp bounds the multiplier, not the absolute pixel count — a PDF with a giant MediaBox (spec allows 14400×14400 pt) rendered to a multi-GB single-page canvas → OOM. New **`clampOcrScale(w, h, scale)`** lowers the effective scale so the larger rendered side never exceeds **`MAX_OCR_CANVAS_DIM`** (5000 px).
+- **Inverted page range (LOW).** **`resolveOcrPageRange`** throws on an empty/inverted range (e.g. `pages:[5,2]`) instead of silently returning zero pages (which a caller could misread as "image-only scan").
+- **Docs corrected to the enforced reality.** Rewrote SECURITY.md "OCR network posture" (was: `install-ocr-lang` "Deferred" + "the only outbound call in serve mode" — both now false) with the code-guard list + a stable `<a id="ocr-network-posture">` anchor; fixed the api.md broken anchor; updated `--ocr-pdfs`/`--ocr-langs` CLI help + api.md to cite `install-ocr-lang`.
+
+### Structural defense (closes the #16 class)
+
+- **OIA Check 4e** (`scripts/oia-walk.mjs`) — the "claimed-guarantee vs code-guard" pattern applied to OCR (parallel to rc.8's SLSA Check 4d). If any of README/SECURITY.md/COMPARISON/api.md/llms.txt claims "zero outbound / no runtime CDN / install-ocr-lang" (non-roadmap), it asserts `src/ocr.ts` calls `assertOcrLangsInstalled` + sets `cacheMethod:"readOnly"` AND `src/cli.ts` registers `install-ocr-lang` — failing CI otherwise. **Verified non-vacuous** (all 3 guards detected present → silent for the right reason) **and with detection power** (would flag 4+ claim lines if a guard were removed). The generalized enforcement-verb grep remains a tracked ROADMAP item (this is the #16-specific guard, mirroring how 4d was #15-specific).
+
+### Tests added (+15, positive + NEGATIVE controls)
+
+`tests/ocr-offline.test.ts` (NEW) — `resolveTessdataDir` precedence (3), `ocrLangIsInstalled`/`assertOcrLangsInstalled` incl. multi-lang + missing-pack throw (5), `extractPdfWithOcr` pre-flight throw before any dep loads (1, the load-bearing #16 guard), `clampOcrScale` normal-unchanged + huge-MediaBox-shrinks (3), `resolveOcrPageRange` clamp + inverted-throws (3). All run without `tesseract.js`/`canvas`/`pdfjs` because the guards execute before those load.
+
+### Files changed
+
+- `src/ocr.ts` — `resolveTessdataDir`/`ocrLangIsInstalled`/`assertOcrLangsInstalled`/`clampOcrScale`/`resolveOcrPageRange`/`MAX_OCR_CANVAS_DIM`; pre-flight + readOnly worker + canvas clamp + page-range in `extractPdfWithOcr`; TSDoc corrected to the enforced behavior.
+- `src/cli.ts` — `install-ocr-lang` subcommand; `--ocr-pdfs`/`--ocr-langs` help cite it.
+- `scripts/oia-walk.mjs` — Check 4e + header enumeration (11 → 12 blocks).
+- `SECURITY.md`, `docs/api.md` — OCR posture rewrite + stable anchor + subcommand row.
+- `tests/ocr-offline.test.ts` (new).
+- test count 944 → 959 across README/COMPARISON/llms.txt/AGENTS/package.json/ROADMAP.
+- version bump 3.9.0-rc.9 → 3.9.0-rc.10 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.9] — 2026-05-28
 
 > **TL;DR:** **First RC of the post-audit sprint — input-validation security.** A second, five-agent comprehensive audit (core-retrieval code · server/transport/CLI code · docs/workflows/config · competitor landscape · repo-page/discoverability) ran against rc.8; `ROADMAP.md` is rewritten around its findings + the competitive read (we are capability-ahead of every Obsidian-MCP peer; the gap to the memory leaders is published benchmarks + discoverability, not tech). This RC ships the **P0 input-validation** findings: a real **ReDoS guard** on `obsidian_open_questions` (an always-registered tool that compiled a caller-supplied `pattern` straight into V8's backtracking engine and ran it over every line of every note — a remote DoS on `serve-http`), a defensive length cap on DQL `like`, and reconciliation of the bearer-token min-length check between the CLI and the transport. **No behavior change for legitimate callers. 927 → 944 tests** (+17, all with positive + negative controls).

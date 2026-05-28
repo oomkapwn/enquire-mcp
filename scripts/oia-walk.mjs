@@ -21,27 +21,36 @@
 //   node scripts/oia-walk.mjs --allow    # walk, print findings, always exit 0
 //
 // Checks (all evidence-based — each finding includes file:line and the
-// matched fragment):
+// matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
+// it listed only checks 1–5 while the code grew to 11 distinct walks. The
+// canonical count is "8" (the top-level numbered checks 1–8), but check 4
+// has historically accreted sub-checks (4b/4c/4d), so 11 distinct walks
+// actually run. Full honest list below:
 //
-//   1. STALE VERSION TOMBSTONES — `vX.Y.Z` or `X.Y.Z-rc.N` references
-//      in file-header docstrings (first 30 lines of every src/*.ts file)
-//      that aren't tagged as historical context (no `History:` or
-//      `Pre-3.X` lead-in).
+//   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
+//       file-header docstrings (first 30 lines) not tagged as history.
+//   2.  WORKFLOW EXISTENCE — CI workflow names in README/docs must exist
+//       as `.github/workflows/*.yml` or be annotated "via GitHub default-setup".
+//   3.  CLI SUBCOMMAND EXISTENCE — backticked `enquire-mcp <cmd>` in
+//       docs/*.md must match a `program.command("<cmd>")` in src/cli.ts.
+//   4b. STALE-CURRENCY-CLAIM in docs/*.md headers (extends 1 to docs/).
+//   4c. SHELL-SCRIPT-STALENESS — scripts/*.sh referencing removed commands.
+//   4d. SLSA build-provenance LEVEL claim vs release.yml mechanism +
+//       (network) published-attestation presence. [rewritten rc.8 / audit S2]
+//   4.  NPM SCRIPT EXISTENCE — backticked `npm run <script>` in docs +
+//       script comments must match `package.json#scripts`.
+//   5.  CURRENT-CLAIM vs TOMBSTONE — "default" value comments must agree
+//       with the actual exported `DEFAULT_*` constant in the same file.
+//   6.  COVERAGE-COMMENT DRIFT — inline `// current ~X%` in
+//       check-per-file-coverage.mjs vs coverage-summary.json (>1pp fails).
+//   7.  STALE CURRENT-STATE VERSION CLAIMS in docs/ + CLAUDE.md (present-
+//       and future-tense currency claims vs the actual current major.minor).
+//   8.  SCOPE-COMPLETENESS — delegates to scope-completeness-audit.mjs
+//       (numeric-claim + deferred-claim + cli-flag-coverage dimensions).
 //
-//   2. WORKFLOW EXISTENCE — every CI workflow name referenced in README /
-//      docs (e.g. "CodeQL", "Analyze") must exist as `.github/workflows/
-//      *.yml` OR be explicitly annotated as "via GitHub default-setup".
-//
-//   3. CLI SUBCOMMAND EXISTENCE — every backticked `enquire-mcp <cmd>`
-//      reference in docs/*.md must match a `program.command("<cmd>")`
-//      in `src/cli.ts`.
-//
-//   4. NPM SCRIPT EXISTENCE — every backticked `npm run <script>` in
-//      docs/*.md and scripts/*.mjs comments must match `package.json#scripts`.
-//
-//   5. CURRENT-CLAIM vs TOMBSTONE — comments referring to a "default"
-//      value (e.g. "rerank-multilingual default") must agree with the
-//      actual exported default constant in the same file.
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4,5,6,7,8 — check 4d/4
+// appear after the 4b/4c sub-checks for historical-accretion reasons; the
+// numbering is kept stable because CHANGELOG entries reference these IDs.
 //
 // Exit codes:
 //   0 — no findings (or --allow flag passed)
@@ -287,26 +296,62 @@ walk("scripts", ".sh", (file) => {
   }
 });
 
-// ─── Check 4d: SLSA-3 provenance attestation for the current version ───
-// v3.7.19 round-21 θ2 — README claims "SLSA-3 build provenance on releases".
-// CI-published releases via `npm publish --provenance` DO get an attestation
-// recorded in npm's dist.attestations + Sigstore transparency log. Manual
-// publishes (e.g. when NPM_TOKEN is broken and the maintainer falls back to
-// `npm publish` from their machine) typically OMIT the `--provenance` flag
-// and silently break the SLSA-3 chain.
+// ─── Check 4d: SLSA build-provenance LEVEL claim vs actual mechanism ───
+// v3.9.0-rc.8 (audit S2) — REWRITTEN. The old check only verified that the
+// current npm version had SOME slsa.dev attestation, and its wording still
+// said "SLSA-3" — the exact overclaim (#15) that rc.7 had to retract. It
+// could NOT detect the actual bug (a doc claiming SLSA-3/Build L3 when the
+// workflow only earns L2), and it silently no-op'd on unpublished RCs (i.e.
+// it was effectively OFF for every pre-stable release that CI runs).
 //
-// Round-21 caught this when v3.7.18 was manually published: every CI-shipped
-// version (v3.7.14/15/16) has provenance, but v3.7.13 + v3.7.18 (both
-// manual) do not. The README claim is technically false for those gaps.
+// This is the "claimed-guarantee vs code-guard" class (CLAUDE.md anti-pattern
+// since rc.7): the SLSA *level* claimed in docs MUST match what release.yml
+// actually does.
+//   • `npm publish --provenance` (+ GitHub OIDC) = SLSA Build **L2**
+//     (hosted builder + Sigstore-signed, non-forgeable-by-author provenance).
+//   • SLSA Build **L3** requires an isolated, non-falsifiable builder, i.e.
+//     the `slsa-framework/slsa-github-generator` reusable workflow.
 //
-// This check queries the live npm registry for the package's current
-// version's `dist.attestations` field. If missing, flags it — BUT only
-// in `--strict` mode (default) since the missing version state takes a
-// few seconds to propagate after publish and false positives are noisy.
-// Network-gated: skip the check if offline / npm registry unreachable.
-//
-// To skip this check explicitly (e.g. for local dev runs), pass
-// `--skip-network` flag.
+// Part A (STATIC, always runs — offline + on RCs): derive the EARNED level
+// from release.yml, then fail if any doc claims a HIGHER level than earned.
+// This catches the #15 regression with zero network dependency.
+{
+  const releaseYml = readLines(".github/workflows/release.yml").join("\n");
+  const earnsL3 = /slsa-framework\/slsa-github-generator/.test(releaseYml);
+  const doesProvenance = /npm publish[^\n]*--provenance/.test(releaseYml);
+  // Earned level: 3 if the isolated-builder generator is wired; 2 if only
+  // `npm publish --provenance`; 0 if neither (no provenance at all).
+  const earnedLevel = earnsL3 ? 3 : doesProvenance ? 2 : 0;
+  // Surfaces that carry the public SLSA/provenance claim.
+  const claimFiles = ["README.md", "package.json", "llms.txt", "docs/COMPARISON.md", "STABILITY.md"];
+  // Patterns that assert SLSA Build Level 3 (or the legacy "SLSA-3" shorthand,
+  // or a badge linking to the L3 spec anchor).
+  const l3ClaimRe = /\bSLSA[-\s]?3\b|\bSLSA\s+(?:Build\s+)?L(?:evel\s*)?3\b|levels#build-l3/i;
+  for (const file of claimFiles) {
+    const lines = readLines(file);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (!l3ClaimRe.test(line)) continue;
+      // A doc may legitimately mention L3 as a ROADMAP/future target — skip
+      // lines that frame it as not-yet-earned.
+      if (/\b(roadmap|on the roadmap|planned|future|earn|target|not yet|L3 generator)\b/i.test(line)) continue;
+      if (earnedLevel < 3) {
+        record(
+          "SLSA-LEVEL-OVERCLAIM",
+          file,
+          i + 1,
+          line.trim().slice(0, 140),
+          `Doc claims SLSA Build L3 but release.yml only earns Build L${earnedLevel} (it does ${doesProvenance ? "`npm publish --provenance` = L2" : "no provenance"}; L3 needs slsa-framework/slsa-github-generator). Either adopt the isolated-builder generator, OR phrase the L3 mention as a roadmap target (add "roadmap"/"planned"/"on the roadmap").`
+        );
+      }
+    }
+  }
+}
+
+// Part B (NETWORK, opt-out via --skip-network): for a PUBLISHED version,
+// confirm the npm artifact actually carries the L2 provenance attestation
+// the docs promise. Skips cleanly for unpublished RCs (no claim to verify
+// yet) and on infra failure — Part A is the always-on guard.
 const SKIP_NETWORK = process.argv.includes("--skip-network");
 if (!SKIP_NETWORK) {
   try {
@@ -323,8 +368,8 @@ if (!SKIP_NETWORK) {
           "SLSA-PROVENANCE-MISSING",
           "package.json",
           5,
-          `npm @oomkapwn/enquire-mcp@${currentVersion} has no SLSA-3 provenance attestation`,
-          `README claims "SLSA-3 build provenance on releases" but the current published version lacks dist.attestations. This typically means a manual \`npm publish\` (without --provenance flag) was used to ship this version. Future releases should go through CI (release.yml uses --provenance). Pass --skip-network to OIA to skip this check (offline environments).`
+          `npm @oomkapwn/enquire-mcp@${currentVersion} has no signed build-provenance attestation`,
+          `Docs claim signed build provenance (SLSA L2) but the current published version lacks dist.attestations. This typically means a manual \`npm publish\` (without --provenance) shipped this version. Releases must go through CI (release.yml uses --provenance). Pass --skip-network to skip (offline environments).`
         );
       }
     }
@@ -332,7 +377,9 @@ if (!SKIP_NETWORK) {
   } catch (err) {
     // Network failure or `npm` not installed — silently skip with a stderr note.
     // (Don't fail OIA on infrastructure issues outside the repo's control.)
-    console.error(`[oia-walk] SLSA-PROVENANCE check skipped: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `[oia-walk] SLSA-PROVENANCE network check skipped: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

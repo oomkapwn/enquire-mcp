@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.8] — 2026-05-28
+
+> **TL;DR:** **Integrity-batch #2 from the exhaustive file-by-file audit** (every `src/` module, every doc, every workflow, every script re-read on Opus 4.8). Closes the cheap-but-real drift the audit surfaced and adds the FIRST structural defense for the "claimed-guarantee vs code-guard" class introduced in rc.7: a new **OIA Check 4d** that reads `.github/workflows/release.yml`, computes the SLSA Build Level it actually earns, and fails CI if any doc claims a higher level. Also: a bench-harness honesty fix (a 5-sample "p99" that always returned the max — relabeled `max`), determinism fix (`Date.now()` tag → stable), the privacy-test soft-skips made VISIBLE via `ctx.skip()` + a CI tripwire that fails loudly if the native deps that gate them ever go missing in CI, two stale test-title positioning claims, a benchmarks rounding drift, a biome binary/schema unification (2.4.14/2.4.15 → 2.4.16), and a stale Node placeholder in the bug template. **Docs/tests/scripts/config only — zero `src/` runtime logic changed. 926 → 927 tests (+1 CI tripwire).**
+
+**Patch — audit-driven integrity (Tier 0, batch 2).**
+
+### Fixed
+
+- **S2 — OIA Check 4d: SLSA-level code-guard (structural defense for the rc.7 #15 class).** rc.7 *corrected* the SLSA-3→L2 overclaim by hand; this rc makes the regression **structurally impossible**. New `scripts/oia-walk.mjs` Check 4d Part A statically reads `release.yml`: `earnsL3 = /slsa-framework\/slsa-github-generator/`, `doesProvenance = /npm publish[^\n]*--provenance/` → `earnedLevel = earnsL3 ? 3 : doesProvenance ? 2 : 0`. It then greps the claim surfaces (README, package.json, llms.txt, COMPARISON, STABILITY) for an L3 claim (`/\bSLSA[-\s]?3\b|…L(?:evel\s*)?3\b|levels#build-l3/i`) and fails if any claim exceeds the earned level — with a roadmap-context skip so "L3 on the roadmap" stays legal. Part B (opt-out via `--skip-network`) checks the published attestation. This is the first concrete instance of the rc.7-promised "enforcement-verb code-guard" defense.
+- **S1 — bench "p99" was always the max (honesty fix).** `scripts/bench.mjs` runs `RUNS=5` then took `quantile(samples, 0.99)`, which on 5 sorted samples is unconditionally `samples[4]` = the maximum. Reporting it as "p99" overstated tail rigor. Relabeled to `max` in the return object, the table header, and `bench/results.md` (the *values* were always the max — only the label was wrong, so no number moved).
+- **M3 — bench determinism.** The write-path micro-bench used `#new-tag-${Date.now()}`, making every run mutate a different note and defeating run-to-run comparability. Pinned to `#new-tag-stable`.
+- **T1 — privacy tests: visible skips + a CI tripwire (the silent-skip class).** `tests/cli-privacy-filters.test.ts` guarded 6 security-critical privacy assertions behind `if (!distExists() || !canRunFts5) return;` — a SILENT pass when the build or `better-sqlite3` was absent, exactly the failure mode that hides regressions. Converted all 6 to `(ctx) => { if (…) return ctx.skip(); … }` so a skip is *visible* in the reporter, and added one **CI GUARD** test that hard-asserts (when `process.env.CI`) that the dist build AND a live FTS5 query both work — so if the native-dep preconditions ever vanish in CI, the suite fails loudly instead of silently skipping the privacy coverage. The single guard transitively protects every other native-dep soft-skip (same CI preconditions). **This is the +1 test (926 → 927).**
+- **W1 — stale positioning in test titles.** `tests/github-metadata-invariant.test.ts` had two `it(...)` titles still describing the pre-v3.7.8 "Memory layer for AI agents" lead and "v3.6.3 hype keywords" — while the assertions already pinned `ABOUT_LEADS_WITH = /^The most advanced Obsidian MCP/i`. Titles realigned to what the code actually checks (α-class TSDoc-drift sibling, but in test descriptions).
+- **S4 — benchmarks rounding drift.** `docs/benchmarks.md` line 30 said "+25 MRR / +16 NDCG@10" (rounded) while every other surface uses the precise measured "+24.7 MRR / +15.5 NDCG@10". Unified to the precise figures.
+- **C1 — biome binary/schema unification.** Installed binary was 2.4.14, `biome.json` `$schema` pinned 2.4.15, `package.json` devDep `^2.4.15`. Bumped all three to **2.4.16** (latest). Clean bump — `lint:fix` reformatted one long line I'd added to `oia-walk.mjs`; zero new rule violations.
+- **bug_report.yml Node placeholder.** `.github/ISSUE_TEMPLATE/bug_report.yml` example was `v20.11.0`, below the `engines.node >= 22.13.0` floor — a reporter copying it would file an unsupported version. → `v22.13.0`.
+
+### Why these are batched
+
+All nine are state-driven findings from re-reading the repo file-by-file (the methodology gap CLAUDE.md documents: change-driven sweeps miss files not actively edited). None touch `src/` runtime behavior — they harden the *audit apparatus* (S2), *measurement honesty* (S1/M3/S4), *test visibility* (T1/W1), and *toolchain/template hygiene* (C1/bug_report). Higher-risk items stay sequenced per plan: **#16 OCR offline enforcement → rc.9; H1 watcher per-file serialization → rc.10.**
+
+### Files changed
+
+- `scripts/oia-walk.mjs` — Check 4d SLSA-level guard (Part A static + Part B network) + honest header enumeration of all 8 checks / 11 blocks.
+- `scripts/bench.mjs` — `p99`→`max` (return obj + header); `Date.now()` tag → `#new-tag-stable`.
+- `bench/results.md` — `p50 / p99` → `p50 / max` column label.
+- `tests/cli-privacy-filters.test.ts` — 6 soft-skips → `ctx.skip()`; +1 CI GUARD tripwire.
+- `tests/github-metadata-invariant.test.ts` — 2 stale test titles realigned to assertions.
+- `docs/benchmarks.md` — +25/+16 → +24.7/+15.5.
+- `biome.json` + `package.json` — biome 2.4.15 → 2.4.16.
+- `.github/ISSUE_TEMPLATE/bug_report.yml` — Node placeholder v20.11.0 → v22.13.0.
+- `ROADMAP.md` — re-sequenced #16 OCR offline (rc.8 → rc.9) + Tier 1 watcher/H1 (rc.9 → rc.10) since rc.8 became the integrity-batch; noted Check 4d as partial progress on the structural drift-class item.
+- `README.md`, `docs/COMPARISON.md`, `llms.txt`, `AGENTS.md`, `package.json` — test count 926 → 927.
+- version bump 3.9.0-rc.7 → 3.9.0-rc.8 (7 surfaces).
+
+### Stats
+
+- **927 unit tests** (+1 CI tripwire) — all passing.
+- Lint clean (biome 2.4.16, 0 warnings). `tsc` strict clean. OIA clean (8 checks incl. new 4d). scope-completeness clean.
+
+---
+
 ## [3.9.0-rc.7] — 2026-05-25
 
 > **TL;DR:** **Tier 0 integrity batch from a full project audit** (deep code audit of all 31 src/ modules + docs/workflows/config audit + competitive survey of the Obsidian-MCP / AI-memory / RAG-MCP landscapes). Fixes the two brand-critical overclaims the audit surfaced — **#15 SLSA-3** (badge linked to the slsa.dev **L3** spec + 8+ surfaces claimed "SLSA-3", but `release.yml` only runs `npm publish --provenance` = SLSA Build **L2**) and corrects pervasive version/RC drift + an undersold reranker number. Adds a public **ROADMAP.md**, gitignores the stray `false/` npm-cache tree, adds `CITATION.cff` version field, and documents a new overclaim anti-pattern (the "claimed-guarantee vs code-guard" class behind #15 + #16). **Docs/config-only; 926 tests unchanged. The OCR-offline-enforcement overclaim (#16, "implement" decision) ships in rc.8; the watcher live-update race (H1) in rc.9.**

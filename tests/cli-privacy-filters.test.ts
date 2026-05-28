@@ -70,8 +70,24 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     }
   }
 
-  it("`enquire-mcp index --exclude-glob 'private/**'` skips files under private/", () => {
-    if (!distExists() || !canRunFts5) return;
+  // v3.9.0-rc.8 (audit T1) — CI GUARD. The privacy-boundary tests below
+  // soft-skip (via `ctx.skip()`) when `dist/` or better-sqlite3 is absent.
+  // Pre-rc.8 they used a silent `return`, so a build-less run green-passed
+  // the entire privacy-at-indexing-time security surface with ZERO
+  // assertions and NO skip count to reveal it. In CI those preconditions
+  // are guaranteed (ci.yml: `npm ci` → `npm run build` → `npm test`), so if
+  // either is missing here, fail LOUD rather than silently skipping the
+  // security tests. Outside CI (local dev without a build) this is a no-op.
+  it("CI GUARD — build + better-sqlite3 present so privacy tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(distExists(), "dist/index.js must exist in CI (npm run build runs before npm test)").toBe(true);
+    expect(canRunFts5, "better-sqlite3 must load in CI so privacy-at-indexing tests execute, not silently skip").toBe(
+      true
+    );
+  });
+
+  it("`enquire-mcp index --exclude-glob 'private/**'` skips files under private/", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "denylist.fts5.db");
     const out = execFileSync(
       process.execPath,
@@ -83,8 +99,8 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     expect(out).not.toMatch(/added=3 /);
   });
 
-  it("`enquire-mcp index --read-paths 'public/**'` indexes ONLY public/", () => {
-    if (!distExists() || !canRunFts5) return;
+  it("`enquire-mcp index --read-paths 'public/**'` indexes ONLY public/", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "allowlist.fts5.db");
     const out = execFileSync(
       process.execPath,
@@ -95,8 +111,8 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     expect(out).not.toMatch(/added=3 /);
   });
 
-  it("`enquire-mcp index` without filters indexes everything (baseline sanity)", () => {
-    if (!distExists() || !canRunFts5) return;
+  it("`enquire-mcp index` without filters indexes everything (baseline sanity)", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "baseline.fts5.db");
     const out = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
@@ -105,8 +121,8 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     expect(out).toMatch(/added=3 /);
   });
 
-  it("`enquire-mcp setup --exclude-glob 'private/**' --skip-embeddings` skips private/ in FTS5 phase", () => {
-    if (!distExists() || !canRunFts5) return;
+  it("`enquire-mcp setup --exclude-glob 'private/**' --skip-embeddings` skips private/ in FTS5 phase", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const out = execFileSync(
       process.execPath,
       [
@@ -128,8 +144,8 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     expect(out).not.toMatch(/added=3 /);
   });
 
-  it("`enquire-mcp setup --read-paths 'public/**' --skip-embeddings` indexes ONLY public/", () => {
-    if (!distExists() || !canRunFts5) return;
+  it("`enquire-mcp setup --read-paths 'public/**' --skip-embeddings` indexes ONLY public/", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const out = execFileSync(
       process.execPath,
       [distEntry, "setup", "--vault", vault, "--read-paths", "public/**", "--skip-embeddings"],
@@ -139,8 +155,8 @@ describe("CLI privacy filters on `index` / `setup` (audit M-8)", () => {
     expect(out).not.toMatch(/added=3 /);
   });
 
-  it("`enquire-mcp setup --skip-embeddings` without filters indexes everything (baseline sanity)", () => {
-    if (!distExists() || !canRunFts5) return;
+  it("`enquire-mcp setup --skip-embeddings` without filters indexes everything (baseline sanity)", (ctx) => {
+    if (!distExists() || !canRunFts5) return ctx.skip();
     const out = execFileSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
       encoding: "utf8",
       env: { ...process.env, XDG_CACHE_HOME: xdgCache }

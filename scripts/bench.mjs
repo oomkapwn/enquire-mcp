@@ -82,11 +82,15 @@ async function timeMs(label, fn) {
     samples.push(performance.now() - t);
   }
   samples.sort((a, b) => a - b);
+  // v3.9.0-rc.8 (audit S1) — with RUNS=5, quantile(s,0.99) = samples[floor(4.95)] =
+  // samples[4] = the worst sample, i.e. the MAX, not a real 99th percentile (that
+  // needs ~100 samples). p50 (= samples[2]) IS a true median of 5. We report
+  // min / p50 / max honestly rather than mislabeling the max as "p99".
   return {
     label,
     min: samples[0],
     p50: quantile(samples, 0.5),
-    p99: quantile(samples, 0.99)
+    max: samples[samples.length - 1]
   };
 }
 
@@ -109,7 +113,7 @@ tags: [project]
 ---
 
 This draft links to [[Folder0/note-0]] and [[Folder1/note-1]] and [[NonExistent]].
-Tags: #project #new-tag-${Date.now()}.
+Tags: #project #new-tag-stable.
 `;
 
   const results = [];
@@ -137,15 +141,15 @@ function fmt(n) {
 
 function renderTable(allResults) {
   const labels = allResults[0].results.map((r) => r.label);
-  let md = `# enquire benchmarks\n\nLatency per tool, measured on a synthetic vault. ${RUNS} runs after a warmup; each cell is \`p50 / p99\` in milliseconds. Run: \`node scripts/bench.mjs\`.\n\n`;
+  let md = `# enquire benchmarks\n\nLatency per tool, measured on a synthetic vault. ${RUNS} runs after a warmup; each cell is \`p50 / max\` in milliseconds (with only ${RUNS} samples a true p99 is not meaningful, so the second number is the worst observed run). Run: \`node scripts/bench.mjs\`.\n\n`;
   md +=
     "Smaller is better. Times include the read-cache warmup hit; cold first-call latency is captured on the warmup run and excluded from the samples (so these numbers reflect what an interactive agent will see on the second-and-later calls).\n\n";
   md += `Hardware: \`${os.cpus()[0]?.model ?? "unknown"}\`, Node ${process.version}.\n\n`;
-  md += `| Tool | ${allResults.map((r) => `${r.n} notes (p50 / p99 ms)`).join(" | ")} |\n`;
+  md += `| Tool | ${allResults.map((r) => `${r.n} notes (p50 / max ms)`).join(" | ")} |\n`;
   md += `|---|${allResults.map(() => "---").join("|")}|\n`;
   for (let i = 0; i < labels.length; i++) {
     md += `| \`${labels[i]}\` | ${allResults
-      .map((r) => `${fmt(r.results[i].p50)} / ${fmt(r.results[i].p99)}`)
+      .map((r) => `${fmt(r.results[i].p50)} / ${fmt(r.results[i].max)}`)
       .join(" | ")} |\n`;
   }
   return md;

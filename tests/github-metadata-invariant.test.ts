@@ -97,7 +97,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // the test "passes" without asserting (treated as a no-op skip).
   const available = ghIsAvailable();
 
-  it("repo About description leads with 'Memory layer for AI agents'", () => {
+  it("repo About description leads with 'The most advanced Obsidian MCP'", () => {
     if (!available) {
       // v3.7.13 L4 — CI now sets `GH_TOKEN: ${{ github.token }}` so this
       // branch only fires in local dev without auth. Production CI runs
@@ -118,7 +118,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     expect(meta.description ?? "").toMatch(ABOUT_LEADS_WITH);
   });
 
-  it("repo Topics include the 8 v3.6.3 hype keywords", () => {
+  it("repo Topics include the 8 required memory/positioning keywords", () => {
     if (!available) {
       console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
       return;

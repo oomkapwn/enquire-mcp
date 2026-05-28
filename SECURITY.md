@@ -167,12 +167,14 @@ The `obsidian_ocr_pdf` tool (v2.10+) uses `tesseract.js` for image-PDF OCR. Tess
 - Pre-download trained-data files by running OCR once per language on a known-online machine, then copy the resulting `tessdata/` directory to the offline deployment.
 - The runtime warning is unconditional — it fires whether the trained-data is cached or not, because the WORKER COULD fall back to the CDN if the cache is somehow incomplete.
 
-**Roadmap (v3.8.0):**
-- An `enquire-mcp install-ocr-lang <code>` subcommand to mirror `install-model` for embeddings (explicit, opt-in network call; offline posture for `serve`).
-- Strict cache check before `createWorker()` that fails fast on missing trained-data, with a clear "run `install-ocr-lang <code>`" message.
+**Current install procedure (canonical):** the language pack must be pre-cached before offline OCR. Run OCR once per language on an online machine — Tesseract.js auto-downloads `<lang>.traineddata` into its `tessdata/` cache — then copy that `tessdata/` directory to the offline host. Alternatively, fetch `<lang>.traineddata` directly from [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast) into the same cache dir. This is the documented path until the `install-ocr-lang` subcommand below ships.
+
+**Roadmap (planned, not yet shipped as of v3.9.0 — re-targeted from the original v3.8.0 plan):**
+- An `enquire-mcp install-ocr-lang <code>` subcommand to mirror `install-model` for embeddings (explicit, opt-in network call; offline posture for `serve`). **Deferred** because it requires wiring a stable `langPath`/`cachePath` into `src/ocr.ts`'s `createWorker` call, and the network-download path can't be exercised in CI (tesseract.js + canvas are optional deps absent from the CI matrix) — so it needs an env-gated integration test before shipping.
+- Strict cache check before `createWorker()` that fails fast on missing trained-data, with a clear "pre-cache the language pack (see above)" message.
 - `--enable-ocr-online` flag for users who explicitly want the CDN fallback.
 
-Tracked in CHANGELOG under v3.7.16 P1-1.
+Tracked in CHANGELOG under v3.7.16 P1-1; install-procedure unification + roadmap re-target in v3.9.0-rc.5.
 
 ### OCR resource limits (v3.7.16 P1-2)
 

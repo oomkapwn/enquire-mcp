@@ -529,6 +529,41 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
     }
   });
 
+  it("handles many sequential stateless requests cleanly (v3.9.0-rc.16 — per-request cleanup)", async () => {
+    // Each stateless POST builds a fresh McpServer + transport and must close
+    // both on response 'close'. Pre-rc.16 the cleanup was wired only on the
+    // connect-success path; this test fires the build→connect→handle→cleanup
+    // cycle repeatedly to confirm it neither hangs nor degrades (a leaked
+    // server/transport per request would eventually surface as a failure).
+    const s = await spawn();
+    try {
+      for (let i = 0; i < 6; i++) {
+        const res = await fetch(`${s.url}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${TOKEN}`
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: i + 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-03-26",
+              capabilities: {},
+              clientInfo: { name: "vitest-e2e", version: "0.0.0" }
+            }
+          })
+        });
+        expect(res.status, `request ${i} should succeed`).toBe(200);
+        await res.text(); // drain the body so the response 'close' fires → cleanup runs
+      }
+    } finally {
+      await s.close();
+    }
+  });
+
   it("returns 405 on GET /mcp (stateless transport — no SSE stream)", async () => {
     const s = await spawn();
     try {

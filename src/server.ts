@@ -256,6 +256,14 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // init's short-lived handle). Opened below if `--watch` + the embed-db
   // file exists; closed by startServer's shutdown handler.
   let watcherEmbedDb: EmbedDb | null = null;
+  // v3.9.0-rc.16 — `--ocr-pdfs` only takes effect on the watcher path (it
+  // re-OCRs scanned PDFs as they change and feeds the embed pipeline). Warn
+  // if it was passed without `--watch` so the flag isn't a silent no-op.
+  if (opts.ocrPdfs && !opts.watch) {
+    process.stderr.write(
+      "enquire: --ocr-pdfs has no effect without --watch (it re-indexes scanned PDFs as they change during a session). Ignoring.\n"
+    );
+  }
   if (opts.watch) {
     // v3.9.0-rc.1 — OCR-on-watch is wired here when both `--ocr-pdfs` and
     // `--include-pdfs` are set. The constructor fail-loud check enforces
@@ -332,6 +340,13 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             );
           }
         }
+      } else if (opts.ocrPdfs) {
+        // v3.9.0-rc.16 — `--ocr-pdfs` needs an embed-db to index the OCR'd
+        // text; without one the flag is a silent no-op. Warn + continue
+        // FTS5-only instead of failing the whole watcher.
+        process.stderr.write(
+          "enquire: --ocr-pdfs requested but no embed-db found — OCR-on-watch needs an embed-db to index scanned-PDF text. Run `enquire-mcp build-embeddings` first; continuing with FTS5-only watch.\n"
+        );
       }
     } catch (err) {
       process.stderr.write(

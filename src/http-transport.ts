@@ -800,19 +800,32 @@ async function handleStatelessRequest(
   }
   const server = buildMcpServer(deps, opts);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  // v3.9.0-rc.16 — register cleanup BEFORE connect + make it idempotent +
+  // error-safe, for parity with the stateful path's close discipline (P2-10).
+  // Pre-rc.16 the `res.on("close")` registration sat AFTER `server.connect()`,
+  // so a connect failure threw straight to the catch and the freshly-built
+  // server + transport leaked (cleanup was never wired). The `cleanedUp` guard
+  // prevents the double-close that a `res 'close'` + catch both firing would
+  // otherwise cause; the `.catch` mirrors the stateful arms (lines ~378/402).
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    void transport.close().catch(() => {});
+    void server.close().catch(() => {});
+  };
+  res.on("close", cleanup);
   try {
     await server.connect(transport);
-    const cleanup = () => {
-      void transport.close();
-      void server.close();
-    };
-    res.on("close", cleanup);
     await transport.handleRequest(req, res, body);
   } catch (err) {
     process.stderr.write(`enquire http: transport error — ${err instanceof Error ? err.message : String(err)}\n`);
     if (!res.headersSent) {
       sendJsonRpcError(res, 500, -32603, "Internal server error");
     }
+    // Belt-and-suspenders: if the response stream never emits 'close' (e.g.
+    // connect threw before the socket was wired), free the handles now.
+    cleanup();
   }
 }
 

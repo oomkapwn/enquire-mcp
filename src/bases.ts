@@ -420,15 +420,14 @@ const KNOWN_PREDICATES = Object.freeze([
 /**
  * v3.6.2 HN-2 — stderr warning is rate-limited to ONE message per
  * predicate string per process, so a single typo doesn't drown out logs
- * on a vault with 10k notes. Module-level Set is fine because the daemon
- * is single-process; the worst case across multiple `serve` sessions is
- * one log line each.
- */
-/**
- * v3.9.0-rc.15 — max distinct entries tracked for warn-once dedup. Caps the
- * module-level set so a stream of distinct malformed predicates (attacker- or
- * agent-controlled `.base` input) can't grow it without bound over a
- * long-lived `serve` process.
+ * on a vault with 10k notes. The dedup Set is module-level (the daemon is
+ * single-process).
+ *
+ * v3.9.0-rc.15 — the original "one log line each" reasoning only held for a
+ * FIXED set of predicates; a stream of DISTINCT malformed predicates
+ * (attacker- or agent-controlled `.base` input) would grow the Set without
+ * bound over a long-lived `serve`. `MAX_WARNED_PREDICATES` caps it (past the
+ * cap a distinct predicate may re-warn — an acceptable trade vs. a leak).
  */
 export const MAX_WARNED_PREDICATES = 1000;
 

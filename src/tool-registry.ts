@@ -553,7 +553,7 @@ export function registerReadTools(
     {
       title: "Detect wikilink-graph communities (GraphRAG-light)",
       description:
-        "v3.4.0 — Computes structural communities over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). Returns `community_count`, `modularity` (∈ [-0.5, 1] — higher = stronger structure), `iterations` until convergence, `communities[]` (each with id/size/sorted-members/representative — the highest-in-community-degree note), and `membership` (path → id). Pure structural — no embeddings consulted. Server stays LLM-free; the agent can summarize a community by reading its representative + sample members. Computation is O(passes × edges); typical 8K-note vault completes in <500ms. The result is NOT cached — call once per session and reuse. First MCP server with native vault community detection.",
+        "v3.4.0 — Computes structural communities over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). Returns `community_count`, `modularity` (∈ [-0.5, 1] — higher = stronger structure), `iterations` (greedy passes run) and `converged` (true if a stable partition was reached, false if it hit the 50-pass cap), `communities[]` (each with id/size/sorted-members/representative — the highest-in-community-degree note), and `membership` (path → id). Pure structural — no embeddings consulted. Server stays LLM-free; the agent can summarize a community by reading its representative + sample members. Computation is O(passes × edges); typical 8K-note vault completes in <500ms. The result is NOT cached — call once per session and reuse. First MCP server with native vault community detection.",
       annotations: { ...READ_ONLY, title: "Get communities" },
       inputSchema: {
         min_size: z
@@ -590,6 +590,7 @@ export function registerReadTools(
         community_count: result.community_count,
         modularity: result.modularity,
         iterations: result.iterations,
+        converged: result.converged,
         node_count: result.membership.size,
         communities: filtered,
         membership: membershipObj

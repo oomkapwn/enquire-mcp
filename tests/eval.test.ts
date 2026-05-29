@@ -253,6 +253,29 @@ describe("runEval (v2.12.0)", () => {
     expect(result.query_count).toBe(2);
     expect(result.per_query[1]?.ndcg_at_k).toBe(0);
     expect(result.per_query[1]?.recall_at_k).toBe(0);
+    // v3.9.0-rc.16 — the errored query is COUNTED + FLAGGED, not silently
+    // conflated with a genuine zero-relevance retrieval.
+    expect(result.query_errors).toBe(1);
+    expect(result.per_query[1]?.error).toBe(true);
+    // NEGATIVE control: the successful query carries no error flag.
+    expect(result.per_query[0]?.error).toBeUndefined();
+    // The human-readable banner surfaces the deflation warning.
+    expect(formatEvalResult(result)).toContain("errored");
+  });
+
+  it("query_errors is 0 + no banner warning when every query succeeds (v3.9.0-rc.16 NEGATIVE control)", async () => {
+    const v = new Vault(root);
+    const queries: EvalQuery[] = [{ id: "ok", query: "Apollo", relevant: ["apollo.md"] }];
+    const result = await runEval({
+      vault: v,
+      queries,
+      ftsIndex: idx,
+      embedFile: path.join(root, "nonexistent.embed.db"),
+      k: 10
+    });
+    expect(result.query_errors).toBe(0);
+    expect(result.per_query[0]?.error).toBeUndefined();
+    expect(formatEvalResult(result)).not.toContain("errored");
   });
 });
 
@@ -262,6 +285,7 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
       label: "test",
       k: 10,
       query_count: 1,
+      query_errors: 0,
       per_query: [
         {
           id: "q1",

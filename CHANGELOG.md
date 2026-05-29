@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.16] — 2026-05-29
+
+> **TL;DR:** **Correctness batch 2 (sprint RC 8) — user-facing correctness + honesty.** Clears the rc.15-deferred backlog plus the rc.15 post-ship self-audit. (1) `doctor` now actually applies the privacy filter it claimed (`--exclude-glob`/`--read-paths` were never wired — it counted all files yet labeled the count "privacy filter applied" — **P2-12**). (2) `eval` distinguishes an *errored* query from a genuine zero-relevance one (new `query_errors` count + per-query `error` flag + a banner warning — a benchmark's means were silently deflatable by infra hiccups). (3) The stateless HTTP handler now wires its per-request cleanup **before** `connect()`, so a connect failure no longer leaks the McpServer + transport (parity with the stateful path's close discipline). (4) `--ocr-pdfs` warns instead of silently no-op'ing when `--watch` or the embed-db is absent. (5) rc.15's `converged` flag is now actually **surfaced** to MCP callers, and a stale "`+5-10 NDCG@10`" reranker undersell in CLI `--help` (missed by rc.12's docs-only sweep) is corrected to the measured **+15.5 / +24.7**. The deferred `tools/search.ts` "citation mis-attribution" item was **investigated and found to be a non-issue** (snippet/line/chunk/kind all follow one consistent `bm25 ?? embeddings ?? tfidf` precedence). **970 → 975 tests** (+5, positive + NEGATIVE controls).
+
+**Patch — audit-driven correctness, batch 2 (sprint RC 8).**
+
+### Fixed
+
+- **`doctor` ignored the privacy filter while claiming to apply it (P2-12).** `runDoctor` built `new Vault(opts.vault)` with no `excludeGlobs`/`readPaths` — so it walked the *unfiltered* vault, counted every file, and labeled the count `"(privacy filter applied)"`. A privacy-conscious user verifying setup got false reassurance. Now `RunDoctorOptions` accepts `excludeGlobs`/`readPaths`, the CLI `doctor` command exposes `--exclude-glob`/`--read-paths`, the count is honest (`"(after privacy filter)"` only when one is set), and a new `privacy` check reports the active pattern counts — or surfaces a config **error** (instead of crashing) on an empty-after-trim glob.
+- **`eval` conflated errored queries with zero-relevance hits.** A query that threw in `searchHybrid` was pushed to `per_query` with all-zero scores and counted in the means — indistinguishable from a genuine miss, silently deflating published NDCG/Recall/MRR. New `EvalResult.query_errors` count + per-query `error?: true` flag + a `formatEvalResult` banner warning ("re-run before publishing"). Means still include the zeros (you don't get to drop hard queries that crashed) but the deflation is now **visible**.
+- **Stateless HTTP per-request cleanup leaked on connect failure (parity).** `handleStatelessRequest` registered `res.on("close", cleanup)` *after* `await server.connect(transport)`, so a connect throw skipped straight to the catch and the freshly-built McpServer + transport were never closed. Cleanup is now wired **before** connect, made idempotent (`cleanedUp` guard) + error-safe (`.catch`), and also invoked in the catch — matching the stateful path's close discipline (P2-10).
+- **`--ocr-pdfs` was a silent no-op in two cases.** Passed without `--watch` (the flag only acts on the watcher path) → now warns + ignores. Passed with `--watch` but no embed-db (OCR'd text has nowhere to be indexed) → now warns + continues FTS5-only, instead of the block being skipped inside `if (existsSync(embedFile))` with zero feedback.
+
+### rc.15 post-ship self-audit (same-class re-sweep)
+
+- **`converged` was computed but never surfaced.** rc.15 added `CommunityResult.converged` "so callers can surface this" — but the `obsidian_get_communities` handler dropped it. Now in the tool output; tool description corrected ("`iterations` until convergence" → "`iterations` (greedy passes run) and `converged`").
+- **α-class comment drift (bases.ts).** The v3.6.2 HN-2 comment still framed the unbounded warn-Set as "fine" ("one log line each") right next to rc.15's `MAX_WARNED_PREDICATES` cap that exists *because* a distinct-predicate stream broke that reasoning. Comment corrected.
+- **Reranker undersell in CLI `--help` (missed instance).** `--enable-reranker` help still said the generic "+5-10 NDCG@10 typical"; rc.12's "corrected everywhere" sweep covered `docs/` but not `src/` CLI strings. → measured **≈+15.5 NDCG@10 / +24.7 MRR (60-query ablation)**.
+
+### Investigated — no change (empirical rejection)
+
+- **`tools/search.ts` "citation line/kind mis-attribution across rankers"** (rc.15-deferred hypothesis): traced the final-hit assembly — `snippet`, `line_start`/`line_end`, `chunk_index`, and `kind` all derive from the same `bm25 ?? embeddings ?? tfidf` precedence (TF-IDF carries no line/kind, so a TF-IDF-only hit reports `line: undefined` + `kind: "md"`, never a *cross-ranker mix*). `kind` is a file-level property and can't conflict across signals. Current `main` is consistent; no fix warranted.
+
+### Tests added (+5 new it() blocks, positive + NEGATIVE controls) — 970 → 975
+
+- `tests/eval.test.ts` — errored-query: `query_errors === 1`, per-query `error === true`, banner contains "errored", successful query `error` undefined (NEGATIVE); + an all-success NEGATIVE control (`query_errors === 0`, no banner). `makeResult()` literal updated for the new field.
+- `tests/doctor.test.ts` — privacy-active (ok check + "after privacy filter" count), no-filter NEGATIVE control (no `privacy` check, no false claim), empty-glob error path (`ready === false`).
+- `tests/http-transport.test.ts` — 6 sequential stateless requests each 200 (exercises per-request build→connect→cleanup repeatedly).
+- `tests/e2e-handlers.test.ts` — `converged` surfaced in the `obsidian_get_communities` MCP output.
+
+### Files changed
+
+- `src/doctor.ts` (privacy opts + check + honest count), `src/cli.ts` (doctor `--exclude-glob`/`--read-paths`; reranker help number), `src/eval.ts` (`query_errors` + `error` + banner), `src/http-transport.ts` (stateless cleanup parity), `src/server.ts` (two `--ocr-pdfs` warnings), `src/tool-registry.ts` (`converged` surfaced + description), `src/bases.ts` (HN-2 comment).
+- tests: eval (+2 + literal), doctor (+3), http-transport (+1), e2e-handlers (+1 assertion). `scripts/check-per-file-coverage.mjs` bases.ts comment 73.17% → 74.71%.
+- version bump 3.9.0-rc.15 → 3.9.0-rc.16 (7 surfaces); test count 970 → 975.
+
+---
+
 ## [3.9.0-rc.15] — 2026-05-29
 
 > **TL;DR:** **Correctness cleanup (sprint RC 7).** Three MEDIUM/LOW findings from the audit: `bases.ts`'s warn-once dedup `Set` grew without bound on a stream of distinct malformed `.base` predicates (slow memory leak on a long-lived `serve`); `detectCommunities` gave no signal when Louvain hit the `MAX_PASSES=50` cap without converging (callers couldn't tell a sub-optimal partition); and `loadReranker`'s TSDoc claimed the default alias is `rerank-multilingual` when it's actually `rerank-bge` (α-class drift). **966 → 970 tests** (+4, positive + NEGATIVE controls).

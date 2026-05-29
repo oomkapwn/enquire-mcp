@@ -9,7 +9,7 @@
 //     gate caught it)
 // Run as part of CI so a forgotten bump in any one place fails the build
 // instead of shipping silent drift (which we hit on v0.7.4 → 0.7.5 + the
-// 4-RC server.json drift caught by Cursor external audit on rc.15).
+// 4-RC server.json drift caught by the M-REG-1 external-audit finding on rc.15).
 
 import { readFile } from "node:fs/promises";
 

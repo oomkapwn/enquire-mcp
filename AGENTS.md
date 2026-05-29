@@ -21,7 +21,7 @@ All 9 required CI gates run on every PR. Local checks above must pass before pus
 
 ```
 src/
-├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, install-model, build-embeddings, index, doctor, eval, bench)
+├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, install-model, build-embeddings, index, doctor, eval, install-ocr-lang)
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── server.ts           — MCP server bootstrap + dependency wiring
 ├── tool-registry.ts    — tool registration manifest
@@ -43,7 +43,7 @@ src/
 scripts/
 ├── oia-walk.mjs                       — state-driven drift scan (8 checks)
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
-├── check-version-consistency.mjs      — version sync across 5 surfaces
+├── check-version-consistency.mjs      — version sync across 7 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality
 
 tests/
@@ -127,7 +127,7 @@ npm run test:coverage && npm run check:oia   # local dev order
 node scripts/oia-walk.mjs --allow   # always exit 0 (override for documented deferrals)
 
 # Version consistency
-node scripts/check-version-consistency.mjs  # checks 5 surfaces
+node scripts/check-version-consistency.mjs  # checks 7 surfaces
 
 # CHANGELOG coverage gate
 node scripts/check-changelog-coverage.mjs
@@ -145,7 +145,7 @@ Required (block merge if failed):
 4. `smoke` — JSON-RPC smoke against synthetic vault
 5. `audit` — `npm audit --audit-level=moderate`
 6. `coverage` — global + per-file branch floors
-7. `version-consistency` — 5-surface version sync
+7. `version-consistency` — 7-surface version sync
 8. `docs` — TypeDoc generation
 9. `oia` — state-driven drift scan
 
@@ -155,7 +155,7 @@ Advisory (don't block, but tracked):
 ## Do NOT
 
 - **Do NOT modify shared CLI help strings inline.** Lift to `src/cli-help.ts` first. The `cli-parity.test.ts` invariant fails inline drift between serve and serve-http.
-- **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 5 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading).
+- **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 7 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading, server.json version + packages[0]).
 - **Do NOT skip CI hooks** (`--no-verify`) without explicit user instruction. Investigate the hook failure root cause.
 - **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + 9 required gates.
 - **Do NOT tag the pre-merge branch SHA.** Tag the squash-merge SHA on main after `gh pr merge --squash`. Rule since v3.7.15 (`Assert tag is on main` guard).

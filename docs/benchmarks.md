@@ -61,7 +61,7 @@ so the FTS5/embed-db source_state hashes are bit-identical across runs.
 ### Ground-truth queries
 
 The 60 queries live in
-[`tests/fixtures/benchmark-queries.jsonl`](../tests/fixtures/benchmark-queries.jsonl).
+[`tests/fixtures/benchmark-queries.jsonl`](https://github.com/oomkapwn/enquire-mcp/blob/main/tests/fixtures/benchmark-queries.jsonl).
 Each line is one JSON object:
 
 ```jsonl
@@ -99,7 +99,7 @@ We report three standard IR metrics from Manning, Raghavan & Schütze,
   many of the relevant docs did we surface at all?"*
 
 All three are computed by the existing
-[`src/eval.ts`](../src/eval.ts) implementations — the same code that powers
+[`src/eval.ts`](https://github.com/oomkapwn/enquire-mcp/blob/main/src/eval.ts) implementations — the same code that powers
 the `enquire-mcp eval` CLI subcommand.
 
 ### Stack configurations
@@ -462,12 +462,12 @@ relative terms.
 
 - [`docs/COMPARISON.md`](./COMPARISON.md) — feature matrix vs. other
   Obsidian-MCP servers.
-- [`docs/api-reference/`](./api-reference/) — TypeDoc-generated API
+- [`docs/api-reference/`](https://oomkapwn.github.io/enquire-mcp/) — TypeDoc-generated API
   reference (links into `searchHybrid`, `embeddingsSearch`,
   `semanticSearch`).
-- [`src/eval.ts`](../src/eval.ts) — the eval harness used by both this
+- [`src/eval.ts`](https://github.com/oomkapwn/enquire-mcp/blob/main/src/eval.ts) — the eval harness used by both this
   bench script and the `enquire-mcp eval` CLI subcommand.
-- [`tests/fixtures/benchmark-queries.jsonl`](../tests/fixtures/benchmark-queries.jsonl)
+- [`tests/fixtures/benchmark-queries.jsonl`](https://github.com/oomkapwn/enquire-mcp/blob/main/tests/fixtures/benchmark-queries.jsonl)
   — the ground-truth query set.
-- [`bench/benchmarks.json`](../bench/benchmarks.json) — machine-readable
+- [`bench/benchmarks.json`](https://github.com/oomkapwn/enquire-mcp/blob/main/bench/benchmarks.json) — machine-readable
   output (includes per-query scores and per-category breakdowns).

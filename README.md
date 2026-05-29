@@ -4,7 +4,7 @@
 
 # enquire-mcp
 
-<sub>**TL;DR for AI agents** — MCP server exposing a local Obsidian markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](./llms.txt) · [AGENTS.md](./AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
+<sub>**TL;DR for AI agents** — MCP server exposing a local Obsidian markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 
 ### The most advanced Obsidian MCP. Long-term memory for AI agents.
 
@@ -148,7 +148,7 @@ Same `npx -y @oomkapwn/enquire-mcp serve --vault <path>` command works for any M
 
 ## 📖 API reference
 
-Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — every tool, prompt, and exported helper with full TSDoc (`@param` / `@returns` / `@example`). Rebuilt from source on every push to `main` via [`publish-docs.yml`](./.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Drift-free by construction: the same TSDoc that AI agents and IDEs see is what's published.
+Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — every tool, prompt, and exported helper with full TSDoc (`@param` / `@returns` / `@example`). Rebuilt from source on every push to `main` via [`publish-docs.yml`](https://github.com/oomkapwn/enquire-mcp/blob/main/.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Drift-free by construction: the same TSDoc that AI agents and IDEs see is what's published.
 
 ---
 
@@ -277,7 +277,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 `v2.0` hybrid retrieval (BM25+TF-IDF+embeddings via RRF) · `v2.6` remote MCP · `v2.7-2.8` PDFs blended · `v2.9` BGE reranker · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` eval harness · `v2.13` HNSW · `v2.14` stateful sessions · `v2.15` late-chunking · `v2.16` HNSW persistence · `v2.17` int8 quantization · `v3.8.0` stable · `v3.8.7` HTTP transport hardening · **`v3.9.0` (on `@rc`)**: OCR'd PDF watcher embed-sync, HNSW in-memory live update on file changes, R-10 adaptive HNSW refill (closes the >66% excluded under-return).
 
-Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.8.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` (the latest release candidate — see [CHANGELOG.md](./CHANGELOG.md)). Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](./ROADMAP.md)**.
+Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.8.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` (the latest release candidate — see [CHANGELOG.md](./CHANGELOG.md)). Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 

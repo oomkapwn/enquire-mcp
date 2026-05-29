@@ -75,7 +75,7 @@ const FLOORS = {
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.
-  "src/tools/meta.ts": { branches: 74 }, // current 76.1% (rc.24 added escape-decode detector branches)
+  "src/tools/meta.ts": { branches: 74 }, // current 78.51% (rc.25 added leadingAtomSet/branchIsNullable/bodyVariable detector branches)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
   "src/bases.ts": { branches: 71 }, // current 74.71% (rc.15 boundedSetAdd tests lifted it +1.5pp)
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts

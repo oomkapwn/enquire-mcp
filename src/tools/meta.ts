@@ -649,9 +649,6 @@ function splitTopLevelAlternation(body: string): string[] {
   return branches;
 }
 
-/** Sentinel: a branch whose leading atom is a broad matcher (`.`, a class, a class-shorthand, a nested group) that can overlap any other branch. */
-const LEADING_ANY = "<<ANY>>";
-
 /**
  * Fold a character for overlap comparison. `obsidian_open_questions` always
  * compiles the pattern case-INSENSITIVELY (`new RegExp(pattern, "i")`), so `a`
@@ -664,85 +661,312 @@ function foldCase(ch: string): string {
 
 /**
  * Decode a regex escape whose body starts at `src[pos]` (the char AFTER the
- * backslash) to the single character it matches, or `null` if it is not a
- * resolvable single-char escape (caller then treats it as {@link LEADING_ANY} —
- * the safe over-flag direction). Handles `\\xHH`, `\\uHHHH`, `\\u{H+}`, the control
- * escapes, and punctuation/metacharacter escapes; leaves octal / backrefs unresolved.
- * @internal v3.9.0-rc.24 — rc.21 returned the raw byte after the backslash
- * (`"x"` for `\\x61`), so `(\\x61|a)+` (= `(a|a)+` in disguise) slipped the guard.
+ * backslash) to the single character it matches plus the number of source chars
+ * the body consumes. `char` is `null` if the escape is not a resolvable
+ * single-char escape (caller then treats it as a broad/ANY leading atom — the
+ * safe over-flag direction). Handles `\\xHH`, `\\uHHHH`, `\\u{H+}`, the control escapes,
+ * and punctuation/metacharacter escapes; leaves octal / backrefs / class
+ * shorthands unresolved (`char: null`). `length` is the body length even when
+ * `char` is null (1 for a single unknown char) so callers can still advance.
+ *
+ * Returning `length` makes this the SINGLE source of truth for escape spans:
+ * `leadingAtomSet` and `branchIsNullable` both locate the atom end
+ * through this function rather than re-parsing (a re-parse would risk diverging —
+ * the exact recursion class CLAUDE.md tracks).
+ *
+ * @internal exported only for unit tests. v3.9.0-rc.24 — rc.21 returned the raw
+ * byte after the backslash (`"x"` for `\\x61`), so `(\\x61|a)+` slipped the guard.
+ * v3.9.0-rc.25 — also returns `length` (was `string | null`).
  */
-function decodeEscapedChar(src: string, pos: number): string | null {
+export function decodeEscapedChar(src: string, pos: number): { char: string | null; length: number } {
   const e = src[pos];
-  if (e === undefined) return null;
+  if (e === undefined) return { char: null, length: 0 };
   if (e === "x") {
     const h = src.slice(pos + 1, pos + 3);
-    return /^[0-9a-fA-F]{2}$/.test(h) ? String.fromCharCode(Number.parseInt(h, 16)) : null;
+    return /^[0-9a-fA-F]{2}$/.test(h)
+      ? { char: String.fromCharCode(Number.parseInt(h, 16)), length: 3 }
+      : { char: null, length: 1 };
   }
   if (e === "u") {
     if (src[pos + 1] === "{") {
       const end = src.indexOf("}", pos + 2);
       const h = end === -1 ? "" : src.slice(pos + 2, end);
-      return /^[0-9a-fA-F]{1,6}$/.test(h) ? String.fromCodePoint(Number.parseInt(h, 16)) : null;
+      return /^[0-9a-fA-F]{1,6}$/.test(h)
+        ? { char: String.fromCodePoint(Number.parseInt(h, 16)), length: end - pos + 1 }
+        : { char: null, length: 1 };
     }
     const h = src.slice(pos + 1, pos + 5);
-    return /^[0-9a-fA-F]{4}$/.test(h) ? String.fromCharCode(Number.parseInt(h, 16)) : null;
+    return /^[0-9a-fA-F]{4}$/.test(h)
+      ? { char: String.fromCharCode(Number.parseInt(h, 16)), length: 5 }
+      : { char: null, length: 1 };
   }
-  if (e === "t") return "\t";
-  if (e === "n") return "\n";
-  if (e === "r") return "\r";
-  if (e === "f") return "\f";
-  if (e === "v") return "\v";
-  if (e === "0" && !/[0-9]/.test(src[pos + 1] ?? "")) return "\0";
-  if (/[.*+?()[\]{}|^$/\\-]/.test(e)) return e;
-  return null;
+  if (e === "t") return { char: "\t", length: 1 };
+  if (e === "n") return { char: "\n", length: 1 };
+  if (e === "r") return { char: "\r", length: 1 };
+  if (e === "f") return { char: "\f", length: 1 };
+  if (e === "v") return { char: "\v", length: 1 };
+  if (e === "0" && !/[0-9]/.test(src[pos + 1] ?? "")) return { char: "\0", length: 1 };
+  if (/[.*+?()[\]{}|^$/\\-]/.test(e)) return { char: e, length: 1 };
+  return { char: null, length: 1 };
 }
 
 /**
- * Conservative leading-atom token of an alternation branch: `""` (nullable —
- * the branch can match empty), {@link LEADING_ANY} (broad / unknown first
- * atom), or the single literal first char. A sound OVER-approximation: when
- * unsure it returns `LEADING_ANY` (overlaps everything), so the ambiguity
- * check below never MISSES a real overlap (it may over-flag).
- * @internal
+ * Read a quantifier at `src[pos]` for nullability analysis. Unlike
+ * {@link readUnboundedQuantifier} (which asks "is it amplifying?"), this asks
+ * "does it permit ZERO repetitions?" — `?`, `*`, `{0,...}`, `{,...}`, `{0}` allow
+ * zero; `+`, `{1,...}`, `{2}` do not. Returns whether a quantifier is present at
+ * all, whether it allows zero, and the source span (incl. a trailing lazy/possessive
+ * marker) so the caller can advance past it.
+ * @internal helper for {@link leadingAtomToken} and {@link branchIsNullable}.
  */
-function leadingAtomToken(branch: string): string {
-  for (let i = 0; i < branch.length; i++) {
+function quantifierMinZero(src: string, pos: number): { isQuantifier: boolean; allowsZero: boolean; length: number } {
+  const c = src[pos];
+  if (c === "*" || c === "?") {
+    const next = src[pos + 1];
+    const extra = next === "?" || next === "+" ? 1 : 0;
+    return { isQuantifier: true, allowsZero: true, length: 1 + extra };
+  }
+  if (c === "+") {
+    const next = src[pos + 1];
+    const extra = next === "?" || next === "+" ? 1 : 0;
+    return { isQuantifier: true, allowsZero: false, length: 1 + extra };
+  }
+  if (c === "{") {
+    const close = src.indexOf("}", pos);
+    if (close === -1) return { isQuantifier: false, allowsZero: false, length: 0 };
+    const body = src.slice(pos + 1, close);
+    const m = /^(\d*)(,(\d*))?$/.exec(body);
+    if (!m || (m[1] === "" && m[2] === undefined)) return { isQuantifier: false, allowsZero: false, length: 0 };
+    const lower = m[1] === "" ? 0 : Number(m[1]);
+    const next = src[close + 1];
+    const extra = next === "?" || next === "+" ? 1 : 0;
+    return { isQuantifier: true, allowsZero: lower === 0, length: close - pos + 1 + extra };
+  }
+  return { isQuantifier: false, allowsZero: false, length: 0 };
+}
+
+/**
+ * Index just past the char-class `[...]` that starts at `src[start]` (`[`).
+ * Honors an initial `]` (literal as first class member) and `\\]` escapes.
+ * @internal helper for {@link branchIsNullable}.
+ */
+function classEnd(src: string, start: number): number {
+  let j = start + 1;
+  if (src[j] === "^") j++;
+  if (src[j] === "]") j++; // leading `]` is a literal member, not the close
+  while (j < src.length && src[j] !== "]") {
+    if (src[j] === "\\") j++;
+    j++;
+  }
+  return j + 1; // past the closing `]` (or past end if unterminated)
+}
+
+/**
+ * Index just past the group `(...)` that starts at `src[start]` (`(`), matching
+ * nested groups and skipping `[...]` / escapes.
+ * @internal helper for {@link branchIsNullable}.
+ */
+function groupEnd(src: string, start: number): number {
+  let depth = 1;
+  let inCls = false;
+  let j = start + 1;
+  while (j < src.length && depth > 0) {
+    const c = src[j];
+    if (c === "\\") {
+      j += 2;
+      continue;
+    }
+    if (inCls) {
+      if (c === "]") inCls = false;
+      j++;
+      continue;
+    }
+    if (c === "[") inCls = true;
+    else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    j++;
+  }
+  return j; // past the matching `)` (or end if unterminated)
+}
+
+/**
+ * True if a single alternation `branch` can match the EMPTY string — every atom
+ * is either zero-width (`^`/`$`) or made optional by a min-0 quantifier
+ * (`?`/`*`/`{0,...}`), OR is a nested group whose own body is nullable. A nullable
+ * body under an unbounded quantifier is the classic `(a?)+` / `(\\s*)*` ReDoS
+ * (each repetition can consume nothing → exponential partitioning), which the
+ * alternation-overlap analysis alone misses when there is only one branch.
+ * Sound over-approximation: when an atom's status is uncertain it is treated as
+ * MANDATORY (returns false early), so this never falsely calls a branch nullable.
+ * @internal v3.9.0-rc.25 — closes the `(a?){25}` Shape-B bypass.
+ */
+function branchIsNullable(branch: string): boolean {
+  let i = 0;
+  while (i < branch.length) {
     const c = branch[i];
-    if (c === undefined) break; // unreachable (i < length) — narrows for noUncheckedIndexedAccess
-    if (c === "^" || c === "$") continue; // zero-width anchor — look past it
-    if (c === "[" || c === "(" || c === ".") return LEADING_ANY;
+    if (c === undefined) break;
+    if (c === "^" || c === "$") {
+      i++;
+      continue; // zero-width anchor — does not make the branch non-nullable
+    }
+    let atomEnd: number;
+    let atomNullableBySelf = false;
+    if (c === "\\") {
+      const d = decodeEscapedChar(branch, i + 1);
+      atomEnd = i + 1 + (d.length || 1); // a class shorthand (\d) decodes to null,length 1 → mandatory single char
+    } else if (c === "[") {
+      atomEnd = classEnd(branch, i);
+    } else if (c === "(") {
+      atomEnd = groupEnd(branch, i);
+      let bs = i + 1;
+      if (branch[bs] === "?") {
+        const c2 = branch[bs + 1];
+        if (c2 === ":" || c2 === "=" || c2 === "!") bs += 2;
+        else if (c2 === "<") {
+          const c3 = branch[bs + 2];
+          if (c3 === "=" || c3 === "!") bs += 3;
+          else {
+            const gt = branch.indexOf(">", bs);
+            bs = gt === -1 ? bs + 2 : gt + 1;
+          }
+        } else bs += 1;
+      }
+      const inner = branch.slice(bs, atomEnd - 1); // body between ( … )
+      atomNullableBySelf = splitTopLevelAlternation(inner).some(branchIsNullable);
+    } else {
+      atomEnd = i + 1; // single-char atom (literal or `.`)
+    }
+    const qz = quantifierMinZero(branch, atomEnd);
+    const skippable = atomNullableBySelf || (qz.isQuantifier && qz.allowsZero);
+    if (!skippable) return false; // a mandatory atom → the branch cannot match empty
+    i = atomEnd + qz.length;
+  }
+  return true; // every atom was skippable (or the branch is empty) → nullable
+}
+
+/**
+ * Discriminated leading-atom analysis of an alternation branch:
+ *  - `{ kind: "nullable" }` — the branch can match empty (every atom optional);
+ *  - `{ kind: "any" }` — the leading set is broad/unknown (`.`, a `[class]`, a
+ *    class shorthand, a nested group, or an unresolved escape can start it);
+ *  - `{ kind: "set", chars }` — the exact (case-folded) chars the branch can
+ *    START with.
+ *
+ * Returning a SET (not a single token) keeps the ambiguity check PRECISE when a
+ * branch has an OPTIONAL leading atom: `a?b` can start with `a` OR `b`, so its
+ * set is `{a,b}`. The single-token approximation (rc.21–rc.24) either dropped
+ * the `b` (UNDER-flag → the C-1 ReDoS `(a?b|b)+`) or collapsed to ANY (OVER-flag
+ * → disjoint alternations like `(a?b|c)+` falsely rejected). Still a sound
+ * OVER-approximation: broad atoms widen to ANY, so it never under-flags.
+ * @internal v3.9.0-rc.25 — replaces the single-token `leadingAtomToken`.
+ */
+type LeadingSet = { kind: "nullable" } | { kind: "any" } | { kind: "set"; chars: Set<string> };
+function leadingAtomSet(branch: string): LeadingSet {
+  const chars = new Set<string>();
+  let i = 0;
+  while (i < branch.length) {
+    const c = branch[i];
+    if (c === undefined) break;
+    if (c === "^" || c === "$") {
+      i++;
+      continue; // zero-width anchor — look past it
+    }
+    if (c === "." || c === "[" || c === "(") return { kind: "any" }; // broad first atom
     if (c === "\\") {
       const n = branch[i + 1];
-      if (n === undefined) return LEADING_ANY;
-      if (/[dDwWsSbBpP]/.test(n)) return LEADING_ANY; // class shorthand → broad
-      const decoded = decodeEscapedChar(branch, i + 1);
-      return decoded === null ? LEADING_ANY : foldCase(decoded); // unresolved escape → conservative ANY
+      if (n === undefined) return { kind: "any" };
+      if (/[dDwWsSbBpP]/.test(n)) return { kind: "any" }; // class shorthand → broad
+      const { char: decoded, length } = decodeEscapedChar(branch, i + 1);
+      if (decoded === null) return { kind: "any" }; // unresolved escape → conservative ANY
+      chars.add(foldCase(decoded));
+      const qz = quantifierMinZero(branch, i + 1 + length);
+      if (qz.isQuantifier && qz.allowsZero) {
+        i = i + 1 + length + qz.length; // optional → the NEXT atom can also lead
+        continue;
+      }
+      return { kind: "set", chars }; // mandatory escaped atom → set complete
     }
-    return foldCase(c); // plain literal first char (case-folded — tool compiles /i)
+    chars.add(foldCase(c));
+    const qz = quantifierMinZero(branch, i + 1);
+    if (qz.isQuantifier && qz.allowsZero) {
+      i = i + 1 + qz.length; // optional literal → include the next atom too
+      continue;
+    }
+    return { kind: "set", chars }; // mandatory literal → set complete
   }
-  return ""; // empty / nullable branch
+  return { kind: "nullable" }; // ran off the end → every atom optional → nullable
 }
 
 /**
  * True if an alternation `body` is AMBIGUOUS under repetition — two of its
- * top-level branches can match a common starting input, or a branch is
- * nullable. `(a|a)`, `(a|ab)`, `(.|a)`, `(a|)` are ambiguous (→ catastrophic
- * under `+`/`*`); `(a|b|c)`, `(cat|dog)` are not (disjoint first chars →
- * linear). Built on {@link leadingAtomToken} (a sound over-approximation), so
- * it may over-flag a shared-first-char-but-divergent group (`(cat|car)`) but
- * never under-flags a real overlap.
+ * top-level branches' leading sets intersect, a branch is broad (ANY), or a
+ * branch is nullable. `(a|a)`, `(a|ab)`, `(.|a)`, `(a|)`, `(a?b|b)` are ambiguous
+ * (→ catastrophic under `+`/`*`); `(a|b|c)`, `(cat|dog)`, `(a?b|c)` are NOT
+ * (disjoint leading sets → linear). Built on {@link leadingAtomSet} (a sound
+ * over-approximation: broad atoms widen to ANY), so it may over-flag a
+ * shared-first-char-but-divergent group (`(cat|car)`) but never under-flags a
+ * real overlap.
  * @internal exported only for unit tests of {@link isCatastrophicRegex}.
  */
 export function alternationBodyAmbiguous(body: string): boolean {
   const branches = splitTopLevelAlternation(body);
   if (branches.length < 2) return false; // no alternation
-  const leads = branches.map(leadingAtomToken);
-  if (leads.some((l) => l === "")) return true; // a nullable branch under + loops ambiguously
+  const leads = branches.map(leadingAtomSet);
+  if (leads.some((l) => l.kind === "nullable")) return true; // nullable branch under + loops ambiguously
+  if (leads.some((l) => l.kind === "any")) return true; // a broad branch overlaps any other
   for (let a = 0; a < leads.length; a++) {
     for (let b = a + 1; b < leads.length; b++) {
-      const la = leads[a];
-      const lb = leads[b];
-      if (la === LEADING_ANY || lb === LEADING_ANY || la === lb) return true;
+      const sa = leads[a];
+      const sb = leads[b];
+      if (sa?.kind === "set" && sb?.kind === "set") {
+        for (const ch of sa.chars) if (sb.chars.has(ch)) return true; // leading sets intersect
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * True if `body` contains a VARIABLE-LENGTH quantifier anywhere outside a char
+ * class — `?`, `*`, `+`, `{m,}`, or `{m,n}` with `m !== n`. A fixed `{n}` and a
+ * literal/escaped `?*+{` do not count. A variable-length body under an UNBOUNDED
+ * outer quantifier (`(a{2,5})+`, `(\\w[ba]{0,3})+`, `(a[ab]?)+`) backtracks
+ * super-linearly: consecutive repetitions can partition a long run many ways.
+ * `readUnboundedQuantifier`'s amplify-threshold treats bounded ranges like
+ * `{2,5}` as "not unbounded", so this is the term that closes that whole class
+ * (found by the rc.25 fuzz harness). Sound but conservative — it OVER-flags an
+ * anchored-separator body like `(\\w+\\s)+` (safe in practice). Per this guard's
+ * documented stance, a rare false positive beats a hung event loop.
+ * @internal v3.9.0-rc.25 helper for {@link isCatastrophicRegex}.
+ */
+function bodyHasVariableQuantifier(body: string): boolean {
+  let inClass = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "\\") {
+      i++;
+      continue; // escaped → literal
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue; // quantifier chars are literal inside a class
+    }
+    if (c === "[") {
+      inClass = true;
+      continue;
+    }
+    if (c === "?" || c === "*" || c === "+") return true;
+    if (c === "{") {
+      const close = body.indexOf("}", i);
+      if (close === -1) continue; // literal `{`
+      const m = /^(\d*)(,(\d*))?$/.exec(body.slice(i + 1, close));
+      if (!m || (m[1] === "" && m[2] === undefined)) continue; // not a quantifier brace
+      const lower = m[1] === "" ? 0 : Number(m[1]);
+      const hasComma = m[2] !== undefined;
+      const upper = m[3];
+      const max = !hasComma ? lower : upper === "" || upper === undefined ? Number.POSITIVE_INFINITY : Number(upper);
+      if (max !== lower) return true; // variable range ({m,n} m≠n, or {m,})
+      i = close; // fixed {n} — skip past it
     }
   }
   return false;
@@ -756,21 +980,32 @@ export function alternationBodyAmbiguous(body: string): boolean {
  * against every line of every note, so an unvalidated regex is a remote DoS
  * on a bearer-authenticated `serve-http` (the tool is always registered).
  *
- * Catches two catastrophic shapes, both dependency-free:
- *  1. **Star height ≥ 2** — an unbounded/amplifying quantifier (see
- *     {@link readUnboundedQuantifier}) applied to a group whose body ALSO
- *     contains one (`(a+)+`, `(.*)*`).
- *  2. **Unbounded-quantified AMBIGUOUS alternation** (v3.9.0-rc.21) — an
- *     unbounded-quantified group whose top-level branches can match a common
- *     starting input (so the backtracker can split one repetition many ways):
- *     `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`. Ambiguity is decided by an
- *     internal `alternationBodyAmbiguous` helper (leading-atom overlap — a
- *     sound over-approximation), so a DISJOINT alternation like `(a|b|c)+` or
- *     `(cat|dog)+` stays accepted (it matches linearly), and a NON-quantified
- *     alternation (`(?:a|b)\s*`, the shape the default pattern uses) is never
- *     flagged. It may over-flag a shared-first-char-but-divergent group
- *     (`(cat|car)+`) — for a security guard, a rare false positive (caller
- *     simplifies / omits the override) beats a hung event loop.
+ * Catches four catastrophic shapes — each is an unbounded-quantified group
+ * (`(...)+`, `(...)*`, `(...){n,}`, `(...){0,BIG}`) whose body is "dangerous":
+ *  1. **Star height ≥ 2** — the body ALSO contains an unbounded quantifier
+ *     (`(a+)+`, `(.*)*`).
+ *  2. **Ambiguous alternation** (v3.9.0-rc.21/rc.24/rc.25) — the body's top-level
+ *     branches' LEADING SETS intersect, so the backtracker can split one
+ *     repetition many ways: `(a|a)+`, `(a|ab)*`, `(.|a)+`, `(a|A)+` (`/i`),
+ *     `(\\x61|a)+` (escape alias), `(a?b|b)+` (optional leading atom). Decided by
+ *     `alternationBodyAmbiguous` over `leadingAtomSet` (a sound
+ *     over-approximation), so a DISJOINT alternation (`(a|b|c)+`, `(cat|dog)+`,
+ *     `(a?b|c)+`) stays accepted and a NON-quantified alternation (`(?:a|b)\s*`,
+ *     the default pattern's shape) is never flagged.
+ *  3. **Nullable body** (v3.9.0-rc.25) — the body can match empty (`(a?)+`,
+ *     `(\\s*)*`, `()+`), so each repetition can consume nothing.
+ *  4. **Variable-length body** (v3.9.0-rc.25) — the body contains a
+ *     variable-length quantifier (`(a{2,5})+`, `(\\w[ba]{0,3})+`, `(a[ab]?)+`);
+ *     consecutive repetitions partition a long run exponentially. Gated on the
+ *     OUTER quantifier being unbounded, so a BOUNDED outer (`(.+){2,5}`, ≤5 reps
+ *     → polynomial) stays accepted.
+ *
+ * Sound but conservative: it never UNDER-flags a real catastrophic shape (proven
+ * by the `tests/redos-fuzz.test.ts` fuzz harness, which times a real
+ * `exec` against the static verdict), but it MAY over-flag — `(cat|car)+`
+ * (shared first char), `(a?b)+` / `(\\w+\\s)+` (variable but anchored). For a
+ * security guard, a rare false positive (caller simplifies / omits the override)
+ * beats a hung event loop.
  *
  * Honors char-classes (`[...]` contents are literal) and backslash escapes
  * (`\(`, `\+`, `\|` are literals). Still best-effort — ReDoS detection is
@@ -783,7 +1018,11 @@ export function alternationBodyAmbiguous(body: string): boolean {
  * ```ts
  * isCatastrophicRegex("(a+)+$");        // true  — nested unbounded quantifiers
  * isCatastrophicRegex("(a|a)+$");       // true  — ambiguous alternation under +
+ * isCatastrophicRegex("(a?b|b)+$");     // true  — optional leading atom overlaps (rc.25)
+ * isCatastrophicRegex("(a?){25}");      // true  — nullable body under repetition (rc.25)
+ * isCatastrophicRegex("(a{2,5})+");     // true  — variable-length body under + (rc.25)
  * isCatastrophicRegex("(a|b|c)+");      // false — disjoint alternation (linear)
+ * isCatastrophicRegex("(.+){2,5}");     // false — variable body but BOUNDED outer
  * isCatastrophicRegex("^Q: (.+)$");     // false — single-level
  * isCatastrophicRegex("(?:a|b)\\s*c");  // false — alternation NOT unbounded-quantified
  * ```
@@ -835,12 +1074,25 @@ export function isCatastrophicRegex(src: string): boolean {
       const bs = bodyStart.pop() ?? i;
       // A group's body is ambiguous if a nested group bubbled ambiguity up OR
       // its own top-level alternation overlaps (`((a|a))+` → inner reaches outer).
-      const bodyAmbiguous = frameAmbiguous || alternationBodyAmbiguous(src.slice(bs, i));
+      const body = src.slice(bs, i);
+      const bodyAmbiguous = frameAmbiguous || alternationBodyAmbiguous(body);
+      // v3.9.0-rc.25: a NULLABLE body (can match empty) under an unbounded
+      // quantifier is the classic `(a?)+` / `(\\s*)*` / `(a?){25}` ReDoS — each
+      // repetition can consume nothing, so the backtracker partitions a long
+      // input exponentially. `branchIsNullable` recurses into nested groups, so
+      // `((a?))+` is caught here too (no separate bubble stack needed).
+      const bodyNullable = splitTopLevelAlternation(body).some(branchIsNullable);
       const q = readUnboundedQuantifier(src, i + 1);
+      // v3.9.0-rc.25: a VARIABLE-LENGTH body under an UNBOUNDED outer quantifier
+      // partitions a long run super-linearly (`(a{2,5})+`, `(a[ab]?)+`). Gated on
+      // `q.unbounded` so a BOUNDED outer like `(.+){2,5}` (≤5 reps → polynomial)
+      // stays accepted. The fuzz harness found this whole class.
+      const bodyVariable = q.unbounded && bodyHasVariableQuantifier(body);
       // Catastrophic if this group is unbounded-quantified AND its body either
-      // nested an unbounded quantifier (star height ≥ 2) OR is an ambiguous
-      // alternation (overlapping-alternation ReDoS).
-      if (q.unbounded && (frameHad || bodyAmbiguous)) return true;
+      // nested an unbounded quantifier (star height ≥ 2), is an ambiguous
+      // alternation (overlapping-alternation ReDoS), is nullable, or is
+      // variable-length.
+      if (q.unbounded && (frameHad || bodyAmbiguous || bodyNullable || bodyVariable)) return true;
       // Propagate to the parent frame.
       if (hadUnbounded.length > 0) {
         if (q.unbounded || frameHad) hadUnbounded[hadUnbounded.length - 1] = true;

@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  decodeEscapedChar,
   getOpenQuestions,
   isCatastrophicRegex,
   MAX_QUESTION_PATTERN_LEN,
@@ -58,11 +59,30 @@ describe("isCatastrophicRegex — catastrophic patterns are flagged (NEGATIVE co
     "(\\u{61}|a)+$", // \u{61} = "a" (unicode code-point escape)
     // v3.9.0-rc.24 — UNRESOLVED escapes must over-flag (the conservative/safe
     // direction): a branch whose first atom can't be decoded to a known single
-    // char is treated as LEADING_ANY, which overlaps the literal `a` branch.
+    // char is treated as a broad/ANY leading atom, which overlaps the literal `a`.
     "(\\xZZ|a)+$", // malformed hex escape → undecodable → ANY → ambiguous
     "(\\uZZZZ|a)+$", // malformed 4-hex unicode → undecodable → ANY
     "(\\u{}|a)+$", // empty code-point braces → undecodable → ANY
-    "(\\q|a)+$" // unknown escape letter → undecodable → ANY
+    "(\\q|a)+$", // unknown escape letter → undecodable → ANY
+    // v3.9.0-rc.25 — the C-1 audit + fuzz findings. Shape A: an OPTIONAL leading
+    // atom makes a branch's leading set overlap another branch (the leading-atom
+    // analysis read the literal and ignored the quantifier).
+    "(a?b|b)+$", // `a?b` can start with `a` OR `b` → overlaps the `b` branch
+    "(a??b|b)+$", // lazy `??` — same
+    "(a{0,5}b|b)+$", // `{0,5}` min-0 → optional leading atom
+    "(a*b|b)+$", // `*` min-0 → optional leading atom
+    // Shape B: a NULLABLE body under an unbounded quantifier.
+    "(a?){25}$", // `a?` nullable, `{25}` amplifier
+    "(a?)+", // nullable body under +
+    "(\\s*)*", // nullable body under *
+    "((a?))+", // nested nullable group bubbles up
+    // Shape C: a VARIABLE-LENGTH body under an unbounded quantifier (the whole
+    // class the fuzz harness surfaced; readUnboundedQuantifier's amplify-threshold
+    // treated bounded ranges like {2,5} as "not unbounded").
+    "(a{2,5})+$", // variable-length inner range, repeated
+    "([ac]{2,5})+$", // variable-length char-class run, repeated
+    "(a[ab]?)+$", // optional overlapping atom, repeated
+    "(\\w[ba]{0,3})+$" // class-shorthand + variable range, repeated
   ];
   for (const p of catastrophic) {
     it(`flags ${JSON.stringify(p)}`, () => {
@@ -91,7 +111,14 @@ describe("isCatastrophicRegex — safe patterns are NOT flagged (POSITIVE contro
     // v3.9.0-rc.24 — the escape DECODER must not OVER-flag a genuinely disjoint
     // escaped branch: `\.` is a literal dot, disjoint from `a`, so `(\.|a)+`
     // matches deterministically → safe (regression guard for the rc.24 decoder).
-    "(\\.|a)+"
+    "(\\.|a)+",
+    // v3.9.0-rc.25 — precision guards for the leading-SET refactor and the
+    // variable-body term. These MUST stay safe (the fix must not regress them):
+    "(ab|cd)+", // fixed-length, disjoint first chars → linear
+    "(abc){2,5}", // fixed-length body, bounded outer → linear
+    "(a|b|c){5,10}", // disjoint single-char alternation, bounded outer
+    "^(Q|TODO|Open question):\\s*(.+)$", // a realistic capture-group override
+    "(open|q)\\s*[:-]\\s*(.+)" // another realistic override (groups for capture, not repetition)
   ];
   for (const p of safe) {
     it(`accepts ${JSON.stringify(p)}`, () => {
@@ -121,6 +148,39 @@ describe("readUnboundedQuantifier", () => {
   it("returns length 0 at a non-quantifier position (NEGATIVE control)", () => {
     expect(readUnboundedQuantifier("abc", 0)).toEqual({ unbounded: false, length: 0 });
     expect(readUnboundedQuantifier("{nope}", 0)).toEqual({ unbounded: false, length: 0 });
+  });
+});
+
+describe("decodeEscapedChar — escape resolution + span (v3.9.0-rc.25)", () => {
+  // `pos` is the index of the char AFTER the backslash. Covers the branches the
+  // rc.24 redos cases exercised only transitively (test-audit MED-2).
+  it("decodes hex / unicode / code-point escapes to the right char + length", () => {
+    expect(decodeEscapedChar("\\x61", 1)).toEqual({ char: "a", length: 3 });
+    expect(decodeEscapedChar("\\u0061", 1)).toEqual({ char: "a", length: 5 });
+    expect(decodeEscapedChar("\\u{61}", 1)).toEqual({ char: "a", length: 5 });
+    expect(decodeEscapedChar("\\u{1F600}", 1).char).toBe("\u{1F600}");
+  });
+  it("decodes the control escapes (the previously-untested branches)", () => {
+    expect(decodeEscapedChar("\\t", 1)).toEqual({ char: "\t", length: 1 });
+    expect(decodeEscapedChar("\\n", 1)).toEqual({ char: "\n", length: 1 });
+    expect(decodeEscapedChar("\\r", 1)).toEqual({ char: "\r", length: 1 });
+    expect(decodeEscapedChar("\\f", 1)).toEqual({ char: "\f", length: 1 });
+    expect(decodeEscapedChar("\\v", 1)).toEqual({ char: "\v", length: 1 });
+  });
+  it("decodes \\0 NUL only when not followed by a digit (octal disambiguation)", () => {
+    expect(decodeEscapedChar("\\0", 1)).toEqual({ char: "\0", length: 1 });
+    expect(decodeEscapedChar("\\012", 1).char).toBeNull(); // octal → unresolved
+  });
+  it("decodes a punctuation/metacharacter escape to its literal", () => {
+    expect(decodeEscapedChar("\\.", 1)).toEqual({ char: ".", length: 1 });
+    expect(decodeEscapedChar("\\+", 1)).toEqual({ char: "+", length: 1 });
+  });
+  it("returns char:null (length≥1) for unresolved escapes (NEGATIVE control)", () => {
+    expect(decodeEscapedChar("\\xZZ", 1).char).toBeNull(); // malformed hex
+    expect(decodeEscapedChar("\\uZZZZ", 1).char).toBeNull(); // malformed 4-hex
+    expect(decodeEscapedChar("\\u{}", 1).char).toBeNull(); // empty code-point
+    expect(decodeEscapedChar("\\q", 1).char).toBeNull(); // unknown letter
+    expect(decodeEscapedChar("\\", 1)).toEqual({ char: null, length: 0 }); // nothing after backslash
   });
 });
 

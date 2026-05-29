@@ -7,11 +7,11 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1009+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1014+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
-- Coverage: `npm run test:coverage` (10 per-file branch floors enforced)
+- Coverage: `npm run test:coverage` (11 per-file coverage floors enforced)
 - OIA: `npm run check:oia` (state-driven drift scan — 10 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 

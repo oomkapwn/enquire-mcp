@@ -31,6 +31,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  classifyDefenseFile,
   DEFENSES,
   runAudit,
   runCliFlagCoverageAudit,
@@ -79,63 +80,56 @@ describe("scope-completeness audit — META structural-defense (v3.8.8)", () => 
     expect(unique.size, `duplicate defense ids in DEFENSES: ${ids.join(", ")}`).toBe(ids.length);
   });
 
-  // (d) NEGATIVE control: prove the audit actually works by constructing
-  // a synthetic in-memory defense with an obvious gap and verifying the
-  // runAudit-like classifier would flag it. We re-implement the classifier
-  // inline (same shape as the audit script) so we don't need to monkey-patch.
-  it("(NEGATIVE control) — synthetic gap is detected by the classifier shape", () => {
-    // Manually drive the classifier logic with a defense that has a
-    // pattern matching real content in a file NOT in its scope and NOT
-    // in its exempts → must be flagged as a gap.
-    const fakeDefense = {
-      id: "negative-control-fake",
-      pattern: /\bnpm\s+install\b/,
-      scope: ["AGENTS.md"], // README has "npm install" too but NOT in scope here
-      exempts: [] // empty — README must be flagged
-    };
-    // Read README and look for the pattern manually (mirrors the audit's
-    // per-line classifier). At least one line should match → that's the gap.
-    // If the classifier ever silently no-ops, this test would still pass
-    // with zero findings, so the assertion is "match must exist".
+  // (d) NEGATIVE control: prove the audit actually works by driving the REAL
+  // classifier (`classifyDefenseFile`, the function `runNumericAudit` itself
+  // calls — v3.9.0-rc.26 rc.25-audit MED-3) with a synthetic defense whose
+  // pattern matches a file NOT in its scope/exempts. Previously this control
+  // re-implemented the classify logic inline, so it proved a COPY worked — a
+  // real divergence in the script's classifier would have slipped through.
+  it("(NEGATIVE control) — the REAL classifier flags a synthetic in-scope gap", () => {
     const fs = require("node:fs") as typeof import("node:fs");
     const path = require("node:path") as typeof import("node:path");
     const readmeContent = fs.readFileSync(path.resolve(__dirname, "..", "README.md"), "utf8");
-    const lines = readmeContent.split("\n");
-    let matches = 0;
-    for (const line of lines) {
-      if (fakeDefense.pattern.test(line)) matches += 1;
-    }
-    // README.md has at least one `npm install` — the classifier-would-flag
-    // assertion. If this is 0, either the pattern is broken or README
-    // doesn't have the expected content (unlikely).
-    expect(matches, "README.md should contain at least one 'npm install' string").toBeGreaterThan(0);
-    // Now verify: the classifier WOULD report this as a gap because:
-    //   - README is NOT in fakeDefense.scope
-    //   - README is NOT in fakeDefense.exempts
-    //   - pattern matched
-    const inScope = fakeDefense.scope.includes("README.md");
-    const isExempt = fakeDefense.exempts.includes("README.md");
-    const wouldFlag = matches > 0 && !inScope && !isExempt;
-    expect(wouldFlag, "audit classifier should flag the synthetic gap").toBe(true);
+    // A defense scoped to AGENTS.md only — README.md contains `npm install` too
+    // but is NOT in scope and NOT exempt, so the REAL classifier must flag it.
+    const fakeDefense = {
+      id: "negative-control-fake",
+      pattern: /\bnpm\s+install\b/,
+      scope: ["AGENTS.md"],
+      exempts: [],
+      rationale: "synthetic negative control"
+    };
+    const findings = classifyDefenseFile(fakeDefense, "README.md", readmeContent);
+    expect(findings.length, "real classifier should flag the synthetic README gap").toBeGreaterThan(0);
+    expect(findings[0]?.defense).toBe("negative-control-fake");
+    // POSITIVE side: when README IS in scope, the same classifier reports NO gap
+    // (proves it isn't trivially always-flagging).
+    const scopedDefense = { ...fakeDefense, scope: ["README.md"] };
+    expect(classifyDefenseFile(scopedDefense, "README.md", readmeContent), "in-scope file must NOT be flagged").toEqual(
+      []
+    );
   });
 
   // (e) NEGATIVE control: prove the exempt mechanism actually exempts.
   // If the exempt check was a no-op, every match would still be a gap.
   it("(NEGATIVE control) — exempt mechanism actually suppresses gaps", () => {
-    const fakeDefense = {
-      id: "negative-control-exempt",
-      pattern: /\bnpm\s+install\b/,
-      scope: ["AGENTS.md"],
-      exempts: ["README.md"] // README explicitly exempted now
-    };
     const fs = require("node:fs") as typeof import("node:fs");
     const path = require("node:path") as typeof import("node:path");
     const readmeContent = fs.readFileSync(path.resolve(__dirname, "..", "README.md"), "utf8");
-    const matches = readmeContent.split("\n").filter((l) => fakeDefense.pattern.test(l)).length;
-    expect(matches).toBeGreaterThan(0);
-    const isExempt = fakeDefense.exempts.includes("README.md");
-    const wouldFlag = matches > 0 && !fakeDefense.scope.includes("README.md") && !isExempt;
-    expect(wouldFlag, "explicit exempt should suppress the gap").toBe(false);
+    // v3.9.0-rc.26 (MED-3): drive the REAL classifier, not a re-implemented copy.
+    // Same pattern that DID flag README in control (d) above, but now README is in
+    // exempts → the real classifier must suppress the gap (returns []).
+    const exemptDefense = {
+      id: "negative-control-exempt",
+      pattern: /\bnpm\s+install\b/,
+      scope: ["AGENTS.md"],
+      exempts: ["README.md"], // README explicitly exempted now
+      rationale: "synthetic exempt negative control"
+    };
+    expect(
+      classifyDefenseFile(exemptDefense, "README.md", readmeContent),
+      "explicit exempt should suppress the gap"
+    ).toEqual([]);
   });
 });
 

@@ -194,29 +194,47 @@ const AUDIT_FILES = [
  * drift; non-numeric drift like stale-deferral and missing-flag-doc
  * required separate defenses).
  */
+/**
+ * Pure per-(defense, file) classifier: every line of `content` matching
+ * `defense.pattern` in a file that is NOT in `defense.scope` and NOT exempt is a
+ * coverage gap. Extracted (v3.9.0-rc.26, rc.25-audit MED-3) so the
+ * scope-completeness NEGATIVE control can drive the REAL classifier with a
+ * synthetic gap instead of a re-implemented copy (a copy would pass even if this
+ * diverged). `runNumericAudit` is the only production caller.
+ * @param {{id:string,pattern:RegExp,scope:string[],exempts:string[],rationale:string}} defense
+ * @param {string} file - repo-relative path (for scope/exempt matching + finding)
+ * @param {string} content - the file's text
+ * @returns {Array<{defense:string,file:string,line:number,evidence:string,rationale:string}>}
+ */
+export function classifyDefenseFile(defense, file, content) {
+  const findings = [];
+  const inScope = defense.scope.includes(file);
+  const isExempt = matchesExempt(file, defense.exempts);
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (!defense.pattern.test(line)) continue;
+    // Found a match. Classify:
+    if (inScope) continue; // existing defense covers this file
+    if (isExempt) continue; // explicitly allowlisted
+    findings.push({
+      defense: defense.id,
+      file,
+      line: i + 1,
+      evidence: line.trim().slice(0, 160),
+      rationale: defense.rationale
+    });
+  }
+  return findings;
+}
+
 export function runNumericAudit() {
   const findings = [];
   for (const defense of DEFENSES) {
     for (const file of AUDIT_FILES) {
       const content = read(file);
       if (content === null) continue; // file missing (optional surface)
-      const inScope = defense.scope.includes(file);
-      const isExempt = matchesExempt(file, defense.exempts);
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? "";
-        if (!defense.pattern.test(line)) continue;
-        // Found a match. Classify:
-        if (inScope) continue; // existing defense covers this file
-        if (isExempt) continue; // explicitly allowlisted
-        findings.push({
-          defense: defense.id,
-          file,
-          line: i + 1,
-          evidence: line.trim().slice(0, 160),
-          rationale: defense.rationale
-        });
-      }
+      findings.push(...classifyDefenseFile(defense, file, content));
     }
   }
   return findings;

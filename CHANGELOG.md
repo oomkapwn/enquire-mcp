@@ -11,6 +11,7 @@ All notable changes to this project will be documented here. The format follows 
 ### Fixed
 
 - **`assets/social-preview.svg` claimed `SLSA-3` (overclaim #15, residual instance).** The bottom trust-signal row badge said `SLSA-3` — a level the build doesn't earn (`npm publish --provenance` = SLSA Build **L2**; L3 needs an isolated builder via `slsa-framework/slsa-github-generator`). This is the same overclaim rc.7 retracted across README/package.json/llms.txt/COMPARISON/STABILITY, but the **social card was outside both rc.7's sweep and OIA Check 4d's scope**, so it persisted on the most externally-visible surface. → `SLSA L2`. `assets/social-preview.png` re-rendered from the corrected SVG via `scripts/render-social-preview.mjs`.
+- **`src/pdf.ts:13` asserted pdfjs-dist is "SLSA-3 published" (unverified third-party claim).** A repo-wide sweep for the SLSA-3 class (triggered by the SVG find, per the root-cause-sweep rule) surfaced a source comment claiming the **pdfjs-dist dependency** ships SLSA-3 provenance — something we never verified. Per the project rule ("any SLSA-level claim must point to backing evidence, else downgrade"), the unverified clause was removed (the comment's real point — pure-JS, no native deps, Apache-2.0, optional — is unchanged). All other repo `SLSA-3` hits are legitimate: CLAUDE.md/ROADMAP history + the "earn real L3" roadmap target, `oia-walk.mjs`'s own detector regex, and `docs/audits/*` point-in-time audit artifacts (excluded from OIA currency + npm — rewriting them would falsify the historical record).
 
 ### Changed (structural defense — close the recursion)
 
@@ -22,7 +23,7 @@ This is a textbook **state-driven** catch: a change-driven sweep (rc.7) fixed th
 
 ### Files changed
 
-- `assets/social-preview.svg` (SLSA-3 → SLSA L2), `assets/social-preview.png` (re-rendered), `scripts/oia-walk.mjs` (Check 4d `claimFiles` += social-preview.svg).
+- `assets/social-preview.svg` (SLSA-3 → SLSA L2), `assets/social-preview.png` (re-rendered), `scripts/oia-walk.mjs` (Check 4d `claimFiles` += social-preview.svg), `src/pdf.ts` (comment-only: dropped unverified pdfjs-dist "SLSA-3 published" — dist output byte-identical, no runtime change).
 - version bump 3.9.0-rc.17 → 3.9.0-rc.18 (7 surfaces); test count unchanged (982).
 
 ### Deferred (repo-page polish, lower priority)

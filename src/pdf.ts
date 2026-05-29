@@ -10,7 +10,7 @@
 // Implementation notes:
 //
 //   • pdfjs-dist (Mozilla's PDF.js) is the parser. Pure JS, no native
-//     deps, Apache-2.0, SLSA-3 published. ~35MB unpacked but pinned to
+//     deps, Apache-2.0. ~35MB unpacked but pinned to
 //     `optionalDependencies` so users on Node 20 / `--omit=optional`
 //     keep a fully functional markdown-only path.
 //

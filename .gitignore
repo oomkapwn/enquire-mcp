@@ -27,3 +27,7 @@ docs/api-reference/
 # mis-parses `--cache false` / `npm_config_cache=false` as a path. Junk;
 # never commit. Guards against an accidental `git add .`.
 false/
+
+# LongMemEval dataset (downloaded by the maintainer for bench:longmemeval; not committed — size + licensing)
+longmemeval*.json
+longmemeval_*/

@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.9.0-rc.18",
+  "version": "3.9.0-rc.19",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 44 tools, 19 MCP prompts, 982 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 44 tools, 19 MCP prompts, 993 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -82,6 +82,7 @@
     "bench:quick": "npm run build && node scripts/bench.mjs --quick",
     "bench:retrieval": "npm run build && node scripts/run-benchmarks.mjs",
     "bench:peek-cache": "npm run build && node scripts/bench-peek-cache.mjs",
+    "bench:longmemeval": "npm run build && node scripts/bench-longmemeval.mjs",
     "docs:api": "typedoc",
     "prepare": "tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
     "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",

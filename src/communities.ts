@@ -47,8 +47,14 @@ export interface CommunityResult {
   community_count: number;
   /** Modularity Q ∈ [-0.5, 1] of the final partition. */
   modularity: number;
-  /** Number of greedy passes until convergence. */
+  /** Number of greedy passes run. */
   iterations: number;
+  /**
+   * v3.9.0-rc.15 — true if Louvain reached a stable partition (a pass made no
+   * moves); false if it hit the `MAX_PASSES` cap with moves still pending (the
+   * partition is valid but may be sub-optimal — callers can surface this).
+   */
+  converged: boolean;
   /** community_id → member note paths, sorted by in-community degree desc. */
   communities: Array<{
     id: number;
@@ -151,7 +157,8 @@ export function detectCommunities(graph: WikilinkGraph): CommunityResult {
   // Edge case: no edges (every node isolated). Each node is its own
   // community; modularity = 0 by convention.
   if (m2 === 0) {
-    return finalize(graph, community, 0, 0);
+    // No edges → nothing to optimize; trivially converged in 0 passes.
+    return finalize(graph, community, 0, 0, true);
   }
 
   let iterations = 0;
@@ -200,7 +207,9 @@ export function detectCommunities(graph: WikilinkGraph): CommunityResult {
   }
 
   const Q = computeModularity(graph, community);
-  return finalize(graph, community, Q, iterations);
+  // v3.9.0-rc.15 — `!changed` means the last pass made no moves → converged.
+  // `changed` is still true only when the loop exited on the MAX_PASSES cap.
+  return finalize(graph, community, Q, iterations, !changed);
 }
 
 function computeModularity(graph: WikilinkGraph, community: Map<string, number>): number {
@@ -224,7 +233,8 @@ function finalize(
   graph: WikilinkGraph,
   community: Map<string, number>,
   modularity: number,
-  iterations: number
+  iterations: number,
+  converged: boolean
 ): CommunityResult {
   // Renumber communities to dense 0..N-1 IDs.
   const remap = new Map<number, number>();
@@ -260,6 +270,7 @@ function finalize(
     community_count: communities.length,
     modularity: Math.round(modularity * 10000) / 10000,
     iterations,
+    converged,
     communities,
     membership
   };

@@ -105,6 +105,8 @@ describe("detectCommunities", () => {
     const r = detectCommunities(g);
     expect(r.community_count).toBe(3);
     expect(r.modularity).toBe(0); // no edges → Q=0
+    expect(r.converged).toBe(true); // v3.9.0-rc.15 — edgeless graph trivially converges (m2===0 path)
+    expect(r.iterations).toBe(0);
   });
 
   it("recovers planted clusters in a 2-community graph", async () => {
@@ -134,6 +136,10 @@ describe("detectCommunities", () => {
     // Ideally A's community ≠ D's community (single bridge isn't enough).
     expect(cAB).not.toBe(cAD);
     expect(r.modularity).toBeGreaterThan(0); // structure present
+    // v3.9.0-rc.15 — a small real graph converges well within MAX_PASSES (the
+    // `!changed` path), so `converged` is true and `iterations` < the cap.
+    expect(r.converged).toBe(true);
+    expect(r.iterations).toBeLessThan(50);
   });
 
   it("a single fully-connected component lands in one community", async () => {

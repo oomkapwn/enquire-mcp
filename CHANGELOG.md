@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.15] — 2026-05-29
+
+> **TL;DR:** **Correctness cleanup (sprint RC 7).** Three MEDIUM/LOW findings from the audit: `bases.ts`'s warn-once dedup `Set` grew without bound on a stream of distinct malformed `.base` predicates (slow memory leak on a long-lived `serve`); `detectCommunities` gave no signal when Louvain hit the `MAX_PASSES=50` cap without converging (callers couldn't tell a sub-optimal partition); and `loadReranker`'s TSDoc claimed the default alias is `rerank-multilingual` when it's actually `rerank-bge` (α-class drift). **966 → 970 tests** (+4, positive + NEGATIVE controls).
+
+**Patch — audit-driven correctness (sprint RC 7).**
+
+### Fixed
+
+- **`bases.ts` unbounded warn-Set (memory growth).** `warnedUnknownPredicates` `.add()`ed every distinct unevaluated predicate forever. A `.base`/DQL query with many unique malformed predicates (attacker- or agent-controlled) grew it without bound for the process lifetime. New exported `boundedSetAdd(set, value, max)` caps it at `MAX_WARNED_PREDICATES`=1000 (past the cap a distinct predicate may re-warn once — acceptable vs. unbounded memory).
+- **`communities.ts` convergence signal.** `CommunityResult` gains **`converged: boolean`** — true when Louvain reached a stable partition (a pass made no moves), false when it exited on the `MAX_PASSES` cap with moves pending (valid but possibly sub-optimal). Derived from the loop's final `!changed`; the edgeless short-circuit reports `converged: true, iterations: 0`.
+- **`embeddings.ts` reranker-default TSDoc.** `loadReranker`'s `@param` said `default: "rerank-multilingual"`; the real `DEFAULT_RERANKER_ALIAS` is `"rerank-bge"`. Corrected (published TypeDoc/IDE-hover was lying — α-class).
+
+### Tests added (+4, positive + NEGATIVE controls)
+
+- `tests/bases.test.ts` — `boundedSetAdd`: adds under cap (POSITIVE), no-grow on duplicate, **refuses to grow past the cap (NEGATIVE control)**, `MAX_WARNED_PREDICATES` sanity.
+- `tests/communities.test.ts` — `converged` asserted on the edgeless path (`true`, `iterations === 0`) + a clustered graph (`true`, `iterations < 50`).
+
+### Deferred to rc.16 (correctness batch 2)
+
+`tools/search.ts` citation line/kind mis-attribution across rankers, `eval.ts` `query_errors` count, `doctor` privacy-glob flags (P2-12), `http-transport.ts` stateless-handler cleanup parity, `server.ts` `--ocr-pdfs`-no-embed-db warning — each needs heavier integration-test setup; batched next.
+
+### Files changed
+
+- `src/bases.ts` (`boundedSetAdd` + cap), `src/communities.ts` (`converged`), `src/embeddings.ts` (TSDoc).
+- `tests/bases.test.ts` (+4), `tests/communities.test.ts` (+assertions).
+- test count 966 → 970 across README/COMPARISON/llms.txt/AGENTS/package.json/ROADMAP.
+- version bump 3.9.0-rc.14 → 3.9.0-rc.15 (7 surfaces).
+
+---
+
 ## [3.9.0-rc.14] — 2026-05-29
 
 > **TL;DR:** **Supply-chain: SHA-pin every GitHub Action + a structural guard so they can't drift back (sprint RC 6).** Floating action tags (`uses: actions/checkout@v6`) can be silently retagged to malicious code — the OpenSSF "Pinned-Dependencies" check + this project's supply-chain brand (SLSA L2 + signed provenance) call for commit-SHA pins. All **28 action refs across the 4 workflows** are now pinned to their exact current 40-hex commit SHA (behavior identical) with a `# vN` comment for humans + Dependabot. New **OIA Check 9** fails CI if any third-party action ever uses a floating tag again — making the pin self-enforcing. **Workflows + audit-script + docs only; 966 tests unchanged.**

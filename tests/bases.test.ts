@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listBases, parseBase, queryBase, readBase } from "../src/bases.js";
+import { boundedSetAdd, listBases, MAX_WARNED_PREDICATES, parseBase, queryBase, readBase } from "../src/bases.js";
 import { Vault } from "../src/vault.js";
 
 let dir: string;
@@ -661,5 +661,28 @@ views:
       expect(out.matches).toHaveLength(4);
       expect(out.truncated).toBe(false);
     });
+  });
+});
+
+describe("boundedSetAdd — warn-once dedup cap (v3.9.0-rc.15)", () => {
+  it("adds a new value under the cap and reports true (POSITIVE)", () => {
+    const s = new Set<string>();
+    expect(boundedSetAdd(s, "a", 3)).toBe(true);
+    expect(boundedSetAdd(s, "b", 3)).toBe(true);
+    expect(s.size).toBe(2);
+  });
+  it("returns false for a duplicate without growing the set", () => {
+    const s = new Set<string>(["a"]);
+    expect(boundedSetAdd(s, "a", 3)).toBe(false);
+    expect(s.size).toBe(1);
+  });
+  it("refuses to grow past the cap and reports false (NEGATIVE control)", () => {
+    const s = new Set<string>(["a", "b", "c"]);
+    expect(boundedSetAdd(s, "d", 3)).toBe(false);
+    expect(s.size).toBe(3); // unbounded growth prevented
+  });
+  it("MAX_WARNED_PREDICATES is a sane positive cap", () => {
+    expect(MAX_WARNED_PREDICATES).toBeGreaterThan(0);
+    expect(Number.isInteger(MAX_WARNED_PREDICATES)).toBe(true);
   });
 });

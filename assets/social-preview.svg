@@ -134,7 +134,7 @@
     <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Monaco, monospace" font-size="13" letter-spacing="0.5">
       <tspan font-weight="700" fill="#10b981">MIT</tspan>
       <tspan fill="#475569">  ·  </tspan>
-      <tspan font-weight="700" fill="#10b981">SLSA-3</tspan>
+      <tspan font-weight="700" fill="#10b981">SLSA L2</tspan>
       <tspan fill="#475569">  ·  </tspan>
       <tspan fill="#cbd5e1">Hybrid retrieval</tspan>
       <tspan fill="#475569">  ·  </tspan>

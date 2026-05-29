@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.18] — 2026-05-29
+
+> **TL;DR:** **Brand-integrity: the social card stopped lying about SLSA (sprint RC 10).** State-driven read of `assets/social-preview.svg` — the GitHub social card, the single most-shared visual of the repo — caught a **`SLSA-3`** trust badge (line 137). That's a **residual instance of overclaim #15** (rc.7 downgraded SLSA-3 → SLSA Build L2 everywhere because `release.yml` only does `npm publish --provenance`); rc.7's sweep AND OIA Check 4d's original file scope both missed the SVG, so the card advertised a false security level for 11 RCs. Fixed the badge (`SLSA-3` → `SLSA L2`), re-rendered the PNG, and **extended OIA Check 4d's `claimFiles` to include `assets/social-preview.svg`** so the surface is permanently guarded. Detection power verified (injected `SLSA-3` → Check 4d flags `social-preview.svg:137`; clean after fix). **982 tests unchanged** (assets + audit-script only).
+
+**Patch — brand-integrity + structural defense (sprint RC 10). Assets/audit-script only; no `src/` runtime change.**
+
+### Fixed
+
+- **`assets/social-preview.svg` claimed `SLSA-3` (overclaim #15, residual instance).** The bottom trust-signal row badge said `SLSA-3` — a level the build doesn't earn (`npm publish --provenance` = SLSA Build **L2**; L3 needs an isolated builder via `slsa-framework/slsa-github-generator`). This is the same overclaim rc.7 retracted across README/package.json/llms.txt/COMPARISON/STABILITY, but the **social card was outside both rc.7's sweep and OIA Check 4d's scope**, so it persisted on the most externally-visible surface. → `SLSA L2`. `assets/social-preview.png` re-rendered from the corrected SVG via `scripts/render-social-preview.mjs`.
+
+### Changed (structural defense — close the recursion)
+
+- **OIA Check 4d (`SLSA-LEVEL-OVERCLAIM`) `claimFiles` now includes `assets/social-preview.svg`.** Root-cause: the SLSA-level check guarded the doc surfaces but not the rendered-asset surface. Adding the SVG makes the social-card SLSA badge self-enforcing (CI fails if it ever drifts to L3/SLSA-3 again). **Detection power verified non-vacuously**: with `SLSA-3` injected the check flags `assets/social-preview.svg:137`; with `SLSA L2` it's silent. Mirrors the v3.8.0-rc.11 "drift findings demand a full-surface sweep + structural defense" rule.
+
+### Method note
+
+This is a textbook **state-driven** catch: a change-driven sweep (rc.7) fixed the class on the files it was looking at; reading *every* file as it exists on disk — including a rendered-asset source — surfaced the one instance it missed. The fix isn't just the instance (SVG badge) but the **defense-scope gap** (Check 4d file list), so the class is closed, not just the symptom.
+
+### Files changed
+
+- `assets/social-preview.svg` (SLSA-3 → SLSA L2), `assets/social-preview.png` (re-rendered), `scripts/oia-walk.mjs` (Check 4d `claimFiles` += social-preview.svg).
+- version bump 3.9.0-rc.17 → 3.9.0-rc.18 (7 surfaces); test count unchanged (982).
+
+### Deferred (repo-page polish, lower priority)
+
+Social-preview stat-pill redesign (would add new numeric-claim drift surface — needs a docs-consistency invariant in the same PR), README hero `claude mcp add` one-liner, `server.json` `categories`/`websiteUrl` (verify against the 2025-12-11 schema first). Then **v3.10 LongMemEval** (the #1 credibility lever).
+
+---
+
 ## [3.9.0-rc.17] — 2026-05-29
 
 > **TL;DR:** **AI-search discoverability: Schema.org `@graph` structured data (sprint RC 9).** The single biggest lever for getting cited by Google AI Overviews / Perplexity / Bing Copilot is machine-readable structured data, and the highest-citation type is **FAQPage**. `scripts/inject-jsonld.mjs` (run at GH-Pages publish time) is upgraded from a lone `SoftwareApplication` node to a Schema.org **`@graph`** with three cross-linked nodes: an enriched **SoftwareApplication** (now with `featureList` + `maintainer`), a **SoftwareSourceCode** node (`codeRepository`/`runtimePlatform`/`targetProduct` → the app), and a **FAQPage** carrying the README's 6 Q&A pairs. Plus a `glama.json` (`maintainers: [oomkapwn]`) so the Glama.ai crawler can attribute + index the server instead of withholding it from search. The builder is refactored into a pure, exported `buildJsonLdGraph(pkg)` so it's unit-tested (deterministic — no dates/RNG). **975 → 982 tests** (+7, positive + NEGATIVE controls).

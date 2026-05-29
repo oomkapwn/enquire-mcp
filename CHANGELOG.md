@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.27] — 2026-05-29
+
+> **TL;DR:** **Positioning + discoverability** (the rc.18-deferred repo-page work + the ROADMAP's #1 messaging item). Sharpens the core differentiator across README + llms.txt + COMPARISON: enquire-mcp is **grounded** in the markdown you already wrote (verbatim, cited, editable), as opposed to conversation-memory tools (mem0/Zep/Supermemory) that **extract** facts from chat logs into a separate opaque store. Plus a copy-paste `claude mcp add` one-liner promoted into the README hero. Docs only — no code, no test, no numeric-claim change.
+
+**Patch — docs/positioning only. Zero `src/` change; test count unchanged (1014).**
+
+### Changed
+
+- **"Grounded, not extracted" positioning** added to the three canonical surfaces (ROADMAP Tier-2 messaging item): `README.md` (a new paragraph in "The solution"), `llms.txt` (the AI-discovery blockquote), and `docs/COMPARISON.md` (intro). Frames the category distinction vs mem0 / Zep / Supermemory: those *extract* memory from conversations into a store you can't read; enquire-mcp recalls the notes you authored, with citations, auditable and editable in any editor.
+- **README hero `claude mcp add` one-liner.** The Claude Code one-command install (`claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault …`) is now surfaced in the hero (was buried in Quick start), for instant copy-paste onboarding.
+
+### Notes / still deferred
+
+- Social-preview **stat-pill redesign** (44 tools / 1014 tests / +15.5 NDCG@10) is intentionally NOT in this RC — it introduces a new numeric-drift surface that must ship with its own `docs-consistency` invariant in the same PR (per the v3.9.0-rc.18 deferral rule); deferred to a focused asset RC. `server.json` `categories`/`keywords` likewise deferred pending a schema re-verify (the rc.13 PR #117 server.json schema fix history).
+- No numeric claims were added, so no docs-consistency / scope-completeness invariant change is required; OIA Check 7 currency scan is unaffected (the mem0/Zep/Supermemory mentions are competitor names, not version-currency claims).
+
+### Files changed
+
+- `README.md`, `llms.txt`, `docs/COMPARISON.md` (positioning + hero one-liner); version bump 3.9.0-rc.26 → 3.9.0-rc.27.
+
+---
+
 ## [3.9.0-rc.26] — 2026-05-29
 
 > **TL;DR:** **Closes the pre-stable audit — test-infra rigor (batch 2/3) + docs drift (batch 3/3).** The same 3-agent audit that found the rc.25 CRITICAL flagged two HIGH defense-integrity gaps: (HIGH-1) the **META-invariant** — the enforcer of "every invariant has a real NEGATIVE control" — was itself partly vacuous: it accepted a COMMENTED-OUT `it(` and an EMPTY-BODY `it("NEGATIVE", () => {})`; (HIGH-2) `cli.test.ts` (22 tests incl. the bearer-auth ≥16 checks + the K-1 FTS5-preservation test) used silent `return` skips with **no CI-GUARD**, so the whole file could no-op in CI if a precondition regressed — the rc.23 CI-GUARD sweep missed this file. Plus MED/LOW (github-metadata CI-GUARD, scope-completeness control drove a re-implemented copy, two invariant-shaped files outside the meta-invariant glob, coverage job built dist only via the `prepare` hook) and docs drift (per-file-floor counter under-counted 11→reported 10, ROADMAP stale checkboxes, STABILITY missing `install-ocr-lang`). **1009 → 1014 tests.** Tests/scripts/workflow/docs only — zero `src/` runtime change. With rc.25 (security) this fully closes the pre-stable audit; the `src/` runtime audited exceptionally clean.

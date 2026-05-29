@@ -65,7 +65,7 @@ const FLOORS = {
   // enforcement) and was the one critical module with NO per-file floor, so a
   // privacy-boundary regression would only show in the global average. First
   // floor, conservative (actual branches 78.03%).
-  "src/vault.ts": { branches: 75 },
+  "src/vault.ts": { branches: 75 }, // current 78.03%
   // rc.23 — ocr.ts gains a `lines` floor too: it's the #16 offline-enforcement
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.
@@ -75,7 +75,7 @@ const FLOORS = {
   "src/tools/search.ts": { branches: 66 }, // current 68.27%
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.
-  "src/tools/meta.ts": { branches: 74 }, // current 76.43% (rc.21 added alternation-ReDoS detector branches)
+  "src/tools/meta.ts": { branches: 74 }, // current 76.1% (rc.24 added escape-decode detector branches)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
   "src/bases.ts": { branches: 71 }, // current 74.71% (rc.15 boundedSetAdd tests lifted it +1.5pp)
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts
@@ -162,6 +162,6 @@ if (failing.length > 0) {
 }
 
 if (!hasError) {
-  console.log(`\n[per-file-coverage] OK — all ${passing.length} per-file branch floors met.`);
+  console.log(`\n[per-file-coverage] OK — all ${passing.length} per-file coverage floors met.`);
   process.exit(0);
 }

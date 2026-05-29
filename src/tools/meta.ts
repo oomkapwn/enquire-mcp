@@ -650,7 +650,52 @@ function splitTopLevelAlternation(body: string): string[] {
 }
 
 /** Sentinel: a branch whose leading atom is a broad matcher (`.`, a class, a class-shorthand, a nested group) that can overlap any other branch. */
-const LEADING_ANY = " ANY";
+const LEADING_ANY = "<<ANY>>";
+
+/**
+ * Fold a character for overlap comparison. `obsidian_open_questions` always
+ * compiles the pattern case-INSENSITIVELY (`new RegExp(pattern, "i")`), so `a`
+ * and `A` match the same input and must compare equal.
+ * @internal v3.9.0-rc.24 — rc.21 compared case-sensitively, missing `(a|A)+`.
+ */
+function foldCase(ch: string): string {
+  return ch.toLowerCase();
+}
+
+/**
+ * Decode a regex escape whose body starts at `src[pos]` (the char AFTER the
+ * backslash) to the single character it matches, or `null` if it is not a
+ * resolvable single-char escape (caller then treats it as {@link LEADING_ANY} —
+ * the safe over-flag direction). Handles `\\xHH`, `\\uHHHH`, `\\u{H+}`, the control
+ * escapes, and punctuation/metacharacter escapes; leaves octal / backrefs unresolved.
+ * @internal v3.9.0-rc.24 — rc.21 returned the raw byte after the backslash
+ * (`"x"` for `\\x61`), so `(\\x61|a)+` (= `(a|a)+` in disguise) slipped the guard.
+ */
+function decodeEscapedChar(src: string, pos: number): string | null {
+  const e = src[pos];
+  if (e === undefined) return null;
+  if (e === "x") {
+    const h = src.slice(pos + 1, pos + 3);
+    return /^[0-9a-fA-F]{2}$/.test(h) ? String.fromCharCode(Number.parseInt(h, 16)) : null;
+  }
+  if (e === "u") {
+    if (src[pos + 1] === "{") {
+      const end = src.indexOf("}", pos + 2);
+      const h = end === -1 ? "" : src.slice(pos + 2, end);
+      return /^[0-9a-fA-F]{1,6}$/.test(h) ? String.fromCodePoint(Number.parseInt(h, 16)) : null;
+    }
+    const h = src.slice(pos + 1, pos + 5);
+    return /^[0-9a-fA-F]{4}$/.test(h) ? String.fromCharCode(Number.parseInt(h, 16)) : null;
+  }
+  if (e === "t") return "\t";
+  if (e === "n") return "\n";
+  if (e === "r") return "\r";
+  if (e === "f") return "\f";
+  if (e === "v") return "\v";
+  if (e === "0" && !/[0-9]/.test(src[pos + 1] ?? "")) return "\0";
+  if (/[.*+?()[\]{}|^$/\\-]/.test(e)) return e;
+  return null;
+}
 
 /**
  * Conservative leading-atom token of an alternation branch: `""` (nullable —
@@ -665,13 +710,15 @@ function leadingAtomToken(branch: string): string {
     const c = branch[i];
     if (c === undefined) break; // unreachable (i < length) — narrows for noUncheckedIndexedAccess
     if (c === "^" || c === "$") continue; // zero-width anchor — look past it
+    if (c === "[" || c === "(" || c === ".") return LEADING_ANY;
     if (c === "\\") {
       const n = branch[i + 1];
       if (n === undefined) return LEADING_ANY;
-      return /[dDwWsSbBpP]/.test(n) ? LEADING_ANY : n; // class shorthand → broad; escaped literal → that char
+      if (/[dDwWsSbBpP]/.test(n)) return LEADING_ANY; // class shorthand → broad
+      const decoded = decodeEscapedChar(branch, i + 1);
+      return decoded === null ? LEADING_ANY : foldCase(decoded); // unresolved escape → conservative ANY
     }
-    if (c === "[" || c === "(" || c === ".") return LEADING_ANY;
-    return c; // plain literal first char
+    return foldCase(c); // plain literal first char (case-folded — tool compiles /i)
   }
   return ""; // empty / nullable branch
 }

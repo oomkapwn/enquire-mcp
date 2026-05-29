@@ -716,9 +716,9 @@ export function alternationBodyAmbiguous(body: string): boolean {
  *  2. **Unbounded-quantified AMBIGUOUS alternation** (v3.9.0-rc.21) — an
  *     unbounded-quantified group whose top-level branches can match a common
  *     starting input (so the backtracker can split one repetition many ways):
- *     `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`. Ambiguity is decided by
- *     {@link alternationBodyAmbiguous} (leading-atom overlap — a sound
- *     over-approximation), so a DISJOINT alternation like `(a|b|c)+` or
+ *     `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`. Ambiguity is decided by an
+ *     internal `alternationBodyAmbiguous` helper (leading-atom overlap — a
+ *     sound over-approximation), so a DISJOINT alternation like `(a|b|c)+` or
  *     `(cat|dog)+` stays accepted (it matches linearly), and a NON-quantified
  *     alternation (`(?:a|b)\s*`, the shape the default pattern uses) is never
  *     flagged. It may over-flag a shared-first-char-but-divergent group

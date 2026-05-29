@@ -609,6 +609,99 @@ export function readUnboundedQuantifier(src: string, pos: number): { unbounded: 
 }
 
 /**
+ * Split a regex `body` on its TOP-LEVEL `|` alternations — a `|` inside a
+ * nested group `(...)`, a char-class `[...]`, or escaped (`\|`) does not split.
+ * @internal helper for {@link isCatastrophicRegex}.
+ */
+function splitTopLevelAlternation(body: string): string[] {
+  const branches: string[] = [];
+  let depth = 0;
+  let inClass = false;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "[") {
+      inClass = true;
+      continue;
+    }
+    if (c === "(") {
+      depth++;
+      continue;
+    }
+    if (c === ")") {
+      if (depth > 0) depth--;
+      continue;
+    }
+    if (c === "|" && depth === 0) {
+      branches.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  branches.push(body.slice(start));
+  return branches;
+}
+
+/** Sentinel: a branch whose leading atom is a broad matcher (`.`, a class, a class-shorthand, a nested group) that can overlap any other branch. */
+const LEADING_ANY = " ANY";
+
+/**
+ * Conservative leading-atom token of an alternation branch: `""` (nullable —
+ * the branch can match empty), {@link LEADING_ANY} (broad / unknown first
+ * atom), or the single literal first char. A sound OVER-approximation: when
+ * unsure it returns `LEADING_ANY` (overlaps everything), so the ambiguity
+ * check below never MISSES a real overlap (it may over-flag).
+ * @internal
+ */
+function leadingAtomToken(branch: string): string {
+  for (let i = 0; i < branch.length; i++) {
+    const c = branch[i];
+    if (c === undefined) break; // unreachable (i < length) — narrows for noUncheckedIndexedAccess
+    if (c === "^" || c === "$") continue; // zero-width anchor — look past it
+    if (c === "\\") {
+      const n = branch[i + 1];
+      if (n === undefined) return LEADING_ANY;
+      return /[dDwWsSbBpP]/.test(n) ? LEADING_ANY : n; // class shorthand → broad; escaped literal → that char
+    }
+    if (c === "[" || c === "(" || c === ".") return LEADING_ANY;
+    return c; // plain literal first char
+  }
+  return ""; // empty / nullable branch
+}
+
+/**
+ * True if an alternation `body` is AMBIGUOUS under repetition — two of its
+ * top-level branches can match a common starting input, or a branch is
+ * nullable. `(a|a)`, `(a|ab)`, `(.|a)`, `(a|)` are ambiguous (→ catastrophic
+ * under `+`/`*`); `(a|b|c)`, `(cat|dog)` are not (disjoint first chars →
+ * linear). Built on {@link leadingAtomToken} (a sound over-approximation), so
+ * it may over-flag a shared-first-char-but-divergent group (`(cat|car)`) but
+ * never under-flags a real overlap.
+ * @internal exported only for unit tests of {@link isCatastrophicRegex}.
+ */
+export function alternationBodyAmbiguous(body: string): boolean {
+  const branches = splitTopLevelAlternation(body);
+  if (branches.length < 2) return false; // no alternation
+  const leads = branches.map(leadingAtomToken);
+  if (leads.some((l) => l === "")) return true; // a nullable branch under + loops ambiguously
+  for (let a = 0; a < leads.length; a++) {
+    for (let b = a + 1; b < leads.length; b++) {
+      const la = leads[a];
+      const lb = leads[b];
+      if (la === LEADING_ANY || lb === LEADING_ANY || la === lb) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Conservative, dependency-free guard against catastrophic-backtracking
  * (ReDoS) in a caller-supplied regex. V8's Irregexp engine backtracks, so
  * `(a+)+$`, `(.*)*`, or `(.*a){20}` can freeze the event loop for seconds on
@@ -616,24 +709,42 @@ export function readUnboundedQuantifier(src: string, pos: number): { unbounded: 
  * against every line of every note, so an unvalidated regex is a remote DoS
  * on a bearer-authenticated `serve-http` (the tool is always registered).
  *
- * Detects "star height ≥ 2": an unbounded/amplifying quantifier (see
- * {@link readUnboundedQuantifier}) applied to a group whose body ALSO
- * contains one — the classic catastrophic shape. Honors char-classes
- * (`[...]` contents are literal) and backslash escapes (`\(`, `\+` are
- * literals). Best-effort by design (it can't prove safety for every regex —
- * e.g. overlapping-alternation ReDoS like `(a|a)+` is out of scope), so the
- * caller pairs it with {@link MAX_QUESTION_PATTERN_LEN}.
+ * Catches two catastrophic shapes, both dependency-free:
+ *  1. **Star height ≥ 2** — an unbounded/amplifying quantifier (see
+ *     {@link readUnboundedQuantifier}) applied to a group whose body ALSO
+ *     contains one (`(a+)+`, `(.*)*`).
+ *  2. **Unbounded-quantified AMBIGUOUS alternation** (v3.9.0-rc.21) — an
+ *     unbounded-quantified group whose top-level branches can match a common
+ *     starting input (so the backtracker can split one repetition many ways):
+ *     `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`. Ambiguity is decided by
+ *     {@link alternationBodyAmbiguous} (leading-atom overlap — a sound
+ *     over-approximation), so a DISJOINT alternation like `(a|b|c)+` or
+ *     `(cat|dog)+` stays accepted (it matches linearly), and a NON-quantified
+ *     alternation (`(?:a|b)\s*`, the shape the default pattern uses) is never
+ *     flagged. It may over-flag a shared-first-char-but-divergent group
+ *     (`(cat|car)+`) — for a security guard, a rare false positive (caller
+ *     simplifies / omits the override) beats a hung event loop.
+ *
+ * Honors char-classes (`[...]` contents are literal) and backslash escapes
+ * (`\(`, `\+`, `\|` are literals). Still best-effort — ReDoS detection is
+ * undecidable in general — so the caller also pairs it with
+ * {@link MAX_QUESTION_PATTERN_LEN}.
  *
  * @param src - The raw regex source the caller wants to compile.
  * @returns true if the pattern risks catastrophic backtracking.
  * @example
  * ```ts
  * isCatastrophicRegex("(a+)+$");        // true  — nested unbounded quantifiers
+ * isCatastrophicRegex("(a|a)+$");       // true  — ambiguous alternation under +
+ * isCatastrophicRegex("(a|b|c)+");      // false — disjoint alternation (linear)
  * isCatastrophicRegex("^Q: (.+)$");     // false — single-level
+ * isCatastrophicRegex("(?:a|b)\\s*c");  // false — alternation NOT unbounded-quantified
  * ```
  */
 export function isCatastrophicRegex(src: string): boolean {
-  const hadUnbounded: boolean[] = [false]; // per-group-frame flag; [0] = top level
+  const hadUnbounded: boolean[] = [false]; // per-frame: body has an unbounded quantifier
+  const ambiguous: boolean[] = [false]; // per-frame: body has (or nested-bubbled) an ambiguous alternation
+  const bodyStart: number[] = [0]; // per-frame: index where the group body begins
   let inClass = false;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
@@ -651,16 +762,42 @@ export function isCatastrophicRegex(src: string): boolean {
     }
     if (ch === "(") {
       hadUnbounded.push(false);
+      ambiguous.push(false);
+      // Body begins after the `(` and any group-type prefix (`?:`, `?<name>`,
+      // `?=`, `?!`, `?<=`, `?<!`) so branch-splitting sees the real branches.
+      let bs = i + 1;
+      if (src[bs] === "?") {
+        const c2 = src[bs + 1];
+        if (c2 === ":" || c2 === "=" || c2 === "!") bs += 2;
+        else if (c2 === "<") {
+          const c3 = src[bs + 2];
+          if (c3 === "=" || c3 === "!")
+            bs += 3; // lookbehind
+          else {
+            const gt = src.indexOf(">", bs); // named capture (?<name>
+            bs = gt === -1 ? bs + 2 : gt + 1;
+          }
+        } else bs += 1;
+      }
+      bodyStart.push(bs);
       continue;
     }
     if (ch === ")") {
       const frameHad = hadUnbounded.pop() ?? false;
+      const frameAmbiguous = ambiguous.pop() ?? false;
+      const bs = bodyStart.pop() ?? i;
+      // A group's body is ambiguous if a nested group bubbled ambiguity up OR
+      // its own top-level alternation overlaps (`((a|a))+` → inner reaches outer).
+      const bodyAmbiguous = frameAmbiguous || alternationBodyAmbiguous(src.slice(bs, i));
       const q = readUnboundedQuantifier(src, i + 1);
-      if (q.unbounded && frameHad) return true; // star height ≥ 2 → catastrophic
-      // Propagate: a group that is unbounded-quantified OR whose body already
-      // had an unbounded quantifier counts as one in its parent frame.
-      if (hadUnbounded.length > 0 && (q.unbounded || frameHad)) {
-        hadUnbounded[hadUnbounded.length - 1] = true;
+      // Catastrophic if this group is unbounded-quantified AND its body either
+      // nested an unbounded quantifier (star height ≥ 2) OR is an ambiguous
+      // alternation (overlapping-alternation ReDoS).
+      if (q.unbounded && (frameHad || bodyAmbiguous)) return true;
+      // Propagate to the parent frame.
+      if (hadUnbounded.length > 0) {
+        if (q.unbounded || frameHad) hadUnbounded[hadUnbounded.length - 1] = true;
+        if (bodyAmbiguous) ambiguous[ambiguous.length - 1] = true;
       }
       i += q.length; // skip the quantifier chars we just consumed
       continue;
@@ -729,9 +866,9 @@ export async function getOpenQuestions(
     }
     if (isCatastrophicRegex(args.pattern)) {
       throw new Error(
-        "obsidian_open_questions: pattern rejected — it contains nested unbounded quantifiers " +
-          "(e.g. `(a+)+`, `(.*)*`) that risk catastrophic backtracking (ReDoS). " +
-          "Simplify the pattern or omit it to use the safe default."
+        "obsidian_open_questions: pattern rejected — it risks catastrophic backtracking (ReDoS) via " +
+          "nested unbounded quantifiers (e.g. `(a+)+`, `(.*)*`) or an unbounded-quantified alternation " +
+          "(e.g. `(a|a)+`, `(a|ab)*`). Simplify the pattern or omit it to use the safe default."
       );
     }
     re = new RegExp(args.pattern, "i");

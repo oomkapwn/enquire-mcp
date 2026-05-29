@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.21] — 2026-05-29
+
+> **TL;DR:** **Security — close a verified ReDoS hole the rc.9 guard missed (full-audit response, batch 1/3).** A fresh multi-agent state-driven audit (code + docs + tests, all green on the 10-gate baseline) reproduced ONE genuine exploit: `obsidian_open_questions`'s `isCatastrophicRegex` (rc.9) catches *nested* quantifiers (`(a+)+`) but **not overlapping-alternation** (`(a|a)+`) — the auditor hung V8 >8s with a 200-char-cap-legal pattern, and the tool is always-registered, so any bearer-authenticated `serve-http` client could freeze the event loop (remote DoS). The guard now also rejects **unbounded-quantified AMBIGUOUS alternations** via leading-atom overlap analysis — catching `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`, `(a|)+` while keeping DISJOINT ones like `(a|b|c)+` / `(cat|dog)+` accepted (they match linearly) and the unquantified default-pattern alternation unaffected. **995 tests** (+2 integration; +13 detector cases via the existing data-driven loops). **No CRITICAL/HIGH code findings otherwise — the codebase audited exceptionally clean.**
+
+**Patch — security (full-audit batch 1/3). `src/tools/meta.ts` + tests only.**
+
+### Fixed
+
+- **ReDoS via overlapping-alternation in `obsidian_open_questions` (verified remote DoS).** `isCatastrophicRegex` modelled only "star height ≥ 2"; an unbounded-quantified ambiguous alternation (`(a|a)+`) slipped past it AND the 200-char `MAX_QUESTION_PATTERN_LEN` cap (the exploit pattern is 7 chars). Since the tool is always-registered, a `serve-http` client could peg the single-threaded event loop. The guard now additionally rejects an **unbounded-quantified group whose top-level branches can match a common starting input** (or a nullable branch), decided by a new dependency-free `alternationBodyAmbiguous` (leading-atom overlap — a *sound over-approximation*: it never under-flags a real overlap, and may over-flag a shared-first-char-but-divergent group like `(cat|car)+`, which is the safe direction for a security guard). Ambiguity **bubbles up** through nesting (`((a|a))+`). Disjoint alternations (`(a|b|c)+`, `(cat|dog)+`) and the unquantified default-pattern shape stay accepted. The error message + TSDoc updated to describe both rejected classes.
+
+### Tests (995, positive + NEGATIVE controls)
+
+- `tests/redos-guard.test.ts` — +10 catastrophic alternation cases (`(a|a)+`, `(a|ab)*`, `(.|a)+`, `(\w|x)+`, `(a|)+`, `((a|a))+`, `(?:a|a)+`, `(cat|car)+`, …), +3 safe-disjoint POSITIVE controls (`(cat|dog)+`, unquantified `(a|b|c)`, the `(?:open|q|todo)\s*` default shape), +2 standalone integration `it()` (the tool rejects a runtime-built `(a|a)+` pattern; accepts a disjoint `(open question|todo)` override). The pre-existing `(a|b|c)+`-is-safe control is the key regression guard — the conservative fix must NOT over-reject disjoint alternations.
+
+### Audit baseline (this batch)
+
+The full audit's automated baseline was clean: lint, `tsc` strict, version-consistency (7), **all tests + coverage 89.46% lines / 76.02% branches**, OIA (10 checks). The 3 fresh-eyes auditors confirmed the `src/` codebase clean apart from this finding; the remaining audit findings (docs drift, test-infra rigor) ship in rc.22 + rc.23.
+
+### Files changed
+
+- `src/tools/meta.ts` (`isCatastrophicRegex` + new `splitTopLevelAlternation` / `leadingAtomToken` / `alternationBodyAmbiguous` helpers + error message + TSDoc), `tests/redos-guard.test.ts`.
+- version bump 3.9.0-rc.20 → 3.9.0-rc.21 (7 surfaces); test count 993 → 995.
+
+### Deferred to rc.22 / rc.23 (same audit)
+
+rc.22: `STABILITY.md` reranker-default α-drift (HIGH) + `ROADMAP.md` OIA-count 8→10 + structural guards. rc.23: meta-invariant comment-bypass + glob-miss (HIGH×2) + silent-skip → `ctx.skip()`+CI-GUARD propagation + `vault.ts`/`ocr.ts` per-file FLOORS.
+
+---
+
 ## [3.9.0-rc.20] — 2026-05-29
 
 > **TL;DR:** **CI hardening — kill the recurring `npm ci` flake that just failed a release (sprint RC 12).** The rc.19 release **failed at the assert-CI gate** because the squash-merge commit's `test (24)` leg flaked: `npm ci` → `onnxruntime-node` postinstall → CDN `ETIMEDOUT` (same transient flake as rc.9; the rc.19 PR was all-green, only the main-push re-run flaked). Re-running the job published rc.19 — but a transient network blip should never fail a release. All **10 `npm ci` steps** across the 3 workflows are now wrapped in a **dependency-free bash retry loop** (3 attempts, 15s backoff — no marketplace retry action, so nothing new to SHA-pin per rc.14's supply-chain posture). New **OIA Check 10** fails CI if any bare `- run: npm ci` reappears (detection-power verified: injected one → flags `publish-docs.yml`; clean after). **993 tests unchanged** (workflows + audit-script + docs only).

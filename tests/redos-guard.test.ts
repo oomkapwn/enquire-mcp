@@ -33,7 +33,20 @@ describe("isCatastrophicRegex — catastrophic patterns are flagged (NEGATIVE co
     "(.*a){20}", // bounded-but-large outer repetition over an unbounded body
     "(\\d+){11}", // {11} > amplify threshold (10)
     "((ab)+)+", // deep nesting — risk propagates up two frames
-    "(?:a+)+" // non-capturing group, identical risk
+    "(?:a+)+", // non-capturing group, identical risk
+    // v3.9.0-rc.21 — overlapping-alternation ReDoS (the audit-reproduced class
+    // that the rc.9 guard missed). All are unbounded-quantified AMBIGUOUS
+    // alternations (branches can match a common start), so V8 backtracks.
+    "(a|a)+$", // textbook identical-branch alternation (auditor reproduced >8s hang)
+    "(a|a)*",
+    "(a|ab)+", // prefix-overlapping branches share leading `a`
+    "(a|ab)*",
+    "(.|a)+", // a broad `.` branch overlaps the literal branch
+    "(\\w|x)+", // class-shorthand branch overlaps the literal `x`
+    "(a|)+", // a nullable (empty) branch loops ambiguously
+    "((a|a))+", // ambiguity bubbles up from the nested group to the outer `+`
+    "(?:a|a)+", // non-capturing, same risk
+    "(cat|car)+" // shared leading char (over-flagged — conservative, acceptable)
   ];
   for (const p of catastrophic) {
     it(`flags ${JSON.stringify(p)}`, () => {
@@ -52,7 +65,10 @@ describe("isCatastrophicRegex — safe patterns are NOT flagged (POSITIVE contro
     "\\d{4}-\\d{2}-\\d{2}", // bounded brace quantifiers
     "[a-z]+@[a-z]+\\.[a-z]+",
     "TODO\\??",
-    "(a|b|c)+", // single-char alternation, single level
+    "(a|b|c)+", // DISJOINT single-char alternation under + — matches linearly, safe
+    "(cat|dog)+", // DISJOINT multi-char alternation (distinct first chars) — safe
+    "(a|b|c)", // alternation with NO quantifier — never a backtracking risk
+    "(?:open|q|todo)\\s*", // the default pattern's alternation shape (unquantified) stays safe
     "\\(a+\\)\\+", // escaped parens/plus are literals, not a quantified group
     "[(+*)]+", // metacharacters inside a char class are literals
     "(.+){2,5}" // small bounded outer repetition (≤ amplify threshold)
@@ -124,6 +140,25 @@ describe("getOpenQuestions — pattern hardening integration", () => {
     await expect(getOpenQuestions(new Vault(root), { pattern: evil })).rejects.toThrow(
       /catastrophic backtracking|ReDoS|rejected/i
     );
+  });
+
+  it("REJECTS an overlapping-alternation pattern (NEGATIVE control, v3.9.0-rc.21)", async () => {
+    // The audit-reproduced ReDoS class the rc.9 guard missed: `(a|a)+$`.
+    // Built at runtime (pipe via String.fromCharCode(124)) so CodeQL's js/redos
+    // never sees a catastrophic literal reaching the `new RegExp` sink — the
+    // guard rejects it BEFORE compile, so it never executes.
+    const pipe = String.fromCharCode(124);
+    const plus = String.fromCharCode(43);
+    const evilAlt = `(a${pipe}a)${plus}$`; // "(a|a)+$"
+    await expect(getOpenQuestions(new Vault(root), { pattern: evilAlt })).rejects.toThrow(
+      /catastrophic backtracking|ReDoS|rejected/i
+    );
+  });
+
+  it("still accepts a DISJOINT alternation override (POSITIVE control — no over-rejection)", async () => {
+    // `(open question|todo): ...` style — distinct first chars, matches linearly.
+    const out = await getOpenQuestions(new Vault(root), { pattern: "^(open question|todo): (.+)$" });
+    expect(Array.isArray(out)).toBe(true); // compiles + runs; not rejected
   });
 
   it("REJECTS an over-long pattern (NEGATIVE control)", async () => {

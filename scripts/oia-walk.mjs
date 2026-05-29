@@ -550,9 +550,14 @@ walk("src", ".ts", (file) => {
       const checkerPath = "scripts/check-per-file-coverage.mjs";
       const checkerSrc = readFileSync(join(repoRoot, checkerPath), "utf8");
       const checkerLines = checkerSrc.split("\n");
-      // Pattern: "src/foo.ts": { branches: N }, // current X% [...rest]
-      // OR     :                                 // current ~X% [...rest]
-      const lineRe = /"(src\/[\w./-]+)":\s*\{\s*branches:\s*\d+\s*\}\s*,?\s*\/\/\s*current\s*~?(\d+(?:\.\d+)?)%/;
+      // Pattern: "src/foo.ts": { branches: N [, lines: M ...] }, // current [branches ]X% [...rest]
+      // v3.9.0-rc.24 — broadened from single-key `{ branches: N }` + `// current X%`:
+      // rc.23 added two-key floors (`{ branches, lines }`) + a `// current branches X% / lines Y%`
+      // comment, which the old regex silently dropped from drift-checking (the very gap this
+      // check exists to prevent). Now tolerates extra floor keys + an optional `branches ` word
+      // before the percent; still extracts the BRANCHES percent for the drift comparison.
+      const lineRe =
+        /"(src\/[\w./-]+)":\s*\{\s*branches:\s*\d+[^}]*\}\s*,?\s*\/\/\s*current\s*(?:branches\s*)?~?(\d+(?:\.\d+)?)%/;
       for (let i = 0; i < checkerLines.length; i++) {
         const line = checkerLines[i] ?? "";
         const m = lineRe.exec(line);

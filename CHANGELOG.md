@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.24] — 2026-05-29
+
+> **TL;DR:** **Security — close a ReDoS recursion the rc.21 fix itself introduced.** A re-audit (adversarial fresh-eyes review of the rc.21–rc.23 diffs) reproduced **two CRITICAL false-negatives in rc.21's own ReDoS detector** — the exact "audit-driven fix ships a fresh instance of the class it fixed" recursion this project most fears. `isCatastrophicRegex` compared **surface syntax**, not the matched character: (1) `(a|A)+` slipped through because the tool compiles `/i` (so `a`/`A` overlap) but `leadingAtomToken` was case-*sensitive*; (2) `(\x61|a)+` (= `(a|a)+`, also `a`/`\u{61}`) slipped because the helper returned the raw byte after `\` (`"x"`), not the decoded char. Both reproduced ~16s V8 hangs at ≤12 chars on bearer-auth `serve-http`. Fixed by case-folding + decoding escapes (unresolved escapes conservatively over-flag → the soundness claim is now true). Also closed the MEDIUM the same re-audit found (rc.23's two-key `{branches,lines}` floor objects fell out of OIA Check 6's drift regex). **1002 tests** (+6 detector cases via the data-driven loops; count unchanged — array entries, not new `it()`).
+
+**Patch — security recursion fix (re-audit response). `src/tools/meta.ts` + tests + audit-script only.**
+
+### Fixed
+
+- **ReDoS recursion in `isCatastrophicRegex` (CRITICAL ×2).** rc.21's alternation-overlap analysis compared *surface syntax* (case-sensitive literal / first byte after `\`) instead of the matched char under the `/i` compile flag, so two real-overlap classes were ACCEPTED:
+  - **Case-fold**: `(a|A)+` / `(A|a)+` — the tool always compiles `new RegExp(pattern, "i")`, so `a` and `A` match the same input. `leadingAtomToken` now case-folds literals (`foldCase`).
+  - **Escape-alias**: `(\x61|a)+`, `(a|\x61)+`, `(a|a)+`, `(\u{61}|a)+` — all `(a|a)+` in disguise. `leadingAtomToken` now resolves the escape to its real char via a new `decodeEscapedChar` (`\xHH`/`\uHHHH`/`\u{H+}`/control/punctuation escapes); octal/backrefs/unknown escapes return `LEADING_ANY` (conservative over-flag — the safe direction). Both reproduced (~16s V8 hangs); both now rejected. Disjoint escapes (`(\.|a)+`) and disjoint literals (`(a|b|c)+`, `(cat|dog)+`) stay accepted (regression-guarded).
+  - With unresolved escapes over-flagging, the helper's "never under-flags a real first-char overlap" soundness claim is now **true** (rc.21's TSDoc asserted it while the code didn't — the claimed-guarantee-vs-reality anti-pattern; now matched).
+- **Sentinel NUL byte (tooling).** `LEADING_ANY` was `"\0ANY"` — a literal NUL byte in source, which made `grep` treat `meta.ts` as binary (silently breaking text tooling/audits that shell-grep it). Changed to plain-ASCII `"<<ANY>>"`.
+- **OIA Check 6 dropped the rc.23 two-key floors (MEDIUM).** Check 6 (coverage-comment drift) regex only matched single-key `{ branches: N } // current X%`; rc.23's `{ branches, lines }` + `// current branches X% / lines Y%` form silently fell out of drift-checking — the very gap Check 6 exists to prevent. Regex broadened to tolerate extra floor keys + an optional `branches ` word; `vault.ts` got an inline `// current 78.03%` so it's tracked too. Detection-power verified on both `vault.ts` + `ocr.ts`.
+- **LOW**: per-file-coverage success message "all N per-file *branch* floors met" → "coverage floors met" (rc.23 added a non-branch `lines` floor).
+
+### Tests (1002)
+
+`tests/redos-guard.test.ts`: +6 catastrophic bypass cases (`(a|A)+`, `(A|a)+`, `(\x61|a)+`, `(a|\x61)+`, `(a|a)+`, `(\u{61}|a)+`) + 1 disjoint-escape POSITIVE control (`(\.|a)+` stays safe — guards the decoder against over-flagging). Array entries, so the canonical `it()` count is unchanged (1002). End-to-end probe: all 6 bypasses now flagged, all regressions preserved.
+
+### Method note
+
+This is exactly the recursion the project's own anti-pattern log warns about (audit-driven fix → fresh same-class instance) — **overclaim instance #17**, and a claimed-guarantee-vs-reality case too (rc.21's TSDoc asserted the analysis "never under-flags a real overlap" while it did). Caught by an **adversarial re-review of my own fix** rather than the gates (which can't fuzz a detector). Root cause — "the detector compared surface syntax, not the character set matched at the sink (case-folded + escape-resolved)" — is now a durable CLAUDE.md anti-pattern; the helper over-flags on any uncertainty, so it errs toward the safe (flag) direction.
+
+### Files changed
+
+- `src/tools/meta.ts` (`foldCase` + `decodeEscapedChar` + `leadingAtomToken` rewrite + de-NUL sentinel + TSDoc), `tests/redos-guard.test.ts` (+7 array cases), `scripts/oia-walk.mjs` (Check 6 regex), `scripts/check-per-file-coverage.mjs` (vault.ts inline comment + message wording).
+- version bump 3.9.0-rc.23 → 3.9.0-rc.24 (7 surfaces); test count unchanged (1002).
+
+---
+
 ## [3.9.0-rc.23] — 2026-05-29
 
 > **TL;DR:** **Test-infra rigor (full-audit batch 3/3 — closes the audit).** The test auditor found the project's structural-enforcement apparatus was weaker than CLAUDE.md claimed: (HIGH) the META-invariant — the enforcer of the "every invariant has a NEGATIVE control" rule — passed if the token `NEGATIVE` appeared **anywhere, including a TODO comment** (reproduced), and its `*-invariant.test.ts` glob **silently excluded** real structural invariants (`no-internal-imports`, `lint`) and even itself; (MED) `security.test.ts` + `fts5.test.ts` had silent `return`-skips (the exact T1 anti-pattern rc.8 fixed) on security surfaces with no CI-GUARD; (LOW) `vault.ts` — the most security-critical module — had **no per-file coverage floor**, and `ocr.ts` floored only branches while its line coverage rotted to 44%. All closed. **1002 tests** (+5).

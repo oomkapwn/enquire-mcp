@@ -46,7 +46,23 @@ describe("isCatastrophicRegex — catastrophic patterns are flagged (NEGATIVE co
     "(a|)+", // a nullable (empty) branch loops ambiguously
     "((a|a))+", // ambiguity bubbles up from the nested group to the outer `+`
     "(?:a|a)+", // non-capturing, same risk
-    "(cat|car)+" // shared leading char (over-flagged — conservative, acceptable)
+    "(cat|car)+", // shared leading char (over-flagged — conservative, acceptable)
+    // v3.9.0-rc.24 — re-audit of rc.21 reproduced two false-negatives the
+    // leading-atom analysis missed (each hung V8 ~16s). The tool compiles /i,
+    // and escapes alias real chars, so these are all `(a|a)+` in effect.
+    "(a|A)+$", // /i flag: a and A match the same input (case-fold)
+    "(A|a)+$",
+    "(\\x61|a)+$", // \x61 = "a" (hex escape decode)
+    "(a|\\x61)+$",
+    "(\\u0061|a)+$", // a = "a" (unicode escape decode)
+    "(\\u{61}|a)+$", // \u{61} = "a" (unicode code-point escape)
+    // v3.9.0-rc.24 — UNRESOLVED escapes must over-flag (the conservative/safe
+    // direction): a branch whose first atom can't be decoded to a known single
+    // char is treated as LEADING_ANY, which overlaps the literal `a` branch.
+    "(\\xZZ|a)+$", // malformed hex escape → undecodable → ANY → ambiguous
+    "(\\uZZZZ|a)+$", // malformed 4-hex unicode → undecodable → ANY
+    "(\\u{}|a)+$", // empty code-point braces → undecodable → ANY
+    "(\\q|a)+$" // unknown escape letter → undecodable → ANY
   ];
   for (const p of catastrophic) {
     it(`flags ${JSON.stringify(p)}`, () => {
@@ -71,7 +87,11 @@ describe("isCatastrophicRegex — safe patterns are NOT flagged (POSITIVE contro
     "(?:open|q|todo)\\s*", // the default pattern's alternation shape (unquantified) stays safe
     "\\(a+\\)\\+", // escaped parens/plus are literals, not a quantified group
     "[(+*)]+", // metacharacters inside a char class are literals
-    "(.+){2,5}" // small bounded outer repetition (≤ amplify threshold)
+    "(.+){2,5}", // small bounded outer repetition (≤ amplify threshold)
+    // v3.9.0-rc.24 — the escape DECODER must not OVER-flag a genuinely disjoint
+    // escaped branch: `\.` is a literal dot, disjoint from `a`, so `(\.|a)+`
+    // matches deterministically → safe (regression guard for the rc.24 decoder).
+    "(\\.|a)+"
   ];
   for (const p of safe) {
     it(`accepts ${JSON.stringify(p)}`, () => {

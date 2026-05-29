@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.20] — 2026-05-29
+
+> **TL;DR:** **CI hardening — kill the recurring `npm ci` flake that just failed a release (sprint RC 12).** The rc.19 release **failed at the assert-CI gate** because the squash-merge commit's `test (24)` leg flaked: `npm ci` → `onnxruntime-node` postinstall → CDN `ETIMEDOUT` (same transient flake as rc.9; the rc.19 PR was all-green, only the main-push re-run flaked). Re-running the job published rc.19 — but a transient network blip should never fail a release. All **10 `npm ci` steps** across the 3 workflows are now wrapped in a **dependency-free bash retry loop** (3 attempts, 15s backoff — no marketplace retry action, so nothing new to SHA-pin per rc.14's supply-chain posture). New **OIA Check 10** fails CI if any bare `- run: npm ci` reappears (detection-power verified: injected one → flags `publish-docs.yml`; clean after). **993 tests unchanged** (workflows + audit-script + docs only).
+
+**Patch — CI/supply-chain hardening (sprint RC 12). Workflows/audit-script/docs only; no `src/` runtime change.**
+
+### Fixed
+
+- **Recurring `npm ci` release-failing flake.** `onnxruntime-node`'s postinstall (`node ./script/install`) downloads its native binary from a CDN that intermittently times out; a bare `- run: npm ci` then fails the whole job — and when it hits the squash-merge commit's CI, `release.yml`'s "assert required CI checks passed" gate correctly refuses to publish (it did, on rc.19). All **10** `npm ci` invocations (`ci.yml` ×8, `release.yml`, `publish-docs.yml`) now run inside:
+  ```bash
+  for n in 1 2 3; do
+    npm ci && break
+    [ "$n" -eq 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+    echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+    sleep 15
+  done
+  ```
+  Dependency-free (a bash loop, not a marketplace retry action) so it adds **no new action to SHA-pin** — consistent with rc.14's pinned-dependencies posture.
+
+### Changed (structural defense — close the flake class)
+
+- **OIA Check 10 (`NPM-CI-NOT-RETRY-WRAPPED`)** — scans `.github/workflows/*.yml` and fails CI on any line that is exactly a bare `- run: npm ci`. Makes the retry-wrap self-enforcing: a future PR that adds an unwrapped `npm ci` trips the `oia` gate. **Detection power verified non-vacuously**: injecting a bare `npm ci` flags `publish-docs.yml:<line>`; the wrapped form (`npm ci && break` inside `run: |`) is silent. OIA count synced **9 → 10** (oia-walk header + AGENTS.md ×2).
+
+### Method note
+
+The rc.19 release failure is the *first time* this known flake (documented since rc.9) actually **blocked a publish** rather than just a PR check — which is exactly the signal that "re-run by hand" was no longer an acceptable response. Fixed the class (all 10 steps) + a structural guard (Check 10), not the instance.
+
+### Files changed
+
+- `.github/workflows/{ci,release,publish-docs}.yml` (10 `npm ci` → retry loop), `scripts/oia-walk.mjs` (Check 10 + header 9→10 / 13→14 walks / marker order), `AGENTS.md` (OIA count 9→10 ×2).
+- version bump 3.9.0-rc.19 → 3.9.0-rc.20 (7 surfaces); test count unchanged (993).
+
+---
+
 ## [3.9.0-rc.19] — 2026-05-29
 
 > **TL;DR:** **LongMemEval retrieval harness (sprint RC 11 — the v3.10 credibility lever, engineering half).** [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (Wu et al. 2024) is the long-term-memory benchmark Mem0/Zep publish against; no Obsidian-MCP has any LongMemEval-derived number. New [`scripts/bench-longmemeval.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-longmemeval.mjs) materializes each question's haystack sessions into a throwaway vault, indexes with FTS5, runs `searchHybrid`, and scores **`recall@k` / `MRR` / `NDCG@k` of the answer-bearing session(s)** (reusing `src/eval.ts`), aggregated per `question_type`. It measures **retrieval quality, NOT end-to-end QA accuracy** — enquire is a retriever, not an answerer; claiming a QA number would be an overclaim. The dataset is **not** committed (size + licensing); the **headline numbers are intentionally NOT published** — they're maintainer-gated (a full reference-hardware run + methodology review, per the project's "measured, reproducible, reviewed — never a placeholder" bar). **982 → 993 tests** (+11 pure-function tests, positive + NEGATIVE controls).

@@ -96,7 +96,17 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
           cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run lint
       - run: npm run build
       - run: npm test

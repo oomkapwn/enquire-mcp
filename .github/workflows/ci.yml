@@ -23,7 +23,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run lint
 
   test:
@@ -50,7 +60,17 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run build
       - run: npm test
         env:
@@ -78,7 +98,17 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run build
       - run: npm test
 
@@ -92,7 +122,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run test:coverage
       # v3.5.12 — gate that CHANGELOG's claimed coverage stats match reality
       # within 0.5pp. Closes the class of bug v3.5.10 audit caught (inflated
@@ -124,7 +164,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run build
       # TypeDoc warnings on PR — treat as failure so doc drift fails CI,
       # not silently lands on main. The shell pipe captures the output and
@@ -156,7 +206,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       # OIA doesn't need a build — it greps source + docs. Skip `npm run build`.
       - run: npm run check:oia
 
@@ -171,7 +231,17 @@ jobs:
           # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm run build
       - name: Build synthetic vault
         id: vault
@@ -196,7 +266,17 @@ jobs:
           # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
           node-version: 22
           cache: npm
-      - run: npm ci
+      - name: Install deps (npm ci with retry)
+        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
+        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
+        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
+            sleep 15
+          done
       - run: npm audit --omit=dev --audit-level=moderate
       - run: npm audit --include=dev --audit-level=high
 

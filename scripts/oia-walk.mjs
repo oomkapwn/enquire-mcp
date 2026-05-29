@@ -23,8 +23,8 @@
 // Checks (all evidence-based — each finding includes file:line and the
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
-// canonical count is "9" (the top-level numbered checks 1–9), but check 4
-// has historically accreted sub-checks (4b/4c/4d/4e), so 13 distinct walks
+// canonical count is "10" (the top-level numbered checks 1–10), but check 4
+// has historically accreted sub-checks (4b/4c/4d/4e), so 14 distinct walks
 // actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
@@ -56,8 +56,11 @@
 //   9.  ACTION SHA-PIN — every third-party GitHub Action in
 //       .github/workflows/*.yml must be pinned to a 40-hex commit SHA, not a
 //       floating tag (supply-chain). [added rc.14]
+//   10. NPM-CI RETRY — every `npm ci` in .github/workflows/*.yml must be
+//       retry-wrapped (bare `- run: npm ci` fails the job on a transient
+//       onnxruntime-postinstall CDN ETIMEDOUT). [added rc.20]
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9 — check 4d/4e/4
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,10 — check 4d/4e/4
 // appear after the 4b/4c sub-checks for historical-accretion reasons; the
 // numbering is kept stable because CHANGELOG entries reference these IDs.
 //
@@ -821,6 +824,35 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           (lines[i] ?? "").trim().slice(0, 100),
           `GitHub Action '${ref}@${ver}' uses a floating tag, not a commit SHA — supply-chain risk (a tag can be moved to malicious code). Pin to the full 40-char commit SHA with a trailing '# ${ver}' comment (resolve via: gh api repos/${ref}/commits/${ver} --jq .sha).`
         );
+      }
+    }
+  }
+}
+
+// ─── Check 10: workflow `npm ci` steps must be retry-wrapped ──────────
+// v3.9.0-rc.20 — a bare `- run: npm ci` fails the whole job on a transient
+// network blip: the onnxruntime-node postinstall fetches its native binary
+// from a CDN that intermittently ETIMEDOUTs (hit rc.9, then FAILED the rc.19
+// release at the assert-CI gate). Every `npm ci` must run inside a retry loop
+// (`run: |` + `for n in 1 2 3; do npm ci && break; … sleep 15; done`). Flags
+// any line that is exactly a bare `- run: npm ci` (dependency-free guard — no
+// new action to SHA-pin, unlike a marketplace retry action).
+{
+  const wfDir = ".github/workflows";
+  if (existsSync(join(repoRoot, wfDir))) {
+    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
+      const rel = join(wfDir, wf);
+      const lines = readLines(rel);
+      for (let i = 0; i < lines.length; i++) {
+        if (/^\s*-\s*run:\s*npm ci\s*$/.test(lines[i] ?? "")) {
+          record(
+            "NPM-CI-NOT-RETRY-WRAPPED",
+            rel,
+            i + 1,
+            (lines[i] ?? "").trim(),
+            "Bare `npm ci` fails the job on a transient CDN blip (onnxruntime-node postinstall ETIMEDOUT — hit rc.9 + failed the rc.19 release). Wrap in a retry loop: `run: |` then `for n in 1 2 3; do npm ci && break; [ $n -eq 3 ] && exit 1; sleep 15; done`."
+          );
+        }
       }
     }
   }

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Comprehensive latency benchmark for enquire's read-tool surface.
 // Builds synthetic vaults at multiple scales (default: 100, 1_000, 10_000
-// notes) and times each tool 5x. Reports min / p50 / p99 in milliseconds.
+// notes) and times each tool 5x. Reports min / p50 / max in milliseconds
+// (with 5 samples "p99" would just be the max — see the honest labeling at the
+// reporting site below; external-audit L-4 residual, v3.9.0-rc.28).
 //
 // Run:  node scripts/bench.mjs                           (default scales)
 //       node scripts/bench.mjs 100 1000 5000              (custom scales)

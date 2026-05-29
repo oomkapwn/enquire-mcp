@@ -811,6 +811,32 @@ export async function peekEmbedDbMeta(file: string): Promise<{
 const peekCache = new Map<string, { mtimeMs: number; meta: PeekEmbedDbMetaResult }>();
 type PeekEmbedDbMetaResult = Awaited<ReturnType<typeof peekEmbedDbMeta>>;
 
+/**
+ * v3.9.0-rc.28 (external-audit M-6) — cap on `peekCache`. A long-running `serve`
+ * over a vault with many distinct `.embed.db` paths would otherwise grow the
+ * cache without bound (one entry per file path forever). 512 covers any
+ * realistic single-vault session with comfortable headroom.
+ */
+export const MAX_PEEK_CACHE_ENTRIES = 512;
+
+/**
+ * Insert `key→value` into an insertion-ordered `Map` used as an LRU cache, then
+ * evict the oldest entries until `size <= max`. Pure + exported so the eviction
+ * is unit-testable directly (the `peekEmbedDbMetaCached` path needs real files).
+ * Mirrors the `boundedSetAdd` helper (bases.ts, rc.15). On a re-set of an
+ * existing key the caller should `delete` first so recency is refreshed.
+ * @internal exported for unit tests.
+ */
+export function lruMapSet<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
+  map.delete(key); // refresh recency: re-inserting moves the key to the newest slot
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
 export async function peekEmbedDbMetaCached(file: string): Promise<PeekEmbedDbMetaResult> {
   const fsMod = await import("node:fs/promises");
   let mtimeMs: number;
@@ -825,10 +851,14 @@ export async function peekEmbedDbMetaCached(file: string): Promise<PeekEmbedDbMe
   }
   const cached = peekCache.get(file);
   if (cached && cached.mtimeMs === mtimeMs) {
+    // LRU recency bump: move this key to the newest slot so it isn't evicted
+    // ahead of genuinely-older entries.
+    peekCache.delete(file);
+    peekCache.set(file, cached);
     return cached.meta;
   }
   const meta = await peekEmbedDbMeta(file);
-  peekCache.set(file, { mtimeMs, meta });
+  lruMapSet(peekCache, file, { mtimeMs, meta }, MAX_PEEK_CACHE_ENTRIES);
   return meta;
 }
 

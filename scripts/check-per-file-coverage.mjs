@@ -100,7 +100,7 @@ const FLOORS = {
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).
-  "src/embed-pipeline.ts": { branches: 84 } // current 88.09% (v3.9.0-rc.2 preExtractedPages branches)
+  "src/embed-pipeline.ts": { branches: 84 } // current 86.95% (v3.9.0-rc.28 MAX_EMBED_CHARS clamp branch)
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

@@ -70,6 +70,9 @@ interface HttpServeCli extends ServeOptions {
  * A CLI-parity invariant test (`tests/cli-parity.test.ts`) asserts both
  * commands accept the same set of retrieval flags so future drift fails
  * CI rather than silently shipping an asymmetric surface.
+ *
+ * @param cmd - The commander `Command` (`serve` or `serve-http`) to extend.
+ * @returns The same `cmd`, with the shared retrieval flags registered (chainable).
  */
 function addAdvancedRetrievalOptions(cmd: Command): Command {
   return cmd
@@ -119,6 +122,28 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     );
 }
 
+/**
+ * CLI entry point — the function `dist/index.js` invokes when a user runs
+ * `enquire-mcp` from the terminal. Builds the commander program, registers every
+ * subcommand (`serve`, `serve-http`, `setup`, `install-model`, `install-ocr-lang`,
+ * `build-embeddings`, `index`, `eval`, `doctor`, `clear-cache`, `clear-index`,
+ * `clear-embeddings`, `gen-token`), wires the shared retrieval flags via
+ * `addAdvancedRetrievalOptions`, and parses `process.argv`. Each subcommand
+ * action handles its own errors and sets `process.exitCode`; `main` itself does
+ * not catch — an unexpected throw propagates to the top-level handler in
+ * `index.ts` which prints it and exits non-zero.
+ *
+ * @returns A promise that resolves once argument parsing + the selected
+ *   subcommand's action have completed (commander's `parseAsync`).
+ * @example
+ * ```ts
+ * // dist/index.js
+ * import { main } from "./cli.js";
+ * main().catch((e) => { console.error(e); process.exit(1); });
+ * ```
+ *
+ * v3.9.0-rc.28 (external-audit M-4) — the entry point previously had zero TSDoc.
+ */
 export async function main(): Promise<void> {
   const program = new Command();
   program

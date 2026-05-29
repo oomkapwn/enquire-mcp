@@ -18,7 +18,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearPeekCache, EmbedDb, peekEmbedDbMeta, peekEmbedDbMetaCached } from "../src/embed-db.js";
+import { clearPeekCache, EmbedDb, lruMapSet, peekEmbedDbMeta, peekEmbedDbMetaCached } from "../src/embed-db.js";
 
 describe("peekEmbedDbMetaCached (v3.7.0 L-1)", () => {
   let tmpDir: string;
@@ -111,5 +111,40 @@ describe("peekEmbedDbMetaCached (v3.7.0 L-1)", () => {
     // Same values but different objects — proves the manual clear worked.
     expect(second).toEqual(first);
     expect(second).not.toBe(first);
+  });
+});
+
+// v3.9.0-rc.28 (external-audit M-6) — the LRU bound that keeps `peekCache` from
+// growing without limit over a long-running serve. Driven directly (the cached
+// path needs real files); positive + NEGATIVE controls.
+describe("lruMapSet — bounded LRU insert", () => {
+  it("caps the map at `max` entries, evicting the oldest first (positive)", () => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < 10; i++) lruMapSet(m, `k${i}`, i, 4);
+    expect(m.size).toBe(4); // never exceeds the cap
+    // Oldest (k0..k5) evicted; newest 4 (k6..k9) retained.
+    expect([...m.keys()]).toEqual(["k6", "k7", "k8", "k9"]);
+    expect(m.get("k0")).toBeUndefined();
+    expect(m.get("k9")).toBe(9);
+  });
+
+  it("refreshes recency on re-set so a touched key is NOT evicted (LRU, not FIFO)", () => {
+    const m = new Map<string, number>();
+    lruMapSet(m, "a", 1, 3);
+    lruMapSet(m, "b", 2, 3);
+    lruMapSet(m, "c", 3, 3);
+    lruMapSet(m, "a", 10, 3); // touch "a" → now newest
+    lruMapSet(m, "d", 4, 3); // evicts the oldest, which is now "b" (not "a")
+    expect(m.has("a")).toBe(true);
+    expect(m.has("b")).toBe(false);
+    expect(m.get("a")).toBe(10);
+  });
+
+  it("(NEGATIVE control) a plain Map.set with no bound grows unbounded", () => {
+    // Proves the bound is what does the work: without lruMapSet, the same 10
+    // inserts leave 10 entries (the unbounded-growth the audit flagged).
+    const naive = new Map<string, number>();
+    for (let i = 0; i < 10; i++) naive.set(`k${i}`, i);
+    expect(naive.size).toBe(10);
   });
 });

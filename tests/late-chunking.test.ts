@@ -8,6 +8,7 @@
 //   • Tolerates missing breadcrumb / docTitle
 
 import { describe, expect, it } from "vitest";
+import { MAX_EMBED_CHARS } from "../src/embed-pipeline.js";
 import { buildEmbedText } from "../src/index.js";
 
 describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
@@ -93,5 +94,32 @@ describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
   it("returns empty string when index is out of range", () => {
     expect(buildEmbedText(chunks, 10, { contextChars: 0 })).toBe("");
     expect(buildEmbedText([], 0, { contextChars: 100 })).toBe("");
+  });
+
+  // v3.9.0-rc.28 (external-audit M-2) — clamp pathological assembled text.
+  describe("MAX_EMBED_CHARS clamp", () => {
+    const big = "word ".repeat(6000); // ~30K chars per chunk
+    const huge = [
+      { text: big, breadcrumb: "H > Prev" },
+      // Marker at the START of the chunk so it survives the head-of-core clamp.
+      { text: `CORECHUNK ${big}`, breadcrumb: "H > Mid" },
+      { text: big, breadcrumb: "H > Next" }
+    ];
+
+    it("clamps an oversized assembled context to <= MAX_EMBED_CHARS and keeps the core chunk", () => {
+      const out = buildEmbedText(huge, 1, { contextChars: 20000, docTitle: "Doc" });
+      expect(out.length).toBeLessThanOrEqual(MAX_EMBED_CHARS);
+      // The core chunk text must survive the clamp (neighbor context is dropped first).
+      expect(out).toContain("CORECHUNK");
+    });
+
+    it("(NEGATIVE control) does NOT clamp normal-size assembled text", () => {
+      // A modest context window stays well under the cap → returned verbatim,
+      // INCLUDING the neighbor context (proves the clamp only fires when over budget).
+      const out = buildEmbedText(chunks, 1, { contextChars: 50, docTitle: "Doc" });
+      expect(out.length).toBeLessThan(MAX_EMBED_CHARS);
+      expect(out).toContain("[doc: Doc]");
+      expect(out).toContain("…"); // neighbor context present (not the clamp fallback)
+    });
   });
 });

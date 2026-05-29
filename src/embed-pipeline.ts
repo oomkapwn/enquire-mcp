@@ -32,6 +32,17 @@ import { chunkContent } from "./fts5.js";
 import type { Vault } from "./vault.js";
 
 /**
+ * v3.9.0-rc.28 (external-audit M-2) — hard upper bound on the assembled
+ * late-chunking embed text. Any embedding model truncates at its token budget
+ * (the default `paraphrase-multilingual-MiniLM-L12-v2` at 128 tokens ≈ ~512
+ * chars), so passing arbitrarily long text just wastes tokenizer work. This cap
+ * (~2000 tokens, well above any model's window) bounds the worst case a large
+ * opt-in `--late-chunk-context` could produce. The DEFAULT path
+ * (`contextChars <= 0`) never assembles context and is unaffected.
+ */
+export const MAX_EMBED_CHARS = 8000;
+
+/**
  * v2.15.0 — context-prefixed embedding text builder ("late-chunking-style"
  * context windowing). Pre-pends the document title + heading breadcrumb,
  * then includes a tail of the previous chunk + the chunk itself + a head
@@ -78,7 +89,17 @@ export function buildEmbedText(
     const head = next.text.slice(0, opts.contextChars).replace(/\s\S*$/, "");
     if (head.length > 0) parts.push(`${head} …`);
   }
-  return parts.join("\n\n");
+  const joined = parts.join("\n\n");
+  if (joined.length <= MAX_EMBED_CHARS) return joined;
+  // v3.9.0-rc.28 (external-audit M-2) — a pathological `lateChunkContext` (e.g.
+  // 4000) can assemble ~12K chars, far beyond any embedding model's token budget
+  // (paraphrase-multilingual-MiniLM truncates at 128 tokens; the model would
+  // discard the overflow anyway, wasting tokenizer work). Clamp: keep the CORE
+  // chunk (+ breadcrumb) intact and drop the surrounding neighbor context, then
+  // hard-cap. Default path (`contextChars <= 0`) returns early above and is
+  // unaffected; this only fires on opt-in oversized context.
+  const core = c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
+  return core.slice(0, MAX_EMBED_CHARS);
 }
 
 /**

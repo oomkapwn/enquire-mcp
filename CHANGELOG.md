@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.28] — 2026-05-29
+
+> **TL;DR:** **External-audit re-verification response.** An external "Mavis" audit (on rc.24 / commit `d564eb5`) was supplied and re-verified — I treated every claim as untrusted and checked it against the actual code. Verdict: a competent breadth audit, but it **missed a live CRITICAL** (the ReDoS we'd independently found + fixed in rc.25 — its "no critical findings" was false for the commit it graded) and carried several factual errors ("14-check OIA" → it's 10; "22 bare `catch {}`" → 49, and **zero** truly-empty; "12 floors" → 11 files). This RC fixes the audit's **legitimate** code findings (M-2, M-6, M-4, the L-4 residual — each with positive + NEGATIVE controls), **rejects** one (H-4, documented), **defers** one (M-3, documented), and records the full re-verification in `docs/audits/`. The branch-protection findings (H-1/H-2/H-3) are **maintainer-only** (repo settings — out of scope for me to change). **1014 → 1019 tests**; zero behavior change (clamp + cache cap are opt-in/bounding only).
+
+**Patch — external-audit re-verification + fixes for the verified-real minor findings.**
+
+### Fixed (verified-real audit findings)
+
+- **M-2 — `buildEmbedText` assembled text now clamped (`MAX_EMBED_CHARS = 8000`).** A large opt-in `--late-chunk-context` could assemble ~12K chars, far beyond any embedding model's token budget (the model truncates anyway). Now bounded, preserving the core chunk and dropping neighbor context first. The **default path (`contextChars <= 0`) is unaffected** — bit-for-bit identical.
+- **M-6 — `peekCache` is now LRU-bounded (`MAX_PEEK_CACHE_ENTRIES = 512`).** A long-running `serve` over many distinct `.embed.db` paths previously grew the cache without limit. New exported pure `lruMapSet(map, key, value, max)` helper (mirrors rc.15's `boundedSetAdd`) does insert-with-eviction; the cached-hit path bumps recency (true LRU, not FIFO).
+- **M-4 — TSDoc on the CLI entry point.** `main()` (what `dist/index.js` invokes) had zero TSDoc; added `@returns` + `@example` + subcommand overview. Added `@param`/`@returns` to `addAdvancedRetrievalOptions()`.
+- **L-4 residual — `bench.mjs:4` header comment** still said "p99" though the output was relabeled "max" back in rc.8; comment corrected.
+
+### Rejected / deferred (documented per CLAUDE.md)
+
+- **H-4 (REJECTED as framed)** — "22 bare `catch {}` swallow errors silently." Re-verification: actual bare-catch count is **49** (not 22), and **none** are truly empty — all have deliberate fail-soft bodies (`return null` / `continue` / skip-unreadable). It's a style preference (capture `err` for logging), not silent swallowing; rated HIGH but is LOW. Adding `err` bindings across 49 deliberate fail-soft sites is noise > value.
+- **M-3 (DEFERRED)** — expose hnsw `m`/`efConstruction` as CLI flags. Two new shared CLI flags = disproportionate surface (cli-help.ts + both subcommands + api.md flag table + cli-parity + scope-completeness invariants) for an advanced-vault-only knob. Lighter alternative (document the defaults in `--help`) noted for a future tuning RC.
+- **H-1/H-2/H-3 (MAINTAINER-ONLY)** — branch protection (`docs`+`oia` not in required checks — verified true via `gh api`: 7 enforced, not 9; `enforce_admins:false`; 0 required reviews). Modifying repo security/access settings is out of scope for the agent; left for the maintainer with the exact `gh api` command in the re-verification doc.
+
+### Added
+
+- `docs/audits/v3.9.0-rc.24-external-mavis-reverification-2026-05-29.md` — the full per-finding re-verification + verdict. Headline: the external audit missed a live CRITICAL that our state-driven + adversarial-fuzz methodology caught — reinforcing the v3.6.1 "≥2 independent external auditors, different methodologies" gate for `@latest`.
+
+### Tests (1019)
+
++5 source `it()`: `late-chunking.test.ts` (MAX_EMBED_CHARS clamp positive + NEGATIVE control) + `peek-cache.test.ts` (`lruMapSet` cap/eviction, LRU-recency, + NEGATIVE control proving an unbounded `Map` grows). Test-count claims 1014 → 1019 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+
+### Files changed
+
+- `src/embed-pipeline.ts` (`MAX_EMBED_CHARS` + clamp), `src/embed-db.ts` (`lruMapSet` + `MAX_PEEK_CACHE_ENTRIES` + LRU-bumped peekCache), `src/cli.ts` (TSDoc on `main()` + `addAdvancedRetrievalOptions`), `scripts/bench.mjs` (header comment), `tests/late-chunking.test.ts`, `tests/peek-cache.test.ts`, `docs/audits/…reverification….md`, test-count claims → 1019.
+- version bump 3.9.0-rc.27 → 3.9.0-rc.28.
+
+---
+
 ## [3.9.0-rc.27] — 2026-05-29
 
 > **TL;DR:** **Positioning + discoverability** (the rc.18-deferred repo-page work + the ROADMAP's #1 messaging item). Sharpens the core differentiator across README + llms.txt + COMPARISON: enquire-mcp is **grounded** in the markdown you already wrote (verbatim, cited, editable), as opposed to conversation-memory tools (mem0/Zep/Supermemory) that **extract** facts from chat logs into a separate opaque store. Plus a copy-paste `claude mcp add` one-liner promoted into the README hero. Docs only — no code, no test, no numeric-claim change.

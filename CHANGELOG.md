@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.19] — 2026-05-29
+
+> **TL;DR:** **LongMemEval retrieval harness (sprint RC 11 — the v3.10 credibility lever, engineering half).** [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (Wu et al. 2024) is the long-term-memory benchmark Mem0/Zep publish against; no Obsidian-MCP has any LongMemEval-derived number. New [`scripts/bench-longmemeval.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-longmemeval.mjs) materializes each question's haystack sessions into a throwaway vault, indexes with FTS5, runs `searchHybrid`, and scores **`recall@k` / `MRR` / `NDCG@k` of the answer-bearing session(s)** (reusing `src/eval.ts`), aggregated per `question_type`. It measures **retrieval quality, NOT end-to-end QA accuracy** — enquire is a retriever, not an answerer; claiming a QA number would be an overclaim. The dataset is **not** committed (size + licensing); the **headline numbers are intentionally NOT published** — they're maintainer-gated (a full reference-hardware run + methodology review, per the project's "measured, reproducible, reviewed — never a placeholder" bar). **982 → 993 tests** (+11 pure-function tests, positive + NEGATIVE controls).
+
+**Patch — discoverability/credibility infrastructure (sprint RC 11). Scripts/tests/docs only; no `src/` runtime change.**
+
+### Added
+
+- **`scripts/bench-longmemeval.mjs`** — LongMemEval **retrieval** benchmark harness. Per question: materialize haystack sessions → one note each in a temp vault → `syncFtsIndex` → `searchHybrid` → score `recall@k`/`MRR`/`NDCG@k` of the answer session(s) (the same `src/eval.ts` metrics as the rest of `docs/benchmarks.md`), aggregated overall + per `question_type`; abstention (`*_abs`) questions counted separately. Pure helpers (`sessionToMarkdown`, `sessionNotePath`, `relevantSessionPaths`, `isAbstention`, `aggregateByType`) exported for unit testing; CLI guarded by `isEntrypoint`. `--dataset <path> [--limit N] [--k 10] [--embeddings]`. Missing dataset → exit 2 with download guidance (it's not committed).
+- **`npm run bench:longmemeval`** script.
+- **`docs/benchmarks.md` → "LongMemEval retrieval (external benchmark)"** section: the retrieval-vs-QA framing, the run command, and an explicit **"numbers pending a full maintainer run"** status (no fabricated/placeholder figures — the LongMemEval headline is the credibility centerpiece and goes through the same measured-and-reviewed bar as every other number).
+- **`.gitignore`** guard (`longmemeval*.json`, `longmemeval_*/`) so a maintainer's dataset download can't be accidentally committed.
+
+### Tests added (+11 new it() blocks, positive + NEGATIVE controls) — 982 → 993
+
+- `tests/longmemeval-harness.test.ts` (new) — `sessionNotePath` (safe-id + **path-traversal NEGATIVE control**), `sessionToMarkdown` (role-labelled turns + **malformed/empty-session NEGATIVE control**), `relevantSessionPaths` (explicit `answer_session_ids` + `has_answer` fallback + **empty-on-abstention NEGATIVE control**), `isAbstention` (`_abs` + NEGATIVE), `aggregateByType` (per-type averages + hit-rate + **empty-input NEGATIVE control**). The full benchmark run (needs the uncommitted dataset + heavy compute) is intentionally not a CI gate; the *logic that decides what's scored and how it aggregates* is.
+
+### Scope note — what ships vs. what's gated
+
+The **harness + tests ship now** (verifiable engineering). The **published LongMemEval score**, forgetting-aware staleness, and "grounded in your knowledge, not extracted" messaging remain **v3.10** — the score specifically is maintainer-gated (download + full run + review) so the credibility centerpiece is never an unreviewed auto-publish.
+
+### Files changed
+
+- `scripts/bench-longmemeval.mjs` (new), `tests/longmemeval-harness.test.ts` (new, +11), `docs/benchmarks.md` (LongMemEval section), `package.json` (`bench:longmemeval` script), `.gitignore` (dataset guard).
+- version bump 3.9.0-rc.18 → 3.9.0-rc.19 (7 surfaces); test count 982 → 993.
+
+---
+
 ## [3.9.0-rc.18] — 2026-05-29
 
 > **TL;DR:** **Brand-integrity: the social card stopped lying about SLSA (sprint RC 10).** State-driven read of `assets/social-preview.svg` — the GitHub social card, the single most-shared visual of the repo — caught a **`SLSA-3`** trust badge (line 137). That's a **residual instance of overclaim #15** (rc.7 downgraded SLSA-3 → SLSA Build L2 everywhere because `release.yml` only does `npm publish --provenance`); rc.7's sweep AND OIA Check 4d's original file scope both missed the SVG, so the card advertised a false security level for 11 RCs. Fixed the badge (`SLSA-3` → `SLSA L2`), re-rendered the PNG, and **extended OIA Check 4d's `claimFiles` to include `assets/social-preview.svg`** so the surface is permanently guarded. Detection power verified (injected `SLSA-3` → Check 4d flags `social-preview.svg:137`; clean after fix). **982 tests unchanged** (assets + audit-script only).

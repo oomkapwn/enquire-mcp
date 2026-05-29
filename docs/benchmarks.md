@@ -443,6 +443,49 @@ which makes Recall@10 forgiving. On a 1,000-note vault Recall@10 captures
 reranker's Recall@10 cost (-5.2 points here) would likely be smaller in
 relative terms.
 
+## LongMemEval retrieval (external benchmark)
+
+[LongMemEval](https://github.com/xiaowu0162/LongMemEval) (Wu et al. 2024,
+[arXiv:2410.10813](https://arxiv.org/abs/2410.10813)) is the standard
+long-term-memory benchmark the AI-memory leaders (Mem0, Zep) publish against.
+No Obsidian-MCP has any LongMemEval-derived number — so a measured one is a
+clear differentiator.
+
+**What we measure — and what we don't.** enquire-mcp is a *retriever* over a
+vault, not an answer-generating chat assistant. So this harness reports
+**retrieval quality** — `recall@k` / `MRR` / `NDCG@k` of the *answer-bearing
+session(s)* per question, using the **same `src/eval.ts` metrics** as the rest
+of this document. It deliberately does **not** report LongMemEval's end-to-end
+QA accuracy: that requires an LLM to generate an answer from the retrieved
+context, which is the calling agent's job, not the memory layer's. Reporting a
+QA-accuracy number for a retriever would be an overclaim.
+
+**Harness.** [`scripts/bench-longmemeval.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-longmemeval.mjs)
+(shipped v3.9.0-rc.19) materializes each question's haystack sessions into a
+throwaway vault (one note per session), indexes it with FTS5, runs
+`searchHybrid`, and scores `recall@k` / `MRR` / `NDCG@k` of the answer
+session(s) — aggregated overall and per `question_type` (single-session,
+multi-session, temporal-reasoning, knowledge-update, …). Abstention questions
+(`*_abs`) are counted separately, not scored for recall.
+
+**Running it** (the dataset is **not** committed — size + licensing):
+
+```bash
+# 1. Download longmemeval_s / _m / _oracle from the LongMemEval repo
+# 2. Then:
+npm run bench:longmemeval -- --dataset path/to/longmemeval_s.json --k 10
+#   optional: --limit N (sample the first N questions) · --embeddings (add the
+#   dense arm — heavy: per-question embed-db build)
+```
+
+**Status:** the harness + its pure-function tests ship in v3.9.0-rc.19; the
+**headline numbers are intentionally not published here yet** — they will be
+added once the maintainer runs the full set on reference hardware and reviews
+the methodology (a published LongMemEval figure is the project's credibility
+centerpiece, so it goes through the same "measured, reproducible, reviewed"
+bar as every other number in this document — never a placeholder or an
+estimate).
+
 ## Future work
 
 - Reproduce on **public BEIR / TREC subsets** so numbers can be compared

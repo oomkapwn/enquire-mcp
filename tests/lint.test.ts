@@ -1,3 +1,8 @@
+// META-INVARIANT-EXEMPT: this file exercises the `lintWiki` / `paperAudit` /
+// `getOpenQuestions` TOOLS (positive + negative inputs inline below), not a
+// repo-structural invariant whose drift needs a fixture. It was pulled into the
+// rc.23 structural-file scan by its name; the real backstop for the underlying
+// code lint is the `lint` CI gate (biome). No separate negative-control adds signal.
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

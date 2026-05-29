@@ -150,6 +150,15 @@ async function pickFreePort(): Promise<number> {
 describe("T-2 — obsidian_get_communities E2E (v3.8.5)", () => {
   let vault: string;
   let client: RpcClient | null = null;
+  // v3.9.0-rc.23 — CI-GUARD: ci.yml builds dist/ before `npm test`, so these
+  // E2E handler tests (incl. the 401-without-bearer auth check) MUST run, not
+  // silently `return` on a missing build. Fail loud if dist is absent in CI.
+  it("CI GUARD — dist/ is built in CI so E2E handler tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(distExists(), "dist/index.js must exist in CI (npm run build precedes npm test) so E2E tests run").toBe(
+      true
+    );
+  });
   beforeAll(async () => {
     if (!distExists()) return;
     vault = await makeWikilinkVault("comm");

@@ -17,6 +17,11 @@ import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;
 let outsideDir: string;
+// v3.9.0-rc.23 (full-audit batch 3) — capture whether symlink creation worked
+// so the symlink-escape privacy tests can `ctx.skip()` VISIBLY (not silently
+// `return` with zero assertions) when symlinks aren't supported, and a CI-GUARD
+// can hard-fail if the precondition vanishes in CI (same fix as rc.8's T1).
+let canSymlink = false;
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-sec-"));
@@ -27,6 +32,7 @@ beforeAll(async () => {
   try {
     await fs.symlink(path.join(outsideDir, "Secret.md"), path.join(root, "Secret-link.md"));
     await fs.symlink(outsideDir, path.join(root, "outside-dir-link"));
+    canSymlink = true;
   } catch {
     // On Windows without dev mode, symlinks may fail — tests that depend on this skip.
   }
@@ -38,6 +44,15 @@ afterAll(async () => {
 });
 
 describe("Vault — symlink safety", () => {
+  // v3.9.0-rc.23 — CI-GUARD: in CI, symlink creation MUST work so the
+  // symlink-escape privacy assertions below actually run. Fail loud if it
+  // doesn't (rather than every dependent test silently ctx.skip-ing — that's
+  // how a privacy-boundary regression could hide). No-op outside CI.
+  it("CI GUARD — symlink creation works so privacy-escape tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(canSymlink, "symlinks must be creatable in CI so the symlink-escape privacy tests execute").toBe(true);
+  });
+
   it("does not list files reached via symlinks", async () => {
     const v = new Vault(root);
     await v.ensureExists();
@@ -46,11 +61,11 @@ describe("Vault — symlink safety", () => {
     expect(notes.find((n) => n.title === "Secret")).toBeUndefined();
   });
 
-  it("rejects reads of symlinked files that resolve outside vault", async () => {
+  it("rejects reads of symlinked files that resolve outside vault", async (ctx) => {
     const v = new Vault(root);
     await v.ensureExists();
     const linkExists = await fs.lstat(path.join(root, "Secret-link.md")).catch(() => null);
-    if (!linkExists) return;
+    if (!linkExists) return ctx.skip();
     await expect(readNote(v, { path: "Secret-link.md" })).rejects.toThrow(/escapes vault root/);
   });
 
@@ -112,7 +127,7 @@ describe("Vault — cache cap & LRU", () => {
 });
 
 describe("Vault — internal symlinks", () => {
-  it("skips symlinks even when they point inside the vault", async () => {
+  it("skips symlinks even when they point inside the vault", async (ctx) => {
     const v = new Vault(root);
     await v.ensureExists();
     const target = path.join(root, "Target-internal.md");
@@ -120,7 +135,7 @@ describe("Vault — internal symlinks", () => {
     await fs.writeFile(target, "internal target");
     await fs.symlink(target, link).catch(() => null);
     const linkExists = await fs.lstat(link).catch(() => null);
-    if (!linkExists) return;
+    if (!linkExists) return ctx.skip();
     const titles = (await listNotes(v, {})).map((n) => n.title);
     expect(titles).toContain("Target-internal");
     expect(titles).not.toContain("Link-internal");
@@ -130,7 +145,7 @@ describe("Vault — internal symlinks", () => {
 });
 
 describe("Vault — listMarkdown(folder) symlink-out (audit P2-1)", () => {
-  it("returns empty when folder argument is a symlink to outside the vault", async () => {
+  it("returns empty when folder argument is a symlink to outside the vault", async (ctx) => {
     const v = new Vault(root);
     await v.ensureExists();
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-fold-out-"));
@@ -138,7 +153,7 @@ describe("Vault — listMarkdown(folder) symlink-out (audit P2-1)", () => {
     try {
       await fs.symlink(outside, path.join(root, "linked-out"));
       const linkExists = await fs.lstat(path.join(root, "linked-out")).catch(() => null);
-      if (!linkExists) return;
+      if (!linkExists) return ctx.skip();
       const out = await listNotes(v, { folder: "linked-out" });
       expect(out).toEqual([]);
     } finally {

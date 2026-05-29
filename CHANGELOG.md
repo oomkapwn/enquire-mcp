@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.23] — 2026-05-29
+
+> **TL;DR:** **Test-infra rigor (full-audit batch 3/3 — closes the audit).** The test auditor found the project's structural-enforcement apparatus was weaker than CLAUDE.md claimed: (HIGH) the META-invariant — the enforcer of the "every invariant has a NEGATIVE control" rule — passed if the token `NEGATIVE` appeared **anywhere, including a TODO comment** (reproduced), and its `*-invariant.test.ts` glob **silently excluded** real structural invariants (`no-internal-imports`, `lint`) and even itself; (MED) `security.test.ts` + `fts5.test.ts` had silent `return`-skips (the exact T1 anti-pattern rc.8 fixed) on security surfaces with no CI-GUARD; (LOW) `vault.ts` — the most security-critical module — had **no per-file coverage floor**, and `ocr.ts` floored only branches while its line coverage rotted to 44%. All closed. **1002 tests** (+5).
+
+**Patch — test-infrastructure rigor (full-audit batch 3/3). Tests/scripts only; no `src/` runtime change.**
+
+### Fixed
+
+- **META-invariant comment-bypass (HIGH).** `checkInvariantHasNegativeCoverage` accepted the `NEGATIVE`/`negative-control` token **anywhere in the file** — so `// TODO: add a negative-control later` + a vacuous test satisfied the rule (reproduced by the auditor). Path (a) now requires the token inside an actual **test declaration** (`it`/`test`/`describe` title) — a real inline negative control; a bare comment no longer counts. Files whose coverage lives in siblings or that delegate to a tool use the explicit `META-INVARIANT-EXEMPT` marker (path b).
+- **META-invariant glob-miss (HIGH).** The scan only walked `tests/*-invariant.test.ts`, silently excluding real structural invariants (`no-internal-imports.test.ts`, `lint.test.ts`) and the meta file itself — a dev could dodge the rule by filename. The scan now also covers a curated `EXTRA_STRUCTURAL_FILES` set (`docs-consistency`, `cli-parity`, `lint`, `no-internal-imports`, `meta-invariant-coverage`). `no-internal-imports` got a **real inline NEGATIVE control** (extracted a pure `restrictedImportViolations` matcher; a synthetic restricted-import is flagged, an allowed one isn't); `lint` + `k1-class` carry `META-INVARIANT-EXEMPT` markers (delegation-to-biome / sibling-coverage).
+- **Silent-skip security surfaces (MED).** `security.test.ts` (symlink-escape privacy) + `fts5.test.ts` (FTS5 injection-escaping) `return`ed silently with zero assertions when their precondition (symlink support / better-sqlite3) was absent — green-passing a security surface. Added **CI-GUARD tripwires** (fail loud in CI if the precondition vanishes) + converted the 3 `security.test.ts` symlink skips to visible `ctx.skip()`. Also added a CI-GUARD to `e2e-handlers.test.ts` (the 401-no-bearer auth E2E). Same fix as rc.8's T1.
+- **Per-file FLOORS gaps (LOW).** Added `src/vault.ts` (`branches: 75`; actual 78.03%) — the most security-critical module (path-traversal/symlink/privacy), previously the lone critical module with no per-file gate. Added an `ocr.ts` `lines: 40` floor (actual 44.44%) so the #16 offline-enforcement surface's line coverage can't silently rot under a branches-only floor.
+
+### Tests (1002, +5)
+
++1 META-invariant self-test proving the comment/TODO-only bypass is now **rejected** (positive: the EXEMPT path still works); +1 `no-internal-imports` NEGATIVE control; +3 CI-GUARD tripwires (`security`, `fts5`, `e2e-handlers`).
+
+### Files changed
+
+- `tests/meta-invariant-coverage.test.ts` (tightened path-a check + broadened scan + bypass-rejected self-test), `tests/no-internal-imports.test.ts` (pure matcher + NEGATIVE control), `tests/lint.test.ts` + `tests/k1-class-invariant.test.ts` (EXEMPT markers), `tests/security.test.ts` (CI-GUARD + 3 `ctx.skip()`), `tests/fts5.test.ts` + `tests/e2e-handlers.test.ts` (CI-GUARDs), `scripts/check-per-file-coverage.mjs` (vault.ts + ocr.ts floors).
+- version bump 3.9.0-rc.22 → 3.9.0-rc.23 (7 surfaces); test count 997 → 1002.
+
+### Full-audit closure
+
+This completes the 3-batch response to the multi-agent state-driven audit: **rc.21** (security — verified ReDoS), **rc.22** (docs drift + structural guards), **rc.23** (test-infra rigor). The automated 10-gate baseline was clean throughout; the `src/` runtime audited exceptionally clean (the only `src/` finding was the rc.21 ReDoS). Net: 4 HIGH + 1 security-MED + several LOW closed, each with a structural defense where one was missing.
+
+---
+
 ## [3.9.0-rc.22] — 2026-05-29
 
 > **TL;DR:** **Docs-drift + structural guards (full-audit batch 2/3).** The docs auditor found 2 claim-vs-reality drifts the gates didn't catch: (HIGH) `STABILITY.md` stated the `--reranker-model` default alias is `rerank-multilingual` — but the code default is `rerank-bge` (the **3rd instance** of the exact α-class drift fixed in rc.15 TSDoc + rc.16 CLI help, now in a *packaged semver-contract doc*); (MED) `ROADMAP.md` said "**8** state-driven OIA drift checks" when the canonical count is **10** (Check 9 rc.14, Check 10 rc.20). Both fixed AND each gets a structural guard in `tests/docs-consistency.test.ts` so the class can't recur. **997 tests** (+2 docs-consistency guards).

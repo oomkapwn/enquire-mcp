@@ -26,6 +26,15 @@ afterEach(async () => {
 });
 
 describe("safeFts5Query", () => {
+  // v3.9.0-rc.23 — CI-GUARD: better-sqlite3 is installed in CI, so the 23
+  // FTS5 tests below (incl. the safeFts5Query injection-escaping security
+  // checks) MUST run, not silently `return` on a load failure. Fail loud if
+  // the precondition vanishes in CI. No-op outside CI. (rc.8 T1 pattern.)
+  it("CI GUARD — better-sqlite3 loads in CI so FTS5 tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(canRunFts5, "better-sqlite3 must load in CI so FTS5 + injection-escaping tests execute").toBe(true);
+  });
+
   it("passes plain alphanumeric tokens unchanged", () => {
     expect(safeFts5Query("hello world")).toBe("hello world");
   });

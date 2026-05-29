@@ -23,8 +23,8 @@
 // Checks (all evidence-based — each finding includes file:line and the
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
-// canonical count is "8" (the top-level numbered checks 1–8), but check 4
-// has historically accreted sub-checks (4b/4c/4d/4e), so 12 distinct walks
+// canonical count is "9" (the top-level numbered checks 1–9), but check 4
+// has historically accreted sub-checks (4b/4c/4d/4e), so 13 distinct walks
 // actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
@@ -53,8 +53,11 @@
 //       vX.Y.Z-rc.N" must match the EXACT current version, not just maj.minor).
 //   8.  SCOPE-COMPLETENESS — delegates to scope-completeness-audit.mjs
 //       (numeric-claim + deferred-claim + cli-flag-coverage dimensions).
+//   9.  ACTION SHA-PIN — every third-party GitHub Action in
+//       .github/workflows/*.yml must be pinned to a 40-hex commit SHA, not a
+//       floating tag (supply-chain). [added rc.14]
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8 — check 4d/4e/4
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9 — check 4d/4e/4
 // appear after the 4b/4c sub-checks for historical-accretion reasons; the
 // numbering is kept stable because CHANGELOG entries reference these IDs.
 //
@@ -778,6 +781,38 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         `scripts/scope-completeness-audit.mjs, OR (b) add the file to ` +
         `DEFENSES['${f.defense}'].exempts with reasoning. ${f.rationale}`
     );
+  }
+}
+
+// ─── Check 9: GitHub Actions must be SHA-pinned (supply-chain) ─────────
+// v3.9.0-rc.14 — a floating action tag (`uses: org/action@v3` or `@main`) can
+// be silently retagged to malicious code; SHA-pinning to a 40-hex commit (with
+// a `# vN` comment for humans + Dependabot) is the OpenSSF "Pinned-Dependencies"
+// best practice and matches this project's supply-chain brand (SLSA L2 +
+// provenance). Flags any third-party action ref NOT pinned to a commit SHA.
+// Local reusable refs (`./.github/...`) and already-pinned `@<40hex>` pass.
+{
+  const wfDir = ".github/workflows";
+  if (existsSync(join(repoRoot, wfDir))) {
+    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
+      const rel = join(wfDir, wf);
+      const lines = readLines(rel);
+      for (let i = 0; i < lines.length; i++) {
+        const m = /uses:\s*([^\s@]+)@([^\s#]+)/.exec(lines[i] ?? "");
+        if (!m) continue;
+        const ref = m[1];
+        const ver = m[2];
+        if (ref.startsWith("./")) continue; // local reusable workflow — no pin needed
+        if (/^[0-9a-f]{40}$/.test(ver)) continue; // already SHA-pinned
+        record(
+          "ACTION-NOT-SHA-PINNED",
+          rel,
+          i + 1,
+          (lines[i] ?? "").trim().slice(0, 100),
+          `GitHub Action '${ref}@${ver}' uses a floating tag, not a commit SHA — supply-chain risk (a tag can be moved to malicious code). Pin to the full 40-char commit SHA with a trailing '# ${ver}' comment (resolve via: gh api repos/${ref}/commits/${ver} --jq .sha).`
+        );
+      }
+    }
   }
 }
 

@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           # We need full history so we can verify the tagged SHA is reachable
@@ -90,7 +90,7 @@ jobs:
             echo "CI still running ($DONE/$REQ_COUNT required checks complete; attempt $attempt/10) — waiting 30s..."
             sleep 30
           done
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"

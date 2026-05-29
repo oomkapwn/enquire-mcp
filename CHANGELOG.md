@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.14] — 2026-05-29
+
+> **TL;DR:** **Supply-chain: SHA-pin every GitHub Action + a structural guard so they can't drift back (sprint RC 6).** Floating action tags (`uses: actions/checkout@v6`) can be silently retagged to malicious code — the OpenSSF "Pinned-Dependencies" check + this project's supply-chain brand (SLSA L2 + signed provenance) call for commit-SHA pins. All **28 action refs across the 4 workflows** are now pinned to their exact current 40-hex commit SHA (behavior identical) with a `# vN` comment for humans + Dependabot. New **OIA Check 9** fails CI if any third-party action ever uses a floating tag again — making the pin self-enforcing. **Workflows + audit-script + docs only; 966 tests unchanged.**
+
+**Patch — audit-driven supply-chain (sprint RC 6).**
+
+### Fixed
+
+- **SHA-pin all GitHub Actions (28 refs / 4 workflows).** `actions/checkout@v6`, `actions/setup-node@v6`, `actions/upload-artifact@v7`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v5`, `actions/deploy-pages@v5` → each pinned to the exact commit SHA the tag currently resolves to (resolved via `gh api repos/actions/<x>/commits/<tag>`), with a trailing `# vN` comment. Identical behavior today; immune to tag-moving supply-chain attacks. Spans `ci.yml` (19), `publish-docs.yml` (5), `release.yml` (2), `dist-tag-cleanup.yml` (2).
+
+### Structural defense
+
+- **OIA Check 9 — Actions SHA-pin.** Scans every `.github/workflows/*.yml` `uses:` line; flags any third-party action NOT pinned to a 40-hex commit SHA (local `./.github/...` reusable refs exempt). **Verified non-vacuous** (all 28 current refs pass — silent for the right reason) **and with detection power** (a floating `@v6` / `@main` would flag). Makes the pin permanent: a future unpinned action fails CI. This is the 9th numbered OIA walk (header + AGENTS + CLAUDE counts synced 8 → 9).
+
+### Deferred (tracked)
+
+OpenSSF Scorecard workflow + `dependency-review-action` on PRs — additive new workflows (each itself SHA-pinned) → a follow-up supply-chain RC. SHA-pinning is the highest-value item (the concrete hardening + the Scorecard "Pinned-Dependencies" win) and ships here first.
+
+### Files changed
+
+- `.github/workflows/{ci,publish-docs,release,dist-tag-cleanup}.yml` — 28 action refs SHA-pinned.
+- `scripts/oia-walk.mjs` — Check 9 + header enumeration (8 → 9 numbered, 12 → 13 blocks).
+- `AGENTS.md`, `CLAUDE.md` — OIA check count 8 → 9.
+- version bump 3.9.0-rc.13 → 3.9.0-rc.14 (7 surfaces). **966 tests unchanged.**
+
+---
+
 ## [3.9.0-rc.13] — 2026-05-29
 
 > **TL;DR:** **State-driven docs hygiene (sprint RC 5).** Clears the deferred-from-rc.12 backlog of stale-fragment fixes the file-by-file audit found — none CI-blocking, all honesty/credibility: CITATION.cff named the wrong default models; a script comment still credited the retracted "Cursor external audit" (overclaim #11); AGENTS.md said the version gate checks "5 surfaces" (it's 7) and listed a phantom `bench` CLI subcommand; several **packaged docs** (README, docs/api.md, docs/benchmarks.md — all ship in the npm tarball) linked to repo paths that **don't** ship (`../tests/`, `../src/`, `../bench/`, `./AGENTS.md`, `./ROADMAP.md`, `./llms.txt`, `.github/…`) → 404 for npm-page readers; and the rc.7 CHANGELOG entry's forward-claim ("#16 → rc.8, H1 → rc.9") was left stale after the rc.8 pivot re-sequenced them to rc.10/rc.11. **Docs/metadata/script only; 966 tests unchanged.**

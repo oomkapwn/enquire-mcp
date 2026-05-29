@@ -44,7 +44,15 @@ const EXTRA_STRUCTURAL_FILES = [
   "cli-parity.test.ts",
   "lint.test.ts",
   "no-internal-imports.test.ts",
-  "meta-invariant-coverage.test.ts"
+  "meta-invariant-coverage.test.ts",
+  // v3.9.0-rc.26 (rc.25-audit LOW-1) — two more invariant-SHAPED tests that
+  // assert source/state against a canonical value but aren't named
+  // `*-invariant.test.ts`, so they escaped the glob. Both already carry a real
+  // NEGATIVE control (k1-version-stamp drives `scanK1Stamps` on a bad fixture;
+  // jsonld has an empty-answer control) — listing them keeps the meta-invariant
+  // watching that those controls don't rot.
+  "k1-version-stamp-consistency.test.ts",
+  "jsonld.test.ts"
 ];
 
 /** Discover all structural-invariant test files: every `*-invariant.test.ts`
@@ -82,13 +90,65 @@ async function collectInvariantTestFiles(): Promise<string[]> {
  *  `// TODO: add negative-control later`) trivially satisfied "token anywhere".
  *  Files whose coverage genuinely lives in sibling files, or that delegate to
  *  an external tool (lint→biome), use the explicit EXEMPT marker (path b). */
+/**
+ * Strip comments so a COMMENTED-OUT negative control can't satisfy the rule.
+ * Removes block comments, then any line whose first non-whitespace is `//`
+ * (conservative — a trailing `// ...` after code, or `//` inside a string, is
+ * left alone; the bypass we close is a full-line `// it("NEGATIVE"…)`).
+ * @internal v3.9.0-rc.26 (closes the rc.25-audit HIGH-1 commented-out bypass).
+ */
+function stripComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join("\n");
+}
+
+/**
+ * From the `it(`/`test(`/`describe(` whose token is at `startIndex`, return the
+ * source of its callback body (balanced braces from the first `{` after the
+ * opening). Empty string if no `{` body is found (an arrow with an expression
+ * body, e.g. `it("x", () => expect(...))`, returns "" — handled by the caller's
+ * fallback assertion scan).
+ * @internal v3.9.0-rc.26.
+ */
+function callbackBody(code: string, startIndex: number): string {
+  const open = code.indexOf("{", startIndex);
+  if (open === -1) return "";
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    const c = code[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return code.slice(open, i + 1);
+    }
+  }
+  return code.slice(open); // unbalanced (truncated) — return the rest
+}
+
+const ASSERTION_RE =
+  /\b(?:expect|assert)\s*\(|\.(?:toBe|toEqual|toStrictEqual|toThrow|toMatch|toContain|toHaveLength|toBeGreaterThan|toBeLessThan|toBeNull|toBeDefined|rejects|resolves|fail)\b/;
+
 function checkInvariantHasNegativeCoverage(filename: string, content: string): string | null {
   // Path (a): an INLINE negative-control TEST — the token inside an
-  // it()/test()/describe() title. Repo convention is mixed-case
-  // ("NEGATIVE" / "negative-control"); accept both. A bare comment/TODO
-  // containing the token no longer counts.
-  const inlineNegControl = /\b(?:it|test|describe)\s*\(\s*(["'`])[^"'`]*(?:NEGATIVE|negative[-_]control)/.test(content);
-  if (inlineNegControl) return null;
+  // it()/test()/describe() title, whose CALLBACK BODY actually asserts. Repo
+  // convention is mixed-case ("NEGATIVE" / "negative-control"); accept both.
+  // v3.9.0-rc.26 (rc.25-audit HIGH-1): comments are stripped first (a
+  // commented-out test no longer counts) AND the matched test's body must
+  // contain an assertion (an empty-body `it("NEGATIVE", () => {})` no longer
+  // counts — that vacuity is exactly what this META-invariant exists to forbid).
+  const code = stripComments(content);
+  const titleRe = /\b(?:it|test|describe)\s*\(\s*(["'`])[^"'`]*(?:NEGATIVE|negative[-_]control)[^"'`]*\1/g;
+  let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard exec-loop idiom
+  while ((m = titleRe.exec(code)) !== null) {
+    const body = callbackBody(code, m.index);
+    // A `{ }` body must assert; an expression-bodied arrow (no `{`) is accepted
+    // (it IS an assertion, e.g. `() => expect(fn()).toThrow()`).
+    if (body === "" || ASSERTION_RE.test(body)) return null;
+  }
 
   // Path (b): explicit exempt marker citing siblings / delegation. Format:
   //   // META-INVARIANT-EXEMPT: <reason>
@@ -111,8 +171,8 @@ describe("META-invariant: NEGATIVE control coverage for every *-invariant.test.t
     const files = await collectInvariantTestFiles();
     expect(
       files.length,
-      "expected ≥ 9 structural-invariant files (5 *-invariant.test.ts + curated EXTRA_STRUCTURAL_FILES)"
-    ).toBeGreaterThanOrEqual(9);
+      "expected ≥ 11 structural-invariant files (*-invariant.test.ts + curated EXTRA_STRUCTURAL_FILES)"
+    ).toBeGreaterThanOrEqual(11);
 
     const violations: string[] = [];
     for (const file of files) {
@@ -146,14 +206,38 @@ describe("META-invariant: NEGATIVE control coverage for every *-invariant.test.t
     expect(checkInvariantHasNegativeCoverage("y-invariant.test.ts", proseOnly)).toMatch(/META-INVARIANT-EXEMPT/);
   });
 
-  it("NEGATIVE: checkInvariantHasNegativeCoverage accepts file with NEGATIVE token (uppercase)", () => {
-    const goodContent = `// has coverage\nit("NEGATIVE: catches drift", () => {});`;
+  it("NEGATIVE: checkInvariantHasNegativeCoverage accepts file with NEGATIVE token + asserting body (uppercase)", () => {
+    const goodContent = `// has coverage\nit("NEGATIVE: catches drift", () => { expect(check("bad")).toMatch(/x/); });`;
     expect(checkInvariantHasNegativeCoverage("good-invariant.test.ts", goodContent)).toBeNull();
   });
 
-  it("NEGATIVE: checkInvariantHasNegativeCoverage accepts file with negative-control (hyphenated)", () => {
-    const goodContent = `// has coverage\ndescribe("foo — negative-control via fixtures", () => {});`;
+  it("NEGATIVE: checkInvariantHasNegativeCoverage accepts negative-control describe with asserting nested test (hyphenated)", () => {
+    const goodContent = `// has coverage\ndescribe("foo — negative-control via fixtures", () => { it("flags drift", () => { expect(run()).toBe(false); }); });`;
     expect(checkInvariantHasNegativeCoverage("good-invariant.test.ts", goodContent)).toBeNull();
+  });
+
+  it("NEGATIVE: an EMPTY-body negative control is REJECTED (rc.26 — closes the vacuity bypass)", () => {
+    // The HIGH-1 gap the rc.25 audit found: a title with the token but a body
+    // that asserts NOTHING is vacuous — the exact thing this META-invariant forbids.
+    const emptyBody = `// header\nit("NEGATIVE: catches drift", () => {});`;
+    expect(checkInvariantHasNegativeCoverage("empty-invariant.test.ts", emptyBody)).toMatch(
+      /no INLINE NEGATIVE control test/
+    );
+  });
+
+  it("NEGATIVE: a COMMENTED-OUT negative control is REJECTED (rc.26 — comments stripped first)", () => {
+    // A full-line-commented test must not satisfy the rule even though its text
+    // contains both the token and an assertion.
+    const commentedOut = `// it("NEGATIVE: catches drift", () => { expect(x).toBe(1); });\nit("real", () => { expect(2).toBe(2); });`;
+    expect(checkInvariantHasNegativeCoverage("commented-invariant.test.ts", commentedOut)).toMatch(
+      /no INLINE NEGATIVE control test/
+    );
+  });
+
+  it("NEGATIVE: an expression-bodied arrow negative control is accepted (no `{` body)", () => {
+    // `() => expect(...)` IS an assertion — accept it (don't require a brace body).
+    const exprBody = `// header\nit("NEGATIVE: rejects bad input", () => expect(() => parse("bad")).toThrow());`;
+    expect(checkInvariantHasNegativeCoverage("expr-invariant.test.ts", exprBody)).toBeNull();
   });
 
   it("NEGATIVE: checkInvariantHasNegativeCoverage accepts explicit exempt marker", () => {

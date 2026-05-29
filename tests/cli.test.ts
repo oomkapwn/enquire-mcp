@@ -186,14 +186,28 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     }
   }
 
-  it("`enquire-mcp --version` prints the package version", () => {
-    if (!distExists()) return;
+  // v3.9.0-rc.26 (rc.25-audit HIGH-2) — CI-GUARD tripwire. The CLI E2E tests
+  // below (incl. the bearer-auth ≥16 security checks and the K-1 FTS5-preservation
+  // correctness test) skip via ctx.skip() when dist/ isn't built or FTS5 is
+  // unavailable. That's correct for local dev, but it would SILENTLY no-op the
+  // entire file in CI if a precondition regressed (e.g. the `prepare` build hook
+  // stops running). This tripwire HARD-FAILS in CI if the preconditions vanish,
+  // so the skips can never hide a coverage loss. Mirrors the rc.8/rc.23 pattern
+  // in security.test.ts / fts5.test.ts / e2e-handlers.test.ts.
+  it("CI GUARD — dist/ built + FTS5 available in CI so the CLI E2E + bearer-auth + K-1 tests run", () => {
+    if (!process.env.CI) return;
+    expect(distExists()).toBe(true);
+    expect(canRunFts5).toBe(true);
+  });
+
+  it("`enquire-mcp --version` prints the package version", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const out = execFileSync(process.execPath, [distEntry, "--version"], { encoding: "utf8" });
     expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
   });
 
-  it("`enquire-mcp --help` shows all subcommands (serve / clear-cache / clear-index / index)", () => {
-    if (!distExists()) return;
+  it("`enquire-mcp --help` shows all subcommands (serve / clear-cache / clear-index / index)", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const out = execFileSync(process.execPath, [distEntry, "--help"], { encoding: "utf8" });
     // commander's auto-help lists subcommands in a Commands: section.
     expect(out).toContain("serve");
@@ -206,8 +220,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   // action (reconciled with startHttpServer's ≥16 throw) so the user gets a
   // friendly hint + clean exit(1) before any server setup. Both branches exit
   // before binding, so spawnSync returns fast.
-  it("`serve-http --bearer-token <short>` exits 1 with a ≥16-char hint (NEGATIVE control)", () => {
-    if (!distExists()) return;
+  it("`serve-http --bearer-token <short>` exits 1 with a ≥16-char hint (NEGATIVE control)", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const res = spawnSync(process.execPath, [distEntry, "serve-http", "--vault", vault, "--bearer-token", "short"], {
       encoding: "utf8",
       timeout: 20000
@@ -217,8 +231,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(res.stderr).toContain("gen-token");
   });
 
-  it("`serve-http` with NO bearer token exits 1 with a 'required' message (contrast control)", () => {
-    if (!distExists()) return;
+  it("`serve-http` with NO bearer token exits 1 with a 'required' message (contrast control)", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const res = spawnSync(process.execPath, [distEntry, "serve-http", "--vault", vault], {
       encoding: "utf8",
       timeout: 20000
@@ -229,8 +243,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(res.stderr).not.toMatch(/≥16 chars/);
   });
 
-  it("`enquire-mcp clear-cache` reports 'no cache file' when none exists", () => {
-    if (!distExists()) return;
+  it("`enquire-mcp clear-cache` reports 'no cache file' when none exists", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const cacheFile = path.join(tmpdir, "no-such.json");
     const out = execFileSync(
       process.execPath,
@@ -240,8 +254,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("no cache file");
   });
 
-  it("`enquire-mcp clear-index` reports 'no fts5 index' when none exists", () => {
-    if (!distExists()) return;
+  it("`enquire-mcp clear-index` reports 'no fts5 index' when none exists", (ctx) => {
+    if (!distExists()) return ctx.skip();
     const indexFile = path.join(tmpdir, "no-such.fts5.db");
     const out = execFileSync(
       process.execPath,
@@ -251,9 +265,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("no fts5 index");
   });
 
-  it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "test.fts5.db");
     const out = execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
@@ -262,9 +276,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain(indexFile);
   });
 
-  it("`enquire-mcp clear-index` removes db + WAL/SHM after a build", async () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp clear-index` removes db + WAL/SHM after a build", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "purge.fts5.db");
     execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
@@ -289,9 +303,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(dbStillThere).toBe(false);
   });
 
-  it("`enquire-mcp index` then second call reports unchanged=N (incremental skips unchanged files)", () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp index` then second call reports unchanged=N (incremental skips unchanged files)", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "incremental.fts5.db");
     execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
       encoding: "utf8"
@@ -303,9 +317,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out2).toMatch(/added=0 updated=0 deleted=0 unchanged=2/);
   });
 
-  it("`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize PRESERVES trigram (v3.6.4 K-1 fix)", () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize PRESERVES trigram (v3.6.4 K-1 fix)", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "tokenize-flip.fts5.db");
     execFileSync(
       process.execPath,
@@ -325,9 +339,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // what matters for the K-1 contract.
   });
 
-  it("`enquire-mcp index --tokenize trigram` then re-run WITH explicit --tokenize unicode61 DOES rebuild (v3.6.4 forced-rebuild path)", () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp index --tokenize trigram` then re-run WITH explicit --tokenize unicode61 DOES rebuild (v3.6.4 forced-rebuild path)", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "tokenize-flip-forced.fts5.db");
     execFileSync(
       process.execPath,
@@ -356,9 +370,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   // BEFORE the embedder load. That proves the peek-and-honor logic ran
   // even when the test environment can't complete the full subcommand.
 
-  it("`enquire-mcp setup --skip-embeddings` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp setup --skip-embeddings` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     // setup uses `defaultIndexFile(v.root)` where v.root is the REALPATH of
     // the vault (Vault.ensureExists() does fs.realpath). On macOS,
     // tmpdir/.../vault → /private/var/.../vault. To make our peek and
@@ -392,9 +406,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(setupResult.status).toBe(0);
   });
 
-  it("`enquire-mcp eval --persistent-index` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp eval --persistent-index` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     // eval uses defaultIndexFile(v.root) — same realpath concern as setup.
     const realVault = await fs.realpath(vault);
     const { defaultIndexFile } = await import("../src/fts5.js");
@@ -428,9 +442,9 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   // on macOS CI). Round-23 external audit caught the mismatch: vitest
   // global testTimeout=15s vs spawnSync=60s. Per-it override to 90s
   // gives subprocess room to finish + 30s assertion budget after.
-  it("`enquire-mcp build-embeddings` (no --embedding-model) HONORS existing model_alias=bge in stderr message (v3.7.0 M-1)", async () => {
-    if (!distExists()) return;
-    if (!canRunFts5) return;
+  it("`enquire-mcp build-embeddings` (no --embedding-model) HONORS existing model_alias=bge in stderr message (v3.7.0 M-1)", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
     // build-embeddings uses embedDbPath(vault.root) — same realpath concern.
     const realVault = await fs.realpath(vault);
     const { embedDbPath } = await import("../src/tool-registry.js");

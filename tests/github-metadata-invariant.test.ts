@@ -97,6 +97,21 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // the test "passes" without asserting (treated as a no-op skip).
   const available = ghIsAvailable();
 
+  // v3.9.0-rc.26 (rc.25-audit MED-1) — CI-GUARD tripwire. The two metadata
+  // invariants below early-return when `gh` isn't authenticated, which is correct
+  // for local dev but would let them SILENTLY no-op in CI if the `GH_TOKEN` the
+  // `test` job sets ever lost its scope or the gh CLI regressed. This tripwire
+  // hard-fails in CI WHEN A TOKEN IS PROVIDED, so a broken-auth regression on the
+  // token-bearing job surfaces. (Jobs that intentionally omit GH_TOKEN — e.g.
+  // `coverage` — are not asserted against; the `&& GH_TOKEN` gate skips them.)
+  it("CI GUARD — when CI provides GH_TOKEN, gh is actually authenticated (metadata invariants run)", () => {
+    if (!process.env.CI || !process.env.GH_TOKEN) return;
+    expect(
+      ghIsAvailable(),
+      "GH_TOKEN is set in CI but `gh auth status` failed — the About/Topics invariants would silently no-op"
+    ).toBe(true);
+  });
+
   it("repo About description leads with 'The most advanced Obsidian MCP'", () => {
     if (!available) {
       // v3.7.13 L4 — CI now sets `GH_TOKEN: ${{ github.token }}` so this

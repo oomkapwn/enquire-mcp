@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.26] — 2026-05-29
+
+> **TL;DR:** **Closes the pre-stable audit — test-infra rigor (batch 2/3) + docs drift (batch 3/3).** The same 3-agent audit that found the rc.25 CRITICAL flagged two HIGH defense-integrity gaps: (HIGH-1) the **META-invariant** — the enforcer of "every invariant has a real NEGATIVE control" — was itself partly vacuous: it accepted a COMMENTED-OUT `it(` and an EMPTY-BODY `it("NEGATIVE", () => {})`; (HIGH-2) `cli.test.ts` (22 tests incl. the bearer-auth ≥16 checks + the K-1 FTS5-preservation test) used silent `return` skips with **no CI-GUARD**, so the whole file could no-op in CI if a precondition regressed — the rc.23 CI-GUARD sweep missed this file. Plus MED/LOW (github-metadata CI-GUARD, scope-completeness control drove a re-implemented copy, two invariant-shaped files outside the meta-invariant glob, coverage job built dist only via the `prepare` hook) and docs drift (per-file-floor counter under-counted 11→reported 10, ROADMAP stale checkboxes, STABILITY missing `install-ocr-lang`). **1009 → 1014 tests.** Tests/scripts/workflow/docs only — zero `src/` runtime change. With rc.25 (security) this fully closes the pre-stable audit; the `src/` runtime audited exceptionally clean.
+
+**Patch — pre-stable audit response, batches 2/3 (test-infra) + 3/3 (docs).**
+
+### Fixed — test-infra (batch 2/3)
+
+- **HIGH-1 — the META-invariant was itself partly vacuous (meta-recursion).** `checkInvariantHasNegativeCoverage` matched the `NEGATIVE`/`negative-control` token in an `it`/`describe` TITLE but (a) didn't strip comments — a full-line `// it("NEGATIVE", …)` satisfied it — and (b) didn't inspect the body — an empty `it("NEGATIVE", () => {})` satisfied it. The enforcer of "no vacuous invariant" was thus partly vacuous (the exact recursion class CLAUDE.md tracks; rc.23 advertised this fixed but only moved the vacuity from "token anywhere" to "token in a title"). Now: comments are stripped first, and the matched test's **callback body must contain an assertion** (`expect(`/`toThrow`/`rejects`/… via a balanced-brace scan; an expression-bodied arrow `() => expect(…)` is accepted). +3 NEGATIVE controls (commented-out → rejected, empty-body → rejected, expression-body → accepted). Verified against all real invariant files (none false-rejected).
+- **HIGH-2 — `cli.test.ts` silent skips → CI-GUARD + `ctx.skip()`.** 14 `it`-blocks (incl. the rc.9 bearer-auth ≥16 security checks and the v3.6.4 K-1 trigram-preservation correctness test) used bare `if (!distExists()) return;` / `if (!canRunFts5) return;` — silently no-op'ing with zero assertions if dist/FTS5 vanished, with no tripwire. rc.23 added CI-GUARDs to the sibling files (`security`/`fts5`/`e2e-handlers`) but missed this one (incomplete class-sweep). Added a CI-GUARD tripwire (hard-fails in CI if `distExists()`/`canRunFts5` are false) + converted all 22 bare returns to visible `ctx.skip()`.
+- **MED-1 — `github-metadata-invariant.test.ts` CI-GUARD.** Both metadata invariants early-return when `gh` isn't authenticated; added a tripwire that, **when CI provides `GH_TOKEN`**, asserts `gh auth status` actually succeeds (catches a token-scope/CLI regression on the token-bearing job).
+- **MED-3 — scope-completeness NEGATIVE control drove a re-implemented copy.** Extracted the real per-(defense,file) classifier as `classifyDefenseFile` (exported; `runNumericAudit` now calls it) so the negative control drives the REAL code with a synthetic gap, not a hand-copied `wouldFlag` expression that could pass while the script diverged. + a POSITIVE side (in-scope file → no finding).
+- **LOW-1 — two invariant-shaped tests outside the meta-invariant glob.** `k1-version-stamp-consistency.test.ts` + `jsonld.test.ts` assert source/state against canonical values but aren't named `*-invariant.test.ts`; added to `EXTRA_STRUCTURAL_FILES` (count assertion ≥9 → ≥11) so the meta-invariant keeps watching their negative controls.
+- **LOW-2 — coverage CI job now runs `npm run build` explicitly** (matches the `test` job) instead of relying on the `npm ci` `prepare` hook to produce `dist/`; makes the `distExists()` precondition for the new cli.test.ts CI-GUARD explicit.
+
+### Fixed — docs drift (batch 3/3)
+
+- **F1 — per-file-floor counter under-counted (gate-passes-while-claim-is-wrong).** `docs-consistency.test.ts`'s `countPerFileFloors` regex only matched single-key `{ branches: N }`, skipping rc.23's two-key `"src/ocr.ts": { branches: 60, lines: 40 }` — so it returned 10 while reality was 11, and `AGENTS.md`'s "10 per-file branch floors" passed against a wrong number. Regex broadened to match multi-key floor objects (→ 11); `AGENTS.md` → "11 per-file coverage floors".
+- **F2 — `ROADMAP.md` stale state.** rc.9/rc.12/rc.13 were shown unchecked `[ ]` though shipped → checked with accurate shipped-RC notes; "Updated" date + completed-sprint header refreshed; the unverifiable "MCP Registry entry (currently 404s)" claim reworded to a plain re-verify action item.
+- **F3 — `STABILITY.md` omitted `install-ocr-lang`** from the semver-stable subcommand list (shipped rc.10) → added.
+
+### Tests (1014)
+
++5 source `it()`: 3 META-invariant NEGATIVE controls + 1 cli.test.ts CI-GUARD + 1 github-metadata CI-GUARD (the 22 cli.test.ts skip conversions and the scope-completeness rewrite are net-zero `it()`). Test-count claims 1009 → 1014 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+
+### Method note
+
+Both HIGH findings are the project's signature **incomplete-class-sweep** anti-pattern: rc.23 hardened the meta-invariant + added CI-GUARDs to security test files, but left a vacuity hole in the meta-invariant itself AND skipped `cli.test.ts`. The fresh independent audit (not the gates) caught both — reinforcing the v3.6.1 "≥2 external auditors" discipline. With rc.25 this closes the pre-stable audit end-to-end.
+
+### Files changed
+
+- `tests/meta-invariant-coverage.test.ts` (stripComments + callbackBody + ASSERTION_RE + 3 controls + EXTRA_STRUCTURAL_FILES +2 + ≥11), `tests/cli.test.ts` (CI-GUARD + 22 ctx.skip), `tests/github-metadata-invariant.test.ts` (CI-GUARD), `tests/scope-completeness-invariant.test.ts` (real-classifier control), `scripts/scope-completeness-audit.mjs` (`classifyDefenseFile` export), `tests/docs-consistency.test.ts` (per-file-floor regex), `.github/workflows/ci.yml` (coverage build), `AGENTS.md` / `ROADMAP.md` / `STABILITY.md` (docs), test-count claims → 1014.
+- version bump 3.9.0-rc.25 → 3.9.0-rc.26.
+
+---
+
 ## [3.9.0-rc.25] — 2026-05-29
 
 > **TL;DR:** **Security — close the 3rd ReDoS recursion + add the fuzz harness that ends the treadmill.** A fresh independent pre-stable audit (3 agents: code · docs · tests) reproduced a **CRITICAL** the rc.21/rc.24 guard still missed: `(a?b|b)+$` (9 chars) hangs V8 >5s on bearer-auth `serve-http`. An OPTIONAL leading atom (`a?`/`a*`/`a{0,n}`) makes a branch's leading set overlap another branch, and a NULLABLE or VARIABLE-LENGTH body under an unbounded quantifier (`(a?){25}`, `(a{2,5})+`) partitions a long run exponentially — three shapes the leading-atom analysis couldn't see. Rather than chase shapes a 4th time, this RC fixes them with the *general* conditions (leading-SET intersection, nullable-body, variable-body) **and** adds `tests/redos-fuzz.test.ts`: it runs every SAFE-classified pattern from a 2000-pattern corpus through a real timed `exec` in a worker, so the NEXT missed shape fails CI empirically (the class is now structurally self-checking). **993 → 1009 tests** (+16: the fuzz + decode-helper direct tests + new-shape regression cases).

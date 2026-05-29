@@ -788,8 +788,10 @@ function checkAgentsTestFloor(agents: string, actual: number): string | null {
 
 /** Pure check: AGENTS.md 'N per-file branch floors'. */
 function checkAgentsPerFileFloors(agents: string, actualFloors: number): string | null {
-  const m = /(\d+)\s+per-file branch floors/.exec(agents);
-  if (!m) return "AGENTS.md must declare 'N per-file branch floors enforced'";
+  // v3.9.0-rc.26 (F1): accept "branch" or "coverage" wording — rc.26 relabeled
+  // AGENTS to "coverage floors" since ocr.ts now has a `lines` floor too.
+  const m = /(\d+)\s+per-file (?:branch|coverage) floors/.exec(agents);
+  if (!m) return "AGENTS.md must declare 'N per-file branch/coverage floors enforced'";
   const claimed = Number.parseInt(m[1] ?? "0", 10);
   if (claimed !== actualFloors)
     return `AGENTS.md says "${m[0]}" but scripts/check-per-file-coverage.mjs has ${actualFloors} entries`;
@@ -857,7 +859,12 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
 
   async function countPerFileFloors(): Promise<number> {
     const script = await read("scripts/check-per-file-coverage.mjs");
-    const matches = [...script.matchAll(/"src\/[\w./-]+":\s*\{\s*branches:\s*\d+\s*\}/g)];
+    // v3.9.0-rc.26 (rc.25-audit F1): tolerate MULTI-KEY floor objects. rc.23 added
+    // a two-key `"src/ocr.ts": { branches: 60, lines: 40 }`, which the original
+    // single-key `{ branches: N }` regex skipped — so this counter returned 10
+    // while reality was 11, and AGENTS.md's "10" passed against a wrong number
+    // (the exact gate-passes-while-claim-is-wrong shape this file exists to catch).
+    const matches = [...script.matchAll(/"src\/[\w./-]+":\s*\{[^}]*\bbranches:\s*\d+[^}]*\}/g)];
     return matches.length;
   }
 

@@ -376,7 +376,7 @@ export interface Reranker {
  * fixed: direct tokenizer + model inference + sigmoid maps the raw
  * relevance logit to [0, 1].
  *
- * @param alias - Reranker alias from RERANKER_MODELS (default: "rerank-multilingual").
+ * @param alias - Reranker alias from RERANKER_MODELS (default: "rerank-bge" — `DEFAULT_RERANKER_ALIAS`).
  */
 export async function loadReranker(alias?: string): Promise<Reranker> {
   const model = resolveRerankerModel(alias);

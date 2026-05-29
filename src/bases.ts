@@ -424,10 +424,36 @@ const KNOWN_PREDICATES = Object.freeze([
  * is single-process; the worst case across multiple `serve` sessions is
  * one log line each.
  */
+/**
+ * v3.9.0-rc.15 — max distinct entries tracked for warn-once dedup. Caps the
+ * module-level set so a stream of distinct malformed predicates (attacker- or
+ * agent-controlled `.base` input) can't grow it without bound over a
+ * long-lived `serve` process.
+ */
+export const MAX_WARNED_PREDICATES = 1000;
+
+/**
+ * Add `value` to a dedup `set` only while it's under `max` entries — a bounded
+ * "warn once" tracker. Past the cap, returns false (caller may still act, but
+ * the value isn't tracked, so it could re-fire later — an acceptable trade vs.
+ * unbounded memory). Pure + exported for unit testing.
+ *
+ * @returns true if the value was newly added; false if already present OR the
+ *   set is at `max` capacity.
+ */
+export function boundedSetAdd(set: Set<string>, value: string, max: number): boolean {
+  if (set.has(value)) return false;
+  if (set.size >= max) return false;
+  set.add(value);
+  return true;
+}
+
 const warnedUnknownPredicates = new Set<string>();
 function warnUnknownPredicate(expr: string): void {
+  // Bounded dedup: skip if already warned OR the tracker is at capacity (past
+  // the cap a distinct predicate may re-warn once — fine; unbounded growth is not).
   if (warnedUnknownPredicates.has(expr)) return;
-  warnedUnknownPredicates.add(expr);
+  boundedSetAdd(warnedUnknownPredicates, expr, MAX_WARNED_PREDICATES);
   const known = KNOWN_PREDICATES.join(" | ");
   process.stderr.write(
     `enquire: bases.ts — unknown predicate '${expr}'; row excluded (strict mode). Known predicates: ${known}\n`

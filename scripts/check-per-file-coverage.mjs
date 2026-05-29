@@ -68,7 +68,7 @@ const FLOORS = {
   // raised per-file branches from 67.66% → 73.85%.
   "src/tools/meta.ts": { branches: 74 }, // current 76.90% (rc.9 ReDoS-guard tests lifted it +3pp)
   "src/tools/media.ts": { branches: 65 }, // current 67.93%
-  "src/bases.ts": { branches: 71 }, // current 73.17%
+  "src/bases.ts": { branches: 71 }, // current 74.71% (rc.15 boundedSetAdd tests lifted it +1.5pp)
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts
   // with a PDF embed-sync block (lines 240-288); the fail-soft error branches
   // (embedder throws) required dependency injection to test deterministically.

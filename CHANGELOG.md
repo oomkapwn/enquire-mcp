@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.13] — 2026-05-29
+
+> **TL;DR:** **State-driven docs hygiene (sprint RC 5).** Clears the deferred-from-rc.12 backlog of stale-fragment fixes the file-by-file audit found — none CI-blocking, all honesty/credibility: CITATION.cff named the wrong default models; a script comment still credited the retracted "Cursor external audit" (overclaim #11); AGENTS.md said the version gate checks "5 surfaces" (it's 7) and listed a phantom `bench` CLI subcommand; several **packaged docs** (README, docs/api.md, docs/benchmarks.md — all ship in the npm tarball) linked to repo paths that **don't** ship (`../tests/`, `../src/`, `../bench/`, `./AGENTS.md`, `./ROADMAP.md`, `./llms.txt`, `.github/…`) → 404 for npm-page readers; and the rc.7 CHANGELOG entry's forward-claim ("#16 → rc.8, H1 → rc.9") was left stale after the rc.8 pivot re-sequenced them to rc.10/rc.11. **Docs/metadata/script only; 966 tests unchanged.**
+
+**Patch — audit-driven docs hygiene (sprint RC 5).**
+
+### Fixed
+
+- **CITATION.cff model names.** Said "enquire-mcp uses bge-multilingual-gemma2 and bge-reranker-base" — `bge-multilingual-gemma2` isn't even in the model catalog. Corrected to the actual defaults: `paraphrase-multilingual-MiniLM-L12-v2` (embeddings) + `bge-reranker-base` (reranker). (Consumed by Zenodo/OpenAlex/Scholar — a factually wrong metadata claim.)
+- **Retracted-Cursor-audit comment.** `scripts/check-version-consistency.mjs` header still credited the server.json gate to a "Cursor external audit on rc.15" — that attribution was retracted as overclaim #11 (the doc was for a different project). Re-credited to the M-REG-1 external-audit finding.
+- **AGENTS.md drift.** "version sync across 5 surfaces" → **7** (×4 incl. the hyphenated "5-surface" + the surface list, which now names server.json version + packages[0]); dropped the phantom `bench` CLI subcommand from the architecture comment (no such subcommand) and listed the real `install-ocr-lang` instead.
+- **Broken packaged-doc links → absolute GitHub URLs.** README (`llms.txt`, `AGENTS.md`, `ROADMAP.md`, `publish-docs.yml`), docs/api.md (`../scripts/bench-search.mjs`), docs/benchmarks.md (`../tests/…`, `../src/eval.ts` ×2, `../bench/benchmarks.json`, `./api-reference/` → the GH Pages URL) — all 404'd in the npm tarball (those paths aren't in `package.json#files`). Now absolute `github.com/.../blob/main/…` links that resolve everywhere.
+- **CHANGELOG rc.7 forward-claim.** Added an inline "re-sequenced" note: #16 actually shipped in rc.10 and H1 in rc.11 (the rc.8 integrity-batch pivot pushed both back two RCs); the original "ships in rc.8 / rc.9" lines are preserved as history.
+
+### Deferred (tracked)
+
+`ROADMAP`/`AGENTS` into `scope-completeness-audit.mjs` AUDIT_FILES (needs a coordinated docs-consistency assertion so the numbers are actually verified, not just "claimed covered") + extending OIA Check 3's CLI-subcommand scan to AGENTS.md → a later structural RC. Supply-chain (SHA-pin Actions + OpenSSF Scorecard) → rc.14. Correctness cleanup (bases Set leak, search citation, eval errors, doctor globs, stateless-HTTP cleanup) → rc.15.
+
+### Files changed
+
+`CITATION.cff`, `scripts/check-version-consistency.mjs`, `AGENTS.md`, `README.md`, `docs/api.md`, `docs/benchmarks.md`, `CHANGELOG.md` (rc.7 note); version bump 3.9.0-rc.12 → 3.9.0-rc.13 (7 surfaces). **966 tests unchanged.**
+
+---
+
 ## [3.9.0-rc.12] — 2026-05-29
 
 > **TL;DR:** **Claim-accuracy: a structural RC-level currency guard + the stale-doc instances it surfaces (sprint RC 4).** The audit's root-cause theme — "the stale-claim findings stem from a defense gap" — gets its second structural fix (the first was rc.10's OIA Check 4e for OCR). OIA Check 7 only compared **major.minor** (so `v3.9.0-rc.3` read as "current" because `3.9 == 3.9`), letting a pinned "currently v3.9.0-rc.N" drift every release. New **RC-level sub-check** compares the **full** version: a "currently / valid as of vX.Y.Z-rc.N" claim must match the exact current version. It immediately caught 3 stale instances (README, api.md, benchmarks.md, all pinned to rc.3/rc.6); all rephrased to version-agnostic. Also closes the **reranker-number undersell** that rc.7's "corrected everywhere" sweep missed (4 sites still said the generic "+5-10 NDCG@10" vs the measured **+15.5 NDCG@10 / +24.7 MRR**). **Docs + audit-script only; 966 tests unchanged.**
@@ -196,6 +220,7 @@ Three parallel passes:
 
 - **rc.8 — #16 OCR offline enforcement (HIGH, "implement" decision).** SECURITY.md claims "zero outbound network calls in serve mode" and `ocr.ts` TSDoc claims a pre-flight "throws if language not installed" check, but `extractPdfWithOcr` only warns then `createWorker` silently CDN-fetches; `install-ocr-lang` is referenced in 4 files but never existed. Implement: pre-flight cache check + `langPath` wiring + real `install-ocr-lang` subcommand + env-gated integration test.
 - **rc.9 — H1 watcher per-file serialization (HIGH).** Fire-and-forget `handle()` lets concurrent saves to one file interleave `applyDiff` + the shared `rowsByLabel` mutation → in-memory HNSW drift. Add a per-relPath promise queue + concurrent-event test. Plus M1 (HNSW `saveTo` live count), L2 (unlink kind).
+- _**Re-sequenced after this entry** (rc.13 doc fix): the rc.8 integrity-batch pivot pushed both items back two RCs — **#16 OCR offline enforcement actually shipped in v3.9.0-rc.10**, **H1 watcher serialization in v3.9.0-rc.11** (see those entries). The "ships in rc.8 / rc.9" lines above are the original rc.7 plan, preserved as history._
 
 ### Files changed
 

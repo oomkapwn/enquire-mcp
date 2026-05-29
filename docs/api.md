@@ -861,7 +861,7 @@ BM25-ranked full-text search over a SQLite FTS5 inverted index. Sub-100ms on mul
 }
 ```
 
-**Implementation note:** see [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) for the full architecture (production-verified by an external contributor at 1771 chunks / 368 files, 9.8 MB index, 50–100ms BM25 top-10). Local bench against synthetic vault sees 37–103x speedup over the linear-scan path on 100–1000 notes — see [`scripts/bench-search.mjs`](../scripts/bench-search.mjs).
+**Implementation note:** see [issue #10](https://github.com/oomkapwn/enquire-mcp/issues/10) for the full architecture (production-verified by an external contributor at 1771 chunks / 368 files, 9.8 MB index, 50–100ms BM25 top-10). Local bench against synthetic vault sees 37–103x speedup over the linear-scan path on 100–1000 notes — see [`scripts/bench-search.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-search.mjs).
 
 ## `obsidian://chunk/{chunkIndex}/{+notePath}` resource _(opt-in, requires `--persistent-index`)_
 

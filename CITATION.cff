@@ -137,5 +137,5 @@ references:
         given-names: "Niklas"
     year: 2023
     journal: "arXiv preprint"
-    notes: "BAAI BGE embedding + reranker models. enquire-mcp uses bge-multilingual-gemma2 and bge-reranker-base."
+    notes: "BAAI BGE embedding + reranker models. enquire-mcp default models: paraphrase-multilingual-MiniLM-L12-v2 (embeddings) and bge-reranker-base (reranker)."
     url: "https://arxiv.org/abs/2309.07597"

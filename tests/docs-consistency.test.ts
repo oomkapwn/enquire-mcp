@@ -198,6 +198,48 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.prompts);
   });
 
+  // v3.9.0-rc.22 (full-audit batch 2) — α-class structural guard. The reranker
+  // default alias drifted in STABILITY.md ("rerank-multilingual") vs the code
+  // default ("rerank-bge") — the SAME drift fixed in rc.15 (TSDoc) + rc.16 (CLI
+  // help). Pin STABILITY's "Default models" bullet to the code constant so this
+  // 3rd-instance class can't recur on a packaged semver-contract doc.
+  it("STABILITY.md reranker-default alias matches DEFAULT_RERANKER_ALIAS (rc.22 α-guard)", async () => {
+    const stability = await read("STABILITY.md");
+    const embeddings = await read("src/embeddings.ts");
+    const cm = /DEFAULT_RERANKER_ALIAS\s*=\s*"([^"]+)"/.exec(embeddings);
+    expect(cm, "src/embeddings.ts must define DEFAULT_RERANKER_ALIAS").not.toBeNull();
+    const actual = cm?.[1] ?? "";
+    const bullet = /\*\*Default models\.\*\*[^\n]*/.exec(stability)?.[0] ?? "";
+    expect(bullet, "STABILITY.md must have a '**Default models.**' bullet").not.toBe("");
+    expect(bullet, `Default-models bullet must name the actual reranker default '${actual}'`).toContain(actual);
+    expect(
+      bullet.includes("rerank-multilingual"),
+      "Default-models bullet must NOT present rerank-multilingual as the default (α-class drift — see rc.15/16/22)"
+    ).toBe(false);
+  });
+
+  // v3.9.0-rc.22 (full-audit batch 2) — OIA-check-count drift guard. ROADMAP.md
+  // said "8 OIA checks" while the canonical count had reached 10 (Check 9 rc.14,
+  // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's
+  // self-declared canonical number, so adding a check forces a docs sync.
+  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", async () => {
+    const oia = await read("scripts/oia-walk.mjs");
+    const canon = /canonical count is "(\d+)"/.exec(oia);
+    expect(canon, 'scripts/oia-walk.mjs must declare `canonical count is "N"`').not.toBeNull();
+    const n = Number.parseInt(canon?.[1] ?? "0", 10);
+    expect(n, "canonical OIA count should be ≥ 10 as of rc.20").toBeGreaterThanOrEqual(10);
+    const agents = await read("AGENTS.md");
+    const agentsCounts = [...agents.matchAll(/drift scan[^\n]*?(\d+)\s+checks/g)].map((mm) =>
+      Number.parseInt(mm[1] ?? "0", 10)
+    );
+    expect(agentsCounts.length, "AGENTS.md must state the OIA check count").toBeGreaterThan(0);
+    for (const c of agentsCounts) expect(c, "AGENTS.md OIA count must match oia-walk canonical").toBe(n);
+    const roadmap = await read("ROADMAP.md");
+    const rm = /(\d+)\s+state-driven OIA drift checks/.exec(roadmap);
+    expect(rm, "ROADMAP.md must state the OIA check count").not.toBeNull();
+    expect(Number.parseInt(rm?.[1] ?? "0", 10), "ROADMAP.md OIA count must match oia-walk canonical").toBe(n);
+  });
+
   it("package.json description tool-count matches actual count", async () => {
     const pkgRaw = await read("package.json");
     const pkg = JSON.parse(pkgRaw) as { description?: string };

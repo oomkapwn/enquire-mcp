@@ -60,7 +60,7 @@ Anything not listed here (private fields, internal helpers, test fixtures) is **
 
 - **Stderr log format.** We add diagnostic lines, change wording, and adjust verbosity in minor releases. Don't grep stderr for control flow.
 - **On-disk file formats.** SQLite schemas, HNSW sidecar layouts, embedding model versions, and persistent-cache shapes can evolve. v2.17 demonstrated the policy: schema bumps trigger automatic rebuild via the meta-table contamination guard. You don't need to migrate manually.
-- **Default models.** `--embedding-model` and `--reranker-model` default aliases (`multilingual` / `rerank-multilingual`) point at the recommended HuggingFace repos for the current release. We may change which underlying repo a default alias resolves to in a minor release if a better one becomes available; the alias name itself is stable.
+- **Default models.** `--embedding-model` and `--reranker-model` default aliases (`multilingual` / `rerank-bge`) point at the recommended HuggingFace repos for the current release. We may change which underlying repo a default alias resolves to in a minor release if a better one becomes available; the alias name itself is stable.
 - **Internal HTTP routes** other than `/mcp` and `/health` (which are configurable via `--mcp-path` / `--health-path`).
 - **Test infrastructure** under `tests/` and helper scripts under `scripts/`.
 

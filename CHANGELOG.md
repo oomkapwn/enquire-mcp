@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.25] — 2026-05-29
+
+> **TL;DR:** **Security — close the 3rd ReDoS recursion + add the fuzz harness that ends the treadmill.** A fresh independent pre-stable audit (3 agents: code · docs · tests) reproduced a **CRITICAL** the rc.21/rc.24 guard still missed: `(a?b|b)+$` (9 chars) hangs V8 >5s on bearer-auth `serve-http`. An OPTIONAL leading atom (`a?`/`a*`/`a{0,n}`) makes a branch's leading set overlap another branch, and a NULLABLE or VARIABLE-LENGTH body under an unbounded quantifier (`(a?){25}`, `(a{2,5})+`) partitions a long run exponentially — three shapes the leading-atom analysis couldn't see. Rather than chase shapes a 4th time, this RC fixes them with the *general* conditions (leading-SET intersection, nullable-body, variable-body) **and** adds `tests/redos-fuzz.test.ts`: it runs every SAFE-classified pattern from a 2000-pattern corpus through a real timed `exec` in a worker, so the NEXT missed shape fails CI empirically (the class is now structurally self-checking). **993 → 1009 tests** (+16: the fuzz + decode-helper direct tests + new-shape regression cases).
+
+**Patch — pre-stable security audit response, batch 1/3 (the @latest-gate blocker). `src/tools/meta.ts` + tests only.**
+
+### Fixed
+
+- **ReDoS C-1 (CRITICAL) — optional / nullable / variable bodies (overclaim #18, 3rd recursion).** The rc.21 TSDoc claimed `alternationBodyAmbiguous` "never under-flags a real overlap"; rc.24 made that true for case/escape aliases, but it was STILL false for quantifier-induced shapes:
+  - **Optional leading atom** — `(a?b|b)+$`, `(a*b|b)+`, `(a{0,5}b|b)+`: `a?b` can start with `a` OR `b`, overlapping the `b` branch. The single-token `leadingAtomToken` read the literal and ignored the quantifier. Replaced with `leadingAtomSet` — a precise leading-**set** per branch — so `alternationBodyAmbiguous` checks real set INTERSECTION. (This also REMOVES the over-flag on disjoint cases like `(a?b|c)+` in the alternation analysis.)
+  - **Nullable body** — `(a?){25}`, `(\s*)*`, `()+`: a body that can match empty under an unbounded quantifier loops ambiguously. New `branchIsNullable` (recurses into nested groups) adds the `bodyNullable` term.
+  - **Variable-length body** — `(a{2,5})+`, `(\w[ba]{0,3})+`, `(a[ab]?)+`: a variable-length body partitions a long run super-linearly. `readUnboundedQuantifier`'s amplify-threshold treated bounded ranges like `{2,5}` as "not unbounded", so a whole class slipped. New `bodyHasVariableQuantifier` adds the `bodyVariable` term, **gated on the OUTER quantifier being unbounded** so a bounded `(.+){2,5}` (≤5 reps) stays accepted.
+
+  All three reproduced multi-second V8 hangs at ≤12 chars on the always-registered `obsidian_open_questions` tool (remote DoS on bearer-auth `serve-http`). Now rejected before compile. The guard stays sound-but-conservative: it may over-flag `(a?b)+` / `(\w+\s)+` (variable but anchored) — per the guard's documented stance, a rare false positive beats a hung event loop. Realistic capture-group overrides (`^(Q|TODO|Open question):\s*(.+)$`) stay accepted (verified).
+- **`decodeEscapedChar` now returns `{char, length}`** (was `string | null`) — the SINGLE source of truth for escape spans, so `leadingAtomSet` and `branchIsNullable` locate atom ends without a divergent re-parser. Exported for direct unit tests.
+
+### Added — the durable structural defense
+
+- **`tests/redos-fuzz.test.ts`** — the class has recurred 3× (rc.21/rc.24/rc.25) because unit tests of *known* shapes can't catch the *next* missed shape. This fuzz generates a deterministic 2000-pattern ReDoS-prone corpus, and for every pattern `isCatastrophicRegex` classifies SAFE, runs it through a real `exec` in a worker (700 ms timeout, alphabet-matched adversarial inputs). A SAFE-classified pattern that HANGS is an under-flag → CI fails. Includes a NEGATIVE control proving the harness detects a real hang (non-vacuous). This turns the undecidable "did I catch every shape?" into an empirical check — the treadmill ends here.
+
+### Tests (1009)
+
+`tests/redos-guard.test.ts`: +new-shape catastrophic cases (optional-leading-atom, nullable-body, variable-body) + disjoint/fixed-body safe regression guards + a direct `decodeEscapedChar` block (5 `it()`, covering the control-escape / invalid-escape branches the test audit flagged as untested). `tests/redos-fuzz.test.ts`: +2 `it()` (fuzz + NEGATIVE control). Net +7 source `it()` (993 → 1009; the rest were array-loop entries). The 5000-candidate fuzz I ran during development found 0 under-flags after the fix; the CI fuzz (2000) is the permanent guard.
+
+### Method note
+
+This is the project's deepest anti-pattern on display — the **incomplete class-sweep**: the ReDoS class recurred a 3rd time, found by an INDEPENDENT audit (not the gates, not my own rc.24 self-fuzz). The lesson applied: when a heuristic security detector's class keeps recurring, stop enumerating shapes and add an **empirical fuzz** that compares the static verdict against real execution. Batches 2/3 (test-infra: meta-invariant vacuity, `cli.test.ts` CI-GUARD) and 3/3 (docs drift) follow as rc.26/rc.27.
+
+### Files changed
+
+- `src/tools/meta.ts` (`leadingAtomSet` + `branchIsNullable` + `bodyHasVariableQuantifier` + `quantifierMinZero` + `classEnd`/`groupEnd` helpers; `decodeEscapedChar` → `{char,length}`; `)` handler adds `bodyNullable`+`bodyVariable`; TSDoc documents all 4 shapes + the conservative over-flag), `tests/redos-guard.test.ts`, `tests/redos-fuzz.test.ts` (new), test-count claims 1002 → 1009 (README ×4, package.json, llms.txt, AGENTS.md, COMPARISON).
+- version bump 3.9.0-rc.24 → 3.9.0-rc.25.
+
+---
+
 ## [3.9.0-rc.24] — 2026-05-29
 
 > **TL;DR:** **Security — close a ReDoS recursion the rc.21 fix itself introduced.** A re-audit (adversarial fresh-eyes review of the rc.21–rc.23 diffs) reproduced **two CRITICAL false-negatives in rc.21's own ReDoS detector** — the exact "audit-driven fix ships a fresh instance of the class it fixed" recursion this project most fears. `isCatastrophicRegex` compared **surface syntax**, not the matched character: (1) `(a|A)+` slipped through because the tool compiles `/i` (so `a`/`A` overlap) but `leadingAtomToken` was case-*sensitive*; (2) `(\x61|a)+` (= `(a|a)+`, also `a`/`\u{61}`) slipped because the helper returned the raw byte after `\` (`"x"`), not the decoded char. Both reproduced ~16s V8 hangs at ≤12 chars on bearer-auth `serve-http`. Fixed by case-folding + decoding escapes (unresolved escapes conservatively over-flag → the soundness claim is now true). Also closed the MEDIUM the same re-audit found (rc.23's two-key `{branches,lines}` floor objects fell out of OIA Check 6's drift regex). **1002 tests** (+6 detector cases via the data-driven loops; count unchanged — array entries, not new `it()`).

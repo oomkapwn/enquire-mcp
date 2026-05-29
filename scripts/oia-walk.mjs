@@ -331,8 +331,18 @@ walk("scripts", ".sh", (file) => {
   // Earned level: 3 if the isolated-builder generator is wired; 2 if only
   // `npm publish --provenance`; 0 if neither (no provenance at all).
   const earnedLevel = earnsL3 ? 3 : doesProvenance ? 2 : 0;
-  // Surfaces that carry the public SLSA/provenance claim.
-  const claimFiles = ["README.md", "package.json", "llms.txt", "docs/COMPARISON.md", "STABILITY.md"];
+  // Surfaces that carry the public SLSA/provenance claim. v3.9.0-rc.18 added
+  // assets/social-preview.svg — the GitHub social card is the most-shared
+  // visual of the repo and it carried a stale "SLSA-3" badge that rc.7's
+  // sweep (and this check's original scope) both missed for 11 RCs.
+  const claimFiles = [
+    "README.md",
+    "package.json",
+    "llms.txt",
+    "docs/COMPARISON.md",
+    "STABILITY.md",
+    "assets/social-preview.svg"
+  ];
   // Patterns that assert SLSA Build Level 3 (or the legacy "SLSA-3" shorthand,
   // or a badge linking to the L3 spec anchor).
   const l3ClaimRe = /\bSLSA[-\s]?3\b|\bSLSA\s+(?:Build\s+)?L(?:evel\s*)?3\b|levels#build-l3/i;

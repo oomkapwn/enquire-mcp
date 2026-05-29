@@ -21,6 +21,12 @@
 
 **[⚡ 30-second install](#-quick-start) · [🧠 Use cases](#-use-cases) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 API reference](https://oomkapwn.github.io/enquire-mcp/) · [💬 Compare alternatives](./docs/COMPARISON.md)**
 
+**Claude Code — one line:**
+
+```bash
+claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
+```
+
 </div>
 
 ---
@@ -32,6 +38,8 @@ Every AI session starts from zero. You re-explain your project, your design deci
 ## The solution
 
 Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
+
+**Grounded, not extracted.** Conversation-memory tools (mem0, Zep, Supermemory) *extract* facts from your chat logs into a separate store you can't read. enquire-mcp is the inverse: it's **grounded in the knowledge you already wrote** — your own `.md` notes, verbatim, with citations — so recall is auditable, editable in any editor, and never a lossy summary of a chat you half-remember.
 
 > **Three things make enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.

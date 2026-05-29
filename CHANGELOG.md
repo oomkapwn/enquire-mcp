@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.22] — 2026-05-29
+
+> **TL;DR:** **Docs-drift + structural guards (full-audit batch 2/3).** The docs auditor found 2 claim-vs-reality drifts the gates didn't catch: (HIGH) `STABILITY.md` stated the `--reranker-model` default alias is `rerank-multilingual` — but the code default is `rerank-bge` (the **3rd instance** of the exact α-class drift fixed in rc.15 TSDoc + rc.16 CLI help, now in a *packaged semver-contract doc*); (MED) `ROADMAP.md` said "**8** state-driven OIA drift checks" when the canonical count is **10** (Check 9 rc.14, Check 10 rc.20). Both fixed AND each gets a structural guard in `tests/docs-consistency.test.ts` so the class can't recur. **997 tests** (+2 docs-consistency guards).
+
+**Patch — docs-drift + structural defense (full-audit batch 2/3). Docs/tests only.**
+
+### Fixed
+
+- **`STABILITY.md` reranker default α-drift (HIGH).** The "Default models" bullet named `rerank-multilingual` as the `--reranker-model` default; `src/embeddings.ts` defines `DEFAULT_RERANKER_ALIAS = "rerank-bge"` (`rerank-multilingual` is a *valid* catalog alias but NOT the default). Same drift rc.15 fixed in `loadReranker`'s TSDoc and rc.16 in the CLI `--enable-reranker` help — this 3rd instance lived on the packaged semver-contract doc. → `rerank-bge`.
+- **`ROADMAP.md` OIA-check undercount (MED).** "8 state-driven OIA drift checks" → **10** (the lone count straggler; AGENTS/CLAUDE/CHANGELOG were already correct).
+
+### Changed (structural defenses — close both classes)
+
+- **`tests/docs-consistency.test.ts` (+2 invariants):**
+  - **reranker-default α-guard** — reads `DEFAULT_RERANKER_ALIAS` from `src/embeddings.ts` and asserts STABILITY's "Default models" bullet names it AND does not present `rerank-multilingual` as the default. Pins the 3rd-instance class structurally.
+  - **OIA-count consistency** — derives the canonical count from `scripts/oia-walk.mjs`'s self-declared `canonical count is "N"` (cross-checked it's ≥10) and asserts every count-stating surface (`AGENTS.md` ×2, `ROADMAP.md`) matches it — so adding an OIA check forces a docs sync.
+
+### Tests (997)
+
++2 `it()` in `tests/docs-consistency.test.ts` (the two guards above). Test count 995 → 997 across surfaces.
+
+### Files changed
+
+- `STABILITY.md` (reranker default → rerank-bge), `ROADMAP.md` (OIA 8→10 + test-count 997), `tests/docs-consistency.test.ts` (+2 guards), test-count surfaces (README/COMPARISON/llms.txt/AGENTS/package.json) → 997.
+- version bump 3.9.0-rc.21 → 3.9.0-rc.22 (7 surfaces).
+
+### Deferred to rc.23 (same audit, batch 3/3)
+
+Test-infra rigor: meta-invariant comment-bypass + glob-miss (HIGH×2), silent-`return`→`ctx.skip()`+CI-GUARD propagation (security.test.ts/fts5.test.ts), `vault.ts`/`ocr.ts` per-file FLOORS.
+
+---
+
 ## [3.9.0-rc.21] — 2026-05-29
 
 > **TL;DR:** **Security — close a verified ReDoS hole the rc.9 guard missed (full-audit response, batch 1/3).** A fresh multi-agent state-driven audit (code + docs + tests, all green on the 10-gate baseline) reproduced ONE genuine exploit: `obsidian_open_questions`'s `isCatastrophicRegex` (rc.9) catches *nested* quantifiers (`(a+)+`) but **not overlapping-alternation** (`(a|a)+`) — the auditor hung V8 >8s with a 200-char-cap-legal pattern, and the tool is always-registered, so any bearer-authenticated `serve-http` client could freeze the event loop (remote DoS). The guard now also rejects **unbounded-quantified AMBIGUOUS alternations** via leading-atom overlap analysis — catching `(a|a)+`, `(a|ab)*`, `(.|a)+`, `((a|a))+`, `(a|)+` while keeping DISJOINT ones like `(a|b|c)+` / `(cat|dog)+` accepted (they match linearly) and the unquantified default-pattern alternation unaffected. **995 tests** (+2 integration; +13 detector cases via the existing data-driven loops). **No CRITICAL/HIGH code findings otherwise — the codebase audited exceptionally clean.**

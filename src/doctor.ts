@@ -171,6 +171,18 @@ export interface RunDoctorOptions {
    * `resolveModel(alias)` from src/embeddings.ts.
    */
   modelEntry?: EmbeddingModel;
+  /**
+   * v3.9.0-rc.16 (P2-12) — privacy denylist, same semantics as `serve`'s
+   * `--exclude-glob`. When set, the doctor walks the vault WITH the filter so
+   * its counts + "privacy filter" claim reflect reality (pre-rc.16 it always
+   * walked unfiltered yet labeled the count "privacy filter applied").
+   */
+  excludeGlobs?: string[];
+  /**
+   * v3.9.0-rc.16 (P2-12) — privacy allowlist, same semantics as `serve`'s
+   * `--read-paths`.
+   */
+  readPaths?: string[];
 }
 
 /**
@@ -179,7 +191,40 @@ export interface RunDoctorOptions {
  */
 export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const checks: DoctorCheck[] = [];
-  const vault = new Vault(opts.vault);
+
+  // v3.9.0-rc.16 (P2-12) — build the Vault WITH the user's privacy filters so
+  // the counts below reflect what tools actually see. The constructor fails
+  // closed on empty-after-trim globs; catch that so a bad pattern surfaces as
+  // a doctor error instead of crashing the whole diagnostic, then fall back
+  // to an unfiltered vault so the remaining checks still run.
+  const wantsPrivacy = (opts.excludeGlobs?.length ?? 0) > 0 || (opts.readPaths?.length ?? 0) > 0;
+  let vault: Vault;
+  let privacyActive = false;
+  try {
+    vault = new Vault(opts.vault, {
+      ...(opts.excludeGlobs ? { excludeGlobs: opts.excludeGlobs } : {}),
+      ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+    });
+    privacyActive = wantsPrivacy;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    checks.push({
+      id: "privacy",
+      label: "Privacy filter configuration",
+      status: "error",
+      detail: msg,
+      hint: "Fix or remove the offending --exclude-glob / --read-paths pattern"
+    });
+    vault = new Vault(opts.vault);
+  }
+  if (privacyActive) {
+    checks.push({
+      id: "privacy",
+      label: "Privacy filter active",
+      status: "ok",
+      detail: `${opts.excludeGlobs?.length ?? 0} exclude-glob denylist · ${opts.readPaths?.length ?? 0} read-path allowlist pattern(s)`
+    });
+  }
 
   // 1. Vault path exists + is readable.
   let vaultExists = false;
@@ -193,7 +238,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       id: "vault",
       label: `Vault accessible at ${opts.vault}`,
       status: "ok",
-      detail: `${noteCount} markdown · ${pdfCount} pdf · ${canvasCount} canvas (privacy filter applied)`
+      detail: `${noteCount} markdown · ${pdfCount} pdf · ${canvasCount} canvas${privacyActive ? " (after privacy filter)" : ""}`
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

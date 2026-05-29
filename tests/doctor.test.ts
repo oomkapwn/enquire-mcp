@@ -75,6 +75,43 @@ describe("runDoctor (v2.11.0)", () => {
     expect(result.ready).toBe(false);
   });
 
+  // v3.9.0-rc.16 (P2-12) — privacy filters are honored + reported, not faked.
+  it("reports a privacy-filter-active check + filtered count when --exclude-glob is set", async () => {
+    await fs.writeFile(path.join(root, "public.md"), "# Public\n");
+    await fs.writeFile(path.join(root, "secret.md"), "# Secret\n");
+    const result = await runDoctor({
+      vault: root,
+      modelCacheRoot: cacheRoot,
+      excludeGlobs: ["secret.md"]
+    });
+    const privacy = result.checks.find((c) => c.id === "privacy");
+    expect(privacy?.status).toBe("ok");
+    expect(privacy?.detail).toContain("exclude-glob");
+    const vaultCheck = result.checks.find((c) => c.id === "vault");
+    expect(vaultCheck?.detail).toContain("after privacy filter");
+    // 1 markdown visible (secret.md filtered out).
+    expect(vaultCheck?.detail).toContain("1 markdown");
+  });
+
+  it("does NOT claim a privacy filter when none is set (v3.9.0-rc.16 NEGATIVE control)", async () => {
+    await fs.writeFile(path.join(root, "note.md"), "# Hi\n");
+    const result = await runDoctor({ vault: root, modelCacheRoot: cacheRoot });
+    expect(result.checks.find((c) => c.id === "privacy")).toBeUndefined();
+    const vaultCheck = result.checks.find((c) => c.id === "vault");
+    expect(vaultCheck?.detail).not.toContain("privacy filter");
+  });
+
+  it("surfaces a privacy-config error (not a crash) for an empty-after-trim glob", async () => {
+    const result = await runDoctor({
+      vault: root,
+      modelCacheRoot: cacheRoot,
+      excludeGlobs: ["   "]
+    });
+    const privacy = result.checks.find((c) => c.id === "privacy");
+    expect(privacy?.status).toBe("error");
+    expect(result.ready).toBe(false);
+  });
+
   it("optional-dep checks return ok in CI (all optionalDependencies installed)", async () => {
     const result = await runDoctor({ vault: root, modelCacheRoot: cacheRoot });
     const sqlite = result.checks.find((c) => c.id === "dep:better-sqlite3");

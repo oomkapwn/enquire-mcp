@@ -174,6 +174,9 @@ describe("T-2 — obsidian_get_communities E2E (v3.8.5)", () => {
     expect(parsed.modularity).toBeGreaterThan(0.2); // planted clusters should give strong structure
     expect(Array.isArray(parsed.communities)).toBe(true);
     expect(parsed.node_count).toBe(6);
+    // v3.9.0-rc.16 — the convergence flag is surfaced to MCP callers (a small
+    // planted graph converges well before the 50-pass cap).
+    expect(parsed.converged).toBe(true);
     // Each community has the required fields.
     for (const c of parsed.communities) {
       expect(typeof c.id).toBe("number");

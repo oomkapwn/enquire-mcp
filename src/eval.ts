@@ -69,6 +69,14 @@ export interface EvalQueryScore {
   hits_total_relevant: number;
   /** Latency for this query in milliseconds. */
   latency_ms: number;
+  /**
+   * v3.9.0-rc.16 — true if `searchHybrid` threw for this query (transient
+   * infra failure, embedder OOM, etc.). The query's scores are all 0 and it
+   * still counts toward the means — an errored query is NOT silently dropped,
+   * but it IS distinguishable from a genuine zero-relevance retrieval. Absent
+   * (undefined) on successful queries.
+   */
+  error?: boolean;
 }
 
 /** Aggregate evaluation result. */
@@ -77,6 +85,12 @@ export interface EvalResult {
   label: string;
   k: number;
   query_count: number;
+  /**
+   * v3.9.0-rc.16 — number of queries that threw during retrieval (counted in
+   * `query_count` and in the means as zeros). > 0 means the means are deflated
+   * by infra failures, not retrieval quality — re-run before publishing.
+   */
+  query_errors: number;
   /** Per-query scores. */
   per_query: EvalQueryScore[];
   /** Mean NDCG@K across all queries. */
@@ -201,6 +215,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
   const k = opts.k ?? 10;
   const totalT0 = Date.now();
   const perQuery: EvalQueryScore[] = [];
+  let queryErrors = 0;
 
   for (let i = 0; i < opts.queries.length; i++) {
     const q = opts.queries[i];
@@ -209,6 +224,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     const relevantSet = new Set(q.relevant);
     const t0 = Date.now();
     let hits: SearchHybridHit[] = [];
+    let errored = false;
     try {
       const result = await searchHybrid(
         opts.vault,
@@ -229,7 +245,10 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
       hits = result.matches;
     } catch (err) {
       // Per-query isolation — one bad query doesn't sink the whole eval.
-      // The query's scores will all be 0 and we keep going.
+      // The query's scores will all be 0 and we keep going, but we flag it
+      // (errored) + count it (queryErrors) so the deflation is visible.
+      errored = true;
+      queryErrors += 1;
       process.stderr.write(
         `enquire eval: query "${q.query.slice(0, 60)}" failed — ${err instanceof Error ? err.message : String(err)}\n`
       );
@@ -251,7 +270,8 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
       mrr: round(mrr),
       hits_relevant: hitsRelevant,
       hits_total_relevant: relevantSet.size,
-      latency_ms: latency
+      latency_ms: latency,
+      ...(errored ? { error: true } : {})
     });
   }
 
@@ -264,6 +284,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     label: opts.label ?? "default",
     k,
     query_count: perQuery.length,
+    query_errors: queryErrors,
     per_query: perQuery,
     mean_ndcg: round(meanNdcg),
     mean_recall: round(meanRecall),
@@ -296,6 +317,11 @@ export function formatEvalResult(result: EvalResult, opts: { perQuery?: boolean 
   const lines: string[] = [];
   lines.push(bold(`enquire eval — ${result.label}`));
   lines.push(`  ${result.query_count} queries · k=${result.k} · wall=${result.total_wall_ms}ms`);
+  if (result.query_errors > 0) {
+    lines.push(
+      `  ⚠ ${result.query_errors} query(s) errored (scored 0) — the means below are deflated by infra failures, not retrieval quality; re-run before publishing`
+    );
+  }
   lines.push("");
   if (opts.perQuery) {
     lines.push(bold("per query:"));

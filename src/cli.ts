@@ -79,7 +79,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--enable-reranker",
-      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; +5-10 NDCG@10 typical for retrieval quality. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
+      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; ≈+15.5 NDCG@10 / +24.7 MRR measured on our 60-query ablation. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
     )
     .option(
       "--reranker-model <alias>",
@@ -608,12 +608,22 @@ export async function main(): Promise<void> {
       "Run a read-only health check: verify the vault path, optional deps (better-sqlite3 / transformers / pdfjs / tesseract / canvas), embedding-model cache, FTS5 index, and embed-db. Returns 0 if everything is ready for full hybrid retrieval, 1 if any critical piece is missing. Color-coded ✓ / ⚠ / ✗ output. Use this when you're unsure what's set up vs not."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option(
+      "--exclude-glob <pattern...>",
+      "Privacy denylist (same semantics as `serve`) — counts + checks reflect the filter."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "Privacy allowlist (same semantics as `serve`) — counts + checks reflect the filter."
+    )
     .option("--json", "Emit machine-readable JSON instead of the colored banner")
-    .action(async (opts: { vault: string; json?: boolean }) => {
+    .action(async (opts: { vault: string; json?: boolean; excludeGlob?: string[]; readPaths?: string[] }) => {
       const { runDoctor, formatDoctorResult } = await import("./doctor.js");
       const result = await runDoctor({
         vault: opts.vault,
-        modelEntry: EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]
+        modelEntry: EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS],
+        ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+        ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
       });
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

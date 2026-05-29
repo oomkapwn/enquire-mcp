@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.17] — 2026-05-29
+
+> **TL;DR:** **AI-search discoverability: Schema.org `@graph` structured data (sprint RC 9).** The single biggest lever for getting cited by Google AI Overviews / Perplexity / Bing Copilot is machine-readable structured data, and the highest-citation type is **FAQPage**. `scripts/inject-jsonld.mjs` (run at GH-Pages publish time) is upgraded from a lone `SoftwareApplication` node to a Schema.org **`@graph`** with three cross-linked nodes: an enriched **SoftwareApplication** (now with `featureList` + `maintainer`), a **SoftwareSourceCode** node (`codeRepository`/`runtimePlatform`/`targetProduct` → the app), and a **FAQPage** carrying the README's 6 Q&A pairs. Plus a `glama.json` (`maintainers: [oomkapwn]`) so the Glama.ai crawler can attribute + index the server instead of withholding it from search. The builder is refactored into a pure, exported `buildJsonLdGraph(pkg)` so it's unit-tested (deterministic — no dates/RNG). **975 → 982 tests** (+7, positive + NEGATIVE controls).
+
+**Patch — discoverability (sprint RC 9). Docs/scripts/config only; no `src/` runtime change.**
+
+### Added
+
+- **Schema.org `@graph` JSON-LD** (`scripts/inject-jsonld.mjs`, expanded). Three nodes:
+  - **SoftwareApplication** — now includes `featureList` (8 differentiators), `maintainer`, `applicationSubCategory: "Model Context Protocol (MCP) server"`, stable `@id`.
+  - **SoftwareSourceCode** — `codeRepository` (cleaned of `git+`/`.git`), `runtimePlatform`, `programmingLanguage`, `targetProduct` cross-referencing the SoftwareApplication `@id`.
+  - **FAQPage** — the README "## ❓ FAQ" Q&A as `Question`/`acceptedAnswer` pairs (highest AI-citation structured-data type).
+- **`glama.json`** at repo root (`$schema` + `maintainers: ["oomkapwn"]`) — lets the Glama.ai MCP directory attribute the server to its maintainer and index it (claimed servers move from "withheld from search" to discoverable for Glama's user base).
+
+### Changed
+
+- `scripts/inject-jsonld.mjs` refactored: `buildJsonLdGraph(pkg)` + `FAQ_ENTRIES` are now **exported pure** functions/data (CLI behavior guarded behind an `isEntrypoint` check), so the JSON-LD is unit-testable. The injected `<script type="application/ld+json">` now carries a `@graph`; the idempotency marker (`application/ld+json`) is unchanged, so `publish-docs.yml` needs no edit.
+
+### Tests added (+7 new it() blocks, positive + NEGATIVE controls) — 975 → 982
+
+- `tests/jsonld.test.ts` (new) — `buildJsonLdGraph`: `@graph` has exactly the 3 expected `@type`s; SoftwareApplication carries `softwareVersion === package.json` + `featureList` + `maintainer`; `SoftwareSourceCode.targetProduct["@id"]` cross-refs the app `@id` + repo URL is clean (no `git+`/`.git`); FAQPage mirrors `FAQ_ENTRIES` with **non-empty Q + A (NEGATIVE control on empty answers)**; the graph is JSON-serializable. Plus a **README-FAQ-count drift guard**: `FAQ_ENTRIES.length` must equal the README FAQ bold-question count (so a 7th README FAQ that's not mirrored into the JSON-LD fails CI), and every entry is well-formed (`q` ends with `?`, `a` non-empty).
+
+### Files changed
+
+- `scripts/inject-jsonld.mjs` (expanded + exported builder), `glama.json` (new), `tests/jsonld.test.ts` (new, +7).
+- version bump 3.9.0-rc.16 → 3.9.0-rc.17 (7 surfaces); test count 975 → 982.
+
+### Deferred to rc.18 (repo-page polish)
+
+Social-preview regen (`scripts/render-social-preview.mjs` → stat-pill design: 44 tools / 982 tests / +15.5 NDCG@10), README hero `claude mcp add` one-liner + canonical-URL comments, `server.json` `categories`/`keywords`, then **v3.10 LongMemEval** harness (the #1 credibility lever).
+
+---
+
 ## [3.9.0-rc.16] — 2026-05-29
 
 > **TL;DR:** **Correctness batch 2 (sprint RC 8) — user-facing correctness + honesty.** Clears the rc.15-deferred backlog plus the rc.15 post-ship self-audit. (1) `doctor` now actually applies the privacy filter it claimed (`--exclude-glob`/`--read-paths` were never wired — it counted all files yet labeled the count "privacy filter applied" — **P2-12**). (2) `eval` distinguishes an *errored* query from a genuine zero-relevance one (new `query_errors` count + per-query `error` flag + a banner warning — a benchmark's means were silently deflatable by infra hiccups). (3) The stateless HTTP handler now wires its per-request cleanup **before** `connect()`, so a connect failure no longer leaks the McpServer + transport (parity with the stateful path's close discipline). (4) `--ocr-pdfs` warns instead of silently no-op'ing when `--watch` or the embed-db is absent. (5) rc.15's `converged` flag is now actually **surfaced** to MCP callers, and a stale "`+5-10 NDCG@10`" reranker undersell in CLI `--help` (missed by rc.12's docs-only sweep) is corrected to the measured **+15.5 / +24.7**. The deferred `tools/search.ts` "citation mis-attribution" item was **investigated and found to be a non-issue** (snippet/line/chunk/kind all follow one consistent `bm25 ?? embeddings ?? tfidf` precedence). **970 → 975 tests** (+5, positive + NEGATIVE controls).

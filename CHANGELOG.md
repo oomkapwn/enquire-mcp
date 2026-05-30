@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.30] — 2026-05-30
+
+> **TL;DR:** **Correction patch — overclaim instance #18.** A state-driven post-ship audit (after the multi-hour sandbox outage that interrupted rc.29) caught that the rc.29 CHANGELOG + CLAUDE.md cited social-card asset sizes carried over from the **first design attempt the EPERM outage ate**, not the files actually shipped: SVG claimed "9.7 KB → 11.8 KB" (real **7.3 KB** — it shrank), PNG claimed "188 KB → **49.5 KB**" (real **205 KB** — the 2× density render grew it). No gate catches KB annotations in CHANGELOG prose, so only a state-driven read found it. Corrected to be **size-agnostic** (drop drift-prone KB; keep the verified `1280×640`, which the audit confirmed correct). **Docs-only — zero `src/`, zero asset change, 1019 tests unchanged.**
+
+**Patch — claim-vs-reality correction (CHANGELOG + CLAUDE.md only).**
+
+### Fixed
+
+- **Overclaim #18** — rc.29's two asset-size annotations were inaccurate (numbers from a pre-outage render draft, never re-measured against the shipped files). Removed the wrong KB figures from the rc.29 CHANGELOG entry (SVG + PNG lines) and the CLAUDE.md rc.29 status line. The verifiable `1280×640` dimension (re-confirmed via `sharp().metadata()`) is kept; the volatile byte-size annotations are dropped rather than re-stated, so this stops being a drift surface.
+
+### Method note
+
+Root cause: I drafted the rc.29 entry **before** the outage forced a re-render, then shipped the draft's numbers without re-measuring the actual artifact. The recovery itself (re-applying the eaten SVG write, deleting a misplaced tag, re-tagging the correct squash SHA) was verified end-to-end — but the *prose numbers* describing the artifact were not re-checked against the final bytes. This is the claim-vs-reality class (overclaims #15/#16/#17): a stated figure the artifact doesn't back. **Lesson reinforced**: after any re-render/re-build, re-measure every quantitative claim in the same commit that ships the artifact — a draft figure is not evidence. Asset byte-sizes are deliberately NOT a tracked claim going forward (volatile, low value); dimensions + content are.
+
+### Files changed
+
+- `CHANGELOG.md` (rc.29 entry: SVG + PNG size annotations removed), `CLAUDE.md` (rc.29 status line: "49.5 KB" removed).
+- version bump 3.9.0-rc.29 → 3.9.0-rc.30; no `src/`, asset, or test change (1019).
+
+---
+
 ## [3.9.0-rc.29] — 2026-05-29
 
 > **TL;DR:** **Social card redesign** — `assets/social-preview.svg` (+ rendered `.png`), the GitHub social-preview / most-shared visual of the repo, was completely redesigned for a more professional, conversion-oriented look. Premium dark treatment (layered gradient + radial glow + subtle dot matrix), an SVG logomark (vault doc → recall rings; no emoji), a value-prop hero (**"Long-term memory for your AI agents"**), the category-differentiator selling line (**"Grounded in the notes you actually wrote — cited, auditable, editable."**), qualitative capability chips (Hybrid + reranked · GraphRAG · Agentic RAG · PDF + OCR), a `claude mcp add enquire-mcp` install CTA pill, an honest trust line (**MIT · SLSA L2 · Claude/Cursor/ChatGPT/Codex/OpenClaw**), and a "vault → knowledge-graph memory" illustration. **Assets only — zero `src/`, 1019 tests unchanged.**
@@ -10,8 +31,8 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Changed
 
-- **`assets/social-preview.svg`** fully rewritten (9.7 KB → 11.8 KB) with the premium layout above. Deliberately **drops the previous hardcoded count claims** ("44 tools", "19 prompts") — qualitative differentiators replace drift-prone numbers, so the card is no longer a numeric-drift surface (sidesteps the rc.18-deferred "stat-pill needs an invariant" concern entirely). Pure ASCII, no NUL, well-formed.
-- **`assets/social-preview.png`** re-rendered at 2× density → crisp 1280×640 (188 KB → 49.5 KB).
+- **`assets/social-preview.svg`** fully rewritten with the premium layout above. Deliberately **drops the previous hardcoded count claims** ("44 tools", "19 prompts") — qualitative differentiators replace drift-prone numbers, so the card is no longer a numeric-drift surface (sidesteps the rc.18-deferred "stat-pill needs an invariant" concern entirely). Pure ASCII, no NUL, well-formed.
+- **`assets/social-preview.png`** re-rendered at 2× density → crisp 1280×640.
 - **SLSA honesty preserved**: the trust line reads "SLSA L2" (not "SLSA-3"); OIA Check 4d (which scans `social-preview.svg`) stays green.
 
 ### Notes

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.29] — 2026-05-29
+
+> **TL;DR:** **Social card redesign** — `assets/social-preview.svg` (+ rendered `.png`), the GitHub social-preview / most-shared visual of the repo, was completely redesigned for a more professional, conversion-oriented look. Premium dark treatment (layered gradient + radial glow + subtle dot matrix), an SVG logomark (vault doc → recall rings; no emoji), a value-prop hero (**"Long-term memory for your AI agents"**), the category-differentiator selling line (**"Grounded in the notes you actually wrote — cited, auditable, editable."**), qualitative capability chips (Hybrid + reranked · GraphRAG · Agentic RAG · PDF + OCR), a `claude mcp add enquire-mcp` install CTA pill, an honest trust line (**MIT · SLSA L2 · Claude/Cursor/ChatGPT/Codex/OpenClaw**), and a "vault → knowledge-graph memory" illustration. **Assets only — zero `src/`, 1019 tests unchanged.**
+
+**Patch — brand/visual. `assets/social-preview.svg` + `assets/social-preview.png` only.**
+
+### Changed
+
+- **`assets/social-preview.svg`** fully rewritten (9.7 KB → 11.8 KB) with the premium layout above. Deliberately **drops the previous hardcoded count claims** ("44 tools", "19 prompts") — qualitative differentiators replace drift-prone numbers, so the card is no longer a numeric-drift surface (sidesteps the rc.18-deferred "stat-pill needs an invariant" concern entirely). Pure ASCII, no NUL, well-formed.
+- **`assets/social-preview.png`** re-rendered at 2× density → crisp 1280×640 (188 KB → 49.5 KB).
+- **SLSA honesty preserved**: the trust line reads "SLSA L2" (not "SLSA-3"); OIA Check 4d (which scans `social-preview.svg`) stays green.
+
+### Notes
+
+- The GitHub repo **Social preview** image is uploaded in repo **Settings → Options → Social preview** (not auto-derived from the file); upload `assets/social-preview.png` there to update the live card.
+- version bump 3.9.0-rc.28 → 3.9.0-rc.29; no package-content change (assets are not in the npm tarball).
+
+---
+
 ## [3.9.0-rc.28] — 2026-05-29
 
 > **TL;DR:** **External-audit re-verification response.** An external "Mavis" audit (on rc.24 / commit `d564eb5`) was supplied and re-verified — I treated every claim as untrusted and checked it against the actual code. Verdict: a competent breadth audit, but it **missed a live CRITICAL** (the ReDoS we'd independently found + fixed in rc.25 — its "no critical findings" was false for the commit it graded) and carried several factual errors ("14-check OIA" → it's 10; "22 bare `catch {}`" → 49, and **zero** truly-empty; "12 floors" → 11 files). This RC fixes the audit's **legitimate** code findings (M-2, M-6, M-4, the L-4 residual — each with positive + NEGATIVE controls), **rejects** one (H-4, documented), **defers** one (M-3, documented), and records the full re-verification in `docs/audits/`. The branch-protection findings (H-1/H-2/H-3) are **maintainer-only** (repo settings — out of scope for me to change). **1014 → 1019 tests**; zero behavior change (clamp + cache cap are opt-in/bounding only).

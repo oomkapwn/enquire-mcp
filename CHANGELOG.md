@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.31] — 2026-05-30
+
+> **TL;DR:** **Repo-page SLSA overclaim fix + structural guard (residual of overclaim #15).** A state-driven check of the GitHub repo page found the **About description still said "SLSA-3"** — the unenforced claim that overclaim #15 (rc.7) downgraded to "SLSA L2" across README/package.json/llms.txt/COMPARISON/STABILITY, and that rc.18 fixed on the social card. The About string lives ONLY on GitHub (no file → outside OIA Check 4d's scope), so it survived ~23 RCs. **Fixed the live About** (`gh repo edit` → "SLSA L2") and added a structural guard so it can't drift back: `tests/github-metadata-invariant.test.ts` now asserts the About carries no SLSA-level-above-2 claim. **1019 → 1020 tests** (+1 source `it()`, positive + NEGATIVE controls); no `src/` change.
+
+**Patch — brand-integrity (repo metadata + invariant). Tests + docs only.**
+
+### Fixed
+
+- **Repo About "SLSA-3" → "SLSA L2"** (residual instance of overclaim #15). `release.yml` runs `npm publish --provenance` = **SLSA Build L2** (L3 requires the isolated `slsa-framework/slsa-github-generator`). The GitHub About description was the last surface still asserting the higher level — corrected via `gh repo edit`. (Topics verified correct: all `REQUIRED_TOPICS` present incl. `openclaw`; About lead-in "The most advanced Obsidian MCP" intact.)
+
+### Added
+
+- **`findSlsaOverclaim` analyzer + live assertion** in `tests/github-metadata-invariant.test.ts` — the About-description test now fails if the description claims SLSA-3 / L3 / L4 (tolerant of `SLSA-3`, `SLSA 3`, `SLSA Build L3`, `SLSA Level 3`, `SLSA L3`); `SLSA L2` / `SLSA-2` pass. This is the structural class-closer for the gap that let the overclaim live on GitHub-only metadata: OIA Check 4d guards in-repo claim files + the social SVG, but the repo About string had no guard until now. Positive + NEGATIVE controls + a false-positive guard ("3 transports / L3 caching" must NOT trip).
+
+### Method note
+
+The change-driven sweep of overclaim #15 (rc.7) fixed every *file*; OIA Check 4d (rc.8) structurally guarded every *file* + the social SVG (rc.18). But the GitHub About/Topics metadata is not a file in the repo — it's reachable only via `gh api` — so it fell outside both. Same root shape the project keeps hitting: **a defense scoped to one surface type misses a sibling surface of a different type**. The fix extends the existing `github-metadata-invariant` (which already pulls live About/Topics) with the SLSA check, so the repo page is now covered by the same fail-loud apparatus as the files.
+
+### Files changed
+
+- `tests/github-metadata-invariant.test.ts` (+`findSlsaOverclaim` + live assertion + NEGATIVE control), test-count claims 1019 → 1020 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+- live GitHub repo About (out-of-band via `gh repo edit`; not a tracked file).
+- version bump 3.9.0-rc.30 → 3.9.0-rc.31.
+
+---
+
 ## [3.9.0-rc.30] — 2026-05-30
 
 > **TL;DR:** **Correction patch — overclaim instance #18.** A state-driven post-ship audit (after the multi-hour sandbox outage that interrupted rc.29) caught that the rc.29 CHANGELOG + CLAUDE.md cited social-card asset sizes carried over from the **first design attempt the EPERM outage ate**, not the files actually shipped: SVG claimed "9.7 KB → 11.8 KB" (real **7.3 KB** — it shrank), PNG claimed "188 KB → **49.5 KB**" (real **205 KB** — the 2× density render grew it). No gate catches KB annotations in CHANGELOG prose, so only a state-driven read found it. Corrected to be **size-agnostic** (drop drift-prone KB; keep the verified `1280×640`, which the audit confirmed correct). **Docs-only — zero `src/`, zero asset change, 1019 tests unchanged.**

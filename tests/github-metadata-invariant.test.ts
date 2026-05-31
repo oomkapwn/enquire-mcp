@@ -88,6 +88,28 @@ function findMissingTopics(topics: string[]): string[] {
   return REQUIRED_TOPICS.filter((t) => !set.has(t));
 }
 
+// v3.9.0-rc.31 — SLSA-overclaim guard for the repo About description.
+//
+// Background: overclaim #15 (rc.7) downgraded an unenforced "SLSA-3" claim to
+// the accurate "SLSA L2" across README/package.json/llms.txt/COMPARISON/
+// STABILITY (release.yml only runs `npm publish --provenance` = SLSA Build L2;
+// L3 needs the isolated slsa-framework/slsa-github-generator). OIA Check 4d
+// then structurally guards every in-repo claim file + the social-preview SVG.
+// But the GitHub repo About string lives ONLY on GitHub — no file, no OIA
+// scope — so the stale "SLSA-3" survived there for ~23 RCs until a state-driven
+// repo-page check (rc.31) caught it. This analyzer closes that gap: the About
+// description must NOT assert a SLSA level above L2.
+//
+// Returns the offending substring (e.g. "SLSA-3") or null if the claim is
+// absent / correctly stated as L2. Matches "SLSA-3", "SLSA 3", "SLSA-4",
+// "SLSA Build L3", "SLSA Level 3", "SLSA L3"; tolerant of separators/case.
+// "SLSA L2" / "SLSA-2" / "SLSA Build L2" pass.
+const SLSA_OVERCLAIM_RE = /SLSA[\s-]*(?:Build[\s-]*)?(?:Level[\s-]*|L)?\s*([34])\b/i;
+function findSlsaOverclaim(description: string): string | null {
+  const m = SLSA_OVERCLAIM_RE.exec(description ?? "");
+  return m ? m[0] : null;
+}
+
 describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", () => {
   // Always use `it` (not `it.skip`) so the total `it()` count is constant
   // across local-with-gh-auth and CI-without-gh-auth environments. The
@@ -131,6 +153,13 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     ).not.toBeNull();
     if (!meta) return;
     expect(meta.description ?? "").toMatch(ABOUT_LEADS_WITH);
+    // v3.9.0-rc.31 — the About string must not carry a SLSA-level overclaim
+    // (release.yml earns SLSA Build L2; "SLSA-3"/L3 would be unenforced).
+    const slsa = findSlsaOverclaim(meta.description ?? "");
+    expect(
+      slsa,
+      `repo About claims an unenforced SLSA level (${slsa}); release.yml earns SLSA Build L2 — fix via \`gh repo edit ${REPO} --description ...\` to say "SLSA L2"`
+    ).toBeNull();
   });
 
   it("repo Topics include the 8 required memory/positioning keywords", () => {
@@ -198,6 +227,23 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       // ignore the extras and report no missing.
       const full = [...REQUIRED_TOPICS, "extra-1", "extra-2"];
       expect(findMissingTopics(full)).toEqual([]);
+    });
+
+    it("findSlsaOverclaim flags SLSA-3/L3/L4 and passes SLSA L2 (v3.9.0-rc.31)", () => {
+      // NEGATIVE — every shape of the overclaim must be caught.
+      expect(findSlsaOverclaim("MCP-native, MIT, SLSA-3.")).toBe("SLSA-3");
+      expect(findSlsaOverclaim("... SLSA 3 ...")).toBeTruthy();
+      expect(findSlsaOverclaim("built with SLSA Build L3")).toBeTruthy();
+      expect(findSlsaOverclaim("SLSA Level 3 provenance")).toBeTruthy();
+      expect(findSlsaOverclaim("SLSA L3")).toBeTruthy();
+      expect(findSlsaOverclaim("SLSA-4")).toBe("SLSA-4");
+      // POSITIVE — the accurate claim (and no-claim) must NOT be flagged.
+      expect(findSlsaOverclaim("MCP-native, MIT, SLSA L2.")).toBeNull();
+      expect(findSlsaOverclaim("... SLSA-2 ...")).toBeNull();
+      expect(findSlsaOverclaim("SLSA Build L2")).toBeNull();
+      expect(findSlsaOverclaim("The most advanced Obsidian MCP — no provenance mention")).toBeNull();
+      // Guard against false-positive on unrelated digits near "SLSA"-free text.
+      expect(findSlsaOverclaim("Supports 3 transports and L3 caching")).toBeNull();
     });
   });
 });

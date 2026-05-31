@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.32] — 2026-05-30
+
+> **TL;DR:** **Automate MCP Registry publishing + drift backstop (closes the registry-staleness class).** A promotion-channel check found the canonical MCP Registry stuck at **3.8.4** while npm `@latest` is **3.8.8** (~7 versions behind) — and because Glama / mcp.so / smithery **auto-sync from the registry**, that stale entry was silently propagating an outdated "current version" across the whole directory ecosystem. Root cause: the registry was published *manually* (`mcp-publisher publish` after each stable), so it drifted whenever that step was skipped. **Fixed structurally:** `release.yml` now auto-publishes **stable releases** to the registry via GitHub Actions **OIDC** (no secret — the existing `id-token: write` is all it needs), and new **OIA Check 11** is a state-driven advisory that surfaces registry-vs-npm drift on every audit run. **Workflow + audit-script + docs only; 1020 tests unchanged.**
+
+**Patch — supply-chain / discoverability automation.**
+
+### Added
+
+- **Automated MCP Registry publish (OIDC) in `release.yml`** — after the npm publish + GitHub Release steps, a new `Publish to MCP Registry (stable only)` step downloads the official `mcp-publisher`, authenticates via `mcp-publisher login github-oidc` (GitHub Actions OIDC — trusts the repo's identity for the `io.github.oomkapwn/*` namespace; **no dedicated secret**), and runs `mcp-publisher publish`. **Gated to `dist_tag == 'latest'`** so the registry's `isLatest` always reflects what `npm install` gives by default — RCs publish to npm under `@rc` but are deliberately NOT pushed to the registry (else the canonical listing, and every directory that syncs from it, would advertise an `-rc.N` as current). Defensively re-syncs `server.json`'s `version` (+ each `packages[].version`) from `package.json` before publishing.
+- **OIA Check 11 — `MCP-REGISTRY-VERSION-DRIFT`** (`scripts/oia-walk.mjs`, network, `--skip-network`-respecting) — compares the registry's `isLatest` version to npm's `latest` dist-tag and prints a visible **ADVISORY** when they differ. **Non-fatal by design**: remediation (re-publish) is maintainer-gated (runs on a stable tag or a manual login), so a PR author can't fix registry state inside their PR — hard-failing the `oia` gate on it would block unrelated work (same principle as the SLSA network check skipping on infra it doesn't control). Detection-power verified: it flags the live 3.8.4-vs-3.8.8 drift today. OIA canonical count 10 → 11 (header + AGENTS ×2 + ROADMAP, gated by `docs-consistency.test.ts`).
+
+### Method note
+
+This is the registry analogue of the rc.31 repo-About fix: a promotion surface that lives **outside the repo's files** (here, the canonical registry; there, GitHub metadata) drifted because the publish path was manual and no state-driven check watched it. The durable fix is the same shape — **automate the publish** (OIDC step) **+ add a state-driven drift detector** (OIA Check 11). The advisory will keep flagging 3.8.4-vs-3.8.8 until the next **stable** release runs the new OIDC step (or a maintainer re-publishes manually); on an RC line there is no stable tag to trigger it, so the reconciliation lands with the v3.9.0 → `@latest` promotion.
+
+### Files changed
+
+- `.github/workflows/release.yml` (registry-publish OIDC step, stable-gated), `scripts/oia-walk.mjs` (Check 11 + canonical count 11), `AGENTS.md` ×2 + `ROADMAP.md` (OIA count 10 → 11; ROADMAP test count 1002 → 1020 stale-fix).
+- version bump 3.9.0-rc.31 → 3.9.0-rc.32; no `src/`, no test change (1020).
+
+---
+
 ## [3.9.0-rc.31] — 2026-05-30
 
 > **TL;DR:** **Repo-page SLSA overclaim fix + structural guard (residual of overclaim #15).** A state-driven check of the GitHub repo page found the **About description still said "SLSA-3"** — the unenforced claim that overclaim #15 (rc.7) downgraded to "SLSA L2" across README/package.json/llms.txt/COMPARISON/STABILITY, and that rc.18 fixed on the social card. The About string lives ONLY on GitHub (no file → outside OIA Check 4d's scope), so it survived ~23 RCs. **Fixed the live About** (`gh repo edit` → "SLSA L2") and added a structural guard so it can't drift back: `tests/github-metadata-invariant.test.ts` now asserts the About carries no SLSA-level-above-2 claim. **1019 → 1020 tests** (+1 source `it()`, positive + NEGATIVE controls); no `src/` change.

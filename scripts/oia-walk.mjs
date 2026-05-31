@@ -23,7 +23,7 @@
 // Checks (all evidence-based — each finding includes file:line and the
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
-// canonical count is "10" (the top-level numbered checks 1–10), but check 4
+// canonical count is "11" (the top-level numbered checks 1–11), but check 4
 // has historically accreted sub-checks (4b/4c/4d/4e), so 14 distinct walks
 // actually run. Full honest list below:
 //
@@ -860,6 +860,62 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         }
       }
     }
+  }
+}
+
+// ─── Check 11: MCP Registry version must not drift behind npm @latest ────
+// v3.9.0-rc.32 (NETWORK, skipped under --skip-network) — the canonical MCP
+// Registry (registry.modelcontextprotocol.io) is what Glama / mcp.so /
+// smithery auto-sync from, so a stale registry entry silently propagates an
+// outdated "current version" across the whole directory ecosystem. Pre-rc.32
+// the registry was published manually after each stable and fell ~7 versions
+// behind (stuck at 3.8.4 while npm @latest was 3.8.8). rc.32 automates the
+// publish via OIDC in release.yml (stable-only); this check is the state-driven
+// backstop that surfaces drift if that automation ever regresses. Compares the
+// registry's isLatest version to npm's `latest` dist-tag; flags a mismatch.
+// Skips cleanly offline / on infra failure (Part-A checks are the always-on guard).
+if (!SKIP_NETWORK) {
+  try {
+    const { execSync } = await import("node:child_process");
+    const npmLatest = execSync("npm view @oomkapwn/enquire-mcp dist-tags.latest 2>/dev/null", {
+      encoding: "utf8",
+      timeout: 10_000
+    }).trim();
+    const regJson = execSync(
+      'curl -fsSL --max-time 12 "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.oomkapwn/enquire-mcp" 2>/dev/null',
+      { encoding: "utf8", timeout: 15_000 }
+    );
+    if (npmLatest && regJson && regJson.trim().length > 0) {
+      const parsed = JSON.parse(regJson);
+      const servers = parsed.servers ?? [];
+      // The registry returns all published versions; find the one flagged
+      // isLatest (the official-registry metadata block carries the flag).
+      let regLatest = null;
+      for (const entry of servers) {
+        const sv = entry.server ?? entry;
+        const meta = entry._meta?.["io.modelcontextprotocol.registry/official"] ?? entry._meta ?? {};
+        if (meta.isLatest === true || sv.isLatest === true) regLatest = sv.version ?? meta.version ?? null;
+      }
+      // ADVISORY, not a hard finding: when the registry trails npm @latest we
+      // print a visible warning but do NOT exit 1. Remediation (re-publish to
+      // the registry) is maintainer-gated — it runs only on a STABLE tag via
+      // the OIDC step in release.yml, or a manual `mcp-publisher login`. A PR
+      // author cannot fix registry state inside their PR, so hard-failing the
+      // `oia` gate on it would block unrelated work. (Same principle as the
+      // SLSA network check skipping on infra it doesn't control.) The advisory
+      // keeps the drift visible; the OIDC automation is the actual fix.
+      if (regLatest && regLatest !== npmLatest) {
+        console.error(
+          `[oia-walk] ADVISORY — MCP-REGISTRY-VERSION-DRIFT: registry isLatest=${regLatest} but npm @latest=${npmLatest}. ` +
+            "The canonical registry (Glama/mcp.so/smithery auto-sync from it) trails npm. " +
+            "Stable releases auto-publish via OIDC (release.yml, v3.9.0-rc.32); to reconcile now, re-run the release workflow on the latest stable tag or `mcp-publisher login github-oidc && mcp-publisher publish`. Non-fatal (maintainer-gated remediation)."
+        );
+      }
+    }
+  } catch (err) {
+    console.error(
+      `[oia-walk] MCP-REGISTRY-VERSION-DRIFT network check skipped: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

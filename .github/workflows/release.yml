@@ -202,3 +202,32 @@ jobs:
               --prerelease \
               --target main
           fi
+      # v3.9.0-rc.32 — automate the official MCP Registry publish via GitHub
+      # Actions OIDC (no interactive login, no dedicated secret — `id-token:
+      # write` above is the only requirement; the registry trusts the repo's
+      # OIDC identity for the `io.github.oomkapwn/*` namespace).
+      #
+      # STABLE-ONLY: the registry's `isLatest` should reflect what users get
+      # from `npm install @oomkapwn/enquire-mcp` (the `latest` dist-tag), NOT a
+      # prerelease — otherwise the canonical listing (which Glama / mcp.so /
+      # smithery auto-sync from) would advertise an `-rc.N` as current. RC tags
+      # publish to npm under `@rc` but are SKIPPED here. This closes the
+      # registry-drift class: pre-3.9.0-rc.32 the registry was published
+      # manually (`mcp-publisher publish` after each stable), and it silently
+      # fell ~7 versions behind (stuck at 3.8.4 while npm was at 3.8.8).
+      - name: Publish to MCP Registry (stable only)
+        if: steps.dist_tag.outputs.tag == 'latest'
+        run: |
+          set -euo pipefail
+          # server.json is version-pinned by check-version-consistency.mjs to
+          # match package.json, so on a stable run it already carries the
+          # just-published stable version. Re-sync defensively in case the tag
+          # was cut from a tree where server.json lagged.
+          VERSION=$(node -p "require('./package.json').version")
+          node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('server.json','utf8'));s.version='${VERSION}';if(s.packages)for(const p of s.packages)p.version='${VERSION}';fs.writeFileSync('server.json',JSON.stringify(s,null,2)+'\n')"
+          # Download the official publisher CLI (pinned to the registry's
+          # latest release; same approach the MCP docs recommend).
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+          echo "Published $VERSION to the MCP Registry"

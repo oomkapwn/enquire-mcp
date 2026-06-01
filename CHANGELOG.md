@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.2] — 2026-06-01
+
+> **TL;DR:** **v3.10 staleness increment 2 — the `obsidian_stale_notes` tool (the flagship forgetting-aware capability).** A new always-on read tool (the **45th** tool): "what's gone stale in my vault?" — lists notes not edited in N days (default 365), oldest first, so an agent can proactively flag or refresh aged facts instead of recalling them as if current (the Memora frontier). Cheap **mtime-only** scan (`vault.listMarkdown()` + rc.1's `computeStaleness` — NO `readNote`, so it's not a whole-vault content scan and isn't a resource-bound scanner). Self-contained — zero change to the critical search path. The tool-count cascade (44 → 45, always-on read 33 → 34) is fully gate-verified by `docs-consistency` against `TOOL_MANIFEST`. **1050 → 1056 tests.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 2/N.**
+
+### Added
+
+- **`obsidian_stale_notes`** (read · always) — `staleNotes(vault, { stale_days?, limit?, folder? })` → `{ stale_days, scanned_notes, matches: [{ path, title, mtime, age_days }] }`, oldest-first. New `StaleNote` / `StaleNotesResponse` types + `TOOL_MANIFEST` entry + `tool-registry` registration (zod: `stale_days` ≤ 36500, `limit` ≤ 500, `folder`). Tool count **44 → 45** (34 always-on read + 4 opt-in read + 7 write); claims synced across README / STABILITY / api.md / llms.txt / COMPARISON / package.json + the tool lists/tables.
+- **`tests/stale-notes.test.ts`** (+6): oldest-first ordering + `age_days` + `scanned_notes`, default-365 threshold, custom threshold, `limit`, `folder` filter, and a NEGATIVE control (all-fresh vault → zero matches). Uses `fs.utimes` to control mtimes for exact assertions.
+
+### Method note
+
+Chosen over hybrid-path plumbing for rc.2 because it's **self-contained** (no edit to the critical `obsidian_search` fusion path → no logic-regression risk the gates can't catch) and its blast radius — the tool-count cascade — is **fully gate-verified** (`docs-consistency` re-derives every count + the tool list from `TOOL_MANIFEST`; 9 failures drove the exact checklist, now 0). The scan is mtime-only (no `readNote`), so it's as cheap as `get_recent_edits` and the rc.36 resource-bound invariant correctly does not classify it as a whole-vault scanner. **Deferred to rc.3+:** plumb `age_days`/`stale` into the hybrid `SearchHybridHit` (the primary surface — needs a path→mtime map across the multi-stage fusion) + opt-in recency RE-ranking (`--stale-days` / recency-weight) + freshness messaging.
+
+### Tests (1056)
+
+`tests/stale-notes.test.ts` +6 source `it()`. 1050 → 1056; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/tools/read.ts` (`staleNotes` + types), `src/tool-manifest.ts` (+entry), `src/tool-registry.ts` (+registration), `tests/stale-notes.test.ts` (new), README / STABILITY / docs/api.md / llms.txt / docs/COMPARISON / package.json (tool count 44→45 + tool lists), test-count claims → 1056.
+- version bump 3.10.0-rc.1 → 3.10.0-rc.2.
+
+---
+
 ## [3.10.0-rc.1] — 2026-06-01
 
 > **TL;DR:** **Opens the v3.10 line — forgetting-aware staleness (the Memora-frontier capability).** The Memora benchmark (arXiv:2604.20006) showed every memory system fails at STALE-fact reuse — recalling an old fact as if current. enquire's structural edge: every recalled note is a real markdown file with an `mtime`, so we can tell an agent HOW OLD a recalled fact is. **rc.1 ships the signal additively:** `obsidian_find_similar` + `obsidian_semantic_search` results now carry **`age_days`** (whole days since mtime) + **`stale`** (`true` past a 365-day default) via a new pure, unit-tested `computeStaleness` helper. **Zero ranking/behavior change** — it's metadata the agent can reason over ("this note is 2 years old — verify before relying on it"), turning "grounded, auditable recall" into "grounded, auditable, freshness-aware recall." Recency re-ranking, a `--stale-days` flag, hybrid-path plumbing, and an `obsidian_stale_notes` surface are the rc.2+ follow-ups (they carry product-shape choices). **1044 → 1050 tests.**

@@ -43,7 +43,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Read open editor state, active note, etc.     | **No**              | **Yes**          | Limited          | No               | No               |
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
-| Test count (public)                           | **1050**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **1056**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
@@ -56,7 +56,7 @@ Notes on the matrix:
 
 - **"Limited" for markus on Obsidian-side operations:** it covers a smaller subset of REST endpoints than cyanheads.
 
-- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 44-tool count is exact for v3.8.x stable and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
+- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 45-tool count is exact for v3.8.x stable and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
 
 - **License row** is informational, not a recommendation. MIT and Apache-2.0 are both permissive; pick what your org's policy requires.
 
@@ -114,7 +114,7 @@ Specific scenarios:
 
 - **You only need shallow operations** — list, read, write, simple text search — and you don't want a server that auto-builds an index in the background.
 
-- **You want a smaller surface for security review** — fewer tools is fewer code paths to threat-model. enquire-mcp's 44 tools + 19 prompts + Streamable HTTP transport is a real review effort; a 10-tool FS server is much smaller.
+- **You want a smaller surface for security review** — fewer tools is fewer code paths to threat-model. enquire-mcp's 45 tools + 19 prompts + Streamable HTTP transport is a real review effort; a 10-tool FS server is much smaller.
 
 - **You're prototyping** and you'd rather not commit to a specific retrieval architecture this early. Swapping a simple FS server out later is easier than swapping enquire-mcp out — there's just less to migrate.
 

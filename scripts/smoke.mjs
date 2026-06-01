@@ -98,13 +98,16 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  // v3.4.0: 36 tools (with --diagnostic-search-tools): 33 always-on read +
+  // v3.10.0: 37 tools (with --diagnostic-search-tools): 34 always-on read +
   // 3 single-ranker diagnostic tools. With --persistent-index: + 1
-  // (obsidian_full_text_search) = 37.
+  // (obsidian_full_text_search) = 38.
   // v3.1.0 added obsidian_hyde_search (HyDE retrieval) to always-on.
   // v3.2.0 added 3 .base file tools: list_bases / read_base / query_base.
   // v3.4.0 added obsidian_get_communities (GraphRAG-light).
-  const expectedCount = withFts ? 37 : 36;
+  // v3.10.0-rc.2 added obsidian_stale_notes (forgetting-aware staleness).
+  // NOTE: this spec is hardcoded — keep it in sync with TOOL_MANIFEST on any
+  // tool add (docs-consistency gates the doc counts; this smoke gates serve).
+  const expectedCount = withFts ? 38 : 37;
   check(
     `tools/list returns ${expectedCount} read tools`,
     names.length === expectedCount,
@@ -145,6 +148,7 @@ try {
     "obsidian_search",
     "obsidian_search_text",
     "obsidian_semantic_search",
+    "obsidian_stale_notes",
     "obsidian_stats",
     "obsidian_validate_note_proposal"
   ];

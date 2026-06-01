@@ -8,13 +8,13 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 
 ## v3.x stable surfaces
 
-### MCP tool names (44 tools)
+### MCP tool names (45 tools)
 
-44 tools total = **33 always-on read** + **1 opt-in via `--persistent-index`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`**. Names + argument shapes are stable in v3.x.
+45 tools total = **34 always-on read** + **1 opt-in via `--persistent-index`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`**. Names + argument shapes are stable in v3.x.
 
 **Read — always-on (33):**
 
-`obsidian_search`, `obsidian_hyde_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_list_bases`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_communities`, `obsidian_get_recent_edits`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
+`obsidian_search`, `obsidian_hyde_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_list_bases`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_communities`, `obsidian_get_recent_edits`, `obsidian_stale_notes`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
 
 **Read — opt-in via `--persistent-index` (1):** `obsidian_full_text_search`.
 

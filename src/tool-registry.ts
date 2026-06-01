@@ -43,6 +43,7 @@ import {
   searchHybrid,
   searchText,
   semanticSearch,
+  staleNotes,
   validateNoteProposal
 } from "./tools/index.js";
 import type { Vault } from "./vault.js";
@@ -238,6 +239,22 @@ export function registerReadTools(
       }
     },
     async (args) => textResult(await getRecentEdits(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_stale_notes",
+    {
+      title: "Stale notes",
+      description:
+        "List notes not edited in N days (forgetting-aware staleness), oldest first. Use to surface facts that may be outdated before relying on them, or to pick notes to refresh. Cheap mtime-only scan; returns path / title / mtime / age_days.",
+      annotations: { ...READ_ONLY, title: "Stale notes" },
+      inputSchema: {
+        stale_days: z.number().int().positive().max(36500).optional().describe("Age threshold in days (default 365)"),
+        folder: z.string().optional().describe("Restrict to a subfolder"),
+        limit: z.number().int().positive().max(500).optional().describe("Max results (default 50)")
+      }
+    },
+    async (args) => textResult(await staleNotes(vault, args))
   );
 
   server.registerTool(

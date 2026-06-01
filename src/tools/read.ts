@@ -1,6 +1,7 @@
 import { parseDql, runDql } from "../dql.js";
 import type { Embed, Wikilink } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
 import { extractFrontmatterTagsLower, resolveTarget } from "./write.js";
@@ -1205,7 +1206,12 @@ export async function getNoteNeighbors(
   await vault.ensureExists();
   const cap = args.max_per_bucket ?? 20;
   const target = await resolveTarget(vault, args);
-  const entries = await vault.listMarkdown();
+  // rc.36 F-5 (R-5/AS#5 sibling) — cap the whole-vault scan: getNoteNeighbors
+  // does TWO full-vault readNote passes (inbound backlinks + tag-siblings) and
+  // builds an inbound-count map. Defense-in-depth against a pathological vault
+  // over serve-http; output is a bounded top-K per bucket, so a partial scan on
+  // an absurdly large vault only trims the neighbor tail.
+  const entries = capScanEntries(await vault.listMarkdown(), "obsidian_get_note_neighbors");
   const { parsed: targetParsed } = await vault.readNote(target.absPath, target.mtimeMs);
   const targetTagsLower = new Set(targetParsed.tags.map((t) => t.toLowerCase()));
 

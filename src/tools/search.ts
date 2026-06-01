@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
 
@@ -239,7 +240,11 @@ export async function findSimilar(
   const limit = args.limit ?? 10;
   const minScore = args.min_score ?? 0.05;
   const target = await resolveTarget(vault, args);
-  const entries = await vault.listMarkdown();
+  // rc.36 F-4 (R-5/AS#5 sibling) — cap the whole-vault scan: findSimilar builds
+  // a vault-sized `metas` + `inboundFor` graph and scores pairwise against the
+  // target. Defense-in-depth against a pathological vault over serve-http;
+  // 50_000 ≫ any real vault, so a partial scan only trims the similarity tail.
+  const entries = capScanEntries(await vault.listMarkdown(), "obsidian_find_similar");
 
   // Pre-extract metadata for all notes including the target.
   type NoteMeta = {

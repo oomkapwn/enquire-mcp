@@ -56,6 +56,9 @@
 //   9.  ACTION SHA-PIN — every third-party GitHub Action in
 //       .github/workflows/*.yml must be pinned to a 40-hex commit SHA, not a
 //       floating tag (supply-chain). [added rc.14]
+//   9b. RUN-DOWNLOAD-UNPINNED — a `run:` `curl`/`wget` must not fetch from a
+//       moving `releases/latest` URL (same supply-chain class as 9, different
+//       surface — the M-9 mcp-publisher shape). [added v3.9.1]
 //   10. NPM-CI RETRY — every `npm ci` in .github/workflows/*.yml must be
 //       retry-wrapped (bare `- run: npm ci` fails the job on a transient
 //       onnxruntime-postinstall CDN ETIMEDOUT). [added rc.20]
@@ -69,7 +72,7 @@
 //       build doesn't purge dist/. Skips when dist/ is absent (CI oia job does
 //       not build). [added rc.36 — the L-3 class root cause]
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,10,11,12,12b —
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,9b,10,11,12,12b —
 // check 4d/4e/4 appear after the 4b/4c sub-checks for historical-accretion
 // reasons; the numbering is kept stable because CHANGELOG entries reference
 // these IDs. The canonical top-level count stays 12 (12b is a sub-check of the
@@ -840,6 +843,41 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           (lines[i] ?? "").trim().slice(0, 100),
           `GitHub Action '${ref}@${ver}' uses a floating tag, not a commit SHA — supply-chain risk (a tag can be moved to malicious code). Pin to the full 40-char commit SHA with a trailing '# ${ver}' comment (resolve via: gh api repos/${ref}/commits/${ver} --jq .sha).`
         );
+      }
+    }
+  }
+}
+
+// ─── Check 9b: workflow `run:` downloads must not pull from `releases/latest` ──
+// v3.9.1 (audit M-9 class) — Check 9 SHA-pins `uses:` action refs, but a binary
+// fetched inside a `run:` block via `curl`/`wget` from a moving `releases/latest`
+// URL is the SAME supply-chain risk on a DIFFERENT syntactic surface (the exact
+// shape of M-9: `mcp-publisher` was downloaded from `releases/latest` until rc.33
+// pinned it to the `v1.7.9` tag). Flags any non-comment `curl`/`wget` line whose
+// URL contains `releases/latest` (or `releases/download/latest`). A version- or
+// var-pinned asset (`releases/download/${TAG}` / `releases/download/v1.2.3/`)
+// passes — pinning is the remediation, exactly like Check 9. Comment lines that
+// merely MENTION `releases/latest` (e.g. release.yml's "PINNED … (not
+// releases/latest)" note) are skipped so the guard can't flag its own rationale.
+{
+  const wfDir = ".github/workflows";
+  if (existsSync(join(repoRoot, wfDir))) {
+    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
+      const rel = join(wfDir, wf);
+      const lines = readLines(rel);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        if (/^\s*#/.test(line)) continue; // YAML comment — not an executed download
+        if (!/\b(curl|wget)\b/.test(line)) continue; // only download commands
+        if (/releases\/(latest|download\/latest)\b/.test(line)) {
+          record(
+            "RUN-DOWNLOAD-UNPINNED",
+            rel,
+            i + 1,
+            line.trim().slice(0, 120),
+            "A `run:` download pulls from a moving `releases/latest` URL — supply-chain risk (the asset can change under a fixed URL). Pin to an exact release tag or version (`releases/download/<tag>/…`), mirroring the rc.33 mcp-publisher fix + Check 9's `uses:` SHA-pin policy."
+          );
+        }
       }
     }
   }

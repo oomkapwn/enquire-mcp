@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
+import { computeStaleness } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
@@ -198,6 +199,10 @@ export interface SimilarNote {
   shared_tags: string[];
   /** ISO-8601 modification time of the candidate note. */
   mtime: string;
+  /** v3.10 — whole days since `mtime` (freshness signal; never negative). */
+  age_days: number;
+  /** v3.10 — `true` when older than the default stale threshold (365d). */
+  stale: boolean;
 }
 
 /**
@@ -285,6 +290,7 @@ export async function findSimilar(
   }
   const targetInbound = inboundFor.get(target.relPath) ?? new Set();
 
+  const now = Date.now(); // v3.10 — one staleness reference for all hits in this response
   const out: SimilarNote[] = [];
   for (const [relPath, m] of metas) {
     if (relPath === target.relPath) continue;
@@ -315,7 +321,8 @@ export async function findSimilar(
         co_backlink: Math.round(coBack * 10000) / 10000
       },
       shared_tags: shared,
-      mtime: new Date(m.entry.mtimeMs).toISOString()
+      mtime: new Date(m.entry.mtimeMs).toISOString(),
+      ...computeStaleness(m.entry.mtimeMs, now)
     });
   }
   out.sort((a, b) => b.score - a.score);
@@ -563,6 +570,10 @@ export interface SemanticHit {
   matched_terms: string[];
   /** ISO-8601 modification time of the note. */
   mtime: string;
+  /** v3.10 — whole days since `mtime` (freshness signal; never negative). */
+  age_days: number;
+  /** v3.10 — `true` when older than the default stale threshold (365d). */
+  stale: boolean;
 }
 
 /**
@@ -641,6 +652,7 @@ export async function semanticSearch(
   }
   scored.sort((a, b) => b.score - a.score);
 
+  const now = Date.now(); // v3.10 — one staleness reference for all hits in this response
   const matches: SemanticHit[] = [];
   for (const { doc, score, matchedTerms } of scored.slice(0, limit)) {
     matchedTerms.sort((a, b) => (idf.get(b) ?? 0) - (idf.get(a) ?? 0));
@@ -666,7 +678,8 @@ export async function semanticSearch(
       score: Math.round(score * 10000) / 10000,
       snippet: snippetText,
       matched_terms: matchedTerms.slice(0, 8),
-      mtime: new Date(doc.mtimeMs).toISOString()
+      mtime: new Date(doc.mtimeMs).toISOString(),
+      ...computeStaleness(doc.mtimeMs, now)
     });
   }
 

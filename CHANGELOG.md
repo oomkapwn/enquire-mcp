@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.33] — 2026-06-01
+
+> **TL;DR:** **External-audit (Mavis on rc.32) re-verification + the 2 genuinely-actionable fixes.** A fresh Mavis audit on rc.32 was supplied; I re-verified every claim against the actual code (treating the report as untrusted). **Verdict**: a broad, mostly-accurate *health* audit (correctly confirms "production-ready, concurrency class closed") — but **materially STALE**: it explicitly carried the rc.24 report forward and re-flagged **4 findings that rc.28 already closed** (MAX_EMBED_CHARS clamp, peekCache LRU, main() TSDoc, bench "p99"→max), plus repeated count errors ("14-check OIA"→11, "22 catch {}"→49/zero-empty, "17 overclaims"→18, "10 floors"→11). Two findings were real and are fixed here: **H-3** (`extractPdfText` silently returned `pages:[]` on an inverted `pageRange` — now throws, matching the OCR sibling) and **M-9** (`mcp-publisher` was downloaded from `releases/latest` — now SHA-tag-pinned). Full per-finding verdict in `docs/audits/v3.9.0-rc.32-external-mavis-reverification-2026-06-01.md`. **1020 → 1022 tests.**
+
+**Patch — external-audit re-verification + fixes for the verified-real findings.**
+
+### Fixed (verified-real)
+
+- **H-3 — `extractPdfText` now fails closed on an inverted/out-of-domain `pageRange`** (`src/pdf.ts`). Previously `{from:50,to:10}` clamped to an empty window and returned `pages:[]` with NO error — a silent caller-error sink and a parity gap with the OCR path (`resolveOcrPageRange` throws on inverted). Now validates `from` is an integer ≥ 1 and ≤ `to`, throwing a clear message ("invalid page range — 'from' must be … ≤ 'to' …") that mirrors the OCR sibling. A valid `from ≤ to` range (incl. clamp-to-doc like `{from:1,to:10}` on a 2-page PDF) is unaffected. Auditor rated this HIGH; re-verified as **LOW** (caller-error → empty, not data loss) but a genuine DX/parity fix.
+- **M-9 — `mcp-publisher` pinned to an exact release tag** (`release.yml`). The rc.32 registry-OIDC step downloaded the CLI from `releases/latest/download` (the official MCP docs' own example does this); pinned to `v1.7.9` via a `MCP_PUBLISHER_TAG` var so a re-tagged/compromised upstream "latest" can't silently change the binary that runs with our OIDC identity. Bump the var deliberately to adopt a newer CLI.
+
+### Rejected / not-actioned (documented in the re-verification doc)
+
+- **4 STALE carryovers** (M-8 clamp, L-2 peekCache, L-7 bench-p99, main()-TSDoc) — all closed in rc.28; verified still-closed on rc.32, no action.
+- **M-2** ("TF-IDF WeakMap unbounded at 100K notes") — **investigated, not a leak**: `tfidfCache` is a `WeakMap<Vault, …>` (search.ts:336) holding ONE cache per live vault object (overwritten on rebuild, GC'd with the vault), not linear content growth. Auditor misread it. No fix.
+- **M-3** (22 bare `catch {}`) — miscounted (actual 49, **zero** truly-empty, all deliberate fail-soft); same rejection as the rc.24 round.
+- **H-1/H-2/H-4** (branch protection) — TRUE + already ACKNOWLEDGED maintainer-only (repo security settings, out of agent scope).
+- **M-1/M-4/M-5/M-6/M-7/M-10 + L-1/L-4/L-5/L-6/L-8/L-9/L-10** — valid-but-non-urgent hardening/DX/refactor; deferred, no correctness impact.
+
+### Method note
+
+Mirror-image lesson to the rc.24 Mavis round: there the single auditor **missed** a live CRITICAL; here it went **stale** — re-flagging four fixes that landed 4 RCs earlier because it carried its prior report forward without re-checking current code. Either failure mode is why the v3.6.1 ≥2-independent-auditors gate stands and why every external finding is re-verified per-item against `git`-current source before any action.
+
+### Tests (1022)
+
+`tests/pdf.test.ts`: the pre-existing "inverted range yields empty pages" test (which asserted the OLD silent-empty behavior) is updated to assert the new throw; +2 source `it()` (from < 1 throw; positive control that a valid `from ≤ to` range still extracts without throwing). Test-count claims 1020 → 1022 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+
+### Files changed
+
+- `src/pdf.ts` (inverted-range guard), `.github/workflows/release.yml` (mcp-publisher SHA-tag pin), `tests/pdf.test.ts` (+2 + 1 updated), `docs/audits/v3.9.0-rc.32-external-mavis-reverification-2026-06-01.md` (new), test-count claims → 1022.
+- version bump 3.9.0-rc.32 → 3.9.0-rc.33.
+
+---
+
 ## [3.9.0-rc.32] — 2026-05-30
 
 > **TL;DR:** **Automate MCP Registry publishing + drift backstop (closes the registry-staleness class).** A promotion-channel check found the canonical MCP Registry stuck at **3.8.4** while npm `@latest` is **3.8.8** (~7 versions behind) — and because Glama / mcp.so / smithery **auto-sync from the registry**, that stale entry was silently propagating an outdated "current version" across the whole directory ecosystem. Root cause: the registry was published *manually* (`mcp-publisher publish` after each stable), so it drifted whenever that step was skipped. **Fixed structurally:** `release.yml` now auto-publishes **stable releases** to the registry via GitHub Actions **OIDC** (no secret — the existing `id-token: write` is all it needs), and new **OIA Check 11** is a state-driven advisory that surfaces registry-vs-npm drift on every audit run. **Workflow + audit-script + docs only; 1020 tests unchanged.**

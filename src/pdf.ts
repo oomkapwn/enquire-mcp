@@ -162,9 +162,22 @@ export async function extractPdfText(buffer: Buffer, opts: ExtractPdfTextOptions
 
   // v3.7.13 H1 — restrict the iteration to the requested window so
   // doc.getPage() / getTextContent() only fire on pages the caller asked
-  // for. `pageRange.from / to` are clamped against the actual pageCount;
-  // an inverted or out-of-range range yields an empty iteration (the
-  // earlier full-document extraction was the resource-leak path).
+  // for. `pageRange.from / to` are clamped against the actual pageCount.
+  // v3.9.0-rc.33 (external-audit H-3) — an explicit but inverted/out-of-range
+  // `pageRange` (e.g. `{from:50,to:10}`) previously clamped to an EMPTY window
+  // and returned `pages:[]` with NO error — a silent caller-error sink and a
+  // parity gap with the OCR path (`resolveOcrPageRange` throws on inverted).
+  // Now fail-closed with a clear message, matching the OCR sibling, so an
+  // agent passing a bad range gets actionable feedback instead of "no pages".
+  if (opts.pageRange) {
+    const { from, to } = opts.pageRange;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) {
+      throw new Error(
+        `enquire PDF: invalid page range — 'from' (${from}) must be an integer ≥ 1 and ≤ 'to' (${to}). ` +
+          "Pass pages as [from, to] with from ≤ to (1-indexed, inclusive)."
+      );
+    }
+  }
   const fromPage = opts.pageRange ? Math.max(1, opts.pageRange.from) : 1;
   const toPage = opts.pageRange ? Math.min(pageCount, opts.pageRange.to) : pageCount;
 

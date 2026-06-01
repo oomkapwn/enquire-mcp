@@ -274,11 +274,28 @@ export class EmbedDb {
     );
   }
 
-  /** Remove the embed db + WAL/SHM sidecars. Idempotent. */
+  /**
+   * Remove the embed db + WAL/SHM sidecars AND the HNSW persistence sidecars
+   * (`<base>.hnsw.bin` + `<base>.hnsw.meta.json`, where `<base>` is the embed
+   * file with its `.embed.db` suffix stripped — mirrors the persist path in
+   * server.ts). Idempotent.
+   *
+   * v3.9.0-rc.34 (deep-audit P-2) — the HNSW sidecars were previously NOT
+   * removed by `clear-embeddings`, so a `--use-hnsw` user's vault content
+   * persisted on disk after "clearing" — and the `.hnsw.meta.json` carries
+   * `text_preview` (raw chunk text), so this was a right-to-erasure / data-
+   * cleanup gap, not just stale-index hygiene. Now the single file-deletion
+   * authority for an embed-db also erases its HNSW companions.
+   */
   async clearOnDisk(): Promise<boolean> {
     this.close();
     let removed = false;
-    for (const p of [this.file, `${this.file}-wal`, `${this.file}-shm`]) {
+    // `<file>` without the `.embed.db` suffix + `.hnsw` is the persist base
+    // (see server.ts `persistFile`); the index writes `<base>.bin` + the
+    // metadata writes `<base>.meta.json`.
+    const hnswBase = `${this.file.replace(/\.embed\.db$/, "")}.hnsw`;
+    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
+    for (const p of targets) {
       try {
         await fs.unlink(p);
         removed = true;

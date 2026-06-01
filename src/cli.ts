@@ -604,7 +604,9 @@ export async function main(): Promise<void> {
 
   program
     .command("clear-embeddings")
-    .description("Delete the embedding index files (.embed.db + WAL/SHM sidecar) for a given vault")
+    .description(
+      "Delete the embedding index files (.embed.db + WAL/SHM sidecar + HNSW .hnsw.bin/.hnsw.meta.json sidecars) for a given vault"
+    )
     .requiredOption("--vault <path>", "Vault whose embedding index to delete")
     .option("--embed-file <path>", "Override the embedding-index file location")
     .action(async (opts: { vault: string; embedFile?: string }) => {

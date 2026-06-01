@@ -956,10 +956,15 @@ export async function embeddingsSearch(
   // "user hasn't built the index yet" from "model failed to load".
   const fsMod = await import("node:fs");
   if (!fsMod.existsSync(embedFile)) {
+    // v3.9.0-rc.34 (deep-audit P-3) — this error propagates to the MCP client
+    // (a tool-handler throw), so on bearer-auth `serve-http` it must NOT echo
+    // the absolute vault path / embed-db path (filesystem fingerprinting).
+    // Sanitized to a path-free, still-actionable remediation. (Both `embedFile`
+    // and `vault.root` were absolute; the auditor flagged only `vault.root`.)
     throw new Error(
-      `Embedding index not found at ${embedFile}. ` +
-        `Run: enquire-mcp build-embeddings --vault ${vault.root} ` +
-        `(first-time setup also needs: enquire-mcp install-model multilingual)`
+      "Embedding index not found. " +
+        "Run `enquire-mcp build-embeddings --vault <your-vault>` to build it " +
+        "(first-time setup also needs `enquire-mcp install-model multilingual`)."
     );
   }
 

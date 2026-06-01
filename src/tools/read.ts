@@ -384,15 +384,15 @@ export interface StaleNotesResponse {
  * List notes not edited in `stale_days` days — the v3.10 forgetting-aware
  * "what's gone stale in my vault?" surface. Lets an agent proactively flag (or
  * refresh) aged facts rather than recalling them as if current (the Memora
- * frontier — see {@link computeStaleness}).
+ * frontier — see `computeStaleness` in `src/staleness.ts`).
  *
  * Cheap: a single metadata pass over `vault.listMarkdown()` mtimes — NO
  * `readNote` (so it's not a whole-vault content scan). Sorted oldest-first so
  * the most-stale notes surface at the top.
  *
  * @param vault - The vault.
- * @param args - All optional. `stale_days` (default {@link DEFAULT_STALE_DAYS}
- *   = 365), `limit` (default 50), `folder` restricts the scan.
+ * @param args - All optional. `stale_days` (default `DEFAULT_STALE_DAYS` = 365),
+ *   `limit` (default 50), `folder` restricts the scan.
  * @returns `{ stale_days, scanned_notes, matches }`, `matches` oldest-first.
  * @example
  * ```ts

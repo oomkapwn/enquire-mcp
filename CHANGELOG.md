@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.1] — 2026-06-01
+
+> **TL;DR:** **Opens the v3.10 line — forgetting-aware staleness (the Memora-frontier capability).** The Memora benchmark (arXiv:2604.20006) showed every memory system fails at STALE-fact reuse — recalling an old fact as if current. enquire's structural edge: every recalled note is a real markdown file with an `mtime`, so we can tell an agent HOW OLD a recalled fact is. **rc.1 ships the signal additively:** `obsidian_find_similar` + `obsidian_semantic_search` results now carry **`age_days`** (whole days since mtime) + **`stale`** (`true` past a 365-day default) via a new pure, unit-tested `computeStaleness` helper. **Zero ranking/behavior change** — it's metadata the agent can reason over ("this note is 2 years old — verify before relying on it"), turning "grounded, auditable recall" into "grounded, auditable, freshness-aware recall." Recency re-ranking, a `--stale-days` flag, hybrid-path plumbing, and an `obsidian_stale_notes` surface are the rc.2+ follow-ups (they carry product-shape choices). **1044 → 1050 tests.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 1/N.**
+
+### Added
+
+- **`src/staleness.ts`** — `computeStaleness(mtimeMs, now, staleDays?)` → `{ age_days, stale }`, pure + deterministic (`now` injected, not read from the clock — unit-testable + one reference per response). Future-dated mtime clamps to `age_days: 0` (no negative age). `DEFAULT_STALE_DAYS = 365` (conservative — old enough to re-verify, not so aggressive a stable reference note trips it).
+- **`age_days` + `stale` on `SimilarNote` + `SemanticHit`** (the two result types that already carried `mtime`), populated at their build sites from the existing `mtimeMs` with a single `now = Date.now()` per response. `tsc` confirms these are the only constructors (required fields, clean build).
+- **`tests/staleness.test.ts`** (+6): age flooring, the `>= 365` boundary, custom threshold, future-mtime clamp, and a NEGATIVE control (fresh ≠ ancient — the verdict isn't constant).
+
+### Method note
+
+Deliberately scoped to the **additive, low-risk** slice: surface the freshness signal on the result types that already carry `mtime`, with NO change to ranking or to the critical hybrid (`obsidian_search`) path. **Deferred to rc.2+** (each a real product-shape decision, best made deliberately rather than rushed): (a) plumb `mtime` → `age_days`/`stale` into `SearchHybridHit` (the primary surface — it doesn't carry mtime today), (b) opt-in recency RE-ranking (a `--stale-days` / recency-weight flag via `addAdvancedRetrievalOptions` + cli-parity), (c) an `obsidian_stale_notes` tool to enumerate aged notes for refresh, (d) "freshness-aware memory" messaging in README/COMPARISON. rc.1 zero-risk foundation first; the behavior-changing + API-surface parts follow with their own gates.
+
+### Tests (1050)
+
+`tests/staleness.test.ts` +6 source `it()`. 1044 → 1050; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/staleness.ts` (new), `src/tools/search.ts` (+`age_days`/`stale` on 2 result types + build sites), `tests/staleness.test.ts` (new), `docs/api.md` (staleness note), test-count claims → 1050.
+- version bump 3.9.1 → 3.10.0-rc.1.
+
+---
+
 ## [3.9.1] — 2026-06-01
 
 > **TL;DR:** **First post-stable patch — closes 2 of the 3 named-uncovered behavioral classes from the rc.36 meta-audit + the v3.8.2-style docs-currency flip.** The meta-audit named three behavioral dimensions the drift-driven apparatus still didn't patrol; this ships structural gates for two: **supply-chain `run:`-download** (OIA **Check 9b** `RUN-DOWNLOAD-UNPINNED` — a `curl`/`wget` must not pull from a moving `releases/latest` URL; the M-9 mcp-publisher class on a surface Check 9's `uses:` SHA-pin didn't cover) and **paired-sink behavior parity** (`tests/sink-parity-invariant.test.ts` — paired sinks that handle the same concept must agree on fail-closed error semantics; H-3 class, the rc.33 PDF-vs-OCR page-range gap). Plus the **docs-currency flip**: now that `@latest = 3.9.0`, the current-stable pointers move "v3.8.x → v3.9.x" (README hero/badge/channel, ROADMAP, api.md, QUICKSTART) — the dated COMPARISON snapshot vintage is **intentionally left at v3.8.x** (it's accurate history; flipping it would imply a v3.9.0 re-verification that didn't happen). **1039 → 1044 tests.**

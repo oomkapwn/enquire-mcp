@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.1] — 2026-06-01
+
+> **TL;DR:** **First post-stable patch — closes 2 of the 3 named-uncovered behavioral classes from the rc.36 meta-audit + the v3.8.2-style docs-currency flip.** The meta-audit named three behavioral dimensions the drift-driven apparatus still didn't patrol; this ships structural gates for two: **supply-chain `run:`-download** (OIA **Check 9b** `RUN-DOWNLOAD-UNPINNED` — a `curl`/`wget` must not pull from a moving `releases/latest` URL; the M-9 mcp-publisher class on a surface Check 9's `uses:` SHA-pin didn't cover) and **paired-sink behavior parity** (`tests/sink-parity-invariant.test.ts` — paired sinks that handle the same concept must agree on fail-closed error semantics; H-3 class, the rc.33 PDF-vs-OCR page-range gap). Plus the **docs-currency flip**: now that `@latest = 3.9.0`, the current-stable pointers move "v3.8.x → v3.9.x" (README hero/badge/channel, ROADMAP, api.md, QUICKSTART) — the dated COMPARISON snapshot vintage is **intentionally left at v3.8.x** (it's accurate history; flipping it would imply a v3.9.0 re-verification that didn't happen). **1039 → 1044 tests.**
+
+**Patch — post-stable hardening (meta-audit behavioral classes) + docs-currency.**
+
+### Added — structural defenses (close named-uncovered behavioral classes)
+
+- **OIA Check 9b (`RUN-DOWNLOAD-UNPINNED`)** — supply-chain. Check 9 SHA-pins `uses:` action refs, but a binary fetched in a `run:` block via `curl`/`wget` from a moving `releases/latest` URL is the SAME risk on a different surface (the exact M-9 shape: `mcp-publisher` was pulled from `releases/latest` until rc.33 pinned it to `v1.7.9`). Flags any non-comment `curl`/`wget` line whose URL contains `releases/latest` (or `releases/download/latest`); version/tag-pinned assets pass; comment lines that merely mention `releases/latest` are skipped (so the guard can't flag its own rationale). Detection-power verified (injected `releases/latest` → flagged; the live `v1.7.9` pin → clean). Folded under Check 9 (9b) — canonical OIA count stays 12.
+- **`tests/sink-parity-invariant.test.ts`** — H-3 class. Generalizes the one-off rc.33 fix (PDF returned `pages:[]` on an inverted `pageRange` while OCR threw) into a manifest of paired sinks that must agree on fail-closed semantics. Behavioral on the pure member (`resolveOcrPageRange` throws on `[50,10]`, passes on `[1,3]`) + structural source-parity on both members (each body must contain an inverted-range `throw`; the regex is an alternation over the two sites' syntaxes — `to < from` vs `to - from + 1 < 1`). Positive + NEGATIVE controls (a silent no-throw sink + a guard-less body are both flagged). Enrolled in the META-invariant.
+
+### Changed — docs-currency (post-publish, v3.8.2 precedent)
+
+- Current-stable pointers flipped `v3.8.x → v3.9.x`: README hero credential + `stable` badge + npm-channel line + version-history `(on @rc)` → `stable`; ROADMAP "Where we are"; `docs/api.md` channel header (+ dropped the stale "in-flight v3.9.0 RCs" phrase); `docs/QUICKSTART.md` version example. **Intentionally NOT flipped:** the dated `docs/COMPARISON.md` + README comparison-note snapshot vintage ("as of 2026-05-24, v3.8.x stable") — that's accurate history; re-stamping it v3.9.x without re-running the comparison would be an overclaim. Line-level `v3.9.x` (not `v3.9.0`) is used so the pointers stay correct across patches.
+
+### Method note
+
+First post-stable patch, mirroring v3.8.0 → v3.8.2 (currency flip after the dist-tag actually moved). The two structural gates follow the rc.36 meta-audit rule: internalize each external lens as an inventory invariant, don't just patch the instance. **Deferred (the 3rd named class):** a generalized enforcement-verb → code-guard taxonomy (greps SECURITY.md/TSDoc for "blocked / zero outbound / fails closed / throws if" and requires each to point at a named guard) — it needs careful low-false-positive design (many TSDoc legitimately say "throws if" with the guard inline), so it gets its own focused patch rather than a rushed regex here.
+
+### Tests (1044)
+
+`tests/sink-parity-invariant.test.ts` +5 source `it()` (1 behavioral + 1 valid-range NEGATIVE + 1 structural-parity loop + 2 NEGATIVE controls). 1039 → 1044; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `scripts/oia-walk.mjs` (Check 9b + enumeration/marker-order update), `tests/sink-parity-invariant.test.ts` (new), README/ROADMAP/api.md/QUICKSTART (currency flip), test-count claims → 1044.
+- version bump 3.9.0 → 3.9.1.
+
+---
+
 ## [3.9.0] — 2026-06-01
 
 > **TL;DR:** **v3.9.0 STABLE — promoted `@rc → @latest` after 37 RCs.** The v3.9.0 minor delivers the last architectural items from the v3.8.0 backlog plus the deepest security/correctness hardening cascade in the project's history. **Headline features:** OCR'd-PDF watcher embed-sync (rc.1), **HNSW in-memory live update** so search reflects vault edits within the watcher debounce window (~250 ms) without a serve restart (rc.2) + close-time disk persistence (rc.6), and **R-10 adaptive HNSW refill** that doubles `k` under heavy privacy-filtering (rc.3). **Hardening cascade (rc.7→rc.37):** the ReDoS guard for `obsidian_open_questions` taken from a single instance to a permanent generative-fuzz CI gate (rc.21/24/25), OCR offline-enforcement actually built to match the docs (rc.10), watcher/HNSW concurrency races closed (rc.11), and a comprehensive in-house audit (rc.36/37) that fixed the open siblings of every recent class **and internalized the missing privacy/DoS lenses as permanent inventory invariants** (erasure-completeness, resource-bound-completeness, orphan-dist). **Promotion basis:** the v3.6.1 ≥2-independent-external-auditor gate is met by the rc.32 deep-audit (Mavis 10-track STRIDE/privacy) + the rc.34 from-scratch audit (different methodology), each re-verified per-item against the pinned commit; the maintainer elected to promote on these two rather than commission a third on the rc.37 commit (the rc.35→37 delta is hardening + docs only). **1039 tests, 89.61% line coverage, all 9 required CI gates green.**

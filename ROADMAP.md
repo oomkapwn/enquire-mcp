@@ -8,7 +8,7 @@ This is the *public* roadmap. Per-release detail lives in [`CHANGELOG.md`](./CHA
 
 ---
 
-## Where we are (v3.9.0-rc train on `@rc`; stable `@latest` = v3.8.x)
+## Where we are (v3.9.x stable on `@latest`)
 
 Already shipped and differentiating:
 
@@ -18,7 +18,7 @@ Already shipped and differentiating:
 - **GraphRAG-light** — Louvain community detection over the wikilink graph.
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
-- **Process maturity** — 1039 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1044 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 

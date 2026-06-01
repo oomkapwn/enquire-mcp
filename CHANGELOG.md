@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] — 2026-06-01
+
+> **TL;DR:** **v3.9.0 STABLE — promoted `@rc → @latest` after 37 RCs.** The v3.9.0 minor delivers the last architectural items from the v3.8.0 backlog plus the deepest security/correctness hardening cascade in the project's history. **Headline features:** OCR'd-PDF watcher embed-sync (rc.1), **HNSW in-memory live update** so search reflects vault edits within the watcher debounce window (~250 ms) without a serve restart (rc.2) + close-time disk persistence (rc.6), and **R-10 adaptive HNSW refill** that doubles `k` under heavy privacy-filtering (rc.3). **Hardening cascade (rc.7→rc.37):** the ReDoS guard for `obsidian_open_questions` taken from a single instance to a permanent generative-fuzz CI gate (rc.21/24/25), OCR offline-enforcement actually built to match the docs (rc.10), watcher/HNSW concurrency races closed (rc.11), and a comprehensive in-house audit (rc.36/37) that fixed the open siblings of every recent class **and internalized the missing privacy/DoS lenses as permanent inventory invariants** (erasure-completeness, resource-bound-completeness, orphan-dist). **Promotion basis:** the v3.6.1 ≥2-independent-external-auditor gate is met by the rc.32 deep-audit (Mavis 10-track STRIDE/privacy) + the rc.34 from-scratch audit (different methodology), each re-verified per-item against the pinned commit; the maintainer elected to promote on these two rather than commission a third on the rc.37 commit (the rc.35→37 delta is hardening + docs only). **1039 tests, 89.61% line coverage, all 9 required CI gates green.**
+
+**Minor — STABLE promotion of the v3.9.0 line.**
+
+### Promoted
+
+- npm dist-tag `@rc` (3.9.0-rc.37) → `@latest` (3.9.0). GitHub release marked Latest. The MCP Registry auto-publishes on the stable tag via OIDC (release.yml, gated `dist_tag=='latest'`), reconciling the registry-vs-npm drift the rc.32 advisory tracks (3.8.4 → 3.9.0). No code change vs rc.37 — this is a version bump + this entry.
+
+### What shipped across the v3.9.0 line (vs v3.8.8 stable)
+
+- **Architectural (closed the v3.8.0 backlog):** OCR'd-PDF watcher embed-sync; HNSW in-memory live update + disk persistence; R-10 adaptive refill; full state-driven self-audit.
+- **Security / correctness:** ReDoS guard + generative-fuzz gate (overlapping-alternation, case/escape aliasing, optional/nullable/variable bodies); OCR offline enforcement (`assertOcrLangsInstalled` + `cacheMethod:"readOnly"` + real `install-ocr-lang`); canvas-OOM clamp; watcher per-file serialization + fail-closed HNSW label zip; bearer ≥16 reconciliation; DQL `like` cap.
+- **Privacy / DoS (the rc.34→rc.37 external + in-house audit line):** HNSW-sidecar right-to-erasure (P-2) + parse-cache `.tmp` erasure (F-2); path-free client errors (P-3/F-3); `find_path`/`communities`/`findSimilar`/`getNoteNeighbors` whole-vault scan caps (R-5/AS#5/F-4/F-5); stale-`dist` ship fix (L-3/F-1).
+- **Apparatus:** OIA grew to 12 checks (+12b orphan-dist); new structural invariants — erasure-completeness, resource-bound-completeness, meta-invariant vacuity closure, ReDoS generative fuzz; `lint` now enforces `noExplicitAny`.
+
+### Method note
+
+Promotion follows the v3.8.0 precedent: this entry + the version bump only; the **state-driven docs-currency flip** ("stable `@latest` = v3.8.x → v3.9.0" across README/COMPARISON/api.md/ROADMAP) lands as a documented **follow-up patch after `@latest` publishes** (mirroring v3.8.2 after v3.8.0) — those pointers are accurate until the dist-tag actually moves, so flipping them pre-publish would itself be an overclaim. The promotion is the maintainer's call per the v3.6.1 rule; the agent prepared this gated release and the maintainer triggers the `@latest` publish via the stable tag push.
+
+### Exit criteria
+
+npm `@latest = 3.9.0` · GitHub release v3.9.0 marked Latest · all 37 RCs tagged + on `@rc` · 1039 tests green · 9/9 required CI gates · MCP Registry auto-synced to 3.9.0 via OIDC on the stable tag.
+
+---
+
 ## [3.9.0-rc.37] — 2026-06-01
 
 > **TL;DR:** **Docs/process-drift batch — the deferred (no-behavioral-risk) half of the rc.36 comprehensive audit — plus the structural gate that closes the gate-GAP the headline finding exposed.** The process/contradiction sub-agent found **F1** (MEDIUM): `ROADMAP.md` carried a stale "Process maturity — **1020 tests**" claim (plus a `1002`/`44 tools` stat-pill in a planning bullet) that **NO gate caught** — ROADMAP was absent from both `scope-completeness-audit.mjs` `AUDIT_FILES` and the `docs-consistency` surfaces, and a `[x]` checkbox even *claimed* ROADMAP had already been added to `AUDIT_FILES` (it hadn't — only `AGENTS.md` was). Closed the number AND the gate-gap: ROADMAP is now in `AUDIT_FILES` + the `test-count`/`ci-gate-count` defense scopes + a new `docs-consistency` "ROADMAP test-count" invariant. Plus **F3** (`AGENTS.md` referenced a phantom `src/search.ts` ×2 — the file is `src/rrf.ts` / `src/tools/search.ts`), **F4** (`COMPARISON` "7 stack configs" → "8: 6 full-60-query + 2 HyDE-subset"), **F2** (`lint` didn't enforce the documented "0 warnings / no `any`" claim — `noExplicitAny:"warn"` + plain `biome check` → set to `"error"`, verified zero stray `any`). Documents the meta-audit's durable lesson as a CLAUDE.md anti-pattern. **1038 → 1039 tests.**

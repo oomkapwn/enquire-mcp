@@ -59,10 +59,21 @@
 //   10. NPM-CI RETRY — every `npm ci` in .github/workflows/*.yml must be
 //       retry-wrapped (bare `- run: npm ci` fails the job on a transient
 //       onnxruntime-postinstall CDN ETIMEDOUT). [added rc.20]
+//   11. MCP-REGISTRY VERSION DRIFT — canonical registry version vs npm
+//       `@latest` (non-fatal advisory; remediation is maintainer-gated). [rc.32]
+//   12. STALE-DIST-TOOLS-IMPORT — scripts/*.mjs must not import the pre-split
+//       `dist/tools.js` (TypeScript now emits `dist/tools/index.js`). [rc.35]
+//   12b. ORPHAN-DIST-FILE — every emitted `dist/<p>.{js,d.ts}` must have a
+//       backing `src/<p>.ts` (flat 1:1 TS emit rule). Catches the stale
+//       *artifact* (not just the stale import string) that ships to npm when a
+//       build doesn't purge dist/. Skips when dist/ is absent (CI oia job does
+//       not build). [added rc.36 — the L-3 class root cause]
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,10 — check 4d/4e/4
-// appear after the 4b/4c sub-checks for historical-accretion reasons; the
-// numbering is kept stable because CHANGELOG entries reference these IDs.
+// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,10,11,12,12b —
+// check 4d/4e/4 appear after the 4b/4c sub-checks for historical-accretion
+// reasons; the numbering is kept stable because CHANGELOG entries reference
+// these IDs. The canonical top-level count stays 12 (12b is a sub-check of the
+// dist-split / L-3 class, mirroring 4b–4e under check 4).
 //
 // Exit codes:
 //   0 — no findings (or --allow flag passed)
@@ -944,6 +955,58 @@ if (!SKIP_NETWORK) {
             "Imports `../dist/tools.js`, which TypeScript no longer emits (the source is `tools/` → `dist/tools/index.js`). This only resolves if a stale pre-split `dist/tools.js` lingers; on a clean build it breaks. Change the import to `../dist/tools/index.js`."
           );
         }
+      }
+    }
+  }
+}
+
+// ─── Check 12b: no orphan dist artifacts (the L-3 class ROOT CAUSE) ───────
+// v3.9.0-rc.36 — Check 12 caught the stale *import string*; this catches the
+// stale *file*. After `src/tools.ts` was split into `src/tools/`, TypeScript
+// emits `dist/tools/index.js` and NO LONGER emits `dist/tools.js` — but a
+// `tsc` that doesn't first purge dist/ leaves the 6-week-old pre-split
+// `dist/tools.{js,d.ts}` (+ maps) behind, and `files:["dist"]` SHIPS them to
+// npm (~309 KB of stale code/types, confirmed via `npm pack --dry-run`). The
+// real fix is `build: rm -rf dist && tsc` (package.json); this check is the
+// state-driven tripwire that fails a local pre-ship `check:oia` if a stale
+// dist lingers. TS emit is FLAT 1:1: `dist/<p>.js` ⇔ `src/<p>.ts` (a *file*),
+// and a directory `src/<p>/` emits `dist/<p>/index.js`, never `dist/<p>.js` —
+// so a `src/<p>/` directory must NOT satisfy `dist/<p>.js` (that exact
+// false-negative bit my first probe; mirrors the rc.24 "analyze the right
+// semantic space" rule). Skips entirely when dist/ is absent — the CI oia job
+// deliberately does not build (it only greps source + docs), so this protects
+// the maintainer's local pre-ship run + the published tarball, not CI itself.
+{
+  const distRoot = join(repoRoot, "dist");
+  if (existsSync(distRoot)) {
+    /** Recursively collect every file under dist/ (relative to dist/). */
+    const walkDist = (dir, prefix = "") => {
+      const out = [];
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${e.name}` : e.name;
+        if (e.isDirectory()) out.push(...walkDist(join(dir, e.name), rel));
+        else out.push(rel);
+      }
+      return out;
+    };
+    for (const rel of walkDist(distRoot)) {
+      // Map an emitted artifact back to its source stem. Order matters:
+      // `.d.ts.map` and `.js.map` must be tested before `.d.ts`/`.js`.
+      let stem = null;
+      if (rel.endsWith(".d.ts.map")) stem = rel.slice(0, -".d.ts.map".length);
+      else if (rel.endsWith(".js.map")) stem = rel.slice(0, -".js.map".length);
+      else if (rel.endsWith(".d.ts")) stem = rel.slice(0, -".d.ts".length);
+      else if (rel.endsWith(".js")) stem = rel.slice(0, -".js".length);
+      if (stem === null) continue; // non-emit asset (rare); not our concern
+      // FLAT rule — NO directory fallback. `dist/tools.js` ⇒ `src/tools.ts`.
+      if (!existsSync(join(repoRoot, "src", `${stem}.ts`))) {
+        record(
+          "ORPHAN-DIST-FILE",
+          `dist/${rel}`,
+          1,
+          `dist/${rel} has no backing src/${stem}.ts`,
+          'Stale build artifact with no source — TypeScript no longer emits it (likely a pre-rename/pre-split leftover). It SHIPS to npm via `files:["dist"]`. Run `npm run clean && npm run build` to purge dist/ and rebuild; `build`/`prepublishOnly` now `rm -rf dist` first so a clean build cannot reproduce this.'
+        );
       }
     }
   }

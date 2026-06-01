@@ -351,15 +351,25 @@ export class Vault {
    */
   async clearDiskCache(): Promise<boolean> {
     if (!this.cacheFile) return false;
-    try {
-      await fs.unlink(this.cacheFile);
-      this.cache.clear();
-      this.cacheDirty = false;
-      return true;
-    } catch (err) {
-      if (isErrnoException(err) && err.code === "ENOENT") return false;
-      throw err;
+    // rc.36 F-2 (P-2 erasure-completeness sibling) — erase BOTH the cache file
+    // AND any leftover atomic-write temp. A crash between `saveDiskCache`'s
+    // `writeFile(tmp)` and `rename` (or an EXDEV cross-device rename) leaves
+    // `${cacheFile}.tmp` holding full note bodies on disk; clearing only the
+    // main file would leave raw vault text behind — a right-to-erasure gap,
+    // the parse-cache analogue of the rc.34 HNSW `.meta.json` sidecar fix.
+    const file = this.cacheFile;
+    let removed = false;
+    for (const target of [file, `${file}.tmp`]) {
+      try {
+        await fs.unlink(target);
+        removed = true;
+      } catch (err) {
+        if (!(isErrnoException(err) && err.code === "ENOENT")) throw err;
+      }
     }
+    this.cache.clear();
+    this.cacheDirty = false;
+    return removed;
   }
 
   /**
@@ -677,7 +687,14 @@ export class Vault {
       if (real) {
         const rel = path.relative(this.root, real);
         if (rel.startsWith("..") || path.isAbsolute(rel)) {
-          throw new Error(`Refusing to write — parent directory resolves outside vault: ${current}`);
+          // rc.36 F-3 (P-3 / ν-class sibling) — echo the path RELATIVE to the
+          // vault root, never the absolute server path. `current` is a
+          // server-computed absolute dir; leaking it to an MCP client over
+          // serve-http discloses the host filesystem layout. Mirrors the
+          // sibling symlink throw above (`path.relative(this.root, abs)`).
+          throw new Error(
+            `Refusing to write — parent directory resolves outside vault: ${path.relative(this.root, current)}`
+          );
         }
         break;
       }

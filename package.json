@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.9.0-rc.35",
+  "version": "3.9.0-rc.36",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 44 tools, 19 MCP prompts, 1026 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 44 tools, 19 MCP prompts, 1038 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -65,7 +65,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "clean": "rm -rf dist",
+    "build": "rm -rf dist && tsc && chmod +x dist/index.js",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -84,7 +85,7 @@
     "bench:peek-cache": "npm run build && node scripts/bench-peek-cache.mjs",
     "bench:longmemeval": "npm run build && node scripts/bench-longmemeval.mjs",
     "docs:api": "typedoc",
-    "prepare": "tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
+    "prepare": "rm -rf dist && tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
     "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
     "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md"
   },

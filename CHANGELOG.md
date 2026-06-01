@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.37] — 2026-06-01
+
+> **TL;DR:** **Docs/process-drift batch — the deferred (no-behavioral-risk) half of the rc.36 comprehensive audit — plus the structural gate that closes the gate-GAP the headline finding exposed.** The process/contradiction sub-agent found **F1** (MEDIUM): `ROADMAP.md` carried a stale "Process maturity — **1020 tests**" claim (plus a `1002`/`44 tools` stat-pill in a planning bullet) that **NO gate caught** — ROADMAP was absent from both `scope-completeness-audit.mjs` `AUDIT_FILES` and the `docs-consistency` surfaces, and a `[x]` checkbox even *claimed* ROADMAP had already been added to `AUDIT_FILES` (it hadn't — only `AGENTS.md` was). Closed the number AND the gate-gap: ROADMAP is now in `AUDIT_FILES` + the `test-count`/`ci-gate-count` defense scopes + a new `docs-consistency` "ROADMAP test-count" invariant. Plus **F3** (`AGENTS.md` referenced a phantom `src/search.ts` ×2 — the file is `src/rrf.ts` / `src/tools/search.ts`), **F4** (`COMPARISON` "7 stack configs" → "8: 6 full-60-query + 2 HyDE-subset"), **F2** (`lint` didn't enforce the documented "0 warnings / no `any`" claim — `noExplicitAny:"warn"` + plain `biome check` → set to `"error"`, verified zero stray `any`). Documents the meta-audit's durable lesson as a CLAUDE.md anti-pattern. **1038 → 1039 tests.**
+
+**Patch — comprehensive-audit docs/process half + apparatus gate-gap closure.**
+
+### Fixed (verified-real)
+
+- **F1 — `ROADMAP.md` stale test count, caught by no gate** (MEDIUM; the headline finding). Line 21 said "1020 tests" (drifted from canonical 1026→1038); a Tier-2 planning bullet embedded a stale "44 tools / 1002 tests" stat-pill (describing a social-card design rc.29 abandoned). Root cause — a **gate gap**: ROADMAP was in neither `scope-completeness-audit.mjs#AUDIT_FILES` nor any `docs-consistency` surface, and OIA Check 7's `DOCS_FILES_TO_SCAN` omits it. Worse, a `[x]` checkbox claimed "add `ROADMAP.md`/`AGENTS.md` to `AUDIT_FILES`" was DONE — but only `AGENTS` had been added (a false-done — the exact scope-too-narrow recursion the project documents). **Fix:** corrected line 21 → canonical; dropped the stat-pill counts (count-agnostic, per rc.29); added `ROADMAP.md` to `AUDIT_FILES` + the `test-count` and `ci-gate-count` defense scopes; new `docs-consistency` invariant "ROADMAP.md test-count claim matches actual it() count" (3-4-digit pattern pins the maturity total while ignoring the "+15 tests"/"+7 tests" per-RC deltas); made the checkbox honest (AGENTS rc.13, ROADMAP rc.37; OpenSSF Scorecard genuinely deferred).
+- **F3 — `AGENTS.md` phantom `src/search.ts`** (LOW; ×2). The architecture diagram + the "fix a retrieval bug" entrypoint both pointed at `src/search.ts`, which doesn't exist (the orchestration is `src/tools/search.ts`; RRF is `src/rrf.ts`). Corrected both.
+- **F4 — `docs/COMPARISON.md` "7 stack configurations"** (LOW). The benchmarks table has 8 rows (6 on the full 60-query set + 2 HyDE-subset at n=25). Reworded to "8 stack configurations (6 … + 2 HyDE-subset)".
+- **F2 — `lint` did not enforce the documented "0 warnings / no `any`" guarantee** (LOW; claimed-guarantee-vs-reality). CLAUDE.md quality-bar #2 says "biome 0 warnings/errors" and AGENTS says "No `any`", but `biome.json` had `noExplicitAny:"warn"` and the `lint` script was a plain `biome check` (exits 0 on warnings) — a stray `: any` would have passed CI silently. Set `noExplicitAny:"error"` (verified the tree has zero real `: any`, so the gate now matches the claim with no active violation).
+
+### Added — durable methodology capture
+
+- **CLAUDE.md anti-pattern** documenting the meta-audit conclusion: the internal apparatus is ~85% drift/claim-driven and structurally blind to behavioral/threat classes, so every recent behavioral defect came from an external lens; the rule is to internalize each external lens as an inventory-based invariant (as rc.36 did with erasure + resource-bound + orphan-dist), and the named-but-uncovered dimensions (supply-chain `run:`-download pinning, paired-sink behavior parity, enforcement-verb→code-guard taxonomy) are listed so they're not silently skipped.
+
+### Method note
+
+This is the no-behavioral-risk docs/process half of the rc.36 comprehensive audit (rc.36 shipped the behavioral fixes + the erasure/resource-bound invariants). The F1 closure follows the project's own "drift findings demand a full-surface sweep + structural defense, not a per-instance fix" rule — the stale number was the symptom; the gate gap (ROADMAP outside the audit set) was the cause. **Deferred (named, not silently skipped):** OpenSSF Scorecard + `dependency-review-action` workflows + an OIA scan for unpinned `run:` downloads (M-9 class), a paired-sink behavior-parity invariant (H-3 class), and a generalized enforcement-verb→code-guard taxonomy (beyond OIA 4d/4e).
+
+### Tests (1039)
+
+`tests/docs-consistency.test.ts` +1 source `it()` (the ROADMAP test-count invariant). 1038 → 1039; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `ROADMAP.md` (count → 1039, stat-pill dropped, checkbox honesty), `scripts/scope-completeness-audit.mjs` (ROADMAP → AUDIT_FILES + test-count/ci-gate-count scopes), `tests/docs-consistency.test.ts` (+ROADMAP invariant), `AGENTS.md` (rrf.ts/tools/search.ts + count), `docs/COMPARISON.md` (8 configs + count), `biome.json` (`noExplicitAny: error`), `CLAUDE.md` (anti-pattern), test-count claims → 1039.
+- version bump 3.9.0-rc.36 → 3.9.0-rc.37.
+
+---
+
 ## [3.9.0-rc.36] — 2026-06-01
 
 > **TL;DR:** **Comprehensive in-house audit (3 parallel sub-agents — sibling-class hunt · process/contradiction · meta-audit — each cross-checked against my own independent grep sweep) + the structural gates that close each finding's CLASS.** The meta-audit's core result: our home-grown apparatus (12 OIA checks + the invariant suite) is ~85% **drift/claim-driven** (does a CLAIM match reality?) and structurally blind to **behavioral/threat-model** failure — so every recent real bug (P-2 erasure, P-3 path-leak, R-5/AS#5 unbounded-graph, L-3 stale-build) was found by an EXTERNAL privacy/STRIDE lens we don't run ourselves. rc.36 fixes the open siblings of those classes **and internalizes the missing lenses as permanent CI gates.** **Fixed: F-1** (HIGH — `tsc` never purged `dist/`, so the pre-split `dist/tools.{js,d.ts}` (~309 KB stale) SHIPPED to npm, confirmed via `npm pack --dry-run`; the rc.35 fix closed the stale-*import*, this closes the stale-*artifact* ROOT CAUSE), **F-2** (MEDIUM privacy — `clear-cache` left the atomic-write `${cacheFile}.tmp` (full note bodies) on disk — P-2 sibling), **F-3** (LOW — `assertParentInsideVault` leaked an absolute server path to MCP clients — P-3 sibling), **F-4/F-5** (MEDIUM DoS — `findSimilar` + `getNoteNeighbors` did uncapped whole-vault `readNote` fan-out — R-5/AS#5 siblings). **3 new structural gates:** OIA **Check 12b** (orphan-`dist` file detector), `tests/erasure-invariant.test.ts` (writers ⊆ erasers), `tests/resource-bound-invariant.test.ts` (every whole-vault scanner must be CAP-or-EXEMPT classified — ends the AS#5→AS#6 recursion). **1026 → 1038 tests.**

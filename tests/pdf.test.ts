@@ -147,14 +147,30 @@ describe("extractPdfText (v2.7.0)", () => {
       expect(result.pageCount).toBe(3);
     });
 
-    it("inverted range yields empty pages (caller responsibility to reject)", async () => {
+    // v3.9.0-rc.33 (external-audit H-3) — an inverted range previously
+    // CLAMPED to an empty window and returned `pages:[]` with NO error: a
+    // silent caller-error sink and a parity gap with the OCR path
+    // (`resolveOcrPageRange` throws). Now `extractPdfText` fails closed with a
+    // clear message, matching the OCR sibling. (Pre-rc.33 this test asserted
+    // the old silent-empty behavior; updated to the fixed throw.)
+    it("THROWS on an inverted range (from > to) — H-3 parity with OCR", async () => {
       const buf = makePdf({ pages: ["A", "B", "C"] });
-      // L2 — schema-level rejection rejects to < from at tool boundary,
-      // but the library function clamps and returns an empty iteration.
-      // This documents the library's own behavior; the schema's refine
-      // means clients never see this path.
-      const result = await extractPdfText(buf, { pageRange: { from: 5, to: 2 } });
-      expect(result.pages.length).toBe(0);
+      await expect(extractPdfText(buf, { pageRange: { from: 5, to: 2 } })).rejects.toThrow(
+        /invalid page range|from.*must be.*≤.*to/i
+      );
+    });
+
+    it("THROWS on from < 1 (out-of-domain lower bound) — H-3", async () => {
+      const buf = makePdf({ pages: ["A", "B", "C"] });
+      await expect(extractPdfText(buf, { pageRange: { from: 0, to: 2 } })).rejects.toThrow(/invalid page range/i);
+    });
+
+    it("(positive control) a valid from ≤ to range still extracts, no throw — H-3", async () => {
+      // Proves the new guard does NOT over-reject legitimate ranges (incl.
+      // the clamp-to-doc case from the test above): from ≤ to passes.
+      const buf = makePdf({ pages: ["A", "B", "C"] });
+      const result = await extractPdfText(buf, { pageRange: { from: 1, to: 3 } });
+      expect(result.pages.length).toBe(3);
     });
   });
 

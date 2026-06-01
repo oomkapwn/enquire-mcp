@@ -75,6 +75,12 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     summary: "Notes ordered by most-recent modification."
   },
   {
+    name: "obsidian_stale_notes",
+    kind: "read",
+    gating: "always",
+    summary: "Notes not edited in N days (forgetting-aware staleness), oldest first."
+  },
+  {
     name: "obsidian_get_backlinks",
     kind: "read",
     gating: "always",

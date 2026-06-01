@@ -1,5 +1,6 @@
 import { parseDql, runDql } from "../dql.js";
 import type { Embed, Wikilink } from "../parser.js";
+import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
@@ -355,6 +356,72 @@ export async function getRecentEdits(
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/** One stale-note row from {@link staleNotes}. */
+export interface StaleNote {
+  /** Vault-relative path. */
+  path: string;
+  /** `.md`-stripped basename for display. */
+  title: string;
+  /** ISO-8601 modification time. */
+  mtime: string;
+  /** Whole days since `mtime` (≥ the requested `stale_days` threshold). */
+  age_days: number;
+}
+
+/** Envelope returned by {@link staleNotes}. */
+export interface StaleNotesResponse {
+  /** The staleness threshold applied (days). */
+  stale_days: number;
+  /** Total notes scanned (post-`folder` filter) — observability. */
+  scanned_notes: number;
+  /** Stale notes, OLDEST first, truncated to `limit`. */
+  matches: StaleNote[];
+}
+
+/**
+ * List notes not edited in `stale_days` days — the v3.10 forgetting-aware
+ * "what's gone stale in my vault?" surface. Lets an agent proactively flag (or
+ * refresh) aged facts rather than recalling them as if current (the Memora
+ * frontier — see {@link computeStaleness}).
+ *
+ * Cheap: a single metadata pass over `vault.listMarkdown()` mtimes — NO
+ * `readNote` (so it's not a whole-vault content scan). Sorted oldest-first so
+ * the most-stale notes surface at the top.
+ *
+ * @param vault - The vault.
+ * @param args - All optional. `stale_days` (default {@link DEFAULT_STALE_DAYS}
+ *   = 365), `limit` (default 50), `folder` restricts the scan.
+ * @returns `{ stale_days, scanned_notes, matches }`, `matches` oldest-first.
+ * @example
+ * ```ts
+ * const r = await staleNotes(vault, { stale_days: 180, limit: 20 });
+ * for (const n of r.matches) console.log(`${n.path} — ${n.age_days}d old`);
+ * ```
+ */
+export async function staleNotes(
+  vault: Vault,
+  args: { stale_days?: number; limit?: number; folder?: string }
+): Promise<StaleNotesResponse> {
+  await vault.ensureExists();
+  const staleDays = args.stale_days ?? DEFAULT_STALE_DAYS;
+  const limit = args.limit ?? 50;
+  const now = Date.now();
+  const entries = await vault.listMarkdown(args.folder);
+  const stale: StaleNote[] = [];
+  for (const e of entries) {
+    const { age_days, stale: isStale } = computeStaleness(e.mtimeMs, now, staleDays);
+    if (!isStale) continue;
+    stale.push({
+      path: e.relPath,
+      title: stripMd(e.basename),
+      mtime: new Date(e.mtimeMs).toISOString(),
+      age_days
+    });
+  }
+  stale.sort((a, b) => b.age_days - a.age_days); // oldest (most stale) first
+  return { stale_days: staleDays, scanned_notes: entries.length, matches: stale.slice(0, limit) };
 }
 
 /**

@@ -67,7 +67,7 @@ export const DEFENSES = [
   {
     id: "test-count",
     pattern: /\b(\d{3,4})\s+(?:unit\s+)?tests?\b(?!\s*unchanged)/i,
-    scope: ["README.md", "llms.txt", "AGENTS.md", "docs/COMPARISON.md", "package.json"],
+    scope: ["README.md", "llms.txt", "AGENTS.md", "docs/COMPARISON.md", "package.json", "ROADMAP.md"],
     exempts: [
       // CHANGELOG entries naturally embed per-release test counts —
       // those are historical, not current-state. Each line in CHANGELOG
@@ -117,7 +117,7 @@ export const DEFENSES = [
   {
     id: "ci-gate-count",
     pattern: /\b(\d+)\s+required\s+(?:\+\s+\d+\s+advisory\s+)?(?:CI\s+)?gates?\b/,
-    scope: ["README.md", "llms.txt", "AGENTS.md"],
+    scope: ["README.md", "llms.txt", "AGENTS.md", "ROADMAP.md"],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
       "v3.7.14 F4: hardcoded '8 required CI gates' drift caught by " +
@@ -179,7 +179,8 @@ const AUDIT_FILES = [
   "examples/chatgpt-actions.md",
   "llms.txt",
   "package.json",
-  "server.json"
+  "server.json",
+  "ROADMAP.md"
 ];
 
 /**

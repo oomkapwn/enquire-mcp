@@ -413,6 +413,22 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.9.0-rc.37 (audit F1) — ROADMAP.md carried a stale "Process maturity —
+  // N tests" claim (1020, drifted from the canonical 1026/1038) that NO gate
+  // caught: it was absent from the scope-completeness AUDIT_FILES and from the
+  // docs-consistency surfaces. Both gaps are now closed (AUDIT_FILES + this
+  // invariant). The 3-4-digit pattern pins the maturity TOTAL while ignoring
+  // the "+15 tests" / "+7 tests" per-RC deltas in the changelog-style bullets.
+  it("ROADMAP.md test-count claim matches actual it() count", async () => {
+    const roadmap = await read("ROADMAP.md");
+    const actual = await countActualTests();
+    const totals = [...roadmap.matchAll(/\b(\d{3,4})\s+tests\b/g)];
+    expect(totals.length, "ROADMAP must state the maturity test total").toBeGreaterThan(0);
+    for (const m of totals) {
+      expect(Number.parseInt(m[1] ?? "0", 10), `ROADMAP "${m[0]}" must equal actual ${actual}`).toBe(actual);
+    }
+  });
+
   // v3.7.4 — close the "Hardcoded counts in docs without an invariant"
   // anti-pattern gap (Rule since v3.5.9 per CLAUDE.md). Previously docs-
   // consistency gated tool count, prompt count, and test count, but the

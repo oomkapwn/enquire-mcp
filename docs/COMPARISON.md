@@ -43,7 +43,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Read open editor state, active note, etc.     | **No**              | **Yes**          | Limited          | No               | No               |
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
-| Test count (public)                           | **1038**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **1039**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
@@ -233,7 +233,7 @@ This is a rough heuristic, not a verdict. The "when to pick X" sections above ar
 
 ## A note on benchmarks
 
-As of v3.6.0-rc.4, **enquire-mcp ships public, reproducible end-to-end retrieval benchmarks** at [`docs/benchmarks.md`](./benchmarks.md): a 60-query ablation across 7 stack configurations on a deterministic synthetic Obsidian vault. Reproducible with `npm run bench:retrieval` (4-decimal precision across runs). Headline: `rerank-bge` adds **+24.7 MRR / +15.5 NDCG@10** over plain hybrid. The other alternatives in this matrix do not (as of 2026-05-15) ship comparable public benchmarks. If retrieval quality is decisive, **run our `bench:retrieval` against your own vault**, then run any equivalent eval (or hand-eval) the alternatives provide.
+As of v3.6.0-rc.4, **enquire-mcp ships public, reproducible end-to-end retrieval benchmarks** at [`docs/benchmarks.md`](./benchmarks.md): a 60-query ablation across 8 stack configurations (6 on the full 60-query set + 2 HyDE-subset rows at n=25) on a deterministic synthetic Obsidian vault. Reproducible with `npm run bench:retrieval` (4-decimal precision across runs). Headline: `rerank-bge` adds **+24.7 MRR / +15.5 NDCG@10** over plain hybrid. The other alternatives in this matrix do not (as of 2026-05-15) ship comparable public benchmarks. If retrieval quality is decisive, **run our `bench:retrieval` against your own vault**, then run any equivalent eval (or hand-eval) the alternatives provide.
 
 ---
 

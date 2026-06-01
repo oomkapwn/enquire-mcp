@@ -42,7 +42,7 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.9.0-rc.34";
+export const VERSION = "3.9.0-rc.35";
 
 // Re-exports — preserve the v3.5.x public surface so http-transport.ts and
 // tests don't need to know about the new module layout. The set below

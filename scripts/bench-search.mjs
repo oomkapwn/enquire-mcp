@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { FtsIndex } from "../dist/fts5.js";
-import { searchText } from "../dist/tools.js";
+import { searchText } from "../dist/tools/index.js";
 import { Vault } from "../dist/vault.js";
 
 const sizes = process.argv[2] ? [Number.parseInt(process.argv[2], 10)] : [100, 500, 1000];

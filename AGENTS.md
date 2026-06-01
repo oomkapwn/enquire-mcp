@@ -7,12 +7,12 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1024+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1026+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
 - Coverage: `npm run test:coverage` (11 per-file coverage floors enforced)
-- OIA: `npm run check:oia` (state-driven drift scan — 11 checks)
+- OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
 All 9 required CI gates run on every PR. Local checks above must pass before pushing.
@@ -41,7 +41,7 @@ src/
 └── doctor.ts           — health check (color-coded ✓/⚠/✗)
 
 scripts/
-├── oia-walk.mjs                       — state-driven drift scan (11 checks)
+├── oia-walk.mjs                       — state-driven drift scan (12 checks)
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
 ├── check-version-consistency.mjs      — version sync across 7 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality

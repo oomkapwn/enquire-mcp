@@ -31,6 +31,19 @@ import * as path from "node:path";
 import { extractWikilinks } from "./parser.js";
 import type { Vault } from "./vault.js";
 
+/**
+ * v3.9.0-rc.35 (external-audit AS#5 / R-B) — hard cap on the number of notes
+ * the wikilink graph ingests, mirroring the `MAX_VISITED` cap on `find_path`
+ * BFS (rc.34 R-5). `obsidian_get_communities` is always-registered and reads
+ * EVERY `.md` to build a full adjacency map + run Louvain; on a pathological /
+ * very large vault that is unbounded I/O + memory for a single tool call. We
+ * cap the node set (newest-first by the vault's own listing order) so the
+ * worst case is bounded regardless of vault size — defense-in-depth, not a
+ * correctness limit (real vaults are far below the cap; Louvain itself is
+ * already bounded by `MAX_PASSES`).
+ */
+export const MAX_GRAPH_NODES = 50_000;
+
 export interface WikilinkGraph {
   /** Node ID = vault-relative path (forward-slash normalized). */
   nodes: string[];
@@ -81,7 +94,12 @@ export interface CommunityResult {
  */
 export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
   await vault.ensureExists();
-  const all = await vault.listFilesByExtension(".md");
+  const listed = await vault.listFilesByExtension(".md");
+  // v3.9.0-rc.35 (AS#5 / R-B) — bound the node set so a pathological/huge vault
+  // can't drive unbounded I/O + memory through this always-registered tool.
+  // Truncate to MAX_GRAPH_NODES (graceful degradation; real vaults are far
+  // below the cap). Mirrors the rc.34 find_path R-5 MAX_VISITED cap.
+  const all = listed.length > MAX_GRAPH_NODES ? listed.slice(0, MAX_GRAPH_NODES) : listed;
   // Build a basename index for resolving wikilinks.
   const byBasename = new Map<string, string>();
   for (const e of all) {

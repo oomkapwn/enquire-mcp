@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.35] — 2026-06-01
+
+> **TL;DR:** **Full from-scratch external audit (Mavis, 3 methodologies, on the pinned rc.34 commit) re-verification + the 2 genuinely-new code findings.** I commissioned a clean-slate external audit (state-driven + change-driven + adversarial STRIDE) on the exact pinned commit `7a479bb` and re-verified every finding. **Verdict: it graded the correct commit (no staleness this time), confirmed all rc.32→rc.34 P-fixes closed, and recommends promoting v3.9.0 → `@latest`.** Its one **HIGH** ("1024 tests is an overclaim, runtime is 1088") is **rejected** — a methodology error: the canonical metric is *source `it()` = 1024* by design, and the runtime expansion comes from data-driven `for (… ) it(…)` loops the auditor mis-claimed it "found none of" (`redos-guard.test.ts` etc.). Two genuinely-new **LOW** code gaps it surfaced (that our own sweeps missed) are fixed here: **L-3** (`bench.mjs`/`bench-search.mjs` imported the pre-split `../dist/tools.js`) + **AS#5/R-B** (`buildWikilinkGraph` had no node cap — DoS parity gap with the rc.34 `find_path` R-5 cap). **1024 → 1026 tests; +OIA Check 12.**
+
+**Patch — external from-scratch audit response.**
+
+### Fixed (verified-real, new)
+
+- **L-3 — bench scripts import path** (`scripts/bench.mjs`, `scripts/bench-search.mjs`). The `tools.ts → tools/` split means TS emits `dist/tools/index.js`, not `dist/tools.js`; both bench scripts kept the old import, which only "resolved" because a STALE pre-split `dist/tools.js` lingered in the gitignored `dist/` (on a clean build it breaks). CI never runs these (only `bench:retrieval`), so it hid. Fixed both to `../dist/tools/index.js`. **Structural class-closer: new OIA Check 12 (`STALE-DIST-TOOLS-IMPORT`)** fails CI on any `scripts/*.mjs` importing `dist/tools.js` (detection-power verified: injected import flagged, clean after fix). OIA canonical count 11 → 12 (header + AGENTS ×2 + ROADMAP).
+- **AS#5 / R-B — `communities.ts buildWikilinkGraph` node cap** (`MAX_GRAPH_NODES = 50_000`). `obsidian_get_communities` is always-registered and read EVERY `.md` to build the full adjacency map + run Louvain, with only `MAX_PASSES=50` on *iterations* — no bound on graph *size* → unbounded I/O+memory on a pathological/huge vault. Now the node set is capped (graceful truncation), exactly mirroring the rc.34 `find_path` R-5 `MAX_VISITED` cap. +2 tests (cap-triggers via a stubbed oversized vault + below-cap NEGATIVE control).
+
+### Rejected / documented (verified)
+
+- **H-DOC-1** "test count overclaim: docs 1024 vs runtime 1088" — **REJECTED, methodology error.** Canonical metric is **source `it()` count = 1024** (verified exact); runtime > source because of data-driven loops (`for (const p of catastrophic) { it(…) }` in `redos-guard.test.ts` + ~10 other files), which the auditor incorrectly claimed not to find. A deliberate, internally-consistent metric is not an overclaim. This is the same item the prior Mavis round raised as "L-11" and we already ruled working-as-intended. No change.
+- **M-DOC-1** npm `@latest` 3.8.8 keywords still end `slsa-3` — REAL on the *published stable tag*; HEAD `package.json` keywords are clean (verified, no `slsa-3`). Reconciles when v3.9.0 → `@latest` (clean keywords) or a manual stable re-publish. Not a source-tree bug. **MAINTAINER-GATED.**
+- **M-DOC-2** published `@rc` description (256 chars) shorter than HEAD (567) — registry-side; HEAD is the source of truth; reconciles on next publish. No source change.
+- **L-1 (watcher throttle), L-2 (TF-IDF WeakMap), R-C (per-tool timeout), R-D (TUI password prompt), H-1/H-2/H-3 (branch protection)** — valid-but-non-urgent or maintainer-only; deferred, documented. (L-2 is the WeakMap prior rounds misread as a leak; this auditor correctly downgraded it to LOW.)
+
+### Method note
+
+Third independent external pass on the v3.9.0 line, and the first to grade the correct pinned commit with no staleness — strong independent confirmation that the rc.25–rc.34 cascade closed everything, plus 2 real LOW gaps our sweeps missed. Combined with the rc.32 deep-audit (different methodology), the v3.6.1 ≥2-independent-auditors-with-different-methodologies gate is now **substantively met** for the v3.9.0 → `@latest` decision (maintainer's call). Its one HIGH was a metric-methodology artifact — reinforcing again: re-verify every external finding's *severity and validity* against current code, never action on faith. Full per-finding verdict in `docs/audits/v3.9.0-rc.34-external-fromscratch-reverification-2026-06-01.md`.
+
+### Tests (1026)
+
+`tests/communities.test.ts`: +2 (MAX_GRAPH_NODES cap-triggers via stubbed oversized vault + below-cap NEGATIVE control). Test-count claims 1024 → 1026 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+
+### Files changed
+
+- `scripts/bench.mjs` + `scripts/bench-search.mjs` (import path), `scripts/oia-walk.mjs` (Check 12 + canonical count 12), `src/communities.ts` (`MAX_GRAPH_NODES` cap), `tests/communities.test.ts` (+2), `AGENTS.md` ×2 + `ROADMAP.md` (OIA count 11 → 12), `docs/audits/v3.9.0-rc.34-external-fromscratch-reverification-2026-06-01.md` (new), test-count claims → 1026.
+- version bump 3.9.0-rc.34 → 3.9.0-rc.35.
+
+---
+
 ## [3.9.0-rc.34] — 2026-06-01
 
 > **TL;DR:** **Deep-audit (Mavis 10-track on rc.32) re-verification + the genuinely-new privacy/DoS fixes.** A much deeper Mavis audit (type-system, supply-chain, STRIDE, privacy/GDPR, MCP-compliance) was supplied; I re-verified every claim. Its two top non-governance findings (**H-3** extractPdfText, **SC-1** mcp-publisher pin) were **already shipped in rc.33** — the audit graded the older rc.32 commit. But its **new deep-dimension tracks surfaced 3 real, previously-unflagged issues** this RC fixes: **P-2** (`clear-embeddings` left the HNSW `.hnsw.bin`/`.hnsw.meta.json` sidecars on disk — and the `.meta.json` carries `text_preview` raw text → a right-to-erasure gap for `--use-hnsw` users; now erased), **P-3** (the `embeddings_search` "index not found" error echoed the absolute vault + embed-db paths to MCP clients → fingerprinting on `serve-http`; now path-free), **R-5** (`obsidian_find_path` BFS had no explicit visited cap → unbounded I/O on a pathological graph; now capped at 50k). Plus **P-1** doc-honesty (`text_preview` at-rest, in SECURITY.md). **Rejected** SC-4 + M-2 (both auditor misreads — verified). **1022 → 1024 tests.**

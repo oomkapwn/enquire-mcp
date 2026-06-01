@@ -260,6 +260,61 @@ describe("EmbedDb", () => {
     expect(await db.clearOnDisk()).toBe(false);
   });
 
+  // v3.9.0-rc.34 (deep-audit P-2) — clearOnDisk must ALSO remove the HNSW
+  // persistence sidecars (`<base>.hnsw.bin` + `<base>.hnsw.meta.json`), since
+  // the .meta.json carries `text_preview` (raw chunk text). Previously these
+  // survived `clear-embeddings`, a right-to-erasure gap for `--use-hnsw` users.
+  it("clearOnDisk also removes the HNSW sidecars (P-2 erasure)", async () => {
+    const file = path.join(dir, "vaultx.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "secret note text", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.close();
+    // Simulate the HNSW persist sidecars next to the embed-db (same base the
+    // server derives: strip `.embed.db`, append `.hnsw`).
+    const base = `${file.replace(/\.embed\.db$/, "")}.hnsw`;
+    const binFile = `${base}.bin`;
+    const metaFile = `${base}.meta.json`;
+    await fs.writeFile(binFile, Buffer.from([1, 2, 3, 4]));
+    await fs.writeFile(metaFile, JSON.stringify({ text_preview: "secret note text" }));
+
+    expect(await db.clearOnDisk()).toBe(true);
+    // Both the embed-db AND both HNSW sidecars must be gone.
+    for (const p of [file, binFile, metaFile]) {
+      expect(
+        await fs
+          .stat(p)
+          .then(() => true)
+          .catch(() => false),
+        `${p} should be removed`
+      ).toBe(false);
+    }
+  });
+
+  it("(negative control) clearOnDisk leaves UNRELATED sidecars untouched (P-2)", async () => {
+    // Guard against over-deletion: a `.hnsw.bin` for a DIFFERENT embed-db base
+    // must NOT be removed when clearing this one.
+    const file = path.join(dir, "mine.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.close();
+    const otherSidecar = path.join(dir, "someone-else.hnsw.bin");
+    await fs.writeFile(otherSidecar, Buffer.from([9]));
+
+    await db.clearOnDisk();
+    expect(
+      await fs
+        .stat(otherSidecar)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(true); // untouched
+  });
+
   it("getSourceStates returns the latest mtime per note for incremental rebuilds", async () => {
     const db = new EmbedDb({
       file: path.join(dir, "test.embed.db"),

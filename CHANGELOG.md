@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0-rc.34] — 2026-06-01
+
+> **TL;DR:** **Deep-audit (Mavis 10-track on rc.32) re-verification + the genuinely-new privacy/DoS fixes.** A much deeper Mavis audit (type-system, supply-chain, STRIDE, privacy/GDPR, MCP-compliance) was supplied; I re-verified every claim. Its two top non-governance findings (**H-3** extractPdfText, **SC-1** mcp-publisher pin) were **already shipped in rc.33** — the audit graded the older rc.32 commit. But its **new deep-dimension tracks surfaced 3 real, previously-unflagged issues** this RC fixes: **P-2** (`clear-embeddings` left the HNSW `.hnsw.bin`/`.hnsw.meta.json` sidecars on disk — and the `.meta.json` carries `text_preview` raw text → a right-to-erasure gap for `--use-hnsw` users; now erased), **P-3** (the `embeddings_search` "index not found" error echoed the absolute vault + embed-db paths to MCP clients → fingerprinting on `serve-http`; now path-free), **R-5** (`obsidian_find_path` BFS had no explicit visited cap → unbounded I/O on a pathological graph; now capped at 50k). Plus **P-1** doc-honesty (`text_preview` at-rest, in SECURITY.md). **Rejected** SC-4 + M-2 (both auditor misreads — verified). **1022 → 1024 tests.**
+
+**Patch — deep-audit response (privacy + DoS hardening).**
+
+### Fixed (verified-real, new in the deep tracks)
+
+- **P-2 — `clear-embeddings` now erases the HNSW sidecars too** (`src/embed-db.ts` `clearOnDisk`, `src/cli.ts` description). Previously it removed only `.embed.db` + WAL/SHM, leaving `<base>.hnsw.bin` + `<base>.hnsw.meta.json` on disk — and the `.meta.json` stores `text_preview` (raw chunk text), so a `--use-hnsw` user's content survived a "clear". `clearOnDisk()` is now the single authority that erases every embed-derived artifact for the vault. Positive + NEGATIVE (over-deletion) controls.
+- **P-3 — `embeddings_search` "index not found" error no longer leaks filesystem paths** (`src/tools/search.ts`). The throw propagates to the MCP client; on bearer-auth `serve-http` it previously echoed the absolute `embedFile` + `vault.root` (fingerprinting). Reworded to a path-free, still-actionable remediation. (The auditor flagged only `vault.root`; `embedFile` was the bigger leak — both removed. The `server.ts:374` site it also flagged is a server-operator **stderr log**, not client-facing — left intentional, consistent with the startup banner.)
+- **R-5 — `obsidian_find_path` BFS visited-node cap** (`src/tools/meta.ts`, `MAX_VISITED = 50_000`). BFS was already bounded by note-count + `max_depth`, but a very large densely-wikilinked vault meant unbounded per-layer `readNote` I/O for an always-registered tool; the cap bails gracefully (returns not-found) — defense-in-depth.
+- **P-1 — SECURITY.md now documents content-at-rest honestly**: the `text_preview` column (+ `.hnsw.meta.json`) stores raw leading chunk text directly, alongside the existing cosine-reversibility caveat; the `clear-embeddings` purge note updated for the rc.34 sidecar removal.
+
+### Rejected / not-actioned (verified, documented)
+
+- **SC-4** ("`@huggingface/transformers` dup in dev+optional is a no-op") — **FALSE / would regress**: the `optionalDependencies` entry is how an end-user `npm i -g @oomkapwn/enquire-mcp` gets the embeddings runtime (the error at `embeddings.ts:108` literally says "reinstall … without `--omit=optional`"); the `devDependencies` entry is for the maintainer's own test `npm ci`. Different audiences; the optional entry is load-bearing for users, not a no-op. Removing it would break embeddings for consumers. No change.
+- **H-3 / SC-1** — already shipped in **rc.33** (audit graded rc.32).
+- **M-2** ("TF-IDF WeakMap unbounded") — re-confirmed not-a-leak (WeakMap keyed on live Vault, GC'd); same misread as the v1 round.
+- **H-1/H-2/H-4** branch protection — TRUE, maintainer-only (repo settings).
+- **T-1/T-2** (branded types, z.infer), **M-1/M-4/M-5/M-6/M-7** (logger, refactors, throttle, hnsw flags), **R-1/R-6** etc. — valid-but-non-urgent; deferred, no correctness impact.
+
+### Method note
+
+Best round yet from this auditor: its **new deep dimensions** (privacy/GDPR, STRIDE) earned their keep by finding P-2/P-3/R-5 that all prior rounds (and my own sweeps) missed — even though it was simultaneously **stale on the code tracks** (re-flagged H-3/SC-1 fixed in rc.33). Lesson holds: per-item re-verification against current code separates the real new findings from the carry-over noise. Full per-finding verdict appended to `docs/audits/v3.9.0-rc.32-external-mavis-reverification-2026-06-01.md`.
+
+### Tests (1024)
+
+`tests/embed-db.test.ts`: +2 — P-2 HNSW-sidecar erasure (positive) + over-deletion NEGATIVE control. `findPath` R-5 cap covered by the existing `v16.test.ts` BFS suite (regression: cap doesn't alter normal traversal); a 50k-node trigger test is impractical and omitted by design. Test-count claims 1022 → 1024 (README ×4, package.json, llms.txt, AGENTS, COMPARISON).
+
+### Files changed
+
+- `src/embed-db.ts` (clearOnDisk + HNSW sidecars), `src/cli.ts` (clear-embeddings description), `src/tools/search.ts` (P-3 path-free error), `src/tools/meta.ts` (R-5 cap), `SECURITY.md` (P-1), `tests/embed-db.test.ts` (+2), `docs/audits/…reverification….md` (deep-round appendix), test-count claims → 1024.
+- version bump 3.9.0-rc.33 → 3.9.0-rc.34.
+
+---
+
 ## [3.9.0-rc.33] — 2026-06-01
 
 > **TL;DR:** **External-audit (Mavis on rc.32) re-verification + the 2 genuinely-actionable fixes.** A fresh Mavis audit on rc.32 was supplied; I re-verified every claim against the actual code (treating the report as untrusted). **Verdict**: a broad, mostly-accurate *health* audit (correctly confirms "production-ready, concurrency class closed") — but **materially STALE**: it explicitly carried the rc.24 report forward and re-flagged **4 findings that rc.28 already closed** (MAX_EMBED_CHARS clamp, peekCache LRU, main() TSDoc, bench "p99"→max), plus repeated count errors ("14-check OIA"→11, "22 catch {}"→49/zero-empty, "17 overclaims"→18, "10 floors"→11). Two findings were real and are fixed here: **H-3** (`extractPdfText` silently returned `pages:[]` on an inverted `pageRange` — now throws, matching the OCR sibling) and **M-9** (`mcp-publisher` was downloaded from `releases/latest` — now SHA-tag-pinned). Full per-finding verdict in `docs/audits/v3.9.0-rc.32-external-mavis-reverification-2026-06-01.md`. **1020 → 1022 tests.**

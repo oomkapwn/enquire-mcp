@@ -1464,6 +1464,14 @@ export async function findPath(
   const byRel = new Map<string, FileEntry>();
   for (const e of entries) byRel.set(e.relPath, e);
 
+  // v3.9.0-rc.34 (deep-audit R-5) — explicit visited-node cap. BFS is already
+  // bounded by the vault's note count (each note is visited at most once) +
+  // `maxDepth`, but on a very large, densely-wikilinked vault the per-layer
+  // `readNote` I/O is unbounded work for an always-registered tool. This hard
+  // cap bails gracefully (returns not-found) once an unreasonable number of
+  // nodes has been expanded, bounding worst-case CPU/I/O regardless of vault
+  // size — defense-in-depth against an adversarial/pathological graph.
+  const MAX_VISITED = 50_000;
   type FrontierEntry = { rel: string; trail: PathStep[] };
   const visited = new Set<string>([fromEntry.relPath]);
   let frontier: FrontierEntry[] = [
@@ -1502,6 +1510,12 @@ export async function findPath(
           visited.add(m.relPath);
           next.push({ rel: m.relPath, trail: newTrail });
         }
+      }
+      // R-5 cap — stop expanding once we've visited an unreasonable number of
+      // nodes. Returns whatever's been found so far (or not-found); never hangs.
+      if (visited.size >= MAX_VISITED) {
+        frontier = [];
+        break;
       }
     }
     if (foundDepth !== -1 && depth + 1 === foundDepth) break;

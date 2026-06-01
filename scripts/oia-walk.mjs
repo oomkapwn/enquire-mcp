@@ -23,7 +23,7 @@
 // Checks (all evidence-based — each finding includes file:line and the
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
-// canonical count is "11" (the top-level numbered checks 1–11), but check 4
+// canonical count is "12" (the top-level numbered checks 1–12), but check 4
 // has historically accreted sub-checks (4b/4c/4d/4e), so 14 distinct walks
 // actually run. Full honest list below:
 //
@@ -916,6 +916,36 @@ if (!SKIP_NETWORK) {
     console.error(
       `[oia-walk] MCP-REGISTRY-VERSION-DRIFT network check skipped: ${err instanceof Error ? err.message : String(err)}`
     );
+  }
+}
+
+// ─── Check 12: scripts must not import the pre-split `dist/tools.js` ──────
+// v3.9.0-rc.35 (external-audit L-3) — `tools.ts` was split into a `tools/`
+// directory; TypeScript now emits `dist/tools/index.js`, NOT `dist/tools.js`.
+// `scripts/bench.mjs` + `bench-search.mjs` kept the old `../dist/tools.js`
+// import, which only "resolved" locally because a STALE pre-split
+// `dist/tools.js` lingered in the gitignored `dist/` — on a clean build it
+// breaks. CI never runs these (only `bench:retrieval`), so it stayed hidden.
+// Flag any `from "...dist/tools.js"` import in scripts/ so the directory-vs-
+// file trap can't recur silently. (Dependency-free; reads scripts/*.mjs.)
+{
+  const scriptsDir = "scripts";
+  if (existsSync(join(repoRoot, scriptsDir))) {
+    for (const f of readdirSync(join(repoRoot, scriptsDir)).filter((n) => n.endsWith(".mjs"))) {
+      const rel = join(scriptsDir, f);
+      const lines = readLines(rel);
+      for (let i = 0; i < lines.length; i++) {
+        if (/from\s+["'][^"']*\/dist\/tools\.js["']/.test(lines[i] ?? "")) {
+          record(
+            "STALE-DIST-TOOLS-IMPORT",
+            rel,
+            i + 1,
+            (lines[i] ?? "").trim(),
+            "Imports `../dist/tools.js`, which TypeScript no longer emits (the source is `tools/` → `dist/tools/index.js`). This only resolves if a stale pre-split `dist/tools.js` lingers; on a clean build it breaks. Change the import to `../dist/tools/index.js`."
+          );
+        }
+      }
+    }
   }
 }
 

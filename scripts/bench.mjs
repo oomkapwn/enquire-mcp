@@ -26,7 +26,7 @@ import {
   listTags,
   searchText,
   validateNoteProposal
-} from "../dist/tools.js";
+} from "../dist/tools/index.js";
 import { Vault } from "../dist/vault.js";
 
 const args = process.argv.slice(2);

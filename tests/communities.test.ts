@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWikilinkGraph, detectCommunities } from "../src/communities.js";
+import { buildWikilinkGraph, detectCommunities, MAX_GRAPH_NODES } from "../src/communities.js";
 import { Vault } from "../src/vault.js";
 
 let dir: string;
@@ -322,5 +322,45 @@ describe("detectCommunities — convergence + Louvain branches (v3.6.2)", () => 
     const cU1 = r.membership.get("U1.md");
     expect(cU1).toBe(r.membership.get("U2.md"));
     expect(cU1).toBe(r.membership.get("U3.md"));
+  });
+
+  // v3.9.0-rc.35 (external-audit AS#5 / R-B) — graph build is node-capped so a
+  // pathological/huge vault can't drive unbounded I/O+memory through the
+  // always-registered obsidian_get_communities tool (mirrors find_path R-5).
+  describe("MAX_GRAPH_NODES cap (AS#5)", () => {
+    it("caps the graph at MAX_GRAPH_NODES nodes when the vault exceeds it", async () => {
+      // Stub a vault that reports far more .md files than the cap, without
+      // touching disk (we only need listFilesByExtension + readFile shapes).
+      const N = MAX_GRAPH_NODES + 25;
+      const fakeEntries = Array.from({ length: N }, (_, i) => ({
+        relPath: `n${i}.md`,
+        absPath: `/v/n${i}.md`,
+        basename: `n${i}.md`,
+        mtimeMs: 0
+      }));
+      const stub = {
+        ensureExists: async () => {},
+        listFilesByExtension: async () => fakeEntries,
+        // No wikilinks → trivial bodies; we only assert the node count is bounded.
+        readFile: async () => ""
+      } as unknown as Vault;
+      const graph = await buildWikilinkGraph(stub);
+      expect(graph.nodes.length).toBe(MAX_GRAPH_NODES);
+      expect(graph.nodes.length).toBeLessThan(N);
+    });
+
+    it("(negative control) does NOT truncate a vault below the cap", async () => {
+      const fakeEntries = [
+        { relPath: "a.md", absPath: "/v/a.md", basename: "a.md", mtimeMs: 0 },
+        { relPath: "b.md", absPath: "/v/b.md", basename: "b.md", mtimeMs: 0 }
+      ];
+      const stub = {
+        ensureExists: async () => {},
+        listFilesByExtension: async () => fakeEntries,
+        readFile: async () => ""
+      } as unknown as Vault;
+      const graph = await buildWikilinkGraph(stub);
+      expect(graph.nodes.length).toBe(2);
+    });
   });
 });

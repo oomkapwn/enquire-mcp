@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.8] — 2026-06-02
+
+> **TL;DR:** **Post-rc.7 audit response — fusion-stage privacy parity (defense-in-depth) + a self-caught vacuous-test correction.** A state-driven audit of the rc.3→rc.7 line (behavioral/threat lens, per the rc.36 meta-audit) found that the two fusion-stage consumers of the RRF `fused` list — pre-existing **graph-boost** (calls `vault.readNote` to parse a candidate's wikilinks → reads its **content**) and the rc.5 **recency re-rank** (stats a candidate's **mtime**) — both run BEFORE the rc.18 L-HYB-1 response-build `isExcluded` guard and don't replicate it. Not exploitable today (every ranker arm already drops excluded paths before `fused`, and the response-build guard drops them from output), so this is a **third, defense-in-depth layer** for a hypothetical future ranker-arm regression — exactly the "RRF fusion trusts ranker inputs; don't" rationale L-HYB-1 was shipped on. Fixed by pruning excluded paths from `fused` once at the source via a new pure `pruneExcludedHits`. **The audit also caught itself overclaiming:** the first test written for this was an *integration* test that **passed with the fix disabled** (vacuous — the per-arm filters prevent an excluded path from ever reaching `fused` through the public API). The revert-verify exposed it; it was replaced with a **pure-helper unit test** that actually fails when the guard is removed. **1072 → 1076 tests.** `src/` change is one fusion-stage filter line + the extracted helper.
+
+**Minor (pre-release) — v3.10 line; post-sprint audit hardening.**
+
+### Added
+
+- **`pruneExcludedHits(hits, isExcluded, granularity)`** in `src/tools/search.ts` — pure, granularity-aware (`block` ids strip the `#chunk` suffix before the membership test, matching the response-build guard's `lastIndexOf("#")` logic exactly). `searchHybrid` now calls it on `fused` immediately after RRF, so graph-boost + recency + matches-build are all excluded-free by construction.
+- **`tests/search-hybrid.test.ts`** (+4): `pruneExcludedHits` note-granularity removal + order preservation, `#chunk`-suffix stripping (block), the `C# Notes.md` literal-`#` case (regression guard for the v3.7.16 P2-16 class), and a **NEGATIVE control** (predicate-driven, not unconditional — a `return hits` no-op fails it).
+
+### Method note
+
+This is the project's signature **incomplete-class-sweep** closure: rc.18 L-HYB-1 added the *response-build* `isExcluded` guard but left graph-boost's fusion-stage content-read unguarded; rc.5 then added a second unguarded fusion-stage consumer (recency mtime-stat). The class fix prunes at the source so any future consumer of `fused` inherits the guard. **Honest self-correction (worth recording):** the integration test first written to "prove" the fix was **vacuous** — it asserted graph-boost never read an excluded note, but the per-arm ranker filters (BM25 `~line 1373`, embeddings `~1100`, TF-IDF via `listMarkdown`) already prevent an excluded path from reaching `fused` through the public `searchHybrid` API, so the assertion held with OR without the prune. The mandated **revert-verify** (disable the fix, confirm the test fails) caught it red-handed. Lesson: a guard that sits *behind* an existing filter can't be exercised through the front door — test it as a pure unit with the dependency injected, or the "test" is theater. Severity of the underlying finding is **LOW** (triple-guarded; no live leak), but the defense-in-depth + the class closure + the testing lesson justify the patch. **No new behavior on any real vault** — `fused` is already excluded-free in every current code path (the prune is a no-op until a ranker arm regresses).
+
+### Tests (1076)
+
+`tests/search-hybrid.test.ts` +4 source `it()` (the vacuous integration test added during the audit was removed before ship — net 0 in `security.test.ts`). 1072 → 1076; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/tools/search.ts` (`pruneExcludedHits` helper + the `fused = pruneExcludedHits(...)` call), `tests/search-hybrid.test.ts` (+4), test-count claims → 1076.
+- version bump 3.10.0-rc.7 → 3.10.0-rc.8.
+
+---
+
 ## [3.10.0-rc.7] — 2026-06-02
 
 > **TL;DR:** **v3.10 increment 6 — TDQS (tool-description quality): make the freshness signal discoverable to agents.** rc.4/rc.5 added `age_days` + `stale` to `obsidian_search` / `obsidian_find_similar` / `obsidian_semantic_search` results, but the **tool descriptions an agent actually reads** never mentioned them — so an agent had no way to know the freshness signal exists, let alone reason over it. This RC adds a concise freshness note to all three descriptions (what the fields are + that `--recency-weight` can blend fresher notes upward) — closing the "shipped-but-undiscoverable" gap. **The benchmark-methodology half of the original rc.7 plan needs no work** — `docs/benchmarks.md` already carries the full methodology (dataset, ground-truth, metric definitions, ablations, reproducibility) AND the precise "what we measure and what we don't" framing (retrieval quality, NOT end-to-end QA accuracy — "a QA-accuracy number for a retriever would be an overclaim"), shipped across the v3.7.x cascade + rc.19. **Src/description-only — zero behavior change, 1072 tests unchanged.**

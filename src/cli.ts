@@ -119,6 +119,14 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     .option(
       "--ocr-max-pages <n>",
       "v3.9.0-rc.1 — page cap for OCR runs invoked by --ocr-pdfs. Default 200 (matches DEFAULT_OCR_MAX_PAGES). Image-only PDFs exceeding this skip the OCR pass entirely (FTS5 still reindexes from pdfjs's empty pages; embed-db rows are cleared). Lift the cap (or pass a large value) for trusted PDF sets; lower it on shared deployments to bound per-event CPU."
+    )
+    .option(
+      "--recency-weight <w>",
+      "v3.10.0-rc.5 — OPT-IN recency re-ranking for `obsidian_search`. A number in [0, 1]; default 0 (OFF — ranking stays purely relevance-driven). When > 0, the final fused order is re-sorted by `(1 - w) * relevanceRank + w * recency`, where recency decays with the note's live last-modified time (half-life = --stale-days). 0.15-0.3 gently favors fresher notes among similarly-relevant hits; 1.0 sorts almost purely by recency. The forgetting-aware knob for the Memora stale-reuse frontier — your knowledge, freshness-aware. Reflects live mtime (re-stats the candidate set), so a just-edited note is treated as fresh immediately."
+    )
+    .option(
+      "--stale-days <n>",
+      "v3.10.0-rc.5 — recency half-life in days for --recency-weight (the age at which a note's recency score is 0.5). Default 365. Also the threshold behind the `stale` freshness flag on search hits. Lower it (e.g. 90) for fast-moving notes where staleness matters sooner; raise it for stable reference vaults. No effect unless --recency-weight > 0 (for re-ranking) — the freshness flag uses the 365-day default regardless."
     );
 }
 

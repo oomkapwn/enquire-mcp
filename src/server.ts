@@ -6,6 +6,7 @@ import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
+import { DEFAULT_STALE_DAYS } from "./staleness.js";
 import {
   embedDbPath,
   parsePositiveInt,
@@ -94,6 +95,13 @@ export interface ServeOptions {
   useHnsw?: boolean;
   /** v2.13.0 — HNSW search-time beam width (default 100; ≥k). */
   hnswEf?: string;
+  /** v3.10.0-rc.5 — opt-in recency re-ranking weight in [0,1] for obsidian_search.
+   *  Default 0 (OFF — ranking stays purely relevance-driven). When > 0, the fused
+   *  order is re-sorted by `(1-w)*relevanceRank + w*recency`. */
+  recencyWeight?: string;
+  /** v3.10.0-rc.5 — recency half-life in days for --recency-weight (age at which
+   *  recency score = 0.5; also the `stale` flag threshold). Default 365. */
+  staleDays?: string;
   /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
   lateChunkContext?: string;
   /** v2.16.0 — persist HNSW index to disk for fast reload on next serve.
@@ -629,13 +637,26 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
         ...(opts.rerankerTopN ? { topN: parsePositiveInt(opts.rerankerTopN, "--reranker-top-n") } : {})
       }
     : null;
+
+  // v3.10.0-rc.5: build opt-in recency re-ranking config. Default OFF
+  // (weight 0 → null → searchHybrid skips the re-rank entirely, ranking stays
+  // relevance-pure). `--stale-days` only matters when weight > 0 (the half-life).
+  const recencyWeight = opts.recencyWeight !== undefined ? Number(opts.recencyWeight) : 0;
+  if (!Number.isFinite(recencyWeight) || recencyWeight < 0 || recencyWeight > 1) {
+    throw new Error(`--recency-weight must be a number in [0, 1]; got "${opts.recencyWeight}"`);
+  }
+  const recencyStaleDays =
+    opts.staleDays !== undefined ? parsePositiveInt(opts.staleDays, "--stale-days") : DEFAULT_STALE_DAYS;
+  const recencyConfig = recencyWeight > 0 ? { weight: recencyWeight, staleDays: recencyStaleDays } : null;
+
   registerReadTools(
     server,
     deps.vault,
     deps.ftsIndex,
     opts.diagnosticSearchTools ?? false,
     rerankerConfig,
-    deps.hnswContext
+    deps.hnswContext,
+    recencyConfig
   );
   if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault);
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);

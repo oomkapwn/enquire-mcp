@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TOOL_MANIFEST } from "../dist/tool-manifest.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -98,62 +99,30 @@ try {
 
   const list = await rpc("tools/list", {});
   const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-  // v3.10.0: 37 tools (with --diagnostic-search-tools): 34 always-on read +
-  // 3 single-ranker diagnostic tools. With --persistent-index: + 1
-  // (obsidian_full_text_search) = 38.
-  // v3.1.0 added obsidian_hyde_search (HyDE retrieval) to always-on.
-  // v3.2.0 added 3 .base file tools: list_bases / read_base / query_base.
-  // v3.4.0 added obsidian_get_communities (GraphRAG-light).
-  // v3.10.0-rc.2 added obsidian_stale_notes (forgetting-aware staleness).
-  // NOTE: this spec is hardcoded — keep it in sync with TOOL_MANIFEST on any
-  // tool add (docs-consistency gates the doc counts; this smoke gates serve).
-  const expectedCount = withFts ? 38 : 37;
+  // v3.10.0-rc.3: the expected read-tool set is DERIVED from TOOL_MANIFEST, not
+  // hardcoded — so adding a tool can no longer silently break smoke (the rc.2
+  // gate-gap). smoke launches serve with `--diagnostic-search-tools` (+
+  // `--persistent-index` when `--with-fts`) and NOT `--enable-write`, so the
+  // registered surface is exactly: gating "always" + "--diagnostic-search-tools"
+  // (+ the single fts tool when withFts). This mirrors the registry's gating.
+  const expected = TOOL_MANIFEST.filter(
+    (t) =>
+      t.gating === "always" ||
+      t.gating === "--diagnostic-search-tools" ||
+      (withFts && t.gating.includes("--persistent-index"))
+  )
+    .map((t) => t.name)
+    .sort();
   check(
-    `tools/list returns ${expectedCount} read tools`,
-    names.length === expectedCount,
-    `got ${JSON.stringify(names)}`
+    `tools/list returns ${expected.length} read tools (derived from TOOL_MANIFEST)`,
+    names.length === expected.length,
+    `expected ${expected.length}, got ${names.length}: ${JSON.stringify(names)}`
   );
-  const baseTools = [
-    "obsidian_chat_thread_read",
-    "obsidian_context_pack",
-    "obsidian_dataview_query",
-    "obsidian_embeddings_search",
-    "obsidian_find_path",
-    "obsidian_find_similar",
-    "obsidian_frontmatter_get",
-    "obsidian_frontmatter_search",
-    "obsidian_get_backlinks",
-    "obsidian_get_communities",
-    "obsidian_get_note_neighbors",
-    "obsidian_get_outbound_links",
-    "obsidian_get_recent_edits",
-    "obsidian_get_unresolved_wikilinks",
-    "obsidian_hyde_search",
-    "obsidian_lint_wiki",
-    "obsidian_list_bases",
-    "obsidian_list_canvases",
-    "obsidian_list_notes",
-    "obsidian_list_pdfs",
-    "obsidian_list_tags",
-    "obsidian_ocr_pdf",
-    "obsidian_open_in_ui",
-    "obsidian_open_questions",
-    "obsidian_paper_audit",
-    "obsidian_query_base",
-    "obsidian_read_base",
-    "obsidian_read_canvas",
-    "obsidian_read_note",
-    "obsidian_read_pdf",
-    "obsidian_resolve_wikilink",
-    "obsidian_search",
-    "obsidian_search_text",
-    "obsidian_semantic_search",
-    "obsidian_stale_notes",
-    "obsidian_stats",
-    "obsidian_validate_note_proposal"
-  ];
-  const expected = withFts ? [...baseTools, "obsidian_full_text_search"].sort() : baseTools;
-  check("tool names match spec", JSON.stringify(names) === JSON.stringify(expected), JSON.stringify(names));
+  check(
+    "tool names match TOOL_MANIFEST-derived set",
+    JSON.stringify(names) === JSON.stringify(expected),
+    JSON.stringify(names)
+  );
   const allReadOnly = (list.result?.tools ?? []).every((t) => t.annotations?.readOnlyHint === true);
   check("read tools all have readOnlyHint=true", allReadOnly, "missing annotations");
 

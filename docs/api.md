@@ -548,6 +548,7 @@ If the index is missing, the tool returns a clean error pointing at `enquire-mcp
 | `limit`            | `number?` (≤ 100)     | Max hits. Default 10.                                                              |
 | `min_signals`      | `number?` (1–3)       | Filter: only return hits that ranked in at least N rankers. Default 1. Set 2+ for high-precision multi-ranker consensus. |
 | `embedding_model`  | `string?`             | Override the embedding model alias (default `multilingual`). Only consulted if a `.embed.db` exists. |
+| `filter_frontmatter` | `Record<string, scalar \| scalar[]>?` | v3.10 — keep only hits whose YAML frontmatter satisfies every `key: value` pair (AND across keys). Per key: strings match case-insensitively; an array frontmatter value matches by membership (`{tags: "project"}` matches `tags: [project, x]`); the filter value may be an array for OR (`{type: ["meeting","decision"]}`). Notes with no frontmatter, or missing a filtered key, are excluded. Omit for no filtering. Filters the fused candidate pool, so a strict filter may return fewer than `limit`. Example: `{ status: "active", type: ["meeting","decision"] }`. |
 
 **Returns:** `{ query, method: "rrf", k: 60, signals_used, total_candidates, matches: [{ path, title, score, snippet, chunk_index?, line_start?, line_end?, per_signal: { bm25?, tfidf?, embeddings? }, age_days?, stale? }] }`.
 

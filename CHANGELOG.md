@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.10] — 2026-06-02
+
+> **TL;DR:** **New capability — frontmatter-aware retrieval.** `obsidian_search` gains an optional `filter_frontmatter` map so an agent can scope hybrid search by YAML frontmatter: `{ status: "active", type: ["meeting","decision"] }` → only notes whose frontmatter matches **every** key (strings case-insensitive; an array frontmatter value matches by membership; an array filter value is OR). It's the first genuinely-new *feature* (not polish) since the v3.10 staleness line — Obsidian users live in frontmatter (`status`/`type`/`project`), and **no other Obsidian-MCP can scope semantic search by it**. Opt-in + additive: **absent ⇒ byte-identical** to before (same safe pattern as recency re-ranking). Matching is filter-on-the-fused-candidate-pool, which is already excluded-pruned (rc.8), so no excluded note's frontmatter is read; PDFs (no frontmatter) are excluded without a binary read. **1076 → 1085 tests.**
+
+**Minor (pre-release) — v3.10 line; new feature: frontmatter-aware retrieval (increment 1/N).**
+
+### Added
+
+- **`obsidian_search` `filter_frontmatter?: Record<string, scalar | scalar[]>`** — post-filters fused hits by the note's parsed YAML frontmatter. AND across keys; per key, scalar-equality (strings case-insensitive, numbers/booleans strict, no cross-type coercion) or array-membership; a filter value may be an array for OR. Notes with no frontmatter, or missing a filtered key, are excluded (a filter is a positive assertion). Runs only when the param is passed; filters the candidate pool (so a strict filter can legitimately return < `limit`). Reads candidate frontmatter via the cached `vault.readNote` (graph-boost usually warms it); fail-soft (an unreadable candidate is excluded, honoring the filter).
+- **Pure exported `frontmatterMatches(frontmatter, filter)`** (+ `FrontmatterFilterValue` / `FrontmatterFilterScalar` types) — the matching semantics, unit-testable in isolation. zod schema added to the `obsidian_search` registration (`z.record` of string→scalar|scalar[]).
+- **`tests/search-hybrid.test.ts`** (+9): 6 `frontmatterMatches` unit tests (scalar/case-insensitive, array-membership, array-OR + multi-key-AND, number/boolean strictness, missing-key/empty/absent → no match, a NEGATIVE control that discriminates) + 3 integration tests through `searchHybrid` (filter narrows to the matching note; **NEGATIVE control** — no filter returns all three, proving the filter is what narrowed it; array-value OR + multi-key AND).
+
+### Method note
+
+This is the deliberate answer to "is the project at a dead-end?" — the *refinement* track had hit diminishing returns, so the next real value is a **new capability**, not another micro-RC. Frontmatter-aware retrieval was chosen because it (1) expands what the product can *do* (not polish), (2) plays to the retrieval core — the project's strength, (3) is deeply Obsidian-native (frontmatter is a first-class Obsidian primitive) with **no competitor parity**, and (4) ships **additively/opt-in** so the critical search path is byte-identical when unused. Rejected alternatives, with reasons: conversation write-back (it's `basic-memory`'s grain and muddies the "grounded, not extracted" differentiator), multi-vault (explicit non-goal in CLAUDE.md), and answer-synthesis (we're a retriever, not a QA generator — would be the kind of overclaim `docs/benchmarks.md` explicitly avoids). The integration test is non-vacuous by construction (the NEGATIVE control returns all three notes when the filter is absent — so a no-op filter implementation fails it), unlike the rc.8 case the revert-verify caught. **Next increments:** rc.11 — `tag` filter parity (FTS has it; hybrid doesn't) + optional boost-by-frontmatter; rc.12 — positioning for the capability.
+
+### Tests (1085)
+
+`tests/search-hybrid.test.ts` +9 source `it()`. 1076 → 1085; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP). Tool count unchanged (45 — this adds a *parameter*, not a tool).
+
+### Files changed
+
+- `src/tools/search.ts` (`filter_frontmatter` arg + `frontmatterMatches`/`frontmatterValueMatches`/`frontmatterScalarEq` helpers + matches-loop integration + `fmFilter` hoist), `src/tool-registry.ts` (zod schema), `tests/search-hybrid.test.ts` (+9), `docs/api.md` (args-table row), test-count claims → 1085.
+- version bump 3.10.0-rc.9 → 3.10.0-rc.10.
+
+---
+
 ## [3.10.0-rc.9] — 2026-06-02
 
 > **TL;DR:** **Positioning — a verified, fair head-to-head vs `basic-memory`** (the closest local-markdown-MCP rival), added to the COMPARISON "when to pick something other than enquire-mcp" section. Grounded in a fresh web-research pass (Track B of the promotion plan): `basic-memory` solves the **inverse** problem — it *writes* a knowledge-base **from your AI conversations** (readable markdown, viewable in Obsidian as a GUI), whereas enquire-mcp *recalls the notes you authored*. The entry is intentionally fair-not-sales (calls out exactly when basic-memory is the better pick, and that the two **compose**) and makes the "grounded, not extracted" line concrete with a real, citable example. Docs-only; no overclaim about the competitor (every claim verified against its public repo). **1076 tests unchanged.**

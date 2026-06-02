@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
-import { pruneExcludedHits } from "../src/tools/search.js";
+import { frontmatterMatches, pruneExcludedHits } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -551,5 +551,95 @@ describe("pruneExcludedHits (v3.10 rc.8 — fusion-stage isExcluded parity)", ()
     expect(pruneExcludedHits(hits, () => false, "note")).toHaveLength(3); // excludes nothing
     expect(pruneExcludedHits(hits, () => true, "note")).toHaveLength(0); // excludes everything
     expect(pruneExcludedHits(hits, isExcludedPersonal, "note")).toHaveLength(2); // exactly the 1 excluded removed
+  });
+});
+
+// v3.10 (rc.10) — frontmatter-aware retrieval filter. Pure matcher unit-tested
+// directly (semantics), then the opt-in filter exercised end-to-end through
+// searchHybrid with a NEGATIVE control proving it actually narrows.
+describe("frontmatterMatches (v3.10 rc.10 — filter semantics)", () => {
+  it("scalar equality, strings case-insensitive", () => {
+    expect(frontmatterMatches({ status: "Active" }, { status: "active" })).toBe(true);
+    expect(frontmatterMatches({ status: "done" }, { status: "active" })).toBe(false);
+  });
+  it("array frontmatter value matches by membership", () => {
+    expect(frontmatterMatches({ tags: ["proj", "x"] }, { tags: "proj" })).toBe(true);
+    expect(frontmatterMatches({ tags: ["a", "b"] }, { tags: "proj" })).toBe(false);
+  });
+  it("array filter value is OR; multiple keys are AND", () => {
+    expect(frontmatterMatches({ type: "meeting" }, { type: ["meeting", "decision"] })).toBe(true);
+    expect(frontmatterMatches({ status: "active", type: "meeting" }, { status: "active", type: "decision" })).toBe(
+      false
+    );
+  });
+  it("numbers/booleans are strict (no cross-type coercion)", () => {
+    expect(frontmatterMatches({ priority: 1, pinned: true }, { priority: 1, pinned: true })).toBe(true);
+    expect(frontmatterMatches({ priority: 1 }, { priority: "1" })).toBe(false); // 1 ≠ "1"
+  });
+  it("missing key, empty, or absent frontmatter never matches a filter", () => {
+    expect(frontmatterMatches({ status: "active" }, { type: "meeting" })).toBe(false); // missing key
+    expect(frontmatterMatches({}, { status: "active" })).toBe(false);
+    expect(frontmatterMatches(undefined, { status: "active" })).toBe(false);
+    expect(frontmatterMatches(null, { status: "active" })).toBe(false);
+  });
+  // NEGATIVE control: the matcher must DISCRIMINATE — a satisfiable filter
+  // returns true, an unsatisfiable one false. A constant impl fails one of these.
+  it("NEGATIVE control — discriminates (not constant)", () => {
+    const fm = { status: "active", type: "meeting" };
+    expect(frontmatterMatches(fm, { status: "active" })).toBe(true);
+    expect(frontmatterMatches(fm, { status: "archived" })).toBe(false);
+  });
+});
+
+describe("searchHybrid — opt-in frontmatter filter (v3.10 rc.10)", () => {
+  let fmRoot: string;
+  beforeAll(async () => {
+    fmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-fm-"));
+    await fs.writeFile(
+      path.join(fmRoot, "active.md"),
+      "---\nstatus: active\ntype: project\n---\nkubernetes ingress controller routing.\n"
+    );
+    await fs.writeFile(
+      path.join(fmRoot, "done.md"),
+      "---\nstatus: done\ntype: project\n---\nkubernetes ingress controller routing.\n"
+    );
+    await fs.writeFile(path.join(fmRoot, "nofm.md"), "kubernetes ingress controller routing, no frontmatter.\n");
+  });
+  afterAll(async () => {
+    await fs.rm(fmRoot, { recursive: true, force: true });
+  });
+
+  it("filters hits to notes whose frontmatter matches (and excludes no-frontmatter / non-matching)", async () => {
+    const v = new Vault(fmRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes ingress", limit: 10, filter_frontmatter: { status: "active" } },
+      { ftsIndex: null, embedFile: path.join(fmRoot, "nonexistent.embed.db") }
+    );
+    expect(result.matches.map((m) => m.path)).toEqual(["active.md"]);
+  });
+
+  // NEGATIVE control: WITHOUT the filter, the same query returns all three —
+  // proving the filter above actually removed done.md + nofm.md (not that the
+  // query only matched one note).
+  it("NEGATIVE control — no filter returns all three (the filter is what narrowed it)", async () => {
+    const v = new Vault(fmRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes ingress", limit: 10 },
+      { ftsIndex: null, embedFile: path.join(fmRoot, "nonexistent.embed.db") }
+    );
+    const paths = result.matches.map((m) => m.path).sort();
+    expect(paths).toEqual(["active.md", "done.md", "nofm.md"]);
+  });
+
+  it("array-value frontmatter filter (OR) + AND across keys", async () => {
+    const v = new Vault(fmRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes ingress", limit: 10, filter_frontmatter: { type: "project", status: ["active", "done"] } },
+      { ftsIndex: null, embedFile: path.join(fmRoot, "nonexistent.embed.db") }
+    );
+    expect(result.matches.map((m) => m.path).sort()).toEqual(["active.md", "done.md"]); // both projects, nofm excluded
   });
 });

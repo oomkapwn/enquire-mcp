@@ -1307,6 +1307,64 @@ export function pruneExcludedHits<T extends { id: string }>(
   });
 }
 
+/** v3.10 (rc.10) — a scalar a frontmatter filter can match against. */
+export type FrontmatterFilterScalar = string | number | boolean;
+/** v3.10 (rc.10) — one filter value: a scalar, or an array of scalars (OR-semantics). */
+export type FrontmatterFilterValue = FrontmatterFilterScalar | FrontmatterFilterScalar[];
+
+/**
+ * v3.10 (rc.10) — case-insensitive-for-strings, strict-for-number/boolean scalar
+ * equality. Strings compare case- and whitespace-insensitively (frontmatter is
+ * human-authored — `Active` should match `active`); numbers/booleans compare
+ * strictly. Mixed types never match (`"1"` ≠ `1`).
+ */
+function frontmatterScalarEq(a: unknown, b: FrontmatterFilterScalar): boolean {
+  if (typeof b === "string") return typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+  return a === b; // number / boolean — strict
+}
+
+/**
+ * v3.10 (rc.10) — does a single note frontmatter value satisfy one filter value?
+ * Handles the four shapes intuitively:
+ * - note scalar vs filter scalar → equality
+ * - note scalar vs filter array  → note ∈ filter (OR)
+ * - note array  vs filter scalar → filter ∈ note (membership, e.g. `tags`)
+ * - note array  vs filter array  → non-empty intersection (any-of)
+ */
+function frontmatterValueMatches(have: unknown, want: FrontmatterFilterValue): boolean {
+  const wants = Array.isArray(want) ? want : [want];
+  const haves = Array.isArray(have) ? have : [have];
+  return wants.some((w) => haves.some((h) => frontmatterScalarEq(h, w)));
+}
+
+/**
+ * v3.10 (rc.10) — does a note's frontmatter satisfy a frontmatter filter?
+ *
+ * AND across keys (every `key: value` pair must match); per-key matching is
+ * scalar-equality or array-membership, with OR over an array filter value
+ * (see `frontmatterValueMatches`). A note with NO frontmatter, or missing any filtered
+ * key, does NOT match (a filter is a positive assertion — absence ≠ match). Pure
+ * + injectable so it's unit-tested directly without spinning up a vault.
+ *
+ * @example
+ * ```ts
+ * frontmatterMatches({ status: "Active", tags: ["proj", "x"] }, { status: "active", tags: "proj" }); // true
+ * frontmatterMatches({ status: "done" }, { status: "active" }); // false
+ * frontmatterMatches(undefined, { status: "active" }); // false (no frontmatter)
+ * ```
+ */
+export function frontmatterMatches(
+  frontmatter: Record<string, unknown> | undefined | null,
+  filter: Record<string, FrontmatterFilterValue>
+): boolean {
+  if (!frontmatter) return false;
+  for (const [key, want] of Object.entries(filter)) {
+    if (!(key in frontmatter)) return false;
+    if (!frontmatterValueMatches(frontmatter[key], want)) return false;
+  }
+  return true;
+}
+
 export async function searchHybrid(
   vault: Vault,
   args: {
@@ -1323,6 +1381,19 @@ export async function searchHybrid(
      *  top-K hits link to each one. Default true; set false to disable for
      *  diagnostic comparison (e.g. measuring whether boost helped). */
     graph_boost?: boolean;
+    /**
+     * v3.10 (rc.10) — optional frontmatter filter. A `{ key: value }` map;
+     * a hit is kept only if its note's YAML frontmatter satisfies EVERY pair
+     * (AND across keys). Per key, the value matches by scalar-equality
+     * (strings case-insensitive) or array-membership, and a filter value may
+     * itself be an array for OR — see {@link frontmatterMatches}. A note with
+     * no frontmatter, or missing a filtered key, is excluded (a filter is a
+     * positive assertion). Absent ⇒ no filtering (byte-identical to pre-3.10).
+     * Filtering happens on the fused candidate pool (already excluded-pruned),
+     * so a strict filter may return fewer than `limit` hits — that's correct.
+     * @example `{ status: "active", type: ["meeting", "decision"] }`
+     */
+    filter_frontmatter?: Record<string, FrontmatterFilterValue>;
   },
   ctx: {
     /** FTS5 index, if `--persistent-index` is enabled at server start. */
@@ -1372,6 +1443,11 @@ export async function searchHybrid(
   const limit = args.limit ?? 10;
   const minSignals = args.min_signals ?? 1;
   const granularity = args.granularity ?? "note";
+  // v3.10 (rc.10) — opt-in frontmatter filter. Normalized to `undefined` when
+  // absent/empty so the per-candidate filter block (and its extra readNote) is
+  // skipped entirely on the default path ⇒ byte-identical to pre-3.10.
+  const fmFilter =
+    args.filter_frontmatter && Object.keys(args.filter_frontmatter).length > 0 ? args.filter_frontmatter : undefined;
   // Fan-out per-ranker top-K. Bigger than user's `limit` so RRF has room
   // to surface a doc that's mid-rank in one signal but top in another.
   const fanOutK = Math.max(50, limit * 5);
@@ -1827,6 +1903,25 @@ export async function searchHybrid(
       if (hashIdx > 0) pathForFilter = f.id.slice(0, hashIdx);
     }
     if (vault.isExcluded(pathForFilter)) continue;
+    // v3.10 (rc.10) — opt-in frontmatter filter. Runs ONLY when the caller
+    // passed `filter_frontmatter` (else skipped — byte-identical default).
+    // PDFs/canvas have no YAML frontmatter, so a frontmatter filter excludes
+    // them without a binary-decoding read. Otherwise read the note (cached;
+    // graph-boost has usually warmed it) and keep only if its frontmatter
+    // satisfies the filter. The candidate pool is already excluded-pruned
+    // (rc.8), so no excluded note's frontmatter is ever read here. Fail-soft:
+    // an unreadable candidate can't be verified → excluded (honors the filter).
+    if (fmFilter) {
+      if (!pathForFilter.toLowerCase().endsWith(".md")) continue;
+      let fm: Record<string, unknown> | undefined;
+      try {
+        const note = await vault.readNote(vault.resolveInside(pathForFilter));
+        fm = note.parsed.frontmatter;
+      } catch {
+        continue;
+      }
+      if (!frontmatterMatches(fm, fmFilter)) continue;
+    }
     // Snippet preference: BM25 > embeddings > TF-IDF (BM25 snippets bracket
     // the matched terms with «…», highest signal-to-noise).
     const bm = bm25Map.get(f.id);

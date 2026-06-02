@@ -18,7 +18,7 @@ Already shipped and differentiating:
 - **GraphRAG-light** — Louvain community detection over the wikilink graph.
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
-- **Process maturity** — 1059 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1062 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 

@@ -1183,6 +1183,22 @@ export interface SearchHybridHit {
    * value depends on the query).
    */
   reranker_score?: number;
+  /**
+   * v3.10 — whole days since the note's current on-disk `mtime` (freshness
+   * signal for forgetting-aware recall; never negative). Computed by statting
+   * the final hit paths, so it reflects the live file mtime, not the possibly-
+   * lagging indexed mtime in FTS5/embed-db `source_state`. Omitted (along with
+   * `stale`) only when the stat fails — e.g. the file was deleted between
+   * fusion and response assembly (fail-soft, never throws).
+   */
+  age_days?: number;
+  /**
+   * v3.10 — `true` when `age_days >= DEFAULT_STALE_DAYS` (365). Lets an agent
+   * flag a recalled fact as potentially out-of-date instead of presenting it
+   * as current (the Memora stale-memory-reuse frontier). Read-only signal —
+   * does NOT reorder results (opt-in recency re-ranking is a separate flag).
+   */
+  stale?: boolean;
 }
 
 /**
@@ -1757,6 +1773,36 @@ export async function searchHybrid(
         : {})
     });
     if (matches.length >= limit) break;
+  }
+
+  // v3.10 — forgetting-aware freshness enrichment. Attach age_days/stale to
+  // each final hit by statting its CURRENT on-disk mtime (not the indexed
+  // mtime in FTS5/embed-db source_state, which can lag a live edit). Bounded:
+  // O(unique paths in matches) ≤ limit stats, run concurrently. Fail-soft —
+  // any stat error (e.g. file deleted between fusion and now) just omits the
+  // two fields for that hit; a staleness-enrichment failure must never break
+  // search. Block granularity repeats a path across chunks, so dedupe first.
+  try {
+    const { stat } = await import("node:fs/promises");
+    const now = Date.now();
+    const uniquePaths = [...new Set(matches.map((m) => m.path))];
+    const mtimeByPath = new Map<string, number>();
+    await Promise.all(
+      uniquePaths.map(async (p) => {
+        try {
+          const s = await stat(vault.resolveInside(p));
+          mtimeByPath.set(p, s.mtimeMs);
+        } catch {
+          // file vanished or unreadable — leave it out of the map (fields omitted)
+        }
+      })
+    );
+    for (const m of matches) {
+      const mtimeMs = mtimeByPath.get(m.path);
+      if (typeof mtimeMs === "number") Object.assign(m, computeStaleness(mtimeMs, now));
+    }
+  } catch {
+    // node:fs/promises import failed (should never happen) — skip enrichment.
   }
 
   // v2.0.0-beta.2 P1 fix: surface signal_errors only when at least one

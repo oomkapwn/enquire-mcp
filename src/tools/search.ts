@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
-import { computeStaleness } from "../staleness.js";
+import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
@@ -1324,6 +1324,14 @@ export async function searchHybrid(
      * ServerDeps.hnswContext. Null/undefined → brute-force fallback.
      */
     hnsw?: HnswSearchContext | null;
+    /**
+     * v3.10 (rc.5) — optional opt-in recency re-ranking. When `weight > 0`,
+     * the final fused order is re-sorted by a blend of relevance rank and the
+     * note's live-mtime recency (see `recencyScore` in staleness.ts). `weight = 0` (or
+     * undefined) is a no-op — the default keeps ranking purely relevance-driven.
+     * `staleDays` is the recency half-life (the age at which recency = 0.5).
+     */
+    recency?: { weight: number; staleDays: number };
   }
 ): Promise<SearchHybridResponse> {
   await vault.ensureExists();
@@ -1699,6 +1707,57 @@ export async function searchHybrid(
       // a "signal" per se but the existing dict is the right home.
       (signalErrors as Record<string, string>).reranker = msg;
       process.stderr.write(`obsidian_search: reranker failed — ${msg}\n`);
+    }
+  }
+
+  // ─── v3.10 (rc.5): opt-in recency re-ranking ────────────────────────────
+  // OFF unless `--recency-weight > 0`. Blends each candidate's RELEVANCE RANK
+  // (its current position in `fused`, after RRF + graph-boost + reranker) with
+  // a recency score derived from the note's LIVE on-disk mtime:
+  //   key = (1 - w) * 1/(1+pos) + w * recencyScore(ageDays, staleDays)
+  // The relevance term is rank-based (scale-free), so the blend is agnostic to
+  // whether the order came from RRF or the cross-encoder — sidestepping the
+  // score-magnitude mismatch between those stages. `w = 0` makes `key` a
+  // strictly-decreasing function of `pos` ⇒ the order is preserved exactly
+  // (provable no-op — which is why the default ranking stays relevance-pure).
+  // Bounded: stats ≤ `fused.length` (≤ topK) unique paths, ONLY when enabled.
+  // Fail-soft throughout — any stat / import failure keeps the relevance order.
+  if (ctx.recency && ctx.recency.weight > 0 && fused.length > 1) {
+    try {
+      const { stat } = await import("node:fs/promises");
+      const w = Math.min(1, Math.max(0, ctx.recency.weight));
+      const staleDays = ctx.recency.staleDays;
+      const now = Date.now();
+      const pathOf = (id: string): string => {
+        if (granularity !== "block") return id;
+        const h = id.lastIndexOf("#");
+        return h > 0 ? id.slice(0, h) : id;
+      };
+      const uniquePaths = [...new Set(fused.map((f) => pathOf(f.id)))];
+      const ageByPath = new Map<string, number>();
+      await Promise.all(
+        uniquePaths.map(async (p) => {
+          try {
+            const s = await stat(vault.resolveInside(p));
+            ageByPath.set(p, computeStaleness(s.mtimeMs, now, staleDays).age_days);
+          } catch {
+            // unstattable (e.g. deleted mid-flight) — omit; recency score 0 below.
+          }
+        })
+      );
+      const blended = fused.map((f, pos) => {
+        const age = ageByPath.get(pathOf(f.id));
+        const rec = typeof age === "number" ? recencyScore(age, staleDays) : 0;
+        const relevance = 1 / (1 + pos);
+        return { f, key: (1 - w) * relevance + w * rec };
+      });
+      blended.sort((a, b) => b.key - a.key);
+      for (let i = 0; i < blended.length; i++) {
+        const b = blended[i];
+        if (b) fused[i] = b.f;
+      }
+    } catch {
+      // node:fs/promises import failed (should never happen) — keep relevance order.
     }
   }
 

@@ -135,7 +135,14 @@ export function registerReadTools(
    * through the in-memory HNSW index instead of brute-force cosine.
    * Built once on serve start; passed through every search call.
    */
-  hnswContext: ServerDeps["hnswContext"] = null
+  hnswContext: ServerDeps["hnswContext"] = null,
+  /**
+   * v3.10.0-rc.5 — optional opt-in recency re-ranking config for obsidian_search.
+   * When set (weight > 0), the final fused order is re-sorted by a blend of
+   * relevance rank and the note's live-mtime recency. `null` (default) keeps
+   * ranking purely relevance-driven.
+   */
+  recencyConfig: { weight: number; staleDays: number } | null = null
 ): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
 
@@ -946,7 +953,8 @@ export function registerReadTools(
           ftsIndex,
           embedFile,
           ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
-          ...(hnswContext ? { hnsw: hnswContext } : {})
+          ...(hnswContext ? { hnsw: hnswContext } : {}),
+          ...(recencyConfig ? { recency: recencyConfig } : {})
         })
       );
     }

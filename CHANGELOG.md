@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.5] — 2026-06-02
+
+> **TL;DR:** **v3.10 staleness increment 4 — OPT-IN recency re-ranking (the forgetting-aware knob).** Two new shared serve/serve-http flags: **`--recency-weight <w>`** (0–1, **default 0 = OFF**) and **`--stale-days <n>`** (recency half-life, default 365). When `weight > 0`, `obsidian_search` re-sorts the fused result set by `(1 − w)·relevanceRank + w·recency`, where recency decays hyperbolically with the note's **live** on-disk mtime (`recencyScore` = `staleDays / (staleDays + age_days)`). The relevance term is **rank-based** (`1/(1+pos)`), so the blend composes cleanly on top of RRF + graph-boost + the cross-encoder reranker without any score-scale mismatch — and `weight = 0` makes the blend key a strictly-decreasing function of position, i.e. a **provable no-op** (the default keeps ranking purely relevance-driven; nobody is surprised by recency silently reordering relevance). Bounded (stats ≤ candidate-pool unique paths, only when enabled) and fail-soft. This is the Memora stale-reuse-frontier knob: your knowledge, now freshness-*weightable*. **1062 → 1072 tests.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 4/N.**
+
+### Added
+
+- **`--recency-weight <w>` + `--stale-days <n>`** on both `serve` and `serve-http` (via the shared `addAdvancedRetrievalOptions` helper → inherently cli-parity-safe; helper flag count 11 → 13). `--recency-weight` is validated to `[0, 1]` (`server.ts` throws on out-of-range, matching the rc.9 input-validation posture); `--stale-days` parses as a positive integer. Both default to OFF behavior (`weight 0` → no re-rank; `staleDays` only matters when weight > 0).
+- **`recencyScore(ageDays, staleDays)`** in `src/staleness.ts` — a pure, monotonically-decreasing recency curve in `(0, 1]`: `1` at age 0, `0.5` at the half-life, → `0` as age → ∞. Smooth hyperbolic decay (not a hard stale cliff) so a highly-relevant year-old note still competes. Clamps negative/non-finite age → 0 and sub-1 half-life → 1 (no divide-by-zero).
+- **`searchHybrid` ctx gains `recency?: { weight; staleDays }`** — applied after RRF + graph-boost + reranker, before truncation. Re-stats the candidate pool for live mtimes (dedup by path, `Promise.all`, fail-soft per path), blends, re-sorts.
+- **Tests (+10):** `tests/staleness.test.ts` +6 (`recencyScore` curve: anchor points, strict monotonicity, half-life sensitivity, default, clamps, + a NEGATIVE control that fresh strictly outscores old); `tests/search-hybrid.test.ts` +4 (baseline relevance-first; weight 1.0 floats the fresh note above a more-relevant old one; **NEGATIVE control** weight 0 == baseline order; small-half-life still fresh-first).
+
+### Changed
+
+- **`tests/cli-parity.test.ts`** — helper flag count 11 → 13; `--recency-weight` / `--stale-days` added to `REQUIRED_RETRIEVAL_FLAGS` (asserts both serve + serve-http carry them).
+- **`docs/api.md`** — two flag-table rows + an "opt-in recency re-ranking" note in the `obsidian_search` freshness paragraph.
+- **`src/staleness.ts` header** — updated the forward-looking deferral comment (rc.1 said recency re-ranking + `--stale-days` were "v3.10 follow-ups"; now documents the incremental rc.1→rc.5 buildout) per the overclaim-#13 rule (update deferral claims in the same commit that ships them).
+
+### Method note
+
+The design choice that makes this safe to ship on the **critical search path**: blend the relevance **rank** (`1/(1+pos)`), not the raw fused score. Rank is scale-free, so the blend is agnostic to whether the order came from RRF, graph-boost, or the cross-encoder — and `weight = 0` is a *provable* no-op (the key reduces to a strictly-decreasing function of position, reproducing the input order exactly), which is why the entire feature is gated behind `weight > 0` and the default behavior is byte-identical to rc.4. Recency uses a smooth `staleDays/(staleDays+age)` decay rather than a hard cliff at the stale threshold, so the knob is a nudge, not a guillotine. Per the project's "surface before reorder" caution, rc.4 surfaced the freshness signal read-only; rc.5 only *now* lets it influence ranking, and only when the operator explicitly opts in. **Deferred to rc.6:** the FAMA/forgetting-aware narrative + "grounded, not extracted" sharpening in README/COMPARISON (docs-only).
+
+### Tests (1072)
+
+`tests/staleness.test.ts` +6, `tests/search-hybrid.test.ts` +4. 1062 → 1072; claims synced (README ×4 incl. badge, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/staleness.ts` (`recencyScore` + header), `src/tools/search.ts` (ctx `recency` + post-rerank blend), `src/cli.ts` (2 flags), `src/server.ts` (parse + validate + plumb), `src/tool-registry.ts` (`registerReadTools` param + ctx), `tests/staleness.test.ts` (+6), `tests/search-hybrid.test.ts` (+4), `tests/cli-parity.test.ts` (11→13 + flags), `docs/api.md` (flag rows + note), test-count claims → 1072.
+- version bump 3.10.0-rc.4 → 3.10.0-rc.5.
+
+---
+
 ## [3.10.0-rc.4] — 2026-06-02
 
 > **TL;DR:** **v3.10 staleness increment 3 — freshness fields on the PRIMARY search surface.** The hybrid `obsidian_search` tool (the recommended default, the one agents actually call) now carries the same forgetting-aware freshness signal that rc.1 added to `obsidian_find_similar` / `obsidian_semantic_search`: every hit gains `age_days` (whole days since the note's **current on-disk** mtime) and an over-one-year `stale` boolean. Computed by statting the final ≤`limit` hit paths — so it reflects the **live** file mtime, not the possibly-lagging indexed mtime in FTS5/embed-db `source_state`. **Read-only signal — does NOT reorder results** (opt-in recency re-ranking is the next increment); it just lets an agent flag a recalled fact as potentially out-of-date instead of presenting it as current (the Memora stale-memory-reuse frontier). Bounded (O(unique paths) ≤ `limit` concurrent stats) and **fail-soft** (a file deleted between fusion and response simply omits the two fields — never throws). **1059 → 1062 tests.**

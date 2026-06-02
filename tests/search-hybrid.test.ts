@@ -436,3 +436,78 @@ describe("searchHybrid — age_days/stale freshness enrichment (v3.10)", () => {
     }
   });
 });
+
+// v3.10 (rc.5) — opt-in recency re-ranking. A vault with a MORE-relevant but
+// OLD note and a LESS-relevant but FRESH note: by default the old-but-relevant
+// note ranks first; with a high recency weight the fresh note rises. weight=0
+// must be a provable no-op. mtimes controlled via fs.utimes.
+describe("searchHybrid — opt-in recency re-ranking (v3.10 rc.5)", () => {
+  const DAY = 86_400_000;
+  let rRoot: string;
+
+  beforeAll(async () => {
+    rRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-recency-"));
+    // alpha: 3× the query term → higher TF-IDF relevance, but OLD (1000 days).
+    await fs.writeFile(path.join(rRoot, "alpha.md"), "kubernetes kubernetes kubernetes ingress controller.\n");
+    // beta: 1× the term → lower relevance, but FRESH (1 day).
+    await fs.writeFile(path.join(rRoot, "beta.md"), "kubernetes ingress controller notes.\n");
+    const now = Date.now();
+    await fs.utimes(path.join(rRoot, "alpha.md"), new Date(now - 1000 * DAY), new Date(now - 1000 * DAY));
+    await fs.utimes(path.join(rRoot, "beta.md"), new Date(now - 1 * DAY), new Date(now - 1 * DAY));
+  });
+
+  afterAll(async () => {
+    await fs.rm(rRoot, { recursive: true, force: true });
+  });
+
+  const embedFile = () => path.join(rRoot, "nonexistent.embed.db");
+
+  it("baseline (no recency config): the more-relevant OLD note ranks first", async () => {
+    const v = new Vault(rRoot);
+    const result = await searchHybrid(v, { query: "kubernetes", limit: 5 }, { ftsIndex: null, embedFile: embedFile() });
+    expect(result.matches.length).toBe(2);
+    expect(result.matches[0]?.path).toBe("alpha.md"); // relevance wins by default
+  });
+
+  it("with recency weight 1.0, the FRESH note rises above the more-relevant old one", async () => {
+    const v = new Vault(rRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      { ftsIndex: null, embedFile: embedFile(), recency: { weight: 1, staleDays: 365 } }
+    );
+    expect(result.matches.length).toBe(2);
+    // weight 1 → order is purely by recency → the 1-day note beats the 1000-day note.
+    expect(result.matches[0]?.path).toBe("beta.md");
+    expect(result.matches[1]?.path).toBe("alpha.md");
+  });
+
+  // NEGATIVE control: weight 0 must NOT change anything — identical to baseline.
+  // This proves the blend is a true no-op when off (the default), so nobody is
+  // surprised by recency silently reordering relevance.
+  it("NEGATIVE control — recency weight 0 is a provable no-op (order == baseline)", async () => {
+    const v = new Vault(rRoot);
+    const baseline = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      { ftsIndex: null, embedFile: embedFile() }
+    );
+    const withZero = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      { ftsIndex: null, embedFile: embedFile(), recency: { weight: 0, staleDays: 365 } }
+    );
+    expect(withZero.matches.map((m) => m.path)).toEqual(baseline.matches.map((m) => m.path));
+    expect(withZero.matches[0]?.path).toBe("alpha.md"); // still relevance-first
+  });
+
+  it("a smaller staleDays (faster decay) still ranks the fresh note first at high weight", async () => {
+    const v = new Vault(rRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      { ftsIndex: null, embedFile: embedFile(), recency: { weight: 0.9, staleDays: 30 } }
+    );
+    expect(result.matches[0]?.path).toBe("beta.md");
+  });
+});

@@ -67,7 +67,7 @@ Notes on the matrix:
 
 ## When to pick something other than enquire-mcp
 
-This is the most important section. enquire-mcp is not the right server for every Obsidian + MCP workflow. Four cases where one of the alternatives is the better fit:
+This is the most important section. enquire-mcp is not the right server for every Obsidian + MCP workflow. Five cases where one of the alternatives is the better fit:
 
 ### Pick `cyanheads/obsidian-mcp-server` if…
 
@@ -136,6 +136,20 @@ Specific scenarios:
 - **You're stitching together your own retrieval pipeline** in the agent layer (LangChain / LlamaIndex / a custom orchestrator), and Obsidian is just the document store. Don't fight the layer above — let the agent do retrieval and let the MCP server be a dumb pipe.
 
 Concrete example: "I already have a pgvector-backed RAG index over my whole digital footprint, and the Obsidian vault is one input. I just need the model to fetch a note by path when it's relevant." mcpvault-class server, not enquire-mcp.
+
+### Pick `basic-memory` (basicmachines-co) if…
+
+**Headline:** you want the AI to *write* a memory knowledge-base **from your conversations** — not recall the notes you already authored.
+
+`basic-memory` is the closest project in spirit (local-first, markdown, MCP-native, viewable in Obsidian as a GUI, semantic search over a wikilinked knowledge graph), but it solves the **inverse** problem, which makes the choice clean:
+
+- **Your "memory" IS the AI dialogue.** basic-memory captures observations from chat sessions into linked markdown so you can "continue the conversation later with full context." If write-from-chat is the primary loop, that's its sweet spot. enquire-mcp is read-first: it indexes the markdown **you wrote**, so it shines when you already have a vault to recall from — not when memory should be generated from chat. (This is the "grounded, not extracted" line made concrete: basic-memory's notes are readable, but they're *extracted from conversations*; enquire recalls the notes you authored.)
+
+- **You want bi-directional human↔LLM capture as the core workflow.** That's basic-memory's first-class path; enquire-mcp's writes are an opt-in `--enable-write` minority surface behind a deliberately read-first design.
+
+- **You don't need the heavy retrieval stack.** A conversation-derived store rarely needs RRF-fused BM25 + multilingual embeddings + a cross-encoder reranker + HNSW; enquire-mcp is more retrieval machinery than that workflow calls for.
+
+Concrete example: "After every Claude session, distill what we decided into linked notes I can browse in Obsidian" is basic-memory's grain; "search the three years of research notes I've already written and cite the relevant ones" is enquire-mcp's. **They compose** — let basic-memory *write* conversation-derived notes and let enquire-mcp *retrieve* across your whole authored vault.
 
 ---
 

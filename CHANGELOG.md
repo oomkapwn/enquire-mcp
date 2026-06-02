@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.9] — 2026-06-02
+
+> **TL;DR:** **Positioning — a verified, fair head-to-head vs `basic-memory`** (the closest local-markdown-MCP rival), added to the COMPARISON "when to pick something other than enquire-mcp" section. Grounded in a fresh web-research pass (Track B of the promotion plan): `basic-memory` solves the **inverse** problem — it *writes* a knowledge-base **from your AI conversations** (readable markdown, viewable in Obsidian as a GUI), whereas enquire-mcp *recalls the notes you authored*. The entry is intentionally fair-not-sales (calls out exactly when basic-memory is the better pick, and that the two **compose**) and makes the "grounded, not extracted" line concrete with a real, citable example. Docs-only; no overclaim about the competitor (every claim verified against its public repo). **1076 tests unchanged.**
+
+**Minor (pre-release) — v3.10 line; promotion/positioning increment (no code change).**
+
+### Changed
+
+- **`docs/COMPARISON.md`** — "when to pick something other than enquire-mcp" expanded from four cases to **five**: added **`basic-memory` (basicmachines-co)**. It's the closest project in spirit (local-first, markdown, MCP-native, semantic search over a wikilinked knowledge graph, Obsidian as a GUI) but solves the inverse problem — write-memory-from-chat vs recall-what-you-authored — which makes the choice clean and sharpens enquire's "grounded, not extracted" differentiator with a concrete example. Notes that the two compose (basic-memory writes conversation-derived notes; enquire retrieves across the whole authored vault). Kept OUT of the Obsidian-MCP feature matrix (different category) to avoid a misleading row.
+
+### Method note
+
+This is the first increment of the **promotion track**. It's grounded in a Firecrawl research pass (PROMO-1), not authored from memory, specifically to avoid competitor-claim overclaim: every `basic-memory` capability stated here was verified against its public GitHub/docs (knowledge-graph, semantic search, wikilinks, MCP-native, Obsidian GUI, conversation-capture). The research also surfaced **discoverability gaps that are maintainer-gated** (not shippable as repo docs) — handed off separately: enquire is absent from the high-intent "best Obsidian MCP server" results (needs stars + listicle presence), the brand search surfaces a stale OpenClaw-directory listing rather than the canonical repo, and the highest-leverage lever remains the published LongMemEval/retrieval score (reference hardware). Glama listing confirmed live (auto-synced from the MCP registry); the "claim" is OAuth-gated. **Deliberately did NOT** churn the README use-cases for marginal on-page SEO — the real high-intent-query gap is off-page (stars/listicles), and quality > keyword-stuffing.
+
+### Tests (1076)
+
+No `it()` change (docs-only). 1076 unchanged.
+
+### Files changed
+
+- `docs/COMPARISON.md` (basic-memory "when to pick else" entry; four→five), version bump 3.10.0-rc.8 → 3.10.0-rc.9.
+
+---
+
 ## [3.10.0-rc.8] — 2026-06-02
 
 > **TL;DR:** **Post-rc.7 audit response — fusion-stage privacy parity (defense-in-depth) + a self-caught vacuous-test correction.** A state-driven audit of the rc.3→rc.7 line (behavioral/threat lens, per the rc.36 meta-audit) found that the two fusion-stage consumers of the RRF `fused` list — pre-existing **graph-boost** (calls `vault.readNote` to parse a candidate's wikilinks → reads its **content**) and the rc.5 **recency re-rank** (stats a candidate's **mtime**) — both run BEFORE the rc.18 L-HYB-1 response-build `isExcluded` guard and don't replicate it. Not exploitable today (every ranker arm already drops excluded paths before `fused`, and the response-build guard drops them from output), so this is a **third, defense-in-depth layer** for a hypothetical future ranker-arm regression — exactly the "RRF fusion trusts ranker inputs; don't" rationale L-HYB-1 was shipped on. Fixed by pruning excluded paths from `fused` once at the source via a new pure `pruneExcludedHits`. **The audit also caught itself overclaiming:** the first test written for this was an *integration* test that **passed with the fix disabled** (vacuous — the per-arm filters prevent an excluded path from ever reaching `fused` through the public API). The revert-verify exposed it; it was replaced with a **pure-helper unit test** that actually fails when the guard is removed. **1072 → 1076 tests.** `src/` change is one fusion-stage filter line + the extracted helper.

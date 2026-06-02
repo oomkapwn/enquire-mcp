@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
+import { pruneExcludedHits } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -509,5 +510,46 @@ describe("searchHybrid — opt-in recency re-ranking (v3.10 rc.5)", () => {
       { ftsIndex: null, embedFile: embedFile(), recency: { weight: 0.9, staleDays: 30 } }
     );
     expect(result.matches[0]?.path).toBe("beta.md");
+  });
+});
+
+// v3.10.0-rc.8 (post-rc.7 audit) — the fusion-stage privacy prune. This guards
+// the fusion-stage consumers of `fused` (graph-boost reads candidate CONTENT;
+// recency stats candidate mtime) which run BEFORE the response-build
+// isExcluded guard. Tested as a PURE unit (predicate injected) because the
+// public searchHybrid path can't inject an excluded id into `fused` — the
+// per-arm ranker filters already drop them — so an integration test would be
+// vacuous (verified: it passed with the prune disabled).
+describe("pruneExcludedHits (v3.10 rc.8 — fusion-stage isExcluded parity)", () => {
+  const hits = [{ id: "Public/a.md" }, { id: "Personal/diary.md" }, { id: "Public/b.md" }];
+  const isExcludedPersonal = (p: string) => p.startsWith("Personal/");
+
+  it("removes excluded note-granularity ids, preserves order of the rest", () => {
+    const out = pruneExcludedHits(hits, isExcludedPersonal, "note");
+    expect(out.map((h) => h.id)).toEqual(["Public/a.md", "Public/b.md"]);
+  });
+
+  it("strips the #chunk suffix before the membership test (block granularity)", () => {
+    const blockHits = [{ id: "Public/a.md#0" }, { id: "Personal/diary.md#3" }, { id: "Public/b.md#1" }];
+    const out = pruneExcludedHits(blockHits, isExcludedPersonal, "block");
+    expect(out.map((h) => h.id)).toEqual(["Public/a.md#0", "Public/b.md#1"]);
+  });
+
+  it("does NOT strip a literal '#' in a note-granularity filename (C# Notes.md)", () => {
+    // In "note" granularity the id IS the path — a `#` in the name is part of it.
+    const csharp = [{ id: "C# Notes.md" }];
+    expect(pruneExcludedHits(csharp, () => false, "note").map((h) => h.id)).toEqual(["C# Notes.md"]);
+    // And it's correctly excluded when the predicate matches the full name.
+    expect(pruneExcludedHits(csharp, (p) => p === "C# Notes.md", "note")).toEqual([]);
+  });
+
+  // NEGATIVE control: the prune MUST be driven by the predicate. A predicate
+  // that excludes nothing leaves the list intact; one that matches an entry
+  // removes exactly it. A no-op impl (`return hits`) FAILS the second assertion
+  // — this is what made the integration test vacuous and this one real.
+  it("NEGATIVE control — driven by the predicate, not unconditional", () => {
+    expect(pruneExcludedHits(hits, () => false, "note")).toHaveLength(3); // excludes nothing
+    expect(pruneExcludedHits(hits, () => true, "note")).toHaveLength(0); // excludes everything
+    expect(pruneExcludedHits(hits, isExcludedPersonal, "note")).toHaveLength(2); // exactly the 1 excluded removed
   });
 });

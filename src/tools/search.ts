@@ -1274,6 +1274,39 @@ export interface SearchHybridResponse {
  * console.log("Rankers fired:", result.signals_used);
  * ```
  */
+/**
+ * v3.10.0-rc.8 — prune excluded paths from a fused ranking list, at the
+ * fusion-stage source. Defense-in-depth parity with the rc.18 L-HYB-1
+ * response-build guard: the fusion-stage consumers of the fused list
+ * (graph-boost reads candidate CONTENT via `readNote`; recency stats candidate
+ * mtime) run before that terminal guard, and this keeps them excluded-free even
+ * if a future ranker arm forgets its own per-arm filter.
+ *
+ * Pure (the `isExcluded` predicate is injected) and granularity-aware: for
+ * `"block"` ids of the form `path#chunk`, the chunk suffix is stripped before
+ * the membership test — matching the response-build guard's `lastIndexOf("#")`
+ * logic exactly so the two layers never disagree.
+ *
+ * @param hits - fused ranking entries (each carries an `id` = path or `path#chunk`).
+ * @param isExcluded - returns true if a vault-relative path is excluded (`vault.isExcluded`).
+ * @param granularity - `"note"` (id IS the path) or `"block"` (id is `path#chunk`).
+ * @returns a new array with excluded-path entries removed (order preserved).
+ */
+export function pruneExcludedHits<T extends { id: string }>(
+  hits: T[],
+  isExcluded: (relPath: string) => boolean,
+  granularity: "note" | "block"
+): T[] {
+  return hits.filter((h) => {
+    let p = h.id;
+    if (granularity === "block") {
+      const hashIdx = h.id.lastIndexOf("#");
+      if (hashIdx > 0) p = h.id.slice(0, hashIdx);
+    }
+    return !isExcluded(p);
+  });
+}
+
 export async function searchHybrid(
   vault: Vault,
   args: {
@@ -1551,7 +1584,7 @@ export async function searchHybrid(
   }
 
   // ─── RRF fusion ─────────────────────────────────────────────────────────
-  const fused = reciprocalRankFusion(
+  let fused = reciprocalRankFusion(
     {
       bm25: bm25Ranked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
       tfidf: tfidfRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
@@ -1559,6 +1592,22 @@ export async function searchHybrid(
     },
     { topK: Math.max(limit * 4, 30) } // overshoot — graph boost may rerank
   );
+
+  // v3.10.0-rc.8 (post-rc.7 audit) — privacy guard at the SOURCE, for parity
+  // with the rc.18 L-HYB-1 response-build guard. The fusion-stage consumers of
+  // `fused` run BEFORE that terminal guard: graph-boost (below) calls
+  // `vault.readNote` to parse a candidate's wikilinks — reading its CONTENT —
+  // and the rc.5 recency re-rank stats a candidate's mtime. Each ranker arm
+  // ALREADY drops excluded paths (BM25 + embeddings post-filter, TF-IDF via
+  // listMarkdown) AND the response-build guard (~line 1790) drops them from
+  // output — so this is a THIRD, defense-in-depth layer that still holds if a
+  // future ranker arm forgets its per-arm filter (L-HYB-1's rationale: "RRF
+  // fusion trusts ranker inputs; don't"). Pruning here makes every downstream
+  // fusion stage excluded-free by construction. Extracted to the pure
+  // {@link pruneExcludedHits} and unit-tested directly: the public searchHybrid
+  // path can't inject an excluded id into `fused` (the per-arm filters already
+  // prevent it), so an integration test of this layer would be vacuous.
+  fused = pruneExcludedHits(fused, (p) => vault.isExcluded(p), granularity);
 
   // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
   // Re-rank top-K by counting how many *other* top-K hits link to each one.

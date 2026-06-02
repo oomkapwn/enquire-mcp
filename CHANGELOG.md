@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.7] — 2026-06-02
+
+> **TL;DR:** **v3.10 increment 6 — TDQS (tool-description quality): make the freshness signal discoverable to agents.** rc.4/rc.5 added `age_days` + `stale` to `obsidian_search` / `obsidian_find_similar` / `obsidian_semantic_search` results, but the **tool descriptions an agent actually reads** never mentioned them — so an agent had no way to know the freshness signal exists, let alone reason over it. This RC adds a concise freshness note to all three descriptions (what the fields are + that `--recency-weight` can blend fresher notes upward) — closing the "shipped-but-undiscoverable" gap. **The benchmark-methodology half of the original rc.7 plan needs no work** — `docs/benchmarks.md` already carries the full methodology (dataset, ground-truth, metric definitions, ablations, reproducibility) AND the precise "what we measure and what we don't" framing (retrieval quality, NOT end-to-end QA accuracy — "a QA-accuracy number for a retriever would be an overclaim"), shipped across the v3.7.x cascade + rc.19. **Src/description-only — zero behavior change, 1072 tests unchanged.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 6/N (TDQS).**
+
+### Changed
+
+- **`src/tool-registry.ts`** — added a forgetting-aware freshness note to three tool descriptions:
+  - `obsidian_search`: "every hit also carries `age_days` … and a `stale` boolean … use these to flag a recalled fact as possibly out-of-date … if the server was started with `--recency-weight`, fresher notes are blended upward."
+  - `obsidian_find_similar`: "each result also carries `age_days` + a `stale` flag … so you can prefer fresher related notes or flag aged ones."
+  - `obsidian_semantic_search`: "each hit also carries `age_days` + a `stale` flag … a freshness signal you can reason over."
+  These are the agent-facing strings returned by `tools/list`, so the capability is now self-describing — an agent discovers the freshness signal from the tool contract, not just the docs.
+
+### Method note
+
+A TDQS (tool-description quality) pass is most valuable where a *shipped capability is invisible in the contract the consumer reads* — not as cosmetic rewording of already-audited prose. The scan found exactly that gap (freshness fields shipped rc.4/rc.5, undocumented in `tools/list`) and fixed only it; the rest of the 45 descriptions were already high-quality from prior audit rounds, so they're left untouched (no churn). No structural wording-invariant was added: tying a test to exact description prose is brittle, and the descriptions are already protected by `smoke` (they load) + the K-3 readOnlyHint invariant. **Dependabot triage (separate housekeeping, not in this commit):** PR #91 (better-sqlite3 12.9.0→12.10.0, patch, native optionalDep) and PR #90 (dev-dependencies group) are low-risk with green CI → safe to merge; PR #178 (commander 14→15, **major** — CLI option-parsing behavior) and PR #177 (pdfjs-dist 5→6, **major** — PDF-extraction behavior) need a dedicated test pass + maintainer review before merge; community PR #113 (docs) is maintainer-review-gated. **This concludes the autonomously-shippable v3.10 forgetting-aware line (rc.1→rc.7).** Maintainer-gated next: dependabot major bumps, the published LongMemEval reference-hardware score, and v3.10.0 → `@latest` (fresh external audit per the v3.6.1 ≥2-auditor rule).
+
+### Tests (1072)
+
+No `it()` added (description-only). 1072 unchanged; version-bearing surfaces synced to 3.10.0-rc.7.
+
+### Files changed
+
+- `src/tool-registry.ts` (3 tool descriptions), `package.json` / `package-lock.json` / `src/index.ts` / `server.json` (version bump 3.10.0-rc.6 → 3.10.0-rc.7).
+
+---
+
 ## [3.10.0-rc.6] — 2026-06-02
 
 > **TL;DR:** **v3.10 messaging — the positioning catches up to the shipped forgetting-aware capability.** rc.1–rc.5 built freshness fields + recency re-ranking; rc.6 is the docs-only RC that makes that *discoverable* and *positioned*. Adds a "**Grounded — and freshness-aware**" narrative to the README (the Memora stale-fact-reuse frontier, arXiv:2604.20006, which conversation-memory stores ignore), a 4th top-line differentiator (**Freshness-aware recall**), a freshness row in the COMPARISON feature matrix, and the same framing in llms.txt + ROADMAP. Also **sharpens the "grounded, not extracted" claim**: names the chat-memory cohort precisely (mem0 / Zep / Supermemory / **Memobase**) and explicitly scopes the "extracted" critique to *that* cohort — NOT to knowledge-graph/ETL tools (cognee) or personal-search peers (Khoj), so the comparison stays fair-not-sales. **Docs-only — zero `src/` change, 1072 tests unchanged.**

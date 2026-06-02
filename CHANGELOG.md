@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.3] — 2026-06-02
+
+> **TL;DR:** **Gate-gap closure — two structural defenses, zero `src/` runtime change.** A post-rc.2 self-audit caught two places where the apparatus was weaker than CLAUDE.md implies. **(1) smoke-from-manifest:** `scripts/smoke.mjs` hardcoded the expected read-tool set + count, so every new tool (rc.2's `obsidian_stale_notes` among them) silently broke smoke until hand-patched — a hidden coupling the `smoke` CI gate masked as a real failure. It now **derives the expected set from `TOOL_MANIFEST`** (single source of truth), so adding a tool never requires editing smoke again. **(2) enforcement-guard taxonomy:** the META-audit's #3 uncovered behavioral dimension (the **#15/#16 "claimed-guarantee vs code-guard" overclaim class**) had only two surface-specific verifiers (OIA 4d for SLSA, 4e for OCR-offline). New `tests/enforcement-guard-invariant.test.ts` is the **generalized** defense: a curated 10-entry inventory mapping each `SECURITY.md` enforcement claim → the exact code-guard symbol that backs it, failing CI if either the marker or the guard goes missing. **1056 → 1059 tests.**
+
+**Minor (pre-release) — v3.10 line; gate-gap / structural-defense increment.**
+
+### Added
+
+- **`tests/enforcement-guard-invariant.test.ts`** (+3 source `it()`) — the generalized enforcement-verb→code-guard taxonomy (closes the last open Tier-0 item: "a GENERALIZED enforcement-verb grep beyond the SLSA/OCR specifics"). A curated `GUARANTEES` manifest pins 10 `SECURITY.md` claims to their backing symbols (`resolveSafePath`, `assertOcrLangsInstalled`, `cacheMethod`, `MAX_OCR_CANVAS_DIM`, `DEFAULT_OCR_MAX_PAGES`, `0o600`, `0o700`, `SAFE_SCHEMA`, `sweepIdle`, `Allow-Credentials`); `checkGuarantee()` fails if the claim's marker is absent from SECURITY.md **or** the guard symbol is absent from `src/`. 1 positive + 2 NEGATIVE controls (missing guard symbol; missing SECURITY.md marker). This is the inventory-based form of the #15/#16 class — the META-audit's prescription: convert "did we remember to back claim X with a guard?" into a self-checking gate.
+
+### Changed
+
+- **`scripts/smoke.mjs`** — the expected read-tool set + count are now **derived from `TOOL_MANIFEST`** (`gating === "always" || "--diagnostic-search-tools" || (withFts && includes("--persistent-index"))`) instead of a hardcoded `baseTools` array + `expectedCount`. Closes the rc.2 gate-gap where a new tool broke `smoke` until the spec was hand-edited; the smoke gate now self-updates with the manifest. Two checks: derived-count match + exact name-set match (`JSON.stringify` equality against the sorted derived set).
+
+### Method note
+
+Both fixes are the same shape as the rc.36 meta-audit conclusion — **the apparatus is drift/claim-driven and was blind to two structural gaps**: (1) a test-fixture that duplicated a single source of truth (smoke's tool list vs `TOOL_MANIFEST`) and silently required manual sync, and (2) a claim-class (#15/#16 enforced-guarantee) that had only point defenses, not an inventory invariant. Per the rule "when an external lens finds a behavioral bug, internalize THAT LENS as an inventory invariant," the enforcement-guard test generalizes the two surface-specific OIA checks into one extensible manifest. **Zero `src/` runtime change** — scripts + tests only. **Deferred to rc.4:** plumb `age_days`/`stale` into the hybrid `SearchHybridHit` (the primary search surface — needs a path→mtime map across the multi-stage RRF fusion incl. `path#chunk-N` rows).
+
+### Tests (1059)
+
+`tests/enforcement-guard-invariant.test.ts` +3 source `it()`. 1056 → 1059; claims synced (README ×4 incl. tests badge, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP). `scripts/smoke.mjs` is a script (no `it()`), so the smoke refactor does not change the count.
+
+### Files changed
+
+- `scripts/smoke.mjs` (derive from `TOOL_MANIFEST`), `tests/enforcement-guard-invariant.test.ts` (new), test-count claims → 1059.
+- version bump 3.10.0-rc.2 → 3.10.0-rc.3.
+
+---
+
 ## [3.10.0-rc.2] — 2026-06-01
 
 > **TL;DR:** **v3.10 staleness increment 2 — the `obsidian_stale_notes` tool (the flagship forgetting-aware capability).** A new always-on read tool (the **45th** tool): "what's gone stale in my vault?" — lists notes not edited in N days (default 365), oldest first, so an agent can proactively flag or refresh aged facts instead of recalling them as if current (the Memora frontier). Cheap **mtime-only** scan (`vault.listMarkdown()` + rc.1's `computeStaleness` — NO `readNote`, so it's not a whole-vault content scan and isn't a resource-bound scanner). Self-contained — zero change to the critical search path. The tool-count cascade (44 → 45, always-on read 33 → 34) is fully gate-verified by `docs-consistency` against `TOOL_MANIFEST`. **1050 → 1056 tests.**

@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.6] — 2026-06-02
+
+> **TL;DR:** **v3.10 messaging — the positioning catches up to the shipped forgetting-aware capability.** rc.1–rc.5 built freshness fields + recency re-ranking; rc.6 is the docs-only RC that makes that *discoverable* and *positioned*. Adds a "**Grounded — and freshness-aware**" narrative to the README (the Memora stale-fact-reuse frontier, arXiv:2604.20006, which conversation-memory stores ignore), a 4th top-line differentiator (**Freshness-aware recall**), a freshness row in the COMPARISON feature matrix, and the same framing in llms.txt + ROADMAP. Also **sharpens the "grounded, not extracted" claim**: names the chat-memory cohort precisely (mem0 / Zep / Supermemory / **Memobase**) and explicitly scopes the "extracted" critique to *that* cohort — NOT to knowledge-graph/ETL tools (cognee) or personal-search peers (Khoj), so the comparison stays fair-not-sales. **Docs-only — zero `src/` change, 1072 tests unchanged.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 5/N (messaging).**
+
+### Changed
+
+- **README** — extended the "Grounded, not extracted" block with a "**Grounded — and freshness-aware**" paragraph (cites the Memora benchmark) + a 4th differentiator bullet ("Freshness-aware recall"); the "Three things" header → "What makes enquire-mcp different". Added the cohort-precision parenthetical (the "extracted" critique is specific to chat-memory tools, not cognee / Khoj).
+- **llms.txt** — added Memobase to the conversation-memory cohort + a FRESHNESS-AWARE sentence (age_days/stale + `--recency-weight` + the Memora citation) for AI-agent discovery.
+- **docs/COMPARISON.md** — added Memobase + a freshness-aware sentence to the grounded intro; added a **"Forgetting-aware freshness (`age_days` / recency re-rank)"** row to the feature matrix (enquire Yes (v3.10), all four alternatives No). Row "Yes" deliberately left un-bolded to respect the matrix's stated "bold only in the four audit-priority rows" convention.
+- **ROADMAP.md** — added a "Forgetting-aware freshness (v3.10)" bullet to the "Already shipped and differentiating" list.
+
+### Method note
+
+This is the "messaging catches up to capability" RC the project runs after a feature line lands (cf. v3.6.3 marketing pivot, v3.9.0-rc.27 "grounded, not extracted"). All competitor claims are kept to the **verifiable cohort already named in the docs** + one addition (Memobase, a chat-memory backend the "extract" critique accurately describes); the deliberately-scoped parenthetical (NOT cognee / Khoj) is the anti-overclaim move — it's easy to over-broaden "every memory tool extracts" into an unfair-comparison overclaim, so the critique is explicitly bounded. **Deferred (documented):** a head-to-head vs `basic-memory` (a non-Obsidian markdown-memory MCP) — out of scope for the *Obsidian-MCP* COMPARISON matrix and would carry an unverified-license/feature-claim burden; revisit if a dedicated AI-memory-framework comparison page is added. **Deferred to rc.7:** TDQS (tool-description quality) pass on the 45 tool descriptions + a benchmark-methodology doc + dependabot triage.
+
+### Tests (1072)
+
+No `it()` added (docs-only). 1072 unchanged; version-bearing surfaces synced to 3.10.0-rc.6.
+
+### Files changed
+
+- `README.md`, `llms.txt`, `docs/COMPARISON.md`, `ROADMAP.md` (messaging), `package.json` / `package-lock.json` / `src/index.ts` / `server.json` (version bump 3.10.0-rc.5 → 3.10.0-rc.6).
+
+---
+
 ## [3.10.0-rc.5] — 2026-06-02
 
 > **TL;DR:** **v3.10 staleness increment 4 — OPT-IN recency re-ranking (the forgetting-aware knob).** Two new shared serve/serve-http flags: **`--recency-weight <w>`** (0–1, **default 0 = OFF**) and **`--stale-days <n>`** (recency half-life, default 365). When `weight > 0`, `obsidian_search` re-sorts the fused result set by `(1 − w)·relevanceRank + w·recency`, where recency decays hyperbolically with the note's **live** on-disk mtime (`recencyScore` = `staleDays / (staleDays + age_days)`). The relevance term is **rank-based** (`1/(1+pos)`), so the blend composes cleanly on top of RRF + graph-boost + the cross-encoder reranker without any score-scale mismatch — and `weight = 0` makes the blend key a strictly-decreasing function of position, i.e. a **provable no-op** (the default keeps ranking purely relevance-driven; nobody is surprised by recency silently reordering relevance). Bounded (stats ≤ candidate-pool unique paths, only when enabled) and fail-soft. This is the Memora stale-reuse-frontier knob: your knowledge, now freshness-*weightable*. **1062 → 1072 tests.**

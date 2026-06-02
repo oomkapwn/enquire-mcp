@@ -39,12 +39,15 @@ Every AI session starts from zero. You re-explain your project, your design deci
 
 Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
 
-**Grounded, not extracted.** Conversation-memory tools (mem0, Zep, Supermemory) *extract* facts from your chat logs into a separate store you can't read. enquire-mcp is the inverse: it's **grounded in the knowledge you already wrote** — your own `.md` notes, verbatim, with citations — so recall is auditable, editable in any editor, and never a lossy summary of a chat you half-remember.
+**Grounded, not extracted.** Conversation-memory tools (mem0, Zep, Supermemory, Memobase) *extract* facts from your chat logs into a separate store you can't read. enquire-mcp is the inverse: it's **grounded in the knowledge you already wrote** — your own `.md` notes, verbatim, with citations — so recall is auditable, editable in any editor, and never a lossy summary of a chat you half-remember. (That "extracted" critique is specific to the chat-memory cohort — not to knowledge-graph / ETL tools like cognee, nor to personal-search peers like Khoj.)
 
-> **Three things make enquire-mcp different**:
+**Grounded — and freshness-aware.** Recalling a fact is half the problem; knowing whether it's still *true* is the other half. The [Memora benchmark](https://arxiv.org/abs/2604.20006) (Apr 2026) showed memory systems systematically fail at stale-fact reuse — recalling a year-old note as if it were written today. Because enquire's memory *is* your real markdown files, every search hit carries `age_days` + a `stale` flag derived from the note's live last-modified time, and you can opt into recency-weighted ranking (`--recency-weight`) so fresher notes surface first. Your knowledge, freshness-aware — not a timeless blob.
+
+> **What makes enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
 > 2. **Best-in-class retrieval.** Hybrid BM25 + multilingual embeddings + BGE cross-encoder reranker fused via RRF, scaled with HNSW + int8 quantization. The same IR stack a search startup would build — open-sourced, in one binary.
 > 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
+> 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
 **45 tools · 19 MCP prompts · 1072 unit tests · 50+ languages · v3.9.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 

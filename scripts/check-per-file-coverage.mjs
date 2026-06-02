@@ -72,7 +72,7 @@ const FLOORS = {
   "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 66.66% / lines 44.44%
   "src/http-transport.ts": { branches: 65 }, // current 72.85% (v3.8.7 P2-10/P2-11 raised branch coverage with 10 new tests)
   "src/doctor.ts": { branches: 64 }, // current 68.99% (rc.16 P2-12 privacy tests lifted it +2.9pp)
-  "src/tools/search.ts": { branches: 66 }, // current 68.27%
+  "src/tools/search.ts": { branches: 66 }, // current 69.71% (rc.10 frontmatter-filter helpers + matches-loop branch lifted it)
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.
   "src/tools/meta.ts": { branches: 74 }, // current 78.51% (rc.25 added leadingAtomSet/branchIsNullable/bodyVariable detector branches)

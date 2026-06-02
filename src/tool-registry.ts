@@ -943,6 +943,15 @@ export function registerReadTools(
           .optional()
           .describe(
             "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. The 'only enquire-mcp does this' feature: generic vector stores can't do this without an Obsidian-aware layer."
+          ),
+        filter_frontmatter: z
+          .record(
+            z.string(),
+            z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+          )
+          .optional()
+          .describe(
+            "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits."
           )
       }
     },

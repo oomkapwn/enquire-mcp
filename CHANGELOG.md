@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.4] — 2026-06-02
+
+> **TL;DR:** **v3.10 staleness increment 3 — freshness fields on the PRIMARY search surface.** The hybrid `obsidian_search` tool (the recommended default, the one agents actually call) now carries the same forgetting-aware freshness signal that rc.1 added to `obsidian_find_similar` / `obsidian_semantic_search`: every hit gains `age_days` (whole days since the note's **current on-disk** mtime) and an over-one-year `stale` boolean. Computed by statting the final ≤`limit` hit paths — so it reflects the **live** file mtime, not the possibly-lagging indexed mtime in FTS5/embed-db `source_state`. **Read-only signal — does NOT reorder results** (opt-in recency re-ranking is the next increment); it just lets an agent flag a recalled fact as potentially out-of-date instead of presenting it as current (the Memora stale-memory-reuse frontier). Bounded (O(unique paths) ≤ `limit` concurrent stats) and **fail-soft** (a file deleted between fusion and response simply omits the two fields — never throws). **1059 → 1062 tests.**
+
+**Minor (pre-release) — v3.10 forgetting-aware staleness, increment 3/N.**
+
+### Added
+
+- **`SearchHybridHit.age_days` + `SearchHybridHit.stale`** (both optional, additive — no API break). Populated after RRF fusion by deduping the final hit paths, statting each concurrently (`node:fs/promises` `stat` via `Promise.all`), and attaching `computeStaleness(mtimeMs, now)` (the same rc.1 helper, threshold `DEFAULT_STALE_DAYS` = 365). PDFs are statted too (they're files with an mtime). The whole enrichment is wrapped in a `try/catch` and each per-path stat is individually guarded, so any failure degrades to "fields omitted for that hit" rather than breaking search.
+- **`tests/search-hybrid.test.ts`** (+3): a positive test (a 400-day-old note → `stale:true` + `age_days` ≥ 399; a 10-day-old note → `stale:false` + `age_days` in [9,30)), a **NEGATIVE control** (all-fresh vault → `stale:false` on every hit + `age_days` < 2), and a fail-soft / all-enriched assertion on the live-vault path. Uses `fs.utimes` for deterministic mtimes (mirrors `tests/stale-notes.test.ts`).
+
+### Changed
+
+- **`docs/api.md`** — the `obsidian_search` Returns shape gains `age_days?, stale?`; a new paragraph explains the freshness fields (live-mtime basis, read-only / non-reordering, fail-soft omission). The channels banner now lists `obsidian_search` alongside `find_similar` / `semantic_search` as carrying freshness fields.
+
+### Method note
+
+Why stat the final hits instead of reusing the indexed mtime already in `source_state`? Because the indexed mtime can lag a live edit (the watcher debounce window, or an index that hasn't been refreshed) — and a *forgetting* signal that reports a just-edited note as a year stale is worse than no signal. The final hit set is ≤ `limit` (default 10), so O(limit) concurrent stats is cheap and is NOT a whole-vault scan (the rc.36 resource-bound invariant correctly does not classify it as a scanner). This deliberately stops at *surfacing* the signal; **reordering by recency is a separate opt-in flag** (rc.5) so the default ranking stays purely relevance-driven and nobody is surprised by recency silently outranking relevance. **Deferred to rc.5:** opt-in recency re-ranking (`--stale-days` / recency-weight via `addAdvancedRetrievalOptions`, default OFF, cli-parity-guarded).
+
+### Tests (1062)
+
+`tests/search-hybrid.test.ts` +3 source `it()`. 1059 → 1062; claims synced (README ×4 incl. badge, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/tools/search.ts` (`SearchHybridHit` +2 fields + post-fusion stat-enrichment), `tests/search-hybrid.test.ts` (+3), `docs/api.md` (Returns shape + freshness paragraph + banner), test-count claims → 1062.
+- version bump 3.10.0-rc.3 → 3.10.0-rc.4.
+
+---
+
 ## [3.10.0-rc.3] — 2026-06-02
 
 > **TL;DR:** **Gate-gap closure — two structural defenses, zero `src/` runtime change.** A post-rc.2 self-audit caught two places where the apparatus was weaker than CLAUDE.md implies. **(1) smoke-from-manifest:** `scripts/smoke.mjs` hardcoded the expected read-tool set + count, so every new tool (rc.2's `obsidian_stale_notes` among them) silently broke smoke until hand-patched — a hidden coupling the `smoke` CI gate masked as a real failure. It now **derives the expected set from `TOOL_MANIFEST`** (single source of truth), so adding a tool never requires editing smoke again. **(2) enforcement-guard taxonomy:** the META-audit's #3 uncovered behavioral dimension (the **#15/#16 "claimed-guarantee vs code-guard" overclaim class**) had only two surface-specific verifiers (OIA 4d for SLSA, 4e for OCR-offline). New `tests/enforcement-guard-invariant.test.ts` is the **generalized** defense: a curated 10-entry inventory mapping each `SECURITY.md` enforcement claim → the exact code-guard symbol that backs it, failing CI if either the marker or the guard goes missing. **1056 → 1059 tests.**

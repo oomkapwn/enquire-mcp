@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.14] — 2026-06-03
+
+> **TL;DR:** **`query` + `prune` CLI (bug-report Issues 4, 8) — concludes the actionable bug-report batch.** **(Issue 4)** New `enquire-mcp query "<text>" --vault <path>` runs the SAME hybrid `searchHybrid` the MCP `obsidian_search` tool uses and prints the results — a one-shot CLI search for smoke-tests / CI / debugging without an MCP client (the report had to hand-craft JSON-RPC over stdio to verify retrieval). **(Issue 8)** New `enquire-mcp prune --vault <path>` GCs the per-vault index clutter that accumulates in the cache dir (`clear-cache`/`clear-index` only target the current vault); it removes all OTHER vaults' enquire artifacts, **dry-run by default** (opt in with `--yes`), and — via the pure `planCachePrune` with a strict `<12-hex>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` filter — can NEVER touch a file enquire didn't create. **1098 → 1104 tests.**
+
+**Minor (pre-release) — v3.10 line; bug-report response batch 3/3 (DX CLI). Concludes the actionable bug-report batch (rc.12 model-path · rc.13 reranker · rc.14 query+prune).**
+
+### Added
+
+- **`query` subcommand (Issue 4).** `enquire-mcp query "<text>" --vault <path> [--limit N] [--index-file …] [--json]` — builds/reuses the persistent FTS5 index (peek-safe tokenize, K-1 invariant), runs `searchHybrid`, prints `path:line [kind]` + snippet per hit (or the full JSON with `--json`). Unblocks CLI/CI smoke-testing of retrieval without an MCP client.
+- **`prune` subcommand (Issue 8).** `enquire-mcp prune --vault <path> [--yes]` — removes cached index artifacts for OTHER vaults, keeping the named one. Dry-run preview by default; `--yes` deletes. Backed by the pure, exported `planCachePrune(entries, keepHash)` whose strict enquire-artifact regex is the safety property (verified: ignores user notes / wrong-shaped hashes / wrong extensions).
+
+### Fixed
+
+- **Issue 4 — no CLI search for smoke/CI.** Previously retrieval could only be exercised through the MCP protocol (stdio JSON-RPC). `query` gives a direct CLI path.
+- **Issue 8 — no GC for accumulated per-vault indexes.** The cache dir grew one index set per vault path/config hash with no cleanup command for OTHER vaults. `prune` is that command. (The root cause for the maintainer's own clutter was the test suite — fixed in rc.11; `prune` is the user-facing GC.)
+
+### Tests (1104)
+
+`tests/cache-prune.test.ts` +4 (planCachePrune: selects other vaults, never the kept one, **NEGATIVE control** ignores non-enquire files, empty cases); `tests/cli.test.ts` +2 (`query` prints results, `prune` previews + deletes nothing without `--yes`). 1098 → 1104; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/fts5.ts` (`planCachePrune` + `ENQUIRE_CACHE_ARTIFACT` regex), `src/cli.ts` (`query` + `prune` commands + `searchHybrid`/`planCachePrune` imports), `docs/api.md` (2 subcommand rows), `tests/cache-prune.test.ts` (new, +4), `tests/cli.test.ts` (+2), test-count claims → 1104.
+- version bump 3.10.0-rc.13 → 3.10.0-rc.14.
+
+### Known / next
+
+- **A flaky watcher test (`tests/watcher.test.ts:505`, chokidar FSEvents timing) failed the rc.13 release run** (a re-run published it). Same class as rc.7 #36 / rc.9 W-FLAKE-2, but now blocking *releases*, not just PRs — more severe. **rc.15 will stabilize it** (wait on the watcher's `ready` signal instead of a fixed `setTimeout` warmup) per the "a transient blip must never fail a release" rule (rc.20).
+
+---
+
 ## [3.10.0-rc.13] — 2026-06-03
 
 > **TL;DR:** **Reranker observability + pre-cache (bug-report Issues 9, 3, 5).** The cross-encoder reranker was a black box: enabling it triggered a SILENT ~110 MB download on the first query (which could exceed a client's tool-call timeout → unexplained RRF fallback), there was no way to pre-cache it, and the response gave no positive signal it ran. Now: **(Issue 9)** `obsidian_search` emits stderr lifecycle logs (`reranker '<alias>' loading (~110 MB…)` BEFORE the blocking load, `loaded; reranked N pairs` after — failures were already logged) and returns a `reranked: { applied, pairs?, reason? }` field; **(Issue 3)** `install-model` resolves the reranker catalog too, so `enquire-mcp install-model rerank-bge` pre-downloads the cross-encoder (the ~110 MB no longer blocks the first query); **(Issue 5, docs)** `docs/api.md` now states the default reranker is English-tuned and RU/multilingual vaults can leave it off (RRF hybrid already handles them), plus which aliases are verified-working. **1094 → 1098 tests.**

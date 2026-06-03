@@ -819,6 +819,33 @@ export function defaultIndexFile(vaultRoot: string): string {
 }
 
 /**
+ * Strict filename pattern for enquire's own per-vault cache artifacts:
+ * `<12-hex-sha1>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` plus the SQLite
+ * `-wal`/`-shm` sidecars. Anchored + exhaustively enumerated so a prune can
+ * NEVER select a file enquire didn't create (a user note, another app's cache
+ * sharing the dir, etc.) — the safety property of `planCachePrune`.
+ */
+const ENQUIRE_CACHE_ARTIFACT = /^[0-9a-f]{12}\.(fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm)?$/;
+
+/**
+ * Plan a cache prune: given the filenames present in enquire's cache directory
+ * and the 12-hex hash of the vault to KEEP, return the subset safe to delete —
+ * enquire-owned artifacts belonging to OTHER vaults. Pure and side-effect-free,
+ * so the destructive `prune` CLI can preview before touching disk and the
+ * safety invariant (never selects a non-enquire file, never the kept vault) is
+ * unit-testable.
+ *
+ * @param entries Filenames (basenames) present in the cache directory.
+ * @param keepHash The 12-hex vault hash to preserve (from `defaultIndexFile`).
+ * @returns Basenames safe to remove — strictly enquire artifacts, never `keepHash`.
+ * @example planCachePrune(["aaaaaaaaaaaa.fts5.db", "bbbbbbbbbbbb.fts5.db", "notes.md"], "aaaaaaaaaaaa")
+ *   // → ["bbbbbbbbbbbb.fts5.db"]   (keeps aaaa…, ignores notes.md)
+ */
+export function planCachePrune(entries: readonly string[], keepHash: string): string[] {
+  return entries.filter((e) => ENQUIRE_CACHE_ARTIFACT.test(e) && !e.startsWith(`${keepHash}.`));
+}
+
+/**
  * v3.6.2 K-1b — non-destructive peek at an existing fts5 index's meta row.
  *
  * Mirror of `peekEmbedDbMeta()` in `src/embed-db.ts`. Reads `tokenize_mode`,

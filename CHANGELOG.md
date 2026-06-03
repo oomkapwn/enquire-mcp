@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.15] — 2026-06-03
+
+> **TL;DR:** **Watcher-test flake stabilized at the root — it was blocking RELEASES, not just PRs.** The rc.13 release run failed at `tests/watcher.test.ts:505` (chokidar FSEvents timing); a re-run published it — but a transient blip must never fail a publish (rc.20 rule). Two root races: **(1)** a brand-new file's FIRST inotify/FSEvents event can be dropped on a loaded runner even after `start()` resolves on `ready`, so a one-shot `writeFile` + `waitFor` can wait forever — the fixed-`setTimeout` warm-ups (rc.7 #36, rc.9 W-FLAKE-2) only approximated a fix; **(2)** the `:505` assertion read the embed-error stderr line IMMEDIATELY after the `fts.totalFiles()` check, but that line is logged a tick LATER in the same handler. Fixed: new `writeAndWaitFor` re-touch-on-miss helper (re-writes the file if the first event is dropped — idempotent reindex) on all 5 new-file-add sites; the lagging embed-error signal is now polled with `waitFor`; `waitFor` default 4000 → 8000 ms. **Verified green 3× back-to-back.** **1104 tests unchanged** (bodies refactored, no `it()` added). **Test-only — zero `src/`.**
+
+**Pre-release (v3.10 line) — release-reliability fix; no `src/` / behavior change.**
+
+### Fixed
+
+- **Watcher test flake blocked the rc.13 release** (`tests/watcher.test.ts:505`, "expected false to be true"). Two root races, both fixed:
+  - **Missed first event.** chokidar can drop the FIRST add event for a brand-new path on a loaded runner (the watch is still arming when the write lands, even though `start()` already resolved on `ready`). New `writeAndWaitFor(filePath, content, cond)` re-writes the file every ~1.2 s while waiting, regenerating a fresh event the watcher reliably catches. Idempotent reindex ⇒ extra writes never change the asserted outcome. Applied to all 5 new-file-add sites (`logged.md`, `added.md`, `added.pdf`, `note-embed.md`, `embed-error.md`).
+  - **Asserting a lagging signal too early.** The `:505` check read the "embed-db sync failed" stderr line right after `fts.totalFiles()>=1`, but that line is logged a tick later in the same handler. Now polled with `waitFor`.
+- **`waitFor` default 4000 → 8000 ms** — headroom for the full chain (event → `awaitWriteFinish` 250 ms → per-file queue → reindex → embed-sync) under coverage instrumentation + parallel workers, without masking a genuine hang.
+
+### Method note
+
+The durable fix the project's fixed-`setTimeout` warm-ups (rc.7 #36, rc.9 W-FLAKE-2) chased for three RCs: the root isn't "wait longer before writing" — it's "regenerate the event if it's dropped" + "poll lagging signals, don't assert them immediately". Per "a transient blip must never fail a release" (rc.20), but fixed at the ROOT (a fixable test race) rather than masked with a retry (the rc.20 npm-ci retry was for an *unfixable* network flake). Verified empirically — watcher suite green 3× back-to-back — per the rc.25 "run it, don't assume" lesson. Deferred (noted): a structural lint flagging `writeFile`-then-`waitFor` in watcher tests was considered and rejected as noisy; the helper is the durable mechanism and the remaining sites are change/unlink (reliable on already-watched files).
+
+### Tests (1104)
+
+`tests/watcher.test.ts` — 5 add-sites → `writeAndWaitFor`, embed-error downstream signal → `waitFor`, default timeout 4000→8000. No `it()` added/removed; 1104 unchanged.
+
+### Files changed
+
+- `tests/watcher.test.ts` only (new `writeAndWaitFor` helper + 6 site refactors + `waitFor` timeout bump).
+- version bump 3.10.0-rc.14 → 3.10.0-rc.15.
+
+---
+
 ## [3.10.0-rc.14] — 2026-06-03
 
 > **TL;DR:** **`query` + `prune` CLI (bug-report Issues 4, 8) — concludes the actionable bug-report batch.** **(Issue 4)** New `enquire-mcp query "<text>" --vault <path>` runs the SAME hybrid `searchHybrid` the MCP `obsidian_search` tool uses and prints the results — a one-shot CLI search for smoke-tests / CI / debugging without an MCP client (the report had to hand-craft JSON-RPC over stdio to verify retrieval). **(Issue 8)** New `enquire-mcp prune --vault <path>` GCs the per-vault index clutter that accumulates in the cache dir (`clear-cache`/`clear-index` only target the current vault); it removes all OTHER vaults' enquire artifacts, **dry-run by default** (opt in with `--yes`), and — via the pure `planCachePrune` with a strict `<12-hex>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` filter — can NEVER touch a file enquire didn't create. **1098 → 1104 tests.**

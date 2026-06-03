@@ -18,7 +18,13 @@ import {
   WATCH_HELP
 } from "./cli-help.js";
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
-import { DEFAULT_MODEL_ALIAS, EMBEDDING_MODELS, loadEmbedder, resolveModel } from "./embeddings.js";
+import {
+  DEFAULT_MODEL_ALIAS,
+  EMBEDDING_MODELS,
+  loadEmbedder,
+  resolveModel,
+  resolveTransformersCacheDir
+} from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
@@ -439,7 +445,7 @@ export async function main(): Promise<void> {
   program
     .command("install-model")
     .description(
-      `Pre-download an embedding model so the first \`obsidian_embeddings_search\` call doesn't block on a ${EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]?.approxSizeMB}MB HuggingFace download. Models are cached under ~/.cache/huggingface/transformers.js/ and are reused across vaults.`
+      `Pre-download an embedding model so the first \`obsidian_embeddings_search\` call doesn't block on a ${EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]?.approxSizeMB}MB HuggingFace download. Models are cached by transformers.js inside its own package directory (run \`enquire-mcp doctor\` to see the exact resolved path) and are reused across vaults.`
     )
     .argument("[alias]", `Model alias (${Object.keys(EMBEDDING_MODELS).join(" | ")})`, DEFAULT_MODEL_ALIAS)
     .action(async (alias: string) => {
@@ -461,7 +467,7 @@ export async function main(): Promise<void> {
         throw new Error(`Model loaded but produced unexpected output dim=${vec?.length}`);
       }
       process.stdout.write(
-        `enquire: model ${alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+        `enquire: model ${alias} ready (${model.dim}-dim, ${Date.now() - t0}ms warmup, cached under ${resolveTransformersCacheDir() ?? "the transformers.js model cache"})\n`
       );
     });
 
@@ -782,7 +788,7 @@ export async function main(): Promise<void> {
           );
         }
         process.stdout.write(
-          `   model ${setupModel.alias} ready (${setupModel.dim}-dim, ${Date.now() - t0}ms warmup, cached under ~/.cache/huggingface/)\n`
+          `   model ${setupModel.alias} ready (${setupModel.dim}-dim, ${Date.now() - t0}ms warmup, cached under ${resolveTransformersCacheDir() ?? "the transformers.js model cache"})\n`
         );
 
         // Step 3: build-embeddings.

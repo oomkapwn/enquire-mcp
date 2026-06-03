@@ -28,7 +28,7 @@
 import { existsSync, promises as fs, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { EmbeddingModel } from "./embeddings.js";
+import { type EmbeddingModel, resolveTransformersCacheDir } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { Vault } from "./vault.js";
 
@@ -113,13 +113,20 @@ export function formatDoctorResult(result: DoctorResult): string {
  * would defeat the doctor's "fast read-only health check" promise on
  * users who haven't installed the optional dep at all.
  */
-function candidateModelCacheRoots(): string[] {
+export function candidateModelCacheRoots(): string[] {
   const candidates: string[] = [];
-  // 1. transformers.js v3+ default (lives inside the package itself).
-  // Find the @huggingface/transformers install directory.
-  // require.resolve doesn't exist in ESM; we walk node_modules ourselves
-  // from cwd. If transformers.js isn't installed, this candidate just
-  // won't exist on disk and gets filtered out.
+  // 1. transformers.js v3+ default — its OWN package `.cache`, resolved
+  //    RELATIVE TO THIS MODULE (via createRequire, not cwd). This is the path
+  //    transformers.js actually loads from, and the ONLY one correct for a
+  //    global `npm i -g` install (the model lives in the package's nested
+  //    node_modules, not under cwd). v3.10.0-rc.12 — bug-report Issue 1: the
+  //    prior cwd-based probe missed it entirely → false NOT READY on a
+  //    fully-working global install. Resolution-only (no ONNX load).
+  const pkgCache = resolveTransformersCacheDir();
+  if (pkgCache) candidates.push(pkgCache);
+  // 1b. cwd-relative fallback — covers local-dev / npx layouts where the
+  //     module-relative resolve above differs from the user's project tree.
+  //     If transformers.js isn't installed, this just won't exist on disk.
   candidates.push(path.join(process.cwd(), "node_modules", "@huggingface", "transformers", ".cache"));
   // 2. HuggingFace Hub conventions.
   if (process.env.HF_HOME) candidates.push(path.join(process.env.HF_HOME, "hub"));

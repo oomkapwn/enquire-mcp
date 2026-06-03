@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.12] — 2026-06-03
+
+> **TL;DR:** **Model-cache path: one resolver, no more lying paths (bug-report Issues 1 + 2).** A fresh-install bug report on a real 236-note vault found `enquire-mcp doctor` printing **"NOT READY — no Xenova model weights found"** on a fully-working **global** install: the cache probe only looked under `process.cwd()/node_modules/…`, but a global `npm i -g` loads the model from the package's OWN nested `node_modules`, resolved relative to the module — never relative to cwd (Issue 1). Relatedly, `install-model` / `setup` printed `cached under ~/.cache/huggingface/` — a path that stays empty — while the help text and two TSDocs named other (also wrong) paths (Issue 2). Both now flow through ONE source of truth, `resolveTransformersCacheDir()` (resolves `@huggingface/transformers` via `createRequire(import.meta.url)` → its package `.cache`, correct for hoisted AND nested layouts), so the diagnostic and the success message can never again disagree with reality. **Verified:** on this machine `doctor` now reports `✓ Embedding model cache — 2 model(s) cached under …/node_modules/@huggingface/transformers/.cache/Xenova/`. **1088 → 1094 tests.**
+
+**Minor (pre-release) — v3.10 line; bug-report response batch 1/3 (model-path correctness).**
+
+### Fixed
+
+- **Issue 1 — `doctor` false-negative on a global install (Medium).** `candidateModelCacheRoots()` (`src/doctor.ts`) probed only a cwd-based path; the model on a global install lives in the package's nested `node_modules/@huggingface/transformers/.cache`, which cwd never reaches → false `NOT READY` on a fully-working setup (panic / needless reinstalls). Now the FIRST candidate is `resolveTransformersCacheDir()` — the module-relative path transformers.js actually loads from — with the cwd probe kept as a local-dev/npx fallback and the HF-Hub conventions kept after it.
+- **Issue 2 — `install-model` / `setup` printed a wrong, empty cache path (Low).** The success message (`cached under ~/.cache/huggingface/`), the `install-model` description (`~/.cache/huggingface/transformers.js/`), and two `src/embeddings.ts` TSDocs each named a different wrong path. All now print / point to the resolved truth (`resolveTransformersCacheDir()`); the `docs/api.md` `install-model` row was corrected. Root-cause sweep fixed **5 instances** of the wrong-path claim (install-model msg, setup msg, 2 TSDocs, api.md), not just the reported one.
+
+### Added
+
+- **`resolveTransformersCacheDir()` + `deriveTransformersCacheDir()`** (`src/embeddings.ts`, exported): single resolver for the transformers.js model-cache dir. Pure derivation slices at the INNERMOST `node_modules/@huggingface/transformers` segment so it's correct for hoisted (`<root>/node_modules/…`) AND nested global-install (`…/enquire-mcp/node_modules/@huggingface/transformers/.cache`) layouts. Resolution-only (no ONNX load) → keeps `doctor`'s fast-read-only promise.
+- **`tests/transformers-cache-path.test.ts`** (+6): pins the pure derivation incl. the nested global-install layout (the exact Issue-1 shape), with a discriminating NEGATIVE control (no marker → `null`); asserts the live resolver returns the package `.cache` and that `doctor` ranks it first.
+
+### Method note
+
+Classic change-driven-vs-state-driven gap: my home gates never run a global install, so the cwd-only probe survived every internal sweep. A real fresh install found it immediately. Fix is the standard transform — collapse N drifting path strings into ONE resolver + a structural test on the derivation, so the diagnostic and the messages are provably consistent. The α-class (TSDoc-drift) rule applied: the wrong-path claims in the `embeddings.ts` TSDocs + the module header comment were corrected in the same commit as the code.
+
+### Tests (1094)
+
+`tests/transformers-cache-path.test.ts` +6 source `it()`. 1088 → 1094; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/embeddings.ts` (resolver + helpers + 2 TSDoc path fixes + header comment), `src/doctor.ts` (candidate #0 = resolved cache + stale-comment fix), `src/cli.ts` (install-model + setup messages → resolved path), `docs/api.md` (install-model row), `tests/transformers-cache-path.test.ts` (new), test-count claims → 1094.
+- version bump 3.10.0-rc.11 → 3.10.0-rc.12.
+
+---
+
 ## [3.10.0-rc.11] — 2026-06-03
 
 > **TL;DR:** **Hermetic test cache — found by live-testing the installed server on a real machine.** Driving the installed `enquire-mcp@3.9.1` over JSON-RPC against a real 237-note vault confirmed it works end-to-end (boot, 33 tools, `obsidian_stats`, semantic `obsidian_search` with a built embed-db, path-escape guard) — but also surfaced **~27,000 orphaned files / ~699 MB** sitting in the real user cache (`~/Library/Caches/enquire/`). Root cause: `defaultIndexFile()` (and the embed-db / HNSW sidecars) resolve their dir from `XDG_CACHE_HOME`, and any test that spawns `serve`/`setup`/`build-embeddings`/`index` **without** an explicit `--index-file` fell back to that REAL cache and never cleaned up — weeks of `npm test` accumulated there (mtimes May 8 → Jun 3). Fixed at the root: `tests/setup.ts` now redirects `XDG_CACHE_HOME` to a throwaway temp dir before any test (and every inheriting child spawn) touches the cache. **Verified: real-cache file delta from the suite is now 0.** Structural guard added so it can't regress. **1085 → 1088 tests.**

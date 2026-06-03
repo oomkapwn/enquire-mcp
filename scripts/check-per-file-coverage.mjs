@@ -59,7 +59,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 28 }, // current 30% (integration-dep)
+  "src/embeddings.ts": { branches: 28 }, // current 33.33% (integration-dep; rc.12 cache-path helpers tested)
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a
@@ -71,7 +71,7 @@ const FLOORS = {
   // (actual lines 44.44%) without tripping any gate.
   "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 66.66% / lines 44.44%
   "src/http-transport.ts": { branches: 65 }, // current 72.85% (v3.8.7 P2-10/P2-11 raised branch coverage with 10 new tests)
-  "src/doctor.ts": { branches: 64 }, // current 68.99% (rc.16 P2-12 privacy tests lifted it +2.9pp)
+  "src/doctor.ts": { branches: 64 }, // current 70.22% (rc.12 exported candidateModelCacheRoots + cache-path tests lifted it)
   "src/tools/search.ts": { branches: 66 }, // current 69.71% (rc.10 frontmatter-filter helpers + matches-loop branch lifted it)
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.

@@ -19,10 +19,48 @@ afterEach(async () => {
 
 /** chokidar awaitWriteFinish polls every 50ms; one event takes ~300-500ms to
  *  propagate. Tests poll for up to `timeoutMs` until `cond` returns true. */
-async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 4000): Promise<boolean> {
+// v3.10.0-rc.15 — default bumped 4000 → 8000ms. The watcher chain on a loaded
+// CI runner (event → awaitWriteFinish 250ms → per-file queue → reindex, and for
+// embed tests a second embed-sync step) can exceed 4s under coverage
+// instrumentation + parallel workers; 8s gives margin without masking a real
+// hang (a genuinely-broken watcher still times out and fails).
+async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 8000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await cond()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+// v3.10.0-rc.15 — re-touch-on-miss for NEW-FILE-ADD detection. Writes `content`
+// to `filePath`, then waits for `cond`; if `cond` hasn't held within ~1.2s, it
+// RE-WRITES the file to regenerate a watch event. This defeats the dominant
+// watcher-test flake on loaded runners: chokidar (inotify/FSEvents) occasionally
+// drops the FIRST event for a brand-new path (the watch can still be arming when
+// the write lands, even after `ready`), so a one-shot write + poll can wait
+// forever. A re-touch produces a fresh event the watcher reliably catches; the
+// reindex is idempotent (same path + content), so extra writes never change the
+// asserted outcome. THIS is the durable fix the prior fixed-`setTimeout` warmups
+// (rc.7 #36, rc.9 W-FLAKE-2) only approximated — and it's why the rc.13 RELEASE
+// run flaked at `watcher.test.ts:505`. NOTE: only for add/change detection; for
+// a signal that LAGS `cond` (e.g. an embed-sync log fired just after the FTS
+// reindex), poll that signal with `waitFor` too — don't assert it immediately.
+async function writeAndWaitFor(
+  filePath: string,
+  content: string | Uint8Array,
+  cond: () => boolean | Promise<boolean>,
+  timeoutMs = 8000
+): Promise<boolean> {
+  const start = Date.now();
+  await fs.writeFile(filePath, content);
+  let lastTouch = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await cond()) return true;
+    if (Date.now() - lastTouch > 1200) {
+      await fs.writeFile(filePath, content); // re-touch: regenerate a missed event
+      lastTouch = Date.now();
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
   return false;
@@ -189,8 +227,9 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
         // line ~140 which had the same race and uses a 20ms warm-up).
         await new Promise((r) => setTimeout(r, 50));
         const abs = path.join(root, "logged.md");
-        await fs.writeFile(abs, "# T\n\nbody\n");
-        const indexed = await waitFor(() => captured.some((s) => s.includes("fts5 reindexed")));
+        const indexed = await writeAndWaitFor(abs, "# T\n\nbody\n", () =>
+          captured.some((s) => s.includes("fts5 reindexed"))
+        );
         expect(indexed).toBe(true);
         await fs.unlink(abs);
         const dropped = await waitFor(() => captured.some((s) => s.includes("fts5 dropped")));
@@ -225,8 +264,11 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         // Add: a fresh .md file should land in the index after the watcher
         // picks it up.
         const abs = path.join(root, "added.md");
-        await fs.writeFile(abs, "# Heading\n\nFirst body chunk.\n\nSecond chunk has more text.\n");
-        const indexed = await waitFor(() => fts.totalFiles() >= 1);
+        const indexed = await writeAndWaitFor(
+          abs,
+          "# Heading\n\nFirst body chunk.\n\nSecond chunk has more text.\n",
+          () => fts.totalFiles() >= 1
+        );
         expect(indexed).toBe(true);
         expect(fts.totalChunks()).toBeGreaterThan(0);
         // Unlink: deleting the file should drop chunks via dropFile().
@@ -299,8 +341,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       try {
         const pdfPath = path.join(root, "added.pdf");
         const pdfBuf = makePdf({ pages: ["PDF page one", "Second page text"] });
-        await fs.writeFile(pdfPath, pdfBuf);
-        const indexed = await waitFor(() => fts.totalFiles() >= 1);
+        const indexed = await writeAndWaitFor(pdfPath, pdfBuf, () => fts.totalFiles() >= 1);
         expect(indexed).toBe(true);
         expect(fts.totalChunks()).toBeGreaterThan(0);
         // Unlink should drop chunks (same dropFile branch as .md unlink).
@@ -357,17 +398,17 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       w.attachEmbed(embedDb, mockEmbedder, 0);
       await w.start();
       try {
-        // v3.8.0-rc.9 W-FLAKE-2 — chokidar FSEvents warm-up (same class as rc.7 #36
-        // fix at lines 156/190). The R-7 embed tests were missing this warm-up; under
-        // `npm run test:coverage` (parallel workers + coverage instrumentation slowdown)
-        // the first write could land before chokidar's FSEvents listener was ready,
-        // causing the waitFor(embedDb.totalChunks > 0) to time out intermittently.
-        await new Promise((r) => setTimeout(r, 50));
+        // v3.10.0-rc.15 — re-touch-on-miss (supersedes the fixed FSEvents warm-up
+        // this test used to need; cf. rc.8 W-FLAKE-2 / rc.7 #36): the first write
+        // to a brand-new path can be dropped under coverage + parallel workers, so
+        // writeAndWaitFor re-writes on miss. embed-sync fires AFTER the fts5
+        // reindex within the handler.
         const filePath = path.join(root, "note-embed.md");
-        await fs.writeFile(filePath, "# Heading\n\nFirst paragraph body.\n\nSecond paragraph here.\n");
-        // Wait for watcher to process — embed-sync should fire AFTER fts5 reindex.
-        // Timeout bumped to 6000ms (default 4000) for coverage-instrumented runs.
-        const synced = await waitFor(() => embedDb.totalChunks() > 0, 6000);
+        const synced = await writeAndWaitFor(
+          filePath,
+          "# Heading\n\nFirst paragraph body.\n\nSecond paragraph here.\n",
+          () => embedDb.totalChunks() > 0
+        );
         expect(synced).toBe(true);
         const chunks = embedDb.totalChunks();
         expect(chunks).toBeGreaterThanOrEqual(1);
@@ -492,17 +533,23 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       try {
         await new Promise((r) => setTimeout(r, 50)); // chokidar FSEvents warmup
         const filePath = path.join(root, "embed-error.md");
-        await fs.writeFile(filePath, "# Heading\n\nBody for embed error test.\n");
         // FTS5 must still be updated (fail-soft) even though embed-db throws.
-        const ftsOk = await waitFor(() => fts.totalFiles() >= 1, 6000);
+        const ftsOk = await writeAndWaitFor(
+          filePath,
+          "# Heading\n\nBody for embed error test.\n",
+          () => fts.totalFiles() >= 1
+        );
         expect(ftsOk).toBe(true);
-        // Embed-db must NOT have been updated (the sync failed).
-        expect(embedDb.totalChunks()).toBe(0);
-        // Stderr must contain the embed-db sync failed message.
-        const hasEmbedError = captured.some(
-          (s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure")
+        // v3.10.0-rc.15 — the embed-db sync error is logged JUST AFTER the fts5
+        // reindex within the SAME handler, so it can lag the totalFiles() check by
+        // a tick. The rc.13 release flaked here (`:505`) because the test asserted
+        // `hasEmbedError` IMMEDIATELY after `ftsOk`. Poll for the log instead.
+        const hasEmbedError = await waitFor(() =>
+          captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))
         );
         expect(hasEmbedError).toBe(true);
+        // Embed-db must NOT have been updated (the sync failed).
+        expect(embedDb.totalChunks()).toBe(0);
       } finally {
         await w.close();
       }

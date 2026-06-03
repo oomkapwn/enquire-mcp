@@ -6,11 +6,17 @@
 // Architecture:
 //   - We expose two catalog'd models: `multilingual` (default; 50+ languages,
 //     384-dim, ~120 MB) and `bge` (English-tuned, 384-dim, ~33 MB).
-//   - Models are pulled from HuggingFace Hub on first use, cached under
-//     `~/.cache/huggingface/transformers.js/` (transformers.js default).
+//   - Models are pulled from HuggingFace Hub on first use, cached by
+//     transformers.js under its OWN package dir — `<install>/node_modules/
+//     @huggingface/transformers/.cache/Xenova/…`. Resolve it at runtime via
+//     `resolveTransformersCacheDir()`; do NOT hardcode `~/.cache/huggingface`
+//     (the older HF-Hub convention transformers.js v3 does NOT use by default).
 //     We do NOT bundle model weights in the npm tarball — keeps install <200 KB.
 //   - Embeddings are L2-normalized at extraction time so cosine = dot product
 //     downstream (matches the v1.8 TF-IDF semantic_search convention).
+
+import { createRequire } from "node:module";
+import * as path from "node:path";
 
 /** Catalog of embedding models supported by enquire. Add new entries by
  *  pinning the Xenova-converted ONNX model id + the dim count + a friendly
@@ -57,6 +63,57 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
 
 /** Default model alias when the user doesn't pass `--embedding-model`. */
 export const DEFAULT_MODEL_ALIAS = "multilingual";
+
+/**
+ * Pure helper: given the resolved main entry of `@huggingface/transformers`
+ * (as returned by `require.resolve("@huggingface/transformers")`), derive the
+ * package's `.cache` directory — the location transformers.js v3 uses for
+ * downloaded model weights (`<pkg>/.cache/Xenova/<model-id>/`).
+ *
+ * Works for BOTH layouts npm produces:
+ *   - hoisted:  `<root>/node_modules/@huggingface/transformers/dist/…`
+ *   - nested:   `<root>/node_modules/@oomkapwn/enquire-mcp/node_modules/
+ *                @huggingface/transformers/dist/…`  ← global-install case
+ * by slicing at the LAST `node_modules/@huggingface/transformers` segment
+ * (innermost wins, matching Node's own resolution).
+ *
+ * @param resolvedMain Absolute path to the transformers main module.
+ * @returns The `.cache` dir path, or `null` if the marker isn't present.
+ * @example deriveTransformersCacheDir("/a/node_modules/@huggingface/transformers/dist/x.cjs")
+ *   // → "/a/node_modules/@huggingface/transformers/.cache"
+ */
+export function deriveTransformersCacheDir(resolvedMain: string): string | null {
+  const marker = path.join("node_modules", "@huggingface", "transformers");
+  const idx = resolvedMain.lastIndexOf(marker);
+  if (idx < 0) return null;
+  return path.join(resolvedMain.slice(0, idx + marker.length), ".cache");
+}
+
+/**
+ * Resolve the directory where transformers.js actually caches model weights on
+ * THIS install — resolved relative to the running module (so it is correct for
+ * a global `npm i -g` install, where the model lives inside the package's own
+ * nested `node_modules`, NOT under `~/.cache/huggingface`).
+ *
+ * This is the single source of truth for the model-cache path: `doctor`'s
+ * health probe and `install-model`'s "cached under …" message both call it, so
+ * the diagnostic and the success message can never disagree with reality
+ * (the v3.9.1 bug-report Issues 1 + 2: doctor false-negative + wrong path).
+ *
+ * Resolution-only — does NOT import/load the ONNX runtime, so it keeps the
+ * `doctor` fast-read-only promise. Returns `null` if the optional dependency
+ * isn't installed (resolve throws → caught).
+ *
+ * @returns Absolute `.cache` dir path, or `null` if transformers isn't installed.
+ */
+export function resolveTransformersCacheDir(): string | null {
+  try {
+    const req = createRequire(import.meta.url);
+    return deriveTransformersCacheDir(req.resolve("@huggingface/transformers"));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Look up an entry in the {@link EMBEDDING_MODELS} catalog. Throws with
@@ -160,7 +217,8 @@ async function loadTransformersForRerank(): Promise<{
 
 /** Load an embedder for the given model alias. First call may block on
  *  model download from HuggingFace (~120MB for multilingual). Subsequent
- *  calls reuse the cached weights under `~/.cache/huggingface/`.
+ *  calls reuse the cached weights from the transformers.js package cache
+ *  (resolve the exact path via `resolveTransformersCacheDir()`).
  *
  *  @param alias - Model alias from EMBEDDING_MODELS (default: "multilingual").
  */
@@ -364,7 +422,8 @@ export interface Reranker {
  * Load a BGE-style cross-encoder reranker. Lazy-imports
  * `@huggingface/transformers` on first call (same lazy-load pattern as
  * `loadEmbedder`). Cold-start downloads the model from HuggingFace
- * (~25-110 MB depending on alias) into `~/.cache/huggingface/`.
+ * (~25-110 MB depending on alias) into the transformers.js package cache
+ * (resolve the exact path via `resolveTransformersCacheDir()`).
  *
  * **v3.6.0-rc.4 P0 fix.** Previously used the high-level
  * `text-classification` pipeline, which softmax'es over the model's

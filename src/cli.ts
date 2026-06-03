@@ -29,7 +29,7 @@ import {
   resolveRerankerModel,
   resolveTransformersCacheDir
 } from "./embeddings.js";
-import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
+import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import {
@@ -41,6 +41,7 @@ import {
   syncPdfFtsIndex
 } from "./server.js";
 import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
+import { searchHybrid } from "./tools/index.js";
 import { Vault } from "./vault.js";
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
@@ -375,6 +376,116 @@ export async function main(): Promise<void> {
       } else {
         process.stdout.write(`enquire: no fts5 index files at ${indexFile}\n`);
       }
+    });
+
+  // v3.10.0-rc.14 (bug-report Issue 4) — one-shot CLI search for smoke-tests /
+  // CI / debugging without an MCP client. Builds (or reuses) the per-vault FTS5
+  // index, runs the SAME hybrid `searchHybrid` the MCP `obsidian_search` tool
+  // uses, and prints the results.
+  program
+    .command("query")
+    .description(
+      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`)."
+    )
+    .argument("<text>", "Search query")
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--limit <n>", "Max results (default 10)", "10")
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--json", "Emit the full JSON response instead of the pretty list")
+    .action(async (text: string, opts: { vault: string; limit?: string; indexFile?: string; json?: boolean }) => {
+      const v = new Vault(opts.vault);
+      await v.ensureExists();
+      const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
+      const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
+      // Peek tokenize_mode before constructing (v3.6.4 K-1: never DROP TABLE on
+      // a mismatch) — identical to the `eval` command's safe-open pattern.
+      const peeked = await peekFtsMetaSafe(indexFile);
+      const honoredTokenize: TokenizeMode = peeked?.tokenize_mode ?? "unicode61";
+      const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+      try {
+        await ftsIndex.open();
+        await syncFtsIndex(v, ftsIndex);
+        const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
+        process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
+        for (const m of result.matches) {
+          const loc = m.line_start ? `:${m.line_start}` : "";
+          const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
+          process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
+        }
+        process.stdout.write("\n");
+      } finally {
+        ftsIndex.close();
+      }
+    });
+
+  // v3.10.0-rc.14 (bug-report Issue 8) — GC the per-vault index clutter that
+  // accumulates in the cache dir over time (one index set per vault path/config
+  // hash). `clear-cache`/`clear-index` only target the CURRENT vault; `prune`
+  // removes all OTHER vaults' enquire artifacts, keeping the one you name.
+  // Dry-run by DEFAULT (destructive → opt in with --yes). Only ever touches
+  // files matching enquire's strict artifact pattern (see `planCachePrune`).
+  program
+    .command("prune")
+    .description(
+      "Delete cached index artifacts for OTHER vaults, keeping only the named vault's — GCs the per-vault clutter that builds up in the cache dir. Dry-run by default; pass --yes to actually delete. Only ever removes enquire's own `<hash>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` files."
+    )
+    .requiredOption("--vault <path>", "Vault whose index to KEEP (all OTHER enquire cache artifacts are removed)")
+    .option("--yes", "Actually delete (without this, prune only PREVIEWS what would be removed)")
+    .action(async (opts: { vault: string; yes?: boolean }) => {
+      const v = new Vault(opts.vault);
+      await v.ensureExists();
+      const keepFile = defaultIndexFile(v.root);
+      const cacheDir = path.dirname(keepFile);
+      const keepHash = path.basename(keepFile).split(".")[0] ?? "";
+      let entries: string[];
+      try {
+        entries = await fs.readdir(cacheDir);
+      } catch {
+        process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
+        return;
+      }
+      const removable = planCachePrune(entries, keepHash);
+      if (removable.length === 0) {
+        process.stdout.write(
+          `enquire prune: cache already clean (kept ${keepHash}.*; 0 other artifacts in ${cacheDir})\n`
+        );
+        return;
+      }
+      // Best-effort byte sum for the report.
+      let bytes = 0;
+      for (const name of removable) {
+        try {
+          bytes += (await fs.stat(path.join(cacheDir, name))).size;
+        } catch {
+          /* unreadable — skip in the tally */
+        }
+      }
+      const mb = (bytes / 1024 / 1024).toFixed(1);
+      const sample = `${removable.slice(0, 5).join(", ")}${removable.length > 5 ? ", …" : ""}`;
+      if (!opts.yes) {
+        process.stdout.write(
+          `enquire prune (DRY RUN): would remove ${removable.length} artifact(s) (~${mb} MB) from ${cacheDir}, keeping ${keepHash}.*\n` +
+            `  Re-run with --yes to delete. Sample: ${sample}\n`
+        );
+        return;
+      }
+      let removed = 0;
+      for (const name of removable) {
+        try {
+          await fs.rm(path.join(cacheDir, name), { force: true });
+          removed++;
+        } catch {
+          /* skip unremovable entries; report the rest */
+        }
+      }
+      process.stdout.write(
+        `enquire prune: removed ${removed} artifact(s) (~${mb} MB) from ${cacheDir}, kept ${keepHash}.*\n`
+      );
     });
 
   program

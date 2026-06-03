@@ -234,6 +234,34 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toMatch(/rerank-bge/);
   });
 
+  // v3.10.0-rc.14 (bug-report Issue 4) — one-shot CLI search for smoke-tests.
+  // The spawn inherits XDG_CACHE_HOME from tests/setup.ts (rc.11 hermetic
+  // cache), so it builds its index in the throwaway test cache, not the real one.
+  it("`query <text> --vault` runs a hybrid search and prints results", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "query", "the", "--vault", vault, "--limit", "3"], {
+      encoding: "utf8",
+      timeout: 30000
+    });
+    expect(res.status).toBe(0);
+    // Prints a result count line whether or not the vault matched the query.
+    expect(res.stdout).toMatch(/result\(s\) for/);
+  });
+
+  // v3.10.0-rc.14 (bug-report Issue 8) — `prune` is DRY-RUN by default: it must
+  // never delete without --yes. Asserts a clean exit + a preview, never a
+  // "removed" line.
+  it("`prune --vault` previews by default and deletes nothing", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault], {
+      encoding: "utf8",
+      timeout: 20000
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/DRY RUN|already clean/);
+    expect(res.stdout).not.toMatch(/enquire prune: removed/);
+  });
+
   // v3.9.0-rc.9 audit — the bearer min-length check now fires in the CLI
   // action (reconciled with startHttpServer's ≥16 throw) so the user gets a
   // friendly hint + clean exit(1) before any server setup. Both branches exit

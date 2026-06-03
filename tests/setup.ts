@@ -1,3 +1,23 @@
+// v3.10.0-rc.11 — HERMETIC CACHE (found by live-testing the install on a real
+// machine): `defaultIndexFile()` + the embed-db / HNSW sidecars resolve their
+// cache dir from `XDG_CACHE_HOME` (all platforms; macOS default
+// `~/Library/Caches/enquire`). Any test that spawns `serve`/`setup`/
+// `build-embeddings`/`index` WITHOUT an explicit `--index-file`/`--embed-file`
+// fell back to that REAL user cache and never cleaned up — weeks of repeated
+// `npm test` had left ~27,000 orphaned files / ~699 MB in a real user's cache.
+// Fix at the root: redirect XDG_CACHE_HOME to a throwaway temp dir BEFORE any
+// test (and any inheriting child spawn — every spawn in this suite inherits
+// process.env, verified) touches the cache. The OS reclaims it; the real cache
+// is never written. Guarded by `if (!XDG_CACHE_HOME)` so CI/devs can override.
+// Enforced by tests/cache-isolation-invariant.test.ts.
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+if (!process.env.XDG_CACHE_HOME) {
+  process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "enquire-test-cache-"));
+}
+
 // v3.5.6 — Vitest setup file. Warms the native / heavy optional deps
 // ONCE before any test runs, so individual tests never pay the cold-
 // import cost.

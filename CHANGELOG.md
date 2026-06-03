@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.11] — 2026-06-03
+
+> **TL;DR:** **Hermetic test cache — found by live-testing the installed server on a real machine.** Driving the installed `enquire-mcp@3.9.1` over JSON-RPC against a real 237-note vault confirmed it works end-to-end (boot, 33 tools, `obsidian_stats`, semantic `obsidian_search` with a built embed-db, path-escape guard) — but also surfaced **~27,000 orphaned files / ~699 MB** sitting in the real user cache (`~/Library/Caches/enquire/`). Root cause: `defaultIndexFile()` (and the embed-db / HNSW sidecars) resolve their dir from `XDG_CACHE_HOME`, and any test that spawns `serve`/`setup`/`build-embeddings`/`index` **without** an explicit `--index-file` fell back to that REAL cache and never cleaned up — weeks of `npm test` accumulated there (mtimes May 8 → Jun 3). Fixed at the root: `tests/setup.ts` now redirects `XDG_CACHE_HOME` to a throwaway temp dir before any test (and every inheriting child spawn) touches the cache. **Verified: real-cache file delta from the suite is now 0.** Structural guard added so it can't regress. **1085 → 1088 tests.**
+
+**Minor (pre-release) — v3.10 line; test-hygiene fix from live-testing (no `src/` runtime change).**
+
+### Fixed
+
+- **Test suite no longer pollutes the real user cache.** `tests/setup.ts` sets `process.env.XDG_CACHE_HOME = mkdtempSync(tmpdir()/enquire-test-cache-…)` (guarded by `if (!XDG_CACHE_HOME)` so CI/devs can override). Because `defaultIndexFile()` keys on `XDG_CACHE_HOME` on every platform and every test child-spawn inherits `process.env` (verified: no test overrides `env` without spreading `process.env`), this redirects ALL fts5 / embed-db / HNSW cache writes — in-process and spawned — to a throwaway dir the OS reclaims. Previously these landed in `~/Library/Caches/enquire/` (macOS) / `~/.cache/enquire/` (Linux) and were never cleaned, so a dev machine that ran the suite over weeks accumulated tens of thousands of orphaned index files. **Verified end-to-end:** real-cache file count is unchanged (Δ0) after a full `npm test`; the only real-cache writes observed during testing came from a separate *real* `serve` run on the actual vault (correct behavior), confirmed by matching the file hash to `sha1("/…/Obsidian Vault")`.
+
+### Added
+
+- **`tests/cache-isolation-invariant.test.ts`** (+3): asserts `XDG_CACHE_HOME` is a temp dir during tests and that `defaultIndexFile()` resolves UNDER it, NOT under the real `~/Library/Caches/enquire` (or `~/.cache/enquire`) — so removing the `setup.ts` redirect fails CI. Includes a NEGATIVE control proving the real-cache classifier discriminates (a constant `() => false` would make it vacuous). Meta-invariant-enrolled.
+
+### Method note
+
+This is the textbook value of **testing on a real machine** (the project's home-grown gates are drift/claim-driven and structurally blind to filesystem-side-effects like this): the unit suite *caused* the accumulation but never *observed* it, because no gate inspects the real cache dir. The fix is the project's standard transform — root-cause + a permanent inventory/structural invariant (`cache-isolation-invariant`) so the class can't silently return. Severity is **dev-hygiene** (not a product/CI/end-user correctness bug — a real user with one vault gets one index file; CI runners are ephemeral), but it's a real papercut (699 MB on the maintainer's machine) with a clean, verified fix. **The pre-existing local cruft is maintainer-gated to clear** (deleting files is out of scope for the agent) — see the session hand-off for the exact one-liner that keeps the live vault's index and removes the orphans.
+
+### Tests (1088)
+
+`tests/cache-isolation-invariant.test.ts` +3 source `it()`. 1085 → 1088; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `tests/setup.ts` (XDG_CACHE_HOME redirect), `tests/cache-isolation-invariant.test.ts` (new), test-count claims → 1088.
+- version bump 3.10.0-rc.10 → 3.10.0-rc.11.
+
+---
+
 ## [3.10.0-rc.10] — 2026-06-02
 
 > **TL;DR:** **New capability — frontmatter-aware retrieval.** `obsidian_search` gains an optional `filter_frontmatter` map so an agent can scope hybrid search by YAML frontmatter: `{ status: "active", type: ["meeting","decision"] }` → only notes whose frontmatter matches **every** key (strings case-insensitive; an array frontmatter value matches by membership; an array filter value is OR). It's the first genuinely-new *feature* (not polish) since the v3.10 staleness line — Obsidian users live in frontmatter (`status`/`type`/`project`), and **no other Obsidian-MCP can scope semantic search by it**. Opt-in + additive: **absent ⇒ byte-identical** to before (same safe pattern as recency re-ranking). Matching is filter-on-the-fused-candidate-pool, which is already excluded-pruned (rc.8), so no excluded note's frontmatter is read; PDFs (no frontmatter) are excluded without a binary read. **1076 → 1085 tests.**

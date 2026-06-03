@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.13] — 2026-06-03
+
+> **TL;DR:** **Reranker observability + pre-cache (bug-report Issues 9, 3, 5).** The cross-encoder reranker was a black box: enabling it triggered a SILENT ~110 MB download on the first query (which could exceed a client's tool-call timeout → unexplained RRF fallback), there was no way to pre-cache it, and the response gave no positive signal it ran. Now: **(Issue 9)** `obsidian_search` emits stderr lifecycle logs (`reranker '<alias>' loading (~110 MB…)` BEFORE the blocking load, `loaded; reranked N pairs` after — failures were already logged) and returns a `reranked: { applied, pairs?, reason? }` field; **(Issue 3)** `install-model` resolves the reranker catalog too, so `enquire-mcp install-model rerank-bge` pre-downloads the cross-encoder (the ~110 MB no longer blocks the first query); **(Issue 5, docs)** `docs/api.md` now states the default reranker is English-tuned and RU/multilingual vaults can leave it off (RRF hybrid already handles them), plus which aliases are verified-working. **1094 → 1098 tests.**
+
+**Minor (pre-release) — v3.10 line; bug-report response batch 2/3 (reranker cluster).**
+
+### Added
+
+- **`SearchHybridResponse.reranked`** — `{ applied: boolean; pairs?: number; reason?: string }`, present ONLY when a reranker was requested. `{applied:true, pairs:N}` after a successful re-score; `{applied:false, reason}` when requested but it didn't run (reason mirrors `signal_errors.reranker` on a load failure, or notes "no candidates"). Closes Issue 9's "silent no-op" — a caller can now tell applied-vs-fell-back without guessing.
+- **`install-model` accepts reranker aliases** (Issue 3). `alias in RERANKER_MODELS` routes to `loadReranker` + a one-pair smoke; `enquire-mcp install-model rerank-bge` pre-caches the ~110 MB cross-encoder so `serve --enable-reranker` doesn't block on the download at first query. Unknown aliases now fail with BOTH catalogs listed (resolves the `bge` embedding vs `rerank-bge` cross-encoder naming confusion).
+
+### Fixed
+
+- **Issue 9 — reranker silently no-op'd with no diagnostics (Medium).** `loadReranker`'s download was silent and `search.ts` logged ONLY failures, so a first-run download that exceeded the client timeout looked identical to a silent failure. Added stderr lifecycle logging (loading… with size / loaded; reranked N pairs) — three distinguishable states — plus the `reranked` response field above. (`signal_errors.reranker` already carried the failure reason; this adds the in-progress + success signals.)
+
+### Docs
+
+- **Issue 5 — reranker language guidance.** `docs/api.md` `--enable-reranker` / `--reranker-model` rows now state the default cross-encoder is English-tuned (RRF hybrid handles RU/multilingual well → leave it off with no quality loss), name `rerank-bge` as the only verified-working reranker (the multilingual aliases still fail at `AutoTokenizer`), and point at `install-model` for pre-caching. The empirical RU conclusion from the bug report (RRF-hybrid already correct without reranker) is now documented guidance.
+
+### Tests (1098)
+
+`tests/reranker.test.ts` +3 (reranked applied / failed-with-reason / NEGATIVE-control absent-when-not-requested); `tests/cli.test.ts` +1 (install-model unknown-alias lists both catalogs). 1094 → 1098; claims synced (README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP).
+
+### Files changed
+
+- `src/tools/search.ts` (`reranked` field + stderr lifecycle logs), `src/cli.ts` (install-model reranker routing + combined-catalog error + imports), `docs/api.md` (reranker guidance), `tests/reranker.test.ts` (+3), `tests/cli.test.ts` (+1), test-count claims → 1098.
+- version bump 3.10.0-rc.12 → 3.10.0-rc.13.
+
+---
+
 ## [3.10.0-rc.12] — 2026-06-03
 
 > **TL;DR:** **Model-cache path: one resolver, no more lying paths (bug-report Issues 1 + 2).** A fresh-install bug report on a real 236-note vault found `enquire-mcp doctor` printing **"NOT READY — no Xenova model weights found"** on a fully-working **global** install: the cache probe only looked under `process.cwd()/node_modules/…`, but a global `npm i -g` loads the model from the package's OWN nested `node_modules`, resolved relative to the module — never relative to cwd (Issue 1). Relatedly, `install-model` / `setup` printed `cached under ~/.cache/huggingface/` — a path that stays empty — while the help text and two TSDocs named other (also wrong) paths (Issue 2). Both now flow through ONE source of truth, `resolveTransformersCacheDir()` (resolves `@huggingface/transformers` via `createRequire(import.meta.url)` → its package `.cache`, correct for hoisted AND nested layouts), so the diagnostic and the success message can never again disagree with reality. **Verified:** on this machine `doctor` now reports `✓ Embedding model cache — 2 model(s) cached under …/node_modules/@huggingface/transformers/.cache/Xenova/`. **1088 → 1094 tests.**

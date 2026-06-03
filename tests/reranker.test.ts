@@ -229,4 +229,62 @@ describe("searchHybrid + reranker (v2.9.0)", () => {
     const withScore = result.matches.filter((m) => m.reranker_score !== undefined);
     expect(withScore.length).toBe(1);
   });
+
+  // v3.10.0-rc.13 (bug-report Issue 9) — the response now surfaces the reranker
+  // OUTCOME so a caller can distinguish "applied N pairs" from "silently fell
+  // back to RRF" (and, on failure, learn why).
+  it("reports reranked.applied=true with a pair count when the reranker runs", async () => {
+    const v = new Vault(root);
+    const result = await searchHybrid(
+      v,
+      { query: "rocket", limit: 5 },
+      {
+        ftsIndex: idx,
+        embedFile: path.join(root, "nonexistent.embed.db"),
+        rerankerOverride: {
+          async score(_q: string, passages: readonly string[]): Promise<number[]> {
+            return passages.map(() => 0.5);
+          }
+        },
+        reranker: { topN: 50 }
+      }
+    );
+    expect(result.reranked?.applied).toBe(true);
+    expect(result.reranked?.pairs).toBeGreaterThan(0);
+    expect(result.reranked?.reason).toBeUndefined();
+  });
+
+  it("reports reranked.applied=false with a reason mirroring signal_errors when the reranker fails", async () => {
+    const v = new Vault(root);
+    const result = await searchHybrid(
+      v,
+      { query: "rocket", limit: 5 },
+      {
+        ftsIndex: idx,
+        embedFile: path.join(root, "nonexistent.embed.db"),
+        rerankerOverride: {
+          async score(): Promise<number[]> {
+            throw new Error("synthetic reranker boom");
+          }
+        },
+        reranker: { topN: 50 }
+      }
+    );
+    expect(result.reranked?.applied).toBe(false);
+    expect(result.reranked?.reason).toMatch(/synthetic reranker boom/);
+    // The reason mirrors signal_errors.reranker so callers can rely on either.
+    expect(result.reranked?.reason).toBe(result.signal_errors?.reranker);
+  });
+
+  it("NEGATIVE control: omits the reranked field entirely when no reranker is requested", async () => {
+    const v = new Vault(root);
+    const result = await searchHybrid(
+      v,
+      { query: "rocket", limit: 5 },
+      { ftsIndex: idx, embedFile: path.join(root, "nonexistent.embed.db") }
+    );
+    // No reranker config + no override → the field must be ABSENT (not
+    // `{applied:false}`), so callers can cheaply test "was reranking requested".
+    expect(result.reranked).toBeUndefined();
+  });
 });

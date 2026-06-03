@@ -216,6 +216,24 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("index");
   });
 
+  // v3.10.0-rc.13 (bug-report Issue 3) — install-model now resolves BOTH the
+  // embedding and reranker catalogs so the ~110MB cross-encoder can be
+  // pre-cached (`install-model rerank-bge`). An unknown alias must fail fast
+  // (no download) with BOTH catalogs listed so the naming is unambiguous.
+  it("`install-model <bogus>` exits non-zero listing both embedding + reranker aliases", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "install-model", "totally-bogus-xyz"], {
+      encoding: "utf8",
+      timeout: 20000
+    });
+    expect(res.status).not.toBe(0);
+    const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    expect(out).toMatch(/Embedding aliases/);
+    expect(out).toMatch(/reranker aliases/);
+    // The default cross-encoder must be offered as a pre-cache target.
+    expect(out).toMatch(/rerank-bge/);
+  });
+
   // v3.9.0-rc.9 audit — the bearer min-length check now fires in the CLI
   // action (reconciled with startHttpServer's ≥16 throw) so the user gets a
   // friendly hint + clean exit(1) before any server setup. Both branches exit

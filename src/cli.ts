@@ -20,9 +20,13 @@ import {
 import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
 import {
   DEFAULT_MODEL_ALIAS,
+  DEFAULT_RERANKER_ALIAS,
   EMBEDDING_MODELS,
   loadEmbedder,
+  loadReranker,
+  RERANKER_MODELS,
   resolveModel,
+  resolveRerankerModel,
   resolveTransformersCacheDir
 } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, type TokenizeMode } from "./fts5.js";
@@ -445,10 +449,46 @@ export async function main(): Promise<void> {
   program
     .command("install-model")
     .description(
-      `Pre-download an embedding model so the first \`obsidian_embeddings_search\` call doesn't block on a ${EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS]?.approxSizeMB}MB HuggingFace download. Models are cached by transformers.js inside its own package directory (run \`enquire-mcp doctor\` to see the exact resolved path) and are reused across vaults.`
+      `Pre-download an embedding OR reranker model so the first \`obsidian_embeddings_search\` / \`--enable-reranker\` call doesn't block on a HuggingFace download (the default cross-encoder \`${DEFAULT_RERANKER_ALIAS}\` is ~${RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.approxSizeMB}MB). Models are cached by transformers.js inside its own package directory (run \`enquire-mcp doctor\` to see the exact resolved path) and are reused across vaults.`
     )
-    .argument("[alias]", `Model alias (${Object.keys(EMBEDDING_MODELS).join(" | ")})`, DEFAULT_MODEL_ALIAS)
+    .argument(
+      "[alias]",
+      `Embedding alias (${Object.keys(EMBEDDING_MODELS).join(" | ")}) or reranker alias (${Object.keys(RERANKER_MODELS).join(" | ")})`,
+      DEFAULT_MODEL_ALIAS
+    )
     .action(async (alias: string) => {
+      // v3.10.0-rc.13 (bug-report Issue 3) — install-model now also pre-caches
+      // cross-encoder rerankers, so `serve --enable-reranker` doesn't block on a
+      // ~110 MB download at the FIRST query (which previously could exceed an MCP
+      // client's tool-call timeout → unexplained RRF fallback). Reranker aliases
+      // live in a separate catalog (RERANKER_MODELS); detect + route accordingly.
+      if (alias in RERANKER_MODELS) {
+        const rmodel = resolveRerankerModel(alias);
+        process.stderr.write(
+          `enquire: downloading reranker ${rmodel.hfId} (~${rmodel.approxSizeMB}MB; ${
+            rmodel.multilingual ? "multilingual" : "English-only"
+          } cross-encoder)...\n`
+        );
+        const t0 = Date.now();
+        const reranker = await loadReranker(alias);
+        // Smoke: score one trivial pair so an ONNX / tokenizer failure surfaces
+        // HERE rather than at first MCP call. (Some multilingual aliases are
+        // known to fail at AutoTokenizer — see `--reranker-model` help; this
+        // makes that failure explicit at install time instead of silent later.)
+        const [s] = await reranker.score("hello", ["world"]);
+        if (typeof s !== "number") {
+          throw new Error(`Reranker loaded but produced no score (got ${typeof s})`);
+        }
+        process.stdout.write(
+          `enquire: reranker ${alias} ready (${Date.now() - t0}ms warmup, cached under ${resolveTransformersCacheDir() ?? "the transformers.js model cache"})\n`
+        );
+        return;
+      }
+      if (!(alias in EMBEDDING_MODELS)) {
+        throw new Error(
+          `Unknown model alias '${alias}'. Embedding aliases: ${Object.keys(EMBEDDING_MODELS).join(" | ")}; reranker aliases: ${Object.keys(RERANKER_MODELS).join(" | ")}.`
+        );
+      }
       const model = resolveModel(alias);
       process.stderr.write(
         `enquire: downloading ${model.hfId} (~${model.approxSizeMB}MB; ${model.dim}-dim, ${

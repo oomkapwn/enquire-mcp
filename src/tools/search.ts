@@ -1225,6 +1225,16 @@ export interface SearchHybridResponse {
    *  surfaces here as a string so agents can reason about reliability.
    *  v2.9.0 added `reranker` for cross-encoder failure surfacing. */
   signal_errors?: { bm25?: string; tfidf?: string; embeddings?: string; reranker?: string };
+  /** v3.10.0-rc.13 — reranker outcome, present ONLY when a cross-encoder was
+   *  requested (`--enable-reranker` / `ctx.reranker`). `{applied:true, pairs:N}`
+   *  when it re-scored N candidates; `{applied:false, reason}` when requested but
+   *  it didn't run — `reason` mirrors `signal_errors.reranker` on a load/download
+   *  failure, or notes there were no candidates. Closes the v3.9.1 bug-report
+   *  Issue 9 (reranker silently fell back to RRF with no way to tell whether it
+   *  was downloading, failed, or disabled). The stderr lifecycle log
+   *  (`reranker '<alias>' loading…` / `loaded; reranked N pairs`) is the
+   *  serve-side companion. */
+  reranked?: { applied: boolean; pairs?: number; reason?: string };
   total_candidates: number;
   matches: SearchHybridHit[];
 }
@@ -1765,6 +1775,7 @@ export async function searchHybrid(
   // load problem doesn't poison the whole search response. The fused order
   // (RRF + graph-boost) is preserved if reranking fails.
   let rerankerScores: Map<string, number> | null = null;
+  let rerankedPairs = 0;
   if ((ctx.reranker || ctx.rerankerOverride) && fused.length > 0) {
     const topN = ctx.reranker?.topN ?? 50;
     const rerankBatch = fused.slice(0, topN);
@@ -1774,8 +1785,19 @@ export async function searchHybrid(
       if (ctx.rerankerOverride) {
         reranker = ctx.rerankerOverride;
       } else {
-        const { loadReranker } = await import("../embeddings.js");
-        reranker = await loadReranker(ctx.reranker?.alias);
+        // v3.10.0-rc.13 (bug-report Issue 9) — reranker lifecycle logging. The
+        // first --enable-reranker call lazily downloads a cross-encoder (~110 MB
+        // for the default rerank-bge); previously this was SILENT, so a long hang
+        // that exceeded the client's tool-call timeout looked like an unexplained
+        // RRF fallback. Announce the load (with size) BEFORE it blocks, and
+        // confirm AFTER — three distinguishable states (loading… / loaded /
+        // failed) on stderr. Pre-cache with `enquire-mcp install-model <alias>`.
+        const emb = await import("../embeddings.js");
+        const rmodel = emb.resolveRerankerModel(ctx.reranker?.alias);
+        process.stderr.write(
+          `obsidian_search: reranker '${rmodel.alias}' loading (~${rmodel.approxSizeMB} MB; first call downloads from HuggingFace and can take 30-60s)…\n`
+        );
+        reranker = await emb.loadReranker(ctx.reranker?.alias);
       }
       // For each candidate, find the best snippet (BM25 > embeddings > TF-IDF)
       // and pair it with the query. Empty-snippet candidates go to the bottom
@@ -1825,6 +1847,10 @@ export async function searchHybrid(
       });
       for (let i = 0; i < reordered.length; i++) {
         fused[i] = reordered[i] as (typeof fused)[number];
+      }
+      rerankedPairs = rerankBatch.length;
+      if (!ctx.rerankerOverride) {
+        process.stderr.write(`obsidian_search: reranker loaded; reranked ${rerankedPairs} pairs\n`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2021,6 +2047,18 @@ export async function searchHybrid(
   };
   if (Object.keys(signalErrors).length > 0) {
     response.signal_errors = signalErrors;
+  }
+  // v3.10.0-rc.13 (Issue 9) — surface the reranker outcome when one was
+  // requested, so callers can distinguish "applied N pairs" from "silently fell
+  // back to RRF" (and, on failure, why). `rerankerScores` is set iff the
+  // cross-encoder ran successfully; otherwise carry the reason.
+  if (ctx.reranker || ctx.rerankerOverride) {
+    response.reranked = rerankerScores
+      ? { applied: true, pairs: rerankedPairs }
+      : {
+          applied: false,
+          reason: (signalErrors as { reranker?: string }).reranker ?? "no candidates to rerank"
+        };
   }
   return response;
 }

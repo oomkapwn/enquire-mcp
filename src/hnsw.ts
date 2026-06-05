@@ -372,6 +372,21 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
             "upgrade hnswlib-node to ≥3.0 (or rebuild from source) to use live-update; falling back to full rebuild on next serve restart"
         );
       }
+      // v3.10.0-rc.16 (audit M6) — pre-validate ALL vector dims BEFORE any
+      // mutation (markDelete / resizeIndex / addPoint). Previously the dim
+      // check lived INSIDE the addPoint loop, so a mismatched vector threw
+      // AFTER some labels were already markDelete'd and some points added —
+      // leaving a half-applied index the caller had to rebuild (silent embed-db
+      // ↔ HNSW divergence in the watcher path, which logs + continues rather
+      // than rebuilding). Hoisting the check makes applyDiff ATOMIC for the
+      // only caller-data-driven throw: if any dim is wrong, nothing mutates.
+      for (const pt of addPoints) {
+        if (pt.vector.length !== dim) {
+          throw new Error(
+            `HnswIndex.applyDiff: vector for label ${pt.label} has dim ${pt.vector.length}, expected ${dim}`
+          );
+        }
+      }
       let removed = 0;
       for (const label of removeLabels) {
         try {
@@ -396,11 +411,9 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
         ctor.resizeIndex(Math.max(needed, Math.ceil(current * 1.5)));
       }
       for (const pt of addPoints) {
-        if (pt.vector.length !== dim) {
-          throw new Error(
-            `HnswIndex.applyDiff: vector for label ${pt.label} has dim ${pt.vector.length}, expected ${dim}`
-          );
-        }
+        // dim pre-validated above (audit M6); the only remaining throw is a
+        // genuine native/capacity error — capacity is pre-grown above, so this
+        // is rare and not caller-data-driven.
         ctor.addPoint(Array.from(pt.vector), pt.label, /* replaceDeleted */ true);
         added += 1;
       }

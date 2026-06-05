@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.16] — 2026-06-05
+
+> **TL;DR:** **Audit MED-batch 1/6 — retrieval correctness.** A from-scratch 7-agent system audit (core code · transport/CLI · security/STRIDE · privacy · agent-facing surfaces · docs/process · tests), every headline adversarially re-verified against the code, returned **0 CRITICAL / 0 HIGH** for this 30+-round-audited codebase — real findings sat in the apparatus's known behavioral/docs blind spots. This RC fixes the first two verified MEDIUMs. **M5:** `obsidian_open_questions` is documented "oldest-first" but broke at `limit` in vault-WALK order and only THEN sorted — so on a vault with > `limit` questions it returned an arbitrary subset, NOT the oldest. Now collects all (scan capped via `capScanEntries`), sorts oldest-first, slices. **M6:** `HnswIndex.applyDiff` validated vector dim INSIDE the addPoint loop, so a wrong-dim vector threw AFTER some labels were `markDelete`'d and some points added → a half-applied index (silent embed-db↔HNSW divergence in the watcher, which logs + continues rather than rebuilding). Dim is now pre-validated before ANY mutation → atomic for the only caller-data-driven throw. **1104 → 1108 tests.**
+
+**Pre-release (v3.10 line) — audit fix batch 1/6.**
+
+### Fixed
+
+- **M5 — `obsidian_open_questions` returned an arbitrary `limit`-subset, not the oldest** (`src/tools/meta.ts`). The outer loop `break`'d once `out.length >= limit` in `vault.listMarkdown` (readdir) order, then `out.sort(age desc)` ran on that already-truncated set. On a vault with more than `limit` questions, callers asking for "the most-aged open questions" got whichever notes came first in the walk. Now: cap the scan (`capScanEntries`, defense-in-depth like the graph tools), collect ALL matches, sort oldest-first, then `slice(0, limit)` — the documented contract.
+- **M6 — `HnswIndex.applyDiff` could leave a half-applied index on a dim mismatch** (`src/hnsw.ts`). The `pt.vector.length !== dim` check lived inside the addPoint loop, so a bad vector threw after the `markDelete` loop + earlier `addPoint`s had already mutated the index; the watcher's `syncHnswForFile` catch logs + continues (doesn't rebuild), leaving HNSW out of sync with the freshly-upserted embed-db until the next serve restart (ghost labels / stale `text_preview`). Now ALL dims are pre-validated before any `markDelete`/`resizeIndex`/`addPoint` → applyDiff is atomic for the only caller-data-driven throw (a native addPoint failure after the pre-grow remains the sole, rare, eventually-consistent residual, documented).
+
+### Tests (1108)
+
+`tests/redos-guard.test.ts` +3 (open-questions oldest-first: limit=1 returns the oldest not the walk-first/newest; limit=2 returns the 2 oldest; full-order regression — names+mtimes chosen so the oldest is never readdir-first, making the revert discriminating). `tests/hnsw.test.ts` +1 (applyDiff wrong-dim throws atomically — the removeLabel survives the failed diff; NEGATIVE control: a valid diff DOES remove it). 1104 → 1108.
+
+### Files changed
+
+- `src/tools/meta.ts` (M5 + `capScanEntries` import), `src/hnsw.ts` (M6 dim pre-validation), `tests/redos-guard.test.ts` (+3), `tests/hnsw.test.ts` (+1), test-count claims → 1108.
+- version bump 3.10.0-rc.15 → 3.10.0-rc.16.
+
+---
+
 ## [3.10.0-rc.15] — 2026-06-03
 
 > **TL;DR:** **Watcher-test flake stabilized at the root — it was blocking RELEASES, not just PRs.** The rc.13 release run failed at `tests/watcher.test.ts:505` (chokidar FSEvents timing); a re-run published it — but a transient blip must never fail a publish (rc.20 rule). Two root races: **(1)** a brand-new file's FIRST inotify/FSEvents event can be dropped on a loaded runner even after `start()` resolves on `ready`, so a one-shot `writeFile` + `waitFor` can wait forever — the fixed-`setTimeout` warm-ups (rc.7 #36, rc.9 W-FLAKE-2) only approximated a fix; **(2)** the `:505` assertion read the embed-error stderr line IMMEDIATELY after the `fts.totalFiles()` check, but that line is logged a tick LATER in the same handler. Fixed: new `writeAndWaitFor` re-touch-on-miss helper (re-writes the file if the first event is dropped — idempotent reindex) on all 5 new-file-add sites; the lagging embed-error signal is now polled with `waitFor`; `waitFor` default 4000 → 8000 ms. **Verified green 3× back-to-back.** **1104 tests unchanged** (bodies refactored, no `it()` added). **Test-only — zero `src/`.**

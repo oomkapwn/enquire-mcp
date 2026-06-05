@@ -177,3 +177,26 @@ describe("parseNote", () => {
     expect(r.tags.sort()).toEqual(["already-hashed", "single"]);
   });
 });
+
+describe("bodyStartLine (rc.17 audit M1 — file-absolute line offset)", () => {
+  it("is > 1 when frontmatter precedes the body (so body-chunk lines can be file-absolute)", () => {
+    expect(parseNote("---\ntitle: T\ntags: [x]\n---\n\nBody line.\n").bodyStartLine).toBeGreaterThan(1);
+  });
+
+  it("NEGATIVE control: is exactly 1 when there's no frontmatter", () => {
+    expect(parseNote("Body only.\n\nMore body.\n").bodyStartLine).toBe(1);
+  });
+
+  it("points at (or before) the first body line in the original source", () => {
+    const src = "---\nstatus: active\n---\n\nThe real body starts here.\n";
+    const { bodyStartLine, body } = parseNote(src);
+    // The source line at bodyStartLine begins the body region: everything from
+    // there on must contain the body's first text (not the frontmatter).
+    const fromBody = src
+      .split("\n")
+      .slice(bodyStartLine - 1)
+      .join("\n");
+    expect(fromBody).toContain("The real body starts here.");
+    expect(body).toContain("The real body starts here.");
+  });
+});

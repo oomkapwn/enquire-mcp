@@ -1262,8 +1262,13 @@ export interface SearchHybridResponse {
  * @param vault - The vault to search.
  * @param args - `query` is required + non-empty. `limit` defaults to 10.
  *   `min_signals` (default 1) requires that many rankers fired for a hit.
- *   `granularity: "note"` (default) collapses to best chunk per note;
- *   `"block"` keeps each chunk distinct. `graph_boost` defaults to `true`.
+ *   `granularity: "note"` (default) collapses to best chunk per note (fused by
+ *   path — unaffected by chunking differences); `"block"` keeps each chunk
+ *   distinct (fused by `path#chunk_index`). NB for notes WITH frontmatter the
+ *   embeddings ranker chunks the body while BM25 chunks the full content, so a
+ *   `block` chunk INDEX may not denote the same span across the two rankers —
+ *   prefer the default `note` granularity for frontmatter-heavy vaults (audit M1).
+ *   `graph_boost` defaults to `true`.
  * @param ctx - Server-side context: `ftsIndex` (nullable), `embedFile`
  *   (path may not exist), optional `reranker` config, optional
  *   `rerankerOverride` (test injection point), optional `hnsw` context for

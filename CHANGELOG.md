@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.17] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 2/6 — M1 chunking parity (embeddings line citations).** The embedding pipeline chunks the frontmatter-STRIPPED body (to keep YAML out of the vectors) while the FTS5 index chunks the FULL note content — so for any note WITH frontmatter, embeddings / `find_similar` / `semantic_search` stored `line_start`/`line_end` that were BODY-relative (too low by the frontmatter line count), pointing deep-links at the wrong line; and the code comments falsely claimed "identical chunking across BM25 and embeddings." Fix: `parseNote` now exposes `bodyStartLine`, and `embedSingleNote` shifts each chunk's line numbers to FILE-absolute (matching FTS5) — keeping the clean body-only embeddings (no quality regression). Comments corrected; the residual `block`-granularity chunk-INDEX divergence for frontmatter'd notes is documented (the default `note` granularity fuses by path, unaffected). **1108 → 1113 tests.**
+
+**Pre-release (v3.10 line) — audit fix batch 2/6.**
+
+### Fixed
+
+- **M1 — embeddings line citations were body-relative (off by the frontmatter line count) for frontmatter'd notes.** `embedSingleNote` chunks `note.parsed.body` (frontmatter stripped, so YAML never pollutes the vectors), but `chunkContent`'s `lineStart`/`lineEnd` are then relative to the body, not the file — so a hit's deep-link pointed N lines too early (N = the frontmatter line count). `parseNote` now returns `bodyStartLine` (the 1-based file line where the body begins, via `source.indexOf(body)`; 1 with no frontmatter), and `embedSingleNote` adds `(bodyStartLine − 1)` to each chunk's line numbers → FILE-absolute, matching the FTS5 index (which chunks full content). Embedding quality is unchanged (still body-only). Existing embed-dbs apply the corrected lines as notes are re-embedded (on edit, or `enquire-mcp build-embeddings`) — no forced rebuild (proportionate: a full re-embed on every serve for a line-number fix would be disruptive).
+- **M1 (claim-vs-reality) — `embed-db.ts` header claimed "Same chunking as FTS5 … so chunk identity matches across BM25 and embeddings."** False for markdown (FTS5 chunks full content; embeddings chunk body). Corrected to describe the actual design + the file-absolute line alignment + the `block`-granularity caveat. The `reindexPdfFile` "chunk IDs match" claim is accurate (PDFs have no frontmatter) and left as-is.
+
+### Docs
+
+- `searchHybrid` granularity `@param` now notes that in `block` granularity a per-note chunk INDEX may not denote the same span across BM25 (content) and embeddings (body) for frontmatter'd notes — prefer the default `note` granularity (fused by path) for frontmatter-heavy vaults.
+
+### Tests (1113)
+
+`tests/embed-pipeline.test.ts` +2 (frontmatter'd note → chunk `lineStart` lands on the file line that actually contains the chunk text, not the `---`; NEGATIVE control: no-frontmatter ⇒ offset 0, line 1). `tests/parser.test.ts` +3 (`bodyStartLine` > 1 with frontmatter; === 1 without — NEGATIVE control; points at the first body line). 1108 → 1113.
+
+### Files changed
+
+- `src/parser.ts` (`bodyStartLine` field + computation), `src/embed-pipeline.ts` (file-absolute line offset in `embedSingleNote`), `src/embed-db.ts` (header comment), `src/tools/search.ts` (granularity `@param` caveat), `tests/embed-pipeline.test.ts` (+2), `tests/parser.test.ts` (+3), test-count claims → 1113.
+- version bump 3.10.0-rc.16 → 3.10.0-rc.17.
+
+---
+
 ## [3.10.0-rc.16] — 2026-06-05
 
 > **TL;DR:** **Audit MED-batch 1/6 — retrieval correctness.** A from-scratch 7-agent system audit (core code · transport/CLI · security/STRIDE · privacy · agent-facing surfaces · docs/process · tests), every headline adversarially re-verified against the code, returned **0 CRITICAL / 0 HIGH** for this 30+-round-audited codebase — real findings sat in the apparatus's known behavioral/docs blind spots. This RC fixes the first two verified MEDIUMs. **M5:** `obsidian_open_questions` is documented "oldest-first" but broke at `limit` in vault-WALK order and only THEN sorted — so on a vault with > `limit` questions it returned an arbitrary subset, NOT the oldest. Now collects all (scan capped via `capScanEntries`), sorts oldest-first, slices. **M6:** `HnswIndex.applyDiff` validated vector dim INSIDE the addPoint loop, so a wrong-dim vector threw AFTER some labels were `markDelete`'d and some points added → a half-applied index (silent embed-db↔HNSW divergence in the watcher, which logs + continues rather than rebuilding). Dim is now pre-validated before ANY mutation → atomic for the only caller-data-driven throw. **1104 → 1108 tests.**

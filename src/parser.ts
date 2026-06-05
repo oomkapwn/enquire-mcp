@@ -41,6 +41,12 @@ export interface ParsedNote {
   frontmatter: Record<string, unknown>;
   /** Post-frontmatter body — verbatim, including code fences. */
   body: string;
+  /** 1-based line number in the ORIGINAL source where `body` begins (= the count
+   *  of frontmatter + delimiter lines + 1; 1 when there's no frontmatter). Lets
+   *  consumers that chunk `body` (the embedding pipeline) report FILE-absolute
+   *  line numbers that match the FTS5 index, which chunks the full content.
+   *  v3.10.0-rc.17 (audit M1). */
+  bodyStartLine: number;
   /** All `[[wikilinks]]` found in the body (after stripping code spans). */
   wikilinks: Wikilink[];
   /** All `![[embeds]]` found in the body (after stripping code spans). */
@@ -78,9 +84,17 @@ export function parseNote(source: string): ParsedNote {
     body = source;
   }
   const sanitized = stripCodeAndInline(body);
+  // v3.10.0-rc.17 (audit M1) — the 1-based file line where `body` starts, so
+  // body-chunking consumers (the embedding pipeline) can report FILE-absolute
+  // line numbers that match the content-chunking FTS5 index. `body` is a
+  // verbatim substring of `source`, so indexOf locates it; 1 when there's no
+  // frontmatter (bodyIdx === 0) or in the defensive not-found case.
+  const bodyIdx = source.indexOf(body);
+  const bodyStartLine = bodyIdx > 0 ? source.slice(0, bodyIdx).split("\n").length : 1;
   return {
     frontmatter,
     body,
+    bodyStartLine,
     wikilinks: extractWikilinks(sanitized),
     embeds: extractEmbeds(sanitized),
     tags: collectTags(frontmatter, sanitized)

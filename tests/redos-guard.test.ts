@@ -246,3 +246,48 @@ describe("getOpenQuestions — pattern hardening integration", () => {
     await expect(getOpenQuestions(new Vault(root), { pattern: tooLong })).rejects.toThrow(/too long/i);
   });
 });
+
+describe("getOpenQuestions — returns the genuinely-OLDEST, not a walk-order subset (rc.16 audit M5)", () => {
+  let root: string;
+  const DAY = 24 * 3600 * 1000;
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-oq-age-"));
+    // Each note has exactly one question; mtime sets its age. Created in
+    // newest→oldest order with names that sort the OLDEST LAST, so the oldest is
+    // never readdir-first under alphabetical OR creation order — the pre-rc.16
+    // code (collect first `limit` in walk order, THEN sort) would surface the
+    // NEWEST here, the fixed code the OLDEST.
+    const notes: Array<[string, number]> = [
+      ["aaa-newest.md", 0],
+      ["mmm-mid.md", 100],
+      ["zzz-oldest.md", 200]
+    ];
+    for (const [name, ageDays] of notes) {
+      const abs = path.join(root, name);
+      await fs.writeFile(abs, `Open question: from ${name}?\n`);
+      const mtime = new Date(Date.now() - ageDays * DAY);
+      await fs.utimes(abs, mtime, mtime);
+    }
+  });
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("with limit=1 returns the single OLDEST question, not the walk-first/newest", async () => {
+    const out = await getOpenQuestions(new Vault(root), { limit: 1 });
+    expect(out).toHaveLength(1);
+    // The fix: globally-oldest. The bug returned the walk-first (newest) note.
+    expect(out[0]?.source_path).toBe("zzz-oldest.md");
+    expect(out[0]?.source_path).not.toBe("aaa-newest.md");
+  });
+
+  it("with limit=2 (< total) returns the 2 OLDEST, oldest-first", async () => {
+    const out = await getOpenQuestions(new Vault(root), { limit: 2 });
+    expect(out.map((q) => q.source_path)).toEqual(["zzz-oldest.md", "mmm-mid.md"]);
+  });
+
+  it("returns ALL questions oldest-first when limit covers them (ordering regression guard)", async () => {
+    const out = await getOpenQuestions(new Vault(root), { limit: 50 });
+    expect(out.map((q) => q.source_path)).toEqual(["zzz-oldest.md", "mmm-mid.md", "aaa-newest.md"]);
+  });
+});

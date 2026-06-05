@@ -383,6 +383,34 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(meta.size, "NEGATIVE control: must NOT be the stale build-time size").not.toBe(n);
   });
 
+  it("M6 (rc.16 audit) — applyDiff with a wrong-dim point throws ATOMICALLY (no markDelete before the throw)", async () => {
+    const dim = 4;
+    const norm = (a: number[]) => {
+      const s = Math.sqrt(a.reduce((t, x) => t + x * x, 0)) || 1;
+      return new Float32Array(a.map((x) => x / s));
+    };
+    const labeled = [0, 1, 2].map((i) => ({ label: i, vector: norm([i + 1, 1, 1, 1]) }));
+    const index = await buildHnsw(labeled, { dim, maxElements: 50 });
+    const q = norm([1, 1, 1, 1]); // closest to label 0
+    expect(index.searchKnn(q, 1).labels, "label 0 active pre-diff").toContain(0);
+
+    // A diff that removes label 0 AND adds a WRONG-dim point. Pre-rc.16 the dim
+    // check fired INSIDE the addPoint loop, so label 0 was already markDelete'd
+    // when the throw hit → half-applied index. Now dims are pre-validated, so a
+    // bad dim throws BEFORE any mutation.
+    expect(() => index.applyDiff([0], [{ label: 99, vector: new Float32Array([1, 1, 1]) }])).toThrow(
+      /dim 3, expected 4/
+    );
+
+    // ATOMICITY: label 0 must STILL be active — the failed diff didn't delete it.
+    expect(index.searchKnn(q, 1).labels, "label 0 must survive a failed applyDiff").toContain(0);
+
+    // NEGATIVE control: a VALID diff DOES remove label 0 — proves the search
+    // check can actually observe a removal (the atomicity assertion isn't vacuous).
+    index.applyDiff([0], [{ label: 99, vector: norm([9, 9, 9, 9]) }]);
+    expect(index.searchKnn(q, 3).labels, "valid diff removes label 0").not.toContain(0);
+  });
+
   it("returns null when signature doesn't match (stale index)", async () => {
     const persistFile = path.join(dir, "stale.hnsw");
     const v = new Float32Array(4).fill(0.5);

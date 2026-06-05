@@ -2,6 +2,7 @@ import * as path from "node:path";
 import matter from "gray-matter";
 import type { FtsIndex } from "../fts5.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { searchHybrid } from "./search.js";
 import { resolveTarget, suggestSimilar } from "./write.js";
@@ -1175,11 +1176,16 @@ export async function getOpenQuestions(
     re = new RegExp(defaultPat, "i");
   }
 
-  const entries = await vault.listMarkdown(args.folder);
+  // v3.10.0-rc.16 (audit M5) — collect ALL matches across the (capped) scan,
+  // THEN sort oldest-first + slice. The prior code broke at `limit` in vault-
+  // WALK order and only then sorted, so on a vault with > `limit` questions it
+  // returned an arbitrary limit-subset, NOT the documented oldest-first. The
+  // scan is capped (capScanEntries) so a pathological vault can't drive
+  // unbounded readNote I/O — defense-in-depth, same posture as the graph tools.
+  const entries = capScanEntries(await vault.listMarkdown(args.folder), "obsidian_open_questions");
   const out: OpenQuestion[] = [];
   const now = Date.now();
   for (const e of entries) {
-    if (out.length >= limit) break;
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
     // Scan parsed.body so frontmatter lines (which can contain "Q:" -ish
     // tokens) don't pollute results.
@@ -1204,12 +1210,12 @@ export async function getOpenQuestions(
         age_days: Math.round((now - mtimeMs) / (24 * 3600 * 1000)),
         mtime: new Date(mtimeMs).toISOString()
       });
-      if (out.length >= limit) break;
     }
   }
-  // Sort oldest-first so things aging out surface first.
+  // Sort oldest-first so things aging out surface first, THEN return the
+  // `limit` genuinely-oldest — not an arbitrary walk-order subset (audit M5).
   out.sort((a, b) => b.age_days - a.age_days);
-  return out;
+  return out.slice(0, limit);
 }
 
 // ─── obsidian_paper_audit (v1.5 — verify #paper notes have citations) ────────

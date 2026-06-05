@@ -96,6 +96,45 @@ describe("embedSingleNote", () => {
     expect(result).toBeNull();
   });
 
+  it("M1 (rc.17 audit) — chunk line numbers are FILE-absolute for a frontmatter'd note", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const filePath = path.join(root, "fm.md");
+    const content = "---\ntitle: T\ntags: [x]\n---\n\nFirst body paragraph here.\n\nSecond body paragraph here.\n";
+    await fs.writeFile(filePath, content);
+    const stat = await fs.stat(filePath);
+    const result = await embedSingleNote(v, mockEmbedder, {
+      relPath: "fm.md",
+      absPath: filePath,
+      mtimeMs: stat.mtimeMs
+    });
+    expect(result).not.toBeNull();
+    if (!result) throw new Error("unreachable");
+    const lines = content.split("\n");
+    const row0 = result.rows[0];
+    if (!row0) throw new Error("expected at least one row");
+    // The stored (now FILE-absolute) lineStart must land on the line in the file
+    // that actually contains the chunk's text. Pre-rc.17 it was body-RELATIVE
+    // (line 1 → the `---` delimiter), a wrong deep-link for frontmatter'd notes.
+    const chunkFirstLine = row0.textPreview.split("\n")[0] ?? "";
+    expect(lines[row0.lineStart - 1]).toContain(chunkFirstLine.slice(0, 15));
+    expect(row0.lineStart, "discriminating: not the body-relative 1").toBeGreaterThan(1);
+  });
+
+  it("M1 NEGATIVE control — no frontmatter ⇒ offset 0, first chunk still starts at line 1", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const filePath = path.join(root, "nofm.md");
+    await fs.writeFile(filePath, "First body paragraph here.\n\nSecond body paragraph here.\n");
+    const stat = await fs.stat(filePath);
+    const result = await embedSingleNote(v, mockEmbedder, {
+      relPath: "nofm.md",
+      absPath: filePath,
+      mtimeMs: stat.mtimeMs
+    });
+    expect(result?.rows[0]?.lineStart).toBe(1);
+  });
+
   it("honors lateChunkContext opt (>0 → contextual embed text)", async () => {
     const v = new Vault(root);
     await v.ensureExists();

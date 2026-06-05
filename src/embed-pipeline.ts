@@ -135,6 +135,12 @@ export async function embedSingleNote(
   const note = await vault.readNote(entry.absPath, entry.mtimeMs);
   const chunks = chunkContent(note.parsed.body);
   if (chunks.length === 0) return null;
+  // v3.10.0-rc.17 (audit M1) — we chunk the BODY (frontmatter stripped) to keep
+  // YAML out of the vectors, but `chunkContent` line numbers are then body-
+  // relative. Shift them to FILE-absolute (matching the FTS5 index, which chunks
+  // full content) so deep-link `line_start`/`line_end` point at the right line
+  // in notes with frontmatter. `bodyStartLine` is 1 (offset 0) without frontmatter.
+  const lineOffset = note.parsed.bodyStartLine - 1;
   const docTitle = note.parsed.frontmatter?.title || path.basename(entry.relPath, ".md");
   const embedTexts = chunks.map((_c, i) =>
     buildEmbedText(chunks, i, {
@@ -148,8 +154,8 @@ export async function embedSingleNote(
     if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
     return {
       chunkIndex: i,
-      lineStart: c.lineStart,
-      lineEnd: c.lineEnd,
+      lineStart: c.lineStart + lineOffset,
+      lineEnd: c.lineEnd + lineOffset,
       textPreview: c.text.slice(0, 480),
       vector
     };

@@ -1,7 +1,13 @@
 // Persistent embedding store (v2.0 alpha). SQLite-backed Float32 vectors,
-// brute-force cosine top-K retrieval. Same chunking as FTS5 (paragraph-level
-// via fts5.chunkContent) so chunk identity matches across BM25 and embeddings —
-// foundation for the v2.0 beta hybrid RRF scorer.
+// brute-force cosine top-K retrieval. Paragraph-level chunking via
+// fts5.chunkContent — but NB embeddings chunk the frontmatter-stripped BODY (to
+// keep YAML out of the vectors) while the FTS5 index chunks the FULL note
+// content. For notes WITHOUT frontmatter the two chunkings are identical; the
+// embedding pipeline shifts its chunk line numbers to FILE-absolute (v3.10.0-rc.17,
+// audit M1) so `line_start`/`line_end` match FTS5 regardless. In `block`
+// granularity the per-note chunk INDEX can still differ for frontmatter'd notes;
+// the default `note` granularity fuses by path and is unaffected. Foundation for
+// the hybrid RRF scorer.
 //
 // Architecture mirrors fts5.ts:
 //   - Lazy-loaded better-sqlite3 (optional dep)

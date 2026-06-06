@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.18] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 3 — M4 DoS-cap completeness (`obsidian_dataview_query` + invariant scope).** The audit flagged `obsidian_dataview_query` (`runDql`) as an uncapped whole-vault `readNote`+parse scan reachable over bearer `serve-http`. Root cause: the rc.36 `resource-bound-invariant`'s `SCANNER_SOURCES` covered `read.ts`/`search.ts`/`meta.ts` but NOT `dql.ts`, so `runDql` was never required to be CAP-or-EXEMPT (scope-too-narrow — the recurring class). Fix: cap `runDql` with `capScanEntries` (defense-in-depth — DQL is a *linear* query so a > MAX_SCAN_NOTES vault yields a partial, logged result, never a hang) + add `src/dql.ts` to `SCANNER_SOURCES` so the invariant patrols it. Also fixed a manifest drift my OWN rc.16 introduced: `getOpenQuestions` began calling `capScanEntries` in rc.16 but the manifest still listed it EXEMPT — reclassified CAPPED. **1113 tests unchanged.** M3 (signal-shutdown) → rc.19.
+
+**Pre-release (v3.10 line) — audit fix batch 3 (M4).**
+
+### Fixed
+
+- **M4 — `obsidian_dataview_query` whole-vault scan was uncapped AND invisible to the resource-bound invariant.** `runDql` (`src/dql.ts`) does `vault.listMarkdown()` → per-note `readNote` + frontmatter-eval; it's always-registered + bearer-reachable, but lived OUTSIDE the invariant's `SCANNER_SOURCES`, so the rc.36 "every whole-vault scanner is CAP-or-EXEMPT" completeness check never saw it. Now: the scan is wrapped in `capScanEntries` (defense-in-depth — DQL is O(N) linear, so a > MAX_SCAN_NOTES vault yields a partial result with a logged warning, not a hang), and `src/dql.ts` is added to `SCANNER_SOURCES`. The audit's "like the uncapped graph tools" framing is imprecise (graph tools are O(N²)/graph and MUST cap; DQL is linear) — but a cap is the right defense-in-depth for a bearer-reachable whole-vault tool, and closing the invariant scope is the structural fix.
+- **rc.16 manifest drift — `getOpenQuestions` was CAPPED in code but EXEMPT in the manifest.** rc.16 (M5) added `capScanEntries` to `getOpenQuestions` but left its `resource-bound-invariant` classification EXEMPT. Reclassified CAPPED (with its `capScanEntries` token) so the manifest matches reality — a post-rc.16 recursion-sweep catch.
+
+### Tests (1113)
+
+No new `it()` — the `resource-bound-invariant` now structurally covers `runDql` (CAPPED → must reference `capScanEntries`) and the corrected `getOpenQuestions` classification; the existing `dql.test.ts` exercises the > MAX_SCAN_NOTES cap path (logs the truncation). 1113 unchanged.
+
+### Files changed
+
+- `src/dql.ts` (`capScanEntries` import + scan cap), `tests/resource-bound-invariant.test.ts` (`SCANNER_SOURCES` += `src/dql.ts`; `runDql` + `getOpenQuestions` → CAPPED; drop `getOpenQuestions` from EXEMPT).
+- version bump 3.10.0-rc.17 → 3.10.0-rc.18.
+
+---
+
 ## [3.10.0-rc.17] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 2/6 — M1 chunking parity (embeddings line citations).** The embedding pipeline chunks the frontmatter-STRIPPED body (to keep YAML out of the vectors) while the FTS5 index chunks the FULL note content — so for any note WITH frontmatter, embeddings / `find_similar` / `semantic_search` stored `line_start`/`line_end` that were BODY-relative (too low by the frontmatter line count), pointing deep-links at the wrong line; and the code comments falsely claimed "identical chunking across BM25 and embeddings." Fix: `parseNote` now exposes `bodyStartLine`, and `embedSingleNote` shifts each chunk's line numbers to FILE-absolute (matching FTS5) — keeping the clean body-only embeddings (no quality regression). Comments corrected; the residual `block`-granularity chunk-INDEX divergence for frontmatter'd notes is documented (the default `note` granularity fuses by path, unaffected). **1108 → 1113 tests.**

@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.25] — 2026-06-06
+
+> **TL;DR:** **Round-2 audit — LOW docs-currency batch (final; docs-only).** Five un-gated currency-drift surfaces the change-driven gates don't watch, all flagged by the round-2 state-driven docs sweep: (1) **`CLAUDE.md`** status section was frozen at `v3.9.0-rc.35` (header still said "v3.8.x stable + v3.9.0 architectural") — added a condensed v3.9.0-stable→v3.9.1→v3.10.0-rc.1→rc.25 roll-up + moved the "(current)" marker + updated the title; (2) **`llms.txt`** "what's new" list stopped at rc.3, omitting the v3.10 freshness flagship (contradicting llms.txt's own header) — added it; (3) **`docs/benchmarks.md`** metric-validity said "through the v3.9.0-rc cascade" — extended to the v3.10 line (recency re-rank is off-by-default, a provable no-op, so the numbers are unchanged); (4) **`README.md`** highlight reel stopped at "v3.9.0 stable" — appended a v3.10 (`@rc`) freshness entry; (5) **`docs/api.md`** described the freshness boolean as an "over-one-year flag (≥ 365)" without naming it — now `stale` flag (≥ `--stale-days`, default 365). **Docs-only — zero `src/`, 1135 tests unchanged. This closes the round-2 (post-MED) audit** (rc.23 HIGH shutdown + rc.24 LOW code + rc.25 LOW docs).
+
+**Pre-release (v3.10 line) — round-2 audit; LOW docs-currency batch (final).**
+
+### Docs
+
+- **`CLAUDE.md`** — title `v3.8.x stable + v3.9.0 architectural` → `v3.9.x stable maintenance + v3.10 forgetting-aware line`; added a single condensed status roll-up entry (v3.9.0 STABLE promotion → v3.9.1 → the full v3.10.0-rc.1→rc.25 line: staleness, bug-report batch, MED audit M1–M10, round-2 re-sweep incl. the rc.23 shutdown HIGH) marked "(current)"; removed "(current)" from the rc.35 entry. (Internal process doc — not packaged; the recurring "CLAUDE.md status frozen" α-drift the project's own anti-pattern list names.)
+- **`llms.txt`** — added a `v3.10+ (@rc)` line to the recent-features list (forgetting-aware freshness + frontmatter-aware search), resolving the list-vs-header self-contradiction on an AI-discoverability surface.
+- **`docs/benchmarks.md`** — metric-validity currency extended from "the v3.9.0-rc cascade" to "the v3.10 line", with the explicit note that the rc.5 recency re-rank is off by default (`--recency-weight 0` = provable no-op) so default-config numbers are unchanged.
+- **`README.md`** — highlight reel gained a `v3.10` (`@rc`) entry (freshness + frontmatter-aware search), so it no longer lags the README's own hero differentiator.
+- **`docs/api.md`** — the v3.10 freshness boolean is now named (`stale`) and `365` is shown as the `--stale-days` default rather than an absolute.
+
+### Tests (1135)
+
+None — docs-only RC; no `src/` or test change. 1135 unchanged.
+
+### Files changed
+
+- `CLAUDE.md` (title + status roll-up), `llms.txt`, `docs/benchmarks.md`, `README.md`, `docs/api.md`.
+- `scripts/check-per-file-coverage.mjs` — refreshed the stale `watcher.ts` inline coverage comment (60.69% → 61.83%; rc.24's unlink-gate change + test raised it; caught by OIA Check 6 against the fresh `coverage-summary.json`).
+- version bump 3.10.0-rc.24 → 3.10.0-rc.25.
+
+### Method note
+
+This concludes the **round-2 (post-MED) audit** — a 3-agent pass on the shipped rc.22 commit (per the CLAUDE.md "re-run a focused audit after a class-closing release" rule). It returned 1 HIGH (rc.23 — a regression in our own rc.19, empirically reproduced + fix-verified before shipping), 3 LOW code (rc.24), and 5 LOW docs-currency (rc.25). No CRITICAL; `src/` remains exceptionally clean. The HIGH validated the meta-lesson: the home-grown gates are drift/claim-driven and structurally blind to runtime behavior, so the external-lens re-sweep after each batch is not optional.
+
+---
+
 ## [3.10.0-rc.24] — 2026-06-06
 
 > **TL;DR:** **Round-2 audit — LOW code batch (3 fixes).** The same post-MED re-sweep that found the rc.23 HIGH surfaced three LOWs, all verified against current code: (1) **`obsidian_query_base` (`bases.ts queryBase`)** was the lone uncapped member of the `capScanEntries` whole-vault-scanner class — always-registered + bearer-reachable, it reads every matched note's full body with no cap; the `resource-bound-invariant` missed it because `bases.ts` is outside `SCANNER_SOURCES` AND it uses `listFilesByExtension`+`readFile` (not the `listMarkdown`+`readNote` shape the heuristic detects). Capped via `capScanEntries` + a standalone invariant assertion (mirroring the `buildWikilinkGraph` one). (2) **`parser.ts bodyStartLine`** used `source.indexOf(body)`, which false-matches a degenerate note whose entire body text also appears verbatim in a frontmatter line (`---\nx: hi\n---\nhi` → wrong line) → `lastIndexOf` (body is the suffix) + empty-body guard. (3) **`watcher.ts handle()`** rc.20's exclude re-check skipped ALL kinds, so an excluded path's `unlink` never purged its rows (orphan index entries for a deleted-but-excluded note) → gate only add/change; `unlink` always cleans up. **1132 → 1135 tests.** Docs-currency LOWs → rc.25.

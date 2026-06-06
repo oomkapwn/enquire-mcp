@@ -96,7 +96,7 @@ const FLOORS = {
   // → flushHnswToDisk → loadHnswFromDisk round-trip) lifted coverage
   // 55.05% → 59.58%; floor stays at 53% (kept the conservative margin
   // because OCR branches still need tesseract.js + canvas, absent from CI).
-  "src/watcher.ts": { branches: 53 }, // current 60.69% (v3.9.0-rc.11 H1 serialization + zip-guard tests)
+  "src/watcher.ts": { branches: 53 }, // current 61.83% (v3.10.0-rc.24 unlink-gate refactor + excluded-unlink test lifted it)
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).

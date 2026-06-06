@@ -56,9 +56,12 @@
 //   9.  ACTION SHA-PIN — every third-party GitHub Action in
 //       .github/workflows/*.yml must be pinned to a 40-hex commit SHA, not a
 //       floating tag (supply-chain). [added rc.14]
-//   9b. RUN-DOWNLOAD-UNPINNED — a `run:` `curl`/`wget` must not fetch from a
-//       moving `releases/latest` URL (same supply-chain class as 9, different
-//       surface — the M-9 mcp-publisher shape). [added v3.9.1]
+//   9b. RUN-DOWNLOAD-UNPINNED / -UNVERIFIED — a `run:` `curl`/`wget` must not
+//       fetch from a moving `releases/latest` URL (same supply-chain class as 9,
+//       different surface — the M-9 mcp-publisher shape) [added v3.9.1]; and a
+//       tag-pinned release ARCHIVE (`releases/download/<tag>/…\.tar.gz`) must ALSO
+//       be SHA256-verified (`sha256sum -c`) in the same file — content-pin, since
+//       a tag is mutable. [extended rc.26 / SYS-1 M-9 completion]
 //   10. NPM-CI RETRY — every `npm ci` in .github/workflows/*.yml must be
 //       retry-wrapped (bare `- run: npm ci` fails the job on a transient
 //       onnxruntime-postinstall CDN ETIMEDOUT). [added rc.20]
@@ -848,7 +851,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   }
 }
 
-// ─── Check 9b: workflow `run:` downloads must not pull from `releases/latest` ──
+// ─── Check 9b: workflow `run:` downloads — tag-pinned AND SHA256-verified ─────
 // v3.9.1 (audit M-9 class) — Check 9 SHA-pins `uses:` action refs, but a binary
 // fetched inside a `run:` block via `curl`/`wget` from a moving `releases/latest`
 // URL is the SAME supply-chain risk on a DIFFERENT syntactic surface (the exact
@@ -856,15 +859,25 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
 // pinned it to the `v1.7.9` tag). Flags any non-comment `curl`/`wget` line whose
 // URL contains `releases/latest` (or `releases/download/latest`). A version- or
 // var-pinned asset (`releases/download/${TAG}` / `releases/download/v1.2.3/`)
-// passes — pinning is the remediation, exactly like Check 9. Comment lines that
-// merely MENTION `releases/latest` (e.g. release.yml's "PINNED … (not
-// releases/latest)" note) are skipped so the guard can't flag its own rationale.
+// passes the URL check — pinning is the remediation, exactly like Check 9.
+// v3.10.0-rc.26 (SYS-1 / M-9 completion) — a tag-pin is NOT immutable (a tag can
+// be force-moved, a release asset re-uploaded), so a tag-pinned release ARCHIVE
+// (`releases/download/<tag>/…\.tar.gz|.tgz|.zip`) ALSO requires a SHA256
+// verification (`sha256sum -c` / `shasum -a 256 -c`) somewhere in the same
+// workflow file — content-pin, the strongest form. Comment lines that merely
+// MENTION `releases/latest` (e.g. release.yml's "PINNED … (not releases/latest)"
+// note) are skipped so the guard can't flag its own rationale.
 {
   const wfDir = ".github/workflows";
   if (existsSync(join(repoRoot, wfDir))) {
     for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
       const rel = join(wfDir, wf);
       const lines = readLines(rel);
+      // A SHA256 verification anywhere in the file (`sha256sum -c` / `shasum -a
+      // 256 -c`) — content-pin proof a tag-pinned archive download must carry.
+      const hasChecksumVerify = lines.some(
+        (l) => !/^\s*#/.test(l) && (/\bsha256sum\b[^|]*-c\b/.test(l) || /\bshasum\b[^|]*-a\s*256[^|]*-c\b/.test(l))
+      );
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? "";
         if (/^\s*#/.test(line)) continue; // YAML comment — not an executed download
@@ -876,6 +889,18 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
             i + 1,
             line.trim().slice(0, 120),
             "A `run:` download pulls from a moving `releases/latest` URL — supply-chain risk (the asset can change under a fixed URL). Pin to an exact release tag or version (`releases/download/<tag>/…`), mirroring the rc.33 mcp-publisher fix + Check 9's `uses:` SHA-pin policy."
+          );
+          continue;
+        }
+        // v3.10.0-rc.26 — a tag-pinned release archive is still mutable; require a
+        // SHA256 verification in the same file (content-pin).
+        if (/\breleases\/download\//.test(line) && /\.(tar\.gz|tgz|zip)\b/.test(line) && !hasChecksumVerify) {
+          record(
+            "RUN-DOWNLOAD-UNVERIFIED",
+            rel,
+            i + 1,
+            line.trim().slice(0, 120),
+            'A `run:` release-archive download is tag-pinned but not SHA256-verified — a tag can be force-moved / a release asset re-uploaded. Content-pin it: download to a file, then `echo "<sha256>  <file>" | sha256sum -c -` before extracting/executing (see release.yml\'s mcp-publisher block, rc.26).'
           );
         }
       }

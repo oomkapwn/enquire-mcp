@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.26] — 2026-06-06
+
+> **TL;DR:** **SYS-1 — supply-chain content-pin (M-9 completion).** The release workflow's one external `run:` download — the `mcp-publisher` CLI that runs with our **OIDC publish identity** on a stable release — was *tag*-pinned (`v1.7.9`, rc.33 M-9) but tag-pins are **mutable** (a tag can be force-moved, a release asset re-uploaded). Now it's **content-pinned**: the tarball's SHA256 is verified (`sha256sum -c`, fail-closed) before it's extracted/executed. Made it **structural** by extending **OIA Check 9b**: a tag-pinned release-archive (`releases/download/<tag>/…\.tar.gz`) `run:` download must ALSO carry a SHA256 verification in the same workflow, else CI fails (`RUN-DOWNLOAD-UNVERIFIED`; detection-power inject/revert-verified). Verified the deferred SYS-1 items against current code first (anti-overclaim): **H-3** paired-sink PDF/OCR parity was **already closed in rc.33**, and Check 9b's `releases/latest` guard already existed — so the genuine residual was just the tag→content upgrade. **Workflow/script/docs only — zero `src/`, 1135 tests unchanged.** Closes the rc.36 meta-audit's two named "deferred behavioral dimensions".
+
+**Pre-release (v3.10 line) — SYS-1: deferred behavioral-defense dimensions.**
+
+### Security (supply-chain)
+
+- **M-9 completion — `mcp-publisher` download is now SHA256 content-pinned (was tag-pinned).** `release.yml`'s registry-publish step downloads the official `mcp-publisher` CLI from a GitHub release. rc.33 pinned it to the `v1.7.9` tag (closed `releases/latest`), but a tag is not immutable. Now: download to a file → `echo "<sha256>  mcp-publisher.tar.gz" | sha256sum -c -` (fail-closed) → extract. The pinned hash (`ab12…81ac`, linux/amd64 — the `ubuntu-latest` runner arch) is bumped *deliberately together with* the tag. This binary runs with the workflow's OIDC identity, so content-pinning it is the highest-value spot for the strongest supply-chain defense. (The download was also simplified from `uname`-portable to explicit `linux_amd64`, matching the fixed runner.)
+
+### Tooling (structural enforcement)
+
+- **OIA Check 9b extended — release-archive `run:` downloads must be SHA256-verified.** Check 9b already flagged `releases/latest` (moving URL). It now ALSO flags a tag-pinned release **archive** (`releases/download/<tag>/…\.tar.gz|.tgz|.zip`) `curl`/`wget` that lacks a `sha256sum -c` / `shasum -a 256 -c` anywhere in the same workflow file (`RUN-DOWNLOAD-UNVERIFIED`). This converts the content-pin from a one-time fix into a permanent gate — the rc.36 "internalize the lens as an inventory invariant" move. Detection-power verified: stripping the `sha256sum -c` line flags `release.yml:240`; restored → clean. (Check 9b is a sub-check of Check 9 — the canonical OIA top-level count stays 12.)
+
+### Docs
+
+- **`CLAUDE.md`** — the rc.36 "remaining uncovered behavioral dimensions" note marked M-9 (→ rc.26) and H-3 (→ rc.33) **closed**, with the still-uncovered set named honestly (generalized enforcement-verb→code-guard taxonomy; the accepted `block`-granularity FTS5↔embed chunk-index divergence). Status roll-up extended rc.25 → rc.26.
+
+### Tests (1135)
+
+None — workflow/script/docs only; no `src/` or test change. Check 9b's new branch is verified by the inject/revert detection-power run (OIA checks run via `npm run check:oia`, not vitest). 1135 unchanged.
+
+### Files changed
+
+- `.github/workflows/release.yml` (mcp-publisher download → file + `sha256sum -c` + extract), `scripts/oia-walk.mjs` (Check 9b archive-checksum requirement), `CLAUDE.md` (dimension-status note + roll-up).
+- version bump 3.10.0-rc.25 → 3.10.0-rc.26.
+
+---
+
 ## [3.10.0-rc.25] — 2026-06-06
 
 > **TL;DR:** **Round-2 audit — LOW docs-currency batch (final; docs-only).** Five un-gated currency-drift surfaces the change-driven gates don't watch, all flagged by the round-2 state-driven docs sweep: (1) **`CLAUDE.md`** status section was frozen at `v3.9.0-rc.35` (header still said "v3.8.x stable + v3.9.0 architectural") — added a condensed v3.9.0-stable→v3.9.1→v3.10.0-rc.1→rc.25 roll-up + moved the "(current)" marker + updated the title; (2) **`llms.txt`** "what's new" list stopped at rc.3, omitting the v3.10 freshness flagship (contradicting llms.txt's own header) — added it; (3) **`docs/benchmarks.md`** metric-validity said "through the v3.9.0-rc cascade" — extended to the v3.10 line (recency re-rank is off-by-default, a provable no-op, so the numbers are unchanged); (4) **`README.md`** highlight reel stopped at "v3.9.0 stable" — appended a v3.10 (`@rc`) freshness entry; (5) **`docs/api.md`** described the freshness boolean as an "over-one-year flag (≥ 365)" without naming it — now `stale` flag (≥ `--stale-days`, default 365). **Docs-only — zero `src/`, 1135 tests unchanged. This closes the round-2 (post-MED) audit** (rc.23 HIGH shutdown + rc.24 LOW code + rc.25 LOW docs).

@@ -856,6 +856,53 @@ interface HttpServerExtras {
 const httpServerExtras = new WeakMap<HttpServer, HttpServerExtras>();
 
 /**
+ * v3.10.0-rc.23 — bounded grace for `server.close()`. Node's
+ * `http.Server.close()` callback fires only once EVERY connection has ended, and
+ * it does NOT terminate idle keep-alive sockets — so a client / reverse-proxy
+ * (or a half-open socket) holding a connection open makes `close()` hang
+ * indefinitely. We immediately close idle keep-alives, then force-close any
+ * straggler after this grace, so shutdown can never block forever.
+ *
+ * This is the bound whose absence turned rc.19's signal-handler consolidation
+ * into a hang: pre-rc.19 a cache-flush handler called `process.exit(0)` on its
+ * own (masking the latent `close()` hang); rc.19 correctly made shutdown AWAIT
+ * the full drain — but without this cap, "await the drain" became "await
+ * forever" whenever a connection lingered (reproduced: a lingering socket +
+ * SIGTERM hung `serve-http` indefinitely).
+ */
+const HTTP_CLOSE_GRACE_MS = 3000;
+
+/** Close an `http.Server` with a bounded grace (see {@link HTTP_CLOSE_GRACE_MS}).
+ *  Resolves as soon as `close()` completes, or after `graceMs` once stragglers
+ *  are force-closed — never hangs on a lingering keep-alive connection.
+ *  `graceMs` is injectable for tests; production callers use the default. */
+export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CLOSE_GRACE_MS): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const grace = setTimeout(() => {
+      // Force-close active stragglers (Node ≥18.2; engines floor is ≥22.13).
+      try {
+        server.closeAllConnections();
+      } catch {
+        /* already closed / unavailable */
+      }
+    }, graceMs);
+    if (typeof grace.unref === "function") grace.unref();
+    server.close(() => {
+      clearTimeout(grace);
+      resolve();
+    });
+    // Idle keep-alive sockets won't end on their own; close them now so the
+    // common case (no in-flight request) resolves immediately rather than
+    // waiting out the grace.
+    try {
+      server.closeIdleConnections();
+    } catch {
+      /* best-effort */
+    }
+  });
+}
+
+/**
  * v3.8.7 P2-11 — graceful shutdown helper for an `http.Server` returned
  * by {@link startHttpServer}. Drains stateful sessions (if any), closes
  * the underlying TCP listener, then closes vault/fts/watcher/embed-db
@@ -885,7 +932,7 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
   if (!extras) {
     // Already cleaned up (or not from startHttpServer). Still close the
     // TCP listener for safety.
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServerBounded(server);
     return;
   }
   httpServerExtras.delete(server);
@@ -896,7 +943,7 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
   } catch {
     /* best-effort */
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServerBounded(server);
   // Close deps last — they own SQLite + chokidar handles that should
   // outlive in-flight requests (which we drained above). Vault doesn't
   // own a SQLite handle (no `close()` method), but it owns the

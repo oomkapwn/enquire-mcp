@@ -1,3 +1,4 @@
+import { capScanEntries } from "./tools/limits.js";
 import type { FileEntry, Vault } from "./vault.js";
 
 /**
@@ -310,7 +311,12 @@ export async function runDql(
 ): Promise<Array<Record<string, unknown>>> {
   const defaultLimit = opts.defaultLimit ?? DEFAULT_DQL_ROW_LIMIT;
   const folder = query.source.type === "folder" ? query.source.path : undefined;
-  const entries = await vault.listMarkdown(folder);
+  // v3.10.0-rc.18 (audit M4) — bound the whole-vault readNote scan. This tool is
+  // always-registered and bearer-reachable on serve-http, so an unbounded scan is
+  // a DoS amplifier. DQL is a LINEAR query (LIMIT/SORT applied AFTER the scan), so
+  // this is a defense-in-depth cap: on a vault larger than MAX_SCAN_NOTES the
+  // result is partial (logged once), never a hang. Real vaults are far under it.
+  const entries = capScanEntries(await vault.listMarkdown(folder), "obsidian_dataview_query");
   const wantTag = query.source.type === "tag" ? query.source.tag.toLowerCase() : null;
 
   const rows: Row[] = [];

@@ -32,7 +32,10 @@ import { capScanEntries, MAX_SCAN_NOTES } from "../src/tools/limits.js";
 const repoRoot = path.resolve(__dirname, "..");
 
 // The source files whose exported tool handlers can scan the whole vault.
-const SCANNER_SOURCES = ["src/tools/read.ts", "src/tools/search.ts", "src/tools/meta.ts"];
+// v3.10.0-rc.18 (audit M4) — added src/dql.ts: `runDql` (behind obsidian_dataview_query)
+// does a whole-vault readNote scan but lived OUTSIDE this list, so the completeness
+// invariant never saw it (scope-too-narrow). Closing the gap.
+const SCANNER_SOURCES = ["src/tools/read.ts", "src/tools/search.ts", "src/tools/meta.ts", "src/dql.ts"];
 
 // CAP — always-on tools that build a vault-sized graph/pairwise structure. Each
 // MUST reference its bounding constant in its own body. (communities.ts's
@@ -47,6 +50,14 @@ const CAPPED: Record<string, { capToken: string; why: string }> = {
   getNoteNeighbors: {
     capToken: "capScanEntries",
     why: "two whole-vault readNote passes building an inbound-count map; rc.36 F-5."
+  },
+  runDql: {
+    capToken: "capScanEntries",
+    why: "obsidian_dataview_query whole-vault readNote+parse scan, bearer-reachable; defense-in-depth cap (linear query, partial on >MAX_SCAN_NOTES, logged); rc.18 M4."
+  },
+  getOpenQuestions: {
+    capToken: "capScanEntries",
+    why: "exhaustive question scan; rc.16 (M5) added capScanEntries to bound the collect-all-then-sort. Was EXEMPT; reclassified CAPPED here (manifest lagged the rc.16 cap)."
   }
 };
 
@@ -64,7 +75,6 @@ const EXEMPT: Record<string, string> = {
   frontmatterSearch: "must scan all frontmatter to find matches; capping drops results.",
   getVaultStats: "whole-vault aggregation by definition; capping yields wrong stats.",
   lintWiki: "exhaustive vault lint; must visit every note (output already supports a limit param).",
-  getOpenQuestions: "exhaustive question-pattern scan; ReDoS-guarded + pattern-length-capped separately (rc.21/25).",
   paperAudit: "exhaustive audit over the whole vault.",
   buildTfidfIndex:
     "search-index infrastructure — builds the vault-wide TF-IDF index (single pass, WeakMap-cached per vault); capping would silently drop notes from search ranking. O(N) build is inherent to a correct index, like searchText."

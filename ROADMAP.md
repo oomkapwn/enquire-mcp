@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. Directly addresses the stale-fact-reuse frontier (Memora, arXiv:2604.20006) that conversation-memory stores ignore — the only Obsidian MCP with it.
-- **Process maturity** — 1124 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1126 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 
@@ -57,13 +57,13 @@ Severity-ordered, phased per the project's "no big-bang" rule; audit checkpoint 
 The capability gap is won; this closes the *visibility* gap. (Several items below need an account/OAuth action and are listed under "Requires the maintainer".)
 
 - [ ] **rc.14 — AI-search + repo-page.** **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) — dark GitHub-native palette; deliberately count-agnostic (rc.29 dropped hardcoded stat-pills to avoid a numeric-drift surface).
-- [ ] **TDQS pass on all 44 tool descriptions** — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". Add explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool. Highest-leverage discoverability work; likely its own RC.
+- [x] **TDQS pass on all 45 tool descriptions** (shipped v3.10-rc.7) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [ ] **Obsidian-MCP COMPARISON table** — extend `docs/COMPARISON.md` with a head-to-head vs knowledge-rag, cyanheads, mcp-obsidian, Smart Connections, obsidian-brain (today it compares only to plugins / mem0-class). Make the standalone + hybrid + reranker + HyDE + Bases + OCR exclusivity explicit.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
 - [ ] **Publish LongMemEval scores** (THE #1 credibility lever). Run the harness (github.com/xiaowu0162/longmemeval) with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes); publish head-to-head vs mem0 (94.4) / Zep (71.2) / Supermemory (81.6) in `docs/benchmarks.md` + lead the README with it. First Obsidian MCP with a published number.
-- [ ] **"Forgetting-aware" note-staleness scoring** (Priority 2; Memora frontier). Optional `mtime`-decay soft signal in RRF (down-weight chunks from long-stale notes for preference/fact queries). <100 LOC; addresses a documented failure mode of *every* competitor.
+- [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
 - [ ] **Messaging reposition** — "the only local memory layer grounded in your own knowledge, not extracted from conversations" across README/llms.txt/COMPARISON; "what comes after Obsidian Copilot when you want agents, not just chat".
 
 ## Tier 4 — Extend the lead (pick after Tier 3)

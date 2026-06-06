@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.21] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 6 — M2/M10 docs integrity.** State-driven docs sweep. **M2 (verified, anti-overclaim):** the total tool-count is ALREADY pinned to `TOOL_MANIFEST.length` (45) across README / STABILITY / COMPARISON / api.md / llms.txt — the audit's "extend docs-consistency to pin them" was already done; the ONE unguarded surface was `ROADMAP.md`, whose "44 tool descriptions" had silently drifted while every guarded surface stayed at 45. Fixed the `44`→`45` + added a `docs-consistency` pin (+ NEGATIVE control) so ROADMAP can't drift again. **M10:** `CITATION.cff` was 2 stables behind (`3.8.8` → `3.9.1`, the current `@latest`); `ROADMAP.md` contradicted itself (the v3.10 forgetting-aware freshness feature listed both as *shipped* under "Already shipped" AND as *open* `[ ]` in Tier-3 — reconciled to `[x]` citing rc.5; the TDQS-pass item was `[ ]` but shipped in rc.7 — marked `[x]`); `server.json`'s subcommand hint got a "run with no subcommand for the full list" suffix (kept representative, NOT an enumerated 15-item list — that would add a drift surface). **api.md "stable v3.9.x" verified accurate (no change).** **1124 → 1126 tests.** M8/M9 test/process → rc.22.
+
+**Pre-release (v3.10 line) — audit fix batch 6 (M2/M10 docs).**
+
+### Fixed
+
+- **M2 — ROADMAP.md tool-count drift + the unguarded surface.** Every *canonical* tool-count surface (README badge+hero+heading, STABILITY header, COMPARISON, api.md first paragraph, llms.txt breakdown) was already pinned to `TOOL_MANIFEST.length` by `docs-consistency.test.ts` — so they all correctly read **45**. `ROADMAP.md`'s "TDQS pass on all **44** tool descriptions" was the lone surface NOT in that invariant set, so it drifted. Fixed to 45 + added `checkRoadmapToolCount` (pure check + positive + NEGATIVE control) pinning ROADMAP's "N tool descriptions" to the manifest. (The audit's "extend docs-consistency to pin them" was already satisfied for the canonical surfaces — only ROADMAP needed closing; documented to avoid claiming a fix that already existed.)
+- **M10 — CITATION.cff stale.** `version: "3.8.8"` → `"3.9.1"` + `date-released` → `2026-06-01` (the current `@latest`; CITATION updates only on a stable promotion, per its own comment — it had missed the 3.9.0/3.9.1 promotions).
+- **M10 — ROADMAP self-contradiction.** (a) "Forgetting-aware freshness (v3.10)" is listed under **Already shipped** (rc.4 plumbing + rc.5 opt-in recency re-ranking) but Tier-3 still carried `[ ] "Forgetting-aware" note-staleness scoring` for the same user-facing capability → marked `[x]` (shipped v3.10-rc.5; post-fusion re-rank achieving the Memora-frontier goal) + a cross-reference so the intentional duplication is clear. (b) `[ ] TDQS pass on all 44 tool descriptions` shipped in rc.7 → `[x]` + 45. (Tier-2 items that are only *partially* shipped — rc.14 AI-search bundle, the Obsidian-MCP COMPARISON table — left `[ ]` to avoid overclaiming.)
+
+### Docs
+
+- **M10 — server.json subcommand hint.** Appended "— run with no subcommand for the full list" to the positional-arg description so the MCP-Registry hint doesn't undersell the CLI, WITHOUT enumerating all 15 subcommands (an enumerated list would be a fresh drift surface + risks the registry schema's description length; `setup` already subsumes the model/index subcommands).
+
+### Tests (1126)
+
+`tests/docs-consistency.test.ts` +2: `ROADMAP.md tool-count claim matches TOOL_MANIFEST` (the M2 pin) + `NEGATIVE: checkRoadmapToolCount flags drift / missing claim`. 1124 → 1126.
+
+### Files changed
+
+- `CITATION.cff` (3.8.8 → 3.9.1 + date), `ROADMAP.md` (TDQS + forgetting-aware items → `[x]`; 44 → 45; test total → 1126), `server.json` (subcommand hint suffix), `docs/COMPARISON.md` / `README.md` / `llms.txt` / `AGENTS.md` / `package.json` (test-count 1124 → 1126), `tests/docs-consistency.test.ts` (+2 + `checkRoadmapToolCount`).
+- version bump 3.10.0-rc.20 → 3.10.0-rc.21.
+
+---
+
 ## [3.10.0-rc.20] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 5 — M7 privacy / right-to-erasure.** Three privacy-hardening fixes: (1) the HNSW persist **base** was computed independently by the WRITER (`server.ts`) and the ERASER (`EmbedDb.clearOnDisk`) — a duplication that, on drift, would leave the `.hnsw.bin` / `.hnsw.meta.json` sidecars (the meta sidecar carries raw `text_preview`) on disk after `clear-embeddings`, a right-to-erasure gap (the rc.34 P-2 class via a different seam); now both route through ONE shared `hnswPersistBase()` helper, and the erasure-completeness invariant asserts it. (2) The `--watch` handler `handle()` now re-checks `vault.isExcluded()` per file as **defense-in-depth** (chokidar's `ignored` predicate already drops excluded paths; this guards the case where `handle()` is reached another way — mirrors the existing PDF re-check). (3) `SECURITY.md` now documents that privacy filters are **not retroactive** for content already at rest — adding `--exclude-glob` hides matching notes from results immediately (terminal `isExcluded()` filter) but does NOT erase the chunk already written to `.fts5.db` / `.embed.db`; that needs `clear-index` / `clear-embeddings` + rebuild. **1119 → 1124 tests.** M2/M10 docs → rc.21.

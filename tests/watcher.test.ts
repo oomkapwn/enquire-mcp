@@ -150,6 +150,54 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     }
   });
 
+  // v3.10.0-rc.20 (audit M7) — defense-in-depth: even if handle() is reached for
+  // an excluded path (bypassing chokidar's `ignored` predicate — a direct call,
+  // an edge case), the per-file re-check must return BEFORE any index/cache work.
+  // We observe `vault.invalidateOne` (the first side effect handle() performs for
+  // a markdown event) to tell "skipped" from "processed".
+  it("handle() skips an excluded path before any index work (rc.20 M7 defense-in-depth)", async () => {
+    await fs.mkdir(path.join(root, "Private"), { recursive: true });
+    await fs.writeFile(path.join(root, "Private", "secret.md"), "secret");
+    const v = new Vault(root, { excludeGlobs: ["Private/**"] });
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+
+    const invalidated: string[] = [];
+    (v as unknown as { invalidateOne: (p: string) => void }).invalidateOne = (p) => {
+      invalidated.push(p);
+    };
+    const handle = (
+      w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
+    ).handle.bind(w);
+
+    // Build the abs path from the CANONICAL root (`v.root` after realpath — /tmp
+    // → /private/tmp on macOS), else handle()'s `path.relative` starts with ".."
+    // and returns at the FIRST guard, masking the M7 exclude re-check.
+    await handle(path.join(v.root, "Private", "secret.md"), "change");
+    expect(invalidated).toEqual([]); // exclude re-check returned before invalidateOne
+  });
+
+  // POSITIVE control — a NON-excluded path DOES reach invalidateOne, proving the
+  // skip above is the exclude re-check and not handle() being inert.
+  it("handle() processes a non-excluded path (control for the M7 skip)", async () => {
+    await fs.writeFile(path.join(root, "Visible.md"), "ok");
+    const v = new Vault(root, { excludeGlobs: ["Private/**"] });
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+
+    const invalidated: string[] = [];
+    (v as unknown as { invalidateOne: (p: string) => void }).invalidateOne = (p) => {
+      invalidated.push(p);
+    };
+    const handle = (
+      w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
+    ).handle.bind(w);
+
+    const abs = path.join(v.root, "Visible.md"); // canonical root (see sibling test)
+    await handle(abs, "change");
+    expect(invalidated).toEqual([abs]);
+  });
+
   it("close() is idempotent and safe to call after start()", async () => {
     const v = new Vault(root);
     await v.ensureExists();

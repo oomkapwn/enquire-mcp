@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.20] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 5 — M7 privacy / right-to-erasure.** Three privacy-hardening fixes: (1) the HNSW persist **base** was computed independently by the WRITER (`server.ts`) and the ERASER (`EmbedDb.clearOnDisk`) — a duplication that, on drift, would leave the `.hnsw.bin` / `.hnsw.meta.json` sidecars (the meta sidecar carries raw `text_preview`) on disk after `clear-embeddings`, a right-to-erasure gap (the rc.34 P-2 class via a different seam); now both route through ONE shared `hnswPersistBase()` helper, and the erasure-completeness invariant asserts it. (2) The `--watch` handler `handle()` now re-checks `vault.isExcluded()` per file as **defense-in-depth** (chokidar's `ignored` predicate already drops excluded paths; this guards the case where `handle()` is reached another way — mirrors the existing PDF re-check). (3) `SECURITY.md` now documents that privacy filters are **not retroactive** for content already at rest — adding `--exclude-glob` hides matching notes from results immediately (terminal `isExcluded()` filter) but does NOT erase the chunk already written to `.fts5.db` / `.embed.db`; that needs `clear-index` / `clear-embeddings` + rebuild. **1119 → 1124 tests.** M2/M10 docs → rc.21.
+
+**Pre-release (v3.10 line) — audit fix batch 5 (M7).**
+
+### Fixed
+
+- **M7.1 — shared HNSW persist-base helper (right-to-erasure anti-drift).** `server.ts` (writer) derived `persistFile` as `` `${embedFile.replace(/\.embed\.db$/, "")}.hnsw` `` while `EmbedDb.clearOnDisk` (eraser) recomputed the identical expression independently. If either changed, `clear-embeddings` would erase the wrong sidecar path and leave HNSW files (incl. `.hnsw.meta.json`'s raw `text_preview`) on disk. New exported `hnswPersistBase(embedDbFile)` is the single source of truth; both call sites route through it. The `erasure-completeness invariant` now (a) scans the helper for the `.hnsw` suffix (moved out of the eraser method body) and (b) asserts BOTH the eraser AND the writer call `hnswPersistBase` and that the writer no longer recomputes the base inline.
+- **M7.2 — watcher `handle()` privacy defense-in-depth.** The chokidar `ignored` predicate already drops `--exclude-glob` / `--read-paths` paths before they reach the handler, but `handle()` now ALSO re-checks `vault.isExcluded(relPath)` and returns before any cache-invalidation / index / embed work — so a filtered note can't be indexed even if `handle()` is reached by a direct call or a chokidar edge case. Mirrors the existing defensive PDF re-check.
+
+### Docs
+
+- **M7.3 — SECURITY.md: privacy filters are not retroactive for at-rest content.** Added a bullet to the `--read-paths` / `--exclude-glob` posture: a filter added *after* a note was indexed hides it from all tool results immediately (same `isExcluded()` predicate gates search/read/walker) but does NOT erase the copy already on disk (`.fts5.db`, `.embed.db` `text_preview`, `.hnsw.meta.json`); purge via `clear-index` / `clear-embeddings` / `clear-cache` then rebuild. Also updated the "Watcher-aware" bullet to note the new `handle()` re-check.
+
+### Refactor
+
+- `hnswPersistBase` lives in `src/embed-db.ts` (alongside `defaultEmbedDbFile`; it owns the `.embed.db` → `.hnsw` relation), imported by `server.ts`. No new import edge beyond server.ts's existing embed-db import; no cycle.
+
+### Tests (1124)
+
+`tests/erasure-invariant.test.ts` +3: `hnswPersistBase` behavioral derivation (3 cases) + structural "eraser & writer both route through the helper, writer doesn't inline the base" + NEGATIVE control (the inline-base detector flags the pre-rc.20 shape). The manifest loop now scans `helperFns` so the `.hnsw` suffix is still verified after moving into the helper. `tests/watcher.test.ts` +2: `handle()` skips an excluded path before `invalidateOne` (the M7.2 fix) + POSITIVE control (a non-excluded path DOES reach `invalidateOne`; both build abs paths from the realpath-canonical `v.root` so handle()'s `path.relative` guard doesn't mask the result). 1119 → 1124.
+
+### Files changed
+
+- `src/embed-db.ts` (new `hnswPersistBase`; `clearOnDisk` routes through it), `src/server.ts` (writer routes through it), `src/watcher.ts` (`handle()` isExcluded re-check), `SECURITY.md` (non-retroactive note + Watcher-aware update), `tests/erasure-invariant.test.ts` (+3 + `extractFn` + `helperFns` scan), `tests/watcher.test.ts` (+2), test-count claims → 1124.
+- `scripts/check-per-file-coverage.mjs` — refreshed the stale `http-transport.ts` inline coverage comment (72.85% → 77.61%; rc.19's M3 handler removal raised it; caught by OIA Check 6 against the fresh `coverage-summary.json`).
+- version bump 3.10.0-rc.19 → 3.10.0-rc.20.
+
+---
+
 ## [3.10.0-rc.19] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 4 — M3 signal-shutdown race (both transports).** On `SIGINT`/`SIGTERM`, `serve-http` registered **four separate** listeners on the same signal — a cache-`flush` handler, `closeWatcher`, `closeFts`, and `shutdownHttpServer` — and the flush handler called `process.exit(0)` the **moment its fast cache flush resolved**, racing ahead of `shutdownHttpServer`'s up-to-5s in-flight-session drain and **cutting off in-flight requests**. The other three were pure duplication: `shutdownHttpServer` already flushes the cache and closes fts/watcher/embed-db. Fix: ONE `makeHttpShutdownHandler` orchestrator that **awaits** the full graceful teardown, then exits (re-entrancy-guarded). The stdio path (`startServer`) had the same shape (three handlers, the flush one calling `process.exit(0)` on its own — racing the async `watcher.close()`); consolidated into one `shutdownStdioDeps(deps)` that awaits watcher → embed-db → cache → fts before exit. `shutdownStdioDeps` was extracted to `src/shutdown.ts` so it's unit-testable (server.ts is in `no-internal-imports`' RESTRICTED_MODULES — same reason embed-pipeline.ts was split in rc.4). **1113 → 1119 tests.** M7 (privacy/erasure) → rc.20.

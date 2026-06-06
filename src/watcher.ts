@@ -507,6 +507,20 @@ export class VaultWatcher {
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
     const relPath = path.relative(this.vault.root, absPath);
     if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) return;
+    // v3.10.0-rc.20 (audit M7) — privacy defense-in-depth. The chokidar
+    // `ignored` predicate (see watch() setup) already drops excluded paths, but
+    // re-check here so a `--exclude-glob` / `--read-paths`-filtered note can
+    // NEVER be indexed even if handle() is reached another way (a direct call, a
+    // chokidar edge case, a future caller). Mirrors the PDF re-check below.
+    // Skips ALL kinds: an excluded note must not be indexed (add/change), and
+    // at-rest cleanup of already-indexed content is a clear+rebuild concern, not
+    // the live watcher (matches chokidar-`ignored` + the non-retroactive posture).
+    if (this.vault.isExcluded(relPath)) {
+      if (!this.silent) {
+        process.stderr.write(`enquire: watcher skip ${relPath} (excluded by privacy filter)\n`);
+      }
+      return;
+    }
     // v3.7.16 P1-5 — dispatch by file kind. PDFs only flow through when
     // `--watch --include-pdfs` is on (the chokidar `ignored` filter
     // already gates this, but we re-check defensively).

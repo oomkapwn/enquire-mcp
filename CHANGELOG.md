@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.22] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 7 (final) — M8/M9 test & process integrity.** **M8a (vacuous test):** `security.test.ts`'s "embeddingsSearch filters excluded paths" test was THEATER — it said "we can't test without a model" and **reimplemented** the privacy filter inline (`rawHits.filter(h => !vault.isExcluded(...))`), never running the real code, so `embeddingsSearch`'s two inline filter sites (search.ts ~1100/1106) were uncovered and would stay green even if the guard were deleted. Extracted the filter into a pure, exported `filterExcludedEmbedHits` (the `embeddingsSearch` sibling of rc.8's `pruneExcludedHits`), routed both sites through it, and made the test + a new unit test exercise the REAL helper. **M8b (silent-skip):** the E2E CI-GUARD only asserted `distExists()` — T-3/T-4 had **no** guard at all, and none checked that the server actually spawned, so a spawn failure in CI would silently skip whole suites (incl. T-4's 401-no-bearer auth check). Added/strengthened CI-GUARDs across T-2/T-3/T-4 to assert dist built **and** the process spawned in CI. **M9 (config drift, ι-class):** `package.json` `prepublishOnly` used a single `npm audit --audit-level=high` (all deps) while CI + release both use the stricter two-step (`--omit=dev --audit-level=moderate` then `--include=dev --audit-level=high`) — so prepublish would miss a *moderate prod* vuln CI/release catch. Aligned. **1126 → 1130 tests. This closes the comprehensive-audit MEDIUM batch (M1–M10).**
+
+**Pre-release (v3.10 line) — audit fix batch 7/7 (M8/M9).**
+
+### Fixed
+
+- **M8a — embeddingsSearch privacy filter was untested (vacuous "theater" test).** `tests/security.test.ts`'s embeddingsSearch privacy test reimplemented the `!vault.isExcluded(rel_path)` filter inline and asserted on the reimplementation — it never invoked anything in `src/`, so `embeddingsSearch`'s two inline filter sites had zero behavioral coverage. New pure `filterExcludedEmbedHits<T extends {rel_path}>(hits, isExcluded)` in `src/tools/search.ts` (sibling of `pruneExcludedHits`); both `embeddingsSearch` sites (HNSW refill path + brute-force path) now call it; the security test + a new `search-hybrid.test.ts` unit test (positive + NEGATIVE control) exercise the REAL helper. A regression that drops the guard now fails CI.
+- **M8b — E2E CI-GUARD silent-skip gaps.** The `tests/e2e-handlers.test.ts` CI-GUARD asserted only `distExists()`, and only T-2 had one — T-3 (HyDE) and T-4 (serve-http) had none, so a failed `spawnServer` / `serve-http` spawn in CI would leave `client`/`proc` null and every test body's `if (!client) return` / `if (!proc) return` would silently skip the suite (including T-4's 401-without-bearer auth assertion). Now each of T-2/T-3/T-4 has a CI-GUARD asserting dist built **and** the server spawned (client non-null / proc non-null + port bound) in CI. Propagates the rc.23 silent-skip→CI-GUARD pattern to the two describes it missed.
+- **M9 — `prepublishOnly` audit weaker than CI/release (ι-class config drift).** `package.json:prepublishOnly` ran `npm audit --audit-level=high` (high across ALL deps), while `ci.yml` + `release.yml` both run the two-step `npm audit --omit=dev --audit-level=moderate` + `npm audit --include=dev --audit-level=high` — so a **moderate severity prod** vuln would pass prepublish but fail CI/release. Aligned `prepublishOnly` to the identical two-step. (The v3.7.19 ι-class alignment synced release↔CI but missed `prepublishOnly`.)
+
+### Tests (1130)
+
+`tests/search-hybrid.test.ts` +2 (`filterExcludedEmbedHits`: removes excluded `rel_path`s preserving order + NEGATIVE control proving it's predicate-driven). `tests/e2e-handlers.test.ts` +2 (T-3 + T-4 CI-GUARDs; T-2's existing guard strengthened to also assert the spawn, net 0). `tests/security.test.ts` rewired to call the real helper (net 0). 1126 → 1130.
+
+### Files changed
+
+- `src/tools/search.ts` (new exported `filterExcludedEmbedHits`; `embeddingsSearch` routes both filter sites through it), `tests/security.test.ts` (theater test → real-helper call), `tests/search-hybrid.test.ts` (+2 + import), `tests/e2e-handlers.test.ts` (T-2 guard strengthened + T-3/T-4 guards added), `package.json` (`prepublishOnly` two-step audit + test-count 1130), test-count claims → 1130.
+- version bump 3.10.0-rc.21 → 3.10.0-rc.22.
+
+---
+
 ## [3.10.0-rc.21] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 6 — M2/M10 docs integrity.** State-driven docs sweep. **M2 (verified, anti-overclaim):** the total tool-count is ALREADY pinned to `TOOL_MANIFEST.length` (45) across README / STABILITY / COMPARISON / api.md / llms.txt — the audit's "extend docs-consistency to pin them" was already done; the ONE unguarded surface was `ROADMAP.md`, whose "44 tool descriptions" had silently drifted while every guarded surface stayed at 45. Fixed the `44`→`45` + added a `docs-consistency` pin (+ NEGATIVE control) so ROADMAP can't drift again. **M10:** `CITATION.cff` was 2 stables behind (`3.8.8` → `3.9.1`, the current `@latest`); `ROADMAP.md` contradicted itself (the v3.10 forgetting-aware freshness feature listed both as *shipped* under "Already shipped" AND as *open* `[ ]` in Tier-3 — reconciled to `[x]` citing rc.5; the TDQS-pass item was `[ ]` but shipped in rc.7 — marked `[x]`); `server.json`'s subcommand hint got a "run with no subcommand for the full list" suffix (kept representative, NOT an enumerated 15-item list — that would add a drift surface). **api.md "stable v3.9.x" verified accurate (no change).** **1124 → 1126 tests.** M8/M9 test/process → rc.22.

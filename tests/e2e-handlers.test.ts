@@ -153,17 +153,22 @@ describe("T-2 — obsidian_get_communities E2E (v3.8.5)", () => {
   // v3.9.0-rc.23 — CI-GUARD: ci.yml builds dist/ before `npm test`, so these
   // E2E handler tests (incl. the 401-without-bearer auth check) MUST run, not
   // silently `return` on a missing build. Fail loud if dist is absent in CI.
-  it("CI GUARD — dist/ is built in CI so E2E handler tests actually run", () => {
-    if (!process.env.CI) return;
-    expect(distExists(), "dist/index.js must exist in CI (npm run build precedes npm test) so E2E tests run").toBe(
-      true
-    );
-  });
   beforeAll(async () => {
     if (!distExists()) return;
     vault = await makeWikilinkVault("comm");
     client = await spawnServer(vault);
   }, 30000);
+  // v3.9.0-rc.23 / v3.10.0-rc.22 (audit M8b) — CI-GUARD: ci.yml builds dist/
+  // before `npm test`, so these E2E handler tests MUST run, not silently `return`
+  // on a missing build OR a failed spawn. rc.22 strengthened this from
+  // distExists-only to ALSO assert the server actually spawned (client non-null),
+  // so a spawn failure in CI fails loud here instead of making every test body's
+  // `if (!client) return` skip the whole suite vacuously.
+  it("CI GUARD — dist built + server spawned in CI so E2E tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(distExists(), "dist/index.js must exist in CI (npm run build precedes npm test)").toBe(true);
+    expect(client, "serve must spawn in CI so the E2E test bodies run (not silently skip)").not.toBeNull();
+  });
   afterAll(async () => {
     client?.close();
     if (vault) await fs.rm(vault, { recursive: true, force: true });
@@ -231,6 +236,15 @@ describe("T-3 — obsidian_hyde_search E2E (v3.8.5)", () => {
   afterAll(async () => {
     client?.close();
     if (vault) await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  // v3.10.0-rc.22 (audit M8b) — CI-GUARD: T-3 had none (rc.23's propagation
+  // missed it). dist built + server spawned in CI, else the test bodies' `if
+  // (!client) return` would skip the whole HyDE suite vacuously.
+  it("CI GUARD — dist built + server spawned in CI so E2E tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(distExists(), "dist/index.js must exist in CI").toBe(true);
+    expect(client, "serve must spawn in CI so the HyDE E2E test bodies run").not.toBeNull();
   });
 
   it("returns a guidance error when no embed-db exists (cheap-path check)", async () => {
@@ -333,6 +347,17 @@ describe("T-4 — serve-http HTTP smoke (v3.8.5)", () => {
       // ignore
     }
     if (vault) await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  // v3.10.0-rc.22 (audit M8b) — CI-GUARD: T-4 had none. Every test body below
+  // does `if (!distExists() || !proc) return` — including the 401-no-bearer auth
+  // check — so a failed serve-http spawn in CI would silently skip the whole
+  // HTTP suite. Assert dist built + process spawned + a port bound in CI.
+  it("CI GUARD — dist built + serve-http spawned in CI so E2E tests actually run", () => {
+    if (!process.env.CI) return;
+    expect(distExists(), "dist/index.js must exist in CI").toBe(true);
+    expect(proc, "serve-http must spawn in CI so the HTTP E2E test bodies (incl. 401 auth) run").not.toBeNull();
+    expect(port, "serve-http must bind a port in CI").toBeGreaterThan(0);
   });
 
   it("health endpoint returns 200 OK", async () => {

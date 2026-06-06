@@ -296,10 +296,11 @@ export class EmbedDb {
   async clearOnDisk(): Promise<boolean> {
     this.close();
     let removed = false;
-    // `<file>` without the `.embed.db` suffix + `.hnsw` is the persist base
-    // (see server.ts `persistFile`); the index writes `<base>.bin` + the
-    // metadata writes `<base>.meta.json`.
-    const hnswBase = `${this.file.replace(/\.embed\.db$/, "")}.hnsw`;
+    // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
+    // `hnswPersistBase` helper (same one server.ts's writer uses), so the eraser
+    // and the writer can never drift. The index writes `<base>.bin` + the
+    // metadata writes `<base>.meta.json` (sidecars carry raw text_preview).
+    const hnswBase = hnswPersistBase(this.file);
     const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
     for (const p of targets) {
       try {
@@ -725,6 +726,23 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
   // Caller is expected to compose the prefix with `~/.cache/enquire/<hash>` —
   // we just append the .embed.db extension for consistency with .fts5.db.
   return `${vaultHashPrefix}.embed.db`;
+}
+
+/**
+ * v3.10.0-rc.20 (audit M7) — derive the HNSW persistence base for an embed-db
+ * file. `<dir>/<x>.embed.db` → `<dir>/<x>.hnsw`; the index writes `<base>.bin`
+ * and the metadata writes `<base>.meta.json` (see {@link import("./hnsw.js")}).
+ *
+ * SINGLE SOURCE OF TRUTH for the base so the WRITER (server.ts `persistFile`,
+ * passed to `saveTo`/`loadHnswFromDisk`) and the ERASER ({@link EmbedDb.clearOnDisk})
+ * can NEVER drift. If they computed the base independently and one changed (the
+ * strip regex or the `.hnsw` suffix), `clear-embeddings` would leave the HNSW
+ * sidecars on disk — and `.hnsw.meta.json` carries raw `text_preview`, so that's
+ * a right-to-erasure (GDPR) gap (the rc.34 P-2 class). The erasure-completeness
+ * invariant asserts both call sites route through this helper.
+ */
+export function hnswPersistBase(embedDbFile: string): string {
+  return `${embedDbFile.replace(/\.embed\.db$/, "")}.hnsw`;
 }
 
 /**

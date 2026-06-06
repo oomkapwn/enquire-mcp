@@ -22,6 +22,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hnswPersistBase } from "../src/embed-db.js";
 import { Vault } from "../src/vault.js";
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -35,7 +36,12 @@ const ERASURE_MANIFEST = [
     family: "embed-db + HNSW sidecars (vectors + raw text_preview)",
     file: "src/embed-db.ts",
     eraser: "clearOnDisk",
-    requiredTokens: ["-wal", "-shm", ".hnsw", ".bin", ".meta.json"]
+    requiredTokens: ["-wal", "-shm", ".hnsw", ".bin", ".meta.json"],
+    // v3.10.0-rc.20 (audit M7) — clearOnDisk now derives the HNSW base via the
+    // shared `hnswPersistBase` helper, so the `.hnsw` suffix literal lives in
+    // that helper (not the eraser method body). Scan it too so the full
+    // suffix set is still verified after the de-dup refactor.
+    helperFns: ["hnswPersistBase"]
   },
   {
     family: "FTS5 index + SQLite WAL sidecars",
@@ -60,6 +66,18 @@ function extractMethod(src: string, name: string): string {
   const rest = src.slice(start);
   const m = rest.match(/\n {2}\}/);
   return m && m.index !== undefined ? rest.slice(0, m.index + m[0].length) : rest;
+}
+
+/** Slice a top-level `export (async )?function NAME(` body: from the signature
+ *  to the first column-0 `\n}`. Used to scan a shared path helper that an eraser
+ *  delegates to (e.g. `hnswPersistBase`), so a suffix moved out of the eraser
+ *  method into a helper is still verified. Returns "" if not found. */
+function extractFn(src: string, name: string): string {
+  const m = new RegExp(`export (?:async )?function ${name}\\s*\\(`).exec(src);
+  if (!m) return "";
+  const rest = src.slice(m.index);
+  const end = rest.search(/\n\}/);
+  return end === -1 ? rest : rest.slice(0, end + 2);
 }
 
 /** Pure: which required suffix tokens are ABSENT from `source`. Empty ⇒ the
@@ -130,11 +148,16 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
   describe("erasure manifest — each eraser references every artifact suffix", () => {
     for (const m of ERASURE_MANIFEST) {
       it(`${m.eraser} in ${m.file} erases all suffixes of [${m.family}]`, () => {
-        const body = extractMethod(readFileSync(path.join(repoRoot, m.file), "utf8"), m.eraser);
+        const src = readFileSync(path.join(repoRoot, m.file), "utf8");
+        const body = extractMethod(src, m.eraser);
         expect(body, `${m.eraser} not found in ${m.file}`).not.toBe("");
+        // v3.10.0-rc.20 (audit M7) — also scan any shared path helpers the
+        // eraser delegates to, so a suffix moved into a helper still counts.
+        const helperFns = "helperFns" in m ? m.helperFns : [];
+        const helperBodies = helperFns.map((h) => extractFn(src, h)).join("\n");
         expect(
-          missingErasureTokens(body, m.requiredTokens),
-          `${m.file}#${m.eraser} is missing erasure suffixes`
+          missingErasureTokens(`${body}\n${helperBodies}`, m.requiredTokens),
+          `${m.file}#${m.eraser} (+ helpers) is missing erasure suffixes`
         ).toEqual([]);
       });
     }
@@ -156,6 +179,41 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       const body = extractMethod(src, "clearOnDisk");
       expect(body).toContain("for (const p of t)");
       expect(body).not.toContain(".meta.json"); // belongs to other(), not clearOnDisk()
+    });
+  });
+
+  // ── v3.10.0-rc.20 (audit M7): the HNSW persist BASE is derived by ONE shared
+  // helper (`hnswPersistBase`) so the WRITER (server.ts `persistFile` → saveTo)
+  // and the ERASER (`EmbedDb.clearOnDisk`) can't drift. A base drift (vs the
+  // suffix drift the manifest above guards) would leave the `.hnsw.*` sidecars —
+  // which carry raw `text_preview` — on disk after `clear-embeddings`: the rc.34
+  // P-2 right-to-erasure gap, reintroduced through a different seam. ──
+  describe("HNSW persist base shared between writer + eraser (rc.20 M7)", () => {
+    const embedDbSrc = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+    const serverSrc = readFileSync(path.join(repoRoot, "src/server.ts"), "utf8");
+    // The pre-rc.20 inline shape: `${x.replace(/\.embed\.db$/, "")}.hnsw`.
+    const INLINE_BASE = /\.replace\(\/\\\.embed\\\.db\$\/[^)]*\)\}\.hnsw/;
+
+    it("hnswPersistBase strips .embed.db and appends .hnsw (single source of truth)", () => {
+      expect(hnswPersistBase("/c/x.embed.db")).toBe("/c/x.hnsw");
+      expect(hnswPersistBase("/cache/abc12.embed.db")).toBe("/cache/abc12.hnsw");
+      expect(hnswPersistBase("/c/no-suffix")).toBe("/c/no-suffix.hnsw");
+    });
+
+    it("the eraser (clearOnDisk) and the writer (server.ts) both route through hnswPersistBase", () => {
+      expect(extractMethod(embedDbSrc, "clearOnDisk")).toContain("hnswPersistBase(");
+      expect(serverSrc, "server.ts writer must use hnswPersistBase").toContain("hnswPersistBase(");
+      // …and the writer must NOT recompute the base inline (the drift this closes).
+      expect(INLINE_BASE.test(serverSrc), "server.ts still recomputes the HNSW base inline").toBe(false);
+    });
+
+    // NEGATIVE control — the inline-base detector must FLAG the pre-rc.20 shape
+    // (so the writer assertion above isn't vacuously true).
+    it("NEGATIVE control — the inline-base detector flags a pre-rc.20 recomputation", () => {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: fixture intentionally holds a literal ${...} representing the pre-rc.20 inline source shape
+      const old = 'const persistFile = `${embedFile.replace(/\\.embed\\.db$/, "")}.hnsw`;';
+      expect(INLINE_BASE.test(old)).toBe(true);
+      expect(old.includes("hnswPersistBase(")).toBe(false);
     });
   });
 });

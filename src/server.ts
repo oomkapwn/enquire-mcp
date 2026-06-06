@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
+import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
 import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
@@ -420,7 +420,10 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
           // Skip-rebuild path: ~50ms read vs ~25s build for 50K-chunk
           // vault when nothing changed since last serve. Staleness
           // detected via `EmbedDb.computeSignature()` mismatch.
-          const persistFile = `${embedFile.replace(/\.embed\.db$/, "")}.hnsw`;
+          // v3.10.0-rc.20 (audit M7) — shared base derivation with the eraser
+          // (EmbedDb.clearOnDisk), so the persisted sidecars + the erased
+          // sidecars can never drift (right-to-erasure completeness).
+          const persistFile = hnswPersistBase(embedFile);
           const signature = db.computeSignature();
           const efOverride = opts.hnswEf ? parsePositiveInt(opts.hnswEf, "--hnsw-ef") : undefined;
           let loaded: {

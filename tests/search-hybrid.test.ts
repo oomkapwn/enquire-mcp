@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
-import { frontmatterMatches, pruneExcludedHits } from "../src/tools/search.js";
+import { filterExcludedEmbedHits, frontmatterMatches, pruneExcludedHits } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -551,6 +551,34 @@ describe("pruneExcludedHits (v3.10 rc.8 — fusion-stage isExcluded parity)", ()
     expect(pruneExcludedHits(hits, () => false, "note")).toHaveLength(3); // excludes nothing
     expect(pruneExcludedHits(hits, () => true, "note")).toHaveLength(0); // excludes everything
     expect(pruneExcludedHits(hits, isExcludedPersonal, "note")).toHaveLength(2); // exactly the 1 excluded removed
+  });
+});
+
+// v3.10.0-rc.22 (audit M8) — embeddingsSearch's privacy filter, extracted from
+// two inline `.filter(row => !vault.isExcluded(row.rel_path))` sites so it's
+// unit-testable without the ML embedder. Before rc.22 the security test
+// REIMPLEMENTED this filter inline (never ran the real one) — a vacuous test
+// that would have passed even if embeddingsSearch dropped its guard.
+describe("filterExcludedEmbedHits (v3.10 rc.22 — embeddingsSearch privacy filter)", () => {
+  const rows = [
+    { rel_path: "Public/a.md", score: 1 },
+    { rel_path: "Personal/diary.md", score: 0.9 },
+    { rel_path: "Public/b.md", score: 0.8 }
+  ];
+  const isExcludedPersonal = (p: string) => p.startsWith("Personal/");
+
+  it("removes excluded rel_paths, preserves order of the rest", () => {
+    const out = filterExcludedEmbedHits(rows, isExcludedPersonal);
+    expect(out.map((r) => r.rel_path)).toEqual(["Public/a.md", "Public/b.md"]);
+  });
+
+  // NEGATIVE control: must be predicate-driven (a no-op `return hits` fails the
+  // "excludes everything" assertion). This is the exact filter embeddingsSearch
+  // applies at search.ts ~1100/1106.
+  it("NEGATIVE control — driven by the predicate, not unconditional", () => {
+    expect(filterExcludedEmbedHits(rows, () => false)).toHaveLength(3); // excludes nothing
+    expect(filterExcludedEmbedHits(rows, () => true)).toHaveLength(0); // excludes everything
+    expect(filterExcludedEmbedHits(rows, isExcludedPersonal)).toHaveLength(2); // exactly 1 removed
   });
 });
 

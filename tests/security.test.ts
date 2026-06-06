@@ -13,6 +13,9 @@ import {
   replaceInNotes,
   searchHybrid
 } from "../src/tools/index.js";
+// v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
+// inline below; now exercised so search.ts's embeddingsSearch filter is covered).
+import { filterExcludedEmbedHits } from "../src/tools/search.js";
 import { globToRegex, Vault } from "../src/vault.js";
 
 let root: string;
@@ -460,8 +463,10 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     try {
       const rawHits = db2.search(l2([1, 0, 0, 0]), 10);
       expect(rawHits.length).toBe(2); // db has both
-      // The post-filter (matching what embeddingsSearch does):
-      const filtered = rawHits.filter((h) => !vServe.isExcluded(h.rel_path));
+      // v3.10.0-rc.22 (audit M8) — call the ACTUAL helper embeddingsSearch
+      // applies (search.ts:~1100/1106), not an inline reimplementation. If the
+      // real filter regresses, this now fails (it was vacuous theater before).
+      const filtered = filterExcludedEmbedHits(rawHits, (p) => vServe.isExcluded(p));
       expect(filtered.length).toBe(1);
       expect(filtered[0]?.rel_path).toBe("Public/auth.md");
     } finally {

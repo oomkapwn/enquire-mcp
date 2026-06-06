@@ -1094,16 +1094,19 @@ export async function embeddingsSearch(
           if (folderPrefix) h = h.filter((row) => row.rel_path.startsWith(folderPrefix));
           h = h.filter((row) => row.score >= minScore);
           // Privacy filter applied here too so the refill loop's "did we
-          // get enough?" check is accurate. The downstream filter at
-          // line ~1019 then re-applies (idempotent — already-filtered hits
-          // pass through).
-          return h.filter((row) => !vault.isExcluded(row.rel_path));
+          // get enough?" check is accurate. The downstream filter then
+          // re-applies (idempotent — already-filtered hits pass through).
+          // v3.10.0-rc.22 (audit M8) — via the shared, unit-tested helper.
+          return filterExcludedEmbedHits(h, (p) => vault.isExcluded(p));
         }
       });
     } else {
       rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
     }
-    const hits = rawHits.filter((h) => !vault.isExcluded(h.rel_path)).slice(0, limit);
+    // v3.10.0-rc.22 (audit M8) — terminal privacy filter via the shared,
+    // unit-tested helper (was an inline `.filter` the security test only
+    // reimplemented, never exercised).
+    const hits = filterExcludedEmbedHits(rawHits, (p) => vault.isExcluded(p)).slice(0, limit);
     const matches: EmbedHit[] = hits.map((h) => ({
       path: h.rel_path,
       title: stripMd(path.basename(h.rel_path)),
@@ -1320,6 +1323,31 @@ export function pruneExcludedHits<T extends { id: string }>(
     }
     return !isExcluded(p);
   });
+}
+
+/**
+ * v3.10.0-rc.22 (audit M8) — pure privacy filter for embed-search hits; the
+ * `embeddingsSearch` sibling of {@link pruneExcludedHits}. Drops rows whose
+ * `rel_path` is excluded by the injected predicate (`vault.isExcluded`). Embed
+ * hits carry a bare `rel_path` (no `#chunk` suffix), so — unlike
+ * `pruneExcludedHits` — there's no id-splitting.
+ *
+ * Extracted so the actual filter `embeddingsSearch` applies (it ran inline at
+ * two sites: the HNSW refill path + the brute-force path) is unit-testable
+ * WITHOUT loading the ML embedder the function needs to encode a query. Before
+ * rc.22 the security test "reimplemented" this filter inline and never exercised
+ * the real code path — a vacuous (theater) test that would have passed even if
+ * `embeddingsSearch` had dropped its guard.
+ *
+ * @param hits - embed-search rows (each carries a vault-relative `rel_path`).
+ * @param isExcluded - true if a vault-relative path is excluded.
+ * @returns a new array with excluded-path rows removed (order preserved).
+ */
+export function filterExcludedEmbedHits<T extends { rel_path: string }>(
+  hits: T[],
+  isExcluded: (relPath: string) => boolean
+): T[] {
+  return hits.filter((h) => !isExcluded(h.rel_path));
 }
 
 /** v3.10 (rc.10) — a scalar a frontmatter filter can match against. */

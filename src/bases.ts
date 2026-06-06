@@ -30,6 +30,7 @@
 import * as path from "node:path";
 import { z } from "zod";
 import { extractWikilinks } from "./parser.js";
+import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
 
 /** Top-level shape of a parsed `.base` file. Mirrors the Obsidian schema. */
@@ -316,7 +317,14 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
   const matches: BaseQueryHit[] = [];
   const unevaluated = new Set<string>();
   const gm = await getGrayMatter();
-  const notes = await vault.listFilesByExtension(".md", args.folder);
+  // v3.10.0-rc.24 (audit L) — DoS cap. `obsidian_query_base` is always-registered
+  // and bearer-reachable on serve-http, and reads every matched note's full body;
+  // an unbounded whole-vault content scan is a DoS amplifier. `capScanEntries`
+  // bounds it at MAX_SCAN_NOTES (partial + logged on overflow) — the same
+  // defense-in-depth its O(N) sibling `runDql` got in rc.18 (M4). (`limit` is
+  // applied AFTER the walk to keep `total_matched` honest, so it can't bound the
+  // scan itself.)
+  const notes = capScanEntries(await vault.listFilesByExtension(".md", args.folder), "obsidian_query_base");
   for (const e of notes) {
     let fm: Record<string, unknown> = {};
     let body = "";

@@ -512,10 +512,12 @@ export class VaultWatcher {
     // re-check here so a `--exclude-glob` / `--read-paths`-filtered note can
     // NEVER be indexed even if handle() is reached another way (a direct call, a
     // chokidar edge case, a future caller). Mirrors the PDF re-check below.
-    // Skips ALL kinds: an excluded note must not be indexed (add/change), and
-    // at-rest cleanup of already-indexed content is a clear+rebuild concern, not
-    // the live watcher (matches chokidar-`ignored` + the non-retroactive posture).
-    if (this.vault.isExcluded(relPath)) {
+    // v3.10.0-rc.24 (audit L) — gate only add/change (the INDEXING ops): an
+    // `unlink` must always fall through to drop the file's rows, even when the
+    // path is excluded — purging a deleted note's index entries is never a
+    // privacy risk, and skipping it orphaned stale rows for a deleted-but-
+    // excluded note (e.g. indexed before exclusion, then deleted).
+    if (kind !== "unlink" && this.vault.isExcluded(relPath)) {
       if (!this.silent) {
         process.stderr.write(`enquire: watcher skip ${relPath} (excluded by privacy filter)\n`);
       }

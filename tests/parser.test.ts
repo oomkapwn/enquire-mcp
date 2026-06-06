@@ -199,4 +199,18 @@ describe("bodyStartLine (rc.17 audit M1 — file-absolute line offset)", () => {
     expect(fromBody).toContain("The real body starts here.");
     expect(body).toContain("The real body starts here.");
   });
+
+  // v3.10.0-rc.24 (audit L) — degenerate case: the body text ALSO appears
+  // verbatim inside a frontmatter line. Plain `indexOf` would false-match the
+  // frontmatter occurrence (reporting too-early a line); `lastIndexOf` anchors to
+  // the real body (the suffix of source). The discriminator: the source line at
+  // `bodyStartLine` must be the body line ("findme"), NOT the frontmatter
+  // `note: findme` — which is what the pre-rc.24 `indexOf` would have pointed at.
+  it("anchors to the body's REAL position when its text also appears in frontmatter (rc.24)", () => {
+    const src = "---\nnote: findme\n---\nfindme\n";
+    const { bodyStartLine, body } = parseNote(src);
+    expect(body).toContain("findme");
+    const lineAt = src.split("\n")[bodyStartLine - 1];
+    expect(lineAt, "bodyStartLine must point at the body line, not the frontmatter occurrence").toBe("findme");
+  });
 });

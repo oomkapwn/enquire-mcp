@@ -146,6 +146,18 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(src).toMatch(/slice\(0,\s*MAX_GRAPH_NODES\)/);
   });
 
+  // v3.10.0-rc.24 (audit L) — `obsidian_query_base` (bases.ts `queryBase`) is an
+  // always-on, bearer-reachable whole-vault CONTENT scanner, but it uses
+  // `listFilesByExtension(".md")` + `readFile` (not `listMarkdown` + `readNote`),
+  // so `discoverScanners` can't see it and `bases.ts` is outside SCANNER_SOURCES.
+  // Assert its cap separately (mirrors buildWikilinkGraph above), so a refactor
+  // that drops the cap fails CI even though the heuristic doesn't reach it.
+  it("bases.queryBase caps its whole-vault scan via capScanEntries (rc.24)", () => {
+    const body = functionBody(readFileSync(path.join(repoRoot, "src/bases.ts"), "utf8"), "queryBase");
+    expect(body, "queryBase not found in bases.ts").not.toBe("");
+    expect(body).toContain("capScanEntries(");
+  });
+
   it("every CAPPED tool is actually discovered as a scanner (didn't silently stop scanning)", () => {
     const discovered = new Set(allDiscoveredScanners());
     const missing = Object.keys(CAPPED).filter((n) => !discovered.has(n));

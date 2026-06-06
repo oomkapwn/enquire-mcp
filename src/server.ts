@@ -6,6 +6,7 @@ import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
+import { shutdownStdioDeps } from "./shutdown.js";
 import { DEFAULT_STALE_DAYS } from "./staleness.js";
 import {
   embedDbPath,
@@ -694,60 +695,36 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
 
 export async function startServer(opts: ServeOptions): Promise<void> {
   const deps = await prepareServerDeps(opts);
-  const { vault, ftsIndex, watcher } = deps;
   const server = buildMcpServer(deps, opts);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  if (vault.persistentCacheEnabled) {
-    let saving = false;
-    let saved = false;
-    const flush = async () => {
-      if (saving || saved) return;
-      saving = true;
-      try {
-        await vault.saveDiskCache();
-        saved = true;
-      } catch (err) {
-        process.stderr.write(`enquire: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
-      } finally {
-        saving = false;
-      }
-    };
-    const onSignal = () => {
-      flush().finally(() => process.exit(0));
-    };
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-    // beforeExit fires when the loop empties; we schedule one async flush.
-    // The `saved` guard prevents recursion when flush completes and beforeExit fires again.
-    process.on("beforeExit", () => {
-      if (!saved && !saving) void flush();
-    });
-  }
-
-  if (watcher) {
-    const closeWatcher = () => {
-      void watcher?.close();
-      // v3.8.0-rc.2 R-7 — close the watcher-owned embed-db handle too.
-      // Safe to call multiple times (idempotent close); WAL checkpoint
-      // happens at close time so no data loss on graceful shutdown.
-      deps.watcherEmbedDb?.close();
-    };
-    process.once("SIGINT", closeWatcher);
-    process.once("SIGTERM", closeWatcher);
-    process.on("beforeExit", closeWatcher);
-  }
-
   process.stderr.write(`${formatReadyBanner(deps)} (transport=stdio)\n`);
 
-  if (ftsIndex) {
-    const closeFts = () => ftsIndex?.close();
-    process.once("SIGINT", closeFts);
-    process.once("SIGTERM", closeFts);
-    process.on("beforeExit", closeFts);
-  }
+  // v3.10.0-rc.19 (audit M3) — ONE graceful-shutdown orchestrator on signal,
+  // mirroring the HTTP path. `shutdownStdioDeps` closes watcher + embed-db,
+  // flushes the persistent cache, then closes the fts5 index, AWAITING each
+  // async step before `process.exit(0)`. Pre-rc.19 these were three separate
+  // SIGINT/SIGTERM handlers and the cache-flush handler called `process.exit(0)`
+  // the moment its flush resolved — racing the (async) `watcher.close()`. stdio
+  // has no installSignalHandlers escape hatch (it always owns its process).
+  let shuttingDown = false;
+  const onSignal = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void shutdownStdioDeps(deps).finally(() => process.exit(0));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  // beforeExit (natural loop drain, no signal): best-effort teardown, never
+  // exit. Guarded so the async work it schedules can't re-trigger beforeExit.
+  let beforeExitRan = false;
+  process.on("beforeExit", () => {
+    if (beforeExitRan || shuttingDown) return;
+    beforeExitRan = true;
+    void shutdownStdioDeps(deps);
+  });
 }
 
 /**

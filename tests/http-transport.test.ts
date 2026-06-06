@@ -16,13 +16,14 @@ import { promises as fs } from "node:fs";
 import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSessionRegistry,
   deriveHttpBodyCap,
   generateBearerToken,
   type HttpServeOptions,
   isInitializeRequest,
+  makeHttpShutdownHandler,
   parseMaxFileBytes,
   RateLimiter,
   readJsonBody,
@@ -1145,6 +1146,60 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     await shutdownHttpServer(httpServer);
     // Second call should not throw.
     await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
+  });
+
+  // v3.10.0-rc.19 (audit M3) — the SIGINT/SIGTERM orchestrator must AWAIT the
+  // full graceful teardown (shutdownHttpServer: drain → close TCP listener →
+  // flush cache → close fts/watcher/embed-db) and only THEN exit. Pre-rc.19 a
+  // SEPARATE cache-flush handler called process.exit(0) the moment its fast
+  // flush resolved — racing ahead of the session drain.
+  it("makeHttpShutdownHandler awaits full teardown before exit (rc.19 M3)", async () => {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      stateful: true,
+      installSignalHandlers: false
+    });
+    expect((httpServer.address() as AddressInfo).port).toBeGreaterThan(0);
+    let exitCode: number | undefined;
+    const handler = makeHttpShutdownHandler(httpServer, (c) => {
+      exitCode = c;
+    });
+    handler();
+    // The await sits in front of exit → it must NOT have fired synchronously.
+    expect(exitCode).toBeUndefined();
+    // Re-entrancy guard: a second signal must not schedule a second teardown/exit.
+    handler();
+    // Teardown settles → exit(0), and the TCP listener was closed BEFORE exit.
+    await vi.waitFor(() => expect(exitCode).toBe(0));
+    expect(httpServer.address()).toBeNull();
+  });
+
+  // NEGATIVE control — a handler that does NOT await shutdownHttpServer (the
+  // pre-rc.19 flush-then-exit shape) "exits" while the TCP listener is still up.
+  // This proves the positive test's "address()===null at exit" genuinely depends
+  // on the await, not on teardown happening to be instant.
+  it("NEGATIVE control — skipping the await exits while the TCP listener is still up (rc.19 M3)", async () => {
+    const httpServer = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      stateful: true,
+      installSignalHandlers: false
+    });
+    expect(httpServer.address()).not.toBeNull();
+    // Mirror the bug: kick off teardown but read state ("exit") immediately,
+    // without awaiting it.
+    void shutdownHttpServer(httpServer);
+    const addrAtExit = httpServer.address();
+    expect(addrAtExit).not.toBeNull(); // ← listener STILL up: the race rc.19 removes
+    // Let the real teardown finish so the test leaves nothing bound.
+    await vi.waitFor(() => expect(httpServer.address()).toBeNull());
   });
 
   // v3.8.7 P2-10 — fire many concurrent initialize POSTs at a low-cap

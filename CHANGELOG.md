@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.19] — 2026-06-06
+
+> **TL;DR:** **Audit MED-batch 4 — M3 signal-shutdown race (both transports).** On `SIGINT`/`SIGTERM`, `serve-http` registered **four separate** listeners on the same signal — a cache-`flush` handler, `closeWatcher`, `closeFts`, and `shutdownHttpServer` — and the flush handler called `process.exit(0)` the **moment its fast cache flush resolved**, racing ahead of `shutdownHttpServer`'s up-to-5s in-flight-session drain and **cutting off in-flight requests**. The other three were pure duplication: `shutdownHttpServer` already flushes the cache and closes fts/watcher/embed-db. Fix: ONE `makeHttpShutdownHandler` orchestrator that **awaits** the full graceful teardown, then exits (re-entrancy-guarded). The stdio path (`startServer`) had the same shape (three handlers, the flush one calling `process.exit(0)` on its own — racing the async `watcher.close()`); consolidated into one `shutdownStdioDeps(deps)` that awaits watcher → embed-db → cache → fts before exit. `shutdownStdioDeps` was extracted to `src/shutdown.ts` so it's unit-testable (server.ts is in `no-internal-imports`' RESTRICTED_MODULES — same reason embed-pipeline.ts was split in rc.4). **1113 → 1119 tests.** M7 (privacy/erasure) → rc.20.
+
+**Pre-release (v3.10 line) — audit fix batch 4 (M3).**
+
+### Fixed
+
+- **M3 (HTTP) — the cache-flush SIGINT/SIGTERM handler raced the session drain.** `startHttpServer` registered FOUR listeners on each of `SIGINT`/`SIGTERM`: a persistent-cache `flush` (calling `process.exit(0)` in its `.finally`), `closeWatcher`, `closeFts`, and `shutdown` (= `shutdownHttpServer`). Because the flush's `saveDiskCache` is fast and the registry drain (`closeAll`, up to 5s) is slow, `process.exit(0)` fired **before** in-flight stateful requests finished — exactly the leak `shutdownHttpServer` (v3.8.7 P2-11) was built to prevent. New `makeHttpShutdownHandler(server, exit?)` returns a single, re-entrancy-guarded handler that `await`s `shutdownHttpServer` (drain → close TCP listener → flush cache → close fts/watcher/embed-db) and only THEN exits. The three redundant handlers are removed (their work is wholly subsumed by `shutdownHttpServer`); `beforeExit` keeps a guarded best-effort teardown for the natural-drain path.
+- **M3 (stdio) — same shape.** `startServer` had three separate signal handlers and the cache-flush one called `process.exit(0)` on its own completion, racing the (async) `watcher.close()`. Consolidated into one orchestrator awaiting `shutdownStdioDeps(deps)` — which closes watcher + embed-db, flushes the persistent cache, then closes fts5, **awaiting each async step** (best-effort: a throw in one step never blocks the rest). The ordering is now deterministic and nothing exits mid-teardown.
+
+### Refactor
+
+- **`shutdownStdioDeps` extracted to `src/shutdown.ts`.** `src/server.ts` is in the `no-internal-imports` RESTRICTED_MODULES list ("registration boilerplate"), so a helper there can't be imported by a test — the SAME constraint that drove the rc.4 embed-pipeline extraction. The new module declares a minimal structural `StdioShutdownDeps` interface locally (no import of `ServerDeps`) so there's zero import cycle with the server module; `ServerDeps` structurally satisfies it, so `startServer` passes `deps` directly.
+
+### Tests (1119)
+
+`tests/http-transport.test.ts` +2: `makeHttpShutdownHandler` awaits full teardown before exit (asserts exit is NOT synchronous, the TCP listener is closed BEFORE exit fires, and a second signal is a re-entrancy no-op) + NEGATIVE control (a handler that skips the await "exits" while the listener is still up — proving the positive assertion depends on the await). `tests/shutdown.test.ts` (new) +4: ordering watcher→embed-db→cache→fts with awaited async steps; cache flush skipped when persistent cache disabled; best-effort (a throwing step doesn't block the rest); NEGATIVE control (a non-awaiting teardown records the sync "exit" step before the async one finishes). 1113 → 1119.
+
+### Files changed
+
+- `src/http-transport.ts` (new `makeHttpShutdownHandler`; four signal handlers → one orchestrator + guarded `beforeExit`), `src/server.ts` (import `shutdownStdioDeps`; three handlers → one orchestrator; drop now-unused `vault`/`ftsIndex`/`watcher` destructuring), `src/shutdown.ts` (new — `StdioShutdownDeps` + `shutdownStdioDeps`), `tests/http-transport.test.ts` (+2), `tests/shutdown.test.ts` (new, +4), test-count claims → 1119.
+- version bump 3.10.0-rc.18 → 3.10.0-rc.19.
+
+---
+
 ## [3.10.0-rc.18] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 3 — M4 DoS-cap completeness (`obsidian_dataview_query` + invariant scope).** The audit flagged `obsidian_dataview_query` (`runDql`) as an uncapped whole-vault `readNote`+parse scan reachable over bearer `serve-http`. Root cause: the rc.36 `resource-bound-invariant`'s `SCANNER_SOURCES` covered `read.ts`/`search.ts`/`meta.ts` but NOT `dql.ts`, so `runDql` was never required to be CAP-or-EXEMPT (scope-too-narrow — the recurring class). Fix: cap `runDql` with `capScanEntries` (defense-in-depth — DQL is a *linear* query so a > MAX_SCAN_NOTES vault yields a partial, logged result, never a hang) + add `src/dql.ts` to `SCANNER_SOURCES` so the invariant patrols it. Also fixed a manifest drift my OWN rc.16 introduced: `getOpenQuestions` began calling `capScanEntries` in rc.16 but the manifest still listed it EXEMPT — reclassified CAPPED. **1113 tests unchanged.** M3 (signal-shutdown) → rc.19.

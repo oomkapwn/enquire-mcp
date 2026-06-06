@@ -86,10 +86,13 @@ export function parseNote(source: string): ParsedNote {
   const sanitized = stripCodeAndInline(body);
   // v3.10.0-rc.17 (audit M1) — the 1-based file line where `body` starts, so
   // body-chunking consumers (the embedding pipeline) can report FILE-absolute
-  // line numbers that match the content-chunking FTS5 index. `body` is a
-  // verbatim substring of `source`, so indexOf locates it; 1 when there's no
-  // frontmatter (bodyIdx === 0) or in the defensive not-found case.
-  const bodyIdx = source.indexOf(body);
+  // line numbers that match the content-chunking FTS5 index.
+  // v3.10.0-rc.24 (audit L) — `body` is the SUFFIX of `source` (everything after
+  // the frontmatter), so use `lastIndexOf`: plain `indexOf` would false-match a
+  // degenerate note whose entire body text also appears verbatim earlier inside
+  // a frontmatter line (e.g. `---\nx: hi\n---\nhi`), reporting too-early a line.
+  // 1 when there's no frontmatter, an empty body, or the defensive not-found case.
+  const bodyIdx = body.length > 0 ? source.lastIndexOf(body) : -1;
   const bodyStartLine = bodyIdx > 0 ? source.slice(0, bodyIdx).split("\n").length : 1;
   return {
     frontmatter,

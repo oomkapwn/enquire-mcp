@@ -177,6 +177,31 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     expect(invalidated).toEqual([]); // exclude re-check returned before invalidateOne
   });
 
+  // v3.10.0-rc.24 (audit L) — but an UNLINK must NOT be skipped for an excluded
+  // path: a delete always purges the file's index rows (removing content is never
+  // a privacy risk; skipping it orphaned stale rows for a deleted-but-excluded
+  // note indexed before the exclusion). So `unlink` falls through the gate — the
+  // discriminator vs the "change" test above (which stays gated → []).
+  it("handle() lets an excluded path's unlink proceed to cleanup (rc.24)", async () => {
+    await fs.mkdir(path.join(root, "Private"), { recursive: true });
+    await fs.writeFile(path.join(root, "Private", "secret.md"), "secret");
+    const v = new Vault(root, { excludeGlobs: ["Private/**"] });
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+
+    const invalidated: string[] = [];
+    (v as unknown as { invalidateOne: (p: string) => void }).invalidateOne = (p) => {
+      invalidated.push(p);
+    };
+    const handle = (
+      w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
+    ).handle.bind(w);
+
+    const abs = path.join(v.root, "Private", "secret.md");
+    await handle(abs, "unlink");
+    expect(invalidated).toEqual([abs]); // unlink proceeded PAST the exclude gate (cleanup runs)
+  });
+
   // POSITIVE control — a NON-excluded path DOES reach invalidateOne, proving the
   // skip above is the exclude re-check and not handle() being inert.
   it("handle() processes a non-excluded path (control for the M7 skip)", async () => {

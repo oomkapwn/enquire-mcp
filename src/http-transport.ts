@@ -927,6 +927,43 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
 }
 
 /**
+ * v3.10.0-rc.19 (audit M3) — single SIGINT/SIGTERM orchestrator for the HTTP
+ * transport. Returns a handler that awaits the FULL graceful teardown
+ * ({@link shutdownHttpServer}: drain in-flight stateful sessions up to
+ * `closeAll`'s bound → close the TCP listener → flush the persistent cache →
+ * close fts/watcher/embed-db) and only THEN calls `exit`.
+ *
+ * Before rc.19, SIGINT/SIGTERM had FOUR separate listeners registered on the
+ * same signal: a cache-`flush` handler, a `closeWatcher` handler, a `closeFts`
+ * handler, AND the `shutdownHttpServer` handler. The flush handler called
+ * `process.exit(0)` the moment its (fast) `saveDiskCache` resolved — racing
+ * ahead of `shutdownHttpServer`'s up-to-5s session drain and cutting off
+ * in-flight requests. The other three handlers were also pure redundancy:
+ * `shutdownHttpServer` already flushes the cache and closes fts/watcher/embed-db
+ * itself. Consolidating to ONE handler that awaits the whole chain removes the
+ * race and the duplication.
+ *
+ * `exit` is injectable for tests (default `process.exit`). The returned handler
+ * guards re-entry so a SIGINT-then-SIGTERM (or a double signal) can't kick off
+ * two concurrent teardowns or two `exit` calls.
+ */
+export function makeHttpShutdownHandler(
+  server: HttpServer,
+  exit: (code: number) => void = (code) => process.exit(code)
+): () => void {
+  let running = false;
+  return () => {
+    if (running) return;
+    running = true;
+    void shutdownHttpServer(server)
+      .catch(() => {
+        /* best-effort — never block exit on a teardown error */
+      })
+      .finally(() => exit(0));
+  };
+}
+
+/**
  * Bind and start the HTTP transport. Returns the underlying http.Server
  * so callers (tests + CLI) can listen for `listening` / close it.
  */
@@ -947,65 +984,30 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
   });
   httpServerExtras.set(httpServer, { registry: handlerOut.registry, deps });
 
-  // Persistent-cache flush + watcher cleanup on signal. Same hooks as
-  // stdio mode — the deps own the lifecycle. Skipped under
-  // installSignalHandlers=false so tests can spawn many servers in one
-  // process without accumulating SIGINT/SIGTERM listeners.
+  // v3.10.0-rc.19 (audit M3) — ONE graceful-shutdown orchestrator on signal.
+  // `shutdownHttpServer` already drains in-flight stateful sessions, closes the
+  // TCP listener, flushes the persistent cache, and closes fts/watcher/embed-db,
+  // so a single handler that AWAITS it (then exits) replaces the four separate
+  // pre-rc.19 listeners (flush / closeWatcher / closeFts / shutdown). The old
+  // flush listener called `process.exit(0)` the moment its fast cache flush
+  // resolved — racing ahead of the up-to-5s session drain and cutting off
+  // in-flight requests; the other three were pure duplication of work
+  // shutdownHttpServer already does. Skipped under installSignalHandlers=false
+  // so tests can spawn many servers in one process without accumulating
+  // SIGINT/SIGTERM listeners.
   if (opts.installSignalHandlers !== false) {
-    if (deps.vault.persistentCacheEnabled) {
-      let saving = false;
-      let saved = false;
-      const flush = async () => {
-        if (saving || saved) return;
-        saving = true;
-        try {
-          await deps.vault.saveDiskCache();
-          saved = true;
-        } catch (err) {
-          process.stderr.write(`enquire: cache flush failed — ${err instanceof Error ? err.message : String(err)}\n`);
-        } finally {
-          saving = false;
-        }
-      };
-      process.once("SIGINT", () => {
-        flush().finally(() => process.exit(0));
-      });
-      process.once("SIGTERM", () => {
-        flush().finally(() => process.exit(0));
-      });
-      process.on("beforeExit", () => {
-        if (!saved && !saving) void flush();
-      });
-    }
-    if (deps.watcher) {
-      const closeWatcher = () => {
-        void deps.watcher?.close();
-        // v3.8.0-rc.2 R-7 — close watcher-owned embed-db handle (HTTP path).
-        deps.watcherEmbedDb?.close();
-      };
-      process.once("SIGINT", closeWatcher);
-      process.once("SIGTERM", closeWatcher);
-      process.on("beforeExit", closeWatcher);
-    }
-    if (deps.ftsIndex) {
-      const closeFts = () => deps.ftsIndex?.close();
-      process.once("SIGINT", closeFts);
-      process.once("SIGTERM", closeFts);
-      process.on("beforeExit", closeFts);
-    }
-    // Graceful HTTP-server shutdown on signal.
-    // v3.8.7 P2-11 — drain registered stateful sessions BEFORE closing
-    // the TCP listener so in-flight requests get a chance to finish and
-    // we don't leak per-session McpServer + transport pairs. The
-    // pre-existing flush/watcher/fts handlers above still fire (they're
-    // registered separately on the same signal) — `shutdownHttpServer`
-    // calls them again as a defense-in-depth no-op (idempotent thanks
-    // to the WeakMap-delete-on-shutdown pattern).
-    const shutdown = () => {
+    const onSignal = makeHttpShutdownHandler(httpServer);
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    // beforeExit (natural drain, no signal): best-effort teardown, never exit.
+    // Idempotent via shutdownHttpServer's WeakMap-delete; guarded so the async
+    // teardown it schedules can't make beforeExit re-fire in a loop.
+    let beforeExitRan = false;
+    process.on("beforeExit", () => {
+      if (beforeExitRan) return;
+      beforeExitRan = true;
       void shutdownHttpServer(httpServer).catch(() => {});
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    });
   }
 
   await new Promise<void>((resolve, reject) => {

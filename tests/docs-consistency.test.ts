@@ -429,6 +429,27 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
+  // v3.10.0-rc.21 (audit M2) — ROADMAP.md was the ONE tool-count surface NOT
+  // covered by the README/STABILITY/COMPARISON/api.md/llms.txt total-tool-count
+  // pins above, so its "44 tool descriptions" (the TDQS item) silently drifted
+  // while every guarded surface stayed at 45. Pin it too. Pure check + NEGATIVE
+  // control (CLAUDE.md rule since v3.6.4).
+  function checkRoadmapToolCount(roadmap: string, total: number): string | null {
+    const m = /(\d+) tool descriptions/.exec(roadmap);
+    if (!m) return "ROADMAP.md must state 'N tool descriptions' (the TDQS item) so the tool count stays pinned";
+    const claimed = Number.parseInt(m[1] ?? "0", 10);
+    return claimed === total ? null : `ROADMAP.md "${m[0]}" but TOOL_MANIFEST has ${total} tools`;
+  }
+  it("ROADMAP.md tool-count claim matches TOOL_MANIFEST (rc.21 M2)", async () => {
+    const roadmap = await read("ROADMAP.md");
+    expect(checkRoadmapToolCount(roadmap, TOOL_MANIFEST.length)).toBeNull();
+  });
+  it("NEGATIVE: checkRoadmapToolCount flags drift / missing claim (rc.21 M2)", () => {
+    expect(checkRoadmapToolCount("TDQS pass on all 44 tool descriptions", 45)).not.toBeNull(); // drift
+    expect(checkRoadmapToolCount("TDQS pass on all 45 tool descriptions", 45)).toBeNull(); // match
+    expect(checkRoadmapToolCount("no tool-count mention here", 45)).not.toBeNull(); // require-present
+  });
+
   // v3.7.4 — close the "Hardcoded counts in docs without an invariant"
   // anti-pattern gap (Rule since v3.5.9 per CLAUDE.md). Previously docs-
   // consistency gated tool count, prompt count, and test count, but the

@@ -6,12 +6,12 @@
     "url": "https://github.com/oomkapwn/enquire-mcp",
     "source": "github"
   },
-  "version": "3.10.0-rc.20",
+  "version": "3.10.0-rc.21",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@oomkapwn/enquire-mcp",
-      "version": "3.10.0-rc.20",
+      "version": "3.10.0-rc.21",
       "transport": {
         "type": "stdio"
       },
@@ -20,7 +20,7 @@
           "type": "positional",
           "valueHint": "subcommand",
           "value": "serve",
-          "description": "Subcommand: serve (stdio MCP), serve-http (remote MCP), setup (download model + build indexes), doctor (health check)",
+          "description": "Subcommand: serve (stdio MCP), serve-http (remote MCP), setup (download model + build indexes), doctor (health check) — run with no subcommand for the full list.",
           "isRequired": true,
           "format": "string"
         },

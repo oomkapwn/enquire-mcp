@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.23] — 2026-06-06
+
+> **TL;DR:** **HIGH — `serve-http` hung forever on SIGINT/SIGTERM (a regression of rc.19's own M3 fix).** A post-MED-batch re-sweep (3-agent audit on the rc.22 commit) caught it: rc.19 correctly made shutdown **await** the full teardown before `process.exit(0)` — but `shutdownHttpServer` awaits `server.close()`, and Node's `http.Server.close()` callback fires only once EVERY connection has ended and **does not terminate idle keep-alive sockets**. So any lingering connection (a reverse proxy's keep-alive, a half-open socket, an LB health probe, an SSE stream) made graceful shutdown block **indefinitely**. Pre-rc.19 this latent `close()` hang was masked because the cache-flush handler called `process.exit(0)` on its own; rc.19 removed that hatch and added no bound → "await the drain" became "await forever." **Reproduced** (lingering socket + SIGTERM → process alive >8s, would hang forever; pre-rc.19 exited in 8ms). Fix: a bounded `closeServerBounded()` — close idle keep-alives immediately, then force-close stragglers via `server.closeAllConnections()` after a 3s grace — so shutdown resolves on `close()` completion OR the grace, never never. **Verified: post-fix the same repro exits in ~3.0s, code 0.** This is the textbook recursion-pair (a fix for one shutdown bug shipping another); documented as such. **1130 → 1132 tests.**
+
+**Pre-release (v3.10 line) — post-MED-batch audit; HIGH regression fix.**
+
+### Fixed
+
+- **HIGH — `serve-http` graceful shutdown could hang forever on a lingering connection (regression introduced by rc.19).** `shutdownHttpServer` did `await new Promise(resolve => server.close(() => resolve()))`. `http.Server.close()` waits for ALL open connections to end and never force-closes idle keep-alives, so a single held-open socket blocked the await — and rc.19's `makeHttpShutdownHandler` gates `process.exit(0)` behind that await, so the process never exited. Under an orchestrator (systemd/docker) this escalates to a SIGKILL after the stop-timeout, defeating the very graceful-drain guarantee rc.19 was built to provide. New `closeServerBounded(server, graceMs = HTTP_CLOSE_GRACE_MS=3000)`: registers `server.close()`, immediately calls `server.closeIdleConnections()` (so the common no-in-flight case resolves at once), and arms an unref'd `setTimeout` that force-closes stragglers with `server.closeAllConnections()` after the grace — resolving whichever happens first. Both `shutdownHttpServer` close sites (the `!extras` fast path + the main path, after `registry.closeAll()` drains in-flight MCP requests) route through it. Reproduced + fix-verified empirically (lingering-socket SIGTERM: hang → 3.0s bounded exit).
+
+### Tests (1132)
+
+`tests/http-transport.test.ts` +2: `closeServerBounded` resolves within the grace despite a lingering keep-alive socket (the rc.19 hang — pre-fix this never returns) + CONTROL (with nothing lingering it resolves promptly, well under a large grace — proving it resolves on `close()` completion, NOT by always waiting the grace; a naive `setTimeout(resolve, grace)` impl fails this). 1130 → 1132.
+
+### Files changed
+
+- `src/http-transport.ts` (new `HTTP_CLOSE_GRACE_MS` + exported `closeServerBounded`; both `shutdownHttpServer` close sites bounded), `tests/http-transport.test.ts` (+2 + `node:http`/`node:net` imports), test-count claims → 1132.
+- version bump 3.10.0-rc.22 → 3.10.0-rc.23.
+
+### Method note
+
+The fix was found by re-running a focused audit on the just-shipped commit (the CLAUDE.md "post-merge re-sweep after a class-closing release" rule) — a 3-agent pass (adversarial diff re-review · docs/process · behavioral/STRIDE) that I commissioned after the MED batch, with the HIGH **empirically reproduced and fix-verified by me** before shipping (not taken on the agent's word). It is a clean recursion-pair instance: rc.19 fixed a shutdown race (flush `exit` beat the drain) and, in removing the `exit` hatch, exposed a latent `server.close()` hang. The remaining audit findings (1 LOW behavioral — `obsidian_query_base` uncapped scan; 2 LOW correctness — parser `indexOf`, watcher unlink-skip; 5 LOW docs currency) ship as rc.24/rc.25.
+
+---
+
 ## [3.10.0-rc.22] — 2026-06-06
 
 > **TL;DR:** **Audit MED-batch 7 (final) — M8/M9 test & process integrity.** **M8a (vacuous test):** `security.test.ts`'s "embeddingsSearch filters excluded paths" test was THEATER — it said "we can't test without a model" and **reimplemented** the privacy filter inline (`rawHits.filter(h => !vault.isExcluded(...))`), never running the real code, so `embeddingsSearch`'s two inline filter sites (search.ts ~1100/1106) were uncovered and would stay green even if the guard were deleted. Extracted the filter into a pure, exported `filterExcludedEmbedHits` (the `embeddingsSearch` sibling of rc.8's `pruneExcludedHits`), routed both sites through it, and made the test + a new unit test exercise the REAL helper. **M8b (silent-skip):** the E2E CI-GUARD only asserted `distExists()` — T-3/T-4 had **no** guard at all, and none checked that the server actually spawned, so a spawn failure in CI would silently skip whole suites (incl. T-4's 401-no-bearer auth check). Added/strengthened CI-GUARDs across T-2/T-3/T-4 to assert dist built **and** the process spawned in CI. **M9 (config drift, ι-class):** `package.json` `prepublishOnly` used a single `npm audit --audit-level=high` (all deps) while CI + release both use the stricter two-step (`--omit=dev --audit-level=moderate` then `--include=dev --audit-level=high`) — so prepublish would miss a *moderate prod* vuln CI/release catch. Aligned. **1126 → 1130 tests. This closes the comprehensive-audit MEDIUM batch (M1–M10).**

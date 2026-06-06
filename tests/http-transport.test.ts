@@ -13,11 +13,14 @@
 // `httpServer.close()`.
 
 import { promises as fs } from "node:fs";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeServerBounded,
   createSessionRegistry,
   deriveHttpBodyCap,
   generateBearerToken,
@@ -1200,6 +1203,40 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     expect(addrAtExit).not.toBeNull(); // ← listener STILL up: the race rc.19 removes
     // Let the real teardown finish so the test leaves nothing bound.
     await vi.waitFor(() => expect(httpServer.address()).toBeNull());
+  });
+
+  // v3.10.0-rc.23 — bounded shutdown. rc.19 made shutdown AWAIT `server.close()`,
+  // but Node's `close()` never terminates idle keep-alive sockets, so a lingering
+  // connection hung `serve-http` forever on SIGINT/SIGTERM (reproduced). The fix:
+  // close idle conns immediately + force-close stragglers after a grace.
+  it("closeServerBounded resolves within the grace despite a lingering keep-alive connection (rc.23)", async () => {
+    const srv = createServer((_req, res) => res.end("ok"));
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as AddressInfo).port;
+    // Open a raw socket and hold it open — never send a complete request. This
+    // is exactly the lingering connection that makes a naive `server.close()` hang.
+    const sock = net.connect(port, "127.0.0.1");
+    sock.on("error", () => {});
+    await new Promise((r) => setTimeout(r, 50));
+    const t0 = Date.now();
+    await closeServerBounded(srv, 150); // tiny grace for the test
+    const elapsed = Date.now() - t0;
+    expect(elapsed, "must not hang on the lingering socket").toBeLessThan(2000);
+    expect(srv.listening).toBe(false);
+    sock.destroy();
+  });
+
+  // CONTROL: with NO lingering connection, it must resolve as soon as close()
+  // completes — NOT wait out the grace. A naive `setTimeout(resolve, grace)` impl
+  // would fail this (it'd always take ~the full grace).
+  it("closeServerBounded resolves promptly (well under the grace) when nothing lingers (rc.23 control)", async () => {
+    const srv = createServer((_req, res) => res.end("ok"));
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const t0 = Date.now();
+    await closeServerBounded(srv, 5000); // large grace it must NOT wait out
+    const elapsed = Date.now() - t0;
+    expect(elapsed, "must resolve on close() completion, not by waiting the grace").toBeLessThan(1000);
+    expect(srv.listening).toBe(false);
   });
 
   // v3.8.7 P2-10 — fire many concurrent initialize POSTs at a low-cap

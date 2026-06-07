@@ -247,9 +247,25 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         }
       }
     } catch (err) {
-      // Don't leak the SQLite handle if open() succeeded but sync threw.
-      ftsIndex.close();
-      throw err;
+      // v3.10.0-rc.33 (post-rc.31 audit) — FAIL-SOFT to TF-IDF instead of
+      // crashing serve, matching the embed-db / PDF / HNSW paths below and the
+      // "auto-degrades gracefully: works with any subset of signals available"
+      // guarantee. The common trigger is better-sqlite3 missing/unbuilt (the
+      // Docker introspection image, or an install whose native build failed)
+      // + `--persistent-index` — which previously hard-crashed startup with an
+      // unactionable "npm rebuild" stack trace. Setting `ftsIndex = null`
+      // yields exactly the (heavily-tested) no-`--persistent-index` state:
+      // BM25/FTS5 is skipped and search degrades to pure-JS TF-IDF, with a
+      // loud stderr warning so a genuinely-broken native install is visible.
+      try {
+        ftsIndex?.close(); // open() may have thrown before a handle existed
+      } catch {
+        // no handle to close — ignore
+      }
+      ftsIndex = null;
+      process.stderr.write(
+        `enquire: --persistent-index FTS5/BM25 unavailable — degrading to TF-IDF search (${err instanceof Error ? err.message : String(err)})\n`
+      );
     }
   }
 

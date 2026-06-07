@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.33] — 2026-06-08
+
+> **TL;DR:** **Post-rc.31 audit response — code correctness (batch 2/2).** Ships the code findings from the 3-lens audit (rc.32 was docs/test-infra). The headline: **FTS5 (`--persistent-index`) now fails soft to TF-IDF instead of hard-crashing serve** when `better-sqlite3` is missing/unbuilt — closing the **"auto-degrades gracefully: works with any subset of signals" claimed-guarantee gap** (the embed-db / PDF / HNSW paths already fail-soft; FTS5 was the lone hard-crash). Writing the E2E test for it **surfaced a DEEPER latent bug the audit didn't name**: `peekFtsMetaSafe` — the pre-open metadata peek, which runs BEFORE the fail-soft try/catch — wrapped the better-sqlite3 *load* but not `new Database()`, so a **corrupt / unreadable / directory persistent-index file crashed serve at startup** (a function literally named "Safe" could throw). Both fixed: `peekFtsMetaSafe` now truly never throws (any failure → `null`), and the open/sync path degrades to TF-IDF with a loud stderr warning. Plus two eval-correctness polishes the audit flagged: `recallAtK`/`ndcgAtK` **dedupe duplicate relevant paths** (a path repeated in the result list no longer inflates recall past 1.0 / DCG past the ideal — pre-existing, unreachable via the eval path, now correct for any caller) and `formatEvalResult` uses a **dynamic id-column width** (ids > 15 chars no longer shift every following column). **+5 tests → 1161.** The FTS5 fail-soft is verified by a new E2E test that forces `ftsIndex.open()` to fail (points `--index-file` at a directory) and asserts serve still completes the MCP handshake + answers `tools/list`.
+
+**Pre-release (v3.10 line) — post-rc.31 audit, batch 2/2 (code correctness).**
+
+### Fixed
+
+- **`src/server.ts` — FTS5 `--persistent-index` fails soft to TF-IDF** (was: re-throw → serve crash). On any `ftsIndex.open()`/sync failure (most commonly `better-sqlite3` missing/unbuilt + `--persistent-index`, e.g. the Docker introspection image or a failed native build), serve now sets `ftsIndex = null` (exactly the heavily-tested no-`--persistent-index` state) + emits a stderr warning, instead of a hard crash with an unactionable "npm rebuild" stack trace. Parity with the already-fail-soft PDF / embed-db / HNSW paths.
+- **`src/fts5.ts` — `peekFtsMetaSafe` now truly never throws** (latent bug surfaced while testing the above). `new Database()` + the meta queries were OUTSIDE the function's only try/catch (which guarded just the dep *load*), so a corrupt / unreadable / not-a-DB / directory index file made the pre-open peek throw and crash serve before the fail-soft could engage. Now the whole DB-open + read is wrapped → any failure returns `null`.
+- **`src/eval.ts` — `recallAtK` + `ndcgAtK` dedupe duplicate relevant paths.** A relevant path repeated in the result list counted multiple times (recall could exceed 1.0; DCG could exceed the ideal). Now each relevant path is credited once (recall counts the distinct set; ndcg credits the first rank). Pre-existing + unreachable via the eval path (default `note` granularity yields one hit per path) — defensive correctness for any caller.
+- **`src/eval.ts` — `formatEvalResult` dynamic id-column width.** Per-query ids longer than 15 chars previously overflowed the fixed pad and shifted every following column; now the id column sizes to the widest id (mirrors `formatEvalMatrix`).
+
+### Tests (1161)
+
+- +5: `tests/e2e-handlers.test.ts` FTS5 fail-soft E2E (CI-GUARD that serve came up degraded + `tools/list` still answers — forces the failure via `--index-file <dir>`; revert-verified: restoring the re-throw crashes startup → the handshake times out → the guard fails); `tests/eval.test.ts` recallAtK-dedupe, ndcgAtK-dedupe, formatEvalResult long-id alignment (each fails pre-fix). 1156 → 1161.
+
+### Files changed
+
+- `src/server.ts` (FTS5 open fail-soft), `src/fts5.ts` (peekFtsMetaSafe wrap), `src/eval.ts` (recall/ndcg dedupe + dynamic id width), `tests/e2e-handlers.test.ts` (+2), `tests/eval.test.ts` (+3), count-bump (`1156 → 1161`) in `README.md` / `package.json` / `llms.txt` / `AGENTS.md` / `ROADMAP.md` / `docs/COMPARISON.md` / `CLAUDE.md`.
+- version bump 3.10.0-rc.32 → 3.10.0-rc.33.
+
+---
+
 ## [3.10.0-rc.32] — 2026-06-08
 
 > **TL;DR:** **Post-rc.31 audit response — docs + test-infra (batch 1/2).** Ran a from-scratch 3-lens audit (code · docs · test/process, via the Agent tool — NOT Workflow) of the rc.27→rc.31 seeklink batch; every finding **per-item re-verified against the actual code** (anti-overclaim). Verdict: the batch is **exceptionally clean — 0 CRITICAL, 0 HIGH** (the same-PR-invariant discipline held). This RC ships the docs/test-infra findings (the one MEDIUM + LOWs; the code findings follow as rc.33): **(1)** the **CLAUDE.md status roll-up** was frozen at `@rc`=rc.26 while the real @rc was rc.31 — the recurring **α-class "status section stale"** (rc.12 / rc.4 / v3.7.4 / v3.7.9 / v3.8.4 …). Updated it to rc.32 + the seeklink/audit summary, **and finally made it STRUCTURAL**: `check-version-consistency.mjs` now enforces the roll-up's `(current roll-up; \`@rc\`=<version>…)` marker == `package.json` on every `-rc.N` build, so a frozen roll-up fails CI (detection-power verified: it flagged the rc.32-vs-rc.31 mismatch before the bump). **(2)** three rc.28 tool-count guards were **vacuous-on-deletion** (caught a stale number but passed if the phrasing was removed) → presence-asserted. **(3)** the eval **`error` failure-bucket** is now asserted end-to-end (thrown query → `failure_bucket:"error"` + aggregate). **(4)** the rc.27 CHANGELOG "AGENTS.md ×2" advisory-sync count was an overcount → corrected. **No `src/` behavior change; 1156 tests unchanged.**

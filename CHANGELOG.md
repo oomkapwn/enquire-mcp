@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.34] — 2026-06-08
+
+> **TL;DR:** **RCA re-sweep of the rc.33 fix — the same bug had a SIBLING, and it was worse.** The post-rc.33 re-sweep (mandated by the project's "fix the class, not the instance" rule) found that `peekEmbedDbMeta` — the embed-db twin of the `peekFtsMetaSafe` function hardened in rc.33 — has the **identical `new Database()`-outside-the-try shape**, and it's called **UNGUARDED** in two hot spots the FTS one wasn't: `embeddingsSearch` (`tools/search.ts`, the peek runs *before* that function's own try/catch) and two CLI subcommands (`cli.ts`). So a **corrupt / unreadable / directory `.embed.db` would error the `embeddings_search` tool and crash those CLI subcommands** (vs the rc.33 FTS case, which only bit startup). Hardened it the same way: `new Database()` + the meta queries now sit inside one try → any failure returns `null` (treated as "no embed-db" — the existing graceful-degrade path). **`src/embed-db.ts` + tests only; +3 tests → 1164.** This is the re-sweep discipline paying off: the rc.33 instance fix's mandatory sibling-scan caught a higher-impact instance of the same class.
+
+**Pre-release (v3.10 line) — post-rc.33 RCA re-sweep (peekEmbedDbMeta sibling).**
+
+### Fixed
+
+- **`src/embed-db.ts` — `peekEmbedDbMeta` now truly never throws** (RCA sibling of rc.33's `peekFtsMetaSafe` fix). `new Database()` was outside the function's only try/catch (which guarded just the dep *load*), so a corrupt / unreadable / not-a-DB / directory `.embed.db` made the peek throw. Unlike the FTS peek (startup-only), this one is called UNGUARDED on the `embeddings_search` hot path (`tools/search.ts`, before that function's `try`) and in `cli.ts` subcommands — so the throw errored the search tool / crashed the CLI instead of degrading. Now the DB-open + read are wrapped → any failure → `null`. (`server.ts` call sites were already inside try/catch; this also makes them cleaner.)
+
+### Tests (1164)
+
+- +3 (`tests/embed-db.test.ts`): `peekEmbedDbMeta` returns `null` (not throws) for a non-existent file, a **directory** path, and a **corrupt non-SQLite** file. Non-vacuous when `better-sqlite3` is present (CI): pre-fix `new Database()` threw → the directory/corrupt cases failed. 1161 → 1164.
+
+### Files changed
+
+- `src/embed-db.ts` (peekEmbedDbMeta wrap), `tests/embed-db.test.ts` (+3), count-bump (`1161 → 1164`) in `README.md` / `package.json` / `llms.txt` / `AGENTS.md` / `ROADMAP.md` / `docs/COMPARISON.md` / `CLAUDE.md`.
+- version bump 3.10.0-rc.33 → 3.10.0-rc.34.
+
+---
+
 ## [3.10.0-rc.33] — 2026-06-08
 
 > **TL;DR:** **Post-rc.31 audit response — code correctness (batch 2/2).** Ships the code findings from the 3-lens audit (rc.32 was docs/test-infra). The headline: **FTS5 (`--persistent-index`) now fails soft to TF-IDF instead of hard-crashing serve** when `better-sqlite3` is missing/unbuilt — closing the **"auto-degrades gracefully: works with any subset of signals" claimed-guarantee gap** (the embed-db / PDF / HNSW paths already fail-soft; FTS5 was the lone hard-crash). Writing the E2E test for it **surfaced a DEEPER latent bug the audit didn't name**: `peekFtsMetaSafe` — the pre-open metadata peek, which runs BEFORE the fail-soft try/catch — wrapped the better-sqlite3 *load* but not `new Database()`, so a **corrupt / unreadable / directory persistent-index file crashed serve at startup** (a function literally named "Safe" could throw). Both fixed: `peekFtsMetaSafe` now truly never throws (any failure → `null`), and the open/sync path degrades to TF-IDF with a loud stderr warning. Plus two eval-correctness polishes the audit flagged: `recallAtK`/`ndcgAtK` **dedupe duplicate relevant paths** (a path repeated in the result list no longer inflates recall past 1.0 / DCG past the ideal — pre-existing, unreachable via the eval path, now correct for any caller) and `formatEvalResult` uses a **dynamic id-column width** (ids > 15 chars no longer shift every following column). **+5 tests → 1161.** The FTS5 fail-soft is verified by a new E2E test that forces `ftsIndex.open()` to fail (points `--index-file` at a directory) and asserts serve still completes the MCP handshake + answers `tools/list`.

@@ -811,8 +811,17 @@ export async function peekEmbedDbMeta(file: string): Promise<{
     // No better-sqlite3 installed; embed-db doesn't work anyway. Return null.
     return null;
   }
-  const db = new Database(file, { readonly: true, fileMustExist: true });
+  // v3.10.0-rc.34 (post-rc.33 RCA — sibling of the peekFtsMetaSafe class fixed
+  // in rc.33) — `new Database()` + the meta queries are now INSIDE the try: a
+  // corrupt / unreadable / not-a-DB / directory `.embed.db` must NOT throw out
+  // of this peek. It is called UNGUARDED on the `embeddings_search` hot path
+  // (tools/search.ts, before that function's own try) and in CLI subcommands,
+  // so a throw here would error the search / crash the CLI instead of degrading.
+  // Any failure → null (treated as "no embed-db" — the existing graceful path).
+  type PeekDb = { prepare(sql: string): { get(): unknown; all(): unknown }; close(): void };
+  let db: PeekDb | null = null;
   try {
+    db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as PeekDb;
     // Confirm meta table exists before SELECT — avoid throwing on fresh dbs.
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
     if (!tableCheck) return null;
@@ -820,8 +829,10 @@ export async function peekEmbedDbMeta(file: string): Promise<{
     const meta: Record<string, string> = {};
     for (const row of rows) meta[row.key] = row.value;
     return meta;
+  } catch {
+    return null;
   } finally {
-    db.close();
+    db?.close();
   }
 }
 

@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1135+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1143+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -136,7 +136,7 @@ node scripts/check-changelog-coverage.mjs
 node scripts/smoke.mjs
 ```
 
-## CI gates (9 required + 4 advisory)
+## CI gates (9 required + 5 advisory)
 
 Required (block merge if failed):
 1. `lint` — biome check
@@ -150,7 +150,7 @@ Required (block merge if failed):
 9. `oia` — state-driven drift scan
 
 Advisory (don't block, but tracked):
-- `test-macos`, `CodeQL`, `Analyze (actions)`, `Analyze (javascript-typescript)`
+- `test-macos`, `docker` (image build + tools/list smoke), `CodeQL`, `Analyze (actions)`, `Analyze (javascript-typescript)`
 
 ## Do NOT
 

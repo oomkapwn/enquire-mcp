@@ -297,3 +297,36 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/check-version-consistency.mjs
+
+  # v3.10.0-rc.27 — Docker image build + MCP introspection smoke. MCP directories
+  # (Glama → awesome-mcp-servers) build the Dockerfile and call tools/list over
+  # stdio; this job verifies the image BUILDS and ANSWERS, so the
+  # "Glama-introspectable" claim is ENFORCED (anti-overclaim), not aspirational,
+  # and the Dockerfile is guarded against rot. Advisory — NOT in the
+  # branch-protection required set, so it never blocks a merge. Uses only the
+  # already-SHA-pinned checkout action + `docker` (preinstalled on the runner):
+  # no new action to SHA-pin, and no `npm ci` (the build runs npm INSIDE the
+  # image), so OIA Checks 9/10 don't apply.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Build the introspection image
+        run: docker build -t enquire-mcp:ci .
+      - name: CLI smoke — the bin runs inside the image
+        # here-string `grep <<<` avoids the `grep -q` early-close EPIPE that, under
+        # the runner's `bash -e`, would abort the step even on a successful match.
+        run: |
+          out=$(timeout 60 docker run --rm enquire-mcp:ci --help || true)
+          grep -qi 'serve' <<<"$out" || { echo "::error::--help did not list the serve subcommand"; printf '%s\n' "$out" | tail -c 600; exit 1; }
+          echo "OK — bin runs in image; --help lists serve"
+      - name: MCP tools/list smoke — stdio introspection (what Glama does)
+        run: |
+          out=$(printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | timeout 90 docker run --rm -i enquire-mcp:ci || true)
+          grep -q '"obsidian_search"' <<<"$out" || { echo "::error::tools/list did not return obsidian_search from the container"; printf '%s\n' "$out" | tail -c 1000; exit 1; }
+          echo "OK — tools/list returned obsidian_search over stdio"

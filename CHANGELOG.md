@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.27] — 2026-06-07
+
+> **TL;DR:** **Docker / Glama discoverability — a borrowed lesson from `seeklink`.** MCP directories (Glama, and through Glama the `awesome-mcp-servers` listing) introspect a server by **building its Dockerfile** and completing an MCP handshake + `tools/list` over stdio. enquire shipped `glama.json` long ago but had **no Dockerfile**, so that check couldn't build it. Added a minimal, reproducible **multi-stage `Dockerfile`** that builds from source and serves the **read-only-by-default** MCP over stdio against a baked sample vault — it installs deps with `--ignore-scripts` so `tsc` resolves the optional-dep types with **no native toolchain**, then **prunes optional from the slim runtime**: each native dep loads via lazy `await import()` only when a heavy tool is *called*, so `tools/list` introspection works without them (umbrella search degrades to pure-JS TF-IDF; full FTS5/embeddings/PDF retrieval uses the npm install path). _(The first CI pass caught that `--omit=optional` broke `tsc` — the optional packages are referenced in typed dynamic imports — exactly why the `docker` job exists; corrected to `--ignore-scripts` + prune-optional.)_ Plus a `.dockerignore` for a lean context. Made it **structural** with `tests/docker-glama-invariant.test.ts`: the Dockerfile must invoke the real bin (`dist/index.js`), run `serve`, and use a Node base image whose major ≥ `engines.node` floor; `glama.json` must be valid + list the owner — each with a real NEGATIVE control. **Infra/docs/tests only — zero `src/` runtime change.** The canonical install path stays `npm install -g @oomkapwn/enquire-mcp`; the image is for directory introspection + quick container trials.
+
+**Pre-release (v3.10 line) — Docker/Glama discoverability (seeklink-inspired).**
+
+### Added
+
+- **`Dockerfile`** — multi-stage (build → slim runtime). Build stage: `npm ci --ignore-scripts` (optional deps present so `tsc` resolves their typed dynamic imports — `hnswlib-node` / `pdfjs-dist` / `tesseract.js` / `@napi-rs/canvas` — but never natively compiled → no python/make/g++) → `npm run build` → `npm prune --omit=dev --omit=optional` (slim runtime). Runtime stage: `node:22-slim` (matches `engines.node` ≥ 22) with `dist/` + prod deps + a baked `/vault/welcome.md`. `ENTRYPOINT ["node","dist/index.js"]` + `CMD ["serve","--vault","/vault"]` — read-only by default, so an introspection harness can never mutate. Header documents the real-use path (`docker run -i -v /abs/vault:/vault …`).
+- **`.dockerignore`** — keeps the build context lean + deterministic (excludes `node_modules`, `dist`, `.git`, `tests`, `docs/audits`, `assets`, etc.).
+
+### Tooling (structural enforcement)
+
+- **`tests/docker-glama-invariant.test.ts`** — pins the two files the directory check depends on. Asserts (1) the Dockerfile invokes `dist/index.js` + runs `serve`, (2) every `FROM node:<major>` base image major ≥ the `engines.node` floor (catches a future engines bump outrunning the base image → unsupported runtime), (3) `glama.json` is valid JSON with a `glama.ai` `$schema` + the owner in `maintainers`. Pure analyzers (`analyzeDockerfile` / `engineNodeMajorFloor` / `validateGlamaConfig`) are driven by 5 NEGATIVE controls (no-bin/no-serve Dockerfile, sub-floor base image, missing engines, invalid JSON, missing owner+schema) so the guard is provably non-vacuous. Auto-scanned by the META-invariant (`*-invariant.test.ts`).
+- **CI `docker` job (`.github/workflows/ci.yml`, advisory).** Anti-overclaim: the image couldn't be built in this dev environment, so a new job actually `docker build`s it, smoke-runs `--help`, and performs a **`tools/list` stdio introspection** (the exact MCP handshake Glama does) asserting `obsidian_search` comes back — turning "Glama-introspectable" into an *enforced* claim and guarding the Dockerfile against rot. Advisory (not in the branch-protection required set → never blocks a merge); uses only the already-SHA-pinned `checkout` + preinstalled `docker` (no new action to pin, no `npm ci` → OIA Checks 9/10 N/A). Advisory gate count `4 → 5` synced across README ×2, `llms.txt`, `AGENTS.md` ×2.
+
+### Docs
+
+- Test-count surfaces bumped `1135 → 1143` (README badge/hero/trust-row/test-cmd, `package.json` description, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md` roll-up) — the docs-consistency invariant pins these to the live `it()` count.
+
+### Tests (1143)
+
+- +8 (`tests/docker-glama-invariant.test.ts`): 3 positive (real Dockerfile + glama.json assertions) + 5 NEGATIVE controls. 1135 → 1143.
+
+### Files changed
+
+- `Dockerfile` (new), `.dockerignore` (new), `tests/docker-glama-invariant.test.ts` (new), `.github/workflows/ci.yml` (advisory `docker` job).
+- count-bump (`1135 → 1143`) in `README.md`, `package.json`, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md`; advisory-gate-count bump (`4 → 5`) in `README.md` ×2, `llms.txt`, `AGENTS.md` ×2.
+- version bump 3.10.0-rc.26 → 3.10.0-rc.27.
+
+---
+
 ## [3.10.0-rc.26] — 2026-06-06
 
 > **TL;DR:** **SYS-1 — supply-chain content-pin (M-9 completion).** The release workflow's one external `run:` download — the `mcp-publisher` CLI that runs with our **OIDC publish identity** on a stable release — was *tag*-pinned (`v1.7.9`, rc.33 M-9) but tag-pins are **mutable** (a tag can be force-moved, a release asset re-uploaded). Now it's **content-pinned**: the tarball's SHA256 is verified (`sha256sum -c`, fail-closed) before it's extracted/executed. Made it **structural** by extending **OIA Check 9b**: a tag-pinned release-archive (`releases/download/<tag>/…\.tar.gz`) `run:` download must ALSO carry a SHA256 verification in the same workflow, else CI fails (`RUN-DOWNLOAD-UNVERIFIED`; detection-power inject/revert-verified). Verified the deferred SYS-1 items against current code first (anti-overclaim): **H-3** paired-sink PDF/OCR parity was **already closed in rc.33**, and Check 9b's `releases/latest` guard already existed — so the genuine residual was just the tag→content upgrade. **Workflow/script/docs only — zero `src/`, 1135 tests unchanged.** Closes the rc.36 meta-audit's two named "deferred behavioral dimensions".

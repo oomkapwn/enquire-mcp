@@ -1,0 +1,15 @@
+# Keep the Docker build context lean + deterministic. `npm ci` reinstalls deps
+# and `npm run build` regenerates dist, so neither is copied from the host.
+node_modules
+dist
+.git
+.github
+coverage
+tests
+docs/audits
+docs/api-reference
+assets
+*.log
+.scratch
+.DS_Store
+npm-debug.log*

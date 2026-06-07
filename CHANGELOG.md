@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.32] — 2026-06-08
+
+> **TL;DR:** **Post-rc.31 audit response — docs + test-infra (batch 1/2).** Ran a from-scratch 3-lens audit (code · docs · test/process, via the Agent tool — NOT Workflow) of the rc.27→rc.31 seeklink batch; every finding **per-item re-verified against the actual code** (anti-overclaim). Verdict: the batch is **exceptionally clean — 0 CRITICAL, 0 HIGH** (the same-PR-invariant discipline held). This RC ships the docs/test-infra findings (the one MEDIUM + LOWs; the code findings follow as rc.33): **(1)** the **CLAUDE.md status roll-up** was frozen at `@rc`=rc.26 while the real @rc was rc.31 — the recurring **α-class "status section stale"** (rc.12 / rc.4 / v3.7.4 / v3.7.9 / v3.8.4 …). Updated it to rc.32 + the seeklink/audit summary, **and finally made it STRUCTURAL**: `check-version-consistency.mjs` now enforces the roll-up's `(current roll-up; \`@rc\`=<version>…)` marker == `package.json` on every `-rc.N` build, so a frozen roll-up fails CI (detection-power verified: it flagged the rc.32-vs-rc.31 mismatch before the bump). **(2)** three rc.28 tool-count guards were **vacuous-on-deletion** (caught a stale number but passed if the phrasing was removed) → presence-asserted. **(3)** the eval **`error` failure-bucket** is now asserted end-to-end (thrown query → `failure_bucket:"error"` + aggregate). **(4)** the rc.27 CHANGELOG "AGENTS.md ×2" advisory-sync count was an overcount → corrected. **No `src/` behavior change; 1156 tests unchanged.**
+
+**Pre-release (v3.10 line) — post-rc.31 audit, batch 1/2 (docs + test-infra).**
+
+### Tooling (structural enforcement)
+
+- **`check-version-consistency.mjs` gains a CLAUDE.md roll-up `@rc`-currency guard** (the α-class structural defense). On any `-rc.N` build it asserts the roll-up's `(current roll-up; \`@rc\`=X.Y.Z-rc.N …)` marker equals `package.json`'s version. NOT counted among the 7 published-version surfaces (it's a status-summary claim, not a published-version file) — the "7 surfaces" wording stays accurate. This converts the 6×-recurring "CLAUDE.md status stale" α-class from a discipline into a CI gate.
+- **`tests/docs-consistency.test.ts`** — the three rc.28 tool-count guards (`**N production tools**`, `| Tool count | N |`, `N tool implementations`) now **presence-assert** before checking the value, so they catch both a stale number AND the phrasing being deleted (the rc.30 zh-numeric `it()` already did this; this brings the rc.28 guards to the same bar).
+
+### Tests / docs
+
+- **`tests/eval.test.ts`** — the "survives a query that throws" test now asserts `per_query[1].failure_bucket === "error"` + `diagnostics.failure_buckets.error === 1` (end-to-end wiring of rc.31's classifier, previously only unit-tested).
+- **`CLAUDE.md`** — status roll-up advanced rc.26 → rc.32 + the seeklink batch (rc.27→rc.31) and this audit summarized.
+- **`CHANGELOG.md`** — rc.27's "advisory-gate-count … `AGENTS.md` ×2" corrected to "`AGENTS.md` (count header + advisory list)" (the "5 advisory" count appears once in AGENTS; the 2nd edit was the advisory list).
+
+### Rejected (with reasoning)
+
+- **"advisory CI-gate count (5) is unpinned by an invariant"** (audit LOW) — **rejected.** 3 of the 5 advisory checks (CodeQL ×2 + Analyze) come from GitHub default-setup, not repo files, so the count can't be structurally derived; the **required** count (9) IS pinned (it's what gates releases). Documenting it as deliberately-unpinned.
+
+### Tests (1156)
+
+- None — all additions are inline assertions in existing tests + a script guard (no new `it()`). 1156 unchanged.
+
+### Files changed
+
+- `scripts/check-version-consistency.mjs` (α-class roll-up guard), `tests/docs-consistency.test.ts` (3 presence asserts), `tests/eval.test.ts` (error-bucket assertion), `CLAUDE.md` (roll-up rc.26→rc.32 + batch summary), `CHANGELOG.md` (rc.27 ×2 correction).
+- version bump 3.10.0-rc.31 → 3.10.0-rc.32.
+
+---
+
 ## [3.10.0-rc.31] — 2026-06-07
 
 > **TL;DR:** **Eval failure-bucket diagnostics (seeklink-inspired) — turn "the score is low" into "*why* it's low".** The eval harness now classifies every query into a retrieval-failure bucket — `hit_rank_1` / `hit_top_k` / `miss` / `no_labels` / `error` — surfaced per-query and as an aggregate `diagnostics.failure_buckets` counter, plus a breakdown line in the CLI report. This is the half of seeklink's `failure_bucket` idea that fits enquire **safely**: the buckets are derived **only from the already-scored top-K** results, so the metric numbers (NDCG/Recall/MRR) are **byte-identical** — zero behavior change, zero extra retrieval cost. **`answer_contains` answerability is deliberately DEFERRED** (honest scoping): a faithful version needs the full matched-chunk text, but `SearchHybridHit` only carries a ~120-char `snippet`, so a snippet-based check would systematically *under-report* (phrase in the chunk but outside the preview) — a misleading metric this project won't ship. The deeper seeklink "candidate-gen miss vs ranking-budget miss" split is likewise deferred (it needs a retrieval wider than K, which would change the reranker budget and break historical comparability) — both deferrals are documented inline in `eval.ts`. **`src/eval.ts` + tests only; +12 tests → 1156.**
@@ -125,7 +157,7 @@ All notable changes to this project will be documented here. The format follows 
 ### Tooling (structural enforcement)
 
 - **`tests/docker-glama-invariant.test.ts`** — pins the two files the directory check depends on. Asserts (1) the Dockerfile invokes `dist/index.js` + runs `serve`, (2) every `FROM node:<major>` base image major ≥ the `engines.node` floor (catches a future engines bump outrunning the base image → unsupported runtime), (3) `glama.json` is valid JSON with a `glama.ai` `$schema` + the owner in `maintainers`. Pure analyzers (`analyzeDockerfile` / `engineNodeMajorFloor` / `validateGlamaConfig`) are driven by 5 NEGATIVE controls (no-bin/no-serve Dockerfile, sub-floor base image, missing engines, invalid JSON, missing owner+schema) so the guard is provably non-vacuous. Auto-scanned by the META-invariant (`*-invariant.test.ts`).
-- **CI `docker` job (`.github/workflows/ci.yml`, advisory).** Anti-overclaim: the image couldn't be built in this dev environment, so a new job actually `docker build`s it, smoke-runs `--help`, and performs a **`tools/list` stdio introspection** (the exact MCP handshake Glama does) asserting `obsidian_search` comes back — turning "Glama-introspectable" into an *enforced* claim and guarding the Dockerfile against rot. Advisory (not in the branch-protection required set → never blocks a merge); uses only the already-SHA-pinned `checkout` + preinstalled `docker` (no new action to pin, no `npm ci` → OIA Checks 9/10 N/A). Advisory gate count `4 → 5` synced across README ×2, `llms.txt`, `AGENTS.md` ×2.
+- **CI `docker` job (`.github/workflows/ci.yml`, advisory).** Anti-overclaim: the image couldn't be built in this dev environment, so a new job actually `docker build`s it, smoke-runs `--help`, and performs a **`tools/list` stdio introspection** (the exact MCP handshake Glama does) asserting `obsidian_search` comes back — turning "Glama-introspectable" into an *enforced* claim and guarding the Dockerfile against rot. Advisory (not in the branch-protection required set → never blocks a merge); uses only the already-SHA-pinned `checkout` + preinstalled `docker` (no new action to pin, no `npm ci` → OIA Checks 9/10 N/A). Advisory gate count `4 → 5` synced across README ×2, `llms.txt`, `AGENTS.md` (count header + advisory list).
 
 ### Docs
 
@@ -138,7 +170,7 @@ All notable changes to this project will be documented here. The format follows 
 ### Files changed
 
 - `Dockerfile` (new), `.dockerignore` (new), `tests/docker-glama-invariant.test.ts` (new), `.github/workflows/ci.yml` (advisory `docker` job).
-- count-bump (`1135 → 1143`) in `README.md`, `package.json`, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md`; advisory-gate-count bump (`4 → 5`) in `README.md` ×2, `llms.txt`, `AGENTS.md` ×2.
+- count-bump (`1135 → 1143`) in `README.md`, `package.json`, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md`; advisory-gate-count bump (`4 → 5`) in `README.md` ×2, `llms.txt`, `AGENTS.md` (count header + advisory list).
 - version bump 3.10.0-rc.26 → 3.10.0-rc.27.
 
 ---

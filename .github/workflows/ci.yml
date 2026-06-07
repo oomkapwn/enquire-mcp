@@ -315,16 +315,18 @@ jobs:
       - name: Build the introspection image
         run: docker build -t enquire-mcp:ci .
       - name: CLI smoke — the bin runs inside the image
+        # here-string `grep <<<` avoids the `grep -q` early-close EPIPE that, under
+        # the runner's `bash -e`, would abort the step even on a successful match.
         run: |
-          set -o pipefail
-          timeout 60 docker run --rm enquire-mcp:ci --help | grep -qi 'serve'
+          out=$(timeout 60 docker run --rm enquire-mcp:ci --help || true)
+          grep -qi 'serve' <<<"$out" || { echo "::error::--help did not list the serve subcommand"; printf '%s\n' "$out" | tail -c 600; exit 1; }
+          echo "OK — bin runs in image; --help lists serve"
       - name: MCP tools/list smoke — stdio introspection (what Glama does)
         run: |
-          set -o pipefail
           out=$(printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
             '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
             | timeout 90 docker run --rm -i enquire-mcp:ci || true)
-          echo "$out" | head -c 1500; echo
-          echo "$out" | grep -q '"obsidian_search"' || { echo "::error::tools/list did not return obsidian_search from the container"; exit 1; }
+          grep -q '"obsidian_search"' <<<"$out" || { echo "::error::tools/list did not return obsidian_search from the container"; printf '%s\n' "$out" | tail -c 1000; exit 1; }
+          echo "OK — tools/list returned obsidian_search over stdio"

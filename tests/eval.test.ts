@@ -15,15 +15,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  classifyFailureBucket,
   type EvalQuery,
   type EvalResult,
+  FAILURE_BUCKETS,
+  type FailureBucket,
   formatEvalMatrix,
   formatEvalResult,
   ndcgAtK,
   readQueriesJsonl,
   recallAtK,
   reciprocalRank,
-  runEval
+  runEval,
+  tallyFailureBuckets
 } from "../src/eval.js";
 import { FtsIndex } from "../src/fts5.js";
 import { Vault } from "../src/vault.js";
@@ -216,6 +220,10 @@ describe("runEval (v2.12.0)", () => {
     // First hit should be relevant → MRR = 1.0
     expect(result.per_query[0]?.mrr).toBe(1);
     expect(result.label).toBe("test");
+    // v3.10.0-rc.31 — Apollo is the rank-1 hit → failure_bucket "hit_rank_1",
+    // and the aggregate diagnostics counter is populated by runEval.
+    expect(result.per_query[0]?.failure_bucket).toBe("hit_rank_1");
+    expect(result.diagnostics?.failure_buckets.hit_rank_1).toBe(1);
   });
 
   it("aggregates across multiple queries", async () => {
@@ -279,6 +287,58 @@ describe("runEval (v2.12.0)", () => {
   });
 });
 
+describe("classifyFailureBucket + tallyFailureBuckets (v3.10.0-rc.31)", () => {
+  const rel = new Set(["a.md", "b.md"]);
+
+  it("classifies an errored query as 'error' (takes precedence)", () => {
+    // even with a perfect rank-1 hit, the error flag wins.
+    expect(classifyFailureBucket(["a.md"], rel, 10, true)).toBe("error");
+  });
+
+  it("classifies a query with no ground truth as 'no_labels'", () => {
+    expect(classifyFailureBucket(["a.md", "b.md"], new Set(), 10)).toBe("no_labels");
+  });
+
+  it("classifies a rank-1 relevant hit as 'hit_rank_1'", () => {
+    expect(classifyFailureBucket(["a.md", "x.md"], rel, 10)).toBe("hit_rank_1");
+  });
+
+  it("classifies a relevant hit below rank 1 as 'hit_top_k'", () => {
+    expect(classifyFailureBucket(["x.md", "y.md", "b.md"], rel, 10)).toBe("hit_top_k");
+  });
+
+  it("classifies no relevant doc in top-K as 'miss'", () => {
+    expect(classifyFailureBucket(["x.md", "y.md"], rel, 10)).toBe("miss");
+  });
+
+  it("NEGATIVE: a relevant doc beyond K is NOT a hit (counts as 'miss')", () => {
+    // a.md is relevant but at index 2; k=2 excludes it.
+    expect(classifyFailureBucket(["x.md", "y.md", "a.md"], rel, 2)).toBe("miss");
+  });
+
+  it("NEGATIVE: a relevant doc at rank 2 yields 'hit_top_k', never 'hit_rank_1'", () => {
+    expect(classifyFailureBucket(["x.md", "b.md"], rel, 10)).not.toBe("hit_rank_1");
+    expect(classifyFailureBucket(["x.md", "b.md"], rel, 10)).toBe("hit_top_k");
+  });
+
+  it("NEGATIVE: an empty result set with labels is a 'miss', not a hit", () => {
+    expect(classifyFailureBucket([], rel, 10)).toBe("miss");
+  });
+
+  it("tallyFailureBuckets returns a complete counter with all keys (zeros included)", () => {
+    const counts = tallyFailureBuckets(["hit_rank_1", "hit_rank_1", "miss"] as FailureBucket[]);
+    expect(counts).toEqual({ hit_rank_1: 2, hit_top_k: 0, miss: 1, no_labels: 0, error: 0 });
+    for (const b of FAILURE_BUCKETS) expect(counts[b]).toBeGreaterThanOrEqual(0);
+  });
+
+  it("NEGATIVE: tallyFailureBuckets of an empty list is all-zero (not missing keys)", () => {
+    const counts = tallyFailureBuckets([]);
+    const total = (Object.values(counts) as number[]).reduce((a, b) => a + b, 0);
+    expect(total).toBe(0);
+    expect(Object.keys(counts).sort()).toEqual([...FAILURE_BUCKETS].sort());
+  });
+});
+
 describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
   function makeResult(over: Partial<EvalResult> = {}): EvalResult {
     return {
@@ -295,7 +355,8 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
           mrr: 1.0,
           hits_relevant: 1,
           hits_total_relevant: 2,
-          latency_ms: 42
+          latency_ms: 42,
+          failure_bucket: "hit_rank_1"
         }
       ],
       mean_ndcg: 0.85,
@@ -303,6 +364,7 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
       mean_mrr: 1.0,
       mean_latency_ms: 42,
       total_wall_ms: 50,
+      diagnostics: { failure_buckets: { hit_rank_1: 1, hit_top_k: 0, miss: 0, no_labels: 0, error: 0 } },
       ...over
     };
   }
@@ -312,6 +374,23 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
     expect(out.length).toBeGreaterThan(0);
     expect(out).toContain("NDCG@10");
     expect(out).toContain("0.8500");
+  });
+
+  it("formatEvalResult renders the failure-bucket breakdown when diagnostics present (rc.31)", () => {
+    const out = formatEvalResult(
+      makeResult({
+        diagnostics: { failure_buckets: { hit_rank_1: 3, hit_top_k: 1, miss: 2, no_labels: 0, error: 1 } }
+      })
+    );
+    expect(out).toContain("failure buckets:");
+    expect(out).toContain("hit@1");
+    expect(out).toContain("=3");
+    expect(out).toContain("miss");
+  });
+
+  it("NEGATIVE: formatEvalResult omits the failure-bucket line when diagnostics absent", () => {
+    const out = formatEvalResult(makeResult({ diagnostics: undefined }));
+    expect(out).not.toContain("failure buckets:");
   });
 
   it("formatEvalResult --per-query mode includes the per-query table", () => {

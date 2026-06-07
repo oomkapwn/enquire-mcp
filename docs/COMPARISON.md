@@ -45,7 +45,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
 | Forgetting-aware freshness (`age_days` / recency re-rank) | Yes (v3.10)     | No               | No               | No               | No               |
 | Test count (public)                           | **1143**             | (varies)         | (varies)         | (varies)         | (varies)         |
-| Tool count                                    | 44                  | ~25              | ~8               | ~10              | 3–5              |
+| Tool count                                    | 45                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
 

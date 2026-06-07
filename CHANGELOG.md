@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.28] — 2026-06-07
+
+> **TL;DR:** **README trust-batch — honest scoping + a self-propagating agent rule (seeklink-inspired).** Added a candid **"When enquire-mcp is *not* the right tool"** section (use `rg` for literal search; conversation-memory tools are a different category; not multi-user/GUI/web-scale) — explicit non-goals build trust, mirroring seeklink's "Not For". Marketed the already-existing **read-only-by-default** posture with a new **least-privilege** Trust row (`--disabled-tools` / `--enabled-tools`), and shipped a **reusable agent-rule snippet** users drop into their own `AGENTS.md`/`CLAUDE.md`/`.cursorrules` so their agent learns *when* to reach for the vault (and when to prefer `grep`). Plus two **state-driven catches** the change-driven gates' regexes missed: a stale **"44 tools" → 45** in three docs (README comparison row, `docs/COMPARISON.md` table cell, `AGENTS.md` file-tree — the 45th tool `obsidian_stale_notes` shipped in v3.10 but these phrasings never updated; one even contradicted its own 34+4+7=45 breakdown), and a **broken Karpathy gist link** in the README (404 — every other reference used the correct id). Per the "drift demands a structural defense" rule, the same PR **extends the tool-count invariants** to pin the missed phrasings (`**N production tools**`, `| Tool count | N |`, `N tool implementations`). **Docs/tests only — zero `src/` runtime change, 1143 tests unchanged.**
+
+**Pre-release (v3.10 line) — README trust-batch (seeklink-inspired) + tool-count drift class.**
+
+### Added
+
+- **README "🚫 When enquire-mcp is *not* the right tool"** — honest non-goals: literal search (`rg`), conversation-memory category (mem0/Zep/Supermemory), multi-user/hosted, non-Markdown sources, GUI/plugin, web-scale corpora. Trust through candor.
+- **README "Reusable agent rule" snippet** — a copy-paste block for any `AGENTS.md`/`CLAUDE.md`/`.cursorrules` telling the agent to search the vault first for conceptual recall and use `grep`/`rg` for literal strings (the self-propagating-adoption pattern borrowed from seeklink's Agent Notes).
+- **README Trust "Least privilege" row** — markets the existing `--disabled-tools`/`--enabled-tools` surface-subsetting (e.g. a read-only research agent gets only `obsidian_search` + `obsidian_read_note`).
+
+### Fixed
+
+- **Stale "44 tools" → 45 in three docs** (README comparison row, `docs/COMPARISON.md` "Tool count" cell, `AGENTS.md` file-tree). The 45th tool (`obsidian_stale_notes`) shipped in the v3.10 line but these phrasings drifted; the README row even contradicted its own "34 + 4 + 7 = 45" breakdown.
+- **Broken Karpathy LLM-Wiki gist link in the README** (`…914927…` → 404). Corrected to the canonical id (`…914893…`, HTTP 200) used everywhere else in the codebase.
+
+### Tooling (structural enforcement)
+
+- **Extended the tool-count invariants** (`tests/docs-consistency.test.ts`) to close the phrasings the existing `**N tools**` regex couldn't see — all pinned to `TOOL_MANIFEST.length`: `**N production tools**` (README), `| Tool count | N |` (COMPARISON table cell), `N tool implementations` (AGENTS file-tree). This is the "a drift finding demands a full-surface sweep + structural defense" rule — the instance fix alone would let the class recur.
+
+### Tests (1143)
+
+- No new `it()` — the new assertions extend three existing tool-count tests (no canonical-count change). 1143 unchanged.
+
+### Files changed
+
+- `README.md` (Not-For section, agent-rule snippet, least-privilege Trust row, 44→45 comparison row, Karpathy link fix), `docs/COMPARISON.md` (Tool count 44→45), `AGENTS.md` (44→45 file-tree), `tests/docs-consistency.test.ts` (3 invariant extensions).
+- version bump 3.10.0-rc.27 → 3.10.0-rc.28.
+
+---
+
 ## [3.10.0-rc.27] — 2026-06-07
 
 > **TL;DR:** **Docker / Glama discoverability — a borrowed lesson from `seeklink`.** MCP directories (Glama, and through Glama the `awesome-mcp-servers` listing) introspect a server by **building its Dockerfile** and completing an MCP handshake + `tools/list` over stdio. enquire shipped `glama.json` long ago but had **no Dockerfile**, so that check couldn't build it. Added a minimal, reproducible **multi-stage `Dockerfile`** that builds from source and serves the **read-only-by-default** MCP over stdio against a baked sample vault — it installs deps with `--ignore-scripts` so `tsc` resolves the optional-dep types with **no native toolchain**, then **prunes optional from the slim runtime**: each native dep loads via lazy `await import()` only when a heavy tool is *called*, so `tools/list` introspection works without them (umbrella search degrades to pure-JS TF-IDF; full FTS5/embeddings/PDF retrieval uses the npm install path). _(The first CI pass caught that `--omit=optional` broke `tsc` — the optional packages are referenced in typed dynamic imports — exactly why the `docker` job exists; corrected to `--ignore-scripts` + prune-optional.)_ Plus a `.dockerignore` for a lean context. Made it **structural** with `tests/docker-glama-invariant.test.ts`: the Dockerfile must invoke the real bin (`dist/index.js`), run `serve`, and use a Node base image whose major ≥ `engines.node` floor; `glama.json` must be valid + list the owner — each with a real NEGATIVE control. **Infra/docs/tests only — zero `src/` runtime change.** The canonical install path stays `npm install -g @oomkapwn/enquire-mcp`; the image is for directory introspection + quick container trials.

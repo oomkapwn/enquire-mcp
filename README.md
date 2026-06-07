@@ -137,6 +137,10 @@ Same `npx -y @oomkapwn/enquire-mcp serve --vault <path>` command works for any M
 
 </details>
 
+**Reusable agent rule** (drop into any `AGENTS.md` / `CLAUDE.md` / `.cursorrules` so the agent knows *when* to reach for the vault):
+
+> When my question touches my own notes, decisions, projects, people, or research, **search my Obsidian vault first** via the `obsidian_*` tools (start with `obsidian_search`) and cite the source note on every fact. Prefer enquire for *conceptual / cross-language / "what did I say about X"* recall; use plain `grep` / `ripgrep` for exact literal strings. If nothing relevant comes back, say so — don't guess.
+
 ### Example queries that work well
 
 - *"Find every note where I discussed pricing strategy, summarize the evolution."* — RRF fusion + reranker handles "evolution" semantically
@@ -154,6 +158,19 @@ Same `npx -y @oomkapwn/enquire-mcp serve --vault <path>` command works for any M
 **2 — Personal knowledge base / second brain.** Hybrid retrieval surfaces the right note for *any* phrasing, in any of 50+ languages. Ask in English about a Russian-language journal entry from 2 years ago, get the right hit. Wikilink graph-boost reranks notes that sit at the centre of your knowledge graph. GraphRAG-light surfaces topical communities — discover connections you forgot you made. PDFs blend into search with `[page: N]` citations so research papers and meeting transcripts become first-class memory.
 
 **3 — Agentic RAG / context engineering.** `obsidian_search` exposes per-signal scores so the agent sees *why* each hit ranked. HyDE pre-rewrites vague queries into rich hypothetical answers before retrieval. Sub-question decomposition handles multi-hop questions ("how did our pricing strategy evolve and what was the customer reaction?") by breaking them into independent sub-queries, fusing results. The built-in eval harness (NDCG / Recall / MRR) lets you measure retrieval quality on your own queries instead of trusting vendor benchmarks.
+
+---
+
+## 🚫 When enquire-mcp is *not* the right tool
+
+Honest non-goals — reach for something else when:
+
+- **You want literal string / regex search.** `ripgrep` / `grep` is faster and exact for "find this precise token". enquire shines on *conceptual* recall — synonyms, cross-language, "what did I say about X". Use both: `rg` for literal, enquire for meaning.
+- **Your knowledge lives in chat logs, not notes.** enquire is *grounded* in the markdown you authored. Conversation-memory tools (mem0, Zep, Supermemory) that *extract* facts from chat transcripts into a separate store are a different category — see the [comparison](./docs/COMPARISON.md).
+- **You need multi-user / hosted / synced search.** enquire is local-first and single-vault by design — no server-side multi-tenant index.
+- **Your sources aren't Markdown or PDF.** `.md` / `.canvas` / `.base` / `.pdf` are first-class; other formats need conversion first.
+- **You want a GUI or an in-app Obsidian plugin.** enquire is a headless MCP server / CLI — it *complements* Obsidian, it isn't one. (Smart Connections is the in-app plugin option.)
+- **You need sub-millisecond search over millions of notes.** HNSW gives sub-10ms top-K at large scale, but enquire targets personal / team vaults, not web-scale corpora.
 
 ---
 
@@ -183,7 +200,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | **Per-signal observability** per hit | ✅ | ❌ | ❌ |
 | **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **44 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **45 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
@@ -195,7 +212,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 
 <sub>Comparison based on each project's public capabilities as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
 
-> Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914927e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
+> Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 
 ---
 
@@ -252,6 +269,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | Surface | Posture |
 |---|---|
 | **Default** | Read-only — `--enable-write` required for the 7 write tools |
+| **Least privilege** | `--disabled-tools` / `--enabled-tools` expose a minimal surface (e.g. a read-only research agent gets only `obsidian_search` + `obsidian_read_note`) |
 | **Path safety** | Realpath check on every read+write; symlinks-out-of-vault rejected |
 | **Privacy filter** | Verified at FTS5 + embed-db + chunk resource paths; fail-closed on empty allow-/deny-lists |
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |

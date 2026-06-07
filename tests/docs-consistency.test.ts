@@ -161,6 +161,17 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(m, "README must declare a total tool count in **N tools** form near the top").not.toBeNull();
     const claimed = Number.parseInt(m?.[1] ?? "0", 10);
     expect(claimed).toBe(counts.allTools);
+    // v3.10.0-rc.28 — also pin the "**N production tools**" phrasing (comparison
+    // table). A stale "44 production tools" slipped the regex above (the number
+    // wasn't directly followed by " tools") and even contradicted its own
+    // 34+4+7=45 breakdown until rc.28. Inline guard against the live count, same
+    // shape as the `**N tools**` and `+ N gated writes` checks in this test.
+    for (const pm of readme.matchAll(/(\d+)\s+production tools\b/g)) {
+      expect(
+        Number.parseInt(pm[1] ?? "0", 10),
+        `README "N production tools" must equal the registered tool count (${counts.allTools})`
+      ).toBe(counts.allTools);
+    }
   });
 
   it("README write-tool-count claim matches actual write count", async () => {
@@ -480,6 +491,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(claimed, `COMPARISON.md mentions "${m[0]}" but actual prompt count is ${counts.prompts}`).toBe(
         counts.prompts
       );
+    }
+    // v3.10.0-rc.28 — also pin the "| Tool count | N |" comparison-table cell.
+    // The "N tools" regex above can't see a bare table cell, so it stayed stale
+    // at 44 (one behind the 45th tool, obsidian_stale_notes) until rc.28.
+    const cellMatch = /Tool count\s*\|\s*\**(\d+)\**/.exec(comparisonMd);
+    if (cellMatch) {
+      expect(
+        Number.parseInt(cellMatch[1] ?? "0", 10),
+        `COMPARISON.md "Tool count | N" must equal the registered tool count (${counts.allTools})`
+      ).toBe(counts.allTools);
     }
   });
 
@@ -936,8 +957,18 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
   });
 
   it("AGENTS.md test count claim (X+ tests) is a valid lower bound", async () => {
-    const err = checkAgentsTestFloor(await read("AGENTS.md"), await countActualTests());
+    const agents = await read("AGENTS.md");
+    const err = checkAgentsTestFloor(agents, await countActualTests());
     expect(err, err ?? "").toBeNull();
+    // v3.10.0-rc.28 — also pin AGENTS.md "N tool implementations" (file-tree
+    // comment) to the registered tool count; it was stale at 44 until rc.28.
+    const counts = await getActualCounts();
+    for (const tm of agents.matchAll(/(\d+)\s+tool implementations\b/g)) {
+      expect(
+        Number.parseInt(tm[1] ?? "0", 10),
+        `AGENTS.md "N tool implementations" must equal ${counts.allTools}`
+      ).toBe(counts.allTools);
+    }
   });
 
   it("AGENTS.md per-file branch floor count matches actual entries in scripts/check-per-file-coverage.mjs", async () => {

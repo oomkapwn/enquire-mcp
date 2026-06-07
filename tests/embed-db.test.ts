@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { decodeInt8Vector, EmbedDb, encodeInt8Vector } from "../src/embed-db.js";
+import { decodeInt8Vector, EmbedDb, encodeInt8Vector, peekEmbedDbMeta } from "../src/embed-db.js";
 
 let dir: string;
 
@@ -790,6 +790,37 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
     } finally {
       db.close();
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sibling of peekFtsMetaSafe)", () => {
+  // Pass trivially when better-sqlite3 is absent (the peek returns null at the
+  // dep-load catch before reaching `new Database`); when present (CI + dev) the
+  // directory/corrupt cases exercise the rc.34 fix — pre-fix `new Database()`
+  // threw out of the peek and errored the embeddings_search hot path / crashed
+  // CLI subcommands that call it unguarded.
+  it("returns null for a non-existent file", async () => {
+    expect(await peekEmbedDbMeta(path.join(os.tmpdir(), `enquire-nope-${Date.now()}.embed.db`))).toBeNull();
+  });
+
+  it("returns null (not throw) when the path is a DIRECTORY", async () => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
+    try {
+      expect(await peekEmbedDbMeta(d)).toBeNull();
+    } finally {
+      await fs.rm(d, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null (not throw) for a corrupt / non-SQLite file", async () => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-corrupt-"));
+    const f = path.join(d, "bad.embed.db");
+    await fs.writeFile(f, "this is not a sqlite database");
+    try {
+      expect(await peekEmbedDbMeta(f)).toBeNull();
+    } finally {
+      await fs.rm(d, { recursive: true, force: true });
     }
   });
 });

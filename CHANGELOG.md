@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.30] — 2026-06-07
+
+> **TL;DR:** **Bilingual `README.zh.md` (中文) — reach into the Chinese PKM / Obsidian / dev community (seeklink-inspired).** Added a complete, faithful **Chinese README** mirroring every section (problem/solution, grounded-not-extracted + freshness, quick start, use cases, "when NOT to use it", the full capability table, the 7-tier retrieval ladder, Trust, FAQ) — capitalizing on enquire's *already-shipped* multilingual + CJK (`Intl.Segmenter`) support that was previously under-marketed. A `[English] · [中文]` switcher sits at the top of **both** READMEs, and `README.zh.md` ships in the npm tarball (`package.json#files`). Honest disclaimer up top: the **English README is authoritative** (it updates every release). Per the rc.14 "new docs surface with numeric claims needs an invariant in the same PR" rule, `docs-consistency.test.ts` now **pins the zh numeric claims**: tool count (`45 个工具`) and prompt count (`19 个 MCP 提示词`) exact against `TOOL_MANIFEST`, and the test count as a **drift-proof lower bound** (`1100+ 单元测试`, mirroring AGENTS.md's `X+ tests`) so it stays valid as the suite grows. **Docs/tests only — zero `src/` runtime change. +1 test (the zh invariant) → 1144.**
+
+**Pre-release (v3.10 line) — bilingual README.zh.md (seeklink-inspired).**
+
+### Added
+
+- **`README.zh.md`** — complete Chinese translation of the README, all sections present (tables kept; code blocks verbatim). Markets the existing 50+-language / CJK retrieval to a Chinese-speaking audience.
+- **`[English] · [中文]` language switcher** at the top of both `README.md` and `README.zh.md`.
+- **`README.zh.md` added to `package.json#files`** so it ships to npm alongside the English README.
+
+### Tooling (structural enforcement)
+
+- **`docs-consistency.test.ts` pins README.zh.md numeric claims** (rc.14 new-surface rule): `45 个工具` == `TOOL_MANIFEST.length`, `19 个 MCP 提示词` == registered prompts, and `1100+ 单元测试` as a lower bound (must be ≤ actual and within 200 of it).
+
+### Tests (1144)
+
+- +1 (`docs-consistency.test.ts`): the README.zh.md numeric-claims invariant. 1143 → 1144 (English count surfaces bumped accordingly; the zh README uses the drift-proof `1100+` lower bound, so it never needs a count bump).
+
+### Files changed
+
+- `README.zh.md` (new), `README.md` (switcher), `package.json` (files + description count), `tests/docs-consistency.test.ts` (zh invariant), count-bump in `llms.txt` / `AGENTS.md` / `ROADMAP.md` / `docs/COMPARISON.md` / `CLAUDE.md`.
+- version bump 3.10.0-rc.29 → 3.10.0-rc.30.
+
+---
+
 ## [3.10.0-rc.29] — 2026-06-07
 
 > **TL;DR:** **`llms.txt` → full agent contract (seeklink-inspired).** enquire's `llms.txt` followed the [llmstxt.org](https://llmstxt.org/) curated-links shape; seeklink's packs a dense "how to drive me" contract instead. Took the best of both: kept the spec-compliant link sections and **added an `## Agent contract` + `### Common failure modes`** block (free-form, before the trailing `Optional` section, so still spec-valid). It gives an AI agent the minimum loop (`obsidian_search` → `obsidian_read_note` → cite), the prefer-enquire-for-meaning-vs-`grep`-for-literal rule, the observability fields (`per_signal`, `age_days`/`stale`), the read-only-by-default posture, an **untrusted-content security note** (retrieved note text is data, not instructions), and the real failure modes (model-not-downloaded → TF-IDF fallback, empty fresh vault, whole-vault scan cap, `serve-http` bearer 401). No new gated numeric claims (so no invariant churn). **`llms.txt` only — zero `src/`, 1143 tests unchanged.**

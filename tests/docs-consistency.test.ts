@@ -976,6 +976,30 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     expect(err, err ?? "").toBeNull();
   });
 
+  it("README.zh.md numeric claims match canonical (tools/prompts exact, tests lower-bound)", async () => {
+    // v3.10.0-rc.30 — bilingual README.zh.md is a new docs surface; per the
+    // rc.14 rule, the same PR pins its numeric claims. Tools/prompts are exact;
+    // the test count is a drift-proof lower bound ("N+ 单元测试") so it stays
+    // valid as the suite grows (mirrors AGENTS.md's "X+ tests" convention).
+    const zh = await read("README.zh.md");
+    const counts = await getActualCounts();
+    const actualTests = await countActualTests();
+    const toolM = /(\d+)\s*个工具/.exec(zh); // stat line "45 个工具" (table "个生产级工具" doesn't match)
+    expect(toolM, "README.zh.md must state the tool count as 'N 个工具'").not.toBeNull();
+    expect(Number.parseInt(toolM?.[1] ?? "0", 10)).toBe(counts.allTools);
+    const promptM = /(\d+)\s*个 MCP 提示词/.exec(zh);
+    expect(promptM, "README.zh.md must state 'N 个 MCP 提示词'").not.toBeNull();
+    expect(Number.parseInt(promptM?.[1] ?? "0", 10)).toBe(counts.prompts);
+    const testM = /(\d+)\+\s*单元测试/.exec(zh);
+    expect(testM, "README.zh.md must state tests as a lower bound 'N+ 单元测试'").not.toBeNull();
+    const floor = Number.parseInt(testM?.[1] ?? "0", 10);
+    expect(floor, `README.zh.md '${floor}+ 单元测试' exceeds actual ${actualTests}`).toBeLessThanOrEqual(actualTests);
+    expect(
+      actualTests - floor,
+      `README.zh.md test floor ${floor} is >200 below actual ${actualTests} — raise it`
+    ).toBeLessThan(200);
+  });
+
   it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
     const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
     expect(err, err ?? "").toBeNull();

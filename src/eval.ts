@@ -77,6 +77,12 @@ export interface EvalQueryScore {
    * (undefined) on successful queries.
    */
   error?: boolean;
+  /**
+   * v3.10.0-rc.31 — retrieval-failure classification for this query (see
+   * {@link classifyFailureBucket}). Lets a maintainer see *why* a query scored
+   * low (ranked-but-not-rank-1 vs missed entirely) without reading every hit.
+   */
+  failure_bucket: FailureBucket;
 }
 
 /** Aggregate evaluation result. */
@@ -103,6 +109,13 @@ export interface EvalResult {
   mean_latency_ms: number;
   /** Total run wall time. */
   total_wall_ms: number;
+  /**
+   * v3.10.0-rc.31 — aggregate retrieval-failure-bucket counts across all
+   * queries (see {@link classifyFailureBucket}). Optional so externally
+   * hand-built `EvalResult`s (e.g. `scripts/run-benchmarks.mjs`) stay valid;
+   * `runEval` always populates it.
+   */
+  diagnostics?: { failure_buckets: Record<FailureBucket, number> };
 }
 
 /**
@@ -148,6 +161,67 @@ export function reciprocalRank(retrievedPaths: string[], relevant: ReadonlySet<s
     if (path && relevant.has(path)) return 1 / (i + 1);
   }
   return 0;
+}
+
+/**
+ * Per-query retrieval-failure classification — a seeklink-inspired diagnostic
+ * that turns a bare "the score is low" into "*why* it's low", so a maintainer
+ * tuning retrieval knows where to look.
+ *
+ * The buckets are derived ONLY from the scored top-K result set (the data the
+ * eval already has), so adding them is a zero-behavior-change, zero-extra-cost
+ * diagnostic — the metric numbers are untouched.
+ *
+ *  - `error`       — `searchHybrid` threw for this query (infra, not relevance).
+ *  - `no_labels`   — the query has no ground-truth `relevant` paths to score.
+ *  - `hit_rank_1`  — a relevant doc is at rank 1 (ideal).
+ *  - `hit_top_k`   — a relevant doc is in the top-K but not at rank 1 (ranking
+ *                    could be tighter — a reranker-ordering signal).
+ *  - `miss`        — no relevant doc in the top-K.
+ *
+ * NOTE (deferred): seeklink further splits `miss` into "candidate-generation
+ * miss" (never retrieved) vs "ranking-budget / reranker-ordering miss"
+ * (retrieved but ranked below K). That split needs a retrieval WIDER than K to
+ * see where the expected doc landed — and widening the eval search would change
+ * the reranker's candidate budget and thus the scored numbers, breaking
+ * historical comparability. It is therefore deliberately NOT done here; a
+ * future first-stage-diagnostics plumbing change (returning pre-rerank
+ * candidates from `searchHybrid`) would enable it without that side effect.
+ */
+export type FailureBucket = "error" | "no_labels" | "hit_rank_1" | "hit_top_k" | "miss";
+
+/** The five buckets, in display order — also the keys of the aggregate counter. */
+export const FAILURE_BUCKETS: readonly FailureBucket[] = ["hit_rank_1", "hit_top_k", "miss", "no_labels", "error"];
+
+/** Classify a single query's outcome from its scored top-K paths. Pure. */
+export function classifyFailureBucket(
+  retrievedPaths: readonly string[],
+  relevant: ReadonlySet<string>,
+  k: number,
+  errored = false
+): FailureBucket {
+  if (errored) return "error";
+  if (relevant.size === 0) return "no_labels";
+  const top = retrievedPaths.slice(0, Math.max(0, k));
+  if (top.length > 0) {
+    const first = top[0];
+    if (first !== undefined && relevant.has(first)) return "hit_rank_1";
+  }
+  for (let i = 1; i < top.length; i++) {
+    const p = top[i];
+    if (p !== undefined && relevant.has(p)) return "hit_top_k";
+  }
+  return "miss";
+}
+
+/** Tally a list of per-query buckets into a complete counter (all keys present). */
+export function tallyFailureBuckets(buckets: readonly FailureBucket[]): Record<FailureBucket, number> {
+  const counts = { hit_rank_1: 0, hit_top_k: 0, miss: 0, no_labels: 0, error: 0 } satisfies Record<
+    FailureBucket,
+    number
+  >;
+  for (const b of buckets) counts[b] += 1;
+  return counts;
 }
 
 /**
@@ -271,6 +345,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
       hits_relevant: hitsRelevant,
       hits_total_relevant: relevantSet.size,
       latency_ms: latency,
+      failure_bucket: classifyFailureBucket(retrievedPaths, relevantSet, k, errored),
       ...(errored ? { error: true } : {})
     });
   }
@@ -290,7 +365,8 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     mean_recall: round(meanRecall),
     mean_mrr: round(meanMrr),
     mean_latency_ms: Math.round(meanLatency),
-    total_wall_ms: Date.now() - totalT0
+    total_wall_ms: Date.now() - totalT0,
+    diagnostics: { failure_buckets: tallyFailureBuckets(perQuery.map((p) => p.failure_bucket)) }
   };
 }
 
@@ -325,10 +401,10 @@ export function formatEvalResult(result: EvalResult, opts: { perQuery?: boolean 
   lines.push("");
   if (opts.perQuery) {
     lines.push(bold("per query:"));
-    lines.push("  id              ndcg@k  recall@k  mrr     hits   latency");
+    lines.push("  id              ndcg@k  recall@k  mrr     hits   latency   bucket");
     for (const p of result.per_query) {
       lines.push(
-        `  ${p.id.padEnd(15)} ${p.ndcg_at_k.toFixed(4)}  ${p.recall_at_k.toFixed(4)}    ${p.mrr.toFixed(4)}  ${`${p.hits_relevant}/${p.hits_total_relevant}`.padEnd(6)} ${p.latency_ms}ms`
+        `  ${p.id.padEnd(15)} ${p.ndcg_at_k.toFixed(4)}  ${p.recall_at_k.toFixed(4)}    ${p.mrr.toFixed(4)}  ${`${p.hits_relevant}/${p.hits_total_relevant}`.padEnd(6)} ${`${p.latency_ms}ms`.padEnd(8)} ${p.failure_bucket ?? "?"}`
       );
     }
     lines.push("");
@@ -338,6 +414,14 @@ export function formatEvalResult(result: EvalResult, opts: { perQuery?: boolean 
   lines.push(`  mean Recall@${result.k} = ${result.mean_recall.toFixed(4)}`);
   lines.push(`  mean MRR        = ${result.mean_mrr.toFixed(4)}`);
   lines.push(`  mean latency    = ${result.mean_latency_ms}ms ${dim("(per query)")}`);
+  if (result.diagnostics) {
+    const fb = result.diagnostics.failure_buckets;
+    lines.push("");
+    lines.push(bold("failure buckets:"));
+    lines.push(
+      `  ${dim("hit@1")}=${fb.hit_rank_1}  ${dim("hit@k")}=${fb.hit_top_k}  ${dim("miss")}=${fb.miss}  ${dim("no-labels")}=${fb.no_labels}  ${dim("error")}=${fb.error}`
+    );
+  }
   return lines.join("\n");
 }
 

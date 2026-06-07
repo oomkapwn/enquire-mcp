@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.31] — 2026-06-07
+
+> **TL;DR:** **Eval failure-bucket diagnostics (seeklink-inspired) — turn "the score is low" into "*why* it's low".** The eval harness now classifies every query into a retrieval-failure bucket — `hit_rank_1` / `hit_top_k` / `miss` / `no_labels` / `error` — surfaced per-query and as an aggregate `diagnostics.failure_buckets` counter, plus a breakdown line in the CLI report. This is the half of seeklink's `failure_bucket` idea that fits enquire **safely**: the buckets are derived **only from the already-scored top-K** results, so the metric numbers (NDCG/Recall/MRR) are **byte-identical** — zero behavior change, zero extra retrieval cost. **`answer_contains` answerability is deliberately DEFERRED** (honest scoping): a faithful version needs the full matched-chunk text, but `SearchHybridHit` only carries a ~120-char `snippet`, so a snippet-based check would systematically *under-report* (phrase in the chunk but outside the preview) — a misleading metric this project won't ship. The deeper seeklink "candidate-gen miss vs ranking-budget miss" split is likewise deferred (it needs a retrieval wider than K, which would change the reranker budget and break historical comparability) — both deferrals are documented inline in `eval.ts`. **`src/eval.ts` + tests only; +12 tests → 1156.**
+
+**Pre-release (v3.10 line) — eval failure-bucket diagnostics (seeklink-inspired).**
+
+### Added
+
+- **`FailureBucket` type + `classifyFailureBucket()` + `tallyFailureBuckets()`** (`src/eval.ts`, all exported + pure) — classify a query's outcome from its scored top-K paths; `error` (threw) takes precedence, then `no_labels`, `hit_rank_1`, `hit_top_k`, `miss`.
+- **`EvalQueryScore.failure_bucket`** (per query) + **`EvalResult.diagnostics.failure_buckets`** (aggregate counter; optional so hand-built results like `run-benchmarks.mjs` stay valid — `runEval` always populates it).
+- **`formatEvalResult` failure-bucket breakdown** — a `failure buckets: hit@1=… hit@k=… miss=… …` line + a `bucket` column in `--per-query` mode.
+
+### Deferred (documented inline in `eval.ts`, with reasons)
+
+- **`answer_contains` answerability** — needs full chunk text; `SearchHybridHit` exposes only a ~120-char snippet, so a snippet-based check would under-report and mislead. Revisit if `searchHybrid` ever returns the full matched chunk.
+- **`miss` → candidate-gen-miss vs ranking-budget/reranker-ordering-miss split** — needs a retrieval wider than K, which would change the reranker's candidate budget and thus the scored numbers (breaking historical comparability). Needs first-stage-diagnostics plumbing from `searchHybrid` first.
+
+### Tests (1156)
+
+- +12 (`tests/eval.test.ts`): `classifyFailureBucket` (5 positive + 3 NEGATIVE controls), `tallyFailureBuckets` (complete-counter + empty-list NEGATIVE), `runEval` populates `failure_bucket` + `diagnostics`, and `formatEvalResult` renders/omits the breakdown (positive + NEGATIVE). 1144 → 1156.
+
+### Files changed
+
+- `src/eval.ts` (FailureBucket type + classifier + tally + interface fields + renderer), `tests/eval.test.ts` (+12), count-bump in `README.md` / `package.json` / `llms.txt` / `AGENTS.md` / `ROADMAP.md` / `docs/COMPARISON.md` / `CLAUDE.md`.
+- version bump 3.10.0-rc.30 → 3.10.0-rc.31.
+
+---
+
 ## [3.10.0-rc.30] — 2026-06-07
 
 > **TL;DR:** **Bilingual `README.zh.md` (中文) — reach into the Chinese PKM / Obsidian / dev community (seeklink-inspired).** Added a complete, faithful **Chinese README** mirroring every section (problem/solution, grounded-not-extracted + freshness, quick start, use cases, "when NOT to use it", the full capability table, the 7-tier retrieval ladder, Trust, FAQ) — capitalizing on enquire's *already-shipped* multilingual + CJK (`Intl.Segmenter`) support that was previously under-marketed. A `[English] · [中文]` switcher sits at the top of **both** READMEs, and `README.zh.md` ships in the npm tarball (`package.json#files`). Honest disclaimer up top: the **English README is authoritative** (it updates every release). Per the rc.14 "new docs surface with numeric claims needs an invariant in the same PR" rule, `docs-consistency.test.ts` now **pins the zh numeric claims**: tool count (`45 个工具`) and prompt count (`19 个 MCP 提示词`) exact against `TOOL_MANIFEST`, and the test count as a **drift-proof lower bound** (`1100+ 单元测试`, mirroring AGENTS.md's `X+ tests`) so it stays valid as the suite grows. **Docs/tests only — zero `src/` runtime change. +1 test (the zh invariant) → 1144.**

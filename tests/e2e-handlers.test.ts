@@ -402,3 +402,41 @@ describe("T-4 — serve-http HTTP smoke (v3.8.5)", () => {
     expect(text).toMatch(/serverInfo|enquire-mcp/);
   });
 });
+
+// ─── FTS5 fail-soft on --persistent-index open failure (v3.10.0-rc.33) ───────
+// Post-rc.31 audit: a pruned/broken better-sqlite3 + `--persistent-index` used
+// to HARD-CRASH serve startup (re-throw). Now it degrades to TF-IDF — parity
+// with the embed-db / PDF / HNSW fail-soft paths and the "auto-degrades
+// gracefully: works with any subset of signals" guarantee. We force the failure
+// with better-sqlite3 PRESENT by pointing --index-file at a DIRECTORY (a dir
+// can't be opened as a SQLite DB → `ftsIndex.open()` throws). Pre-fix, serve
+// crashed → the spawnServer initialize handshake would time out → client null.
+describe("FTS5 fail-soft on --persistent-index open failure (v3.10.0-rc.33)", () => {
+  let client: RpcClient | null = null;
+  beforeAll(async () => {
+    if (!distExists()) return;
+    const vault = await makeSemanticVault("fts-failsoft");
+    const badIndex = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bad-ftsindex-"));
+    try {
+      client = await spawnServer(vault, ["--persistent-index", "--index-file", badIndex]);
+    } catch {
+      client = null; // pre-fix: startup crash → initialize times out → reject
+    }
+  });
+  afterAll(() => client?.close());
+
+  it("CI GUARD — serve still came up (degraded to TF-IDF) despite the unopenable FTS5 index", () => {
+    if (!distExists()) return;
+    expect(
+      client,
+      "serve must complete the MCP handshake despite --persistent-index open failure (fail-soft to TF-IDF)"
+    ).not.toBeNull();
+  });
+
+  it("tools/list still answers with the umbrella obsidian_search (degraded, not crashed)", async () => {
+    if (!client) return;
+    const res = await client.rpc("tools/list", {});
+    const tools = (res.result as { tools?: { name: string }[] } | undefined)?.tools ?? [];
+    expect(tools.some((t) => t.name === "obsidian_search")).toBe(true);
+  });
+});

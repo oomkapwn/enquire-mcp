@@ -914,8 +914,15 @@ export async function peekFtsMetaSafe(file: string): Promise<{
   } catch {
     return null;
   }
-  const db = new Database(file, { readonly: true, fileMustExist: true });
+  // v3.10.0-rc.33 (post-rc.31 audit) — `new Database()` + the meta queries are
+  // now INSIDE the try: a "Safe" peek must NEVER throw. Previously a corrupt /
+  // unreadable / not-a-DB index file (or a path that is a directory) made
+  // `new Database(file)` throw and crashed serve startup at the `--persistent-
+  // index` pre-open peek — before the open() fail-soft could catch it. Any
+  // failure now → null ("no usable meta"), and the caller degrades to TF-IDF.
+  let db: Db | null = null;
   try {
+    db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as Db;
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
     if (!tableCheck) return null;
     const rows = db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
@@ -928,7 +935,9 @@ export async function peekFtsMetaSafe(file: string): Promise<{
       }
     }
     return meta;
+  } catch {
+    return null;
   } finally {
-    db.close();
+    db?.close();
   }
 }

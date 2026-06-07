@@ -64,6 +64,12 @@ describe("ndcgAtK (v2.12.0)", () => {
     const retrieved = ["x.md", "x.md", "x.md", "x.md", "x.md", "x.md", "x.md", "x.md", "x.md", "x.md", "a.md"];
     expect(ndcgAtK(retrieved, new Set(["a.md"]), 10)).toBe(0);
   });
+
+  it("credits a duplicated relevant path once — never exceeds the ideal (v3.10.0-rc.33)", () => {
+    // a.md is relevant and appears at rank 1 AND rank 2; only the rank-1 credit
+    // counts, so NDCG = 1.0 (not the inflated >1 the old double-count produced).
+    expect(ndcgAtK(["a.md", "a.md"], new Set(["a.md"]), 10)).toBeCloseTo(1.0, 5);
+  });
 });
 
 describe("recallAtK (v2.12.0)", () => {
@@ -83,6 +89,13 @@ describe("recallAtK (v2.12.0)", () => {
     // a.md is at position 1, b.md at position 2; K=1 → only a.md visible.
     // 1 relevant in top-1 / 2 total relevant = 0.5
     expect(recallAtK(["a.md", "b.md"], new Set(["a.md", "b.md"]), 1)).toBe(0.5);
+  });
+
+  it("counts a duplicated relevant path once — recall never exceeds 1.0 (v3.10.0-rc.33)", () => {
+    // a.md relevant + duplicated in the result list → recall must be 1/1 = 1,
+    // not the 2/1 = 2 the old hits++ produced.
+    expect(recallAtK(["a.md", "a.md"], new Set(["a.md"]), 10)).toBe(1);
+    expect(recallAtK(["a.md", "a.md", "b.md"], new Set(["a.md", "b.md"]), 10)).toBe(1);
   });
 });
 
@@ -395,6 +408,35 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
   it("NEGATIVE: formatEvalResult omits the failure-bucket line when diagnostics absent", () => {
     const out = formatEvalResult(makeResult({ diagnostics: undefined }));
     expect(out).not.toContain("failure buckets:");
+  });
+
+  it("per-query table stays aligned for ids longer than 15 chars (v3.10.0-rc.33)", () => {
+    const longId = "a-very-long-query-id-23"; // 23 chars > the old fixed 15-pad
+    const out = formatEvalResult(
+      makeResult({
+        per_query: [
+          {
+            id: longId,
+            query: "q",
+            ndcg_at_k: 0.5,
+            recall_at_k: 0.5,
+            mrr: 0.5,
+            hits_relevant: 1,
+            hits_total_relevant: 1,
+            latency_ms: 1,
+            failure_bucket: "hit_rank_1"
+          }
+        ]
+      }),
+      { perQuery: true }
+    );
+    const lines = out.split("\n");
+    const header = lines.find((l) => l.includes("ndcg@k")) ?? "";
+    const row = lines.find((l) => l.includes(longId)) ?? "";
+    // With the dynamic id-column width, the header's "ndcg@k" and the row's
+    // first score column start at the SAME offset (pre-fix the 23-char id
+    // overflowed the 15-pad and shifted every following column right).
+    expect(header.indexOf("ndcg@k")).toBe(row.indexOf("0.5000"));
   });
 
   it("formatEvalResult --per-query mode includes the per-query table", () => {

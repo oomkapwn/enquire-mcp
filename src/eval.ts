@@ -130,9 +130,14 @@ export interface EvalResult {
 export function ndcgAtK(retrievedPaths: string[], relevant: ReadonlySet<string>, k: number): number {
   if (relevant.size === 0) return 0;
   let dcg = 0;
+  // v3.10.0-rc.33 (post-rc.31 audit) — credit each relevant path ONCE, at its
+  // first rank: a duplicate in the result list must not inflate DCG past the
+  // ideal (same pre-existing, eval-unreachable class as recallAtK's dedupe).
+  const credited = new Set<string>();
   for (let i = 0; i < Math.min(k, retrievedPaths.length); i++) {
     const path = retrievedPaths[i];
-    if (path && relevant.has(path)) {
+    if (path && relevant.has(path) && !credited.has(path)) {
+      credited.add(path);
       dcg += 1 / Math.log2(i + 2); // i+2 because i is 0-indexed; rank = i+1, log2(rank+1)
     }
   }
@@ -146,12 +151,17 @@ export function ndcgAtK(retrievedPaths: string[], relevant: ReadonlySet<string>,
 /** Recall @ K = |retrieved ∩ relevant| / |relevant|. */
 export function recallAtK(retrievedPaths: string[], relevant: ReadonlySet<string>, k: number): number {
   if (relevant.size === 0) return 0;
-  let hits = 0;
+  // v3.10.0-rc.33 (post-rc.31 audit) — count DISTINCT relevant paths in top-K.
+  // A relevant path duplicated in the result list must not inflate recall past
+  // 1.0. (Unreachable via the eval path at the default `note` granularity —
+  // `searchHybrid` yields one hit per note path — but the pure function is now
+  // correct for any caller.)
+  const found = new Set<string>();
   for (let i = 0; i < Math.min(k, retrievedPaths.length); i++) {
-    const path = retrievedPaths[i];
-    if (path && relevant.has(path)) hits += 1;
+    const p = retrievedPaths[i];
+    if (p && relevant.has(p)) found.add(p);
   }
-  return hits / relevant.size;
+  return found.size / relevant.size;
 }
 
 /** Mean Reciprocal Rank — 1/rank of first relevant; 0 if none in top-K. */
@@ -401,10 +411,14 @@ export function formatEvalResult(result: EvalResult, opts: { perQuery?: boolean 
   lines.push("");
   if (opts.perQuery) {
     lines.push(bold("per query:"));
-    lines.push("  id              ndcg@k  recall@k  mrr     hits   latency   bucket");
+    // v3.10.0-rc.33 (audit) — dynamic id-column width so ids longer than 15
+    // chars don't shift every following column (mirrors formatEvalMatrix's
+    // labelWidth). Empty per_query → Math.max(15) = 15.
+    const idWidth = Math.max(15, ...result.per_query.map((p) => p.id.length));
+    lines.push(`  ${"id".padEnd(idWidth)} ndcg@k  recall@k  mrr     hits   latency   bucket`);
     for (const p of result.per_query) {
       lines.push(
-        `  ${p.id.padEnd(15)} ${p.ndcg_at_k.toFixed(4)}  ${p.recall_at_k.toFixed(4)}    ${p.mrr.toFixed(4)}  ${`${p.hits_relevant}/${p.hits_total_relevant}`.padEnd(6)} ${`${p.latency_ms}ms`.padEnd(8)} ${p.failure_bucket ?? "?"}`
+        `  ${p.id.padEnd(idWidth)} ${p.ndcg_at_k.toFixed(4)}  ${p.recall_at_k.toFixed(4)}    ${p.mrr.toFixed(4)}  ${`${p.hits_relevant}/${p.hits_total_relevant}`.padEnd(6)} ${`${p.latency_ms}ms`.padEnd(8)} ${p.failure_bucket ?? "?"}`
       );
     }
     lines.push("");

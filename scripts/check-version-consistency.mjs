@@ -33,16 +33,40 @@ const surfaces = {
   "server.json:packages[0].version": serverJson.packages?.[0]?.version
 };
 
+const errors = [];
+
 const distinct = new Set(Object.values(surfaces));
-if (distinct.size === 1) {
+if (distinct.size !== 1) {
+  errors.push("Version drift across published surfaces:");
+  for (const [where, v] of Object.entries(surfaces)) errors.push(`  ${where}: ${v ?? "(missing)"}`);
+}
+
+// v3.10.0-rc.32 — CLAUDE.md status roll-up `@rc`=<version> currency guard.
+// This is NOT one of the published-version surfaces above; it's the status-
+// summary claim that recurringly went stale (the documented "α-class": the
+// roll-up froze at rc.12 / rc.4 / v3.7.4 / v3.7.9 / v3.8.4 — and again post-
+// rc.31, frozen at `@rc`=rc.26 while the real @rc was rc.31, because no gate
+// pinned the roll-up's RC version). Only enforced on an `-rc.N` build (on a
+// stable release the roll-up's `@rc` legitimately refers to the prior RC line).
+// The roll-up MUST carry the marker `... (current roll-up; \`@rc\`=X.Y.Z-rc.N ...`.
+if (/-rc\.\d+$/.test(pkg.version)) {
+  const claudeMd = await readFile(new URL("../CLAUDE.md", import.meta.url), "utf8");
+  const rollupRc = /current roll-up;\s*`@rc`\s*=\s*(\d+\.\d+\.\d+-rc\.\d+)/.exec(claudeMd)?.[1];
+  if (rollupRc !== pkg.version) {
+    errors.push(
+      `CLAUDE.md status roll-up \`@rc\`=${rollupRc ?? "(marker missing)"} but package.json is ${pkg.version} — ` +
+        "advance the roll-up's `(current roll-up; `@rc`=<version>...)` marker (and its RC range + summary) to the " +
+        "current release. This is the α-class status-stale guard (added v3.10.0-rc.32)."
+    );
+  }
+}
+
+if (errors.length === 0) {
   process.stdout.write(
-    `OK — version ${[...distinct][0]} is consistent across ${Object.keys(surfaces).length} surfaces\n`
+    `OK — version ${pkg.version} consistent across ${Object.keys(surfaces).length} surfaces + CLAUDE.md roll-up @rc currency\n`
   );
   process.exit(0);
 }
 
-process.stderr.write("Version drift detected:\n");
-for (const [where, v] of Object.entries(surfaces)) {
-  process.stderr.write(`  ${where}: ${v ?? "(missing)"}\n`);
-}
+process.stderr.write(`${errors.join("\n")}\n`);
 process.exit(1);

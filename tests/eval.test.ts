@@ -265,6 +265,10 @@ describe("runEval (v2.12.0)", () => {
     // conflated with a genuine zero-relevance retrieval.
     expect(result.query_errors).toBe(1);
     expect(result.per_query[1]?.error).toBe(true);
+    // v3.10.0-rc.32 (audit LOW) — the errored query's bucket is "error" end-to-end
+    // (runEval wires `errored` into classifyFailureBucket + the aggregate counter).
+    expect(result.per_query[1]?.failure_bucket).toBe("error");
+    expect(result.diagnostics?.failure_buckets.error).toBe(1);
     // NEGATIVE control: the successful query carries no error flag.
     expect(result.per_query[0]?.error).toBeUndefined();
     // The human-readable banner surfaces the deflation warning.

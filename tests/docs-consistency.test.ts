@@ -166,7 +166,11 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     // wasn't directly followed by " tools") and even contradicted its own
     // 34+4+7=45 breakdown until rc.28. Inline guard against the live count, same
     // shape as the `**N tools**` and `+ N gated writes` checks in this test.
-    for (const pm of readme.matchAll(/(\d+)\s+production tools\b/g)) {
+    // v3.10.0-rc.32 (audit LOW) — presence-assert so the guard isn't
+    // vacuous-on-deletion (catches both a stale number AND the row vanishing).
+    const productionToolMatches = [...readme.matchAll(/(\d+)\s+production tools\b/g)];
+    expect(productionToolMatches.length, 'README must keep the "N production tools" comparison row').toBeGreaterThan(0);
+    for (const pm of productionToolMatches) {
       expect(
         Number.parseInt(pm[1] ?? "0", 10),
         `README "N production tools" must equal the registered tool count (${counts.allTools})`
@@ -495,13 +499,13 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     // v3.10.0-rc.28 — also pin the "| Tool count | N |" comparison-table cell.
     // The "N tools" regex above can't see a bare table cell, so it stayed stale
     // at 44 (one behind the 45th tool, obsidian_stale_notes) until rc.28.
+    // v3.10.0-rc.32 (audit LOW) — presence-assert (not vacuous-on-deletion).
     const cellMatch = /Tool count\s*\|\s*\**(\d+)\**/.exec(comparisonMd);
-    if (cellMatch) {
-      expect(
-        Number.parseInt(cellMatch[1] ?? "0", 10),
-        `COMPARISON.md "Tool count | N" must equal the registered tool count (${counts.allTools})`
-      ).toBe(counts.allTools);
-    }
+    expect(cellMatch, 'COMPARISON.md must keep the "| Tool count | N |" row').not.toBeNull();
+    expect(
+      Number.parseInt(cellMatch?.[1] ?? "0", 10),
+      `COMPARISON.md "Tool count | N" must equal the registered tool count (${counts.allTools})`
+    ).toBe(counts.allTools);
   });
 
   // v3.7.13 M12 — extend COMPARISON.md gate to test count. The audit round-15
@@ -963,7 +967,10 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     // v3.10.0-rc.28 — also pin AGENTS.md "N tool implementations" (file-tree
     // comment) to the registered tool count; it was stale at 44 until rc.28.
     const counts = await getActualCounts();
-    for (const tm of agents.matchAll(/(\d+)\s+tool implementations\b/g)) {
+    // v3.10.0-rc.32 (audit LOW) — presence-assert (not vacuous-on-deletion).
+    const toolImplMatches = [...agents.matchAll(/(\d+)\s+tool implementations\b/g)];
+    expect(toolImplMatches.length, 'AGENTS.md must keep the "N tool implementations" note').toBeGreaterThan(0);
+    for (const tm of toolImplMatches) {
       expect(
         Number.parseInt(tm[1] ?? "0", 10),
         `AGENTS.md "N tool implementations" must equal ${counts.allTools}`

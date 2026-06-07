@@ -187,7 +187,7 @@ Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomka
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1143 unit tests · 9 required + 4 advisory CI gates per PR** | ✅ | n/a | rare |
+| **1143 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -257,7 +257,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `gray-matter` (`js-yaml` safeLoad) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **CI** | **9 required** branch-protection gates: (1) `lint`, (2) `test` on Node 22, (3) `test` on Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **4 advisory**: `test-macos` via `.github/workflows/ci.yml`; CodeQL ×2 + Analyze actions via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (not workflow files). Release workflow re-verifies all 9 required passed on tagged SHA before npm publish. _v3.7.10 — `docs` (TypeDoc generation gate) added to required set. v3.7.13 — `engines.node` floor bumped to `>=22.13.0` to match the CI matrix. v3.8.0-rc.6 — `oia` (Outside-In Audit) promoted from advisory._ |
+| **CI** | **9 required** branch-protection gates: (1) `lint`, (2) `test` on Node 22, (3) `test` on Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 advisory**: `test-macos` + `docker` (Dockerfile build + `tools/list` introspection smoke) via `.github/workflows/ci.yml`; CodeQL ×2 + Analyze actions via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (not workflow files). Release workflow re-verifies all 9 required passed on tagged SHA before npm publish. _v3.7.10 — `docs` (TypeDoc generation gate) added to required set. v3.7.13 — `engines.node` floor bumped to `>=22.13.0` to match the CI matrix. v3.8.0-rc.6 — `oia` (Outside-In Audit) promoted from advisory._ |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |

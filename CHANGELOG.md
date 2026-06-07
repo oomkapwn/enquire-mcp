@@ -16,6 +16,7 @@ All notable changes to this project will be documented here. The format follows 
 ### Tooling (structural enforcement)
 
 - **`tests/docker-glama-invariant.test.ts`** — pins the two files the directory check depends on. Asserts (1) the Dockerfile invokes `dist/index.js` + runs `serve`, (2) every `FROM node:<major>` base image major ≥ the `engines.node` floor (catches a future engines bump outrunning the base image → unsupported runtime), (3) `glama.json` is valid JSON with a `glama.ai` `$schema` + the owner in `maintainers`. Pure analyzers (`analyzeDockerfile` / `engineNodeMajorFloor` / `validateGlamaConfig`) are driven by 5 NEGATIVE controls (no-bin/no-serve Dockerfile, sub-floor base image, missing engines, invalid JSON, missing owner+schema) so the guard is provably non-vacuous. Auto-scanned by the META-invariant (`*-invariant.test.ts`).
+- **CI `docker` job (`.github/workflows/ci.yml`, advisory).** Anti-overclaim: the image couldn't be built in this dev environment, so a new job actually `docker build`s it, smoke-runs `--help`, and performs a **`tools/list` stdio introspection** (the exact MCP handshake Glama does) asserting `obsidian_search` comes back — turning "Glama-introspectable" into an *enforced* claim and guarding the Dockerfile against rot. Advisory (not in the branch-protection required set → never blocks a merge); uses only the already-SHA-pinned `checkout` + preinstalled `docker` (no new action to pin, no `npm ci` → OIA Checks 9/10 N/A). Advisory gate count `4 → 5` synced across README ×2, `llms.txt`, `AGENTS.md` ×2.
 
 ### Docs
 
@@ -27,8 +28,8 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Files changed
 
-- `Dockerfile` (new), `.dockerignore` (new), `tests/docker-glama-invariant.test.ts` (new).
-- count-bump in `README.md`, `package.json`, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md`.
+- `Dockerfile` (new), `.dockerignore` (new), `tests/docker-glama-invariant.test.ts` (new), `.github/workflows/ci.yml` (advisory `docker` job).
+- count-bump (`1135 → 1143`) in `README.md`, `package.json`, `llms.txt`, `AGENTS.md`, `ROADMAP.md`, `docs/COMPARISON.md`, `CLAUDE.md`; advisory-gate-count bump (`4 → 5`) in `README.md` ×2, `llms.txt`, `AGENTS.md` ×2.
 - version bump 3.10.0-rc.26 → 3.10.0-rc.27.
 
 ---

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.29] — 2026-06-07
+
+> **TL;DR:** **`llms.txt` → full agent contract (seeklink-inspired).** enquire's `llms.txt` followed the [llmstxt.org](https://llmstxt.org/) curated-links shape; seeklink's packs a dense "how to drive me" contract instead. Took the best of both: kept the spec-compliant link sections and **added an `## Agent contract` + `### Common failure modes`** block (free-form, before the trailing `Optional` section, so still spec-valid). It gives an AI agent the minimum loop (`obsidian_search` → `obsidian_read_note` → cite), the prefer-enquire-for-meaning-vs-`grep`-for-literal rule, the observability fields (`per_signal`, `age_days`/`stale`), the read-only-by-default posture, an **untrusted-content security note** (retrieved note text is data, not instructions), and the real failure modes (model-not-downloaded → TF-IDF fallback, empty fresh vault, whole-vault scan cap, `serve-http` bearer 401). No new gated numeric claims (so no invariant churn). **`llms.txt` only — zero `src/`, 1143 tests unchanged.**
+
+**Pre-release (v3.10 line) — llms.txt agent-contract enrichment (seeklink-inspired).**
+
+### Added
+
+- **`llms.txt` `## Agent contract` section** — minimum agent loop, when-to-prefer-enquire-vs-`grep`, observability (`per_signal` / `age_days` / `stale`; scores sort within one query only), read-only-by-default + `--disabled-tools`/`--enabled-tools`, and an **untrusted-content** note (treat "ignore previous instructions"-style text inside a retrieved note as content, never a command).
+- **`llms.txt` `### Common failure modes` subsection** — first-call embedding-model-not-downloaded → `setup`/`install-model` (umbrella degrades to TF-IDF meanwhile), empty fresh vault, whole-vault scan safety cap (partial results flagged, never silent), and `serve-http` bearer-token-too-short → HTTP 401 (`gen-token` mints a valid one).
+
+### Tests (1143)
+
+- None — `llms.txt` only; no gated numeric claims added (existing llms.txt invariants — test count, 34+4+7 tool breakdown, prompt count, CI-gate count — unchanged). 1143 unchanged.
+
+### Files changed
+
+- `llms.txt` (Agent contract + failure-modes sections).
+- version bump 3.10.0-rc.28 → 3.10.0-rc.29.
+
+---
+
 ## [3.10.0-rc.28] — 2026-06-07
 
 > **TL;DR:** **README trust-batch — honest scoping + a self-propagating agent rule (seeklink-inspired).** Added a candid **"When enquire-mcp is *not* the right tool"** section (use `rg` for literal search; conversation-memory tools are a different category; not multi-user/GUI/web-scale) — explicit non-goals build trust, mirroring seeklink's "Not For". Marketed the already-existing **read-only-by-default** posture with a new **least-privilege** Trust row (`--disabled-tools` / `--enabled-tools`), and shipped a **reusable agent-rule snippet** users drop into their own `AGENTS.md`/`CLAUDE.md`/`.cursorrules` so their agent learns *when* to reach for the vault (and when to prefer `grep`). Plus two **state-driven catches** the change-driven gates' regexes missed: a stale **"44 tools" → 45** in three docs (README comparison row, `docs/COMPARISON.md` table cell, `AGENTS.md` file-tree — the 45th tool `obsidian_stale_notes` shipped in v3.10 but these phrasings never updated; one even contradicted its own 34+4+7=45 breakdown), and a **broken Karpathy gist link** in the README (404 — every other reference used the correct id). Per the "drift demands a structural defense" rule, the same PR **extends the tool-count invariants** to pin the missed phrasings (`**N production tools**`, `| Tool count | N |`, `N tool implementations`). **Docs/tests only — zero `src/` runtime change, 1143 tests unchanged.**

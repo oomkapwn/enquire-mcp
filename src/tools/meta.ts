@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { Worker } from "node:worker_threads";
 import matter from "gray-matter";
 import type { FtsIndex } from "../fts5.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -573,6 +574,22 @@ export interface OpenQuestion {
  * against an unbounded user regex compiled into V8's backtracking engine.
  */
 export const MAX_QUESTION_PATTERN_LEN = 200;
+
+/**
+ * Hard wall-clock budget (ms) for matching a CALLER-SUPPLIED
+ * `obsidian_open_questions` pattern against the vault, enforced by running the
+ * match on a WORKER THREAD ({@link matchLinesBounded}). {@link isCatastrophicRegex}
+ * is a best-effort static denylist (ReDoS detection is undecidable — a v3.10.0-rc.39
+ * re-sweep confirmed a residual tail of nested patterns it under-flags); this is
+ * the HARD backstop. Because matching runs off the main thread, the event loop can
+ * NEVER hang regardless of pattern, and a pattern that blows the budget is rejected
+ * fail-closed. Generous enough that a legit linear pattern over a large vault
+ * finishes well under it, while a catastrophic-backtracking pattern (effectively
+ * unbounded) is killed.
+ * @internal v3.10.0-rc.39 — the hard ReDoS sink-bound (closes the static-detector
+ *   residual the rc.36 re-sweep surfaced).
+ */
+export const MAX_QUESTION_SCAN_MS = 5000;
 
 /**
  * Read the regex quantifier (if any) starting at `pos` in `src`. Returns
@@ -1314,6 +1331,61 @@ export function isCatastrophicRegex(src: string): boolean {
 }
 
 /**
+ * Match `lines` against a caller-supplied regex `pattern` (compiled case-INsensitively)
+ * on a WORKER THREAD, bounded by `budgetMs`. Returns `{ idx, q }` for every line whose
+ * FIRST capture group matched (mirrors the `re.exec(line)?.[1]` contract
+ * {@link getOpenQuestions} uses). The worker isolates V8's backtracking off the main
+ * event loop and the timeout terminates it, so even a catastrophic-backtracking pattern
+ * the best-effort static {@link isCatastrophicRegex} guard MISSED can never hang the
+ * server — it's rejected fail-closed when the budget elapses. An invalid pattern rejects
+ * with a clear error. This is the HARD ReDoS sink-bound; the static guard is a cheap
+ * pre-filter in front of it.
+ * @internal v3.10.0-rc.39 — closes the static-detector residual the rc.36 re-sweep found.
+ */
+export function matchLinesBounded(
+  pattern: string,
+  lines: readonly string[],
+  budgetMs: number
+): Promise<{ idx: number; q: string }[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      "const{parentPort,workerData}=require('node:worker_threads');" +
+        "try{const re=new RegExp(workerData.pattern,'i');const L=workerData.lines;const out=[];" +
+        "for(let i=0;i<L.length;i++){const m=re.exec(L[i]);if(m&&m[1]!=null)out.push({idx:i,q:m[1]});}" +
+        "parentPort.postMessage({ok:true,out});}catch(e){parentPort.postMessage({ok:false,err:String((e&&e.message)||e)});}",
+      { eval: true, workerData: { pattern, lines } }
+    );
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      fn();
+    };
+    const timer = setTimeout(
+      () =>
+        settle(() =>
+          reject(
+            new Error(
+              `obsidian_open_questions: pattern rejected — matching exceeded the ${budgetMs}ms safe budget ` +
+                "(likely catastrophic backtracking / ReDoS). Simplify the pattern or omit it to use the safe default."
+            )
+          )
+        ),
+      budgetMs
+    );
+    worker.on("message", (msg: { ok: boolean; out?: { idx: number; q: string }[]; err?: string }) =>
+      settle(() => {
+        if (msg.ok) resolve(msg.out ?? []);
+        else reject(new Error(`obsidian_open_questions: invalid pattern — ${msg.err ?? "could not compile"}`));
+      })
+    );
+    worker.on("error", (e) => settle(() => reject(e instanceof Error ? e : new Error(String(e)))));
+  });
+}
+
+/**
  * Surface unresolved threads — `Open question:` / `Q:` / `TODO?` / `??`
  * markers across the vault.
  *
@@ -1342,7 +1414,7 @@ export function isCatastrophicRegex(src: string): boolean {
  */
 export async function getOpenQuestions(
   vault: Vault,
-  args: { folder?: string; limit?: number; pattern?: string }
+  args: { folder?: string; limit?: number; pattern?: string; scanBudgetMs?: number }
 ): Promise<OpenQuestion[]> {
   await vault.ensureExists();
   const limit = args.limit ?? 100;
@@ -1358,7 +1430,13 @@ export async function getOpenQuestions(
   // run against every line of every note — an unbounded regex would be a
   // remote DoS on serve-http. Reject over-long or catastrophic patterns
   // BEFORE compiling. See isCatastrophicRegex / MAX_QUESTION_PATTERN_LEN.
-  let re: RegExp;
+  // ReDoS defense (rc.9 + rc.39): the safe default is matched inline; a CALLER-
+  // supplied override is (1) length-capped + cheaply pre-filtered by the best-effort
+  // isCatastrophicRegex denylist (rejects OBVIOUS shapes without spawning a worker),
+  // then (2) HARD-bounded by matching on a WORKER THREAD with a wall-clock budget
+  // (matchLinesBounded below) — so even a shape the denylist misses (ReDoS is
+  // undecidable; a rc.36 re-sweep confirmed a residual tail) can never hang the
+  // event loop. See MAX_QUESTION_SCAN_MS. The worker compiles the pattern itself.
   if (args.pattern !== undefined) {
     if (args.pattern.length > MAX_QUESTION_PATTERN_LEN) {
       throw new Error(
@@ -1373,9 +1451,6 @@ export async function getOpenQuestions(
           "(e.g. `(a|a)+`, `(a|ab)*`). Simplify the pattern or omit it to use the safe default."
       );
     }
-    re = new RegExp(args.pattern, "i");
-  } else {
-    re = new RegExp(defaultPat, "i");
   }
 
   // v3.10.0-rc.16 (audit M5) — collect ALL matches across the (capped) scan,
@@ -1385,35 +1460,69 @@ export async function getOpenQuestions(
   // scan is capped (capScanEntries) so a pathological vault can't drive
   // unbounded readNote I/O — defense-in-depth, same posture as the graph tools.
   const entries = capScanEntries(await vault.listMarkdown(args.folder), "obsidian_open_questions");
-  const out: OpenQuestion[] = [];
   const now = Date.now();
+  // Collect candidate lines (skipping heading lines — never question hits) with
+  // their resolved metadata, FLAT across notes, so the regex matching can run as one
+  // bounded pass (in a worker for a caller pattern). Scan parsed.body so frontmatter
+  // lines (which can contain "Q:"-ish tokens) don't pollute results.
+  type Candidate = {
+    line: string;
+    relPath: string;
+    basename: string;
+    lineNo: number;
+    heading: string | null;
+    mtimeMs: number;
+  };
+  const candidates: Candidate[] = [];
   for (const e of entries) {
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
-    // Scan parsed.body so frontmatter lines (which can contain "Q:" -ish
-    // tokens) don't pollute results.
     const lines = parsed.body.split("\n");
     let currentHeading: string | null = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
       const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
       if (headingMatch?.[2]) {
-        currentHeading = headingMatch[2];
-        // A heading line itself isn't a question hit — skip the regex match.
+        currentHeading = headingMatch[2]; // track for context; heading lines aren't hits
         continue;
       }
-      const m = re.exec(line);
-      if (!m?.[1]) continue;
-      out.push({
-        question: m[1].trim(),
-        source_path: e.relPath,
-        source_title: stripMd(e.basename),
-        context_heading: currentHeading,
-        line: i + 1,
-        age_days: Math.round((now - mtimeMs) / (24 * 3600 * 1000)),
-        mtime: new Date(mtimeMs).toISOString()
+      candidates.push({
+        line,
+        relPath: e.relPath,
+        basename: e.basename,
+        lineNo: i + 1,
+        heading: currentHeading,
+        mtimeMs
       });
     }
   }
+  // Match. A CALLER pattern runs on a worker thread with a hard wall-clock budget
+  // (the rc.39 ReDoS sink-bound — the main event loop can never hang, any pattern);
+  // the safe default runs inline (zero overhead). Each match yields the FIRST capture
+  // group as the question text (the `re.exec(line)?.[1]` contract).
+  const lineTexts = candidates.map((c) => c.line);
+  let matches: { idx: number; q: string }[];
+  if (args.pattern !== undefined) {
+    matches = await matchLinesBounded(args.pattern, lineTexts, args.scanBudgetMs ?? MAX_QUESTION_SCAN_MS);
+  } else {
+    matches = [];
+    const re = new RegExp(defaultPat, "i");
+    for (let i = 0; i < lineTexts.length; i++) {
+      const m = re.exec(lineTexts[i] ?? "");
+      if (m?.[1] != null) matches.push({ idx: i, q: m[1] });
+    }
+  }
+  const out: OpenQuestion[] = matches.map(({ idx, q }) => {
+    const c = candidates[idx] as Candidate;
+    return {
+      question: q.trim(),
+      source_path: c.relPath,
+      source_title: stripMd(c.basename),
+      context_heading: c.heading,
+      line: c.lineNo,
+      age_days: Math.round((now - c.mtimeMs) / (24 * 3600 * 1000)),
+      mtime: new Date(c.mtimeMs).toISOString()
+    };
+  });
   // Sort oldest-first so things aging out surface first, THEN return the
   // `limit` genuinely-oldest — not an arbitrary walk-order subset (audit M5).
   out.sort((a, b) => b.age_days - a.age_days);

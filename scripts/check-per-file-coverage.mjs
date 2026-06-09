@@ -59,7 +59,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 28 }, // current 33.33% (integration-dep; rc.12 cache-path helpers tested)
+  "src/embeddings.ts": { branches: 28 }, // current 30.43% (integration-dep; rc.38 per-alias cache branches lowered it from 33.33%, still > floor)
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a

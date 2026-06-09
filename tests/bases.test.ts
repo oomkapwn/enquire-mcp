@@ -320,6 +320,42 @@ views:
     expect(paths).not.toContain("done.md");
   });
 
+  // v3.10.0-rc.38 (audit #5) — `not:` must NOT invert the v3.6.2 HN-2 fail-closed
+  // semantics. An UNEVALUATED child (unknown/typo/unparseable, incl. `inDate(...)`)
+  // fail-closes to `false` = "exclude"; pre-rc.38 `not` negated that to `true` and
+  // returned EVERY row — the exact over-inclusion HN-2 prevents, via negation.
+  // (The "filters via not" test above is the positive control: a KNOWN predicate
+  // under `not` still negates normally.)
+  it("v3.10.0-rc.38 (#5): `not:` over an unevaluated `inDate(...)` fail-closes (excludes all)", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(
+      path.join(root, "q.base"),
+      `filters:
+  not: 'inDate("2026-01-01")'
+views:
+  - type: table
+`
+    );
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.matches).toHaveLength(0); // fail-closed: not(unevaluable) → exclude, NOT include-all
+    expect(out.unevaluated_predicates).toContain('inDate("2026-01-01")');
+  });
+
+  it("v3.10.0-rc.38 (#5): `not:` over a typo'd predicate also fail-closes", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(
+      path.join(root, "q.base"),
+      `filters:
+  not: 'taggedWWith(file.file, "book")'
+views:
+  - type: table
+`
+    );
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.matches).toHaveLength(0);
+    expect(out.unevaluated_predicates).toContain('taggedWWith(file.file, "book")');
+  });
+
   it("filters via path predicates", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(

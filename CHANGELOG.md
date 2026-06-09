@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.38] — 2026-06-09
+
+> **TL;DR:** **Correctness + resource batch (audit #5 + #2, both MEDIUM).** **#5:** a `.base` filter `not: '<unevaluated predicate>'` (a typo, or `inDate(...)` / any formula predicate — none of which `obsidian_query_base` evaluates) **returned EVERY row instead of none.** v3.6.2 HN-2 fail-closes an unevaluable predicate to `false` = "exclude the row"; `not` blindly negated that to `true` = "include" — silently over-including the whole scan, the exact over-inclusion HN-2 (and SECURITY.md) say is prevented, reachable through negation. Fixed by evaluating the `not` child against a **fresh `unevaluated` probe** (the real set is shared across rows, so a naive size-delta only catches the first row) and excluding if the child touched any unevaluable predicate. **#2:** the embedder / BGE-reranker **ONNX InferenceSession was rebuilt on EVERY query** — `loadEmbedder`/`loadReranker` re-ran `pipeline()` / `from_pretrained()` per call (~110–120MB session init each), so a long-lived `serve --enable-reranker` paid full model-init latency per `obsidian_search` and N concurrent authenticated queries spun up N simultaneous sessions (a memory-spike vector + a direct hit to the headline sub-10ms claim). Now **cached per-alias** at the module level. **1168 → 1170 source tests** (+2 for #5; #2's behavioral path is gated-smoke + build-verified, as the whole model path is).
+
+**Pre-release (v3.10 line) — correctness + resource.**
+
+### Fixed
+
+- **`src/bases.ts` — `not:` inverted the fail-closed semantics for unevaluated predicates (#5, MEDIUM correctness).** `evalFilter`'s `if ("not" in f) return !evalFilter(f.not, ctx)` negated the `false` that an unknown/typo/unparseable predicate (incl. `inDate(...)`) fail-closes to — turning "exclude" into "include every row." Now: `const probe = new Set(); const inner = evalFilter(f.not, { ...ctx, unevaluated: probe }); merge probe → ctx.unevaluated; if (probe.size > 0) return false; return !inner;`. A fresh probe is required because `ctx.unevaluated` is shared across all rows, so a same-set size delta only fires on the first row that hits the predicate (the bug the first fix attempt hit, caught by the new test). Contradicted SECURITY.md ("Predicate strings that don't match any pattern … treated as false (fail-closed … exclude the row rather than over-include it)").
+- **`src/embeddings.ts` — embedder/reranker ONNX session rebuilt per query (#2, MEDIUM resource/latency).** `loadEmbedder` / `loadReranker` now check a module-level `Map<alias, Promise<Embedder|Reranker>>` and reuse the handle; the build is extracted to private `buildEmbedder` / `buildReranker`. The promise-cache also collapses a concurrent first-load thundering-herd, and a rejected load is evicted so a later call can retry. The `rerankerOverride` test seam (search.ts) is unaffected (it bypasses `loadReranker`).
+
+### Tests (1170)
+
+- `tests/bases.test.ts`: +2 — `not:` over an unevaluated `inDate(...)` and over a typo'd predicate both fail-closed to 0 matches (the existing "filters via not" over a KNOWN predicate is the positive control). #2's cache is build-verified (types) + exercised by the gated `reranker-smoke` (which runs `buildReranker`); the model-load path is gated behind real weights codebase-wide, so no flaky real-load unit test was added. Docs count bumped 1168 → 1170.
+
+### Method
+
+- Continuation of the rc.36 multi-agent behavioral/threat audit (correctness/resource dimensions). The two MEDIUMs are orthogonal to the rc.36 ReDoS detector and the rc.37 erasure paths. Shipped after rc.37 confirmed published on `@rc`.
+
+---
+
 ## [3.10.0-rc.37] — 2026-06-09
 
 > **TL;DR:** **Privacy / right-to-erasure batch (audit #3/#4 MEDIUM + #8 LOW).** The cross-vault `prune` GC silently **left full note bodies on disk forever**: its whitelist regex (`ENQUIRE_CACHE_ARTIFACT`) omitted the `<hash>.json` parse cache (written by `saveDiskCache`, holds every note's raw body), so decommissioning a vault and running `prune` deleted its `.fts5.db`/`.embed.db`/HNSW sidecars but kept its full-text `.json` (and any `.json.tmp`) — a GDPR-shaped right-to-erasure gap (same class as rc.34 P-2 / rc.36 F-2). Fixed the regex to cover `json` + the `.tmp` leftover, and — the structural half — the **erasure-completeness invariant now patrols the `prune` eraser too** (it previously only checked the 3 per-vault `clear-*` erasers; the `prune` surface was unguarded, which is exactly why #3 shipped). Plus #8: an emptied `--use-hnsw` embed-db now erases its stale `.hnsw.bin` + `.hnsw.meta.json` sidecars (the `.meta.json` carries deleted notes' `text_preview`). All local-only (mode-0600, no remote disclosure), behind opt-in preconditions. **1164 → 1168 source tests** (+4).

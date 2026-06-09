@@ -222,8 +222,26 @@ async function loadTransformersForRerank(): Promise<{
  *
  *  @param alias - Model alias from EMBEDDING_MODELS (default: "multilingual").
  */
+const embedderCache = new Map<string, Promise<Embedder>>();
+
+// v3.10.0-rc.38 (audit #2) — cache the loaded handle (the heavy ONNX
+// InferenceSession) per alias so it's built ONCE per process, not rebuilt on
+// every embeddings query. Pre-rc.38 each obsidian_search re-parsed the ~120MB
+// embedder graph (hundreds of ms + a transient native alloc per query; N
+// concurrent queries → N simultaneous sessions). The PROMISE-cache also collapses
+// a concurrent first-load thundering-herd; a rejected load is evicted so a later
+// call can retry rather than be stuck with a permanently-failed promise.
 export async function loadEmbedder(alias?: string): Promise<Embedder> {
   const model = resolveModel(alias);
+  const hit = embedderCache.get(model.alias);
+  if (hit) return hit;
+  const built = buildEmbedder(model);
+  embedderCache.set(model.alias, built);
+  built.catch(() => embedderCache.delete(model.alias));
+  return built;
+}
+
+async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
   const pipeline = await loadPipeline();
   const extractor = (await pipeline("feature-extraction", model.hfId)) as (
     text: string | string[],
@@ -437,8 +455,23 @@ export interface Reranker {
  *
  * @param alias - Reranker alias from RERANKER_MODELS (default: "rerank-bge" — `DEFAULT_RERANKER_ALIAS`).
  */
+const rerankerCache = new Map<string, Promise<Reranker>>();
+
+// v3.10.0-rc.38 (audit #2) — same handle-cache as loadEmbedder: the BGE
+// cross-encoder ONNX session is ~110MB and `--enable-reranker` rebuilt it on
+// EVERY search pre-rc.38. (The `rerankerOverride` test seam in search.ts bypasses
+// this entirely, so it's unaffected.)
 export async function loadReranker(alias?: string): Promise<Reranker> {
   const model = resolveRerankerModel(alias);
+  const hit = rerankerCache.get(model.alias);
+  if (hit) return hit;
+  const built = buildReranker(model);
+  rerankerCache.set(model.alias, built);
+  built.catch(() => rerankerCache.delete(model.alias));
+  return built;
+}
+
+async function buildReranker(model: RerankerModel): Promise<Reranker> {
   const { AutoTokenizer, AutoModelForSequenceClassification } = await loadTransformersForRerank();
   // q8 quantization keeps memory bounded and CPU-friendly. Models in our
   // catalog all ship q8 ONNX weights via Xenova/.

@@ -471,7 +471,23 @@ function evalFilter(f: BaseFilter, ctx: EvalContext): boolean {
   if (typeof f === "string") return evalPredicate(f, ctx);
   if ("and" in f) return f.and.every((sub) => evalFilter(sub, ctx));
   if ("or" in f) return f.or.some((sub) => evalFilter(sub, ctx));
-  if ("not" in f) return !evalFilter(f.not, ctx);
+  if ("not" in f) {
+    // v3.10.0-rc.38 (audit #5) — negation must not INVERT the fail-closed
+    // semantics. An UNEVALUATED child predicate (unknown/typo/unparseable, incl.
+    // `inDate(...)`) fail-closes to `false` = "exclude the row" (v3.6.2 HN-2);
+    // blindly negating that to `true` would INCLUDE every row — the exact
+    // over-inclusion HN-2 was created to prevent, reachable via `not:`. Evaluate the
+    // child against a FRESH `unevaluated` probe (the real ctx.unevaluated is SHARED
+    // across all rows, so a size delta only fires for the first row that hits the
+    // predicate); if the child touched ANY unevaluated predicate it wasn't
+    // evaluable → fail-closed (exclude) regardless of polarity. Predicates the
+    // probe collected are merged back so they still surface to the caller.
+    const probe = new Set<string>();
+    const inner = evalFilter(f.not, { ...ctx, unevaluated: probe });
+    for (const p of probe) ctx.unevaluated.add(p);
+    if (probe.size > 0) return false; // child wasn't evaluable → exclude, never negate-to-include
+    return !inner;
+  }
   return false;
 }
 

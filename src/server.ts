@@ -496,6 +496,18 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             const rows = db.getAllVectors();
             if (rows.length === 0) {
               process.stderr.write(`enquire: --use-hnsw passed but embed-db is empty; skipping HNSW build.\n`);
+              // v3.10.0-rc.37 (audit #8 — right-to-erasure) — an emptied embed-db
+              // leaves a stale `<persistFile>.bin` + `.meta.json` on disk, and the
+              // `.meta.json` sidecar carries deleted notes' raw `text_preview`. With
+              // no index built there is no `saveTo` to overwrite them, so erase the
+              // sidecars now (best-effort) when persistence is on — mirrors the
+              // EmbedDb.clearOnDisk sidecar-erase, minus deleting the (valid) db.
+              if (opts.hnswPersist !== false) {
+                const { unlink } = await import("node:fs/promises");
+                for (const sidecar of [`${persistFile}.bin`, `${persistFile}.meta.json`]) {
+                  await unlink(sidecar).catch(() => {});
+                }
+              }
             } else {
               const { buildHnsw } = await import("./hnsw.js");
               const index = await buildHnsw(

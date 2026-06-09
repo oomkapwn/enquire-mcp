@@ -55,6 +55,42 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 
 ---
 
+## 🏆 Why it's the best
+
+**Six features no other Obsidian-MCP has at all** (GraphRAG-light, standalone `.base` execution, HyDE, int8 quantization, late-chunking, built-in eval harness). **Plus the entire modern IR stack** (BM25 + ML embeddings + cross-encoder reranking + HNSW) that competitors ship at most one or two of. Side-by-side:
+
+| Capability | enquire-mcp | Smart Connections | Other Obsidian-MCPs |
+|---|:---:|:---:|:---:|
+| Hybrid retrieval (BM25 + TF-IDF + ML embeddings, RRF-fused) | ✅ | ❌ | ❌ |
+| **Cross-encoder reranking** (BGE, +15.5 NDCG@10 measured) | ✅ | ❌ | ❌ |
+| **HNSW vector index** (sub-10ms top-K, persisted) | ✅ | ❌ | ❌ |
+| **int8 vector quantization** (~4× smaller embed-db) | ✅ | ❌ | ❌ |
+| **Late-chunking** context-windowed embeddings | ✅ | ❌ | ❌ |
+| **PDFs blended into hybrid search** (`[page: N]` citations) | ✅ | ❌ | ❌ |
+| **OCR for scanned PDFs** (Tesseract.js, multilingual) | ✅ | ❌ | ❌ |
+| **Wikilink graph-boost** retrieval signal | ✅ | ❌ | ❌ |
+| **Multilingual semantic search** (50+ languages, on-device) | ✅ | 💰 paid | ❌ |
+| **Built-in retrieval-quality eval harness** (NDCG, Recall, MRR, A/B matrix) | ✅ | ❌ | ❌ |
+| **Remote MCP** over HTTP + bearer auth + stateful sessions | ✅ | ❌ | partial |
+| **Per-signal observability** per hit | ✅ | ❌ | ❌ |
+| **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
+| **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
+| **45 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
+| **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
+| **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
+| **1164 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
+| **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
+| **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
+| Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
+| License | MIT, free | proprietary, paid | varies |
+
+<sub>Comparison based on each project's public capabilities as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
+
+> Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
+
+---
+
 ## ⚡ Quick start
 
 ```bash
@@ -179,42 +215,6 @@ Honest non-goals — reach for something else when:
 ## 📖 API reference
 
 Auto-generated **[API reference at oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — every tool, prompt, and exported helper with full TSDoc (`@param` / `@returns` / `@example`). Rebuilt from source on every push to `main` via [`publish-docs.yml`](https://github.com/oomkapwn/enquire-mcp/blob/main/.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Drift-free by construction: the same TSDoc that AI agents and IDEs see is what's published.
-
----
-
-## 🏆 Why it's the best
-
-**Six features no other Obsidian-MCP has at all** (GraphRAG-light, standalone `.base` execution, HyDE, int8 quantization, late-chunking, built-in eval harness). **Plus the entire modern IR stack** (BM25 + ML embeddings + cross-encoder reranking + HNSW) that competitors ship at most one or two of. Side-by-side:
-
-| Capability | enquire-mcp | Smart Connections | Other Obsidian-MCPs |
-|---|:---:|:---:|:---:|
-| Hybrid retrieval (BM25 + TF-IDF + ML embeddings, RRF-fused) | ✅ | ❌ | ❌ |
-| **Cross-encoder reranking** (BGE, +15.5 NDCG@10 measured) | ✅ | ❌ | ❌ |
-| **HNSW vector index** (sub-10ms top-K, persisted) | ✅ | ❌ | ❌ |
-| **int8 vector quantization** (~4× smaller embed-db) | ✅ | ❌ | ❌ |
-| **Late-chunking** context-windowed embeddings | ✅ | ❌ | ❌ |
-| **PDFs blended into hybrid search** (`[page: N]` citations) | ✅ | ❌ | ❌ |
-| **OCR for scanned PDFs** (Tesseract.js, multilingual) | ✅ | ❌ | ❌ |
-| **Wikilink graph-boost** retrieval signal | ✅ | ❌ | ❌ |
-| **Multilingual semantic search** (50+ languages, on-device) | ✅ | 💰 paid | ❌ |
-| **Built-in retrieval-quality eval harness** (NDCG, Recall, MRR, A/B matrix) | ✅ | ❌ | ❌ |
-| **Remote MCP** over HTTP + bearer auth + stateful sessions | ✅ | ❌ | partial |
-| **Per-signal observability** per hit | ✅ | ❌ | ❌ |
-| **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
-| **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **45 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
-| **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
-| **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
-| **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1164 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
-| **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
-| **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
-| Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
-| License | MIT, free | proprietary, paid | varies |
-
-<sub>Comparison based on each project's public capabilities as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
-
-> Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 
 ---
 

@@ -358,9 +358,13 @@ export class VaultWatcher {
       return false;
     }
     try {
+      // v3.10.0-rc.40 (#7) — clear dirty BEFORE the await: a concurrent applyDiff that
+      // re-marks dirty DURING saveTo must NOT be clobbered by a late `= false`. If it
+      // stays dirty, the next serve's signature-guard rebuilds rather than trusting a
+      // sidecar that predates the concurrent diff. Re-set to true on failure below.
+      this.hnswDirty = false;
       const signature = this.embedDb.computeSignature();
       await this.hnsw.saveTo(this.hnswPersistFile, this.hnswRowsByLabel, signature);
-      this.hnswDirty = false;
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher persisted live-updated HNSW index to ${this.hnswPersistFile}.bin (+ .meta.json)\n`
@@ -368,6 +372,7 @@ export class VaultWatcher {
       }
       return true;
     } catch (err) {
+      this.hnswDirty = true; // v3.10.0-rc.40 (#7) — persist failed → still dirty so a later flush retries
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher HNSW persist failed — ${err instanceof Error ? err.message : String(err)} (next serve will rebuild from embed-db; correctness unaffected)\n`
@@ -471,6 +476,7 @@ export class VaultWatcher {
     });
 
     const onChange = (absPath: string, kind: "add" | "change" | "unlink") => {
+      if (this.closed) return; // v3.10.0-rc.40 (#6) — no new work once close() began
       // v3.9.0-rc.11 (H1) — serialize per file. Chain this event on the file's
       // prior handle (which always resolves — it catches its own errors) so
       // same-file events run sequentially and never interleave their embed-db
@@ -505,6 +511,10 @@ export class VaultWatcher {
   }
 
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
+    // v3.10.0-rc.40 (#6) — a chokidar event that slipped through after close() began
+    // must not mutate embed-db/HNSW post-drain (belt-and-suspenders to the onChange
+    // guard + the watcher being stopped first in close()).
+    if (this.closed) return;
     const relPath = path.relative(this.vault.root, absPath);
     if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) return;
     // v3.10.0-rc.20 (audit M7) — privacy defense-in-depth. The chokidar
@@ -756,18 +766,22 @@ export class VaultWatcher {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    // v3.9.0-rc.11 (H1) — drain in-flight per-file handlers first so a pending
-    // upsert + applyDiff completes and the flushed sidecar reflects it (rather
-    // than racing close vs. an in-progress live update). allSettled: a failed
-    // handler shouldn't block shutdown.
-    await Promise.allSettled([...this.fileQueues.values()]);
-    // v3.9.0-rc.6 — flush the live-updated HNSW index before shutting
-    // down so the next serve loads the up-to-date sidecar. No-op if no
-    // live updates occurred or persistence is disabled. Fail-soft.
-    await this.flushHnswToDisk();
+    // v3.10.0-rc.40 (#6) — STOP the chokidar watcher FIRST so no new file event can
+    // enter the queue during the drain+flush window below (onChange + handle also
+    // early-return when `closed`). Pre-rc.40 the watcher stayed live until AFTER the
+    // flush, so an edit landing mid-flush could apply a live diff the just-persisted
+    // sidecar didn't reflect (a lost fast-reload — the signature-guard then rebuilt).
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
     }
+    // v3.9.0-rc.11 (H1) — drain in-flight per-file handlers so a pending upsert +
+    // applyDiff completes and the flushed sidecar reflects it. allSettled: a failed
+    // handler shouldn't block shutdown.
+    await Promise.allSettled([...this.fileQueues.values()]);
+    // v3.9.0-rc.6 — flush the live-updated HNSW index before shutting down so the
+    // next serve loads the up-to-date sidecar. No-op if no live updates occurred or
+    // persistence is disabled. Fail-soft.
+    await this.flushHnswToDisk();
   }
 }

@@ -48,6 +48,32 @@ const KNOWN_WRITE_HANDLERS = new Set([
   "frontmatterSet"
 ]);
 
+/**
+ * v3.10.0-rc.40 (#11) — exported async fns in `src` whose body calls a vault MUTATION
+ * method (`vault.write*`/`append*`/`rename*`/`delete*`/`move*`/`remove*`) or a raw fs
+ * write (`writeFile`/`appendFile`/`rename`/`unlink`/`mkdir`/`rm`/`copyFile`). Coarse body
+ * slice (signature → next top-level `export`) — sufficient for write.ts's flat exported-
+ * handler shape. Used to assert KNOWN_WRITE_HANDLERS can't silently fall behind a NEW
+ * fs-mutating handler (which, wired under READ_ONLY, would falsely advertise readOnlyHint).
+ * Heuristic by design (mutation detection is undecidable) — catches the common direct-
+ * mutation forms; the NEGATIVE control below proves it's non-vacuous.
+ */
+function fsMutatingExports(src: string): string[] {
+  const MUT =
+    /\bvault\.(?:write|append|rename|delete|move|remove)\w*\s*\(|\b(?:fs\.)?(?:writeFile|appendFile|rename|unlink|mkdir|rm|rmdir|copyFile)\s*\(/;
+  const fnRe = /export async function (\w+)\s*\(/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard exec-loop idiom
+  while ((m = fnRe.exec(src)) !== null) {
+    const start = m.index;
+    const next = src.indexOf("\nexport ", start + 1);
+    const body = src.slice(start, next === -1 ? undefined : next);
+    if (MUT.test(body)) out.push(m[1] as string);
+  }
+  return out;
+}
+
 interface ToolRegistration {
   toolName: string;
   annotationKind: "READ_ONLY" | "WRITE" | "UNKNOWN";
@@ -179,6 +205,35 @@ describe("K-3 invariant — readOnlyHint vs write-handler wiring", () => {
           `Add annotations: { ...READ_ONLY, ... } or { ...WRITE, ... } to the registerTool config.`
       );
     }
+  });
+
+  it("KNOWN_WRITE_HANDLERS covers every fs-mutating exported fn in write.ts (rc.40 #11)", async () => {
+    // The hardcoded set above is only as good as our memory to extend it. Derive the
+    // fs/vault-MUTATING exported handlers from source and assert each is tracked — so a
+    // NEW write handler added without updating the set fails CI (closes the
+    // "did-we-remember-to-add-it" gap the erasure/resource-bound inventory invariants close).
+    const writeSrc = await fs.readFile(path.join("src", "tools", "write.ts"), "utf-8");
+    const untracked = fsMutatingExports(writeSrc).filter((n) => !KNOWN_WRITE_HANDLERS.has(n));
+    expect(
+      untracked,
+      `write.ts fs-mutating exported fn(s) missing from KNOWN_WRITE_HANDLERS: ${untracked.join(", ")} — add them (a READ_ONLY tool wired to one would falsely advertise readOnlyHint).`
+    ).toEqual([]);
+  });
+
+  it("NEGATIVE control — fsMutatingExports flags an untracked fs-writing export (rc.40 #11)", () => {
+    const fakeSrc = [
+      "export async function deleteNote(vault, p) {",
+      "  await fs.unlink(p);",
+      "}",
+      "export async function readSomething(v) {",
+      "  return v.readNote('x');",
+      "}",
+      ""
+    ].join("\n");
+    const mutators = fsMutatingExports(fakeSrc);
+    expect(mutators).toContain("deleteNote"); // fs.unlink → flagged as a mutator
+    expect(mutators).not.toContain("readSomething"); // read-only → not flagged
+    expect(KNOWN_WRITE_HANDLERS.has("deleteNote")).toBe(false); // → would be reported untracked
   });
 });
 

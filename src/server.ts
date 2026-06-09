@@ -101,7 +101,9 @@ export interface ServeOptions {
    *  order is re-sorted by `(1-w)*relevanceRank + w*recency`. */
   recencyWeight?: string;
   /** v3.10.0-rc.5 — recency half-life in days for --recency-weight (age at which
-   *  recency score = 0.5; also the `stale` flag threshold). Default 365. */
+   *  recency score = 0.5). Default 365. Tunes recency RE-RANKING only; the `stale`
+   *  flag on hits always uses the fixed 365-day default (rc.40 #9 — was mis-claimed
+   *  as this flag's threshold). */
   staleDays?: string;
   /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
   lateChunkContext?: string;

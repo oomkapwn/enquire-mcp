@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.40] — 2026-06-09
+
+> **TL;DR:** **Closes the entire LOW/INFO tail of the wq9ml34gr workflow-audit — the audit is now fully shipped (1 CRIT + 4 MED + 7 LOW/INFO, all closed).** Seven low-stakes items: two watcher concurrency-hardening fixes (close-window event race + HNSW dirty-flag race — both were lost-fast-reload-only, the signature-guard already rebuilt), `--stale-days` doc/help/TSDoc honesty (it tunes recency re-ranking only — the `stale` flag is a hardcoded 365), two test-infra invariant broadenings (K-3 derives write handlers from source; resource-bound detects parallel-fanout scanners), eval `hits_relevant` dedup (INFO), and dropping an unused `id-token: write` grant. **1174 → 1177 source tests.**
+
+**Pre-release (v3.10 line) — audit tail (LOW/INFO).**
+
+### Fixed
+
+- **`src/watcher.ts` #6 — close()-window event race.** `close()` now stops the chokidar watcher FIRST (before draining the queue + flushing), and `onChange`/`handle` early-return when `closed` — so an edit landing mid-shutdown can't apply a live HNSW diff the just-persisted sidecar wouldn't reflect (pre-rc.40: a lost fast-reload; the signature-guard rebuilt on next serve, no corruption).
+- **`src/watcher.ts` #7 — flushHnswToDisk dirty-flag race.** Clears `hnswDirty` BEFORE the `saveTo` await (re-set to true on failure) so a concurrent `applyDiff` that re-marks dirty during the write isn't clobbered by a late `= false` — the index stays correctly dirty → next serve rebuilds rather than trusting a sidecar that predates the diff.
+- **`--stale-days` honesty (#9)** — `src/cli.ts` help, `src/server.ts` `ServeOptions` TSDoc, and `docs/api.md` no longer claim `--stale-days` is "the threshold behind the `stale` flag." It only tunes the recency RE-ranking half-life (active when `--recency-weight > 0`); the `stale` flag on hits always uses the fixed 365-day default. (Behavior was always correct + test-pinned; the docs over-claimed.)
+- **`src/eval.ts` #13 (INFO)** — `hits_relevant` now counts DISTINCT relevant paths (Set), mirroring the rc.33 dedup in `recallAtK`/`ndcgAtK`, so a duplicate path can't print `N/M` with N>M. Unreachable at the default note granularity (paths unique); pins the contract for block-granularity callers.
+- **`.github/workflows/dist-tag-cleanup.yml` #14 (INFO)** — dropped the unused `id-token: write` permission (dist-tag rm auths via `NPM_TOKEN`; no OIDC step). Least-privilege.
+
+### Tests (1177)
+
+- **K-3 invariant #11** — new `fsMutatingExports(src)` derives fs/vault-mutating exported handlers from `write.ts` source; asserts ⊆ `KNOWN_WRITE_HANDLERS` so a NEW mutating handler wired under READ_ONLY (which would falsely advertise `readOnlyHint`) fails CI — closing the "did-we-remember-to-add-it" gap the erasure/resource-bound inventory invariants close. + NEGATIVE control (flags an untracked `fs.unlink` export).
+- **resource-bound invariant #12** — `discoverScanners` now also matches parallel-fanout iteration (`Promise.all` / `.map(async` / `for await`), not only a literal `for (`, so a whole-vault reader written as a pure `Promise.all(entries.map(async …readNote))` can't escape the cap-or-exempt gate. + NEGATIVE fixture. (No new scanner discovered in current src — confirmed no cascade.)
+- +3 source `it()` (K-3 ×2, resource-bound ×1); docs count 1174 → 1177. The watcher #6/#7 fixes are covered by the existing watcher invariant tests (which still pass — the close still drains + flushes; behavior hardened, not changed).
+
+### Method
+
+- The full LOW/INFO tail from the rc.36 multi-agent behavioral/threat audit, batched into one RC (not N reactive patches). With this, every confirmed finding (1 CRIT rc.36 · 4 MED rc.37/38 · 7 LOW/INFO rc.40 · the rc.39 sink-bound from the mandated re-sweep) is shipped — the audit is closed.
+
+---
+
 ## [3.10.0-rc.39] — 2026-06-09
 
 > **TL;DR:** **The mandated post-rc.36 ReDoS re-sweep + its architectural fix (HIGH) — permanently ends the 4×-recurring ReDoS class.** A broader-generator 20,000-pattern re-sweep confirmed rc.36's specific fix is sound (all known shapes flagged, default accepted, no regression) **but surfaced the inherent undecidable residual: 80 SAFE-classified nested patterns genuinely hang V8** — e.g. the 37-char `\W?(([ca]*?){0,3}|c{2,5}b{2,5}){0,3}$` (confirmed: hangs indefinitely on a ~50-char line). This is NOT an rc.36 regression — it's the long-standing limit of *any* static ReDoS denylist (the detection problem is undecidable). Rather than chase 80 more hand-rules (the EDA rabbit hole CLAUDE.md forbids), the fix **bounds the SINK**: `obsidian_open_questions` now matches a caller-supplied pattern on a **worker thread with a hard wall-clock budget** (`MAX_QUESTION_SCAN_MS`=5000), so the main event loop can **never** hang for any pattern, and a pattern that blows the budget is rejected fail-closed. `isCatastrophicRegex` stays as the cheap pre-filter; the safe default pattern stays inline (zero overhead). **1170 → 1174 source tests.**

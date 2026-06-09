@@ -24,7 +24,7 @@
 //
 // Patterns covered (extend as the defense library grows):
 //   • TEST-COUNT — \b\d{3,4} (unit )?tests\b
-//   • TOOL-COUNT — \b\d{2} tools\b (paired with the canonical 44)
+//   • TOOL-COUNT — \b\d{2}(\s+tools|-tool)\b (paired with the canonical 45)
 //   • PROMPT-COUNT — \b\d{2} (MCP )?prompts\b (paired with canonical 19)
 //   • CI-GATES — \b\d (required|advisory) (CI )?gates\b
 //   • PER-FILE-FLOORS — \bN per-file (branch )?floors? \(was \d\)
@@ -87,7 +87,10 @@ export const DEFENSES = [
   },
   {
     id: "tool-count",
-    pattern: /\b(\d{2})\s+tools\b/,
+    // rc.42 F3 — also match the HYPHENATED singular ("45-tool surface"), not just
+    // "45 tools". QUICKSTART.md:132 read "44-tool" and slipped BOTH this audit (space-only
+    // pattern) and docs-consistency (QUICKSTART uncovered) → a real stale-count drift.
+    pattern: /\b(\d{2})(?:\s+tools|-tool)\b/,
     scope: [
       "README.md",
       "llms.txt",
@@ -97,7 +100,8 @@ export const DEFENSES = [
       "package.json",
       // STABILITY.md has "### MCP tool names (44 tools)" + a tool-breakdown
       // sentence — both gated by docs-consistency.test.ts line 183.
-      "STABILITY.md"
+      "STABILITY.md",
+      "docs/QUICKSTART.md" // rc.42 F3 — the surface that drifted to "44-tool"
     ],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:

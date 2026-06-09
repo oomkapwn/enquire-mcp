@@ -129,7 +129,7 @@ You now have working TF-IDF search. To unlock the full hybrid stack:
 - **Cross-encoder reranking** — add `--enable-reranker`. Measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation).
 - **Sub-10ms top-K at scale** — add `--use-hnsw`. HNSW vector index, persisted to disk so cold starts stay ~50ms.
 - **Harder questions** — try `obsidian_hyde_search` (HyDE retrieval, Gao et al 2023) when the literal query phrasing doesn't match how the notes are written.
-- **Full 44-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.
+- **Full 45-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.
 
 The drop-in hybrid config is in [`examples/claude-desktop-hybrid.json`](../examples/claude-desktop-hybrid.json).
 

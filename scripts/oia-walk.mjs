@@ -24,7 +24,7 @@
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
 // canonical count is "12" (the top-level numbered checks 1–12), but check 4
-// has historically accreted sub-checks (4b/4c/4d/4e), so 14 distinct walks
+// has historically accreted sub-checks (4b/4c/4d/4e/4f), so 15 distinct walks
 // actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
@@ -41,6 +41,9 @@
 //       install-ocr-lang" must be backed by the real code guards in ocr.ts
 //       (assertOcrLangsInstalled + cacheMethod:"readOnly") + cli.ts
 //       (install-ocr-lang subcommand). [added rc.10 / overclaim #16]
+//   4f. EMBED OFFLINE-GUARD — docs claiming "zero cloud calls during serve" must
+//       be backed by src/embeddings.ts `allowRemoteModels=false` (offline flag) +
+//       setEmbeddingsOffline() called in cli.ts serve + serve-http. [added rc.42 / F1]
 //   4.  NPM SCRIPT EXISTENCE — backticked `npm run <script>` in docs +
 //       script comments must match `package.json#scripts`.
 //   5.  CURRENT-CLAIM vs TOMBSTONE — "default" value comments must agree
@@ -459,6 +462,47 @@ if (!SKIP_NETWORK) {
           i + 1,
           line.trim().slice(0, 140),
           `Doc claims an ENFORCED offline-OCR guarantee but the code guard is incomplete: ${missing.join("; ")}. Either restore the guard(s) OR phrase the claim as a roadmap target.`
+        );
+      }
+    }
+  }
+}
+
+// ─── Check 4f: embeddings/reranker serve-offline claim vs actual code-guard ──
+// v3.10.0-rc.42 (audit F1, HIGH) — same "claimed-guarantee vs code-guard" class as
+// Check 4e (OCR), applied to the embeddings + reranker model-load path. Docs claim
+// serve makes "zero cloud calls during serve" / "zero outbound network calls during
+// serve". That is only TRUE if (1) src/embeddings.ts sets transformers.js
+// `allowRemoteModels = false` under an offline flag (so a cache-miss fails closed
+// instead of CDN-fetching), and (2) src/cli.ts calls setEmbeddingsOffline() in BOTH
+// the serve and serve-http actions. If a doc makes the enforced claim but a guard is
+// missing, fail — the exact gap that shipped as the rc.41 overclaim before rc.42.
+{
+  const embSrc = readLines("src/embeddings.ts").join("\n");
+  const cliSrc = readLines("src/cli.ts").join("\n");
+  const remoteOff = /allowRemoteModels\s*=\s*false/.test(embSrc);
+  const setterExported = /export function setEmbeddingsOffline\b/.test(embSrc);
+  const serveCalls = (cliSrc.match(/setEmbeddingsOffline\s*\(/g) || []).length;
+  if (!(remoteOff && setterExported && serveCalls >= 2)) {
+    const missing = [
+      !remoteOff && "src/embeddings.ts must set transformers `allowRemoteModels = false` under the offline flag",
+      !setterExported && "src/embeddings.ts must export setEmbeddingsOffline()",
+      serveCalls < 2 && `src/cli.ts must call setEmbeddingsOffline() in BOTH serve + serve-http (found ${serveCalls})`
+    ].filter(Boolean);
+    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "llms.txt"];
+    const claimRe = /zero cloud calls during serve|zero outbound network calls during serve/i;
+    for (const file of claimFiles) {
+      const lines = readLines(file);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        if (!claimRe.test(line)) continue;
+        if (/roadmap|planned|deferred|not yet|will (?:ship|land)/i.test(line)) continue;
+        record(
+          "EMBED-OFFLINE-GUARD-MISSING",
+          file,
+          i + 1,
+          line.trim().slice(0, 140),
+          `Doc claims an ENFORCED "zero cloud calls during serve" guarantee but the code guard is incomplete: ${missing.join("; ")}. Either restore the guard(s) OR phrase the claim as actual default behavior.`
         );
       }
     }

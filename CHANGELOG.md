@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.42] — 2026-06-09
+
+> **TL;DR:** **Full state-driven re-audit (4 independent lenses) of the rc.35→rc.41 line + every doc/test/security surface — found that rc.40 AND rc.41 each shipped a fresh instance of a documented recurring class (the post-merge re-sweep working as designed), and closed both + 2 docs drifts.** 1 HIGH (rc.41 "zero cloud calls during serve" was ASPIRATIONAL — embedder/reranker could CDN-fetch on a cache-miss; now ENFORCED, mirroring OCR), 1 MEDIUM (rc.40 K-3 derive-check was scope-too-narrow — scanned only write.ts, missing read.ts's `chatThreadAppend`), 2 LOW (QUICKSTART `44-tool`; README.zh.md stale test count + missing the rc.41 fleet-memory framing). The code re-sweep otherwise confirmed rc.35→rc.41 sound (no other findings). **1177 → 1181 source tests.**
+
+**Pre-release (v3.10 line) — audit response.**
+
+### Security
+
+- **F1 [HIGH] — "zero cloud calls during serve" is now ENFORCED, not aspirational.** Pre-rc.42, a missing local model cache let transformers.js silently CDN-fetch (~120MB) the embedder/reranker on a serve-time query — the exact "claimed-guarantee vs code-guard" shape of overclaim #16 (OCR), left un-closed for the ML path. Now `serve`/`serve-http` call `setEmbeddingsOffline()` at startup → transformers.js `env.allowRemoteModels = false`, so a model absent from the LOCAL cache **fails closed** (`offlineModelLoadError` with an `install-model`/`build-embeddings` hint) instead of fetching. `build-embeddings`/`install-model` never set the flag, so the one-time online download is unchanged. New **OIA Check 4f** (mirrors 4e for OCR) fails CI if a doc makes the enforced claim while the guard is absent. SECURITY.md updated to document the enforcement. (`src/embeddings.ts`, `src/cli.ts`, `scripts/oia-walk.mjs`, `SECURITY.md`.)
+
+### Fixed
+
+- **F2 [MED] — K-3 derive-check scope-too-narrow (the rc.40 #11 fix's own recursion).** `fsMutatingExports` scanned only `src/tools/write.ts`, but a real WRITE handler (`chatThreadAppend`) lives in `src/tools/read.ts` — so a new fs-mutating handler added to read.ts would escape BOTH the derive-check AND the layer-1 READ_ONLY-violation scan (which only flags names already in the set), letting it falsely advertise `readOnlyHint`. Now scans `WRITE_HANDLER_SOURCES = [write.ts, read.ts]` (mirrors resource-bound's `SCANNER_SOURCES`), with a sanity assertion that `chatThreadAppend` is detected + the delegating-handler blind spot (`archiveNote`) documented. Same scope-too-narrow class the project has fought (resource-bound rc.18, OIA Check 7 ×2). (`tests/k3-readonly-hint-invariant.test.ts`.)
+- **F3 [LOW] — `docs/QUICKSTART.md` "44-tool" → "45-tool"** (slipped both guards: the scope-completeness `tool-count` pattern was space-only `\b\d{2}\s+tools\b`, and QUICKSTART wasn't in its scope). Closed the class: pattern now also matches the hyphenated `\b\d{2}-tool\b` form, and QUICKSTART joins the scope. (`docs/QUICKSTART.md`, `scripts/scope-completeness-audit.mjs`.)
+- **F4 [LOW] — `README.zh.md` re-synced with the rc.41 English README**: test-count lower-bound `1100+` → `1170+` (drifted 77 below actual), and the rc.41 server-fleet-memory counter-positioning clause added to the "扎根于原文" (Grounded) paragraph.
+
+### Tests (1181)
+
+- New `tests/embeddings-offline.test.ts` (+4) — the F1 serve-offline surface: `setEmbeddingsOffline`/`isEmbeddingsOffline` toggle (default ONLINE so build-embeddings can download — NEGATIVE control) + `offlineModelLoadError` is a fail-closed error naming the model + an actionable hint + preserving the cause (+ a non-Error-cause NEGATIVE control). CI-safe (pure surface, no optional dep / model download); the cli.ts wiring is structurally guarded by OIA Check 4f.
+- F2 widens the existing rc.40 K-3 derive test (no net `it()` change there). 1177 → 1181.
+
+### Method
+
+- **The re-audit is the value**: 4 parallel lenses (code · docs · tests/CI · security/privacy) on the *shipped* commit. Code re-sweep confirmed rc.35→rc.41 sound, but the docs + security + test-infra lenses each caught a residual the change-driven sweeps missed — and notably BOTH of the two newest RCs had recursed a known class (rc.40 → scope-too-narrow, rc.41 → claimed-guarantee-vs-code-guard). Caught in-house before an external auditor; both closed with a structural class-defense, not just an instance fix.
+
+---
+
 ## [3.10.0-rc.41] — 2026-06-09
 
 > **TL;DR:** **Counter-positioning docs (caura-memclaw study output) — sharpens the "Grounded, not extracted" brand against the *server-fleet*-memory category.** The hero framing (README + COMPARISON) already distinguished enquire from the *chat-memory* cohort (mem0/Zep/Supermemory — which *extract* facts from chat logs). It now ALSO distinguishes from multi-tenant *fleet*-memory platforms (server-side stores that paraphrase agent traffic into a shared database): enquire is **single-user, local-first, zero cloud calls during serve** — one vault you own, read, edit, and delete yourself. Docs-only; no count or claim-surface change. **1177 source tests unchanged.**

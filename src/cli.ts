@@ -27,7 +27,8 @@ import {
   RERANKER_MODELS,
   resolveModel,
   resolveRerankerModel,
-  resolveTransformersCacheDir
+  resolveTransformersCacheDir,
+  setEmbeddingsOffline
 } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -199,6 +200,10 @@ export async function main(): Promise<void> {
     .action(async (opts: ServeOptions) => {
       // Validate up-front so a bad value fails before we touch the vault.
       parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
+      // rc.42 F1 — enforce "zero cloud calls during serve": a model not already in the
+      // local cache fails closed (with an install hint) instead of CDN-fetching. Must
+      // run BEFORE any embedder/reranker load (startServer → prepareServerDeps).
+      setEmbeddingsOffline();
       await startServer(opts);
     });
 
@@ -265,6 +270,9 @@ export async function main(): Promise<void> {
   addAdvancedRetrievalOptions(serveHttpCmd)
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(async (opts: HttpServeCli) => {
+      // rc.42 F1 — enforce "zero cloud calls during serve" for the HTTP transport too
+      // (bearer-reachable embeddings_search / reranker). Set offline before any load.
+      setEmbeddingsOffline();
       const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
       const tokenFromEnv =
         typeof opts.bearerTokenEnv === "string" ? (process.env[opts.bearerTokenEnv] ?? "").trim() : "";

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.41] — 2026-06-09
+
+> **TL;DR:** **Counter-positioning docs (caura-memclaw study output) — sharpens the "Grounded, not extracted" brand against the *server-fleet*-memory category.** The hero framing (README + COMPARISON) already distinguished enquire from the *chat-memory* cohort (mem0/Zep/Supermemory — which *extract* facts from chat logs). It now ALSO distinguishes from multi-tenant *fleet*-memory platforms (server-side stores that paraphrase agent traffic into a shared database): enquire is **single-user, local-first, zero cloud calls during serve** — one vault you own, read, edit, and delete yourself. Docs-only; no count or claim-surface change. **1177 source tests unchanged.**
+
+**Pre-release (v3.10 line) — positioning.**
+
+### Changed
+
+- **`README.md` hero + `docs/COMPARISON.md` intro** — the "Grounded, not extracted" framing gains a server-fleet-memory contrast clause. Prompted by a competitive study (caura-ai/caura-memclaw, a multi-tenant fleet-memory platform): the existing copy countered only the conversation-memory cohort, leaving the fleet-memory category unaddressed. No new factual/numeric claim — "zero cloud calls during serve" is the existing SECURITY.md/package.json claim, restated in the positioning context.
+
+### Notes
+
+- Marketing assets (a problem-first content blog, a landing page, Discord) remain maintainer-driven and are **never** committed to this public repo (standing rule). The one remaining borrowable *technical* idea from the study — closed-loop retrieval feedback (a "Karpathy Loop" `mark_useful`-style tool) — is a net-new persistent-state feature with data-at-rest + right-to-erasure implications; it's captured for the v3.10.x feature line and best sequenced after the v3.10 → `@latest` promotion (so the promotion audit isn't complicated by a fresh feature) and with a dedicated privacy-design pass.
+
+---
+
 ## [3.10.0-rc.40] — 2026-06-09
 
 > **TL;DR:** **Closes the entire LOW/INFO tail of the wq9ml34gr workflow-audit — the audit is now fully shipped (1 CRIT + 4 MED + 7 LOW/INFO, all closed).** Seven low-stakes items: two watcher concurrency-hardening fixes (close-window event race + HNSW dirty-flag race — both were lost-fast-reload-only, the signature-guard already rebuilt), `--stale-days` doc/help/TSDoc honesty (it tunes recency re-ranking only — the `stale` flag is a hardcoded 365), two test-infra invariant broadenings (K-3 derives write handlers from source; resource-bound detects parallel-fanout scanners), eval `hits_relevant` dedup (INFO), and dropping an unused `id-token: write` grant. **1174 → 1177 source tests.**

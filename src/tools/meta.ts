@@ -973,6 +973,187 @@ function bodyHasVariableQuantifier(body: string): boolean {
   return false;
 }
 
+// v3.10.0-rc.36 — probe alphabet covering every char-equivalence-class the regex
+// shorthands distinguish (digit / lower / upper / underscore / whitespace /
+// punctuation / common metas) so atom overlap is decided by ACTUAL single-char
+// regex membership (delegated to V8) instead of a hand-maintained class truth
+// table — which would be its own under-flag bug surface, the recursion CLAUDE.md tracks.
+const OVERLAP_PROBES = "0123456789abcxyzABCXYZ_ \t\n\r!#-.*:?/>@".split("");
+
+/**
+ * A single-char membership test for one regex ATOM (`.`, `\\w`, `[#.]`, `a`,
+ * `\\x61`), or `"broad"` for a group / unparseable atom (overlaps everything — the
+ * sound over-flag direction). Compiled case-INSENSITIVELY to mirror the
+ * `new RegExp(pattern, "i")` the tool uses.
+ * @internal v3.10.0-rc.36 helper for {@link atomsOverlap}.
+ */
+function atomOverlapMatcher(atomStr: string): ((ch: string) => boolean) | "broad" {
+  if (atomStr === "" || atomStr[0] === "(") return "broad"; // group → conservative overlap
+  let re: RegExp;
+  try {
+    re = new RegExp(`^(?:${atomStr})$`, "i");
+  } catch {
+    return "broad"; // unparseable in isolation → conservative
+  }
+  return (ch) => re.test(ch);
+}
+
+/**
+ * True if two adjacent atoms can match a COMMON single character — so unbounded
+ * quantifiers over them can split a shared run ambiguously. Decided by probing
+ * {@link OVERLAP_PROBES} against each atom's single-char matcher: correct for
+ * literals, `.`, char-classes, and shorthand overlaps (`\\w`⊃`\\d` overlap, `\\w`∩`\\s`=∅)
+ * with NO hand truth table. Groups widen to `"broad"` (over-flag). A genuine
+ * overlap only on a non-probe char would under-flag, but the probe set covers
+ * every ASCII equivalence class the shorthands distinguish; the generative fuzz is
+ * the empirical backstop.
+ * @internal v3.10.0-rc.36 helper for {@link frameAdjacentOverlap}.
+ */
+function atomsOverlap(a: string, b: string): boolean {
+  const ma = atomOverlapMatcher(a);
+  const mb = atomOverlapMatcher(b);
+  if (ma === "broad" || mb === "broad") return true;
+  for (const ch of OVERLAP_PROBES) if (ma(ch) && mb(ch)) return true;
+  return false;
+}
+
+/**
+ * Index just past one atom starting at `src[start]` — an escape (`\\x`), a
+ * char-class (`[...]`), a group (`(...)`), or a single char. Quantifier chars are
+ * NOT consumed (the caller reads them separately).
+ * @internal v3.10.0-rc.36 helper for {@link frameAdjacentOverlap} / {@link tailIsBenign}.
+ */
+function atomEndAt(src: string, start: number): number {
+  const c = src[start];
+  if (c === "\\") {
+    const d = decodeEscapedChar(src, start + 1);
+    return start + 1 + (d.length || 1);
+  }
+  if (c === "[") return classEnd(src, start);
+  if (c === "(") return groupEnd(src, start);
+  return start + 1;
+}
+
+/**
+ * True if the atom at `src[start]` is a UNIVERSAL ABSORBER — `.` followed by an
+ * unbounded quantifier (`.+`, `.*`, `.{n,}`), optionally wrapped in ONE group
+ * layer (`(.+)`, `(?:.*)`). A `.`-greedy run matches ANY trailing chars, so it
+ * consumes whatever a preceding adjacent-quantifier run could have matched and
+ * reaches the end-anchor without forcing exponential redistribution — this is
+ * exactly why the default `…\\s*[:\\-]?\\s*(.+)$` pattern is SAFE (~0.1ms) while
+ * `…\\s*\\s*$` is NOT (~12s).
+ * @internal v3.10.0-rc.36 helper for {@link tailIsBenign}.
+ */
+function isUniversalAbsorber(src: string, start: number): boolean {
+  if (src[start] === ".") return readUnboundedQuantifier(src, start + 1).unbounded;
+  if (src[start] === "(") {
+    let bs = start + 1;
+    if (src[bs] === "?") {
+      const c2 = src[bs + 1];
+      if (c2 === ":" || c2 === "=" || c2 === "!") bs += 2;
+      else if (c2 === "<") {
+        const c3 = src[bs + 2];
+        if (c3 === "=" || c3 === "!") bs += 3;
+        else {
+          const gt = src.indexOf(">", bs);
+          bs = gt === -1 ? bs + 2 : gt + 1;
+        }
+      } else bs += 1;
+    }
+    if (src[bs] === ".") return readUnboundedQuantifier(src, bs + 1).unbounded;
+  }
+  return false;
+}
+
+/**
+ * True if the continuation of `branch` at `i` (everything AFTER an adjacent
+ * overlapping-quantifier run) cannot force catastrophic backtracking — the run is
+ * NEUTRALIZED. Walking from `i`: a `.`-greedy {@link isUniversalAbsorber} or the
+ * end of the branch (no failing anchor) is BENIGN; an end anchor (`$`/`\\b`/`\\B`)
+ * or any mandatory non-absorbing atom is a FAILING continuation (NOT benign).
+ * Min-zero / nullable atoms and `^` are transparent. This is the ONE precision the
+ * detector keeps (so the shipped default + `…\\s*X?\\s*(.+)$` user patterns aren't
+ * rejected); everywhere else it over-flags. Errs toward NOT-benign when uncertain.
+ * @internal v3.10.0-rc.36 helper for {@link frameAdjacentOverlap}.
+ */
+function tailIsBenign(branch: string, i: number): boolean {
+  while (i < branch.length) {
+    const c = branch[i];
+    if (c === undefined) break;
+    if (c === "^") {
+      i++;
+      continue; // non-failing zero-width anchor
+    }
+    if (c === "$") return false; // failing end anchor
+    if (c === "\\" && (branch[i + 1] === "b" || branch[i + 1] === "B")) return false; // word-boundary anchor
+    if (isUniversalAbsorber(branch, i)) return true; // `.+`/`.*` swallows any tail → reaches the end
+    const atomEnd = atomEndAt(branch, i);
+    const atomStr = branch.slice(i, atomEnd);
+    const qz = quantifierMinZero(branch, atomEnd);
+    if ((qz.isQuantifier && qz.allowsZero) || branchIsNullable(atomStr)) {
+      i = atomEnd + (qz.isQuantifier ? qz.length : 0);
+      continue; // optional / nullable atom → transparent
+    }
+    return false; // a mandatory, non-absorbing atom can fail after the run → catastrophic
+  }
+  return true; // reached the end with no failing anchor → greedy match succeeds
+}
+
+/**
+ * v3.10.0-rc.36 — closes the 4th ReDoS recurrence (the top-level adjacency
+ * bypass). True if a top-level concatenation branch of `body` contains TWO
+ * ADJACENT atoms, each repeated by an UNBOUNDED quantifier, whose match sets
+ * OVERLAP — the catastrophic `a*a*$` / `\\w*\\w*…$` / `(a)*(a)*$` shape (V8
+ * redistributes a long shared run across the quantifiers super-linearly when the
+ * continuation can fail; measured ~16s at 45 chars for `\\w*` ×8 + `$`, and ~1s at
+ * 2000 chars for `a*a*$`). rc.21–rc.25 only evaluated the catastrophe verdict when
+ * a QUANTIFIED GROUP closed (on `)`), so a BARE top-level sequence — frame 0 is
+ * never popped — slipped entirely.
+ *
+ * Adjacency: zero-width anchors and min-zero (optional / nullable) atoms are
+ * TRANSPARENT (the optional can vanish, keeping the two unbounded atoms adjacent —
+ * `a*x?a*` is caught); a MANDATORY non-repeated atom BREAKS the run. Overlap is
+ * decided by {@link atomsOverlap} (probe-based, so `\\d*\\s*` / `[#.]+\\s+` stay
+ * accepted — disjoint — while `\\w*\\d*` is caught).
+ *
+ * `exemptByAbsorber`: at the TOP level the whole tail is visible, so a run
+ * neutralized by a `.`-greedy absorber ({@link tailIsBenign}) is accepted — this
+ * keeps the shipped default `…\\s*[:\\-]?\\s*(.+)$` safe. Inside a GROUP body the
+ * external continuation is NOT visible, so pass `false` (over-flag: any in-group
+ * adjacent overlap is treated as catastrophic — catches `(\\w*\\w*)x`).
+ * @internal v3.10.0-rc.36 helper for {@link isCatastrophicRegex}.
+ */
+function frameAdjacentOverlap(body: string, exemptByAbsorber: boolean): boolean {
+  for (const branch of splitTopLevelAlternation(body)) {
+    let prevAtom: string | null = null; // the last unbounded atom (unit) while the run is unbroken
+    let i = 0;
+    while (i < branch.length) {
+      const c = branch[i];
+      if (c === undefined) break;
+      if (c === "^" || c === "$") {
+        i++;
+        continue; // zero-width anchor — transparent, keeps the run
+      }
+      const atomEnd = atomEndAt(branch, i);
+      const atomStr = branch.slice(i, atomEnd);
+      const uq = readUnboundedQuantifier(branch, atomEnd);
+      const qz = quantifierMinZero(branch, atomEnd);
+      if (uq.unbounded) {
+        if (prevAtom !== null && atomsOverlap(prevAtom, atomStr)) {
+          if (!exemptByAbsorber || !tailIsBenign(branch, atomEnd + qz.length)) return true;
+          prevAtom = null; // a `.`-greedy absorber neutralized this run; restart counting after it
+        } else {
+          prevAtom = atomStr;
+        }
+      } else if (!((qz.isQuantifier && qz.allowsZero) || branchIsNullable(atomStr))) {
+        prevAtom = null; // a mandatory, non-repeated atom breaks the adjacency run
+      }
+      i = atomEnd + (qz.isQuantifier ? qz.length : 0);
+    }
+  }
+  return false;
+}
+
 /**
  * Conservative, dependency-free guard against catastrophic-backtracking
  * (ReDoS) in a caller-supplied regex. V8's Irregexp engine backtracks, so
@@ -1000,6 +1181,13 @@ function bodyHasVariableQuantifier(body: string): boolean {
  *     consecutive repetitions partition a long run exponentially. Gated on the
  *     OUTER quantifier being unbounded, so a BOUNDED outer (`(.+){2,5}`, ≤5 reps
  *     → polynomial) stays accepted.
+ *  5. **Adjacent overlapping quantifiers** (v3.10.0-rc.36) — two ADJACENT atoms,
+ *     each unbounded-quantified, whose match sets overlap, at ANY frame INCLUDING
+ *     the TOP level: `a*a*$`, `\\w*\\w*$`, `(a)*(a)*$`. rc.21–rc.25 only evaluated
+ *     the verdict when a QUANTIFIED GROUP closed, so a BARE top-level sequence
+ *     (frame 0 is never popped) slipped — the rc.36 CRITICAL. Decided by
+ *     `frameAdjacentOverlap`; a DISJOINT adjacency (`a*b*$`) stays accepted, and a
+ *     `.`-greedy absorber tail (`…\\s*\\s*(.+)$`, the default's shape) is benign.
  *
  * Sound but conservative: it never UNDER-flags a real catastrophic shape (proven
  * by the `tests/redos-fuzz.test.ts` fuzz harness, which times a real
@@ -1022,6 +1210,8 @@ function bodyHasVariableQuantifier(body: string): boolean {
  * isCatastrophicRegex("(a?b|b)+$");     // true  — optional leading atom overlaps (rc.25)
  * isCatastrophicRegex("(a?){25}");      // true  — nullable body under repetition (rc.25)
  * isCatastrophicRegex("(a{2,5})+");     // true  — variable-length body under + (rc.25)
+ * isCatastrophicRegex("\\w*\\w*$");       // true  — adjacent overlapping quantifiers (rc.36)
+ * isCatastrophicRegex("a*b*$");         // false — adjacent but DISJOINT (linear)
  * isCatastrophicRegex("(a|b|c)+");      // false — disjoint alternation (linear)
  * isCatastrophicRegex("(.+){2,5}");     // false — variable body but BOUNDED outer
  * isCatastrophicRegex("^Q: (.+)$");     // false — single-level
@@ -1076,6 +1266,12 @@ export function isCatastrophicRegex(src: string): boolean {
       // A group's body is ambiguous if a nested group bubbled ambiguity up OR
       // its own top-level alternation overlaps (`((a|a))+` → inner reaches outer).
       const body = src.slice(bs, i);
+      // v3.10.0-rc.36: adjacent overlapping unbounded quantifiers INSIDE this group
+      // body (`(\\w*\\w*)x`, `(a*a*)`) are catastrophic regardless of the outer
+      // quantifier — the per-frame `hadUnbounded` flag alone never caught them.
+      // exemptByAbsorber=false: the group's EXTERNAL continuation isn't visible
+      // here, so any in-group adjacent overlap is treated as catastrophic.
+      if (frameAdjacentOverlap(body, false)) return true;
       const bodyAmbiguous = frameAmbiguous || alternationBodyAmbiguous(body);
       // v3.9.0-rc.25: a NULLABLE body (can match empty) under an unbounded
       // quantifier is the classic `(a?)+` / `(\\s*)*` / `(a?){25}` ReDoS — each
@@ -1108,6 +1304,12 @@ export function isCatastrophicRegex(src: string): boolean {
     }
     if (q.length > 1) i += q.length - 1; // skip multi-char brace quantifiers
   }
+  // v3.10.0-rc.36: the TOP-LEVEL frame (frame 0) is never popped (no `)` at depth
+  // 0), so a bare `\\w*\\w*…$` / `a*a*…$` adjacency reaches here unflagged by the
+  // pop logic above. Evaluate the same overlap check on the whole pattern, with
+  // the absorber exemption (the full tail is visible → the safe-default shape
+  // `…\s*[:\-]?\s*(.+)$` is correctly accepted).
+  if (frameAdjacentOverlap(src, true)) return true;
   return false;
 }
 

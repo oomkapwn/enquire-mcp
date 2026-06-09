@@ -45,6 +45,12 @@ function genPattern(rnd: () => number): string {
   };
   const seq = (depth: number): string => Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => atom(depth)).join("");
   const branches = Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => seq(1));
+  // v3.10.0-rc.36: ~40% of patterns are a BARE top-level concatenation (NO wrapping
+  // quantified group) so the corpus exercises the adjacent-quantifier shape
+  // (`a*a*$`, `\w*\w*…$`, `(a)*(a)*$`) that rc.21–rc.25 — and, until rc.36, this very
+  // generator — were blind to. The rc.36 CRITICAL (top-level `\w*\w*…$`, 16s hang)
+  // lived exactly in this gap: every prior pattern was a quantified GROUP.
+  if (rnd() < 0.4) return `${seq(1)}${seq(1)}$`;
   return `(${branches.join("|")})${pick(["+", "*", "+", "{0,20}", "{2,}"])}$`;
 }
 
@@ -98,6 +104,8 @@ describe("ReDoS guard fuzz — no SAFE-classified pattern may hang", () => {
     const MAX_SAFE_EXEC = 150; // bound wall-clock (one worker per safe pattern)
     const offenders: string[] = [];
     let safeChecked = 0;
+    let bareTopLevelSafe = 0; // v3.10.0-rc.36: SAFE patterns that are a BARE top-level
+    // concatenation (the rc.36 adjacency shape), not a wrapping quantified group.
     for (let k = 0; k < N && safeChecked < MAX_SAFE_EXEC; k++) {
       const p = genPattern(rnd);
       if (p.length > 200) continue; // mirror MAX_QUESTION_PATTERN_LEN
@@ -108,10 +116,18 @@ describe("ReDoS guard fuzz — no SAFE-classified pattern may hang", () => {
       }
       if (isCatastrophicRegex(p)) continue; // flagged → never compiled by the tool
       safeChecked++;
+      if (!p.startsWith("(")) bareTopLevelSafe++;
       if (await patternHangs(p)) offenders.push(p);
     }
-    expect(safeChecked).toBeGreaterThan(0); // the corpus must actually exercise SAFE verdicts
     expect(offenders).toEqual([]); // any offender is an under-flag the guard must catch
+    // v3.10.0-rc.36 (finding #10): the corpus must EXERCISE a healthy number of SAFE
+    // verdicts. Pre-rc.36 the generator emitted ONLY quantified groups, starving the
+    // SAFE corpus to ~43 trivially-linear patterns far from the boundary — so a future
+    // under-flag near the boundary would rarely be generated. Assert the worker sees a
+    // substantial SAFE set, INCLUDING the bare top-level adjacency shape (`a*b*$`,
+    // `\w*\s*…$`) where the rc.36 CRITICAL lived.
+    expect(safeChecked).toBeGreaterThan(80);
+    expect(bareTopLevelSafe).toBeGreaterThan(20);
   }, 120_000);
 
   it("NEGATIVE control — the fuzz harness DOES detect a hang (known catastrophic pattern times out)", async () => {

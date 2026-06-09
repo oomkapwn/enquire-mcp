@@ -432,7 +432,7 @@ export async function main(): Promise<void> {
   program
     .command("prune")
     .description(
-      "Delete cached index artifacts for OTHER vaults, keeping only the named vault's — GCs the per-vault clutter that builds up in the cache dir. Dry-run by default; pass --yes to actually delete. Only ever removes enquire's own `<hash>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` files."
+      "Delete cached index artifacts for OTHER vaults, keeping only the named vault's — GCs the per-vault clutter that builds up in the cache dir. Dry-run by default; pass --yes to actually delete. Only ever removes enquire's own `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` files (incl. the `.json` parse cache that holds full note bodies, and `.tmp`/WAL sidecars)."
     )
     .requiredOption("--vault <path>", "Vault whose index to KEEP (all OTHER enquire cache artifacts are removed)")
     .option("--yes", "Actually delete (without this, prune only PREVIEWS what would be removed)")

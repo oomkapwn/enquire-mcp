@@ -23,6 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hnswPersistBase } from "../src/embed-db.js";
+import { planCachePrune } from "../src/fts5.js";
 import { Vault } from "../src/vault.js";
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -182,6 +183,42 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     });
   });
 
+  // ── v3.10.0-rc.37 (audit #4): the CROSS-VAULT eraser (`prune` → planCachePrune)
+  // must cover EVERY per-vault writer family too — not just the per-vault `clear-*`
+  // erasers above. The #3 leak (a decommissioned vault's `<hash>.json` parse cache,
+  // holding full note bodies, survived `prune` forever) shipped precisely because
+  // THIS eraser surface was unpatrolled. Assert prune selects each writer family
+  // for an OTHER vault (writers ⊆ prune-eraser). ──
+  describe("prune (cross-vault eraser) covers every per-vault writer family (rc.37 #4)", () => {
+    const KEEP = "aaaaaaaaaaaa";
+    const OTHER = "bbbbbbbbbbbb";
+    // One representative basename per on-disk family a writer can produce.
+    const WRITER_FAMILIES: Record<string, string> = {
+      "parse cache (full note bodies)": `${OTHER}.json`,
+      "parse cache atomic-write temp": `${OTHER}.json.tmp`,
+      "FTS5 index": `${OTHER}.fts5.db`,
+      "FTS5 WAL sidecar": `${OTHER}.fts5.db-wal`,
+      "embed-db": `${OTHER}.embed.db`,
+      "HNSW index": `${OTHER}.hnsw.bin`,
+      "HNSW meta sidecar (raw text_preview)": `${OTHER}.hnsw.meta.json`
+    };
+    for (const [family, name] of Object.entries(WRITER_FAMILIES)) {
+      it(`prune selects the ${family} of OTHER vaults (${name})`, () => {
+        expect(planCachePrune([name, `${KEEP}.fts5.db`], KEEP)).toContain(name);
+      });
+    }
+    // NEGATIVE control: a whitelist that OMITS the `.json` family (the literal
+    // pre-rc.37 bug) must FAIL to select the parse cache — proving the coverage
+    // assertions above genuinely discriminate (not vacuously true for any regex).
+    it("NEGATIVE control — a whitelist missing the `.json` family leaves the parse cache (the #3 leak)", () => {
+      const PRE_RC37 = /^[0-9a-f]{12}\.(fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm)?$/;
+      const buggyPrune = (entries: string[], keep: string) =>
+        entries.filter((e) => PRE_RC37.test(e) && !e.startsWith(`${keep}.`));
+      expect(buggyPrune([`${OTHER}.json`], KEEP)).toEqual([]); // leak: parse cache survives prune
+      expect(planCachePrune([`${OTHER}.json`], KEEP)).toEqual([`${OTHER}.json`]); // rc.37: erased
+    });
+  });
+
   // ── v3.10.0-rc.20 (audit M7): the HNSW persist BASE is derived by ONE shared
   // helper (`hnswPersistBase`) so the WRITER (server.ts `persistFile` → saveTo)
   // and the ERASER (`EmbedDb.clearOnDisk`) can't drift. A base drift (vs the
@@ -205,6 +242,19 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       expect(serverSrc, "server.ts writer must use hnswPersistBase").toContain("hnswPersistBase(");
       // …and the writer must NOT recompute the base inline (the drift this closes).
       expect(INLINE_BASE.test(serverSrc), "server.ts still recomputes the HNSW base inline").toBe(false);
+    });
+
+    it("v3.10.0-rc.37 (#8) — server.ts erases the stale HNSW sidecars when the embed-db is empty", () => {
+      // An emptied embed-db builds no index → no `saveTo` to overwrite the stale
+      // `<base>.bin` + `.meta.json` (the latter carries deleted notes' raw
+      // text_preview). The empty branch must unlink BOTH sidecars (persist-gated),
+      // else an emptied --use-hnsw vault leaves raw text on disk.
+      // Substrings without the `${` placeholder (so biome doesn't read this assertion
+      // string as a template literal) — both sidecars must be unlinked in that branch.
+      expect(serverSrc, "empty-embed-db branch must unlink the .bin sidecar").toContain("persistFile}.bin`");
+      expect(serverSrc, "empty-embed-db branch must unlink the .meta.json sidecar (raw text_preview)").toContain(
+        "persistFile}.meta.json`"
+      );
     });
 
     // NEGATIVE control — the inline-base detector must FLAG the pre-rc.20 shape

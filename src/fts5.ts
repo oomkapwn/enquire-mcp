@@ -820,12 +820,21 @@ export function defaultIndexFile(vaultRoot: string): string {
 
 /**
  * Strict filename pattern for enquire's own per-vault cache artifacts:
- * `<12-hex-sha1>.{fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` plus the SQLite
- * `-wal`/`-shm` sidecars. Anchored + exhaustively enumerated so a prune can
- * NEVER select a file enquire didn't create (a user note, another app's cache
- * sharing the dir, etc.) — the safety property of `planCachePrune`.
+ * `<12-hex-sha1>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` plus the SQLite
+ * `-wal`/`-shm` sidecars and the `.tmp` atomic-write leftover. Anchored +
+ * exhaustively enumerated so a prune can NEVER select a file enquire didn't
+ * create (a user note, another app's cache sharing the dir, etc.) — the safety
+ * property of `planCachePrune`.
+ *
+ * v3.10.0-rc.37 (audit #3 — right-to-erasure) — the `json` family is the
+ * `defaultCacheFile` parse cache (`<hash>.json`, written by `saveDiskCache`),
+ * which holds the FULL raw body of every note in its vault. It was missing here,
+ * so a cross-vault `prune` deleted a decommissioned vault's `.fts5.db`/`.embed.db`/
+ * HNSW sidecars but LEFT its `<hash>.json` (+ any `<hash>.json.tmp`) full-text
+ * cache on disk forever. Now covered (writers ⊆ erasers — the erasure invariant
+ * pins this so a future writer family can't silently escape prune again).
  */
-const ENQUIRE_CACHE_ARTIFACT = /^[0-9a-f]{12}\.(fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm)?$/;
+const ENQUIRE_CACHE_ARTIFACT = /^[0-9a-f]{12}\.(json|fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm|\.tmp)?$/;
 
 /**
  * Plan a cache prune: given the filenames present in enquire's cache directory

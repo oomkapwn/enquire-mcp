@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.37] — 2026-06-09
+
+> **TL;DR:** **Privacy / right-to-erasure batch (audit #3/#4 MEDIUM + #8 LOW).** The cross-vault `prune` GC silently **left full note bodies on disk forever**: its whitelist regex (`ENQUIRE_CACHE_ARTIFACT`) omitted the `<hash>.json` parse cache (written by `saveDiskCache`, holds every note's raw body), so decommissioning a vault and running `prune` deleted its `.fts5.db`/`.embed.db`/HNSW sidecars but kept its full-text `.json` (and any `.json.tmp`) — a GDPR-shaped right-to-erasure gap (same class as rc.34 P-2 / rc.36 F-2). Fixed the regex to cover `json` + the `.tmp` leftover, and — the structural half — the **erasure-completeness invariant now patrols the `prune` eraser too** (it previously only checked the 3 per-vault `clear-*` erasers; the `prune` surface was unguarded, which is exactly why #3 shipped). Plus #8: an emptied `--use-hnsw` embed-db now erases its stale `.hnsw.bin` + `.hnsw.meta.json` sidecars (the `.meta.json` carries deleted notes' `text_preview`). All local-only (mode-0600, no remote disclosure), behind opt-in preconditions. **1164 → 1168 source tests** (+4).
+
+**Pre-release (v3.10 line) — privacy / right-to-erasure.**
+
+### Security / privacy
+
+- **`src/fts5.ts` — `prune` left the `.json` parse cache (full note bodies) on disk (#3, MEDIUM right-to-erasure).** `ENQUIRE_CACHE_ARTIFACT` now matches `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` + the `-wal`/`-shm`/`.tmp` sidecars (was missing `json` and `.tmp`). A decommissioned vault's `<hash>.json` (and any crash-left `<hash>.json.tmp`), both holding raw note bodies, are now GC'd by `prune` like every other family. Help text (`cli.ts`) + `docs/api.md` updated to list the `.json` family.
+- **`tests/erasure-invariant.test.ts` — the erasure invariant now patrols the cross-vault `prune` eraser (#4, MEDIUM structural).** It previously asserted only that the 3 per-vault `clear-*` erasers reference every artifact suffix; the `prune` whitelist was a 4th deletion authority with NO coverage — which is why #3 shipped undetected. New "prune covers every per-vault writer family" block asserts `planCachePrune` selects a representative filename of each writer family (`.json`, `.json.tmp`, `.fts5.db`, WAL, `.embed.db`, `.hnsw.bin`, `.hnsw.meta.json`) for an OTHER vault, with a NEGATIVE control that replays the literal pre-rc.37 regex (missing `.json`) and proves it leaves the parse cache. `writers ⊆ prune-eraser`, structurally.
+- **`src/server.ts` — emptied `--use-hnsw` embed-db left stale HNSW sidecars (#8, LOW right-to-erasure residual).** When `getAllVectors()` is empty no index is built, so there was no `saveTo` to overwrite a prior `<base>.hnsw.bin` + `.hnsw.meta.json` — and the `.meta.json` carries deleted notes' `text_preview`. The empty branch now unlinks both sidecars (best-effort, persist-gated), mirroring `EmbedDb.clearOnDisk`'s sidecar-erase minus deleting the (valid, empty) db.
+
+### Tests (1168)
+
+- +4 source `it()`: `tests/cache-prune.test.ts` (the `.json` parse-cache coverage test), `tests/erasure-invariant.test.ts` (the prune-coverage family loop + its NEGATIVE control + the #8 server.ts structural assertion). Existing prune test's "all 4 types" case extended to "all 5 families + tmp". Docs test-count bumped 1164 → 1168 across README ×4, package.json, llms.txt, AGENTS, COMPARISON, ROADMAP.
+
+### Method
+
+- Continuation of the rc.36 multi-agent behavioral/threat audit (the privacy/erasure dimension). Each finding adversarially re-verified against current code before fixing. The orthogonal-module batch (no overlap with the rc.36 ReDoS detector) ships after rc.36 confirmed published on `@rc`.
+
+---
+
 ## [3.10.0-rc.36] — 2026-06-09
 
 > **TL;DR:** **CRITICAL ReDoS fix — the 4th recurrence of the class, found by a fresh behavioral/threat audit.** `isCatastrophicRegex` (the `obsidian_open_questions` guard) computed its catastrophe verdict ONLY when a quantified GROUP closed (`)` pop), so a **bare top-level run of adjacent overlapping unbounded quantifiers** — `\w*\w*\w*\w*\w*\w*\w*\w*$` (25 chars, under the 200-char cap) — was classified SAFE and compiled. On a single ~45-char word-run line it hangs V8 **~16s** (and `a*a*$` is ~1s at 2000 chars / ~68s at 8000), and `obsidian_open_questions` is **always-registered**, so any token-bearing client could freeze a `serve-http` instance for all clients. Fixed by evaluating a new `frameAdjacentOverlap` check on the TOP frame (never popped) **and** every group body. Overlap is decided by **probing actual single-char regex membership** (delegating the char-class truth-table to V8 — so disjoint broad pairs like `\d*\s*` / `[#.]+\s+` stay accepted while cross-class `\w*\d*` is caught), with a `.`-greedy **absorber tail-exemption** that keeps the shipped default `…\s*[:\-]?\s*(.+)$` safe (it is benign ONLY because `(.+)` absorbs the tail). **Overclaim #19**: the detector TSDoc claimed it "never UNDER-flags," which was false. **The durable fix is the fuzz**: the rc.25 generative ReDoS fuzz never caught this because its GENERATOR only emitted quantified groups — extended `genPattern` to emit bare top-level concatenations (SAFE corpus 43 → 390), so the next top-level under-flag fails CI empirically. Canonical source-`it()` count unchanged (1164); rc.36 adds 20 data-driven guard cases + a corpus-floor assertion.

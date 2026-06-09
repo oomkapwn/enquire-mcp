@@ -11,8 +11,10 @@ describe("planCachePrune (rc.14 — Issue 8 cache GC)", () => {
   const KEEP = "aaaaaaaaaaaa";
   const OTHER = "bbbbbbbbbbbb";
 
-  it("selects OTHER vaults' artifacts (all 4 types + SQLite sidecars)", () => {
+  it("selects OTHER vaults' artifacts (all 5 families + SQLite/tmp sidecars)", () => {
     const entries = [
+      `${OTHER}.json`, // v3.10.0-rc.37 (audit #3) — parse cache: FULL note bodies
+      `${OTHER}.json.tmp`, // atomic-write leftover (also full bodies)
       `${OTHER}.fts5.db`,
       `${OTHER}.fts5.db-wal`,
       `${OTHER}.fts5.db-shm`,
@@ -21,6 +23,15 @@ describe("planCachePrune (rc.14 — Issue 8 cache GC)", () => {
       `${OTHER}.hnsw.meta.json`
     ];
     expect(planCachePrune(entries, KEEP).sort()).toEqual([...entries].sort());
+  });
+
+  it("v3.10.0-rc.37 (audit #3): prune covers the `.json` parse cache (full note bodies) — right-to-erasure", () => {
+    // Pre-rc.37 the whitelist regex omitted `.json`, so a decommissioned vault's
+    // full-text parse cache survived `prune` forever. Both `<hash>.json` and its
+    // `.tmp` atomic-write leftover for OTHER must now be selected; KEEP's must not.
+    expect(planCachePrune([`${OTHER}.json`, `${OTHER}.json.tmp`, `${KEEP}.json`], KEEP).sort()).toEqual(
+      [`${OTHER}.json`, `${OTHER}.json.tmp`].sort()
+    );
   });
 
   it("NEVER selects the kept vault's own artifacts", () => {

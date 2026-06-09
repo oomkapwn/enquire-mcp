@@ -342,10 +342,15 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     const ndcg = ndcgAtK(retrievedPaths, relevantSet, k);
     const recall = recallAtK(retrievedPaths, relevantSet, k);
     const mrr = reciprocalRank(retrievedPaths, relevantSet, k);
-    let hitsRelevant = 0;
+    // v3.10.0-rc.40 (#13) — count DISTINCT relevant paths (mirrors the rc.33 dedup in
+    // recallAtK/ndcgAtK) so a duplicate path can't push hits_relevant past
+    // hits_total_relevant in the `N/M` display. Unreachable at the default note
+    // granularity (paths are unique), but pins the contract for block-granularity callers.
+    const hitsRelevantSet = new Set<string>();
     for (const p of retrievedPaths.slice(0, k)) {
-      if (relevantSet.has(p)) hitsRelevant += 1;
+      if (relevantSet.has(p)) hitsRelevantSet.add(p);
     }
+    const hitsRelevant = hitsRelevantSet.size;
     perQuery.push({
       id,
       query: q.query,

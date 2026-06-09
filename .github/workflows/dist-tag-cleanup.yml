@@ -19,7 +19,9 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+  # v3.10.0-rc.40 (#14) — dropped unused `id-token: write`: no step here mints an
+  # OIDC token (dist-tag rm auths via NPM_TOKEN). Least-privilege; the OIDC grant
+  # lives only in release.yml (npm --provenance) + publish-docs.yml (deploy-pages).
 
 jobs:
   cleanup:

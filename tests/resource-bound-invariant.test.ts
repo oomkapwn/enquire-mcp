@@ -101,7 +101,15 @@ function discoverScanners(src: string): string[] {
   // biome-ignore lint/suspicious/noAssignInExpressions: standard exec-loop idiom
   while ((m = re.exec(src)) !== null) {
     const body = functionBody(src, m[1] as string);
-    if (/\.listMarkdown\(/.test(body) && /\.readNote\(/.test(body) && /for\s*\(/.test(body)) {
+    // v3.10.0-rc.40 (#12) — match parallel-fanout iteration too (Promise.all / .map(async /
+    // for await), not only a literal `for (`: a whole-vault reader written as a pure
+    // `Promise.all(entries.map(async e => readNote(...)))` would otherwise escape discovery.
+    const iterates =
+      /for\s*\(/.test(body) ||
+      /for\s+await\b/.test(body) ||
+      /\.map\(\s*async\b/.test(body) ||
+      /Promise\.all\(/.test(body);
+    if (/\.listMarkdown\(/.test(body) && /\.readNote\(/.test(body) && iterates) {
       out.push(m[1] as string);
     }
   }
@@ -194,6 +202,26 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     // would fail until a human classifies it.
     const classified = new Set([...Object.keys(CAPPED), ...Object.keys(EXEMPT)]);
     expect(classified.has("brandNewNeighborTool")).toBe(false);
+  });
+
+  // NEGATIVE control (rc.40 #12): a whole-vault reader written as a pure parallel
+  // fanout (Promise.all(map), NO literal `for (`) MUST also be discovered — pre-rc.40
+  // the for-only predicate missed this natural concurrent-reader shape.
+  it("NEGATIVE control — discoverScanners detects a Promise.all(map) fanout scanner (rc.40 #12)", () => {
+    const fakeSrc = [
+      "export async function parallelFanoutTool(vault) {",
+      "  const entries = await vault.listMarkdown();",
+      "  const r = await Promise.all(",
+      "    entries.map(async (e) => {",
+      "      const { content } = await vault.readNote(e.absPath);",
+      "      return content.length;",
+      "    })",
+      "  );",
+      "  return r;",
+      "}",
+      ""
+    ].join("\n");
+    expect(discoverScanners(fakeSrc)).toContain("parallelFanoutTool");
   });
 
   // NEGATIVE control: the cap-token check must FLAG a capped function that drops

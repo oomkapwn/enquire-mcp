@@ -101,7 +101,7 @@ Canonical list of every registered MCP tool. The `Kind` column splits read/write
 | `--no-hnsw-persist`    | persist on | v2.16.0 — disable HNSW persistence sidecar. Default behavior: save `.hnsw.bin` + `.meta.json` next to `.embed.db`; reload on next serve when signature matches (~25s rebuild → ~50ms reload on 50K chunks). |
 | `--quantize-embeddings <mode>` | `f32` | v2.17.0 — vector storage mode. `f32` (default) or `int8` (~4× storage reduction at ~1–2% recall@10 cost). Switching modes triggers a full rebuild. |
 | `--recency-weight <w>` | `0` (off) | v3.10.0-rc.5 — opt-in recency re-ranking for `obsidian_search`. A number in [0, 1]; default 0 keeps ranking purely relevance-driven. When > 0, the fused order is re-sorted by `(1−w)·relevanceRank + w·recency` (recency decays with the note's live mtime; half-life = `--stale-days`). 0.15–0.3 gently favors fresher notes among similarly-relevant hits; 1.0 sorts almost purely by recency. |
-| `--stale-days <n>`     | `365`   | v3.10.0-rc.5 — recency half-life in days for `--recency-weight` (the age at which a note's recency score is 0.5); also the threshold behind the `stale` freshness flag on hits. Lower (e.g. 90) for fast-moving notes; raise for stable reference vaults. No re-ranking effect unless `--recency-weight > 0`. |
+| `--stale-days <n>`     | `365`   | v3.10.0-rc.5 — recency half-life in days for `--recency-weight` (the age at which a note's recency score is 0.5). Lower (e.g. 90) for fast-moving notes; raise for stable reference vaults. Tunes recency RE-RANKING only — no effect unless `--recency-weight > 0`; the `stale` flag on hits always uses the fixed 365-day default, independent of this flag. |
 
 ## Subcommands
 

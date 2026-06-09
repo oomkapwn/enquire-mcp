@@ -137,7 +137,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--stale-days <n>",
-      "v3.10.0-rc.5 — recency half-life in days for --recency-weight (the age at which a note's recency score is 0.5). Default 365. Also the threshold behind the `stale` freshness flag on search hits. Lower it (e.g. 90) for fast-moving notes where staleness matters sooner; raise it for stable reference vaults. No effect unless --recency-weight > 0 (for re-ranking) — the freshness flag uses the 365-day default regardless."
+      "v3.10.0-rc.5 — recency half-life in days for --recency-weight (the age at which a note's recency score is 0.5). Default 365. Lower it (e.g. 90) for fast-moving notes where staleness matters sooner; raise it for stable reference vaults. No effect unless --recency-weight > 0 (it ONLY tunes recency re-ranking). NOTE: the `stale` freshness flag on search hits always uses the fixed 365-day default and is NOT affected by this flag."
     );
 }
 

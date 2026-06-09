@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.35] — 2026-06-08
+
+> **TL;DR:** **README reorder (maintainer request) — lead with the competitive case.** Moved the **"🏆 Why it's the best"** section (the side-by-side comparison table + the "six features no other Obsidian-MCP has" framing + the Karpathy strategic claim) up to sit **immediately before "⚡ Quick start"** (right after "The solution"), so an evaluator sees the differentiation before the install steps. The hero's one-line `claude mcp add …` + the "30-second install" nav link keep "try it now" reachable from the very top, so the install isn't buried. Done as a **deterministic boundary-based move** (section heading → next heading), not a hand cut-paste, so the 20-row table relocated intact. **README-only — no code, no new/changed claims; the hero stat line stays the first `**N tools**` so the docs-consistency first-match regexes are unaffected; 1164 tests unchanged.**
+
+**Pre-release (v3.10 line) — README section reorder.**
+
+### Changed
+
+- **`README.md` — "🏆 Why it's the best" moved above "⚡ Quick start"** (was buried after "Use cases" / "When NOT to use it" / "API reference"). New top-level flow: hero → The problem → The solution → **Why it's the best** → Quick start → Set up in your AI agent → Use cases → When NOT to use it → API reference → How retrieval works → … No content changed — only the section's position. Separators verified (no double `---`); the removed-from spot (API reference → How retrieval works) closes cleanly.
+
+### Tests (1164)
+
+- None — README-only reorder; no claims added/changed (docs-consistency green; the hero `**45 tools · …**` stat line remains the first tool-count match, so the relocated `**45 production tools**` comparison row doesn't shift any first-match regex). 1164 unchanged.
+
+### Files changed
+
+- `README.md` (section reorder), `CLAUDE.md` (roll-up rc.34 → rc.35 + the reorder note).
+- version bump 3.10.0-rc.34 → 3.10.0-rc.35.
+
+---
+
 ## [3.10.0-rc.34] — 2026-06-08
 
 > **TL;DR:** **RCA re-sweep of the rc.33 fix — the same bug had a SIBLING, and it was worse.** The post-rc.33 re-sweep (mandated by the project's "fix the class, not the instance" rule) found that `peekEmbedDbMeta` — the embed-db twin of the `peekFtsMetaSafe` function hardened in rc.33 — has the **identical `new Database()`-outside-the-try shape**, and it's called **UNGUARDED** in two hot spots the FTS one wasn't: `embeddingsSearch` (`tools/search.ts`, the peek runs *before* that function's own try/catch) and two CLI subcommands (`cli.ts`). So a **corrupt / unreadable / directory `.embed.db` would error the `embeddings_search` tool and crash those CLI subcommands** (vs the rc.33 FTS case, which only bit startup). Hardened it the same way: `new Database()` + the meta queries now sit inside one try → any failure returns `null` (treated as "no embed-db" — the existing graceful-degrade path). **`src/embed-db.ts` + tests only; +3 tests → 1164.** This is the re-sweep discipline paying off: the rc.33 instance fix's mandatory sibling-scan caught a higher-impact instance of the same class.

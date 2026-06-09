@@ -82,7 +82,22 @@ describe("isCatastrophicRegex — catastrophic patterns are flagged (NEGATIVE co
     "(a{2,5})+$", // variable-length inner range, repeated
     "([ac]{2,5})+$", // variable-length char-class run, repeated
     "(a[ab]?)+$", // optional overlapping atom, repeated
-    "(\\w[ba]{0,3})+$" // class-shorthand + variable range, repeated
+    "(\\w[ba]{0,3})+$", // class-shorthand + variable range, repeated
+    // v3.10.0-rc.36 — the CRITICAL the rc.25 fuzz/guard still missed: ADJACENT
+    // overlapping unbounded quantifiers at the TOP level (frame 0 is never popped,
+    // so rc.21–rc.25's pop-only verdict never saw them). Measured ~16s V8 hang.
+    "a*a*$", // 2 directly-adjacent identical stars + failing end-anchor (~1s @2000)
+    "a*a*a*$",
+    "\\w*\\w*\\w*\\w*\\w*\\w*\\w*\\w*$", // the auditor's exact repro (~16s @45 chars)
+    "\\w*\\w*$",
+    ".*.*$",
+    "\\s*\\s*$", // whitespace run + failing anchor (~12s)
+    "\\s*[:\\-]?\\s*$", // optional separator is transparent → still adjacent
+    "a*x?a*$", // optional `x?` between → run stays adjacent
+    "\\w*\\d*$", // cross-class overlap (\\d ⊂ \\w) — probe-based detection catches it
+    "(a)*(a)*$", // adjacent quantified GROUPS over the same atom
+    "(\\w*\\w*)x", // adjacency INSIDE a group, failing literal tail outside it
+    "a*a*b$" // adjacent run + disjoint mandatory blocker (b can fail)
   ];
   for (const p of catastrophic) {
     it(`flags ${JSON.stringify(p)}`, () => {
@@ -118,7 +133,18 @@ describe("isCatastrophicRegex — safe patterns are NOT flagged (POSITIVE contro
     "(abc){2,5}", // fixed-length body, bounded outer → linear
     "(a|b|c){5,10}", // disjoint single-char alternation, bounded outer
     "^(Q|TODO|Open question):\\s*(.+)$", // a realistic capture-group override
-    "(open|q)\\s*[:-]\\s*(.+)" // another realistic override (groups for capture, not repetition)
+    "(open|q)\\s*[:-]\\s*(.+)", // another realistic override (groups for capture, not repetition)
+    // v3.10.0-rc.36 — adjacency precision: these MUST stay accepted (the fix must
+    // not over-flag common safe shapes; regression guards for the probe-based
+    // overlap + the `.`-greedy absorber tail exemption).
+    "a*b*$", // adjacent but DISJOINT (different chars) → linear
+    "a*b*c*$",
+    "\\d*\\s*x", // disjoint broad classes (\\d ∩ \\s = ∅) — probe overlap is empty
+    "\\w+\\s+", // word-run then whitespace-run — disjoint, extremely common
+    "[#.]+\\s+", // the default pattern's inner group shape — disjoint class vs \\s
+    "a*xa*$", // a MANDATORY `x` between breaks the adjacency run
+    "\\s*\\s*(.+)$", // adjacent \\s* but a `.`-greedy absorber tail → benign
+    "\\s*[:\\-]?\\s*(.+)$" // the default's exact tail shape — absorber-saved
   ];
   for (const p of safe) {
     it(`accepts ${JSON.stringify(p)}`, () => {

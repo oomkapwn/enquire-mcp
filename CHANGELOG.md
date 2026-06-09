@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.39] — 2026-06-09
+
+> **TL;DR:** **The mandated post-rc.36 ReDoS re-sweep + its architectural fix (HIGH) — permanently ends the 4×-recurring ReDoS class.** A broader-generator 20,000-pattern re-sweep confirmed rc.36's specific fix is sound (all known shapes flagged, default accepted, no regression) **but surfaced the inherent undecidable residual: 80 SAFE-classified nested patterns genuinely hang V8** — e.g. the 37-char `\W?(([ca]*?){0,3}|c{2,5}b{2,5}){0,3}$` (confirmed: hangs indefinitely on a ~50-char line). This is NOT an rc.36 regression — it's the long-standing limit of *any* static ReDoS denylist (the detection problem is undecidable). Rather than chase 80 more hand-rules (the EDA rabbit hole CLAUDE.md forbids), the fix **bounds the SINK**: `obsidian_open_questions` now matches a caller-supplied pattern on a **worker thread with a hard wall-clock budget** (`MAX_QUESTION_SCAN_MS`=5000), so the main event loop can **never** hang for any pattern, and a pattern that blows the budget is rejected fail-closed. `isCatastrophicRegex` stays as the cheap pre-filter; the safe default pattern stays inline (zero overhead). **1170 → 1174 source tests.**
+
+**Pre-release (v3.10 line) — security: ReDoS sink-bound (the architectural class-ender).**
+
+### Security
+
+- **`src/tools/meta.ts` — hard ReDoS sink-bound for `obsidian_open_questions` (HIGH; closes the static-detector residual the rc.36 re-sweep confirmed).** New `matchLinesBounded(pattern, lines, budgetMs)` runs the caller pattern's per-line matching on a **worker thread** and races a `budgetMs` timeout: the worker isolates V8's backtracking off the main event loop, and on timeout it's terminated and the request is rejected fail-closed (`"matching exceeded the Nms safe budget"`). `getOpenQuestions` is refactored to collect candidate lines + metadata, then match via the worker (caller pattern) or inline (safe default). An invalid pattern rejects with a clear error. **This makes detector completeness moot — no pattern, however crafted, can hang the server.**
+  - Kept `isCatastrophicRegex` + `MAX_QUESTION_PATTERN_LEN` as the cheap pre-filter (rejects obvious shapes without spawning a worker). The worker-budget is the hard backstop for everything the best-effort denylist misses (ReDoS detection is undecidable). New `MAX_QUESTION_SCAN_MS` constant; an optional `scanBudgetMs` arg (NOT in the MCP tool schema, so not caller-settable) lets tests use a short budget.
+  - **Why the architectural fix over more rules:** the re-sweep proved a static analyzer for an undecidable property is forever incomplete (rc.21/24/25/36 each closed a shape; the next is always findable). Bounding the sink ends the class permanently — the project's own "fix the class architecturally, don't chase EDA-precise detection" rule.
+
+### Tests (1174)
+
+- `tests/redos-guard.test.ts`: +4 — `matchLinesBounded` describe (safe pattern → first-capture matches; a pattern `isCatastrophicRegex` MISSES → rejected *within the budget*, asserting it did NOT hang; invalid pattern → clear error) + a `getOpenQuestions` end-to-end test that a detector-missed catastrophic pattern (base64-decoded at runtime for CodeQL js/redos hygiene) is rejected via the worker bound on a vault seeded with a long line. Docs test-count bumped 1170 → 1174.
+
+### Method
+
+- The re-sweep is the MANDATED post-merge step for a recurring-class fix (it's how rc.24's fix surfaced rc.25's CRITICAL). It correctly returned a mixed verdict: rc.36 sound, but the residual real — leading to the architectural fix the maintainer approved over reactive detector-patching.
+
+---
+
 ## [3.10.0-rc.38] — 2026-06-09
 
 > **TL;DR:** **Correctness + resource batch (audit #5 + #2, both MEDIUM).** **#5:** a `.base` filter `not: '<unevaluated predicate>'` (a typo, or `inDate(...)` / any formula predicate — none of which `obsidian_query_base` evaluates) **returned EVERY row instead of none.** v3.6.2 HN-2 fail-closes an unevaluable predicate to `false` = "exclude the row"; `not` blindly negated that to `true` = "include" — silently over-including the whole scan, the exact over-inclusion HN-2 (and SECURITY.md) say is prevented, reachable through negation. Fixed by evaluating the `not` child against a **fresh `unevaluated` probe** (the real set is shared across rows, so a naive size-delta only catches the first row) and excluding if the child touched any unevaluable predicate. **#2:** the embedder / BGE-reranker **ONNX InferenceSession was rebuilt on EVERY query** — `loadEmbedder`/`loadReranker` re-ran `pipeline()` / `from_pretrained()` per call (~110–120MB session init each), so a long-lived `serve --enable-reranker` paid full model-init latency per `obsidian_search` and N concurrent authenticated queries spun up N simultaneous sessions (a memory-spike vector + a direct hit to the headline sub-10ms claim). Now **cached per-alias** at the module level. **1168 → 1170 source tests** (+2 for #5; #2's behavioral path is gated-smoke + build-verified, as the whole model path is).

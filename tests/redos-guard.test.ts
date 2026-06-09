@@ -16,6 +16,7 @@ import {
   getOpenQuestions,
   isCatastrophicRegex,
   MAX_QUESTION_PATTERN_LEN,
+  matchLinesBounded,
   readUnboundedQuantifier
 } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
@@ -210,6 +211,40 @@ describe("decodeEscapedChar — escape resolution + span (v3.9.0-rc.25)", () => 
   });
 });
 
+describe("matchLinesBounded — hard ReDoS sink-bound (v3.10.0-rc.39)", () => {
+  // isCatastrophicRegex is a best-effort denylist (ReDoS is undecidable; the rc.36
+  // re-sweep confirmed a residual under-flag tail). This worker-thread timeout is
+  // the HARD backstop — the main event loop can never hang for ANY pattern, and one
+  // that blows the budget is rejected fail-closed. The catastrophic pattern is
+  // base64-decoded at runtime so no catastrophic regex literal reaches a `new RegExp`
+  // sink in this source (CodeQL js/redos hygiene).
+  const cataMissed = Buffer.from("XFc/KChbY2FdKj8pezAsM318Y3syLDV9YnsyLDV9KXswLDN9JA==", "base64").toString();
+
+  it("returns first-capture matches for a safe pattern (POSITIVE control)", async () => {
+    const out = await matchLinesBounded("^Q: (.+)$", ["Q: hello", "nope", "Q: two"], 2000);
+    expect(out).toEqual([
+      { idx: 0, q: "hello" },
+      { idx: 2, q: "two" }
+    ]);
+  });
+
+  it("REJECTS within the budget a pattern isCatastrophicRegex MISSES (the rc.36 residual)", async () => {
+    // Confirm it IS a detector-miss (so the worker bound — not the denylist — is what
+    // saves us), then prove the worker is killed at the budget instead of hanging.
+    expect(isCatastrophicRegex(cataMissed)).toBe(false);
+    const t0 = Date.now();
+    await expect(matchLinesBounded(cataMissed, [`${"a".repeat(50)}!`], 500)).rejects.toThrow(
+      /budget|catastrophic|ReDoS/i
+    );
+    expect(Date.now() - t0).toBeLessThan(4000); // bounded — did NOT hang
+  });
+
+  it("REJECTS an invalid pattern with a clear error (NEGATIVE control)", async () => {
+    const open = String.fromCharCode(40); // "(" — unbalanced → invalid regex
+    await expect(matchLinesBounded(open, ["x"], 1000)).rejects.toThrow(/invalid pattern/i);
+  });
+});
+
 describe("getOpenQuestions — pattern hardening integration", () => {
   let root: string;
   beforeAll(async () => {
@@ -270,6 +305,27 @@ describe("getOpenQuestions — pattern hardening integration", () => {
   it("REJECTS an over-long pattern (NEGATIVE control)", async () => {
     const tooLong = "a".repeat(MAX_QUESTION_PATTERN_LEN + 1);
     await expect(getOpenQuestions(new Vault(root), { pattern: tooLong })).rejects.toThrow(/too long/i);
+  });
+
+  it("REJECTS a detector-MISSED catastrophic pattern via the worker sink-bound (v3.10.0-rc.39)", async () => {
+    // The rc.36 re-sweep proved isCatastrophicRegex under-flags some nested shapes
+    // (decoded at runtime). The worker timeout is the hard backstop end-to-end: the
+    // tool rejects fail-closed at the budget instead of hanging the event loop.
+    const cataMissed = Buffer.from("XFc/KChbY2FdKj8pezAsM318Y3syLDV9YnsyLDV9KXswLDN9JA==", "base64").toString();
+    expect(isCatastrophicRegex(cataMissed)).toBe(false); // the cheap denylist misses it
+    // The catastrophic backtracking needs a LONG input line to bite — seed a
+    // dedicated vault with one (the shared `root` notes are too short to hang).
+    const longRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-redos-long-"));
+    try {
+      // Trailing "!" (a non-[abc]/non-word char) makes the anchored `$` fail after
+      // the long run → forces the exponential redistribution that hangs the engine.
+      await fs.writeFile(path.join(longRoot, "Long.md"), `# H\n\n${"a".repeat(60)}!\n`);
+      await expect(getOpenQuestions(new Vault(longRoot), { pattern: cataMissed, scanBudgetMs: 600 })).rejects.toThrow(
+        /budget|catastrophic|ReDoS|rejected/i
+      );
+    } finally {
+      await fs.rm(longRoot, { recursive: true, force: true });
+    }
   });
 });
 

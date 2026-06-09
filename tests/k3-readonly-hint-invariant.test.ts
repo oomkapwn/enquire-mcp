@@ -52,11 +52,16 @@ const KNOWN_WRITE_HANDLERS = new Set([
  * v3.10.0-rc.40 (#11) — exported async fns in `src` whose body calls a vault MUTATION
  * method (`vault.write*`/`append*`/`rename*`/`delete*`/`move*`/`remove*`) or a raw fs
  * write (`writeFile`/`appendFile`/`rename`/`unlink`/`mkdir`/`rm`/`copyFile`). Coarse body
- * slice (signature → next top-level `export`) — sufficient for write.ts's flat exported-
- * handler shape. Used to assert KNOWN_WRITE_HANDLERS can't silently fall behind a NEW
- * fs-mutating handler (which, wired under READ_ONLY, would falsely advertise readOnlyHint).
- * Heuristic by design (mutation detection is undecidable) — catches the common direct-
- * mutation forms; the NEGATIVE control below proves it's non-vacuous.
+ * slice (signature → next top-level `export`) — sufficient for the flat exported-handler
+ * shape of write.ts + read.ts. Used to assert KNOWN_WRITE_HANDLERS can't silently fall
+ * behind a NEW fs-mutating handler (which, wired under READ_ONLY, would falsely advertise
+ * readOnlyHint). rc.42 F2: callers MUST scan EVERY module hosting a write handler
+ * (WRITE_HANDLER_SOURCES = write.ts + read.ts — `chatThreadAppend` lives in read.ts), not
+ * just write.ts. Heuristic by design (mutation detection is undecidable) — catches the
+ * common DIRECT-mutation forms; the NEGATIVE control below proves it's non-vacuous. Known
+ * blind spot: a DELEGATING handler (e.g. `archiveNote` → `renameNote`, with no direct
+ * mutation call of its own) isn't derived here — it's covered by its KNOWN_WRITE_HANDLERS
+ * membership + the layer-1 wiring scan instead.
  */
 function fsMutatingExports(src: string): string[] {
   const MUT =
@@ -207,16 +212,25 @@ describe("K-3 invariant — readOnlyHint vs write-handler wiring", () => {
     }
   });
 
-  it("KNOWN_WRITE_HANDLERS covers every fs-mutating exported fn in write.ts (rc.40 #11)", async () => {
-    // The hardcoded set above is only as good as our memory to extend it. Derive the
-    // fs/vault-MUTATING exported handlers from source and assert each is tracked — so a
-    // NEW write handler added without updating the set fails CI (closes the
-    // "did-we-remember-to-add-it" gap the erasure/resource-bound inventory invariants close).
-    const writeSrc = await fs.readFile(path.join("src", "tools", "write.ts"), "utf-8");
-    const untracked = fsMutatingExports(writeSrc).filter((n) => !KNOWN_WRITE_HANDLERS.has(n));
+  // rc.42 F2 — WIDEN rc.40 #11. A real WRITE handler (`chatThreadAppend`) lives in
+  // read.ts, NOT write.ts, so scanning only write.ts was scope-too-narrow: a new
+  // fs-mutating handler added to read.ts would escape BOTH this derive-check AND the
+  // layer-1 READ_ONLY-violation scan (which only flags names already in the set). Union
+  // every module that hosts a write handler, mirroring resource-bound's SCANNER_SOURCES.
+  const WRITE_HANDLER_SOURCES = ["src/tools/write.ts", "src/tools/read.ts"];
+  it("KNOWN_WRITE_HANDLERS covers every fs-mutating exported fn in write.ts + read.ts (rc.42 F2)", async () => {
+    const mutators = new Set<string>();
+    for (const rel of WRITE_HANDLER_SOURCES) {
+      const src = await fs.readFile(path.join(...rel.split("/")), "utf-8");
+      for (const n of fsMutatingExports(src)) mutators.add(n);
+    }
+    // Sanity: the scan genuinely REACHES read.ts (chatThreadAppend mutates via
+    // vault.writeNote there) — proves the union isn't vacuously scanning only write.ts.
+    expect(mutators.has("chatThreadAppend"), "fsMutatingExports must detect read.ts's chatThreadAppend").toBe(true);
+    const untracked = [...mutators].filter((n) => !KNOWN_WRITE_HANDLERS.has(n));
     expect(
       untracked,
-      `write.ts fs-mutating exported fn(s) missing from KNOWN_WRITE_HANDLERS: ${untracked.join(", ")} — add them (a READ_ONLY tool wired to one would falsely advertise readOnlyHint).`
+      `fs-mutating exported fn(s) in ${WRITE_HANDLER_SOURCES.join(" / ")} missing from KNOWN_WRITE_HANDLERS: ${untracked.join(", ")} — add them (a READ_ONLY tool wired to one would falsely advertise readOnlyHint).`
     ).toEqual([]);
   });
 

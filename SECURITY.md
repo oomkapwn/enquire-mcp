@@ -138,7 +138,7 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 
 ### Model download (`install-model`)
 
-- **Explicit, opt-in.** The `enquire-mcp install-model [alias]` subcommand is the ONLY codepath that hits the network. Serving / read-only / TF-IDF / FTS5 paths never make outbound HTTP. Air-gap-safe by default.
+- **Explicit, opt-in (offline-ENFORCED at serve since v3.10.0-rc.42).** The `enquire-mcp install-model [alias]` / `build-embeddings` subcommands are the ONLY codepaths that hit the network (a one-time model download). `serve` / `serve-http` call `setEmbeddingsOffline()` at startup → transformers.js `env.allowRemoteModels = false`, so the embedder + reranker model load uses ONLY the local cache: a cache-miss **fails closed** (with an `install-model` / `build-embeddings` hint) instead of silently CDN-fetching. Serving / read-only / TF-IDF / FTS5 paths never make outbound HTTP. Air-gap-safe by default. **OIA Check 4f** (`scripts/oia-walk.mjs`) fails CI if any doc makes this enforced claim while the code guard is absent (mirrors Check 4e for OCR; regression-proofs the rc.41→rc.42 fix).
 - **Source: HuggingFace Hub.** Model weights ship as ONNX from the `Xenova/*` org. `@huggingface/transformers` handles the download, hash verification, and caching to `~/.cache/huggingface/transformers.js/`.
 - **Reusable across vaults.** The cache is per-machine, not per-vault. Multiple `enquire-mcp` instances on different vaults share the same model files.
 - **Manual purge.** Delete `~/.cache/huggingface/transformers.js/` to remove cached models.

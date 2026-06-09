@@ -149,6 +149,45 @@ let pipelineCtor: ((task: string, model: string) => Promise<unknown>) | null = n
 let autoTokenizerCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 let autoModelForSeqClsCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 
+// v3.10.0-rc.42 (audit F1, HIGH) — serve-mode offline ENFORCEMENT for the embedder +
+// reranker model load. README/llms.txt/SECURITY.md claim "zero cloud calls during serve";
+// pre-rc.42 that was ASPIRATIONAL — a missing local cache let transformers.js silently
+// CDN-fetch (~120MB) on a serve-time query. This makes the claim a real CODE GUARD,
+// mirroring OCR's `assertOcrLangsInstalled` (overclaim #16). serve/serve-http call
+// setEmbeddingsOffline() at startup → transformers.js `env.allowRemoteModels=false` →
+// a model absent from the LOCAL cache fails CLOSED with an install hint instead of
+// fetching. build-embeddings / install-model never call the setter, so the one-time
+// online download path is unchanged.
+let embeddingsOffline = false;
+export function setEmbeddingsOffline(on = true): void {
+  embeddingsOffline = on;
+}
+export function isEmbeddingsOffline(): boolean {
+  return embeddingsOffline;
+}
+/** Force transformers.js to local-cache-only when serve has set the offline flag.
+ *  Idempotent; a no-op when online (build-embeddings). */
+function applyOfflineEnv(mod: unknown): void {
+  if (!embeddingsOffline) return;
+  const env = (mod as { env?: { allowRemoteModels?: boolean; allowLocalModels?: boolean } }).env;
+  if (env) {
+    env.allowRemoteModels = false; // local cache only — no outbound CDN fetch during serve
+    env.allowLocalModels = true;
+  }
+}
+/** v3.10.0-rc.42 (F1) — translate a serve-offline model-load failure (with
+ *  allowRemoteModels=false the CDN fallback is blocked, so a failure is almost always a
+ *  cache miss) into an actionable fail-closed error. Pure → unit-testable without a model. */
+export function offlineModelLoadError(alias: string, hfId: string, original: unknown): Error {
+  const orig = original instanceof Error ? original.message : String(original);
+  return new Error(
+    `Model "${alias}" (${hfId}) is not in the local model cache, and serve mode makes zero outbound ` +
+      `network calls (privacy — your vault never reaches the network). Pre-download the model in an ` +
+      `online context (e.g. \`enquire build-embeddings\` for the embedder, or one reranker query) ` +
+      `before serving, then restart. Original: ${orig}`
+  );
+}
+
 async function loadPipeline(): Promise<(task: string, model: string) => Promise<unknown>> {
   if (pipelineCtor) return pipelineCtor;
   try {
@@ -157,6 +196,7 @@ async function loadPipeline(): Promise<(task: string, model: string) => Promise<
       pipeline?: (task: string, model: string) => Promise<unknown>;
     };
     if (!mod.pipeline) throw new Error("@huggingface/transformers has no `pipeline` export");
+    applyOfflineEnv(mod); // rc.42 F1 — serve sets local-cache-only before any model load
     pipelineCtor = mod.pipeline;
     return pipelineCtor;
   } catch (err) {
@@ -203,6 +243,7 @@ async function loadTransformersForRerank(): Promise<{
         "@huggingface/transformers has no `AutoTokenizer` / `AutoModelForSequenceClassification` exports"
       );
     }
+    applyOfflineEnv(mod); // rc.42 F1 — serve sets local-cache-only before any reranker load
     autoTokenizerCtor = mod.AutoTokenizer;
     autoModelForSeqClsCtor = mod.AutoModelForSequenceClassification;
     return { AutoTokenizer: autoTokenizerCtor, AutoModelForSequenceClassification: autoModelForSeqClsCtor };
@@ -243,10 +284,16 @@ export async function loadEmbedder(alias?: string): Promise<Embedder> {
 
 async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
   const pipeline = await loadPipeline();
-  const extractor = (await pipeline("feature-extraction", model.hfId)) as (
+  let extractor: (
     text: string | string[],
     options: { pooling: "mean"; normalize: boolean }
   ) => Promise<{ data: Float32Array; dims: readonly number[] }>;
+  try {
+    extractor = (await pipeline("feature-extraction", model.hfId)) as typeof extractor;
+  } catch (err) {
+    // rc.42 F1 — under serve-offline, a load failure is a cache miss (CDN blocked); fail closed with a hint.
+    throw embeddingsOffline ? offlineModelLoadError(model.alias, model.hfId, err) : err;
+  }
 
   // v2.0.0-beta.4: cap internal batch size to avoid pathological embedder
   // hangs on notes with many chunks. Real-vault smoke (128 notes) hung at
@@ -476,13 +523,18 @@ async function buildReranker(model: RerankerModel): Promise<Reranker> {
   // q8 quantization keeps memory bounded and CPU-friendly. Models in our
   // catalog all ship q8 ONNX weights via Xenova/.
   const dtype = "q8" as const;
-  const tokenizer = (await AutoTokenizer.from_pretrained(model.hfId)) as (
+  let tokenizer: (
     text: string | string[],
     options: { text_pair: string | string[]; padding: boolean; truncation: boolean }
   ) => unknown;
-  const seqCls = (await AutoModelForSequenceClassification.from_pretrained(model.hfId, { dtype })) as (
-    inputs: unknown
-  ) => Promise<{ logits: { data: Float32Array; dims: readonly number[] } }>;
+  let seqCls: (inputs: unknown) => Promise<{ logits: { data: Float32Array; dims: readonly number[] } }>;
+  try {
+    tokenizer = (await AutoTokenizer.from_pretrained(model.hfId)) as typeof tokenizer;
+    seqCls = (await AutoModelForSequenceClassification.from_pretrained(model.hfId, { dtype })) as typeof seqCls;
+  } catch (err) {
+    // rc.42 F1 — under serve-offline, a load failure is a cache miss (CDN blocked); fail closed with a hint.
+    throw embeddingsOffline ? offlineModelLoadError(model.alias, model.hfId, err) : err;
+  }
 
   // Sub-batch size: cross-encoder is heavier per pair than encoder-only;
   // 4 keeps peak memory under ~280 MB on M1 with q8 + the largest model

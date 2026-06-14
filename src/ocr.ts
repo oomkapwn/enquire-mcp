@@ -194,7 +194,14 @@ export const MAX_OCR_CANVAS_DIM = 5000;
  */
 export function clampOcrScale(baseWidth: number, baseHeight: number, requestedScale: number): number {
   const maxBaseDim = Math.max(baseWidth, baseHeight, 1);
-  return Math.max(0.1, Math.min(requestedScale, MAX_OCR_CANVAS_DIM / maxBaseDim));
+  // v3.10.0-rc.44 (M2) — NO lower floor. The prior `Math.max(0.1, …)` floor OVERRODE the
+  // cap for a huge MediaBox: once 5000/maxBaseDim < 0.1 (any side > 50,000pt) it forced
+  // the scale back up to 0.1, so a 1,000,000pt page rendered at 100,000px → a ~40GB RGBA
+  // canvas → OOM (the exact failure the cap exists to stop; pdfjs does NOT enforce the
+  // PDF spec's 14,400pt MediaBox limit). The cap-derived ratio IS the safe ceiling, and
+  // requestedScale is already [0.5,4]-clamped upstream so it can't be ≤0. The call site
+  // additionally hard-caps the final pixel dims (belt + braces).
+  return Math.min(requestedScale, MAX_OCR_CANVAS_DIM / maxBaseDim);
 }
 
 /**
@@ -239,12 +246,16 @@ export function resolveTessdataDir(): string {
 }
 
 /**
- * True iff a Tesseract language pack for `lang` exists under `dir` (either the
- * uncompressed `<lang>.traineddata` that `install-ocr-lang` writes, or a
- * `<lang>.traineddata.gz` from Tesseract's own cache).
+ * True iff an UNCOMPRESSED Tesseract language pack `<lang>.traineddata` exists under `dir`.
+ *
+ * v3.10.0-rc.44 — require the uncompressed form ONLY. The worker is created with
+ * `gzip:false` + `cacheMethod:"readOnly"` pinned to `dir`, so it reads exactly
+ * `<lang>.traineddata` (no `.gz`). Accepting a `.gz`-only install made this pre-flight
+ * PASS while `createWorker` then failed to load the pack — a false "installed" verdict.
+ * `install-ocr-lang` always writes the uncompressed form, so this matches reality.
  */
 export function ocrLangIsInstalled(lang: string, dir: string = resolveTessdataDir()): boolean {
-  return existsSync(path.join(dir, `${lang}.traineddata`)) || existsSync(path.join(dir, `${lang}.traineddata.gz`));
+  return existsSync(path.join(dir, `${lang}.traineddata`));
 }
 
 /**
@@ -389,7 +400,13 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
         const baseVp = page.getViewport({ scale: 1 });
         const effScale = clampOcrScale(baseVp.width, baseVp.height, scale);
         const viewport = page.getViewport({ scale: effScale });
-        const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+        // rc.44 M2 — hard-cap the final canvas pixels at MAX_OCR_CANVAS_DIM (defense-in-
+        // depth vs any clampOcrScale rounding edge): a huge MediaBox can NEVER allocate an
+        // OOM canvas. A normal page is unaffected (its dims are far below the cap).
+        const canvas = createCanvas(
+          Math.min(Math.ceil(viewport.width), MAX_OCR_CANVAS_DIM),
+          Math.min(Math.ceil(viewport.height), MAX_OCR_CANVAS_DIM)
+        );
         // pdfjs's render() expects a CanvasRenderingContext2D-like object.
         // @napi-rs/canvas's getContext('2d') returns SKRSContext2D which is
         // structurally compatible (canvas property + drawing methods).

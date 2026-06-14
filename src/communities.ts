@@ -230,21 +230,37 @@ export function detectCommunities(graph: WikilinkGraph): CommunityResult {
   return finalize(graph, community, Q, iterations, !changed);
 }
 
-function computeModularity(graph: WikilinkGraph, community: Map<string, number>): number {
+/**
+ * Newman–Girvan modularity Q = Σ_ij [A_ij − k_i·k_j/2m]·δ(c_i,c_j) / 2m, decomposed as
+ * Q = Σ_c [ in_c/2m − (tot_c/2m)² ] where `in_c` is the intra-community edge weight (the
+ * adjacency rep counts each undirected edge twice) and `tot_c` the community's degree sum.
+ *
+ * v3.10.0-rc.43 (M7) — FIX: the prior implementation summed the null-model penalty
+ * `(k_i·k_j/2m)` ONLY over ADJACENT same-community pairs (it lived inside the `for (…of
+ * neighbors)` loop), but the standard formula penalizes ALL same-community pairs incl.
+ * non-adjacent ones (where A_ij=0 but −k_i·k_j/2m still applies). The truncated penalty
+ * inflated Q and could rank a degenerate single-community partition ABOVE the correct
+ * split. Now the penalty is the exact Σ_c tot_c² over per-community degree sums.
+ */
+export function computeModularity(graph: WikilinkGraph, community: Map<string, number>): number {
   const { adjacency, totalWeight2m: m2, degree } = graph;
   if (m2 === 0) return 0;
-  let Q = 0;
+  // Term 1 — intra-community edge weight (adjacency double-counts undirected edges).
+  let sIn = 0;
   for (const [i, neighbors] of adjacency.entries()) {
     const ci = community.get(i);
-    const ki = degree.get(i) ?? 0;
     for (const [j, w] of neighbors) {
-      const cj = community.get(j);
-      if (ci !== cj) continue;
-      const kj = degree.get(j) ?? 0;
-      Q += w - (ki * kj) / m2;
+      if (community.get(j) === ci) sIn += w;
     }
   }
-  return Q / m2;
+  // Term 2 — null-model penalty over ALL same-community pairs: Σ_c (Σ_{i∈c} k_i)².
+  const degByCommunity = new Map<number, number>();
+  for (const [node, c] of community.entries()) {
+    degByCommunity.set(c, (degByCommunity.get(c) ?? 0) + (degree.get(node) ?? 0));
+  }
+  let sumSq = 0;
+  for (const tot of degByCommunity.values()) sumSq += tot * tot;
+  return sIn / m2 - sumSq / (m2 * m2);
 }
 
 function finalize(

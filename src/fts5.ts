@@ -513,8 +513,13 @@ export class FtsIndex {
       // string, and `\/+` consumes only `/` chars greedily. Worst-case input
       // is O(n) (a single trailing run of slashes), not O(n²).
       const prefix = `${opts.folder.replace(/\/+$/, "")}/`;
-      where.push("substr(chunks.rel_path, 1, ?) = ?");
-      params.push(prefix.length, prefix);
+      // rc.43 M1 — let SQLite compute the prefix length via length() (which counts
+      // CHARACTERS, exactly like substr's 3rd arg). Binding JS `prefix.length` (UTF-16
+      // code UNITS) diverged for any folder name with an astral-plane char (emoji): e.g.
+      // "📚Books/" has JS length 8 but occupies 7 code points, so substr(rel_path,1,8)
+      // over-read by one and matched ZERO rows. Bind the prefix string twice instead.
+      where.push("substr(chunks.rel_path, 1, length(?)) = ?");
+      params.push(prefix, prefix);
     }
     if (opts.tag) {
       // Exact-tag membership inside the comma-separated `tags` column —

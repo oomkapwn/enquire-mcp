@@ -556,8 +556,11 @@ export class EmbedDb {
     const rows = db
       .prepare(
         folderPrefix
-          ? `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind
-             FROM embeddings WHERE substr(rel_path, 1, ?) = ?`
+          ? // rc.43 M1 — length(?) counts CHARACTERS (like substr), not JS UTF-16 code
+            // units; otherwise an astral-char folder name (emoji) matched ZERO rows.
+            // Mirrors FtsIndex.search() in fts5.ts.
+            `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind
+             FROM embeddings WHERE substr(rel_path, 1, length(?)) = ?`
           : `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind FROM embeddings`
       )
       .all<{
@@ -568,7 +571,7 @@ export class EmbedDb {
         text_preview: string;
         vector: Buffer;
         kind: string | null;
-      }>(...(folderPrefix ? [folderPrefix.length, folderPrefix] : []));
+      }>(...(folderPrefix ? [folderPrefix, folderPrefix] : [])); // rc.43 M1 — bind prefix twice (length(?) + substr=?)
 
     const expectedBytes = this.encodedBytes;
     const heap: EmbedSearchHit[] = [];

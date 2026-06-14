@@ -222,6 +222,28 @@ describe("EmbedDb", () => {
     db.close();
   });
 
+  it("folder filter matches an emoji (astral-char) folder name (rc.43 M1 — substr by char, not JS UTF-16)", async () => {
+    const db = new EmbedDb({
+      file: path.join(dir, "test.embed.db"),
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await db.open();
+    // "📚Books" leads with a non-BMP char (JS length 7, 6 code points). Pre-rc.43 the
+    // prefix.length (UTF-16) bound to substr(...,1,?) (code points) matched ZERO rows.
+    db.upsertNote("📚Books/oauth.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "auth", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.upsertNote("Other/pasta.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "pasta", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const hits = db.search(l2([1, 0, 0, 0]), 10, { folder: "📚Books" });
+    expect(hits.length).toBe(1);
+    expect(hits[0]?.rel_path).toBe("📚Books/oauth.md");
+    db.close();
+  });
+
   it("search rejects query vectors with the wrong dim", async () => {
     const db = new EmbedDb({
       file: path.join(dir, "test.embed.db"),

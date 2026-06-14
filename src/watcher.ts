@@ -545,7 +545,13 @@ export class VaultWatcher {
       this.vault.invalidateOne(absPath);
     }
 
-    if (!this.ftsIndex) {
+    // v3.10.0-rc.44 (M5) — only early-return when there's NOTHING to sync (no FTS AND no
+    // embed-db). Pre-rc.44 this returned whenever ftsIndex was null, silently skipping the
+    // embed-db + HNSW live-update below — even though server.ts had wired attachEmbed /
+    // attachHnsw and printed "watcher embed-db sync enabled" / "HNSW live-update enabled"
+    // banners. Now embed/HNSW sync runs regardless of FTS; each ftsIndex call below is
+    // optional-chained so a null FTS index simply skips the FTS5 reindex/drop.
+    if (!this.ftsIndex && !this.embedDb) {
       if (!this.silent) {
         process.stderr.write(`enquire: watcher ${kind} ${relPath} (cache-invalidated)\n`);
       }
@@ -553,7 +559,7 @@ export class VaultWatcher {
     }
 
     if (kind === "unlink") {
-      this.ftsIndex.dropFile(relPath);
+      this.ftsIndex?.dropFile(relPath);
       // v3.8.0-rc.2 R-7 — also drop embed-db rows so search results
       // don't surface vectors for deleted notes.
       // v3.8.0-rc.3 R-7 — extended to PDFs (rc.2 was md-only).
@@ -600,7 +606,7 @@ export class VaultWatcher {
         const { extractPdfText } = await import("./pdf.js");
         const result = await extractPdfText(buf);
         const pages = result.pages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
-        this.ftsIndex.reindexPdfFile(relPath, stat.mtimeMs, pages);
+        this.ftsIndex?.reindexPdfFile(relPath, stat.mtimeMs, pages);
         // v3.8.0-rc.3 — embed-db sync for PDFs. Uses embedSinglePdf helper
         // to match syncPdfEmbedDb's chunking + page-marker logic exactly.
         // Image-only PDFs (hasText === false) get embed-db rows DROPPED
@@ -708,7 +714,7 @@ export class VaultWatcher {
       }
       const note = await this.vault.readNote(absPath, stat.mtimeMs);
       const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      this.ftsIndex.reindexFile(relPath, stat.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);
+      this.ftsIndex?.reindexFile(relPath, stat.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);
       // v3.8.0-rc.2 R-7 — re-embed + upsert if embed-db is wired.
       // Failures here are logged but DON'T fail the whole watcher event
       // (FTS5 update already succeeded; embed-db will resync on next bulk

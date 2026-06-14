@@ -949,6 +949,24 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
   // own a SQLite handle (no `close()` method), but it owns the
   // persistent disk cache that we should flush before exit so a
   // SIGKILL-followed-by-cold-start doesn't reread an empty vault.
+  // v3.10.0-rc.44 (M6) — ORDER MATTERS, and now mirrors shutdownStdioDeps. Drain the
+  // watcher FIRST, while ftsIndex + watcherEmbedDb are still OPEN: an in-flight / late
+  // chokidar handler calls ftsIndex.reindexFile/dropFile + embed-db ops, and
+  // watcher.close()'s flushHnswToDisk calls embedDb.computeSignature(). Pre-rc.44
+  // ftsIndex.close() ran BEFORE the drain, so a handler still in flight during the
+  // closeAll(5s)+closeServerBounded(3s) window threw on a closed SQLite handle and the
+  // whole event (fts + embed + hnsw) was dropped. Then close the watcher's embed-db,
+  // flush the vault cache, and close fts LAST.
+  try {
+    await extras.deps.watcher?.close();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    extras.deps.watcherEmbedDb?.close();
+  } catch {
+    /* best-effort */
+  }
   if (extras.deps.vault.persistentCacheEnabled) {
     try {
       await extras.deps.vault.saveDiskCache();
@@ -958,16 +976,6 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
   }
   try {
     extras.deps.ftsIndex?.close();
-  } catch {
-    /* best-effort */
-  }
-  try {
-    await extras.deps.watcher?.close();
-  } catch {
-    /* best-effort */
-  }
-  try {
-    extras.deps.watcherEmbedDb?.close();
   } catch {
     /* best-effort */
   }

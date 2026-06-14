@@ -55,8 +55,14 @@ describe("ocrLangIsInstalled + assertOcrLangsInstalled — #16 offline enforceme
     expect(ocrLangIsInstalled("eng", dir)).toBe(true);
   });
 
-  it("ocrLangIsInstalled also recognizes a .traineddata.gz pack", async () => {
+  it("ocrLangIsInstalled REJECTS a .gz-only pack the readOnly/gzip:false worker can't read (rc.44, NEGATIVE control)", async () => {
+    // Pre-rc.44 this returned true for a `.gz`-only install, but the worker is pinned
+    // gzip:false + cacheMethod:"readOnly" and reads only `<lang>.traineddata` — so the
+    // pre-flight passed while createWorker then failed. Now require the uncompressed form.
     await fs.writeFile(path.join(dir, "rus.traineddata.gz"), "fake");
+    expect(ocrLangIsInstalled("rus", dir)).toBe(false);
+    // …and once the uncompressed pack the worker actually loads is present, true.
+    await fs.writeFile(path.join(dir, "rus.traineddata"), "fake");
     expect(ocrLangIsInstalled("rus", dir)).toBe(true);
   });
 
@@ -115,8 +121,15 @@ describe("clampOcrScale — canvas-OOM DoS guard (v3.9.0-rc.10)", () => {
     expect(eff).toBeLessThan(2);
     expect(14400 * eff).toBeLessThanOrEqual(MAX_OCR_CANVAS_DIM + 1);
   });
-  it("never returns below the 0.1 floor", () => {
-    expect(clampOcrScale(1_000_000, 1_000_000, 4)).toBeGreaterThanOrEqual(0.1);
+  it("bounds the rendered side ≤ cap even for a >50,000pt MediaBox (rc.44 M2 — the 0.1 floor used to defeat the cap)", () => {
+    // Pre-rc.44 `Math.max(0.1, …)` forced the scale back up to 0.1 once 5000/dim < 0.1
+    // (any side > 50,000pt) → a 1,000,000pt page rendered at 0.1·1e6 = 100,000px ≈ 40GB
+    // canvas → OOM. The floor is gone; the rendered side must now stay within the cap.
+    const eff = clampOcrScale(1_000_000, 1_000_000, 4);
+    expect(eff).toBeGreaterThan(0); // still a positive, renderable scale
+    expect(1_000_000 * eff).toBeLessThanOrEqual(MAX_OCR_CANVAS_DIM + 1);
+    // And the call site additionally hard-caps the final canvas pixels (defense-in-depth):
+    expect(Math.min(Math.ceil(1_000_000 * eff), MAX_OCR_CANVAS_DIM)).toBeLessThanOrEqual(MAX_OCR_CANVAS_DIM);
   });
 });
 

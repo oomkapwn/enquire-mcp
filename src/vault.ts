@@ -1100,7 +1100,15 @@ function defaultCacheFile(root: string): string {
   return path.join(base, "enquire", `${hash}.json`);
 }
 
-async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {
+// v3.10.0-rc.44 (G2) — recursion-DEPTH bound for the vault walkers. Symlinks are already
+// skipped (no cycle risk), but a pathologically deep REAL directory tree would drive
+// unbounded recursion + readdir I/O BEFORE capScanEntries(MAX_SCAN_NOTES) — which only
+// caps the RESULT array after the full tree is traversed — ever applies. 64 is far below
+// any real vault's nesting yet bounds a hostile/accidental deep tree.
+const MAX_WALK_DEPTH = 64;
+
+async function walk(dir: string, root: string, out: FileEntry[], depth = 0): Promise<void> {
+  if (depth > MAX_WALK_DEPTH) return;
   let entries: import("node:fs").Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -1117,7 +1125,7 @@ async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> 
       if (!real) continue;
       const rel = path.relative(root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      await walk(full, root, out);
+      await walk(full, root, out, depth + 1);
     } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
       const stat = await fs.stat(full).catch(() => null);
       if (!stat) continue;
@@ -1133,7 +1141,8 @@ async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> 
 
 /** Generic walker — same skip rules as the markdown walker, but matches any
  *  file extension (lowercase). Used by listFilesByExtension(".canvas") etc. */
-async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: string): Promise<void> {
+async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: string, depth = 0): Promise<void> {
+  if (depth > MAX_WALK_DEPTH) return; // rc.44 G2 — bound recursion depth (see walk())
   let entries: import("node:fs").Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -1150,7 +1159,7 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
       if (!real) continue;
       const rel = path.relative(root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      await walkAnyExt(full, root, out, ext);
+      await walkAnyExt(full, root, out, ext, depth + 1);
     } else if (e.isFile() && e.name.toLowerCase().endsWith(ext)) {
       const stat = await fs.stat(full).catch(() => null);
       if (!stat) continue;

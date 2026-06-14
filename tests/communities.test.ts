@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWikilinkGraph, detectCommunities, MAX_GRAPH_NODES } from "../src/communities.js";
+import { buildWikilinkGraph, computeModularity, detectCommunities, MAX_GRAPH_NODES } from "../src/communities.js";
 import { Vault } from "../src/vault.js";
 
 let dir: string;
@@ -362,5 +362,98 @@ describe("detectCommunities — convergence + Louvain branches (v3.6.2)", () => 
       const graph = await buildWikilinkGraph(stub);
       expect(graph.nodes.length).toBe(2);
     });
+  });
+});
+
+describe("computeModularity — Newman–Girvan null-model penalty (rc.43 M7)", () => {
+  // Two triangles {0,1,2} and {3,4,5}, bridged by edge 2–3.
+  function bridgedTriangles() {
+    const edges: [number, number][] = [
+      [0, 1],
+      [1, 2],
+      [0, 2],
+      [3, 4],
+      [4, 5],
+      [3, 5],
+      [2, 3]
+    ];
+    const adjacency = new Map<string, Map<string, number>>();
+    const degree = new Map<string, number>();
+    const nodes: string[] = [];
+    for (let n = 0; n < 6; n++) {
+      adjacency.set(String(n), new Map());
+      degree.set(String(n), 0);
+      nodes.push(String(n));
+    }
+    let totalWeight2m = 0;
+    for (const [a, b] of edges) {
+      const A = String(a);
+      const B = String(b);
+      adjacency.get(A)?.set(B, 1);
+      adjacency.get(B)?.set(A, 1);
+      degree.set(A, (degree.get(A) ?? 0) + 1);
+      degree.set(B, (degree.get(B) ?? 0) + 1);
+      totalWeight2m += 2;
+    }
+    return { nodes, adjacency, degree, totalWeight2m };
+  }
+  const split = new Map([
+    ["0", 0],
+    ["1", 0],
+    ["2", 0],
+    ["3", 1],
+    ["4", 1],
+    ["5", 1]
+  ]);
+  const allInOne = new Map([
+    ["0", 0],
+    ["1", 0],
+    ["2", 0],
+    ["3", 0],
+    ["4", 0],
+    ["5", 0]
+  ]);
+
+  it("scores the natural 2-community split ABOVE a degenerate single community (the inversion the bug caused)", () => {
+    const g = bridgedTriangles() as unknown as Parameters<typeof computeModularity>[0];
+    const qSplit = computeModularity(g, split);
+    const qAll = computeModularity(g, allInOne);
+    // Standard Newman–Girvan value for this graph's natural split is 0.3571…
+    expect(qSplit).toBeCloseTo(0.3571, 3);
+    // Pre-rc.43 the truncated null-model penalty inverted these (split 0.5306 < all-in 0.5816).
+    expect(qSplit).toBeGreaterThan(qAll);
+    // Q is bounded in [-0.5, 1] for any valid partition.
+    expect(qSplit).toBeLessThanOrEqual(1);
+    expect(qAll).toBeGreaterThanOrEqual(-0.5);
+  });
+
+  it("NEGATIVE control — a single community over a fully-connected graph has Q ≈ 0 (in − tot²/2m cancels)", () => {
+    // Triangle {0,1,2}, all one community: in=6/2m, (tot/2m)²·1 → Q = 1 - 1 = 0.
+    const adjacency = new Map<string, Map<string, number>>();
+    const degree = new Map<string, number>();
+    for (let n = 0; n < 3; n++) {
+      adjacency.set(String(n), new Map());
+      degree.set(String(n), 2);
+    }
+    for (const [a, b] of [
+      ["0", "1"],
+      ["1", "2"],
+      ["0", "2"]
+    ]) {
+      adjacency.get(a)?.set(b, 1);
+      adjacency.get(b)?.set(a, 1);
+    }
+    const g = { nodes: ["0", "1", "2"], adjacency, degree, totalWeight2m: 6 } as unknown as Parameters<
+      typeof computeModularity
+    >[0];
+    const q = computeModularity(
+      g,
+      new Map([
+        ["0", 0],
+        ["1", 0],
+        ["2", 0]
+      ])
+    );
+    expect(q).toBeCloseTo(0, 6);
   });
 });

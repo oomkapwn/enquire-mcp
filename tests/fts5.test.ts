@@ -341,6 +341,23 @@ describe("FtsIndex — full lifecycle", () => {
     }
   });
 
+  it("folder filter matches an emoji (astral-char) folder name (rc.43 M1 — substr by char, not JS UTF-16)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      // "📚Books" leads with a non-BMP char → JS .length=7 but 6 code points. Pre-rc.43
+      // bound prefix.length (UTF-16 units) to substr(...,1,?) (code points) → over-read by
+      // one → ZERO matches. Now bound via length(?) so SQLite counts chars consistently.
+      idx.reindexFile("📚Books/a.md", 1000, "emoji-folder-marker");
+      idx.reindexFile("Other/b.md", 1000, "emoji-folder-marker");
+      const hits = idx.search("emoji-folder-marker", { folder: "📚Books" });
+      expect(hits.map((h) => h.rel_path)).toEqual(["📚Books/a.md"]);
+    } finally {
+      idx.close();
+    }
+  });
+
   it("folder filter prefix-equality, NOT GLOB pattern (audit v0.10.4 P2 — folders with `*` `?` `[` should not glob-expand)", async () => {
     if (!canRunFts5) return;
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });

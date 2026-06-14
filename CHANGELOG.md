@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.43] — 2026-06-09
+
+> **TL;DR:** **First fix-batch of the 14-lens ultracode full-project audit (129 agents, adversarial 3-judge verification) — retrieval & i18n correctness.** The audit confirmed the codebase is exceptionally clean — **0 CRITICAL, 0 HIGH** after verification — with 9 MEDIUM / 24 LOW / 4 INFO + 2 critic gaps across all 14 areas. rc.43 ships the 3 retrieval/i18n-correctness items: **M1** folder-prefix filter returned ZERO results for emoji folder names (UTF-16 vs code-point length mismatch), **M7** community-detection modularity was non-standard (truncated null-model penalty, could invert partition ranking), **G1** wikilink/`find_path` resolution failed across Unicode NFC/NFD forms (`[[café]]` ↔ `café.md` on macOS). **1181 → 1189 source tests.** rc.44–rc.46 carry the remaining MEDIUM/LOW/INFO batches.
+
+**Pre-release (v3.10 line) — audit fix-batch 1/4: retrieval & i18n correctness.**
+
+### Fixed
+
+- **M1 [MEDIUM] — folder filter matched ZERO rows for astral-char (emoji) folder names** (`src/fts5.ts`, `src/embed-db.ts`). The folder-prefix equality bound JS `prefix.length` (UTF-16 code **units**) to SQLite `substr(rel_path, 1, ?)` (which counts code **points**), so any folder whose name contains a non-BMP char (e.g. `📚Books/` — JS length 8, 6 code points) over-read by one and matched nothing. Both sites now use `substr(rel_path, 1, length(?))` and bind the prefix string twice, letting SQLite compute the character length consistently. Empirically reproduced + regression-tested (emoji-folder test in both fts5 + embed-db suites).
+- **M7 [MEDIUM] — `computeModularity` used a non-standard, inflated formula** (`src/communities.ts`). It subtracted the Newman–Girvan null-model penalty `k_i·k_j/2m` ONLY for *adjacent* same-community node pairs (the term lived inside the per-neighbor loop), whereas the standard formula penalizes ALL same-community pairs. The truncated penalty inflated Q and could rank a degenerate single-community partition ABOVE the correct split (auditor reproduced an inverted ranking). Rewritten to the exact decomposition `Q = Σ_c [ in_c/2m − (tot_c/2m)² ]` over per-community degree sums (verified: the natural bridged-triangles split scores 0.3571 > all-in-one 0.0). `computeModularity` is now exported + unit-tested (split > single + a Q≈0 NEGATIVE control).
+- **G1 [MEDIUM, critic gap] — wikilink / `find_path` resolution failed across Unicode normalization forms** (`src/tools/meta.ts`). `findBestMatch`/`indexFor` keyed entries by `stripMd(name).toLowerCase()` with no Unicode normalization, so a `[[café]]` link typed NFC never resolved to a `café.md` file whose name macOS APFS returns in NFD (`"café"` NFC !== `"café"` NFD even after `toLowerCase()`). New `foldKey()` helper NFC-normalizes before case-folding and is applied at every index-build + query site (basename, relPath, joined relative path, endsWith scan). Verified NFC→NFD, NFD→NFC, ASCII regression, and a negative control.
+
+### Tests (1189)
+
+- +8 source `it()`: emoji-folder filter (fts5 + embed-db), `computeModularity` Newman-decomposition (split > single-community + Q≈0 NEGATIVE control), and new `tests/wikilink-nfc.test.ts` (NFC/NFD/ASCII/negative). 1181 → 1189.
+
+### Audit
+
+- The full audit (14 lenses · 129 subagents · adversarial 3-judge verify, ≥2/3 to confirm) returned **0 CRITICAL / 0 HIGH** — strong validation of the 20+ prior rounds + structural-invariant apparatus. Remaining confirmed findings (9 MED incl. 3 shipped here, 24 LOW, 4 INFO, 2 critic gaps) are batched into rc.44 (serve/watcher/OCR robustness), rc.45 (privacy/tool-handler correctness), rc.46 (docs/test-infra/script drift + structural guards).
+
+---
+
 ## [3.10.0-rc.42] — 2026-06-09
 
 > **TL;DR:** **Full state-driven re-audit (4 independent lenses) of the rc.35→rc.41 line + every doc/test/security surface — found that rc.40 AND rc.41 each shipped a fresh instance of a documented recurring class (the post-merge re-sweep working as designed), and closed both + 2 docs drifts.** 1 HIGH (rc.41 "zero cloud calls during serve" was ASPIRATIONAL — embedder/reranker could CDN-fetch on a cache-miss; now ENFORCED, mirroring OCR), 1 MEDIUM (rc.40 K-3 derive-check was scope-too-narrow — scanned only write.ts, missing read.ts's `chatThreadAppend`), 2 LOW (QUICKSTART `44-tool`; README.zh.md stale test count + missing the rc.41 fleet-memory framing). The code re-sweep otherwise confirmed rc.35→rc.41 sound (no other findings). **1177 → 1181 source tests.**

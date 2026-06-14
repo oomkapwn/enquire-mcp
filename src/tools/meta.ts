@@ -2236,17 +2236,29 @@ const entryIndexCache = new WeakMap<FileEntry[], EntryIndex>();
  * @returns `{ byBasename, byRelPath }` — basename → entries (multi-value
  *   on collisions); relPath → entry (unique).
  */
+/**
+ * v3.10.0-rc.43 (G1) — canonical lookup key for wikilink/find_path resolution:
+ * strip `.md`, Unicode-normalize to NFC, then case-fold. Both the index keys (built
+ * here) and every query (in findBestMatch) MUST go through this, otherwise a `[[café]]`
+ * link typed NFC never resolves to a `café.md` file whose name the OS returns in NFD
+ * (macOS APFS returns NFD) — `"café"` (NFC) !== `"café"` (NFD) even after toLowerCase().
+ * @internal
+ */
+function foldKey(s: string): string {
+  return stripMd(s).normalize("NFC").toLowerCase();
+}
+
 export function indexFor(entries: FileEntry[]): EntryIndex {
   const cached = entryIndexCache.get(entries);
   if (cached) return cached;
   const byBasename = new Map<string, FileEntry[]>();
   const byRelPath = new Map<string, FileEntry>();
   for (const e of entries) {
-    const key = stripMd(e.basename).toLowerCase();
+    const key = foldKey(e.basename);
     const slot = byBasename.get(key);
     if (slot) slot.push(e);
     else byBasename.set(key, [e]);
-    byRelPath.set(stripMd(e.relPath).toLowerCase(), e);
+    byRelPath.set(foldKey(e.relPath), e);
   }
   const idx: EntryIndex = { byBasename, byRelPath };
   entryIndexCache.set(entries, idx);
@@ -2288,12 +2300,12 @@ export function findBestMatch(entries: FileEntry[], target: string, fromNote?: s
     if (fromNote) {
       const fromDir = path.dirname(fromNote);
       const joined = path.posix.normalize(path.posix.join(fromDir.split(path.sep).join("/"), target));
-      const lower = stripMd(joined).toLowerCase();
+      const lower = foldKey(joined);
       const rel = idx.byRelPath.get(lower);
       if (rel) return rel;
     }
   }
-  const norm = stripMd(target).toLowerCase();
+  const norm = foldKey(target);
   const exact = idx.byBasename.get(norm) ?? [];
   if (exact.length === 1) return exact[0] ?? null;
   if (exact.length > 1 && fromNote) {
@@ -2303,13 +2315,13 @@ export function findBestMatch(entries: FileEntry[], target: string, fromNote?: s
   }
   if (exact.length > 0) return exact[0] ?? null;
   if (target.includes("/")) {
-    const lower = stripMd(target).toLowerCase();
+    const lower = foldKey(target);
     const path1 = idx.byRelPath.get(lower);
     if (path1) return path1;
     // endsWith match — falls back to a scan, but only for path-qualified
     // targets that don't exact-match (rare).
     for (const e of entries) {
-      if (stripMd(e.relPath).toLowerCase().endsWith(`/${lower}`)) return e;
+      if (foldKey(e.relPath).endsWith(`/${lower}`)) return e;
     }
   }
   return null;

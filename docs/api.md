@@ -833,6 +833,15 @@ The note template implements `list`, so MCP clients with a resource browser will
 | `process_inbox`         | `folder` (required)        | Walks an inbox folder, proposes Move / Merge / Promote / Archive for each note. |
 | `consolidate_tags`      | `min_count?`               | Surfaces near-duplicate / inconsistently-cased tags via `obsidian_list_tags` clustering. Proposes canonical merges. Read-only. |
 | `find_duplicates`       | `folder?`, `min_score?`    | Walks the vault clustering structurally-similar notes via `obsidian_find_similar`. Outputs merge proposals; never modifies. |
+| `search_with_query_expansion` | `query`, `n_paraphrases?`, `limit?` | Multi-query expansion — agent paraphrases the query N ways, searches each, RRF-fuses for recall. |
+| `vault_synth`           | `source`, `target_folder?` | Synthesize a vault wiki page from sources (Karpathy-style ingest of pasted/linked material). |
+| `vault_wiki_compile`    | `since_minutes?`, `wiki_folder?` | Compile a vault index + changelog over recently-changed notes (Karpathy-style maintenance). |
+| `vault_lint_extended`   | `folder?`                  | Extended lint — orphans + contradictions + stale claims + missing cross-refs. Read-only. |
+| `vault_capture`         | `text`, `target_hint?`     | Capture a quick thought into the vault (write, don't organize). |
+| `vault_persona_search`  | `folder`, `query`          | Search the vault as a named persona — folder-scoped + tuned retrieval. |
+| `vault_automation_setup`| `intent`                   | Set up a scheduled vault query (Khoj-style automations) from a free-form intent. |
+| `vault_research`        | `question`                 | Research a complex / multi-hop question via sub-question decomposition. |
+| `vault_synthesis_page`  | `topic`, `target_path?`    | Synthesize an existing-knowledge topic page from vault content (Karpathy LLM-Wiki synthesis loop). |
 
 ## Path safety
 

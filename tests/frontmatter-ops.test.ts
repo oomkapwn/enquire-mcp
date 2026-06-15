@@ -90,6 +90,27 @@ describe("frontmatter_set", () => {
     await v.ensureExists();
     await expect(frontmatterSet(v, { path: "draft.md", set: {} })).rejects.toThrow(/non-empty/);
   });
+
+  // v3.10.0-rc.48 (roundtrip-serialization-fidelity) — a frontmatter-only edit must
+  // not alter the body's trailing-newline state. `matter.stringify` always appends a
+  // "\n"; pre-rc.48 that silently added one to a body saved without it.
+  it("preserves the body's trailing-newline state", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // No trailing newline → must NOT gain one.
+    await fs.writeFile(path.join(root, "no-nl.md"), "---\nstatus: draft\n---\nBody no newline");
+    await frontmatterSet(v, { path: "no-nl.md", set: { status: "done" } });
+    const noNl = await fs.readFile(path.join(root, "no-nl.md"), "utf8");
+    expect(noNl.endsWith("Body no newline")).toBe(true);
+    expect(noNl.endsWith("\n")).toBe(false); // NEGATIVE: no spurious newline introduced
+    expect(noNl).toContain("status: done");
+    // Single trailing newline → must stay exactly one (not doubled).
+    await fs.writeFile(path.join(root, "one-nl.md"), "---\nstatus: draft\n---\nBody with newline\n");
+    await frontmatterSet(v, { path: "one-nl.md", set: { status: "done" } });
+    const oneNl = await fs.readFile(path.join(root, "one-nl.md"), "utf8");
+    expect(oneNl.endsWith("Body with newline\n")).toBe(true);
+    expect(oneNl.endsWith("\n\n")).toBe(false);
+  });
 });
 
 describe("frontmatter_search", () => {

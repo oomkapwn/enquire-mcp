@@ -461,7 +461,15 @@ export async function frontmatterSet(
     return { path: target.relPath, changed_keys: changed, before, after, dry_run: args.dry_run === true };
   }
   // Round-trip via gray-matter — same writer pattern as createNote.
-  const newDoc = matter.stringify(note.parsed.body, after);
+  let newDoc = matter.stringify(note.parsed.body, after);
+  // v3.10.0-rc.48 (roundtrip-serialization-fidelity) — `matter.stringify` always
+  // appends a trailing "\n" to the body. gray-matter's `.content` faithfully
+  // preserves the original body's trailing-newline state, so if the body had NO
+  // trailing newline, dropping the one stringify added keeps a frontmatter-only
+  // edit byte-faithful to the rest of the file (it must only touch the YAML).
+  if (!note.parsed.body.endsWith("\n") && newDoc.endsWith("\n")) {
+    newDoc = newDoc.slice(0, -1);
+  }
   await vault.writeNote(target.relPath, newDoc, { overwrite: true });
   return { path: target.relPath, changed_keys: changed, before, after, dry_run: false };
 }

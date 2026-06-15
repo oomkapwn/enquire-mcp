@@ -128,8 +128,11 @@ async function getGrayMatter(): Promise<typeof import("gray-matter")> {
 }
 
 /**
- * Lazy js-yaml (already pulled in via gray-matter) for .base YAML parse.
- * No @types/js-yaml in deps; we use the minimal surface as a structural type.
+ * Lazy js-yaml for `.base` YAML parse. v3.10.0-rc.50 — js-yaml is now a DIRECT
+ * `dependencies` entry (`^3.14.0`, pinned to v3 for the `SAFE_SCHEMA` + 2-arg
+ * `load` API); pre-rc.50 it was a phantom dep relying on gray-matter's transitive
+ * pin + npm hoisting (would break under pnpm-no-hoist / Yarn PnP / a gray-matter
+ * major). No `@types/js-yaml` in deps; we use the minimal surface as a structural type.
  */
 interface JsYamlModule {
   load(input: string, opts?: { schema?: unknown }): unknown;

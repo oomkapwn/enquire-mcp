@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.50] — 2026-06-16
+
+> **TL;DR:** **Re-audit batch 2 — supply-chain (phantom dep + newly-published advisories) + the chatThreadAppend line-drift LOW.** Declaring the previously-phantom `js-yaml` dep surfaced that `npm audit` had gone red **project-wide**: two newly-published advisories on transitive deps (`js-yaml` moderate via gray-matter; `protobufjs` high+moderate via the dev/optional `@huggingface/transformers`→onnxruntime). protobufjs is **fixed** (override → 7.6.4, in-range, no break). js-yaml has **no fix that doesn't break gray-matter** (v4 removed `safeLoad`), so it's accepted via a new **scoped audit gate** that fails on every advisory except documented ones — keeping the bar strict for all else. Plus the chatThreadAppend line_start/line_end range fix (CODE-2) and a phantom-import inventory invariant. **1204 → 1210 source tests.**
+
+**Pre-release (v3.10 line) — re-audit batch 2: supply-chain + line-drift.**
+
+### Fixed
+
+- **SC-PHANTOM-JSYAML-01 [MEDIUM] — `js-yaml` was a phantom (undeclared) runtime dep** (`package.json`, `src/bases.ts`). `bases.ts` does `await import("js-yaml")` for a CORE feature (`.base` parsing) but js-yaml was undeclared — it resolved only via gray-matter's transitive pin + npm hoisting (would break under pnpm-no-hoist / Yarn PnP / a gray-matter major). Declared `"js-yaml": "^3.14.0"` (pinned to v3 for the `SAFE_SCHEMA` + 2-arg `load` API the code uses).
+- **protobufjs high+moderate advisories (GHSA-wcpc-wj8m-hjx6 + GHSA-f38q-mgvj-vph7) — fixed via `overrides`.** A newly-published high DoS (+ moderate property-shadow) on protobufjs `<=7.6.2`, reached transitively through the dev/optional `@huggingface/transformers` → onnxruntime-web. In-range fix (no major bump): `overrides: { "protobufjs": "^7.6.4" }`.
+- **CODE-2-chatthread-line-drift [LOW] — `chatThreadAppend` reported line numbers past EOF** (`src/tools/read.ts`). `line_start` counted newlines in the un-stripped `body` while the write strips trailing newlines (`newBody = body.replace(/\n+$/,"") + toAppend`), so the reported range drifted UP by the stripped-newline count (could point past EOF). Now counts in the trimmed string actually written; `line_end` advances by the appended block's newline COUNT (not `split("\n").length`, which over-counts by one). Fixed the sibling imprecision in the new-note branch too.
+
+### Added
+
+- **Scoped `npm audit` gate (`scripts/check-audit.mjs` + `check:audit`).** Replaces the bare `npm audit --audit-level` calls in `prepublishOnly` + `ci.yml` + `release.yml` with one wrapper that keeps the same thresholds (prod ≥ moderate, dev ≥ high) but fails on every advisory EXCEPT documented ones in an `ALLOWLIST` (each with a written rationale + resolution path). Currently allowlists only **GHSA-h67p-54hq-rp68** (js-yaml merge-key DoS): no v3 fix; js-yaml@4.2.0 removes `safeLoad`, breaking gray-matter at import; the DoS needs attacker-controlled YAML in the user's OWN local vault. Tracked for resolution (migrate frontmatter parsing to js-yaml@4 / drop gray-matter). This is the project's documented-rejection pattern applied to supply-chain — accept *with reasoning, in a reviewable place*, not by lowering the gate.
+- **`tests/phantom-import-invariant.test.ts`** — scans every dynamic `import("x")` in `src/` and fails CI if its package root isn't in `dependencies`/`optionalDependencies` (node: builtins + relative excluded). The next phantom dynamic dep can't ship. + NEGATIVE control.
+- **`tests/check-audit.test.ts`** — unit-tests the scoped gate's pure core (an un-allowlisted advisory fails; the documented one passes; below-threshold ignored) + a drift guard pinning the allowlist to its single documented entry.
+
+### Tests (1210)
+
+- +6 source `it()`: phantom-import invariant (scan + NEGATIVE), check-audit gate (3), chatThreadAppend range-within-file (1). 1204 → 1210.
+
+> **Note:** `ci.yml` + `release.yml` audit steps were switched to the wrapper — this PR touches `.github/workflows/`, so it requires a maintainer web-UI merge (CI token lacks `workflow` scope).
+
+---
+
 ## [3.10.0-rc.49] — 2026-06-15
 
 > **TL;DR:** **abs-path-leak class — TRUE root closure + inventory invariant (HIGH).** A multi-lens re-audit of the shipped rc.45→rc.48 line found that rc.45's abs-path-leak fix had **recursed its own class**: it wrapped 3 READ sinks (readFile/readBinaryFile/stat) and claimed the class closed "at the SOURCE every caller funnels through", but the **write path** (`writeNote`/`renameFile`/`appendNote` — HIGH) and `readNote` (the primary read funnel — MEDIUM) still threw RAW fs errors embedding the host's absolute vault/home path to any bearer-token serve-http client. rc.49 routes **every** `fs` sink in `Vault` through sanitizing wrappers, adds a behavioral leak test (which caught a *further* residual — `resolveSafePath`'s `realpath` leaked `ENOTDIR` with the abs path), and ships a P0 inventory invariant so the next sink physically cannot escape. **1200 → 1204 source tests.**

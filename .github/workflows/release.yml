@@ -119,16 +119,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - name: Version consistency
         run: node scripts/check-version-consistency.mjs
-      # v3.7.19 ι class — align audit-level with PR CI. Pre-3.7.19 release
-      # used `--audit-level=high` only; PR CI uses `moderate` for prod deps
-      # + `high` for dev deps. A moderate-severity prod vulnerability that
-      # appeared between PR-green and tag-push would pass release.yml but
-      # fail the next PR — release-time blind spot. Now: same two-step check
-      # as PR CI's audit job.
-      - name: npm audit (prod moderate+)
-        run: npm audit --omit=dev --audit-level=moderate
-      - name: npm audit (dev high+)
-        run: npm audit --include=dev --audit-level=high
+      # v3.7.19 ι class — align audit-level with PR CI (release-time blind-spot fix).
+      # v3.10.0-rc.50 — both steps unified into the scoped wrapper (same thresholds:
+      # prod ≥ moderate, dev ≥ high) so release.yml + ci.yml + prepublishOnly share ONE
+      # gate. It fails on every advisory EXCEPT documented ones in the
+      # scripts/check-audit.mjs ALLOWLIST (each with a rationale + resolution path).
+      - name: npm audit (scoped — prod moderate+, dev high+, documented allowlist)
+        run: node scripts/check-audit.mjs
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"

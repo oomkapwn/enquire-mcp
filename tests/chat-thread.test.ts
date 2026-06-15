@@ -51,6 +51,21 @@ describe("chat_thread_append (v2.2.0)", () => {
     expect(roleHeadings.length).toBe(3);
   });
 
+  it("reports line_start/line_end within the written file even with trailing blank lines (rc.50 CODE-2)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Existing thread note WITH trailing blank lines — the drift trigger. Pre-rc.50
+    // line_start counted newlines in the un-stripped body while the write strips
+    // them, so line_end pointed PAST EOF.
+    await fs.writeFile(path.join(root, "t.md"), "# t\n\n## Chat: t\n\n### user · 2026-01-01T00:00:00Z\n\nhi\n\n\n\n");
+    const res = await chatThreadAppend(v, { note_path: "t.md", role: "assistant", content: "reply" });
+    const totalLines = (await fs.readFile(path.join(root, "t.md"), "utf8")).split("\n").length;
+    expect(res.line_start).toBeGreaterThan(0);
+    expect(res.line_end).toBeGreaterThanOrEqual(res.line_start);
+    expect(res.line_start, "line_start must be within the written file").toBeLessThanOrEqual(totalLines);
+    expect(res.line_end, "line_end must not point past EOF").toBeLessThanOrEqual(totalLines);
+  });
+
   it("rejects empty path / content", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

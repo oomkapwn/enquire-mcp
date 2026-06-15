@@ -512,10 +512,32 @@ export class Vault {
   /** Read a non-markdown file (e.g. `.canvas` JSON). Same path-safety + size
    *  cap as readFile/readNote, but returns Buffer so callers can decide on
    *  encoding. */
+  /** v3.10.0-rc.45 (abs-path-leak class) — strip the vault root from an fs error so a
+   *  CLIENT-facing message never reveals the host's absolute path / home dir, while
+   *  PRESERVING `err.code` and the ENOENT-shaped message text some callers regex-match
+   *  (e.g. resolveTarget's periodic fallback). Mutates + returns the same error object. */
+  private sanitizeFsError(err: unknown): unknown {
+    if (err instanceof Error) {
+      const root = this.root;
+      const strip = (s: string): string => s.split(`${root}${path.sep}`).join("").split(root).join("");
+      if (typeof err.message === "string" && err.message.includes(root)) err.message = strip(err.message);
+      const rec = err as unknown as Record<string, unknown>;
+      for (const k of ["path", "dest"] as const) {
+        const v = rec[k];
+        if (typeof v === "string" && v.includes(root)) rec[k] = strip(v);
+      }
+    }
+    return err;
+  }
+
   async readBinaryFile(relOrAbs: string): Promise<Buffer> {
     const abs = await this.resolveSafePath(relOrAbs);
-    await this.assertSize(abs);
-    return fs.readFile(abs);
+    try {
+      await this.assertSize(abs);
+      return await fs.readFile(abs);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
   }
 
   /**
@@ -530,8 +552,12 @@ export class Vault {
    */
   async readFile(relOrAbs: string): Promise<string> {
     const abs = await this.resolveSafePath(relOrAbs);
-    await this.assertSize(abs);
-    return fs.readFile(abs, "utf8");
+    try {
+      await this.assertSize(abs);
+      return await fs.readFile(abs, "utf8");
+    } catch (err) {
+      throw this.sanitizeFsError(err); // rc.45 — vault-relative, no host path leak
+    }
   }
 
   /**
@@ -944,8 +970,12 @@ export class Vault {
    */
   async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {
     const abs = await this.resolveSafePath(relOrAbs);
-    const s = await fs.stat(abs);
-    return { mtimeMs: s.mtimeMs, size: s.size };
+    try {
+      const s = await fs.stat(abs);
+      return { mtimeMs: s.mtimeMs, size: s.size };
+    } catch (err) {
+      throw this.sanitizeFsError(err); // rc.45 — M3: raw fs ENOENT embedded the abs path
+    }
   }
 
   /** Convert an absolute path under the vault to a vault-relative one

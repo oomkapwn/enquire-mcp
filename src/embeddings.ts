@@ -178,13 +178,16 @@ function applyOfflineEnv(mod: unknown): void {
 /** v3.10.0-rc.42 (F1) — translate a serve-offline model-load failure (with
  *  allowRemoteModels=false the CDN fallback is blocked, so a failure is almost always a
  *  cache miss) into an actionable fail-closed error. Pure → unit-testable without a model. */
-export function offlineModelLoadError(alias: string, hfId: string, original: unknown): Error {
-  const orig = original instanceof Error ? original.message : String(original);
+export function offlineModelLoadError(alias: string, hfId: string, _original: unknown): Error {
+  // rc.45 (abs-path-leak class) — do NOT interpolate the raw transformers.js cause into
+  // the client-facing message: an offline cache-miss error embeds the ABSOLUTE model-cache
+  // path (host home dir). The install hint is the actionable part; `_original` is kept in
+  // the signature for call-site stability but deliberately not surfaced to the client.
   return new Error(
     `Model "${alias}" (${hfId}) is not in the local model cache, and serve mode makes zero outbound ` +
       `network calls (privacy — your vault never reaches the network). Pre-download the model in an ` +
       `online context (e.g. \`enquire build-embeddings\` for the embedder, or one reranker query) ` +
-      `before serving, then restart. Original: ${orig}`
+      `before serving, then restart.`
   );
 }
 

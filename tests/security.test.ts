@@ -78,6 +78,34 @@ describe("Vault — symlink safety", () => {
   });
 });
 
+describe("Vault — error-message privacy (rc.45 abs-path-leak class)", () => {
+  // RCA of the audit's M3 + sibling sinks: a raw fs error embeds the ABSOLUTE host path
+  // (vault root = home/tmp), which reaches MCP clients via read_note / chat_thread_read /
+  // rename / media. Vault.stat/readFile/readBinaryFile now sanitize: strip the root from
+  // the message + .path while PRESERVING err.code and the ENOENT-shaped text callers
+  // regex-match. POSITIVE + NEGATIVE controls per the rule since v3.6.4.
+  it("stat/readFile/readBinaryFile on a missing note throw a vault-RELATIVE error, never the host path (NEGATIVE)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    for (const m of ["stat", "readFile", "readBinaryFile"] as const) {
+      const err = (await (v[m]("Nope.md") as Promise<unknown>).then(
+        () => null,
+        (e) => e
+      )) as NodeJS.ErrnoException | null;
+      expect(err, `${m} should reject on a missing file`).not.toBeNull();
+      expect(err?.message, `${m} message must not leak the absolute vault root`).not.toContain(root);
+      expect(err?.code, `${m} must preserve err.code for callers that branch on ENOENT`).toBe("ENOENT");
+      expect(err?.message, `${m} keeps the vault-relative filename`).toContain("Nope.md");
+    }
+  });
+
+  it("readFile still returns content for a present file (POSITIVE — sanitization only fires on error)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    expect(await v.readFile("Inside.md")).toContain("Safe content");
+  });
+});
+
 describe("Vault — file size limit", () => {
   it("refuses to read files larger than maxFileBytes", async () => {
     const v = new Vault(root, { maxFileBytes: 50 });

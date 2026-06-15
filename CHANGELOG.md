@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.45] — 2026-06-15
+
+> **TL;DR:** **Ultracode full-project audit, fix-batch 3/4 — the abs-path-leak CLASS (HIGH + privacy brand).** An RCA-driven re-sweep proved that rc.43's **G1** (NFC) and the audit's **M3** (path-leak) were per-INSTANCE fixes, not CLASS fixes — sibling leak sinks were still live. This batch closes the error-path information-disclosure class at the source: `Vault.stat`/`readFile`/`readBinaryFile` now sanitize fs errors (strip the absolute vault root, keep `code` + the ENOENT shape) so EVERY caller returns vault-relative errors to MCP clients; the OCR install-hint throw no longer leaks the host tessdata/home dir; and the offline model-load error no longer surfaces the raw transformers.js cause (which embeds the `~/.cache/huggingface` absolute path). Two tests that had PINNED the leaked text were flipped to negative controls. **1189 → 1191 source tests.** rc.46 carries the NFC name-resolution class; rc.49 adds the matching structural OIA guard.
+
+**Pre-release (v3.10 line) — audit fix-batch 3/4: abs-path-leak class.**
+
+### Fixed
+
+- **M3 [HIGH, privacy] — fs errors echoed the absolute vault path to MCP clients (root-class fix)** (`src/vault.ts`). `Vault.stat` (and the `chatThreadRead` sibling path, and every other fs-touching reader) surfaced raw Node `Error.message`/`Error.path` like `ENOENT: no such file or directory, stat '/Users/alex/Documents/Obsidian Vault/Nope.md'` — on `serve-http` that absolute path fingerprints the host (home dir, vault location). rc.43's G1 and the audit's M3 were each patched as a single sink; the RCA re-sweep found the siblings still live. Fixed at the SOURCE: new `private sanitizeFsError(err)` strips `this.root` (+ `path.sep`) from `err.message` and from `err.path`/`err.dest`, while preserving `err.code` and the canonical `ENOENT: … '<relative>'` message shape; it wraps `stat`, `readFile`, and `readBinaryFile`, so the leak is closed for ALL callers, not just the one the auditor named. Verified at runtime: `leaksRoot=false code=ENOENT msg="ENOENT: no such file or directory, stat 'Nope.md'"`.
+- **HIGH — OCR install hint leaked the host tessdata/home directory** (`src/ocr.ts`). `assertOcrLangsInstalled`'s fail-closed throw appended `— downloads <lang>.traineddata into ${dir}`, where `${dir}` is the resolved absolute tessdata path (under the host home dir) — echoed to MCP clients when an OCR query hits a missing language pack. Dropped `${dir}`; the actionable `install-ocr-lang <code>` command stays.
+- **MEDIUM — offline model-load error surfaced the raw transformers.js cause (abs cache path)** (`src/embeddings.ts`). `offlineModelLoadError` appended `Original: ${original}`, but the raw transformers.js error embeds the absolute model-cache path (`~/.cache/huggingface/...`). Dropped the raw cause; the message still names the model alias + hfId and the actionable `build-embeddings` hint, and still restates the "zero outbound network calls" guarantee.
+
+### Tests (1191)
+
+- `tests/security.test.ts`: new `describe("Vault — error-message privacy (rc.45 abs-path-leak class)")` — `stat`/`readFile`/`readBinaryFile` on a missing note assert the message does NOT contain the vault root, `code === "ENOENT"`, and the message still names the relative path; + a POSITIVE control that reading a present file still works.
+- `tests/embeddings-offline.test.ts`: the two tests that had asserted the leaked cause text (`/ENOENT cache miss/`, `/raw string failure/`) were flipped to `not.toMatch` ("test pinned the bug" pattern) + a NEGATIVE control proving `/Users/secret/.cache/huggingface` is absent from the message while the slash-free model id is still named.
+- Net source `it()`: 1189 → 1191.
+
+### Coverage
+
+- **Per-file floor — `src/embeddings.ts` branches 28 → 27 (documented reduction).** The privacy fix removed the `original instanceof Error ? original.message : String(original)` ternary from `offlineModelLoadError` (the raw cause is no longer surfaced), which deleted two previously-*covered* branch arms — mechanically lowering this integration-dep-heavy file's branch ratio from 29.82% to 27.27% (15/55). Lifting it back would require a real model load (the remaining uncovered branches are `applyOfflineEnv` + the offline-catch path), and synthesizing a branch purely to hold coverage would be test-theater. Floor lowered by 1pp per the documented-reduction rule; the inline `check-per-file-coverage.mjs` comment is synced.
+
+---
+
 ## [3.10.0-rc.44] — 2026-06-09
 
 > **TL;DR:** **Ultracode full-project audit, fix-batch 2/4 — serve / watcher / OCR robustness.** Four code MEDIUMs + one INFO: a canvas-OOM DoS guard bypass (M2), a silently-dead watcher embed/HNSW sync when FTS is off (M5), a shutdown ordering bug that dropped in-flight watcher events (M6), an unbounded directory-walk recursion depth (G2 critic gap), and an OCR language-pack pre-flight that accepted an unreadable `.gz` (INFO). **1189 source tests** (two existing tests were rewritten — they had encoded the buggy behavior, the "test pinned the bug" pattern).

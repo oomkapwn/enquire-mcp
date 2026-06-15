@@ -39,11 +39,15 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
     expect(err.message).toMatch(/Xenova\/multilingual-e5-small/);
     expect(err.message).toMatch(/zero outbound network calls/i); // restates the privacy guarantee
     expect(err.message).toMatch(/build-embeddings/); // actionable: how to populate the cache
-    expect(err.message).toMatch(/ENOENT cache miss/); // preserves the original cause
+    // rc.45 (abs-path-leak class) — the raw transformers.js cause is NOT surfaced: it can
+    // embed the absolute model-cache path (host home dir). The message must NOT echo it
+    // (the hfId itself legitimately contains a '/', so we assert on the cause text, not '/').
+    expect(err.message).not.toMatch(/ENOENT cache miss/);
   });
 
-  it("offlineModelLoadError stringifies a non-Error cause without throwing (NEGATIVE control)", () => {
-    const err = offlineModelLoadError("bge", "Xenova/bge-reranker-base", "raw string failure");
-    expect(err.message).toMatch(/raw string failure/);
+  it("offlineModelLoadError does NOT leak the underlying cause / a path (rc.45 NEGATIVE control)", () => {
+    const err = offlineModelLoadError("bge", "Xenova-bge", "/Users/secret/.cache/huggingface/blob fail");
+    expect(err.message).not.toMatch(/raw string failure|secret|huggingface|\.cache/);
+    expect(err.message).toMatch(/Xenova-bge/); // the model id (no slash) is still named
   });
 });

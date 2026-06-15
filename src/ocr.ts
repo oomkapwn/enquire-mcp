@@ -281,7 +281,10 @@ export function assertOcrLangsInstalled(langs: string, dir: string = resolveTess
     throw new Error(
       `enquire OCR: language pack(s) not installed locally: ${missing.join(", ")}. ` +
         "enquire serve makes ZERO outbound network calls, so Tesseract trained-data must be pre-cached. " +
-        `Install (explicit, opt-in network): ${installCmds}  — downloads <lang>.traineddata into ${dir}. ` +
+        // rc.45 (abs-path-leak class) — do NOT interpolate ${dir} (resolveTessdataDir() =
+        // $HOME/.cache/... ) into this client-reachable throw; it leaks the host home dir.
+        // The `install-ocr-lang <code>` command is the actionable remediation.
+        `Install (explicit, opt-in network): ${installCmds}. ` +
         'See SECURITY.md "OCR network posture".'
     );
   }

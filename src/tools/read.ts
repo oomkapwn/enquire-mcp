@@ -188,7 +188,7 @@ export async function readNote(
       title: stripMd(entry.basename),
       format: "map",
       frontmatter_keys: Object.keys(parsed.frontmatter),
-      headings: extractHeadings(parsed.body),
+      headings: extractHeadings(parsed.body, parsed.bodyStartLine),
       wikilinks_count: parsed.wikilinks.length,
       embeds_count: parsed.embeds.length,
       tags: parsed.tags,
@@ -212,8 +212,15 @@ export async function readNote(
 /** Pull ATX headings (`#`, `##`, `###`, etc.) out of note body for the
  *  document-map projection. Skips ATX inside fenced code blocks via a simple
  *  line-by-line toggle on both backtick fences (` ``` `) and tilde fences
- *  (`~~~`) per CommonMark spec (v3.8.0-rc.10 P3-25). */
-function extractHeadings(body: string): Array<{ level: number; text: string; line: number }> {
+ *  (`~~~`) per CommonMark spec (v3.8.0-rc.10 P3-25).
+ *
+ *  v3.10.0-rc.47 (range-arithmetic) — `line` is FILE-absolute. `body` is the
+ *  frontmatter-stripped content, so `i + 1` alone was BODY-relative and off by
+ *  the frontmatter length for any note with YAML (an agent opening the file and
+ *  jumping to a heading line would land too early). `bodyStartLine` (the file
+ *  line where the body begins; 1 when there's no frontmatter) maps body line `i`
+ *  to file line `bodyStartLine + i`. */
+function extractHeadings(body: string, bodyStartLine: number): Array<{ level: number; text: string; line: number }> {
   const out: Array<{ level: number; text: string; line: number }> = [];
   const lines = body.split("\n");
   let inFence = false;
@@ -229,7 +236,7 @@ function extractHeadings(body: string): Array<{ level: number; text: string; lin
     if (inFence) continue;
     const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (m?.[1] && m[2]) {
-      out.push({ level: m[1].length, text: m[2], line: i + 1 });
+      out.push({ level: m[1].length, text: m[2], line: bodyStartLine + i });
     }
   }
   return out;

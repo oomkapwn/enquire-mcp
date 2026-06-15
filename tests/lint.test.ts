@@ -200,6 +200,27 @@ describe("getOpenQuestions (v1.5)", () => {
     const out = await getOpenQuestions(v, { folder: "Papers" });
     expect(out.every((q) => q.source_path.startsWith("Papers/"))).toBe(true);
   });
+
+  // v3.10.0-rc.47 (range-arithmetic) — `line` must be FILE-absolute, not
+  // body-relative. The marker below sits on file line 8 (frontmatter lines 1-4,
+  // blank 5, "# Section" 6, blank 7, "Q:" 8); the old body-relative code (i+1 on
+  // the frontmatter-stripped body) reported 4.
+  it("reports FILE-absolute line numbers for notes with frontmatter", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(
+      path.join(root, "FM Question.md"),
+      "---\ntitle: FM Question\ntags: [x]\n---\n\n# Section\n\nQ: what is the file-absolute line?\n"
+    );
+    try {
+      const out = await getOpenQuestions(v, { limit: 100 });
+      const q = out.find((x) => x.source_path === "FM Question.md");
+      expect(q).toBeTruthy();
+      expect(q?.line).toBe(8); // file-absolute
+      expect(q?.line).not.toBe(4); // NEGATIVE: body-relative was wrong
+    } finally {
+      await fs.unlink(path.join(root, "FM Question.md")).catch(() => {});
+    }
+  });
 });
 
 describe("paperAudit (v1.5)", () => {

@@ -1490,7 +1490,13 @@ export async function getOpenQuestions(
         line,
         relPath: e.relPath,
         basename: e.basename,
-        lineNo: i + 1,
+        // v3.10.0-rc.47 (range-arithmetic) — FILE-absolute line number. `lines`
+        // indexes `parsed.body` (frontmatter-stripped), so `i + 1` was BODY-relative
+        // and off by the frontmatter length for any note with YAML — an agent jumping
+        // to `line` in the file would land too early. `bodyStartLine` is the file line
+        // where the body begins (1 when there's no frontmatter), so body line `i` maps
+        // to file line `bodyStartLine + i`.
+        lineNo: parsed.bodyStartLine + i,
         heading: currentHeading,
         mtimeMs
       });

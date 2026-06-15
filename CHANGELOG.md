@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.49] — 2026-06-15
+
+> **TL;DR:** **abs-path-leak class — TRUE root closure + inventory invariant (HIGH).** A multi-lens re-audit of the shipped rc.45→rc.48 line found that rc.45's abs-path-leak fix had **recursed its own class**: it wrapped 3 READ sinks (readFile/readBinaryFile/stat) and claimed the class closed "at the SOURCE every caller funnels through", but the **write path** (`writeNote`/`renameFile`/`appendNote` — HIGH) and `readNote` (the primary read funnel — MEDIUM) still threw RAW fs errors embedding the host's absolute vault/home path to any bearer-token serve-http client. rc.49 routes **every** `fs` sink in `Vault` through sanitizing wrappers, adds a behavioral leak test (which caught a *further* residual — `resolveSafePath`'s `realpath` leaked `ENOTDIR` with the abs path), and ships a P0 inventory invariant so the next sink physically cannot escape. **1200 → 1204 source tests.**
+
+**Pre-release (v3.10 line) — re-audit batch 1: abs-path-leak class true closure.**
+
+### Fixed
+
+- **HIGH (RC45-WRITEPATH-LEAK) + MEDIUM (CODE-1) — abs-path-leak class residual across the write path + readNote** (`src/vault.ts`). rc.45 sanitized only `readFile`/`readBinaryFile`/`stat`. The re-audit confirmed `writeNote` (`fs.mkdir`/`fs.writeFile`/`fs.stat`), `renameFile` (`fs.rename`/`fs.link`/`fs.copyFile`/`fs.unlink`/`fs.stat`/`fs.mkdir`), `appendNote` (`fs.open`/`fs.stat`), and `readNote` (`fs.stat`/`fs.readFile`) all threw raw errors embedding the absolute host path — reaching MCP clients verbatim on `serve-http` (e.g. `replaceInNotes` surfaces `err.message`). Root fix: new private sanitizing wrappers (`statSafe`/`realpathSafe`/`readFileSafe`/`writeFileSafe`/`mkdirSafe`/`openSafe`/`renameSafe`/`linkSafe`/`copyFileSafe`/`unlinkSafe`); **every** raw `fs` sink in the `Vault` class (27 call sites, incl. the cache/startup internals) now routes through them. `err.code` is preserved, so the `EEXIST`/`EXDEV` control flow in writeNote/renameFile is unchanged.
+- **HIGH residual found by the behavioral test — `resolveSafePath`'s `realpath` leaked the abs path** (`src/vault.ts`). The first static sweep excluded `realpath` (assumed always `.catch`-guarded); the new behavioral test proved `appendNote("file.md/child")` threw `ENOTDIR: … realpath '<abs>'` raw. Added `realpathSafe` + converted the two unguarded `realpath` sinks (`resolveSafePath`, the startup root-resolve). This is exactly why a behavioral test (not just a static grep) is required for a leak class.
+
+### Added
+
+- **`tests/abs-path-leak-invariant.test.ts` (P0 inventory invariant).** A pure detector parses the `Vault` class and fails CI if any method contains a raw (non-`.catch`-guarded) `fs` sink without referencing `sanitizeFsError` (or an explicit `abs-path-safe` exemption). Converts "did we sanitize every fs sink?" (recursion-prone — rc.45 missed 23 of 27) into a self-checking gate; ships a NEGATIVE control (flags a leaky method, clears a sanitized one, ignores a `.catch` probe + an exemption marker). Plus **behavioral leak tests** in `tests/security.test.ts`: `readNote` + the write path (`writeNote`/`renameFile`/`appendNote`) on a forced fs error assert the message never contains the vault root.
+
+### Tests (1204)
+
+- +4 source `it()`: the inventory invariant (scan + NEGATIVE control) and 2 behavioral leak tests (readNote; write-path trio). 1200 → 1204. The 27-site wrapper conversion is covered by the full vault/security/write/read suites (all green — `err.code` preserved, no behavioral change).
+
+> **Re-audit sequencing:** rc.50 = `js-yaml` phantom dep (MED) + `chatThreadAppend` line drift (LOW) + phantom-import OIA; rc.51 = docs drift (api.md `--hnsw-persist` phantom flag, SECURITY.md body-cap) + class-D guards. The remaining meta P0 hardening (golden-value scoring spec, unicode fuzz, enforcement-verb OIA) follows.
+
+---
+
 ## [3.10.0-rc.48] — 2026-06-15
 
 > **TL;DR:** **Ultracode audit fix-batch 6 — docs/TSDoc-drift + the prompts-table invariant + a frontmatter-fidelity LOW.** Closes the RCA's `help-parser-tsdoc-drift` ×3 (the overclaim #16 OCR "download on first use" residual in `tool-registry.ts`, and a `ServeOptions` TSDoc naming two tools that don't exist) + `structural-defense-scope` ×1 (the docs/api.md prompts table was stale at **10 of 19** with no invariant pinning it — now backfilled to 19 + guarded). Plus the verified-real `frontmatterSet` trailing-newline fidelity LOW, the STABILITY always-on header (33→34), and a dead `files[]` entry. **1197 → 1200 source tests.** The `pdfjs-dist` 5→6 major bump (PR #177) is split into its own RC for isolated verification.

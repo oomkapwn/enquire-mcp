@@ -104,6 +104,49 @@ describe("Vault — error-message privacy (rc.45 abs-path-leak class)", () => {
     await v.ensureExists();
     expect(await v.readFile("Inside.md")).toContain("Safe content");
   });
+
+  // v3.10.0-rc.49 — re-audit CODE-1: readNote (the primary list-then-read funnel)
+  // was missed by rc.45 and leaked the host abs path on a TOCTOU miss.
+  it("readNote on a missing note throws a vault-RELATIVE error (rc.49 CODE-1)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const err = (await v.readNote("Ghost.md").then(
+      () => null,
+      (e) => e
+    )) as NodeJS.ErrnoException | null;
+    expect(err, "readNote should reject on a missing file").not.toBeNull();
+    expect(err?.message, "readNote message must not leak the absolute vault root").not.toContain(root);
+    expect(err?.code).toBe("ENOENT");
+  });
+
+  // v3.10.0-rc.49 — re-audit HIGH RC45-WRITEPATH-LEAK: rc.45 sanitized the READ
+  // path but the WRITE path (writeNote/renameFile/appendNote) still threw raw fs
+  // errors embedding the host abs path to any serve-http write-tool client.
+  it("write-path fs errors are vault-RELATIVE, never the host path (rc.49 HIGH RC45-WRITEPATH-LEAK)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // A regular file used as a parent dir → ENOTDIR (mkdir/open under it fail raw).
+    await fs.writeFile(path.join(root, "clash.md"), "x");
+    const collect = async (fn: () => Promise<unknown>): Promise<NodeJS.ErrnoException | null> =>
+      (await fn().then(
+        () => null,
+        (e) => e
+      )) as NodeJS.ErrnoException | null;
+
+    const wErr = await collect(() => v.writeNote("clash.md/child.md", "body", { overwrite: true }));
+    expect(wErr, "writeNote should reject when the parent path is a file").not.toBeNull();
+    expect(wErr?.message, "writeNote must not leak the absolute vault root").not.toContain(root);
+
+    const aErr = await collect(() => v.appendNote("clash.md/child.md", "more"));
+    expect(aErr, "appendNote should reject when the parent path is a file").not.toBeNull();
+    expect(aErr?.message, "appendNote must not leak the absolute vault root").not.toContain(root);
+
+    const rErr = await collect(() => v.renameFile("Ghost.md", "Dest.md"));
+    expect(rErr, "renameFile should reject on a missing source").not.toBeNull();
+    expect(rErr?.message, "renameFile must not leak the absolute vault root").not.toContain(root);
+
+    await fs.unlink(path.join(root, "clash.md")).catch(() => {});
+  });
 });
 
 describe("Vault — file size limit", () => {

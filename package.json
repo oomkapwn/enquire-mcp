@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.10.0-rc.49",
+  "version": "3.10.0-rc.50",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 45 tools, 19 MCP prompts, 1204 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 45 tools, 19 MCP prompts, 1210 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -85,8 +85,9 @@
     "bench:peek-cache": "npm run build && node scripts/bench-peek-cache.mjs",
     "bench:longmemeval": "npm run build && node scripts/bench-longmemeval.mjs",
     "docs:api": "typedoc",
+    "check:audit": "node scripts/check-audit.mjs",
     "prepare": "rm -rf dist && tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
-    "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && npm audit --omit=dev --audit-level=moderate && npm audit --include=dev --audit-level=high && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
+    "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && node scripts/check-audit.mjs && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
     "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md"
   },
   "keywords": [
@@ -182,6 +183,7 @@
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "gray-matter": "^4.0.3",
+    "js-yaml": "^3.14.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -205,6 +207,7 @@
     "tesseract.js": "^7.0.0"
   },
   "overrides": {
-    "hono": "^4.12.21"
+    "hono": "^4.12.21",
+    "protobufjs": "^7.6.4"
   }
 }

@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.46] — 2026-06-15
+
+> **TL;DR:** **Ultracode full-project audit, fix-batch 4/4 — the Unicode NFC name-resolution CLASS.** rc.43's `foldKey()` (G1) fixed ONE instance of the macOS NFC/NFD name-resolution bug; an RCA + an exhaustive source-signature sweep found the SAME bug live in **14 name-comparison sites across 5 files** (the sweep caught 2 the RCA's hand-enumeration had missed). Every site folded a note name with `.toLowerCase()` but no `.normalize("NFC")`, so on macOS (APFS returns filenames decomposed/NFD; wikilinks and titles are usually composed/NFC) an accented name like a `[[café]]` link silently failed to resolve to its `café.md` file in the wikilink graph, title lookups, `.base` `linksTo`/`file.name ==`, fuzzy title 3-grams, and similar-note suggestions. Fixed at the root with a new shared `src/name-fold.ts` (`foldName`) + a **P0 inventory invariant** that fails CI on any future unfolded site. **1191 → 1196 source tests.**
+
+**Pre-release (v3.10 line) — audit fix-batch 4/4: NFC name-resolution class.**
+
+### Fixed
+
+- **NFC name-resolution class (14 sites, 5 files)** — names compared/keyed without Unicode normalization silently failed to match across NFC/NFD forms on macOS. New dependency-free leaf module `src/name-fold.ts` exports `foldName(s) = s.normalize("NFC").toLowerCase()`; every site now routes through it (and `tools/meta.ts`'s `foldKey` is now `foldName(stripMd(s))`):
+  - `src/communities.ts` — wikilink-graph basename index build + lookup (`buildWikilinkGraph`); accented `[[links]]` now form graph edges.
+  - `src/vault.ts` — `findByTitle` / `findAllByTitle` (both the query norm and the per-entry match); write tools resolve accented titles + still fail-loud on true duplicates.
+  - `src/bases.ts` — `linksTo()` outbound-set build + query, and `file.name ==` / `!=` (both `want` and `got`).
+  - `src/tools/meta.ts` — `lint_vault_wiki` `titleSet` build + the capitalised-phrase lookup.
+  - `src/tools/search.ts` — `find_similar` title 3-gram construction.
+  - `src/tools/write.ts` — `suggestSimilar` target/basename/relPath folding.
+  - rc.43's `foldKey()` was an INSTANCE fix that never triggered a sibling sweep; even the RCA's hand-enumeration missed `search.ts` + `write.ts` — only an exhaustive signature grep found all 14, which is why the durable fix is the inventory invariant below, not the 14 edits.
+
+### Added
+
+- **`tests/name-fold-invariant.test.ts` (P0 inventory invariant).** A pure detector greps every `src/**/*.ts` for the class signature — an extension-strip (`/\.md$/i` or `/\.base$/i`) or `stripMd`/`stripMdExt` call immediately followed by `.toLowerCase()` (i.e. a note name folded without NFC) — and fails CI on any match, so a new unfolded comparison site can never ship. Ships with a NEGATIVE control proving the detector flags the real bug shapes (and does not flag the correct `foldName(...)` form), plus a `foldName` unit covering NFC↔NFD equality, ASCII regression, and a NOT-accent-stripping control. Converts "did we NFC-fold every name comparison?" (recursion-prone) into a self-checking gate — same move as the rc.25 ReDoS fuzz and the rc.36 resource-bound manifest.
+
+### Tests (1196)
+
+- +5 source `it()` in `tests/name-fold-invariant.test.ts` (3 `foldName` units + 2 invariant: the src-scan gate + the detector NEGATIVE control). 1191 → 1196. The 14 code fixes are covered by the existing communities / bases / vault / meta / search / write / wikilink-nfc suites (all green).
+
+---
+
 ## [3.10.0-rc.45] — 2026-06-15
 
 > **TL;DR:** **Ultracode full-project audit, fix-batch 3/4 — the abs-path-leak CLASS (HIGH + privacy brand).** An RCA-driven re-sweep proved that rc.43's **G1** (NFC) and the audit's **M3** (path-leak) were per-INSTANCE fixes, not CLASS fixes — sibling leak sinks were still live. This batch closes the error-path information-disclosure class at the source: `Vault.stat`/`readFile`/`readBinaryFile` now sanitize fs errors (strip the absolute vault root, keep `code` + the ENOENT shape) so EVERY caller returns vault-relative errors to MCP clients; the OCR install-hint throw no longer leaks the host tessdata/home dir; and the offline model-load error no longer surfaces the raw transformers.js cause (which embeds the `~/.cache/huggingface` absolute path). Two tests that had PINNED the leaked text were flipped to negative controls. **1189 → 1191 source tests.** rc.46 carries the NFC name-resolution class; rc.49 adds the matching structural OIA guard.

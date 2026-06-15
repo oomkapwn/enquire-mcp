@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import matter from "gray-matter";
 import type { FtsIndex } from "../fts5.js";
+import { foldName } from "../name-fold.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
@@ -384,7 +385,7 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
   const stubs: LintWikiFinding[] = [];
   const stale: LintWikiFinding[] = [];
   const titleSet = new Set<string>();
-  for (const e of allEntries) titleSet.add(stripMd(e.basename).toLowerCase());
+  for (const e of allEntries) titleSet.add(foldName(stripMd(e.basename)));
 
   // Capitalised-phrase mentions across the whole vault. A phrase is 1-3
   // CapitalCase tokens (e.g. "Reinforcement Learning", "Attention Heads").
@@ -479,7 +480,7 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
       if (seenInThisNote.has(phrase)) continue;
       if (seenInThisNote.size >= 30) break;
       // Skip phrases that are already a vault note (basename match).
-      if (titleSet.has(phrase.toLowerCase())) continue;
+      if (titleSet.has(foldName(phrase))) continue;
       seenInThisNote.add(phrase);
       const set = conceptMentions.get(phrase) ?? new Set<string>();
       set.add(e.relPath);
@@ -2245,7 +2246,7 @@ const entryIndexCache = new WeakMap<FileEntry[], EntryIndex>();
  * @internal
  */
 function foldKey(s: string): string {
-  return stripMd(s).normalize("NFC").toLowerCase();
+  return foldName(stripMd(s));
 }
 
 export function indexFor(entries: FileEntry[]): EntryIndex {

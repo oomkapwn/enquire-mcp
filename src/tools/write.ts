@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import matter from "gray-matter";
+import { foldName } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { findBestMatch, stripMd } from "./meta.js";
@@ -999,11 +1000,11 @@ export function resolvePeriodicAlias(title: string): string | null {
 export async function suggestSimilar(vault: Vault, target: string): Promise<string[]> {
   try {
     const all = await vault.listMarkdown();
-    const lower = target.toLowerCase().replace(/\.md$/i, "");
+    const lower = foldName(target.replace(/\.md$/i, ""));
     const ranked = all
       .map((e) => {
-        const baseLower = stripMd(e.basename).toLowerCase();
-        const relLower = e.relPath.toLowerCase();
+        const baseLower = foldName(stripMd(e.basename));
+        const relLower = foldName(e.relPath);
         let score = 0;
         if (baseLower === lower) score = 100;
         else if (baseLower.startsWith(lower) || lower.startsWith(baseLower)) score = 70;

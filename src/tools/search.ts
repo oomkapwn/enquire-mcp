@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
+import { foldName } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
@@ -262,7 +263,7 @@ export async function findSimilar(
   for (const e of entries) {
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const tags = new Set(parsed.tags.map((t) => t.toLowerCase()));
-    const title3grams = ngrams(stripMd(e.basename).toLowerCase(), 3);
+    const title3grams = ngrams(foldName(stripMd(e.basename)), 3);
     const outbound = new Set<string>();
     for (const link of parsed.wikilinks) {
       const m = findBestMatch(entries, link.target, e.relPath);

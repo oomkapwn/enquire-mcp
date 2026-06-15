@@ -29,6 +29,7 @@
 
 import * as path from "node:path";
 import { z } from "zod";
+import { foldName } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
@@ -347,7 +348,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     for (const link of extractWikilinks(body)) {
       const t = link.target.split(/[#^]/)[0]?.trim();
       if (!t) continue;
-      const norm = (t.split("/").pop() ?? t).replace(/\.md$/i, "").toLowerCase();
+      const norm = foldName((t.split("/").pop() ?? t).replace(/\.md$/i, ""));
       if (norm) outbound.add(norm);
     }
     const ctx: EvalContext = {
@@ -530,7 +531,8 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   if (linksTo) {
     const target = (linksTo[2] ?? "").trim();
     if (!target) return false;
-    const norm = (target.split("/").pop() ?? target).split(/[#^]/)[0]?.replace(/\.md$/i, "").toLowerCase();
+    const stripped = (target.split("/").pop() ?? target).split(/[#^]/)[0]?.replace(/\.md$/i, "");
+    const norm = stripped === undefined ? undefined : foldName(stripped);
     return norm ? ctx.outbound.has(norm) : false;
   }
 
@@ -558,8 +560,8 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   const fileNameEq = /^file\.name\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
   if (fileNameEq) {
     const op = fileNameEq[1];
-    const want = (fileNameEq[3] ?? "").replace(/\.md$/i, "").toLowerCase();
-    const got = (ctx.path.split("/").pop() ?? ctx.path).replace(/\.md$/i, "").toLowerCase();
+    const want = foldName((fileNameEq[3] ?? "").replace(/\.md$/i, ""));
+    const got = foldName((ctx.path.split("/").pop() ?? ctx.path).replace(/\.md$/i, ""));
     const eq = got === want;
     return op === "==" ? eq : !eq;
   }

@@ -198,14 +198,14 @@ export class Vault {
     if (this.ready) return;
     let stat: import("node:fs").Stats;
     try {
-      stat = await fs.stat(this.root);
+      stat = await this.statSafe(this.root);
     } catch {
       throw new Error(`Vault not found: ${this.root}`);
     }
     if (!stat.isDirectory()) {
       throw new Error(`Vault path is not a directory: ${this.root}`);
     }
-    this.root = await fs.realpath(this.root);
+    this.root = await this.realpathSafe(this.root);
     if (this.persistentCacheEnabled && !this.cacheFile) {
       this.cacheFile = defaultCacheFile(this.root);
     }
@@ -238,7 +238,7 @@ export class Vault {
   async loadDiskCache(): Promise<number> {
     if (!this.cacheFile) return 0;
     try {
-      const stat = await fs.stat(this.cacheFile);
+      const stat = await this.statSafe(this.cacheFile);
       if (stat.size > this.maxDiskCacheBytes) {
         process.stderr.write(
           `enquire: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
@@ -250,7 +250,7 @@ export class Vault {
     }
     let raw: string;
     try {
-      raw = await fs.readFile(this.cacheFile, "utf8");
+      raw = await this.readFileSafe(this.cacheFile, "utf8");
     } catch {
       return 0;
     }
@@ -291,7 +291,7 @@ export class Vault {
           return { kind: "drop", excludedByPrivacy: true } as const;
         }
         try {
-          const s = await fs.stat(abs);
+          const s = await this.statSafe(abs);
           if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
           // Belt-and-braces: realpath check in case the path includes a symlink
           // chain that resolves outside the vault.
@@ -362,7 +362,7 @@ export class Vault {
     let removed = false;
     for (const target of [file, `${file}.tmp`]) {
       try {
-        await fs.unlink(target);
+        await this.unlinkSafe(target);
         removed = true;
       } catch (err) {
         if (!(isErrnoException(err) && err.code === "ENOENT")) throw err;
@@ -417,15 +417,15 @@ export class Vault {
       .stat(cacheDir)
       .then(() => true)
       .catch(() => false);
-    await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });
     if (!parentExisted) {
       // Directory didn't exist before this call — we own it, lock perms.
       await fs.chmod(cacheDir, 0o700).catch(() => {});
     }
     const tmp = `${this.cacheFile}.tmp`;
     // mode 0o600 — full note bodies live here, treat as private to the user account.
-    await fs.writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
-    await fs.rename(tmp, this.cacheFile);
+    await this.writeFileSafe(tmp, serialized, { encoding: "utf8", mode: 0o600 });
+    await this.renameSafe(tmp, this.cacheFile);
     // Defensive: rename preserves original mode if file existed; chmod ensures 0o600 either way.
     await fs.chmod(this.cacheFile, 0o600).catch(() => {});
     this.cacheDirty = false;
@@ -531,11 +531,92 @@ export class Vault {
     return err;
   }
 
+  // v3.10.0-rc.49 (abs-path-leak class — TRUE root closure) — sanitizing wrappers
+  // for the leaking fs SINK ops. rc.45 only wrapped readFile/readBinaryFile/stat;
+  // the re-audit found the write path (writeNote/renameFile/appendNote — HIGH) and
+  // readNote (the read funnel — MED) still leaked the host abs path to MCP clients.
+  // Routing every raw fs sink through these centralizes the strip, and the
+  // `tests/abs-path-leak-invariant.test.ts` inventory invariant fails CI if a NEW
+  // raw `fs.<sink>(` appears in a method that doesn't sanitize — so the next sink
+  // physically cannot escape. err.code is preserved, so EEXIST/EXDEV callers still work.
+  private async statSafe(p: string): Promise<import("node:fs").Stats> {
+    try {
+      return await fs.stat(p);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async realpathSafe(p: string): Promise<string> {
+    try {
+      return await fs.realpath(p);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async readFileSafe(p: string): Promise<Buffer>;
+  private async readFileSafe(p: string, enc: BufferEncoding): Promise<string>;
+  private async readFileSafe(p: string, enc?: BufferEncoding): Promise<string | Buffer> {
+    try {
+      return enc ? await fs.readFile(p, enc) : await fs.readFile(p);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async mkdirSafe(p: string, opts: Parameters<typeof fs.mkdir>[1]): Promise<void> {
+    try {
+      await fs.mkdir(p, opts);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async writeFileSafe(p: string, data: string, opts: Parameters<typeof fs.writeFile>[2]): Promise<void> {
+    try {
+      await fs.writeFile(p, data, opts);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async openSafe(p: string, flags: string): Promise<import("node:fs/promises").FileHandle> {
+    try {
+      return await fs.open(p, flags);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async renameSafe(src: string, dest: string): Promise<void> {
+    try {
+      await fs.rename(src, dest);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async linkSafe(src: string, dest: string): Promise<void> {
+    try {
+      await fs.link(src, dest);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async copyFileSafe(src: string, dest: string, mode?: number): Promise<void> {
+    try {
+      await fs.copyFile(src, dest, mode);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async unlinkSafe(p: string): Promise<void> {
+    try {
+      await fs.unlink(p);
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+
   async readBinaryFile(relOrAbs: string): Promise<Buffer> {
     const abs = await this.resolveSafePath(relOrAbs);
     try {
       await this.assertSize(abs);
-      return await fs.readFile(abs);
+      return await this.readFileSafe(abs);
     } catch (err) {
       throw this.sanitizeFsError(err);
     }
@@ -555,7 +636,7 @@ export class Vault {
     const abs = await this.resolveSafePath(relOrAbs);
     try {
       await this.assertSize(abs);
-      return await fs.readFile(abs, "utf8");
+      return await this.readFileSafe(abs, "utf8");
     } catch (err) {
       throw this.sanitizeFsError(err); // rc.45 — vault-relative, no host path leak
     }
@@ -576,20 +657,31 @@ export class Vault {
    */
   async readNote(relOrAbs: string, knownMtimeMs?: number): Promise<CachedNote> {
     const abs = await this.resolveSafePath(relOrAbs);
-    const mtimeMs = knownMtimeMs ?? (await fs.stat(abs)).mtimeMs;
-    const cached = this.cache.get(abs);
-    if (cached && cached.mtimeMs === mtimeMs) {
-      // LRU bump: re-insert so this entry is "freshest"
-      this.cache.delete(abs);
-      this.cache.set(abs, cached);
-      return cached;
+    // v3.10.0-rc.49 (abs-path-leak class — re-audit CODE-1) — readNote is the
+    // primary list-then-read funnel (getNoteNeighbors / semanticSearch / etc.
+    // loop it over listMarkdown()); rc.45 sanitized readFile/readBinaryFile/stat
+    // but MISSED this method, so a TOCTOU delete / EACCES / file→dir between the
+    // list and the per-entry read leaked the host absolute path to MCP clients.
+    // Wrap the disk ops; sanitizeFsError is a no-op on the (relative) deliberate
+    // errors, so only raw fs errors get the root stripped.
+    try {
+      const mtimeMs = knownMtimeMs ?? (await this.statSafe(abs)).mtimeMs;
+      const cached = this.cache.get(abs);
+      if (cached && cached.mtimeMs === mtimeMs) {
+        // LRU bump: re-insert so this entry is "freshest"
+        this.cache.delete(abs);
+        this.cache.set(abs, cached);
+        return cached;
+      }
+      await this.assertSize(abs);
+      const content = await this.readFileSafe(abs, "utf8");
+      const parsed = parseNote(content);
+      const entry = { content, parsed, mtimeMs };
+      this.cacheSet(abs, entry);
+      return entry;
+    } catch (err) {
+      throw this.sanitizeFsError(err);
     }
-    await this.assertSize(abs);
-    const content = await fs.readFile(abs, "utf8");
-    const parsed = parseNote(content);
-    const entry = { content, parsed, mtimeMs };
-    this.cacheSet(abs, entry);
-    return entry;
   }
 
   /**
@@ -666,7 +758,7 @@ export class Vault {
           : "--exclude-glob denylist";
       throw new Error(`Refusing to write — destination is excluded by ${reason}: ${targetRelNorm}`);
     }
-    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await this.mkdirSafe(path.dirname(abs), { recursive: true });
     await this.assertParentInsideVault(abs);
     // Refuse to write through a symlink. fs.writeFile follows the link and would
     // write to wherever it points — possibly outside the vault. assertParentInsideVault
@@ -686,10 +778,10 @@ export class Vault {
       throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
     }
     if (opts.overwrite) {
-      await fs.writeFile(abs, content, "utf8");
+      await this.writeFileSafe(abs, content, "utf8");
     } else {
       try {
-        await fs.writeFile(abs, content, { encoding: "utf8", flag: "wx" });
+        await this.writeFileSafe(abs, content, { encoding: "utf8", flag: "wx" });
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
@@ -698,7 +790,7 @@ export class Vault {
       }
     }
     this.cache.delete(abs);
-    const stat = await fs.stat(abs);
+    const stat = await this.statSafe(abs);
     return {
       absPath: abs,
       relPath: path.relative(this.root, abs),
@@ -768,7 +860,7 @@ export class Vault {
     // Walk UP until we find an existing path (or hit vault root).
     while (true) {
       try {
-        await fs.stat(existing);
+        await this.statSafe(existing);
         break;
       } catch {
         const parent = path.dirname(existing);
@@ -834,7 +926,7 @@ export class Vault {
     if (targetLstat?.isSymbolicLink()) {
       throw new Error(`Refusing to rename — destination is a symlink: ${path.relative(this.root, toAbs)}`);
     }
-    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
     // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
     // Pre-3.7.14 we did `stat(toAbs)`-then-`rename(fromAbs, toAbs)`. POSIX
     // rename(2) silently REPLACES the destination if it exists, so between
@@ -849,10 +941,10 @@ export class Vault {
     // file at the new path with identical contents. For the overwrite path
     // we keep plain rename() since the user opted into replacement.
     if (opts.overwrite) {
-      await fs.rename(fromAbs, toAbs);
+      await this.renameSafe(fromAbs, toAbs);
     } else {
       try {
-        await fs.link(fromAbs, toAbs);
+        await this.linkSafe(fromAbs, toAbs);
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
@@ -861,8 +953,8 @@ export class Vault {
         // bind-mount, source on the underlying fs. Fall back to atomic
         // copy-then-unlink with the wx flag.
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EXDEV") {
-          await fs.copyFile(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
-          await fs.unlink(fromAbs);
+          await this.copyFileSafe(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
+          await this.unlinkSafe(fromAbs);
         } else {
           throw err;
         }
@@ -879,7 +971,7 @@ export class Vault {
     }
     this.cache.delete(fromAbs);
     this.cache.delete(toAbs);
-    const stat = await fs.stat(toAbs);
+    const stat = await this.statSafe(toAbs);
     return {
       from: path.relative(this.root, fromAbs),
       to: path.relative(this.root, toAbs),
@@ -926,7 +1018,7 @@ export class Vault {
     // fd that another process can't reposition. fs.appendFile + open with
     // O_APPEND means subsequent writes are always atomic at the end of
     // file (POSIX append guarantee).
-    const handle = await fs.open(abs, "a");
+    const handle = await this.openSafe(abs, "a");
     let beforeSize = 0;
     try {
       const before = await handle.stat();
@@ -939,7 +1031,7 @@ export class Vault {
       await handle.close();
     }
     this.cache.delete(abs);
-    const after = await fs.stat(abs);
+    const after = await this.statSafe(abs);
     return {
       absPath: abs,
       relPath: path.relative(this.root, abs),
@@ -972,7 +1064,7 @@ export class Vault {
   async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {
     const abs = await this.resolveSafePath(relOrAbs);
     try {
-      const s = await fs.stat(abs);
+      const s = await this.statSafe(abs);
       return { mtimeMs: s.mtimeMs, size: s.size };
     } catch (err) {
       throw this.sanitizeFsError(err); // rc.45 — M3: raw fs ENOENT embedded the abs path
@@ -1055,7 +1147,7 @@ export class Vault {
       abs = this.resolveInside(relOrAbs);
     }
     try {
-      const real = await fs.realpath(abs);
+      const real = await this.realpathSafe(abs);
       const rel = path.relative(this.root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) {
         // v3.7.20 ν class — error message previously interpolated `${abs}`,
@@ -1087,7 +1179,10 @@ export class Vault {
   }
 
   private async assertSize(abs: string): Promise<void> {
-    const stat = await fs.stat(abs);
+    // v3.10.0-rc.49 (abs-path-leak class) — statSafe sanitizes the stat error at
+    // the source, so every caller (readNote/readFile/readBinaryFile + watcher)
+    // inherits a vault-relative error instead of a raw ENOENT embedding the abs path.
+    const stat = await this.statSafe(abs);
     if (stat.size > this.maxFileBytes) {
       throw new Error(
         `File too large (${stat.size} bytes > limit ${this.maxFileBytes}): ${path.relative(this.root, abs)}`

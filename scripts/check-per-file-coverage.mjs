@@ -65,7 +65,7 @@ const FLOORS = {
   // enforcement) and was the one critical module with NO per-file floor, so a
   // privacy-boundary regression would only show in the global average. First
   // floor, conservative (actual branches 78.03%).
-  "src/vault.ts": { branches: 75 }, // current 78.03%
+  "src/vault.ts": { branches: 75 }, // current 80.49% (rc.49 sanitizing fs wrappers + behavioral leak tests)
   // rc.23 — ocr.ts gains a `lines` floor too: it's the #16 offline-enforcement
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.

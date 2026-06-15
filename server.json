@@ -6,12 +6,12 @@
     "url": "https://github.com/oomkapwn/enquire-mcp",
     "source": "github"
   },
-  "version": "3.10.0-rc.46",
+  "version": "3.10.0-rc.47",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@oomkapwn/enquire-mcp",
-      "version": "3.10.0-rc.46",
+      "version": "3.10.0-rc.47",
       "transport": {
         "type": "stdio"
       },

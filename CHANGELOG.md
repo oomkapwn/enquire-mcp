@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.47] — 2026-06-15
+
+> **TL;DR:** **Ultracode audit fix-batch 5 — the range-arithmetic (body-relative line-number) class.** The 58-agent RCA workflow confirmed two MEDIUM siblings of this class: `obsidian_open_questions` and `readNote(format:"map")` both reported line numbers indexed on the *frontmatter-stripped* body (`i + 1`), so for any note with YAML frontmatter the reported `line` was short by the frontmatter length — an agent jumping to that line would land too early. Both now use the parser's already-exposed `bodyStartLine` to report **file-absolute** lines. **1196 → 1197 source tests.**
+
+**Pre-release (v3.10 line) — audit fix-batch 5: range-arithmetic / file-absolute line numbers.**
+
+### Fixed
+
+- **MEDIUM — `obsidian_open_questions` reported body-relative line numbers** (`src/tools/meta.ts`). `getOpenQuestions` split `parsed.body` (which excludes frontmatter) and emitted `lineNo: i + 1`, so a `Q:`/`TODO?` marker in a note with YAML frontmatter was reported off by the frontmatter line count. Now `lineNo: parsed.bodyStartLine + i` (file-absolute; `bodyStartLine` is 1 when there's no frontmatter, so frontmatter-less notes are unchanged).
+- **MEDIUM — `readNote(format:"map")` reported body-relative heading line numbers** (`src/tools/read.ts`). `extractHeadings(parsed.body)` emitted `line: i + 1` over the frontmatter-stripped body. The helper now takes `bodyStartLine` and emits `line: bodyStartLine + i` (file-absolute); the caller passes `parsed.bodyStartLine`.
+
+### Tests (1197)
+
+- `tests/lint.test.ts`: new `it` — a frontmatter'd note whose `Q:` marker is on file line 8 (frontmatter lines 1-4, blank 5, heading 6, blank 7, marker 8); asserts `q.line === 8` (file-absolute) and `!== 4` (the old body-relative value).
+- `tests/tools.test.ts`: extended the existing `readNote format:"map"` test to assert `headings[0]` is `{ text: "Top heading", line: 6 }` (file-absolute) and `!== 2` (old body-relative). No new `it` (assertion added in place).
+- Net source `it()`: 1196 → 1197.
+
+> **Deferred to rc.48** (verified-real but distinct class): `frontmatterSet` round-trips the body through `matter.stringify`, which appends a trailing newline to a body saved without one (LOW, roundtrip-serialization-fidelity — needs gray-matter newline-state handling + a fidelity test, batched with the other LOWs). The RCA-flagged `embeddingsSearch` `db.open()` path-leak was **refuted** (it's guarded by the rc.34 fail-soft `peekEmbedDbMeta`); `chatThreadAppend` line_end and `--late-chunk-context 0` were not confirmed by the RCA and are left unchanged.
+
+---
+
 ## [3.10.0-rc.46] — 2026-06-15
 
 > **TL;DR:** **Ultracode full-project audit, fix-batch 4/4 — the Unicode NFC name-resolution CLASS.** rc.43's `foldKey()` (G1) fixed ONE instance of the macOS NFC/NFD name-resolution bug; an RCA + an exhaustive source-signature sweep found the SAME bug live in **14 name-comparison sites across 5 files** (the sweep caught 2 the RCA's hand-enumeration had missed). Every site folded a note name with `.toLowerCase()` but no `.normalize("NFC")`, so on macOS (APFS returns filenames decomposed/NFD; wikilinks and titles are usually composed/NFC) an accented name like a `[[café]]` link silently failed to resolve to its `café.md` file in the wikilink graph, title lookups, `.base` `linksTo`/`file.name ==`, fuzzy title 3-grams, and similar-note suggestions. Fixed at the root with a new shared `src/name-fold.ts` (`foldName`) + a **P0 inventory invariant** that fails CI on any future unfolded site. **1191 → 1196 source tests.**

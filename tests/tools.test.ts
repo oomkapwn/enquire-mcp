@@ -420,6 +420,11 @@ describe("readNote — document-map projection (v0.11)", () => {
         "## Sub",
         "### Deep" // ## inside ``` is correctly NOT extracted
       ]);
+      // v3.10.0-rc.47 (range-arithmetic) — heading `line` is FILE-absolute, not
+      // body-relative. Frontmatter is file lines 1-4, blank line 5, so
+      // "# Top heading" is on file line 6 (the old body-relative code reported 2).
+      expect(result.headings[0]).toMatchObject({ text: "Top heading", line: 6 });
+      expect(result.headings[0]?.line).not.toBe(2); // NEGATIVE: body-relative was wrong
       expect(result.byte_size).toBeGreaterThan(0);
       // No body field on map projection.
       expect("content" in result).toBe(false);

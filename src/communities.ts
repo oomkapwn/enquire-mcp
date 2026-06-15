@@ -28,6 +28,7 @@
 // to ~50K notes; full multi-phase Louvain is a future optimization.
 
 import * as path from "node:path";
+import { foldName } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import type { Vault } from "./vault.js";
 
@@ -103,7 +104,7 @@ export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
   // Build a basename index for resolving wikilinks.
   const byBasename = new Map<string, string>();
   for (const e of all) {
-    const base = e.basename.replace(/\.md$/i, "").toLowerCase();
+    const base = foldName(e.basename.replace(/\.md$/i, ""));
     if (!byBasename.has(base)) byBasename.set(base, e.relPath.replace(/\\/g, "/"));
   }
   const adj = new Map<string, Map<string, number>>();
@@ -124,7 +125,7 @@ export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
       const target = link.target.split(/[#^]/)[0]?.trim();
       if (!target) continue;
       // Resolution: try basename match, then path match.
-      const lookupKey = path.basename(target).replace(/\.md$/i, "").toLowerCase();
+      const lookupKey = foldName(path.basename(target).replace(/\.md$/i, ""));
       let toPath = byBasename.get(lookupKey);
       if (!toPath) {
         // Try direct path match.

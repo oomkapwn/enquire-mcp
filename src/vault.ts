@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
 
@@ -1002,9 +1003,9 @@ export class Vault {
    * @returns The matching file entry, or `null` if no note matches.
    */
   async findByTitle(title: string): Promise<FileEntry | null> {
-    const norm = stripMdExt(title).toLowerCase();
+    const norm = foldName(stripMdExt(title));
     const all = await this.listMarkdown();
-    return all.find((e) => stripMdExt(e.basename).toLowerCase() === norm) ?? null;
+    return all.find((e) => foldName(stripMdExt(e.basename)) === norm) ?? null;
   }
 
   /**
@@ -1022,9 +1023,9 @@ export class Vault {
    * @returns All matching file entries (empty array if no match).
    */
   async findAllByTitle(title: string): Promise<FileEntry[]> {
-    const norm = stripMdExt(title).toLowerCase();
+    const norm = foldName(stripMdExt(title));
     const all = await this.listMarkdown();
-    return all.filter((e) => stripMdExt(e.basename).toLowerCase() === norm);
+    return all.filter((e) => foldName(stripMdExt(e.basename)) === norm);
   }
 
   /** Periodic Notes plugin config (`.obsidian/daily-notes.json` + Periodic

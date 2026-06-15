@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.48] — 2026-06-15
+
+> **TL;DR:** **Ultracode audit fix-batch 6 — docs/TSDoc-drift + the prompts-table invariant + a frontmatter-fidelity LOW.** Closes the RCA's `help-parser-tsdoc-drift` ×3 (the overclaim #16 OCR "download on first use" residual in `tool-registry.ts`, and a `ServeOptions` TSDoc naming two tools that don't exist) + `structural-defense-scope` ×1 (the docs/api.md prompts table was stale at **10 of 19** with no invariant pinning it — now backfilled to 19 + guarded). Plus the verified-real `frontmatterSet` trailing-newline fidelity LOW, the STABILITY always-on header (33→34), and a dead `files[]` entry. **1197 → 1200 source tests.** The `pdfjs-dist` 5→6 major bump (PR #177) is split into its own RC for isolated verification.
+
+**Pre-release (v3.10 line) — audit fix-batch 6: docs/TSDoc drift + structural guard.**
+
+### Fixed
+
+- **MEDIUM — `obsidian_ocr_pdf` description claimed runtime language-pack download** (`src/tool-registry.ts`, overclaim #16 residual). The tool description + the inline `lang`-schema comment still said trained-data "download on first use", but rc.10 made OCR offline-enforced (`assertOcrLangsInstalled` fails closed; the worker is `cacheMethod: "readOnly"` — zero outbound calls). Rewritten to the enforced reality: packs must be pre-installed via `enquire-mcp install-ocr-lang <code>`.
+- **LOW — `ServeOptions.enableWrite` TSDoc named two non-existent tools** (`src/server.ts`). It listed `obsidian_append_note` + `obsidian_rename_file`; the real handlers are `obsidian_append_to_note` + `obsidian_rename_note`. Corrected.
+- **LOW — `frontmatterSet` altered the body's trailing-newline state** (`src/tools/write.ts`, roundtrip-serialization-fidelity). `matter.stringify` always appends a `\n`; a frontmatter-only edit on a body saved without a trailing newline silently introduced one. gray-matter's `.content` faithfully preserves the original state, so the fix drops the stringify-added newline iff the original body lacked one. Verified empirically against gray-matter round-trip behavior.
+- **LOW — STABILITY.md "always-on (33)" header off by one** (`STABILITY.md`). The list under it has 34 entries (incl. `obsidian_stale_notes`); the header said 33. → 34.
+- **LOW — dead `files[]` entry** (`package.json`). `docs/api-reference` is GH-Pages-generated (not git-tracked, never produced before `npm pack` — `prepublishOnly` doesn't run `docs:api`), so it never shipped in the tarball. Removed the misleading entry.
+
+### Added
+
+- **docs/api.md prompts-table invariant** (`tests/docs-consistency.test.ts`). The prompts table was stale at 10 of 19 with nothing guarding it. Backfilled the 9 missing prompts (`search_with_query_expansion`, `vault_synth`, `vault_wiki_compile`, `vault_lint_extended`, `vault_capture`, `vault_persona_search`, `vault_automation_setup`, `vault_research`, `vault_synthesis_page`) + a new invariant asserting every `registerPrompt()` in `src/prompts.ts` appears in the api.md prompts section (with a NEGATIVE control proving the detector flags an absent prompt).
+
+### Tests (1200)
+
+- +3 source `it()`: the api.md prompts-table invariant + its NEGATIVE control (`tests/docs-consistency.test.ts`), and the `frontmatterSet` trailing-newline fidelity test (`tests/frontmatter-ops.test.ts`). 1197 → 1200.
+
+> **Deferred to its own RC:** `pdfjs-dist` `^5.7.284` → `^6.0.227` (PR [#177](https://github.com/oomkapwn/enquire-mcp/pull/177)) — a MAJOR bump that needs isolated verification (install + PDF-render + OCR-canvas paths) rather than coupling an untested upgrade to this clean docs batch.
+
+---
+
 ## [3.10.0-rc.47] — 2026-06-15
 
 > **TL;DR:** **Ultracode audit fix-batch 5 — the range-arithmetic (body-relative line-number) class.** The 58-agent RCA workflow confirmed two MEDIUM siblings of this class: `obsidian_open_questions` and `readNote(format:"map")` both reported line numbers indexed on the *frontmatter-stripped* body (`i + 1`), so for any note with YAML frontmatter the reported `line` was short by the frontmatter length — an agent jumping to that line would land too early. Both now use the parser's already-exposed `bodyStartLine` to report **file-absolute** lines. **1196 → 1197 source tests.**

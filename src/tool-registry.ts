@@ -761,15 +761,16 @@ export function registerReadTools(
     {
       title: "OCR a scanned/image-only PDF (Tesseract.js)",
       description:
-        "Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as `obsidian_read_pdf`. Use this when `obsidian_read_pdf` returns `has_text: false` (typical for scans, photographed paper, image-only PDFs). Multilingual via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'`). Optional `pages` range and `scale` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU. Read-only. Powered by Tesseract.js (Apache-2.0; trained-data files download on first use into the local cache, ~10 MB per language) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to `optionalDependencies` so the markdown-only path stays zero-cost.",
+        "Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as `obsidian_read_pdf`. Use this when `obsidian_read_pdf` returns `has_text: false` (typical for scans, photographed paper, image-only PDFs). Multilingual via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'`). Optional `pages` range and `scale` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU. Read-only. Powered by Tesseract.js (Apache-2.0; language trained-data must be pre-installed via `enquire-mcp install-ocr-lang <code>` — serve mode makes zero outbound network calls, so a language missing from the local cache fails closed with an install hint rather than downloading at runtime) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to `optionalDependencies` so the markdown-only path stays zero-cost.",
       annotations: { ...READ_ONLY, title: "OCR PDF" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
-        // v3.7.13 M3 — `lang` is passed straight to `tesseract.createWorker`,
-        // which downloads each requested language pack on first use (~10 MB
-        // each, cached). A bearer-token client could request many language
-        // combinations to trigger repeated downloads + slow OCR jobs — a
-        // resource-exhaustion DoS vector. Schema constraint: 1-8 entries,
+        // v3.7.13 M3 / v3.9.0-rc.10 (#16) — `lang` is validated then passed to the
+        // Tesseract worker, which runs `cacheMethod: "readOnly"` against the local
+        // tessdata cache (NO runtime CDN download — serve mode is offline; a missing
+        // pack fails closed via `assertOcrLangsInstalled` with an `install-ocr-lang`
+        // hint). The schema constraint still bounds the input to avoid pathological
+        // many-language requests against the OCR worker. Schema constraint: 1-8 entries,
         // each a 3-letter Tesseract code (lowercase, optionally suffixed
         // with `_<variant>` for regional packs like `chi_sim`, `chi_tra`).
         // The pattern accepts the common Tesseract trained-data file

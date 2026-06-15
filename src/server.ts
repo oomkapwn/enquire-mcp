@@ -33,8 +33,9 @@ import { VaultWatcher } from "./watcher.js";
 export interface ServeOptions {
   /** Absolute path to the vault root directory. Required. */
   vault: string;
-  /** Allow write tools (`obsidian_create_note`, `obsidian_append_note`,
-   *  `obsidian_rename_file`). Default false (read-only). */
+  /** Allow the gated write tools (`obsidian_create_note`,
+   *  `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_archive_note`,
+   *  …). Default false (read-only). */
   enableWrite?: boolean;
   /** Per-file size cap (parsed via {@link parsePositiveInt}). */
   maxFileBytes?: string;

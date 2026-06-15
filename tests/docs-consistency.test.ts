@@ -49,6 +49,24 @@ function mentionedPromptNames(readme: string): Set<string> {
   return new Set([...cell[1].matchAll(/`([a-z_]+)`/g)].map((m) => m[1] ?? ""));
 }
 
+/**
+ * v3.10.0-rc.48 — slice the `## MCP prompts` section of docs/api.md (up to the
+ * next `## ` heading) so the prompts-table invariant pins the TABLE, not stray
+ * prose mentions elsewhere in the doc.
+ */
+function apiMdPromptsSection(apiMd: string): string {
+  const start = apiMd.indexOf("## MCP prompts");
+  if (start < 0) return "";
+  const rest = apiMd.slice(start + "## MCP prompts".length);
+  const next = rest.indexOf("\n## ");
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+/** Registered prompt names absent (as a `code-span`) from a docs section. */
+function promptsMissingFrom(section: string, registered: Set<string>): string[] {
+  return [...registered].filter((p) => !new RegExp("`" + p + "`").test(section));
+}
+
 describe("docs/code consistency — README mirrors registered MCP surface", () => {
   it("every tool in TOOL_MANIFEST appears in README", async () => {
     const readme = await read("README.md");
@@ -73,6 +91,23 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const mentioned = mentionedPromptNames(readme);
     const missingFromReadme = [...registered].filter((p) => !mentioned.has(p));
     expect(missingFromReadme).toEqual([]);
+  });
+
+  // v3.10.0-rc.48 — the RCA found docs/api.md's prompts TABLE stale at 10 of 19
+  // (no invariant pinned it). This guards the api.md table against the registry.
+  it("every registerPrompt() in src/prompts.ts appears in the docs/api.md prompts table", async () => {
+    const promptsSrc = await read("src/prompts.ts");
+    const apiMd = await read("docs/api.md");
+    const registered = registeredNames(promptsSrc, "registerPrompt");
+    const missing = promptsMissingFrom(apiMdPromptsSection(apiMd), registered);
+    expect(missing, `Prompts missing from the docs/api.md prompts table: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("NEGATIVE: a registered prompt absent from the api.md prompts section is flagged", () => {
+    // A section listing only one of two registered prompts → the other is flagged.
+    const section = "| `summarize_recent_edits` | `since_minutes?` | … |";
+    const missing = promptsMissingFrom(section, new Set(["summarize_recent_edits", "vault_research"]));
+    expect(missing).toEqual(["vault_research"]);
   });
 
   // v2.0.0-beta.2 architecture invariant: extend docs-consistency to catch

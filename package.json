@@ -183,7 +183,7 @@
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "gray-matter": "^4.0.3",
-    "js-yaml": "^3.14.0",
+    "js-yaml": "^4.2.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

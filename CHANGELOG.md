@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.51] — 2026-06-16
+
+> **TL;DR:** **Re-audit batch 3 (final) — docs-drift LOWs + class-D structural guards.** Two claim-vs-reality doc drifts the gates didn't catch: `docs/api.md` described a **non-existent `--hnsw-persist`** CLI flag (only `--no-hnsw-persist` exists; persistence is opt-out default-on), and `SECURITY.md` asserted a **fixed 4 MB** HTTP body cap while the code DERIVES `max(4 MB, max-file-bytes × 1.5)` (7.5 MB at the default). Both fixed + pinned with a new invariant so they can't recur. **1210 → 1213 source tests.** This closes the rc45-48 re-audit (1 HIGH + 2 MED + 3 LOW all shipped).
+
+**Pre-release (v3.10 line) — re-audit batch 3: docs drift + class-D guards.**
+
+### Fixed
+
+- **DOC-HNSW-PERSIST-PHANTOM-FLAG [LOW]** (`docs/api.md`). The `--use-hnsw` row's description said the index reloads "from `.hnsw.bin` sidecar if `--hnsw-persist`" — but `--hnsw-persist` never existed; persistence is **on by default**, opt-out via `--no-hnsw-persist` (correctly stated two rows down). Reworded to "reloaded from the `.hnsw.bin` sidecar by default — opt out with `--no-hnsw-persist`".
+- **DOC-SECURITY-HTTP-BODY-CAP-STALE [LOW]** (`SECURITY.md`). The body-bomb mitigation claimed a "Per-request body size cap (4 MB)", but `http-transport.ts` `deriveHttpBodyCap` computes `max(4 MB, maxFileBytes × 1.5)` = **7.5 MB** at the default 5 MB file cap (stale since v3.7.12 M4; `docs/http-transport.md` was already correct). Updated to the derived formula.
+
+### Added
+
+- **`tests/cli-flag-docs-invariant.test.ts` (class-D structural guard).** (1) Scans `docs/api.md` for every `--flag` token and asserts each resolves to a real commander `.option()` in `src/cli.ts` (+ builtins) — a phantom flag in the canonical flag-doc surface now fails CI; ships a NEGATIVE control (flags `--hnsw-persist`, clears `--no-hnsw-persist`). (2) Pins the `SECURITY.md` body-bomb line to the *derived* wording (`--max-file-bytes` + `1.5×`) so it can't drift back to a bare fixed number. OIA Check 3 validates subcommands, not `--flag` tokens in prose — these close that gap.
+
+### Tests (1213)
+
+- +3 source `it()` (flag-in-docs scan + NEGATIVE control + body-cap wording pin). 1210 → 1213.
+
+> **Re-audit closed:** the 6-lens state-driven re-audit of the rc.45→rc.48 line (1 HIGH + 2 MEDIUM + 3 LOW) is fully shipped — rc.49 (abs-path-leak class), rc.50 (js-yaml phantom dep + protobufjs advisory + scoped audit gate + chatThreadAppend), rc.51 (docs drift). Tracked follow-ups: js-yaml advisory de-allowlist (gray-matter YAML-engine migration), pdfjs-dist 5→6 (PR #177).
+
+---
+
 ## [3.10.0-rc.50] — 2026-06-16
 
 > **TL;DR:** **Re-audit batch 2 — supply-chain (phantom dep + newly-published advisories) + the chatThreadAppend line-drift LOW.** Declaring the previously-phantom `js-yaml` dep surfaced that `npm audit` had gone red **project-wide**: two newly-published advisories on transitive deps (`js-yaml` moderate via gray-matter; `protobufjs` high+moderate via the dev/optional `@huggingface/transformers`→onnxruntime). protobufjs is **fixed** (override → 7.6.4, in-range, no break). js-yaml has **no fix that doesn't break gray-matter** (v4 removed `safeLoad`), so it's accepted via a new **scoped audit gate** that fails on every advisory except documented ones — keeping the bar strict for all else. Plus the chatThreadAppend line_start/line_end range fix (CODE-2) and a phantom-import inventory invariant. **1204 → 1210 source tests.**

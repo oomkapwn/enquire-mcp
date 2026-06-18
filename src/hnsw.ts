@@ -42,6 +42,7 @@
 // slower).
 
 import type { EmbedSearchHit } from "./embed-db.js";
+import { optionalDepDetail } from "./optional-dep.js";
 
 /** A single labeled vector — used to populate the index. */
 export interface LabeledVector {
@@ -266,11 +267,12 @@ async function loadHnswlib(): Promise<HnswlibNodeModule> {
     cachedModule = lib;
     return cachedModule;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // rc.59 (OPTDEP leak, post-rc.58 re-sweep) — code only; Node's ERR_MODULE_NOT_FOUND
+    // message embeds the importing file's abs path. (This loader used a `const msg = …`
+    // INDIRECTION the rc.57 detector was blind to — now caught by the strengthened invariant.)
     throw new Error(
       "enquire: hnswlib-node (optional dependency) is not available. HNSW requires it. " +
-        `Install with: npm install hnswlib-node@^3 (or reinstall enquire-mcp without --omit=optional). ` +
-        `Underlying error: ${msg}`
+        `Install with: npm install hnswlib-node@^3 (or reinstall enquire-mcp without --omit=optional). (${optionalDepDetail(err)})`
     );
   }
 }

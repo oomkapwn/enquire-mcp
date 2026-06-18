@@ -94,7 +94,7 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `enquire: pdfjs-dist (optional dependency) is not available. PDF tools require it. ` +
-        `Install with: npm install pdfjs-dist@^5.7.284\nUnderlying error: ${msg}`
+        `Install with: npm install pdfjs-dist@^6.0.227\nUnderlying error: ${msg}`
     );
   }
 }

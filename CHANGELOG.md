@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.52] — 2026-06-18
+
+> **TL;DR:** **Dependency bumps — `pdfjs-dist` 5→6 (closes the deferred major) + a newly-surfaced `hono` advisory batch.** Bumped `pdfjs-dist` `^5.7.284 → ^6.0.227` (v6 engines `>=22.13.0` match ours exactly; the Node `legacy/build` import + `getDocument` API are unchanged — verified by the full PDF/OCR suite + a real-extraction smoke). The bump's `npm install` surfaced **5 newly-published `hono` advisories** (1 high CORS + 4 moderate, on the prod transitive via MCP SDK → @hono/node-server, all `<=4.12.24`) — fixed in-range by bumping the existing `overrides` `hono ^4.12.21 → ^4.12.26` (no major bump). **Tests unchanged (1213).**
+
+**Pre-release (v3.10 line) — dependency bumps: pdfjs 5→6 + hono advisory fix.**
+
+### Changed
+
+- **`pdfjs-dist` `^5.7.284 → ^6.0.227`** (`package.json` optionalDeps + the three install-hint strings in `pdf.ts`/`ocr.ts`/`doctor.ts`). pdfjs v6 requires Node `>=22.13.0 || >=24` — identical to our `engines.node`, so no floor change. We consume the cross-environment `pdfjs-dist/legacy/build/pdf.mjs` build + `getDocument`, whose API is stable across the major (the in-the-wild v6 migration pain is webpack/ESM bundling, which doesn't apply to our Node dynamic import). Verified: all 55 `tests/pdf.test.ts` + `tests/ocr*.test.ts` pass against v6 (they parse real PDF fixtures), `isPdfjsAvailable()` true, full suite green. Closes the rc.48-deferred major bump (dependabot #177).
+- **`hono` override `^4.12.21 → ^4.12.26`** — the pdfjs `npm install` re-resolved hono and surfaced 5 newly-published advisories on `hono <=4.12.24` (prod transitive via `@modelcontextprotocol/sdk` → `@hono/node-server`): GHSA-88fw-hqm2-52qc (high — CORS wildcard reflects Origin with credentials), + 4 moderate (serve-static path traversal on Windows; AWS-Lambda/Lambda@Edge header/cookie handling; body-limit bypass). Most are Lambda-adapter-specific (not our Node `serve-http`), but all are cleared by the in-range bump to 4.12.26 (no `--force`). Scoped audit gate green (only the documented js-yaml GHSA remains allowlisted).
+
+### Tests (1213)
+
+- No new tests — dependency bump + hint-string edits + an override version. Coverage of the bump is the existing PDF/OCR suites against the real v6 package (all green). 1213 unchanged.
+
+---
+
 ## [3.10.0-rc.51] — 2026-06-16
 
 > **TL;DR:** **Re-audit batch 3 (final) — docs-drift LOWs + class-D structural guards.** Two claim-vs-reality doc drifts the gates didn't catch: `docs/api.md` described a **non-existent `--hnsw-persist`** CLI flag (only `--no-hnsw-persist` exists; persistence is opt-out default-on), and `SECURITY.md` asserted a **fixed 4 MB** HTTP body cap while the code DERIVES `max(4 MB, max-file-bytes × 1.5)` (7.5 MB at the default). Both fixed + pinned with a new invariant so they can't recur. **1210 → 1213 source tests.** This closes the rc45-48 re-audit (1 HIGH + 2 MED + 3 LOW all shipped).

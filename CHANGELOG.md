@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.56] — 2026-06-19
+
+> **TL;DR:** **Closes the rc.53 audit — its final 2 LOW findings** (rc.54 closed 16, rc.55 closed 3, of 21 confirmed). **RS-3**: `docs/QUICKSTART.md` still cited `pdfjs-dist@5.7+` as the Node-floor lowest-common-denominator after the rc.52 5→6 bump → `pdfjs-dist@6+`. **FM-3** (documented-rejection verdict): tab-indented YAML frontmatter throws on js-yaml@4 → `parseNote` whole-body fallback — verified NOT a migration regression (the YAML spec forbids tabs for indentation; js-yaml@3/gray-matter enforced it identically) and not data loss (the frontmatter text stays indexed in the body), so it's documented + pinned with a throw-contract test rather than "fixed". **1239 → 1240 source tests.**
+
+**Pre-release (v3.10 line) — rc.53 audit closure.**
+
+### Fixed
+
+- **RS-3 [LOW] — stale `pdfjs-dist@5.7+` reference in QUICKSTART** (`docs/QUICKSTART.md`, 2 sites). The rc.52 bump moved the optional dep to `^6.0.227`, but the Node-floor rationale ("`pdfjs-dist@5.7+` requires `>=22.13.0`") still named the old major. Updated to `pdfjs-dist@6+` (v6 has the same `>=22.13.0` engines floor, so the Node-version rationale is unchanged).
+
+### Documented (rejection verdict)
+
+- **FM-3 [LOW] — tab-indented frontmatter is NOT a migration regression.** The audit flagged that js-yaml@4 throws on tab-indented YAML ("tab characters must not be used in indentation"), after which `parseNote` falls back to treating the whole file as body. Verified this is **not** a behavior change from dropping gray-matter: the YAML spec forbids tabs for indentation and js-yaml@3 (gray-matter's engine) rejected it identically — and on the fallback the frontmatter **text stays indexed and searchable in the body** (no data loss), it simply isn't parsed into structured `data`. Documented in the `src/frontmatter.ts` header and pinned with a throw-contract test, per the project's documented-rejection pattern (don't "fix" a non-bug).
+
+### Tests (1240)
+
+- +1 source `it()` in `tests/frontmatter.test.ts` (tab-indented frontmatter throws — pins the FM-3 contract). 1239 → 1240.
+
+> **Lesson:** an audit finding can be REAL-but-not-a-bug — verify the claimed regression against the prior behavior (here: both YAML engines reject tabs per spec, and the text isn't lost) before "fixing" it; the documented-rejection verdict + a contract test is the right close, not a code change that papers over a non-issue. **This concludes the entire rc.53 audit cascade (21 confirmed + 1 recursion, all shipped or reasoned-rejected across rc.54 → rc.55 → rc.56).**
+
+---
+
 ## [3.10.0-rc.55] — 2026-06-19
 
 > **TL;DR:** **Independent code-correctness batch — 3 findings from the rc.53 audit + 1 recursion the post-rc.54 audit caught.** **CT-LINE-OFFBY1** (`chat_thread_append` `line_start` pointed one line before the appended `### role` heading; new-note branch hardcoded the blank line) → derived from the heading offset across all 3 branches. **CHUNK-SURROGATE-SPLIT** (FTS5 oversize-line hard-cut split surrogate pairs → lone surrogates in the index) → surrogate-safe cut. **OPTDEP-MODULE-PATH-LEAK-02** (optional-dep `import()` errors echoed Node's "imported from /Users/…/dist/…" abs path to serve-http clients — abs-path-leak sibling outside rc.49's Vault scope) → shared `optionalDepDetail` surfaces only the error code, + inventory invariant. **FM-SCALAR-DATE** (rc.54's coercion let a bare top-level Date scalar slip through — a recursion of the class rc.54 closed) → plain-object check. **1233 → 1239 source tests.**

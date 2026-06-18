@@ -48,6 +48,13 @@ describe("parseFrontmatter (rc.53)", () => {
   it("throws on malformed YAML (so parseNote's catch falls back to whole-body) — NEGATIVE control", () => {
     expect(() => parseFrontmatter("---\nkey: : : broken\n  bad: [unclosed\n---\nbody")).toThrow();
   });
+
+  it("throws on TAB-indented frontmatter (rc.56 FM-3 — YAML spec forbids tabs; js-yaml@3 enforced this too)", () => {
+    // Not a migration regression: js-yaml@4 and the dropped js-yaml@3/gray-matter both
+    // reject tabs for indentation. parseNote's catch then falls back to whole-body, so the
+    // frontmatter text stays indexed/searchable — it just isn't parsed into `data`.
+    expect(() => parseFrontmatter("---\nparent:\n\tchild: 1\n---\nbody")).toThrow();
+  });
 });
 
 describe("stringifyFrontmatter (rc.53)", () => {

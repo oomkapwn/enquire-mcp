@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.58] — 2026-06-19
+
+> **TL;DR:** **Fresh 8-lens audit — Batch C+D (3 LOW correctness), closes the audit.** **CT-LASTINDEXOF-COLLISION**: `chatThreadAppend`'s rc.55 `lastIndexOf` could match a heading-like line inside the user's content → wrong `line_start`/past EOF; anchored to the appended block (collision-proof). **CONC-1**: documented the read-modify-write lost-update contract (concurrent same-note appends must be serialized). **FM-DATE-SILENT-MUTATION**: a bare `created: 2026-01-15` was silently rewritten to `2026-01-15T00:00:00.000Z` on any unrelated `frontmatter_set` (breaking date-only Dataview queries + falsifying the rc.54 "ISO dates unaffected" claim) → `stringifyFrontmatter` now renders date-only Dates as `YYYY-MM-DD`. **1246 → 1249 source tests.** Closes the 5-finding fresh audit (1 HIGH + 1 MED + 3 LOW across rc.57+rc.58).
+
+**Pre-release (v3.10 line) — fresh-audit Batch C+D (correctness).**
+
+### Fixed
+
+- **CT-LASTINDEXOF-COLLISION [LOW, recursion of rc.55] — `chat_thread_append` `line_start` could point into user content** (`src/tools/read.ts`). rc.55 derived the line range from `newBody.lastIndexOf(headingMarker)`; if `args.content` embedded a line byte-identical to the freshly-generated `### <role> · <timestamp>` marker (same-second timestamp), `lastIndexOf` matched the **copy inside the content** → `line_start` into user content and `line_end` past EOF (violating the rc.50 no-past-EOF property). Reachability is very low (the timestamp is the server's wall-clock second, not client-controllable), hence LOW. Fixed by anchoring to the **appended block**: `trimmed.length + toAppend.indexOf(headingMarker)` — `toAppend` contains exactly one real heading, which always precedes any user-content copy within `messageBlock`, so first-occurrence `indexOf` is collision-proof.
+- **CONC-1 [LOW] — concurrent appends to the same thread note are a lost-update window** (`src/tools/read.ts`). `chatThreadAppend` is read-modify-`writeNote(overwrite)`, not an atomic `O_APPEND` like `Vault.appendNote`; two appends to the same `note_path` that overlap (a client not awaiting, or concurrent serve-http requests) can drop one message (both read body B; the second write B+msg2 overwrites B+msg1). The TSDoc's understated "last-write-wins" note is rewritten to an explicit **CONCURRENCY CONTRACT**: callers MUST serialize appends to a given thread note. The structural fix (atomic-append the message branch) is deferred — the heading-injection / new-note branches genuinely need a full write, and conflating them risks re-opening the rc.50→rc.55 line-arithmetic class.
+- **FM-DATE-SILENT-MUTATION [LOW] — `frontmatter_set` rewrote a bare date to a full ISO timestamp** (`src/frontmatter.ts`). js-yaml resolves a bare/unquoted `created: 2026-01-15` to a midnight-UTC `Date`, and a naive `dump` re-serialized it as `2026-01-15T00:00:00.000Z` — so a `frontmatter_set` touching ANY other key silently appended a midnight time to every bare date (breaks date-only Dataview/Templater queries) AND falsified the rc.54 header's "ISO dates … unaffected" claim (true only for *quoted* dates). `stringifyFrontmatter` now deep-walks `data` and renders any `Date` with no time-of-day component (midnight UTC) as a `YYYY-MM-DD` string (so the date survives as `'2026-01-15'`, the text preserved, no spurious time); a genuine non-midnight timestamp is left as a full ISO string. The `frontmatter.ts` header claim is corrected to describe this.
+
+### Tests (1249)
+
+- +3 source `it()`: 1 in `tests/chat-thread.test.ts` (CT-LASTINDEXOF collision-proof) + 2 in `tests/frontmatter.test.ts` (FM-DATE round-trip POSITIVE + non-midnight-timestamp NEGATIVE control). 1246 → 1249.
+
+> **Lesson:** rc.58 closed a recursion of rc.55 (CT-LASTINDEXOF — the rc.55 `lastIndexOf` fix introduced a new collision edge) and a residual of rc.54's own header overclaim (FM-DATE — "ISO dates unaffected" was only true for quoted dates) — the project's signature "an audit-driven fix recurs its own class" pattern, the 3rd recursion-pair this session (rc.54→FM-SCALAR-DATE, rc.55→OPTDEP-SQLITE, rc.55→CT-LASTINDEXOF). The fresh-audit-then-fix-then-re-sweep loop is exactly what surfaces these.
+
+---
+
 ## [3.10.0-rc.57] — 2026-06-19
 
 > **TL;DR:** **Fresh 8-lens ultracode audit — Batch A+B (security): a DQL CPU-DoS [HIGH] + a new abs-path-leak instance [MED].** A from-scratch multi-lens workflow-audit (24 agents, 3-skeptic adversarial verify) of the shipped rc.54→rc.56 line returned 5 confirmed findings (1 HIGH / 1 MED / 3 LOW). This RC ships the two security ones. **DQL-PARSE-QUADRATIC-DOS [HIGH]**: the always-registered read-only `obsidian_dataview_query` had no length cap and an O(n²) clause tokenizer → a long query pins the main event loop (DoS for all serve-http clients). **OPTDEP-SQLITE-PATH-LEAK-EMBEDDB [MED]**: `embed-db.ts` + `fts5.ts` `better-sqlite3` import errors leaked the host abs path to clients (a new instance of the rc.55 OPTDEP class my line-oriented grep-sweep missed). Both fixed with a fail-closed cap / shared sanitizer + an extended structural inventory invariant. **1240 → 1246 source tests.**

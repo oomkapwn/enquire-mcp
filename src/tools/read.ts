@@ -885,8 +885,17 @@ const CHAT_THREAD_TITLE_RE = /^## Chat: (.+?)\s*$/m;
  * agents can search past threads by content like any other note.
  *
  * Appending always creates a fresh `### <role> · <timestamp>` block, never
- * mutates existing messages. Safe to call concurrently if note writes don't
- * collide (last-write-wins on simultaneous appends to same note).
+ * mutates existing messages.
+ *
+ * CONCURRENCY CONTRACT (v3.10.0-rc.58, audit CONC-1): this is a read-modify-WRITE
+ * (read the note → append in memory → `writeNote(overwrite)`), NOT an atomic
+ * O_APPEND like `Vault.appendNote`. Two appends to the SAME `note_path` that
+ * overlap (e.g. a client firing two without awaiting, or concurrent serve-http
+ * requests) are a lost-update window: both read body B, and the second write
+ * (B + msg2) overwrites the first (B + msg1), dropping msg1. Callers MUST
+ * serialize appends to a given thread note (await each before the next). This is
+ * an accepted design characteristic — the heading-injection / new-note branches
+ * genuinely need a full write, so routing through atomic append is deferred.
  *
  * @param vault - The vault. Must allow writes (i.e. the server was started
  *   with `--enable-writes`).
@@ -955,7 +964,14 @@ export async function chatThreadAppend(
   const newBody = trimmed + toAppend;
   const result = await vault.writeNote(targetRel, newBody, { overwrite: existed });
   const headingMarker = `### ${role} · ${timestamp}`;
-  const headingOffset = newBody.lastIndexOf(headingMarker);
+  // v3.10.0-rc.58 (CT-LASTINDEXOF-COLLISION) — anchor the offset to the APPENDED block, not
+  // the whole document: `newBody.lastIndexOf` could match a byte-identical line inside
+  // `args.content` (if it embeds the exact same-second `### role · ts` marker) → line_start
+  // into user content / past EOF. `toAppend` contains exactly ONE real heading, and it always
+  // PRECEDES any user-content copy within `messageBlock` (`\n### role · ts\n\n<content>\n`),
+  // so `indexOf` (first occurrence) inside `toAppend` is collision-proof.
+  const appendOffset = toAppend.indexOf(headingMarker);
+  const headingOffset = appendOffset >= 0 ? trimmed.length + appendOffset : -1;
   const lineStart =
     headingOffset >= 0 ? newBody.slice(0, headingOffset).split("\n").length : (trimmed.match(/\n/g) ?? []).length + 1;
   // line_end spans through the message's last content line: the heading line plus the

@@ -92,6 +92,24 @@ describe("chat_thread_append (v2.2.0)", () => {
     expect(c.line_end).toBeLessThanOrEqual(total);
   });
 
+  it("line_start is collision-proof when content embeds a heading-like line (rc.58 CT-LASTINDEXOF-COLLISION)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Content that embeds a line shaped like the `### role · ts` heading. Pre-rc.58
+    // `newBody.lastIndexOf(headingMarker)` could match the copy INSIDE the content →
+    // line_start past EOF. The fix anchors to the appended block (first occurrence = the
+    // real heading, which always precedes the content copy).
+    const res = await chatThreadAppend(v, {
+      note_path: "collide.md",
+      role: "user",
+      content: "quoting an old heading:\n### user · 2020-01-01T00:00:00Z"
+    });
+    const lines = (await fs.readFile(path.join(root, "collide.md"), "utf8")).split("\n");
+    // line_start must land on the REAL appended heading and be within the file.
+    expect(lines[res.line_start - 1] ?? "").toMatch(/^### user · /);
+    expect(res.line_end, "line_end must not point past EOF").toBeLessThanOrEqual(lines.length);
+  });
+
   it("rejects empty path / content", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

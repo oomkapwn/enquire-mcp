@@ -27,6 +27,13 @@
 // Scope vs gray-matter: we support ONLY the default `---` delimiter (Obsidian's
 // frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, sections, and a
 // non-mapping top-level document (coerced to `{}`, gray-matter parity) are out of scope.
+//
+// TAB-INDENTED YAML (v3.10.0-rc.56 audit FM-3, verdict: NOT a regression): js-yaml@4
+// throws "tab characters must not be used in indentation" — but the YAML spec FORBIDS
+// tabs for indentation and js-yaml@3 (gray-matter) enforced this identically, so this is
+// not a behavior change from the migration. On a throw, callers (`parseNote`) fall back
+// to treating the whole file as body — the frontmatter TEXT is still indexed/searchable
+// (no data loss), it just isn't parsed into structured `data`. Pinned in tests.
 
 import { dump, load } from "js-yaml";
 

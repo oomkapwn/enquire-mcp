@@ -59,7 +59,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 27 }, // current 27.27% (integration-dep; rc.45 abs-path-leak fix removed the 2 covered `instanceof Error`/`String()` branch arms in offlineModelLoadError → floor 28→27, documented in CHANGELOG; applyOfflineEnv + offline-catch still need a real model load to cover)
+  "src/embeddings.ts": { branches: 27 }, // current 29.41% (integration-dep; rc.55 OPTDEP fix removed the 2 import-catch `instanceof Error`/`String(err)` ternary arms → branch% rose 27.27→29.41; floor kept at 27 as margin; applyOfflineEnv + offline-catch still need a real model load to cover)
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a
@@ -69,7 +69,7 @@ const FLOORS = {
   // rc.23 — ocr.ts gains a `lines` floor too: it's the #16 offline-enforcement
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.
-  "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 65.30% / lines 44.44%
+  "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 74.41% / lines 45.97% (rc.55 OPTDEP fix dropped the 3 import-catch `err.message` ternaries → branch% rose; floors kept as margin)
   "src/http-transport.ts": { branches: 65 }, // current 77.61% (v3.10.0-rc.19 M3 removed 4 redundant signal handlers — fewer uncovered branches)
   "src/doctor.ts": { branches: 64 }, // current 70.22% (rc.12 exported candidateModelCacheRoots + cache-path tests lifted it)
   "src/tools/search.ts": { branches: 66 }, // current 69.71% (rc.10 frontmatter-filter helpers + matches-loop branch lifted it)

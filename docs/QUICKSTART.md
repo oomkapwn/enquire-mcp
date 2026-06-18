@@ -13,7 +13,7 @@ From `npm install` to a working **long-term memory layer for your AI agents**, b
 
 ## Prerequisites
 
-- **Node 22.13+ required** (since v3.7.13 the `engines.node` floor matches the CI matrix — `pdfjs-dist@5.7+` requires `>=22.13.0` and CI tests Node 22 + 24). On Node 20 the install will reject with `unsupported engine`; if you need Node 20 for non-PDF use cases, pin to v3.7.12 or earlier.
+- **Node 22.13+ required** (since v3.7.13 the `engines.node` floor matches the CI matrix — `pdfjs-dist@6+` requires `>=22.13.0` and CI tests Node 22 + 24). On Node 20 the install will reject with `unsupported engine`; if you need Node 20 for non-PDF use cases, pin to v3.7.12 or earlier.
 - **An Obsidian vault folder** — any directory containing `.md` files. If you don't have one, `mkdir ~/TestVault && echo "# Hello" > ~/TestVault/note.md` is enough to follow this guide.
 - **An MCP client** — one of: Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT (with remote MCP), Codex, OpenClaw, or any other MCP-compatible client.
 
@@ -141,7 +141,7 @@ The drop-in hybrid config is in [`examples/claude-desktop-hybrid.json`](../examp
 
 **`enquire-mcp: command not found`.** The npm global bin directory isn't on your `PATH`. Run `npm config get prefix` to find it, then add `<prefix>/bin` to your `PATH` — or switch to the `npx` form of the Claude Desktop config (see Step 3): `"command": "npx"`, `"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/abs/path"]`.
 
-**`ENOENT` or `unsupported engine` on install.** You're on Node < 22.13. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 22 && nvm use 22`). enquire-mcp's CI matrix tests Node 22 + 24, and since v3.7.13 the `engines.node` floor matches that matrix (`>=22.13.0` — `pdfjs-dist@5.7+` is the lowest common denominator). For non-PDF Node 20 users, pin to v3.7.12.
+**`ENOENT` or `unsupported engine` on install.** You're on Node < 22.13. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 22 && nvm use 22`). enquire-mcp's CI matrix tests Node 22 + 24, and since v3.7.13 the `engines.node` floor matches that matrix (`>=22.13.0` — `pdfjs-dist@6+` is the lowest common denominator). For non-PDF Node 20 users, pin to v3.7.12.
 
 **`Error: vault path does not exist`.** Either the path is wrong, or you used `~` instead of the absolute form. MCP clients don't expand `~` — use `/Users/you/MyVault` on macOS/Linux or `C:\Users\you\MyVault` on Windows. Paths containing spaces are fine as long as the JSON string itself is well-formed; no shell escaping needed inside `claude_desktop_config.json`.
 

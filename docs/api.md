@@ -799,7 +799,7 @@ Add a user / assistant / system message to a note's `## Chat: <title>` block. Cr
 
 ### `obsidian_frontmatter_set`
 
-Surgical YAML manipulation: set one or more frontmatter keys, or remove them by passing `null` as the value. Round-trips through gray-matter (the same parser used at write time) so YAML formatting / quoting / type-coercion stays consistent.
+Surgical YAML manipulation: set one or more frontmatter keys, or remove them by passing `null` as the value. Round-trips through the shared `js-yaml@4` frontmatter parser (the same one used at write time) so YAML formatting / quoting / type-coercion stays consistent.
 
 | Argument  | Type                       | Notes                                                                       |
 |-----------|----------------------------|-----------------------------------------------------------------------------|

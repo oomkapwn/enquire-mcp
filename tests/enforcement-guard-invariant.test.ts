@@ -48,7 +48,14 @@ const GUARANTEES: Array<{ label: string; marker: string; symbol: string }> = [
   { label: "OCR per-call page cap", marker: "DEFAULT_OCR_MAX_PAGES", symbol: "DEFAULT_OCR_MAX_PAGES" },
   { label: "restrictive file mode 0600", marker: "0600", symbol: "0o600" },
   { label: "restrictive dir mode 0700", marker: "0700", symbol: "0o700" },
-  { label: "YAML parsed via SAFE_SCHEMA (no code-exec)", marker: "SAFE_SCHEMA", symbol: "SAFE_SCHEMA" },
+  // v3.10.0-rc.54 — rc.53 dropped gray-matter + js-yaml@3's `SAFE_SCHEMA`; YAML now parses via
+  // js-yaml@4's default `load` (YAML 1.2 core schema, safe-by-default — no `!!js/function` code-exec
+  // tag). The guard symbol is the `js-yaml` import (the safe default API, not a custom schema re-enabling unsafe tags).
+  {
+    label: "YAML parsed via js-yaml@4 safe `load` (no !!js/function code-exec)",
+    marker: "!!js/function",
+    symbol: "js-yaml"
+  },
   { label: "HTTP session idle eviction (memory bound)", marker: "Idle eviction", symbol: "sweepIdle" },
   { label: "CORS omits credentials on wildcard", marker: "Allow-Credentials", symbol: "Allow-Credentials" }
 ];

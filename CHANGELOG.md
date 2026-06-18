@@ -2,9 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.54] — 2026-06-19
+
+> **TL;DR:** **Frontmatter-migration hardening — overclaim #20 + a real corruption bug + the gray-matter doc-drift sweep.** The post-rc.53 state-driven audit confirmed the js-yaml@4 migration is fundamentally SOUND, but rc.53's **"byte-identical port"** claim was an overclaim (**#20**): js-yaml@4 is YAML **1.2** vs gray-matter's js-yaml@3 YAML **1.1**, so SCALAR resolution diverges (`0755`→755 not 493, `12:34:56`→string not 45296, `1_000`→string not 1000). The claim is now scoped to STRUCTURAL parsing and the divergence pinned as a deliberate contract. Also fixes a **real corruption bug** (a non-mapping frontmatter doc was cast to `Record` and would be written back char-indexed by `frontmatter_set`), a **pre-existing SECURITY.md enforcement overclaim** (`.base` YAML "no anchor-expansion / YAML bomb rejected" — js-yaml does neither), the full gray-matter→js-yaml doc-drift sweep, and SC-1 (drop the `@huggingface/transformers` dev/optional dep duplication). New structural guard: `tests/no-graymatter-invariant.test.ts`. **1224 → 1233 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.53 audit response.**
+
+### Fixed
+
+- **Overclaim #20 — rc.53 "byte-identical port" (claimed-guarantee-vs-reality).** `src/frontmatter.ts` ran on js-yaml@4 (YAML 1.2 core) while gray-matter used js-yaml@3 (YAML 1.1); they resolve some scalars DIFFERENTLY — bare octal `0755`→`755` (was `493`), leading-zero `0888`→`888` (was `"0888"`), sexagesimal `12:34:56`→`"12:34:56"` (was int `45296`), underscore `1_000`→`"1_000"` (was `1000`). The rc.53 differential corpus contained none of these shapes, so the diff "passed" while incomplete on the scalar dimension. The header comment now scopes "byte-identical" to STRUCTURAL parsing and documents the divergence; `tests/frontmatter.test.ts` pins the 4 scalar resolutions as a deliberate js-yaml@4 contract. CHANGELOG rc.53 wording corrected inline.
+- **FM-SCALAR (corruption) — a NON-mapping frontmatter document was cast to `Record`.** A frontmatter block that's a bare scalar (`---\nhello\n---`) or a sequence (`---\n- a\n- b\n---`) was returned as `data` and would be spread char-indexed by `frontmatter_set`, writing corrupt YAML back. `parseFrontmatter` now coerces any non-object/array top-level document to `{}` (gray-matter parity). +2 guards.
+- **SECURITY.md `.base` enforcement overclaim (claimed-guarantee-vs-code-guard).** The threat-model claimed YAML is parsed "via `SAFE_SCHEMA` … No anchor-expansion … A YAML bomb … is rejected at parse time" — but js-yaml (v3 AND v4) resolves anchors/aliases and has no billion-laughs guard, so this was a PRE-EXISTING overclaim (true even under gray-matter). Rewritten to the enforced reality: js-yaml@4 default `load` (YAML 1.2 core schema, safe-by-default — no `!!js/function`), the merge-key quadratic DoS fixed in v4, alias bombs NOT specifically rejected and bounded only by the single-user local-vault threat model.
+- **gray-matter doc-drift sweep.** README, SECURITY.md, `docs/api.md`, CONTRIBUTING.md, `typedoc.json`, and the `read.ts` / `write.ts` TSDoc still named gray-matter as the live frontmatter engine ~1 RC after its removal → all updated to js-yaml@4 (CONTRIBUTING mandatory-deps `gray-matter`→`js-yaml`; `typedoc.json` 44→45 tools).
+- **SC-1 — `@huggingface/transformers` was declared in BOTH `devDependencies` and `optionalDependencies`.** Removed the dev duplicate (it's a runtime-optional dep — needed for `build-embeddings` / `--enable-reranker`). This also correctly scopes its `protobufjs` subtree as a prod-optional dependency in `npm audit` (already covered by the `overrides` → 7.6.4 pin).
+
+### Added
+
+- **`tests/no-graymatter-invariant.test.ts`** — structural guard (auto-tracked by the META-invariant): fails CI if `gray-matter` reappears as a declared dependency in any `package.json` section OR is imported/required in any `src/**/*.ts` module. Prose mentions in comments (documenting the port's provenance) are intentionally allowed; the detector matches only an actual import/require (+ NEGATIVE control proving it isn't vacuous).
+- **`tests/frontmatter.test.ts`** scalar-contract block — 4 `it()`s pinning the YAML-1.2 resolutions (octal/leading-zero/sexagesimal/underscore) as a deliberate, documented contract + 2 non-mapping-coercion guards (bare scalar → `{}`, sequence → `{}`).
+
+### Tests (1233)
+
+- +9 source `it()`: 6 in `tests/frontmatter.test.ts` (4 scalar-contract + 2 FM-SCALAR coercion) + 3 in the new `tests/no-graymatter-invariant.test.ts` (2 POSITIVE + 1 NEGATIVE control). 1224 → 1233.
+
+> **Lesson:** a parser migration's differential corpus must cover the SCALAR-RESOLUTION dimension, not just the structural split — two parsers can be byte-identical on delimiters/stringify and still resolve `0755` differently. "Byte-identical port" is exactly the enforced-guarantee claim that the marathon's audit-after-each-stage gate is meant to catch — and it did, one RC later.
+
+---
+
 ## [3.10.0-rc.53] — 2026-06-19
 
-> **TL;DR:** **Dropped gray-matter → js-yaml@4; the js-yaml advisory is now RESOLVED, not allowlisted (tree fully clean).** gray-matter@4 hard-binds js-yaml@3's removed `safeLoad`/`safeDump`, which pinned the vulnerable js-yaml@3 (GHSA-h67p-54hq-rp68) in the tree with no v3 fix. Replaced it with a tiny in-repo `src/frontmatter.ts` (a faithful PORT of gray-matter's split + stringify, **differentially validated byte-identical** against gray-matter over a broad corpus before removal) on **js-yaml@4.2.0** (whose `load`/`dump` are safe-by-default). The scoped audit `ALLOWLIST` is now **empty** — strictest posture. **1213 → 1224 source tests.**
+> **TL;DR:** **Dropped gray-matter → js-yaml@4; the js-yaml advisory is now RESOLVED, not allowlisted (tree fully clean).** gray-matter@4 hard-binds js-yaml@3's removed `safeLoad`/`safeDump`, which pinned the vulnerable js-yaml@3 (GHSA-h67p-54hq-rp68) in the tree with no v3 fix. Replaced it with a tiny in-repo `src/frontmatter.ts` (a faithful PORT of gray-matter's split + stringify, differentially validated byte-identical on the STRUCTURAL paths — delimiter split + stringify — over a broad corpus before removal) on **js-yaml@4.2.0** (whose `load`/`dump` are safe-by-default). The scoped audit `ALLOWLIST` is now **empty** — strictest posture. **1213 → 1224 source tests.** _(Correction in rc.54: "byte-identical" holds for STRUCTURAL parsing only — js-yaml@4 is YAML 1.2, so SCALAR resolution diverges from gray-matter's js-yaml@3/YAML-1.1 on octal/sexagesimal/underscore shapes; see the rc.54 entry.)_
 
 **Pre-release (v3.10 line) — gray-matter → js-yaml@4 migration (resolves #170).**
 
@@ -15,7 +42,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Added
 
-- **`tests/frontmatter.test.ts`** — standalone CI guard for the new module (simple/empty/comment-only/`----`-guard/CRLF/BOM-via-parser/verbatim-suffix parse cases + round-trip + date-string fidelity + a malformed-YAML-throws NEGATIVE control). A dev-only differential test (vs gray-matter, byte-identical over the corpus) validated the port pre-removal and was then deleted (it imported the removed dep).
+- **`tests/frontmatter.test.ts`** — standalone CI guard for the new module (simple/empty/comment-only/`----`-guard/CRLF/BOM-via-parser/verbatim-suffix parse cases + round-trip + date-string fidelity + a malformed-YAML-throws NEGATIVE control). A dev-only differential test (vs gray-matter, byte-identical on the structural-parse corpus; see the rc.54 scalar-resolution caveat) validated the port pre-removal and was then deleted (it imported the removed dep).
 
 ### Tests (1224)
 

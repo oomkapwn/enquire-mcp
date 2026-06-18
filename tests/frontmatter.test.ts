@@ -69,3 +69,32 @@ describe("stringifyFrontmatter (rc.53)", () => {
     expect(typeof parseFrontmatter(out).data.due).toBe("string");
   });
 });
+
+describe("YAML-1.2 scalar resolution — the documented js-yaml@4 contract (rc.54 FM-1/SC-2)", () => {
+  // These shapes resolve DIFFERENTLY than the dropped gray-matter (js-yaml@3, YAML 1.1).
+  // Pinned here so the divergence is a deliberate, gated contract — NOT silently
+  // re-asserted as "byte-identical". js-yaml@4 (YAML 1.2 core) is the intended default.
+  it("bare octal `0755` resolves to decimal 755 (YAML 1.2), not 493 (YAML 1.1 octal)", () => {
+    expect(parseFrontmatter("---\nmode: 0755\n---\nb").data.mode).toBe(755);
+  });
+  it("leading-zero `0888` resolves to number 888 (YAML 1.2), not the v3 string '0888'", () => {
+    expect(parseFrontmatter("---\nzip: 0888\n---\nb").data.zip).toBe(888);
+  });
+  it("sexagesimal `12:34:56` stays a STRING (YAML 1.2), not the v3 integer 45296", () => {
+    expect(parseFrontmatter("---\nt: 12:34:56\n---\nb").data.t).toBe("12:34:56");
+  });
+  it("underscore-grouped `1_000` stays a STRING (YAML 1.2), not the v3 integer 1000", () => {
+    expect(parseFrontmatter("---\nn: 1_000\n---\nb").data.n).toBe("1_000");
+  });
+});
+
+describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard)", () => {
+  // A bare scalar / sequence top-level document must coerce to {} (gray-matter parity),
+  // NOT be cast to Record and later spread char-indexed by frontmatter_set (corrupt write).
+  it("a bare-scalar frontmatter block → {} (not a char-indexed object)", () => {
+    expect(parseFrontmatter("---\njust a scalar string\n---\nbody").data).toEqual({});
+  });
+  it("a sequence frontmatter block → {} (NEGATIVE control — arrays are not mappings)", () => {
+    expect(parseFrontmatter("---\n- a\n- b\n---\nbody").data).toEqual({});
+  });
+});

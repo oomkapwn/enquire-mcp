@@ -30,7 +30,7 @@ node scripts/smoke.mjs ~/Documents/MyVault
 - Lockstep cross-cutting refactors (e.g. swapping the tool registration pattern). Open an issue first.
 - New runtime dependencies unless the case is overwhelming. We currently ship **5 mandatory** and **6 optional** (each opt-in via a CLI flag and lazy-loaded — markdown-only path stays zero-cost):
 
-  **Mandatory:** `@modelcontextprotocol/sdk`, `chokidar`, `commander`, `gray-matter`, `zod`.
+  **Mandatory:** `@modelcontextprotocol/sdk`, `chokidar`, `commander`, `js-yaml`, `zod`.
 
   **Optional (feature-gated):**
   - `better-sqlite3` — required by `--persistent-index` (FTS5) and `build-embeddings` (embed-db).

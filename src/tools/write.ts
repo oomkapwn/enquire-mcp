@@ -393,7 +393,7 @@ export interface FrontmatterSetArgs {
 
 /**
  * Atomic YAML frontmatter mutation — set, update, or delete keys via a
- * gray-matter round-trip.
+ * `parseFrontmatter`∘`stringifyFrontmatter` round-trip (js-yaml@4).
  *
  * Replaces the error-prone "find/replace YAML text" pattern. Parses the
  * frontmatter, applies the diff, re-serializes via js-yaml (so date-like
@@ -463,7 +463,7 @@ export async function frontmatterSet(
   // Round-trip via the shared frontmatter serializer — same writer pattern as createNote.
   let newDoc = stringifyFrontmatter(note.parsed.body, after);
   // v3.10.0-rc.48 (roundtrip-serialization-fidelity) — `stringifyFrontmatter` always
-  // appends a trailing "\n" to the body (gray-matter parity). The parser's `.body`
+  // appends a trailing "\n" to the body (the behavior ported from gray-matter). The parser's `.body`
   // faithfully preserves the original body's trailing-newline state, so if the body had NO
   // trailing newline, dropping the one stringify added keeps a frontmatter-only
   // edit byte-faithful to the rest of the file (it must only touch the YAML).

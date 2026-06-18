@@ -1078,8 +1078,8 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
 // ─── obsidian_frontmatter_{get,set,search} (v2.3.0 — atomic YAML ops) ──────
 // Surgical YAML manipulation. Pre-fix, agents wanting to set `status:
 // published` on 12 notes had to find/replace text — error-prone (multi-line
-// strings, special chars, key-collision). Now: parse via gray-matter, edit,
-// rewrite. Code-fence-aware via gray-matter (frontmatter is delimited
+// strings, special chars, key-collision). Now: parse via `parseFrontmatter`
+// (js-yaml@4), edit, rewrite. Delimiter-aware (frontmatter is delimited
 // strictly by leading `---`, so no fence ambiguity).
 //
 // _get is read-only; _set + _delete are write-gated.

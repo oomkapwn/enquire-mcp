@@ -7,16 +7,26 @@
 // ourselves on js-yaml@4 (whose `load`/`dump` are safe-by-default — the v3 `safeLoad`/
 // `safeDump` semantics).
 //
-// The split + stringify logic below is a faithful PORT of gray-matter's own
+// The STRUCTURAL split + stringify logic below is a faithful PORT of gray-matter's own
 // `index.js#parseMatter` + `lib/stringify.js` (delimiter handling, the `----` guard, the
-// comment-only-emptiness check, the CR/LF strip after the closing fence, the `newline()`
-// join), with only the YAML engine swapped. A differential test
-// (`tests/frontmatter.test.ts`) validated byte-identical `{data,content}` + stringify
-// output against gray-matter over a broad corpus before gray-matter was removed.
+// comment-only-emptiness check, the CR/LF strip after the closing fence, the UTF-8 BOM
+// strip, the `newline()` join) — a dev-only differential test (since deleted; it imported
+// gray-matter) confirmed byte-identical `{data,content}` + stringify on those STRUCTURAL
+// paths over a broad corpus.
+//
+// NOT byte-identical on SCALAR RESOLUTION (v3.10.0-rc.54 audit FM-1/SC-2): the engine is
+// js-yaml@4 (YAML 1.2 core), whereas gray-matter used js-yaml@3 (YAML 1.1). They resolve
+// some scalar shapes DIFFERENTLY, so a `frontmatter_set` edit re-persists them per js-yaml@4:
+//   • bare octal `0755` → 755 (v3: 493)    • leading-zero `0888` → 888 (v3: "0888")
+//   • sexagesimal `12:34:56` / `1:30` → string (v3: 45296 / 90 ints)
+//   • underscore ints `1_000` → "1_000" string (v3: 1000)
+// js-yaml@4 (YAML 1.2) is the intended modern default; these cases are pinned in
+// `tests/frontmatter.test.ts` as the documented contract, not silently re-asserted as
+// "byte-identical". Common frontmatter (tags, ISO dates, plain strings/ints) is unaffected.
 //
 // Scope vs gray-matter: we support ONLY the default `---` delimiter (Obsidian's
-// frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, and sections are
-// not supported — Obsidian never produces them.
+// frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, sections, and a
+// non-mapping top-level document (coerced to `{}`, gray-matter parity) are out of scope.
 
 import { dump, load } from "js-yaml";
 
@@ -60,7 +70,12 @@ export function parseFrontmatter(input: string): Frontmatter {
   const block = matterBlock.replace(/^\s*#[^\n]+/gm, "").trim();
   let data: Record<string, unknown> = {};
   if (block !== "") {
-    data = (load(matterBlock) ?? {}) as Record<string, unknown>;
+    // v3.10.0-rc.54 (audit FM-SCALAR) — coerce a NON-MAPPING document (scalar / array /
+    // null) to {} the way gray-matter did. Otherwise a frontmatter block that's a bare
+    // scalar (`---\nhello\n---`) or a sequence (`---\n- a\n- b\n---`) would be cast to
+    // Record and later spread char-indexed by frontmatter_set, writing corrupt YAML back.
+    const loaded = load(matterBlock);
+    data = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? (loaded as Record<string, unknown>) : {};
   }
 
   let content: string;

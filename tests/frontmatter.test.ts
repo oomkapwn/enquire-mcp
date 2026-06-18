@@ -110,3 +110,23 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
     expect(parseFrontmatter("---\n2026-01-01T10:00:00Z\n---\nbody").data).toEqual({});
   });
 });
+
+describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {
+  it("a bare date survives an unrelated frontmatter_set without gaining a time component", () => {
+    // js-yaml resolves `created: 2026-01-15` (bare) to a midnight-UTC Date; a naive dump
+    // re-serialized it as `2026-01-15T00:00:00.000Z`, silently corrupting an untouched field
+    // on any unrelated edit. stringifyFrontmatter now renders date-only Dates as YYYY-MM-DD.
+    const { data } = parseFrontmatter("---\ncreated: 2026-01-15\nstatus: draft\n---\nbody");
+    data.status = "published"; // unrelated edit
+    const out = stringifyFrontmatter("body", data);
+    expect(out, "no spurious ISO time appended to the bare date").not.toMatch(/T00:00:00/);
+    expect(out).toMatch(/created: '?2026-01-15'?/); // date text preserved (bare or quoted)
+    // and re-parsing keeps the date text
+    expect(String((parseFrontmatter(out).data as { created: unknown }).created)).toContain("2026-01-15");
+  });
+
+  it("a genuine non-midnight timestamp is left as a full ISO timestamp (NEGATIVE control — not over-normalizing)", () => {
+    const out = stringifyFrontmatter("b", { at: new Date("2026-01-15T13:45:00.000Z") });
+    expect(out).toMatch(/2026-01-15T13:45:00/);
+  });
+});

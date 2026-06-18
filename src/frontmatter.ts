@@ -22,7 +22,16 @@
 //   • underscore ints `1_000` → "1_000" string (v3: 1000)
 // js-yaml@4 (YAML 1.2) is the intended modern default; these cases are pinned in
 // `tests/frontmatter.test.ts` as the documented contract, not silently re-asserted as
-// "byte-identical". Common frontmatter (tags, ISO dates, plain strings/ints) is unaffected.
+// "byte-identical". Common frontmatter (tags, plain strings/ints) is unaffected.
+//
+// BARE (unquoted) DATES (v3.10.0-rc.58 audit FM-DATE-SILENT-MUTATION): js-yaml (v3 AND v4)
+// resolves a bare `created: 2026-01-15` to a JS `Date`, and a naive `dump` re-serializes it
+// as a full ISO timestamp `2026-01-15T00:00:00.000Z` — so a `frontmatter_set` on an UNRELATED
+// key silently appended a midnight time to every bare date (breaking date-only Dataview
+// queries). `stringifyFrontmatter` now normalizes any `Date` with no time-of-day component
+// (midnight UTC) back to a `YYYY-MM-DD` string before dump, so an unrelated edit preserves the
+// date (it becomes a quoted `'2026-01-15'`, semantically the same date — no spurious time). A
+// genuine non-midnight timestamp is left as a full ISO string.
 //
 // Scope vs gray-matter: we support ONLY the default `---` delimiter (Obsidian's
 // frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, sections, and a
@@ -118,6 +127,31 @@ function withNewline(s: string): string {
 }
 
 /**
+ * v3.10.0-rc.58 (FM-DATE-SILENT-MUTATION) — deep-clone `value`, converting any `Date` with
+ * NO time-of-day component (exactly midnight UTC) to a `YYYY-MM-DD` string so `dump` emits a
+ * date-only scalar instead of a full ISO timestamp. A genuine timestamp (any non-zero
+ * time-of-day) is left as a `Date` (dump → full ISO). Recurses through arrays + plain objects;
+ * all other values pass through untouched. Pure (no input mutation).
+ */
+function normalizeDateOnly(value: unknown): unknown {
+  if (value instanceof Date) {
+    const midnightUtc =
+      value.getUTCHours() === 0 &&
+      value.getUTCMinutes() === 0 &&
+      value.getUTCSeconds() === 0 &&
+      value.getUTCMilliseconds() === 0;
+    return midnightUtc && !Number.isNaN(value.getTime()) ? value.toISOString().slice(0, 10) : value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeDateOnly);
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = normalizeDateOnly(v);
+    return out;
+  }
+  return value;
+}
+
+/**
  * Serialize `data` as a YAML frontmatter block prepended to `content` (faithful
  * gray-matter `stringify` port). Empty `{}` → `content` verbatim (with a trailing
  * newline, matching gray-matter).
@@ -126,7 +160,8 @@ function withNewline(s: string): string {
  * @param data - Frontmatter object.
  */
 export function stringifyFrontmatter(content: string, data: Record<string, unknown>): string {
-  const dumped = dump(data).trim();
+  // rc.58 (FM-DATE-SILENT-MUTATION) — render bare/date-only Dates as YYYY-MM-DD, not full ISO.
+  const dumped = dump(normalizeDateOnly(data) as Record<string, unknown>).trim();
   const block = dumped !== "{}" ? withNewline(OPEN) + withNewline(dumped) + withNewline(OPEN) : "";
   return block + withNewline(content);
 }

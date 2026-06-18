@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import matter from "gray-matter";
+import { stringifyFrontmatter } from "../frontmatter.js";
 import { foldName } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -9,8 +9,8 @@ import { findBestMatch, stripMd } from "./meta.js";
  * Create a new note (or overwrite an existing one) with optional YAML
  * frontmatter.
  *
- * Frontmatter is serialized via gray-matter (js-yaml underneath), so values
- * like dates / lists / pipe-containing strings round-trip cleanly without
+ * Frontmatter is serialized via the shared `stringifyFrontmatter` (js-yaml
+ * underneath), so values like dates / lists / pipe-containing strings round-trip cleanly without
  * the hand-rolled-YAML corruption the old composer suffered. WRITE TOOL —
  * only registered when the server is started with `--enable-write`.
  *
@@ -460,11 +460,11 @@ export async function frontmatterSet(
   if (changed.length === 0 || args.dry_run === true) {
     return { path: target.relPath, changed_keys: changed, before, after, dry_run: args.dry_run === true };
   }
-  // Round-trip via gray-matter — same writer pattern as createNote.
-  let newDoc = matter.stringify(note.parsed.body, after);
-  // v3.10.0-rc.48 (roundtrip-serialization-fidelity) — `matter.stringify` always
-  // appends a trailing "\n" to the body. gray-matter's `.content` faithfully
-  // preserves the original body's trailing-newline state, so if the body had NO
+  // Round-trip via the shared frontmatter serializer — same writer pattern as createNote.
+  let newDoc = stringifyFrontmatter(note.parsed.body, after);
+  // v3.10.0-rc.48 (roundtrip-serialization-fidelity) — `stringifyFrontmatter` always
+  // appends a trailing "\n" to the body (gray-matter parity). The parser's `.body`
+  // faithfully preserves the original body's trailing-newline state, so if the body had NO
   // trailing newline, dropping the one stringify added keeps a frontmatter-only
   // edit byte-faithful to the rest of the file (it must only touch the YAML).
   if (!note.parsed.body.endsWith("\n") && newDoc.endsWith("\n")) {
@@ -877,7 +877,7 @@ export function replaceStringOutsideCodeFences(
 /**
  * Compose a complete note string from optional frontmatter and a body.
  *
- * Delegates to gray-matter's `stringify` (backed by js-yaml) so YAML-special
+ * Delegates to the shared `stringifyFrontmatter` (backed by js-yaml) so YAML-special
  * strings — date-like (`"2026-05-03"`), `!`-prefixed, pipe-containing, etc.
  * — round-trip safely. Replaces an older hand-rolled renderer that
  * silently corrupted a long tail of valid string values. Empty / missing
@@ -898,12 +898,12 @@ export function replaceStringOutsideCodeFences(
  */
 export function composeNote(frontmatter: Record<string, unknown> | undefined, content: string): string {
   if (!frontmatter || Object.keys(frontmatter).length === 0) return content;
-  // Use gray-matter's stringify (backed by js-yaml) so YAML-special strings —
+  // Use `stringifyFrontmatter` (backed by js-yaml) so YAML-special strings —
   // date-like ("2026-05-03"), !-prefixed, pipe-containing, etc. — are
   // round-trip-safe. The hand-rolled renderer this replaced silently corrupted
   // a long tail of valid string values (e.g. "due: 2026-05-03" came back as a
   // Date object on read).
-  return matter.stringify(content, frontmatter);
+  return stringifyFrontmatter(content, frontmatter);
 }
 
 /**

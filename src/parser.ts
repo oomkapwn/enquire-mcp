@@ -1,4 +1,4 @@
-import matter from "gray-matter";
+import { parseFrontmatter } from "./frontmatter.js";
 
 /**
  * A parsed Obsidian wikilink (`[[Target]]`, `[[Target#section]]`,
@@ -58,7 +58,7 @@ export interface ParsedNote {
 
 /**
  * Parse an Obsidian markdown source string. Splits frontmatter (via
- * `gray-matter`) from body, then extracts wikilinks, embeds, and tags
+ * `parseFrontmatter`) from body, then extracts wikilinks, embeds, and tags
  * from a code-stripped view of the body. Malformed YAML falls back to
  * treating the whole input as body (no throw).
  *
@@ -76,7 +76,7 @@ export function parseNote(source: string): ParsedNote {
   let frontmatter: Record<string, unknown> = {};
   let body = source;
   try {
-    const parsed = matter(source);
+    const parsed = parseFrontmatter(source);
     frontmatter = (parsed.data ?? {}) as Record<string, unknown>;
     body = parsed.content;
   } catch {

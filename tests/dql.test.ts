@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DqlParseError, likeToRegex, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
+import { DqlParseError, likeToRegex, MAX_DQL_QUERY_LEN, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
 import { dataviewQuery, listTags } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
@@ -326,5 +326,43 @@ describe("likeToRegex length cap (v3.9.0-rc.9 audit — defensive CPU bound)", (
   });
   it("throws on an over-long pattern (NEGATIVE control)", () => {
     expect(() => likeToRegex("a".repeat(MAX_LIKE_PATTERN_LEN + 1))).toThrow(/too long/i);
+  });
+});
+
+describe("parseDql query length cap (rc.57 DQL-PARSE-QUADRATIC-DOS)", () => {
+  it("rejects an over-length query fail-closed, in O(1) — the DoS-closure proof", () => {
+    // Pre-rc.57 a long query fed the O(n²) clause tokenizer on the main event loop.
+    // A 2 MB pathological string (all whitespace → keyword-scan at every position) must be
+    // rejected by the length cap WITHOUT ever entering the tokenizer — i.e. near-instant.
+    const huge = " ".repeat(2_000_000);
+    const start = process.hrtime.bigint();
+    expect(() => parseDql(huge)).toThrow(/too long/i);
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(ms, `over-length reject must be O(1), took ${ms.toFixed(1)}ms`).toBeLessThan(50);
+  });
+
+  it("a maximally-pathological query AT the cap still parses in well under a budget (linear tokenizer)", () => {
+    // All single-char whitespace-separated tokens forces the per-boundary keyword scan at
+    // every position — the worst case for the (now linearized) splitClauses. At the 4096 cap
+    // this must be fast; pre-linearization it was O(n²) per boundary (slice+upcase whole tail).
+    const atCap = `LIST WHERE ${"a ".repeat((MAX_DQL_QUERY_LEN - 11) / 2)}`.slice(0, MAX_DQL_QUERY_LEN);
+    const start = process.hrtime.bigint();
+    // It may parse or throw a normal DqlParseError (malformed predicate) — must NOT be "too long"
+    // and must NOT hang.
+    try {
+      parseDql(atCap);
+    } catch (e) {
+      expect(e).toBeInstanceOf(DqlParseError);
+      expect((e as Error).message).not.toMatch(/too long/i);
+    }
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(ms, `at-cap pathological parse must be fast, took ${ms.toFixed(1)}ms`).toBeLessThan(250);
+  });
+
+  it("a valid query just under the cap parses normally (NEGATIVE control — not over-capping)", () => {
+    const folder = "a".repeat(MAX_DQL_QUERY_LEN - 20); // well-formed LIST FROM "<folder>", < cap
+    const q = parseDql(`LIST FROM "${folder}"`);
+    expect(q.kind).toBe("LIST");
+    expect(q.source).toBeDefined();
   });
 });

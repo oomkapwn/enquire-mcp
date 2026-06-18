@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { MAX_DQL_QUERY_LEN } from "./dql.js";
 import { defaultIndexFile, type FtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
 import type { ServerDeps } from "./server.js";
@@ -310,7 +311,9 @@ export function registerReadTools(
         'Run a Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM ("folder" | #tag) [WHERE pred (AND|OR pred)*] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains, like (SQL-LIKE wildcard with *, escape with \\*). Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, FLATTEN, GROUP BY, or joins — see docs/api.md for the unsupported set.',
       annotations: { ...READ_ONLY, title: "Dataview query" },
       inputSchema: {
-        query: z.string().min(1).describe("Dataview-style query string")
+        // v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — boundary length cap (mirrors
+        // MAX_QUESTION_PATTERN_LEN); parseDql enforces the same cap fail-closed at the sink.
+        query: z.string().min(1).max(MAX_DQL_QUERY_LEN).describe("Dataview-style query string")
       }
     },
     async (args) => textResult(await dataviewQuery(vault, args))

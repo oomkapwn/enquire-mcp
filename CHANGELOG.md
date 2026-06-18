@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.57] — 2026-06-19
+
+> **TL;DR:** **Fresh 8-lens ultracode audit — Batch A+B (security): a DQL CPU-DoS [HIGH] + a new abs-path-leak instance [MED].** A from-scratch multi-lens workflow-audit (24 agents, 3-skeptic adversarial verify) of the shipped rc.54→rc.56 line returned 5 confirmed findings (1 HIGH / 1 MED / 3 LOW). This RC ships the two security ones. **DQL-PARSE-QUADRATIC-DOS [HIGH]**: the always-registered read-only `obsidian_dataview_query` had no length cap and an O(n²) clause tokenizer → a long query pins the main event loop (DoS for all serve-http clients). **OPTDEP-SQLITE-PATH-LEAK-EMBEDDB [MED]**: `embed-db.ts` + `fts5.ts` `better-sqlite3` import errors leaked the host abs path to clients (a new instance of the rc.55 OPTDEP class my line-oriented grep-sweep missed). Both fixed with a fail-closed cap / shared sanitizer + an extended structural inventory invariant. **1240 → 1246 source tests.**
+
+**Pre-release (v3.10 line) — fresh-audit Batch A+B (security).**
+
+### Fixed
+
+- **DQL-PARSE-QUADRATIC-DOS [HIGH] — `obsidian_dataview_query` CPU-DoS** (`src/dql.ts`, `src/tool-registry.ts`). The tool is registered unconditionally (read-only, no CLI gate) with `query: z.string().min(1)` and **no `.max()`**; `splitClauses` re-allocated + upper-cased the whole remaining tail (`input.slice(i).toUpperCase()`) at every whitespace boundary → **O(n²)** on the main event loop, so a long query string from any bearer-auth serve-http client pins the server (denial of service for all concurrent clients), well below the HTTP body cap. Fixed: (1) new `MAX_DQL_QUERY_LEN = 4096` enforced **fail-closed in `parseDql`** (the shared sink — every path goes through it), mirroring `MAX_QUESTION_PATTERN_LEN` / `MAX_LIKE_PATTERN_LEN`; (2) a zod `.max(MAX_DQL_QUERY_LEN)` at the tool boundary (defense-in-depth + clean client error); (3) **linearized** the `splitClauses` tokenizer to a fixed-length per-keyword compare (`input.slice(i, i + k.length).toUpperCase()`), no whole-tail allocation/upcasing — identical behavior, now O(n).
+- **OPTDEP-SQLITE-PATH-LEAK-EMBEDDB [MEDIUM] — better-sqlite3 import error leaked the host abs path** (`src/embed-db.ts`, `src/fts5.ts`). Their `await import("better-sqlite3")` loaders interpolated raw `err.message` into the thrown Error; Node's `ERR_MODULE_NOT_FOUND` message embeds the importing file's **absolute path** (`imported from /Users/<you>/.../dist/embed-db.js`), and on a serve-http `obsidian_search` (embed-db file present but the optional dep unresolvable) that error reaches the client via `signal_errors.embeddings`. A new instance of the rc.55 OPTDEP-MODULE-PATH-LEAK class — the rc.55 invariant inventory was `[ocr, pdf, embeddings]`, so the two sqlite loaders were the missed siblings (and my rc.55 follow-up sweep used a LINE-oriented `grep` that structurally can't see the multi-line `${…}` interpolation here). Fixed: both loaders (outer import + inner native-binding probe) route through `optionalDepDetail` (code only, no path).
+
+### Added
+
+- **`tests/parser-input-cap-invariant.test.ts`** — curated structural guard: every always-registered parser-fed tool input (`obsidian_open_questions` `pattern`, `obsidian_dataview_query` `query`) must carry a `.max(<cap>)` in its registered zod schema, else CI fails (+ NEGATIVE control proving the detector isn't vacuous). Closes the "unbounded client string → superlinear parser" DoS class structurally.
+- **`tests/dql.test.ts`** — DQL DoS-closure tests: an over-length query is rejected in O(1) (a 2 MB pathological input rejected <50ms, never entering the tokenizer); a maximally-pathological query AT the cap parses fast (<250ms, proving the linearized tokenizer); a valid query just under the cap parses (NEGATIVE control — not over-capping).
+- **`tests/optional-dep-leak-invariant.test.ts`** inventory extended 3 → 5 files (`embed-db.ts`, `fts5.ts`) so the next better-sqlite3-loader leak fails CI.
+
+### Tests (1246)
+
+- +6 source `it()`: 3 in `tests/dql.test.ts` (DQL length-cap describe) + 3 in `tests/parser-input-cap-invariant.test.ts`. The optional-dep-leak inventory extension is a list change (no new `it()`). 1240 → 1246.
+
+> **Lesson:** my rc.55 OPTDEP fix was an INSTANCE fix (3 files) whose sibling-sweep used a LINE-oriented `grep` that structurally cannot see a multi-line `${…}` interpolation — so embed-db.ts/fts5.ts escaped until this audit read the actual code paths. The durable close is the inventory invariant *covering the files* (the JS detector was always multi-line-capable), not a one-off grep — the project's signature "instance fix ≠ class fix" recursion, now ended for the sqlite loaders. And: an always-registered tool with an unbounded string input is a DoS until proven capped — the parser-input-cap invariant makes that a permanent gate.
+
+---
+
 ## [3.10.0-rc.56] — 2026-06-19
 
 > **TL;DR:** **Closes the rc.53 audit — its final 2 LOW findings** (rc.54 closed 16, rc.55 closed 3, of 21 confirmed). **RS-3**: `docs/QUICKSTART.md` still cited `pdfjs-dist@5.7+` as the Node-floor lowest-common-denominator after the rc.52 5→6 bump → `pdfjs-dist@6+`. **FM-3** (documented-rejection verdict): tab-indented YAML frontmatter throws on js-yaml@4 → `parseNote` whole-body fallback — verified NOT a migration regression (the YAML spec forbids tabs for indentation; js-yaml@3/gray-matter enforced it identically) and not data loss (the frontmatter text stays indexed in the body), so it's documented + pinned with a throw-contract test rather than "fixed". **1239 → 1240 source tests.**

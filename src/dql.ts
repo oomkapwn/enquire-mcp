@@ -70,7 +70,23 @@ const KEYWORDS = ["FROM", "WHERE", "SORT", "LIMIT"];
  * q.source;  // { type: "folder", path: "Inbox" }
  * ```
  */
+/**
+ * Max DQL query length (chars). v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — the
+ * `obsidian_dataview_query` tool is always-registered and read-only (no CLI gate),
+ * so an unbounded query string fed to the char-by-char clause tokenizer is a
+ * main-event-loop CPU-DoS reachable by any serve-http client. This boundary cap
+ * (mirroring {@link MAX_LIKE_PATTERN_LEN} / `MAX_QUESTION_PATTERN_LEN`) bounds the
+ * input so even a superlinear parser stage stays trivial; the tokenizer is also
+ * linearized (no whole-tail `slice`/`toUpperCase` per position).
+ */
+export const MAX_DQL_QUERY_LEN = 4096;
+
 export function parseDql(input: string): DataviewQuery {
+  // v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — fail-closed length cap at the shared
+  // sink (defense-in-depth past the zod `.max()` at the tool boundary).
+  if (input.length > MAX_DQL_QUERY_LEN) {
+    throw new DqlParseError(`Query too long (${input.length} > ${MAX_DQL_QUERY_LEN} chars)`);
+  }
   // No global whitespace collapse here — splitClauses is quote-aware and would
   // otherwise see post-collapsed quoted strings, which silently mangles real
   // folder names and frontmatter values containing repeated whitespace.
@@ -131,10 +147,13 @@ function splitClauses(input: string): Clauses {
     }
     const prev = i > 0 ? input[i - 1] : undefined;
     if (i === 0 || (prev !== undefined && /\s/.test(prev))) {
-      const remaining = input.slice(i);
+      // v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — fixed-length compare per keyword
+      // (slice ≤ keyword length), NOT `input.slice(i).toUpperCase()` which re-allocated
+      // + upcased the whole tail per whitespace boundary → O(n²). KEYWORDS are uppercase.
       const matched = KEYWORDS.find((k) => {
-        if (!remaining.toUpperCase().startsWith(k)) return false;
-        const after = remaining[k.length];
+        if (input.length - i < k.length) return false;
+        if (input.slice(i, i + k.length).toUpperCase() !== k) return false;
+        const after = input[i + k.length];
         return after === undefined || /\s/.test(after);
       });
       if (matched) {

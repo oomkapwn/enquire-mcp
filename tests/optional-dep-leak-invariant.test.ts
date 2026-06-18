@@ -22,7 +22,12 @@ import { optionalDepDetail } from "../src/optional-dep.js";
 const repoRoot = path.resolve(__dirname, "..");
 
 // Inventory: every src module that loads an optional dependency via `import()`.
-const OPTIONAL_DEP_LOADERS = ["src/ocr.ts", "src/pdf.ts", "src/embeddings.ts"];
+// v3.10.0-rc.57 (OPTDEP-SQLITE-PATH-LEAK-EMBEDDB) — added embed-db.ts + fts5.ts: their
+// `await import("better-sqlite3")` loaders interpolated raw `err.message` (an
+// ERR_MODULE_NOT_FOUND embedding the importing file's abs path) that reaches serve-http
+// clients via `signal_errors.embeddings`. The rc.55 inventory was scope-too-narrow (3 files);
+// these two sqlite loaders were the missed siblings — the signature "instance fix ≠ class fix".
+const OPTIONAL_DEP_LOADERS = ["src/ocr.ts", "src/pdf.ts", "src/embeddings.ts", "src/embed-db.ts", "src/fts5.ts"];
 
 /** Strip `//` line comments so a prose mention of `err.message` isn't flagged. */
 function stripLineComments(source: string): string {

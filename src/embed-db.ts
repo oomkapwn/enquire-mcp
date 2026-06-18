@@ -20,6 +20,7 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { optionalDepDetail } from "./optional-dep.js";
 
 const SCHEMA_VERSION = 3;
 // v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
@@ -93,17 +94,19 @@ async function loadBetterSqlite(): Promise<new (file: string) => unknown> {
       const probe = new ctor(":memory:") as { close?: () => void };
       probe.close?.();
     } catch (probeErr) {
+      // rc.57 (OPTDEP-SQLITE-PATH-LEAK-EMBEDDB) — code only; the raw message can embed an abs path.
       throw new Error(
-        `better-sqlite3 native binding failed to load (try: \`npm rebuild better-sqlite3\` or reinstall without --omit=optional / --ignore-scripts). ${probeErr instanceof Error ? probeErr.message : String(probeErr)}`
+        `better-sqlite3 native binding failed to load (try: \`npm rebuild better-sqlite3\` or reinstall without --omit=optional / --ignore-scripts). (${optionalDepDetail(probeErr)})`
       );
     }
     BetterSqliteCtor = ctor;
     return ctor;
   } catch (err) {
+    // rc.57 (OPTDEP-SQLITE-PATH-LEAK-EMBEDDB) — Node's ERR_MODULE_NOT_FOUND message embeds the
+    // importing file's ABSOLUTE path ("imported from /Users/.../dist/embed-db.js"); this error
+    // reaches bearer-auth serve-http clients via signal_errors.embeddings. Surface only the code.
     throw new Error(
-      `Persistent embeddings require the optional 'better-sqlite3' dependency; install failed or the binding could not be loaded. ${
-        err instanceof Error ? err.message : String(err)
-      }`
+      `Persistent embeddings require the optional 'better-sqlite3' dependency; install failed or the binding could not be loaded. (${optionalDepDetail(err)})`
     );
   }
 }

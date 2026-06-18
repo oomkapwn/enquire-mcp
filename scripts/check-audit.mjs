@@ -19,15 +19,11 @@ import { execSync } from "node:child_process";
  * gate for that advisory; adding one REQUIRES a rationale + a path to resolution.
  */
 export const ALLOWLIST = {
-  "GHSA-h67p-54hq-rp68":
-    "js-yaml <=4.1.1 — quadratic-complexity DoS in YAML merge-key handling via repeated aliases. " +
-    "Reached ONLY through gray-matter@4.0.3's transitive js-yaml@^3.13.1 (and our own direct js-yaml@^3 " +
-    "for `.base` parsing). There is NO v3 fix; the fix is js-yaml@4.2.0, which removed `safeLoad`/`safeDump` " +
-    "— forcing it via `overrides` breaks gray-matter at import (engines.js binds `yaml.safeLoad`), i.e. all " +
-    "frontmatter parsing. The DoS requires attacker-controlled YAML inside the user's OWN local vault " +
-    "(single-user, local-first tool; on serve-http it needs --enable-write to plant the note first), so the " +
-    "real-world exposure is low. Accepted v3.10.0-rc.50; resolution tracked: migrate frontmatter parsing to " +
-    "js-yaml@4 (replace gray-matter's YAML engine) or drop gray-matter."
+  // v3.10.0-rc.53 — GHSA-h67p-54hq-rp68 (js-yaml merge-key DoS, accepted rc.50) is now
+  // RESOLVED, not allowlisted: gray-matter was dropped (it pinned the vulnerable js-yaml@3)
+  // and frontmatter parsing migrated to js-yaml@4.2.0 (see src/frontmatter.ts). The tree
+  // no longer contains a vulnerable js-yaml, so the entry was removed and the gate re-armed.
+  // Empty = the strictest posture; add a GHSA here ONLY with a rationale + resolution path.
 };
 
 const SEV_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };

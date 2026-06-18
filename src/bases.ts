@@ -28,7 +28,9 @@
 // evaluator which is several days of work — explicit deferral.
 
 import * as path from "node:path";
+import { load } from "js-yaml";
 import { z } from "zod";
+import { parseFrontmatter } from "./frontmatter.js";
 import { foldName } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
@@ -119,33 +121,11 @@ export interface BaseQueryResult {
   unevaluated_predicates: string[];
 }
 
-/** Lazy gray-matter (already a project dep) for frontmatter parse. */
-let GrayMatter: typeof import("gray-matter") | null = null;
-async function getGrayMatter(): Promise<typeof import("gray-matter")> {
-  if (GrayMatter) return GrayMatter;
-  GrayMatter = (await import("gray-matter")).default as unknown as typeof import("gray-matter");
-  return GrayMatter;
-}
-
-/**
- * Lazy js-yaml for `.base` YAML parse. v3.10.0-rc.50 — js-yaml is now a DIRECT
- * `dependencies` entry (`^3.14.0`, pinned to v3 for the `SAFE_SCHEMA` + 2-arg
- * `load` API); pre-rc.50 it was a phantom dep relying on gray-matter's transitive
- * pin + npm hoisting (would break under pnpm-no-hoist / Yarn PnP / a gray-matter
- * major). No `@types/js-yaml` in deps; we use the minimal surface as a structural type.
- */
-interface JsYamlModule {
-  load(input: string, opts?: { schema?: unknown }): unknown;
-  SAFE_SCHEMA: unknown;
-}
-let JsYaml: JsYamlModule | null = null;
-async function getJsYaml(): Promise<JsYamlModule> {
-  if (JsYaml) return JsYaml;
-  // @ts-expect-error — js-yaml has no @types in this project; structural cast.
-  const mod = (await import("js-yaml")) as { default?: JsYamlModule } & JsYamlModule;
-  JsYaml = mod.default ?? mod;
-  return JsYaml;
-}
+// v3.10.0-rc.53 — frontmatter + `.base` YAML now go through js-yaml@4 directly
+// (`load`/`dump` are safe-by-default — the v3 `safeLoad`/`safeDump` semantics). gray-matter
+// was dropped (it hard-bound js-yaml@3's removed `safeLoad`, which pinned the vulnerable
+// js-yaml@3 in the tree — GHSA-h67p-54hq-rp68). Note frontmatter parses via the shared
+// `parseFrontmatter`; `.base` YAML parses via `load` below.
 
 /** Schema-validate the parsed YAML. Throws on shapes we don't support. */
 const filterShape: z.ZodType<BaseFilter> = z.lazy(() =>
@@ -179,8 +159,8 @@ const baseShape = z
 
 /** Parse a .base file body into typed structure. Throws on malformed YAML. */
 export async function parseBase(body: string): Promise<ParsedBase> {
-  const yaml = await getJsYaml();
-  const raw = (yaml.load(body, { schema: yaml.SAFE_SCHEMA }) as Record<string, unknown> | null) ?? {};
+  // js-yaml@4 `load` is safe-by-default (no merge-key/`!!js` exploits — the v3 SAFE_SCHEMA semantics).
+  const raw = (load(body) as Record<string, unknown> | null) ?? {};
   const parsed = baseShape.parse(raw);
   return parsed as ParsedBase;
 }
@@ -320,7 +300,6 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
   // walk would already break dozens of other code paths in this server.
   const matches: BaseQueryHit[] = [];
   const unevaluated = new Set<string>();
-  const gm = await getGrayMatter();
   // v3.10.0-rc.24 (audit L) — DoS cap. `obsidian_query_base` is always-registered
   // and bearer-reachable on serve-http, and reads every matched note's full body;
   // an unbounded whole-vault content scan is a DoS amplifier. `capScanEntries`
@@ -334,7 +313,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     let body = "";
     try {
       const raw = await vault.readFile(e.absPath);
-      const parsed = gm(raw);
+      const parsed = parseFrontmatter(raw);
       fm = (parsed.data as Record<string, unknown>) ?? {};
       body = parsed.content ?? "";
     } catch {

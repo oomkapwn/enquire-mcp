@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import matter from "gray-matter";
+import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName } from "../name-fold.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -143,11 +143,11 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     }
   }
 
-  // 2. YAML parse via gray-matter (the same parser used at write time).
+  // 2. YAML parse via the shared frontmatter module (the same parser used at write time).
   const yamlReport = { parsed: false, error: null as string | null, keys: [] as string[] };
   let bodyAfterFm = args.content;
   try {
-    const parsed = matter(args.content);
+    const parsed = parseFrontmatter(args.content);
     yamlReport.parsed = true;
     yamlReport.keys = Object.keys(parsed.data ?? {});
     bodyAfterFm = parsed.content;
@@ -199,7 +199,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   const existingTags = new Set((await listTags(vault, {})).map((t) => t.tag.toLowerCase()));
   const proposedTagsRaw = new Set<string>();
   // Frontmatter tags.
-  const fmData = yamlReport.parsed ? matter(args.content).data : {};
+  const fmData = yamlReport.parsed ? parseFrontmatter(args.content).data : {};
   const fmTags = fmData.tags ?? fmData.tag;
   if (Array.isArray(fmTags)) {
     for (const t of fmTags) if (typeof t === "string" && t) proposedTagsRaw.add(t.replace(/^#/, ""));
@@ -441,7 +441,7 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
     }
 
     // Stale pass — frontmatter `last_reviewed` overrides mtime if present.
-    // gray-matter (js-yaml) parses ISO dates into Date objects automatically,
+    // js-yaml parses ISO dates into Date objects automatically,
     // so we accept Date | string | number.
     const lastReviewedRaw = parsed.frontmatter?.last_reviewed ?? parsed.frontmatter?.["last-reviewed"];
     let lastTouchedMs = mtimeMs;

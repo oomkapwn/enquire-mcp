@@ -1201,7 +1201,7 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
     {
       title: "Set/unset frontmatter keys atomically",
       description:
-        "Surgical YAML manipulation: set one or more keys, or remove them by passing `null` as the value. Round-trips through gray-matter (same parser used at write time) so YAML formatting / quoting / type-coercion stays consistent. Returns `before` + `after` + list of changed keys for observability. `dry_run: true` shows the diff without writing.",
+        "Surgical YAML manipulation: set one or more keys, or remove them by passing `null` as the value. Round-trips through the same js-yaml-backed frontmatter serializer used at write time so YAML formatting / quoting / type-coercion stays consistent. Returns `before` + `after` + list of changed keys for observability. `dry_run: true` shows the diff without writing.",
       annotations: { ...WRITE, title: "Set frontmatter" },
       inputSchema: {
         path: z.string().optional().describe("Vault-relative path"),

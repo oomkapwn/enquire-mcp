@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.53] — 2026-06-19
+
+> **TL;DR:** **Dropped gray-matter → js-yaml@4; the js-yaml advisory is now RESOLVED, not allowlisted (tree fully clean).** gray-matter@4 hard-binds js-yaml@3's removed `safeLoad`/`safeDump`, which pinned the vulnerable js-yaml@3 (GHSA-h67p-54hq-rp68) in the tree with no v3 fix. Replaced it with a tiny in-repo `src/frontmatter.ts` (a faithful PORT of gray-matter's split + stringify, **differentially validated byte-identical** against gray-matter over a broad corpus before removal) on **js-yaml@4.2.0** (whose `load`/`dump` are safe-by-default). The scoped audit `ALLOWLIST` is now **empty** — strictest posture. **1213 → 1224 source tests.**
+
+**Pre-release (v3.10 line) — gray-matter → js-yaml@4 migration (resolves #170).**
+
+### Changed
+
+- **Replaced `gray-matter` with `src/frontmatter.ts` + `js-yaml@^4.2.0`.** New `parseFrontmatter` / `stringifyFrontmatter` port gray-matter's exact semantics — the `---` delimiter split, the `----` (4-dash) guard, the comment-only-emptiness check, the leading CR/LF strip after the closing fence, the UTF-8 BOM strip, and the `newline()` join — with only the YAML engine swapped to js-yaml@4 (`load`/`dump` = the v3 `safeLoad`/`safeDump` semantics). `content` stays a verbatim suffix of the input, so `parser.ts`'s `bodyStartLine` `lastIndexOf` is unaffected. Swapped at all call sites: `parser.ts` (parseNote), `tools/meta.ts` (validate_note_proposal), `tools/write.ts` (composeNote + frontmatterSet), `bases.ts` (queryBase frontmatter + `parseBase` — `SAFE_SCHEMA` dropped, v4 `load` is safe-by-default). Added `@types/js-yaml@^4` (real types — no more structural casts). gray-matter removed from `dependencies`.
+- **De-allowlisted GHSA-h67p-54hq-rp68.** With gray-matter gone, no vulnerable js-yaml remains in the tree; the `scripts/check-audit.mjs` `ALLOWLIST` is back to empty (the strictest posture). Resolves the rc.50-accepted advisory at the root (#170).
+
+### Added
+
+- **`tests/frontmatter.test.ts`** — standalone CI guard for the new module (simple/empty/comment-only/`----`-guard/CRLF/BOM-via-parser/verbatim-suffix parse cases + round-trip + date-string fidelity + a malformed-YAML-throws NEGATIVE control). A dev-only differential test (vs gray-matter, byte-identical over the corpus) validated the port pre-removal and was then deleted (it imported the removed dep).
+
+### Tests (1224)
+
+- +11 source `it()` in `tests/frontmatter.test.ts`; the 4 call-site swaps are covered by the existing parser/write/bases/meta/frontmatter-ops suites (all green — the differential test confirmed parity, incl. the BOM case the corpus initially missed). 1213 → 1224.
+
+> **Lesson:** replacing a battle-tested parser is safe ONLY with a differential test against the incumbent over a broad corpus *before* removing it — and even then the corpus has gaps (the BOM case slipped the diff corpus but was caught by the pre-existing parser BOM test, then folded into the port). A migration's verification is the differential diff, not the new code's own tests.
+
+---
+
 ## [3.10.0-rc.52] — 2026-06-18
 
 > **TL;DR:** **Dependency bumps — `pdfjs-dist` 5→6 (closes the deferred major) + a newly-surfaced `hono` advisory batch.** Bumped `pdfjs-dist` `^5.7.284 → ^6.0.227` (v6 engines `>=22.13.0` match ours exactly; the Node `legacy/build` import + `getDocument` API are unchanged — verified by the full PDF/OCR suite + a real-extraction smoke). The bump's `npm install` surfaced **5 newly-published `hono` advisories** (1 high CORS + 4 moderate, on the prod transitive via MCP SDK → @hono/node-server, all `<=4.12.24`) — fixed in-range by bumping the existing `overrides` `hono ^4.12.21 → ^4.12.26` (no major bump). **Tests unchanged (1213).**

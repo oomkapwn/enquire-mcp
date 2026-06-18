@@ -17,6 +17,7 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { optionalDepDetail } from "./optional-dep.js";
 
 /** Catalog of embedding models supported by enquire. Add new entries by
  *  pinning the Xenova-converted ONNX model id + the dim count + a friendly
@@ -206,7 +207,8 @@ async function loadPipeline(): Promise<(task: string, model: string) => Promise<
     throw new Error(
       `Embeddings require the optional '@huggingface/transformers' dependency; install failed or the binding could not be loaded. ` +
         `Run: npm install @huggingface/transformers (or reinstall enquire-mcp without --omit=optional). ` +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`
+        // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
+        `(${optionalDepDetail(err)})`
     );
   }
 }
@@ -254,7 +256,8 @@ async function loadTransformersForRerank(): Promise<{
     throw new Error(
       "Rerankers require the optional '@huggingface/transformers' dependency; install failed or the binding could not be loaded. " +
         "Run: npm install @huggingface/transformers (or reinstall enquire-mcp without --omit=optional). " +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`
+        // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
+        `(${optionalDepDetail(err)})`
     );
   }
 }

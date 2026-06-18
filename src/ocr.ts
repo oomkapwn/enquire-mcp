@@ -39,6 +39,7 @@ import type { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { optionalDepDetail } from "./optional-dep.js";
 
 /** Per-page OCR result. Shape mirrors `PdfPage` from src/pdf.ts. */
 export interface OcrPdfPage {
@@ -75,10 +76,10 @@ async function loadTesseract(): Promise<typeof import("tesseract.js")> {
   try {
     return await import("tesseract.js");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
     throw new Error(
       "enquire: tesseract.js (optional dependency) is not available. PDF OCR requires it. " +
-        `Install with: npm install tesseract.js@^7\nUnderlying error: ${msg}`
+        `Install with: npm install tesseract.js@^7 (${optionalDepDetail(err)})`
     );
   }
 }
@@ -88,10 +89,10 @@ async function loadCanvas(): Promise<typeof import("@napi-rs/canvas")> {
   try {
     return await import("@napi-rs/canvas");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
     throw new Error(
       "enquire: @napi-rs/canvas (optional dependency) is not available. PDF OCR requires it for page-to-bitmap rendering. " +
-        `Install with: npm install @napi-rs/canvas@^1\nUnderlying error: ${msg}`
+        `Install with: npm install @napi-rs/canvas@^1 (${optionalDepDetail(err)})`
     );
   }
 }
@@ -101,10 +102,10 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
   try {
     return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as typeof import("pdfjs-dist");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
     throw new Error(
       "enquire: pdfjs-dist (optional dependency) is not available. PDF OCR requires it. " +
-        `Install with: npm install pdfjs-dist@^6.0.227\nUnderlying error: ${msg}`
+        `Install with: npm install pdfjs-dist@^6.0.227 (${optionalDepDetail(err)})`
     );
   }
 }

@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.55] — 2026-06-19
+
+> **TL;DR:** **Independent code-correctness batch — 3 findings from the rc.53 audit + 1 recursion the post-rc.54 audit caught.** **CT-LINE-OFFBY1** (`chat_thread_append` `line_start` pointed one line before the appended `### role` heading; new-note branch hardcoded the blank line) → derived from the heading offset across all 3 branches. **CHUNK-SURROGATE-SPLIT** (FTS5 oversize-line hard-cut split surrogate pairs → lone surrogates in the index) → surrogate-safe cut. **OPTDEP-MODULE-PATH-LEAK-02** (optional-dep `import()` errors echoed Node's "imported from /Users/…/dist/…" abs path to serve-http clients — abs-path-leak sibling outside rc.49's Vault scope) → shared `optionalDepDetail` surfaces only the error code, + inventory invariant. **FM-SCALAR-DATE** (rc.54's coercion let a bare top-level Date scalar slip through — a recursion of the class rc.54 closed) → plain-object check. **1233 → 1239 source tests.**
+
+**Pre-release (v3.10 line) — code-correctness batch.**
+
+### Fixed
+
+- **CT-LINE-OFFBY1 [MEDIUM, recurrence of rc.50 CODE-2] — `chat_thread_append` `line_start` pointed one line before the message heading** (`src/tools/read.ts`). For the existing-thread branch `line_start` counted newlines in the pre-append body + 1 → the prior content line, one line above the new `### role · ts` heading; the new-note branch hardcoded `4`, which is the blank line (the heading is line 5). All three branches now derive `line_start` from the heading marker's offset in the FINAL written content, and `line_end` from the trimmed message-block's newline count — addressing the actual file and pointing AT the heading (rc.50's no-past-EOF property preserved).
+- **CHUNK-SURROGATE-SPLIT [MEDIUM] — FTS5 oversize-line hard-cut split surrogate pairs** (`src/fts5.ts`). `chunkContent`'s single-line hard-cut used `slice(i, i + maxChars)`, which works on UTF-16 code UNITS — a boundary landing mid-emoji emitted a lone surrogate (a corrupt code point) into the indexed chunk. The cut now backs off by one when the boundary unit is a high surrogate, so a pair is never split (a chunk may be `maxChars − 1` units; re-joining the chunks is lossless).
+- **OPTDEP-MODULE-PATH-LEAK-02 [HIGH, abs-path-leak sibling] — optional-dep import errors leaked the host abs path** (`src/ocr.ts`, `src/pdf.ts`, `src/embeddings.ts`). A failed `await import("tesseract.js" | "@napi-rs/canvas" | "pdfjs-dist" | "@huggingface/transformers")` threw an Error that interpolated `err.message` — Node's `ERR_MODULE_NOT_FOUND` message embeds the importing file's ABSOLUTE path (`Cannot find package 'X' imported from /Users/<you>/.../dist/ocr.js`), leaking the host filesystem layout to bearer-auth serve-http clients (the module-resolution sibling of the rc.45/rc.49 vault-fs leak class, outside the Vault's `*Safe` wrappers). New leaf `src/optional-dep.ts` `optionalDepDetail(err)` surfaces only the error CODE; all 6 import-catches route through it.
+- **FM-SCALAR-DATE [post-rc.54-audit recursion] — rc.54's non-mapping coercion let a Date slip through** (`src/frontmatter.ts`). rc.54's `typeof loaded === "object" && !Array.isArray(loaded)` check accepted a bare top-level Date scalar (`---\n2026-01-01\n---`, which js-yaml resolves to a `Date` instance) as `data` — a recursion of the very FM-SCALAR class rc.54 closed. Tightened to a PLAIN-object check (`isPlainObject`: rejects `Date`/`RegExp`/array/`null`, accepts a YAML mapping) + a Date-scalar regression test.
+
+### Added
+
+- **`src/optional-dep.ts`** — `optionalDepDetail(err)`, a privacy-safe detail string (`error code: <code>`) for failed optional-dependency imports; never echoes `err.message` (which embeds the abs path).
+- **`tests/optional-dep-leak-invariant.test.ts`** — curated-inventory invariant: a raw `${err.message}` / `${String(err)}` interpolation in any optional-dep loader (`ocr.ts`/`pdf.ts`/`embeddings.ts`) fails CI (+ NEGATIVE control proving the detector isn't vacuous + a `optionalDepDetail` unit asserting no path leaks).
+
+### Tests (1239)
+
+- +6 source `it()`: 3 in `tests/optional-dep-leak-invariant.test.ts` (2 POSITIVE + 1 NEGATIVE control) + 1 in `tests/chat-thread.test.ts` (heading-line across all 3 branches) + 1 in `tests/fts5.test.ts` (surrogate-safe hard-cut) + 1 in `tests/frontmatter.test.ts` (Date-scalar coercion). 1233 → 1239.
+
+> **Lesson:** the marathon's audit-after-each-stage caught rc.54's own FM-SCALAR coercion recursing one RC later (a bare Date slipped the `typeof === "object"` check) — and the durable close for the optional-dep leak is the inventory invariant, mirroring rc.49's Vault leak invariant: convert "did every import catch avoid echoing the path?" into a self-checking gate.
+
+---
+
 ## [3.10.0-rc.54] — 2026-06-19
 
 > **TL;DR:** **Frontmatter-migration hardening — overclaim #20 + a real corruption bug + the gray-matter doc-drift sweep.** The post-rc.53 state-driven audit confirmed the js-yaml@4 migration is fundamentally SOUND, but rc.53's **"byte-identical port"** claim was an overclaim (**#20**): js-yaml@4 is YAML **1.2** vs gray-matter's js-yaml@3 YAML **1.1**, so SCALAR resolution diverges (`0755`→755 not 493, `12:34:56`→string not 45296, `1_000`→string not 1000). The claim is now scoped to STRUCTURAL parsing and the divergence pinned as a deliberate contract. Also fixes a **real corruption bug** (a non-mapping frontmatter doc was cast to `Record` and would be written back char-indexed by `frontmatter_set`), a **pre-existing SECURITY.md enforcement overclaim** (`.base` YAML "no anchor-expansion / YAML bomb rejected" — js-yaml does neither), the full gray-matter→js-yaml doc-drift sweep, and SC-1 (drop the `@huggingface/transformers` dev/optional dep duplication). New structural guard: `tests/no-graymatter-invariant.test.ts`. **1224 → 1233 source tests.**

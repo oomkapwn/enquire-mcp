@@ -66,6 +66,32 @@ describe("chat_thread_append (v2.2.0)", () => {
     expect(res.line_end, "line_end must not point past EOF").toBeLessThanOrEqual(totalLines);
   });
 
+  it("line_start lands exactly on the `### role` heading for all 3 branches (rc.55 CT-LINE-OFFBY1)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Returns the 0-based content of the reported line_start line in the written file.
+    const headingAt = async (file: string, lineStart: number) =>
+      (await fs.readFile(path.join(root, file), "utf8")).split("\n")[lineStart - 1] ?? "";
+
+    // Branch C — new note from scratch (pre-rc.55 hardcoded line_start=4, which is the
+    // blank line; the heading is line 5).
+    const a = await chatThreadAppend(v, { note_path: "new.md", role: "user", content: "hello" });
+    expect(await headingAt("new.md", a.line_start)).toMatch(/^### user · /);
+
+    // Branch B — existing note WITHOUT a chat heading (adds the heading).
+    await fs.writeFile(path.join(root, "plain.md"), "# Plain note\n\nSome body text.\n");
+    const b = await chatThreadAppend(v, { note_path: "plain.md", role: "assistant", content: "added" });
+    expect(await headingAt("plain.md", b.line_start)).toMatch(/^### assistant · /);
+
+    // Branch A — existing thread (just appends a message; pre-rc.55 pointed one line
+    // before the new heading).
+    const c = await chatThreadAppend(v, { note_path: "new.md", role: "system", content: "follow-up" });
+    expect(await headingAt("new.md", c.line_start)).toMatch(/^### system · /);
+    // line_end still within the file (rc.50 invariant preserved).
+    const total = (await fs.readFile(path.join(root, "new.md"), "utf8")).split("\n").length;
+    expect(c.line_end).toBeLessThanOrEqual(total);
+  });
+
   it("rejects empty path / content", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

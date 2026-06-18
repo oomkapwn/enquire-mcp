@@ -41,6 +41,19 @@ const OPEN = "---";
 const CLOSE = "\n---";
 
 /**
+ * True only for a PLAIN object (a YAML mapping) — rejects `null`, arrays, and
+ * built-ins like `Date`/`RegExp` that js-yaml resolves from a bare scalar
+ * (e.g. `---\n2026-01-01\n---` → a `Date`). A non-mapping top-level document
+ * must coerce to `{}`, never be returned as `data` (which `frontmatter_set`
+ * would then spread). js-yaml emits maps as `Object.prototype`-rooted objects.
+ */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
  * Parse YAML frontmatter from a markdown string (faithful gray-matter port).
  * Throws on malformed YAML — callers that want a fallback wrap in try/catch (the
  * same contract gray-matter had).
@@ -74,8 +87,11 @@ export function parseFrontmatter(input: string): Frontmatter {
     // null) to {} the way gray-matter did. Otherwise a frontmatter block that's a bare
     // scalar (`---\nhello\n---`) or a sequence (`---\n- a\n- b\n---`) would be cast to
     // Record and later spread char-indexed by frontmatter_set, writing corrupt YAML back.
+    // v3.10.0-rc.55 (FM-SCALAR-DATE) — the rc.54 `typeof === "object" && !Array` check let
+    // a bare top-level Date (`---\n2026-01-01\n---`, which js-yaml resolves to a `Date`
+    // instance) slip through as `data`; require a PLAIN object (a real mapping) instead.
     const loaded = load(matterBlock);
-    data = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? (loaded as Record<string, unknown>) : {};
+    data = isPlainObject(loaded) ? loaded : {};
   }
 
   let content: string;

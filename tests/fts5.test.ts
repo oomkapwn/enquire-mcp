@@ -103,6 +103,33 @@ describe("chunkContent", () => {
     for (const c of chunks) expect(c.text.length).toBeLessThanOrEqual(4096);
   });
 
+  it("hard-cut never splits a surrogate pair (rc.55 CHUNK-SURROGATE-SPLIT)", () => {
+    // A long emoji run forces the hard-cut path; a cut at an odd UTF-16 boundary used
+    // to land between a surrogate pair → a lone surrogate (a corrupt code point in the
+    // indexed chunk). maxChars=5 makes the boundary fall mid-emoji (each 😀 = 2 units).
+    const huge = "😀".repeat(20); // 40 UTF-16 units, 20 code points
+    const chunks = chunkContent(huge, 5);
+    const hasLoneSurrogate = (s: string) => {
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c >= 0xd800 && c <= 0xdbff) {
+          const next = s.charCodeAt(i + 1);
+          if (!(next >= 0xdc00 && next <= 0xdfff)) return true; // high surrogate not followed by low
+          i++;
+        } else if (c >= 0xdc00 && c <= 0xdfff) {
+          return true; // low surrogate without a preceding high
+        }
+      }
+      return false;
+    };
+    for (const c of chunks) {
+      expect(hasLoneSurrogate(c.text), `chunk has a lone surrogate: ${JSON.stringify(c.text)}`).toBe(false);
+      expect(c.text.length).toBeLessThanOrEqual(5);
+    }
+    // No data lost: re-joining the chunks reconstructs the original emoji run.
+    expect(chunks.map((c) => c.text).join("")).toBe(huge);
+  });
+
   it("attaches 1-based line offsets", () => {
     const chunks = chunkContent("first\n\nsecond\n\nthird");
     expect(chunks[0]?.lineStart).toBe(1);

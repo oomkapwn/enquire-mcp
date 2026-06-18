@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.59] — 2026-06-19
+
+> **TL;DR:** **Post-rc.58 re-sweep — a 6th OPTDEP-leak sibling (`hnsw.ts`) + the detector's own blind-spot.** The mandated post-merge re-sweep found `hnsw.ts`'s `loadHnswlib` leaks the importing file's abs path via a `const msg = err.message; …throw new Error(\`…${msg}\`)` **indirection** the rc.57 leak-detector was structurally blind to (it matched only DIRECT `${err.message}`) — missed by the 8-lens audit + my rc.55 grep too. RCA: the throw is **fail-soft-caught server-side** (brute-force fallback → operator stderr, not the client) → **LOW**, but the fix + detector-strengthening are the durable close. Routed `loadHnswlib` through `optionalDepDetail`, added `hnsw.ts` to the inventory (3→6 files), and **strengthened the detector to be indirection-aware AND throw-scoped** (flags a `const`-captured error message interpolated in a `throw`, ignores server-side `stderr` logs). **1249 source tests unchanged.**
+
+**Pre-release (v3.10 line) — post-rc.58 re-sweep.**
+
+### Fixed
+
+- **OPTDEP leak, 6th sibling [LOW] — `hnsw.ts` `loadHnswlib` abs-path leak via a `const msg` indirection** (`src/hnsw.ts`). `await import("hnswlib-node")`'s catch did `const msg = err instanceof Error ? err.message : String(err)` then `throw new Error(\`…Underlying error: ${msg}\`)` — Node's `ERR_MODULE_NOT_FOUND` message embeds the importing file's absolute path. RCA: server.ts catches the HNSW build/load failure **fail-soft** (→ brute-force semantic search → the abs path lands in the operator's own stderr, NOT in a client response), so this is LOW (operator-side), not the client-facing MED that OPTDEP-SQLITE was. Fixed for defense-in-depth + consistency: the loader now routes through `optionalDepDetail(err)` (code only).
+
+### Changed
+
+- **`tests/optional-dep-leak-invariant.test.ts` detector — now indirection-aware AND throw-scoped** (the real durable fix; closes the blind-spot that let `hnsw.ts` escape the rc.57 inventory + detector + 8-lens audit). It previously matched only a DIRECT `${err.message}` / `${String(err)}` token *anywhere*; it now (a) collects `const`-captured error-message variables and (b) flags `err.message` / `String(err)` / any captured var interpolated inside a `throw new Error(...)` (the client-facing sink), while NOT flagging a server-side `process.stderr.write(… ${msg})` (operator's own machine). Inventory extended 3 → 6 files (adds `hnsw.ts`). NEGATIVE control extended to prove the indirection IS caught and the stderr case is NOT (so the detector isn't vacuous and doesn't over-flag). `tools/search.ts`'s `signalErrors.* = msg` chokepoint was investigated and left as-is — its upstream import/model sources are all sanitized (rc.45/rc.57), so it is fed path-free (not a confirmed live leak).
+
+### Tests (1249)
+
+- No new source `it()` — the detector rewrite + the extended direct/indirection/stderr NEGATIVE-control assertions stay within the existing `optional-dep-leak-invariant` tests. 1249 unchanged.
+
+> **Lesson:** a leak-class detector must model the SINK (a thrown Error reaching the client), not a surface token. The rc.57 detector matched the `${err.message}` token but was blind to the `const msg = err.message; …${msg}` indirection AND didn't distinguish a `throw` (client-facing) from a `process.stderr.write` (operator-side) — so `hnsw.ts` slipped past it, the inventory, AND the multi-agent audit. The throw-scoped indirection-aware detector ends the OPTDEP sub-class structurally. This is the 4th audit-fix-recurs-its-own-class pair this session — the post-merge re-sweep keeps earning its keep.
+
+---
+
 ## [3.10.0-rc.58] — 2026-06-19
 
 > **TL;DR:** **Fresh 8-lens audit — Batch C+D (3 LOW correctness), closes the audit.** **CT-LASTINDEXOF-COLLISION**: `chatThreadAppend`'s rc.55 `lastIndexOf` could match a heading-like line inside the user's content → wrong `line_start`/past EOF; anchored to the appended block (collision-proof). **CONC-1**: documented the read-modify-write lost-update contract (concurrent same-note appends must be serialized). **FM-DATE-SILENT-MUTATION**: a bare `created: 2026-01-15` was silently rewritten to `2026-01-15T00:00:00.000Z` on any unrelated `frontmatter_set` (breaking date-only Dataview queries + falsifying the rc.54 "ISO dates unaffected" claim) → `stringifyFrontmatter` now renders date-only Dates as `YYYY-MM-DD`. **1246 → 1249 source tests.** Closes the 5-finding fresh audit (1 HIGH + 1 MED + 3 LOW across rc.57+rc.58).

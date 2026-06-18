@@ -2,12 +2,12 @@
   "$schema": "https://typedoc.org/schema.json",
 
   // Entry points — src/index.ts is the slim CLI / public-surface entry,
-  // src/tools/index.ts is the barrel re-exporting all 44 tools across 5
+  // src/tools/index.ts is the barrel re-exporting all 45 tools across 5
   // domain modules (read / write / search / media / meta), and
   // src/tool-manifest.ts is the machine-readable TOOL_MANIFEST array
   // (single source of truth used by tool-registry.ts + docs-consistency
   // tests). Together these give TypeDoc the full TSDoc surface added in
-  // v3.6.0-rc.3 (44 tools + 19 prompts + ~50 helpers + ~2200 lines of
+  // v3.6.0-rc.3 (45 tools + 19 prompts + ~50 helpers + ~2200 lines of
   // doc-comments) without dragging internal files into the API reference.
   "entryPoints": [
     "src/index.ts",

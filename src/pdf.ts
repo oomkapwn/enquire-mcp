@@ -34,6 +34,7 @@
 //     network or eval inline scripts. Server-side, offline-safe.
 
 import type { Buffer } from "node:buffer";
+import { optionalDepDetail } from "./optional-dep.js";
 
 /**
  * Per-page extraction result. `lineStart` / `lineEnd` are placeholders
@@ -91,10 +92,10 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
     // standards APIs). The legacy bundle runs on Node 20+.
     return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as typeof import("pdfjs-dist");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
     throw new Error(
       `enquire: pdfjs-dist (optional dependency) is not available. PDF tools require it. ` +
-        `Install with: npm install pdfjs-dist@^6.0.227\nUnderlying error: ${msg}`
+        `Install with: npm install pdfjs-dist@^6.0.227 (${optionalDepDetail(err)})`
     );
   }
 }

@@ -97,4 +97,9 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
   it("a sequence frontmatter block → {} (NEGATIVE control — arrays are not mappings)", () => {
     expect(parseFrontmatter("---\n- a\n- b\n---\nbody").data).toEqual({});
   });
+  it("a bare-date frontmatter block → {} (rc.55 FM-SCALAR-DATE — js-yaml resolves it to a Date, not a mapping)", () => {
+    // rc.54's `typeof === "object" && !Array.isArray` let this Date instance slip through.
+    expect(parseFrontmatter("---\n2026-01-01\n---\nbody").data).toEqual({});
+    expect(parseFrontmatter("---\n2026-01-01T10:00:00Z\n---\nbody").data).toEqual({});
+  });
 });

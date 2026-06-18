@@ -941,30 +941,27 @@ export async function chatThreadAppend(
   } else {
     // New note from scratch.
     const title = args.thread_title?.trim() || `chat — ${timestamp.slice(0, 10)}`;
-    const initial = `# ${title}\n\n## Chat: ${title}\n${messageBlock}`;
-    const result = await vault.writeNote(targetRel, initial, { overwrite: false });
-    // v3.10.0-rc.50 (re-audit CODE-2 class) — line_end advances by messageBlock's
-    // newline COUNT, not split().length (which over-counts by one → past EOF).
-    return {
-      note_path: result.relPath,
-      line_start: 4,
-      line_end: 4 + (messageBlock.match(/\n/g) ?? []).length
-    };
+    toAppend = `# ${title}\n\n## Chat: ${title}\n${messageBlock}`;
   }
-  // v3.10.0-rc.50 (re-audit CODE-2 — range-arithmetic class) — line_start/line_end
-  // must address the file ACTUALLY written. Pre-rc.50 lineStart counted newlines in
-  // the un-stripped `body`, but the write strips trailing newlines (`newBody`), so the
-  // reported lines drifted UP by the stripped-newline count (could point past EOF).
-  // Count in the trimmed string; line_end advances by toAppend's newline count.
-  const trimmed = body.replace(/\n+$/, "");
+  // v3.10.0-rc.55 (CT-LINE-OFFBY1) + v3.10.0-rc.50 (CODE-2 range-arithmetic class) —
+  // line_start/line_end must address the file ACTUALLY written AND point AT the
+  // appended message's `### role · ts` heading. Pre-rc.55 line_start counted newlines
+  // in the pre-append body + 1, which landed one line BEFORE the heading (the prior
+  // content line / a blank line), and the new-note branch hardcoded `4` — actually the
+  // blank line, since the heading is on line 5. Now derive both from the heading marker
+  // in the FINAL written content, so all three branches are correct (and frontmatter-
+  // free of off-by-N). `existed` ⇒ overwrite; new note ⇒ create (no clobber).
+  const trimmed = existed ? body.replace(/\n+$/, "") : "";
   const newBody = trimmed + toAppend;
-  await vault.writeNote(targetRel, newBody, { overwrite: true });
-  const lineStart = (trimmed.match(/\n/g) ?? []).length + 1;
-  return {
-    note_path: vault.toRel(abs),
-    line_start: lineStart,
-    line_end: lineStart + (toAppend.match(/\n/g) ?? []).length
-  };
+  const result = await vault.writeNote(targetRel, newBody, { overwrite: existed });
+  const headingMarker = `### ${role} · ${timestamp}`;
+  const headingOffset = newBody.lastIndexOf(headingMarker);
+  const lineStart =
+    headingOffset >= 0 ? newBody.slice(0, headingOffset).split("\n").length : (trimmed.match(/\n/g) ?? []).length + 1;
+  // line_end spans through the message's last content line: the heading line plus the
+  // newline count of the trimmed message block (heading → blank → content[…]).
+  const lineEnd = lineStart + (messageBlock.trim().match(/\n/g) ?? []).length;
+  return { note_path: result.relPath, line_start: lineStart, line_end: lineEnd };
 }
 
 /**

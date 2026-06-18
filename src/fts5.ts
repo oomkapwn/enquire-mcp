@@ -705,13 +705,24 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
           buf = null;
         }
         // Single line too long: hard-cut at maxChars boundaries.
-        for (let i = 0; i < ln.text.length; i += maxChars) {
+        // v3.10.0-rc.55 (CHUNK-SURROGATE-SPLIT) — `slice` works on UTF-16 code
+        // UNITS, so a cut landing between a surrogate pair (e.g. mid-emoji) emits a
+        // lone surrogate → a corrupt code point in the indexed chunk. If the unit at
+        // the boundary is a high surrogate, back the cut off by one so the whole pair
+        // moves to the next chunk (a chunk may end up maxChars-1 units in that case).
+        for (let i = 0; i < ln.text.length; ) {
+          let end = Math.min(i + maxChars, ln.text.length);
+          if (end < ln.text.length) {
+            const code = ln.text.charCodeAt(end - 1);
+            if (code >= 0xd800 && code <= 0xdbff && end - 1 > i) end -= 1;
+          }
           chunks.push({
-            text: ln.text.slice(i, i + maxChars),
+            text: ln.text.slice(i, end),
             lineStart: ln.lineStart,
             lineEnd: ln.lineEnd,
             breadcrumb: p.breadcrumb
           });
+          i = end;
         }
         continue;
       }

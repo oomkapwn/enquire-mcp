@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DqlParseError, likeToRegex, MAX_DQL_QUERY_LEN, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
+import { compileLike, DqlParseError, MAX_DQL_QUERY_LEN, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
 import { dataviewQuery, listTags } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
@@ -338,97 +337,51 @@ describe("DQL — LIMIT must be a positive integer (audit v0.7.6 P4)", () => {
   });
 });
 
-describe("likeToRegex length cap (v3.9.0-rc.9 audit — defensive CPU bound)", () => {
+describe("compileLike length cap (v3.9.0-rc.9 audit — defensive CPU bound)", () => {
   it("compiles and matches a normal LIKE pattern (POSITIVE control)", () => {
-    const re = likeToRegex("foo*bar");
-    expect(re.test("fooXYZbar")).toBe(true);
-    expect(re.test("nope")).toBe(false);
+    const m = compileLike("foo*bar");
+    expect(m.test("fooXYZbar")).toBe(true);
+    expect(m.test("nope")).toBe(false);
   });
   it("passes a pattern exactly at the cap (boundary POSITIVE control)", () => {
-    expect(() => likeToRegex("a".repeat(MAX_LIKE_PATTERN_LEN))).not.toThrow();
+    expect(() => compileLike("a".repeat(MAX_LIKE_PATTERN_LEN))).not.toThrow();
   });
   it("throws on an over-long pattern (NEGATIVE control)", () => {
-    expect(() => likeToRegex("a".repeat(MAX_LIKE_PATTERN_LEN + 1))).toThrow(/too long/i);
+    expect(() => compileLike("a".repeat(MAX_LIKE_PATTERN_LEN + 1))).toThrow(/too long/i);
   });
 });
 
-// v3.10.0-rc.63 (round-3 audit, HIGH ReDoS) — `likeToRegex` translated each `*` to
-// `.*`, so N adjacent `*` compiled to `^.*.*…$` (N adjacent unbounded quantifiers),
-// which backtracks catastrophically against a non-matching subject WITHOUT any
-// nesting — a remote event-loop DoS via the always-on `obsidian_dataview_query`
-// `LIKE` on bearer-auth serve-http (empirically: `**********Q` (11 chars) hung V8
-// many seconds). The fix collapses a run of consecutive `*` into ONE `.*`. The TSDoc
-// claimed "catastrophic-backtracking-SAFE by construction" — false until rc.63.
-//
-// Two structural guards (the length-cap tests above never exercised EVALUATION):
-//   (1) STATIC — the compiled source must never contain adjacent `.*.*` (the only
-//       non-nested catastrophic shape this translator can emit).
-//   (2) EMPIRICAL — run the COMPILED regex against an adversarial non-matching
-//       subject in a worker with a wall-clock budget; a linear regex finishes in
-//       <1ms, a catastrophic one times out. So the NEXT adjacency regression fails
-//       CI on behavior, not just on a hand-checked source string (rc.21 lesson:
-//       the corpus must PRODUCE the dangerous shape — here, adjacent star runs).
-describe("likeToRegex ReDoS — consecutive `*` collapse (rc.63 round-3 audit)", () => {
-  it("collapses a run of `*` into a single `.*` (no adjacent `.*.*` in the source)", () => {
-    expect(likeToRegex("**").source).toBe("^.*$");
-    expect(likeToRegex("***").source).toBe("^.*$");
-    expect(likeToRegex(`${"*".repeat(255)}Q`).source).not.toMatch(/\.\*\.\*/);
-    expect(likeToRegex("a**b").source).toBe("^a.*b$"); // run in the middle collapses too
-    expect(likeToRegex("*x*y*").source).toBe("^.*x.*y.*$"); // separated runs each stay one `.*`
+// v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class) — `likeToRegex` compiled `*`->`.*`
+// and (rc.63) collapsed only ADJACENT `*` runs. A LIKE value with wildcards SEPARATED
+// BY LITERALS (`*a*a*...` -> `^.*a.*a...$`) was still catastrophic (measured 110 s for
+// `*a`x14), since the catastrophe scales with the SUBJECT length and so cannot be
+// bounded by any wildcard count cap. `compileLike` now matches via a NON-backtracking
+// DP (no `RegExp`). The full matcher unit + behavior-differential + linear-budget
+// guards live in tests/wildcard-match.test.ts; these are the DQL-sink-level smokes.
+describe("compileLike ReDoS-safe matching (rc.71 — DQL sink)", () => {
+  it("preserves SQL-LIKE semantics (POSITIVE/NEGATIVE controls)", () => {
+    expect(compileLike("****").test("anything at all")).toBe(true);
+    expect(compileLike("****").test("")).toBe(true);
+    expect(compileLike("*foo*").test("xxfooyy")).toBe(true);
+    expect(compileLike("*foo*").test("bar")).toBe(false);
+    expect(compileLike("a**b").test("aXYZb")).toBe(true);
+    expect(compileLike("a**b").test("ab")).toBe(true); // `*` matches empty
+    expect(compileLike("a**b").test("aXc")).toBe(false);
+    // an ESCAPED \* stays a LITERAL asterisk, not a wildcard
+    expect(compileLike("a\\*\\*b").test("a**b")).toBe(true);
+    expect(compileLike("a\\*\\*b").test("aXYb")).toBe(false);
   });
 
-  it("preserves SQL-LIKE semantics after the collapse (POSITIVE controls)", () => {
-    expect(likeToRegex("****").test("anything at all")).toBe(true);
-    expect(likeToRegex("****").test("")).toBe(true);
-    expect(likeToRegex("*foo*").test("xxfooyy")).toBe(true);
-    expect(likeToRegex("*foo*").test("bar")).toBe(false);
-    expect(likeToRegex("a**b").test("aXYZb")).toBe(true);
-    expect(likeToRegex("a**b").test("ab")).toBe(true); // `.*` matches empty
-    expect(likeToRegex("a**b").test("aXc")).toBe(false);
-    // an ESCAPED `\*` stays a LITERAL asterisk and is NOT collapsed
-    expect(likeToRegex("a\\*\\*b").test("a**b")).toBe(true);
-    expect(likeToRegex("a\\*\\*b").test("aXYb")).toBe(false);
-  });
-
-  it("the COMPILED regex is linear on an adversarial non-matching subject (empirical net)", async () => {
-    // Each pattern is well under MAX_LIKE_PATTERN_LEN; every one was catastrophic
-    // pre-rc.63 (adjacent `.*` runs). Run the ACTUAL likeToRegex output in a worker.
-    const patterns = [
-      `${"*".repeat(10)}Q`,
-      `${"*".repeat(50)}Q`,
-      `${"*".repeat(255)}Q`,
-      `a${"*".repeat(40)}b`,
-      `${"*".repeat(30)}${"*".repeat(30)}Q`
-    ];
-    const subjects = ["z".repeat(60), "x".repeat(80), "abc".repeat(30)];
-    const runCompiled = (src: string, flags: string, subjs: string[], ms: number): Promise<"ok" | "err" | "timeout"> =>
-      new Promise((resolve) => {
-        const w = new Worker(
-          "const{parentPort,workerData}=require('worker_threads');try{const r=new RegExp(workerData.src,workerData.flags);for(const s of workerData.subjs){r.test(s)}parentPort.postMessage('ok')}catch{parentPort.postMessage('err')}",
-          { eval: true, workerData: { src, flags, subjs } }
-        );
-        const t = setTimeout(() => {
-          void w.terminate();
-          resolve("timeout");
-        }, ms);
-        w.on("message", (m: "ok" | "err") => {
-          clearTimeout(t);
-          void w.terminate();
-          resolve(m);
-        });
-        w.on("error", () => {
-          clearTimeout(t);
-          void w.terminate();
-          resolve("err");
-        });
-      });
-    for (const pat of patterns) {
-      const re = likeToRegex(pat);
-      // re-confirm a timeout with a calm budget so parallel-load CPU starvation can't flake it
-      let res = await runCompiled(re.source, re.flags, subjects, 1500);
-      if (res === "timeout") res = await runCompiled(re.source, re.flags, subjects, 5000);
-      expect(res, `compiled likeToRegex(${JSON.stringify(pat)}) must not hang`).toBe("ok");
+  it("is linear on the literal-separated shapes that hung V8 pre-rc.71", () => {
+    // `*a`x40 -> pre-rc.71 `^.*a.*a...$`; against a long all-`a` non-matching subject this
+    // backtracked for minutes. The DP matcher must finish well under a second.
+    const subject = `${"a".repeat(3000)}b`; // non-matching (trailing b)
+    const t0 = Date.now();
+    for (const pat of [`${"*a".repeat(40)}`, `a${"*".repeat(60)}b`, `${"*x".repeat(30)}y`]) {
+      const m = compileLike(pat);
+      for (let r = 0; r < 5; r++) m.test(subject);
     }
+    expect(Date.now() - t0, "literal-separated LIKE must not hang").toBeLessThan(500);
   });
 });
 

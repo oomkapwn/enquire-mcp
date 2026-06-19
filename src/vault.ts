@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
+import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
@@ -106,8 +107,8 @@ export class Vault {
   readonly maxDiskCacheBytes: number;
   readonly excludeGlobs: readonly string[];
   readonly readPaths: readonly string[];
-  private excludeRegexes: RegExp[];
-  private readPathRegexes: RegExp[];
+  private excludeMatchers: Array<{ test(path: string): boolean }>;
+  private readPathMatchers: Array<{ test(path: string): boolean }>;
   cacheFile: string | null;
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
@@ -129,7 +130,7 @@ export class Vault {
     // flags that, after stripping empty / whitespace-only entries, produced
     // 0 working patterns. Pre-fix, e.g. `--read-paths ""` (empty after shell
     // interpolation of an unset variable) survived as an array of one empty
-    // string. globToRegex("") produces `^$` which matches NO real paths —
+    // string. compileGlob("") produces a matcher that matches NO real paths —
     // the user's intent was "filter to nothing" but functionally that meant
     // the readPaths predicate matched nothing → every path treated as
     // excluded. The opposite mistake (whitespace-only) silently disabled.
@@ -147,9 +148,9 @@ export class Vault {
       );
     }
     this.excludeGlobs = Object.freeze([...cleanExcludeGlobs]);
-    this.excludeRegexes = this.excludeGlobs.map(globToRegex);
+    this.excludeMatchers = this.excludeGlobs.map(compileGlob);
     this.readPaths = Object.freeze([...cleanReadPaths]);
-    this.readPathRegexes = this.readPaths.map(globToRegex);
+    this.readPathMatchers = this.readPaths.map(compileGlob);
   }
 
   /** v2.0.0-beta.2: helper that returns the reason a path was excluded, or
@@ -158,13 +159,13 @@ export class Vault {
   exclusionReason(
     relPath: string
   ): "--read-paths allowlist (path doesn't match any allow-glob)" | "--exclude-glob denylist" | null {
-    if (this.excludeRegexes.length === 0 && this.readPathRegexes.length === 0) return null;
+    if (this.excludeMatchers.length === 0 && this.readPathMatchers.length === 0) return null;
     const norm = relPath.replace(/\\/g, "/");
-    if (this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))) {
+    if (this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))) {
       return "--read-paths allowlist (path doesn't match any allow-glob)";
     }
-    if (this.excludeRegexes.length === 0) return null;
-    if (this.excludeRegexes.some((re) => re.test(norm))) {
+    if (this.excludeMatchers.length === 0) return null;
+    if (this.excludeMatchers.some((re) => re.test(norm))) {
       return "--exclude-glob denylist";
     }
     return null;
@@ -176,13 +177,13 @@ export class Vault {
    *  excluded — no list/read/write/watch event surfaces it.
    *  When BOTH are set: must match an allow-glob AND not match an exclude. */
   isExcluded(relPath: string): boolean {
-    if (this.excludeRegexes.length === 0 && this.readPathRegexes.length === 0) return false;
+    if (this.excludeMatchers.length === 0 && this.readPathMatchers.length === 0) return false;
     const norm = relPath.replace(/\\/g, "/");
-    if (this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))) {
+    if (this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))) {
       return true; // not in allowlist → excluded
     }
-    if (this.excludeRegexes.length === 0) return false;
-    return this.excludeRegexes.some((re) => re.test(norm));
+    if (this.excludeMatchers.length === 0) return false;
+    return this.excludeMatchers.some((re) => re.test(norm));
   }
 
   /**
@@ -481,7 +482,7 @@ export class Vault {
     // any --read-paths allowlist pattern are omitted from the listing entirely.
     // resolveSafePath also rejects them on direct read/write, so the LLM has
     // no way to reach excluded content.
-    if (this.excludeRegexes.length > 0 || this.readPathRegexes.length > 0) {
+    if (this.excludeMatchers.length > 0 || this.readPathMatchers.length > 0) {
       return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
     }
     return out;
@@ -504,7 +505,7 @@ export class Vault {
     }
     const out: FileEntry[] = [];
     await walkAnyExt(start, this.root, out, ext.toLowerCase());
-    if (this.excludeRegexes.length > 0 || this.readPathRegexes.length > 0) {
+    if (this.excludeMatchers.length > 0 || this.readPathMatchers.length > 0) {
       return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
     }
     return out;
@@ -753,7 +754,7 @@ export class Vault {
     const targetRelNorm = await this.canonicalRelForPrivacyCheck(abs);
     if (this.isExcluded(targetRelNorm)) {
       const reason =
-        this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(targetRelNorm))
+        this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(targetRelNorm))
           ? "--read-paths allowlist (path doesn't match any allow-glob)"
           : "--exclude-glob denylist";
       throw new Error(`Refusing to write — destination is excluded by ${reason}: ${targetRelNorm}`);
@@ -932,7 +933,7 @@ export class Vault {
     const toRelForFilter = await this.canonicalRelForPrivacyCheck(toAbs);
     if (this.isExcluded(toRelForFilter)) {
       const reason =
-        this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(toRelForFilter))
+        this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(toRelForFilter))
           ? "--read-paths allowlist (path doesn't match any allow-glob)"
           : "--exclude-glob denylist";
       throw new Error(`Refusing to rename — destination is excluded by ${reason}: ${toRelNorm}`);
@@ -1188,7 +1189,7 @@ export class Vault {
       const norm = rel.replace(/\\/g, "/");
       if (this.isExcluded(norm)) {
         const reason =
-          this.readPathRegexes.length > 0 && !this.readPathRegexes.some((re) => re.test(norm))
+          this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))
             ? "--read-paths allowlist (path doesn't match any allow-glob)"
             : "--exclude-glob denylist";
         throw new Error(`Path is excluded by ${reason}: ${rel}`);
@@ -1322,78 +1323,43 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
 }
 
 /**
- * Defensive cap on a glob pattern length (v3.10.0-rc.68, round-3 re-sweep). Bounds
- * regex-compile/match CPU on an absurd operator-supplied glob from `--exclude-glob` /
- * `--read-paths`. The catastrophic-backtracking guard is the consecutive-`*` collapse in
- * {@link globToRegex} (below), not this cap.
+ * Defensive cap on a glob pattern length (v3.10.0-rc.68, round-3 re-sweep). Bounds the
+ * tokenize/match work on an absurd operator-supplied glob from `--exclude-glob` /
+ * `--read-paths`. As of v3.10.0-rc.71 the catastrophic-backtracking guard is structural —
+ * {@link compileGlob} matches via a NON-backtracking DP, not a `RegExp` — so this is a
+ * cheap secondary bound, not the ReDoS guard.
  */
 export const MAX_GLOB_PATTERN_LEN = 1024;
 
 /**
- * Convert a minimal glob pattern to a RegExp anchored against vault-relative
- * paths (forward-slash separated). Supports:
+ * Compile a minimal glob into a NON-backtracking matcher anchored against
+ * vault-relative paths (forward-slash separated). Supports:
  *   `*`   — any run of non-slash characters
  *   `**`  — any run of characters including slashes (globstar)
  *   `?`   — exactly one non-slash character
- * No bracket sets, no `!` negation, no `{a,b}` alternation. Patterns are
- * matched against the full vault-relative path (e.g. `02_Personal/Inbox/x.md`).
+ * No bracket sets, no `!` negation, no `{a,b}` alternation. Patterns are matched
+ * against the full vault-relative path (e.g. `02_Personal/Inbox/x.md`). The
+ * returned object exposes `.test(path)` so call sites read like the old
+ * `globToRegex(...).test(...)`.
  *
- * v3.10.0-rc.68 (round-3 re-sweep, ReDoS — sibling of the rc.63 likeToRegex fix): a RUN of
- * consecutive `*` is collapsed to a single `.*`. Pre-rc.68 the `**` branch consumed only TWO
- * stars + a trailing `/`, so `****` emitted `^.*.*$` and `***` emitted `^.*[^/]*$` — ADJACENT
- * unbounded quantifiers that backtrack catastrophically against a non-matching path (no nesting
- * needed; measured >15s V8 hangs at ~8–12 globstar runs). The regex runs via `.test()` in
- * `isExcluded`/`exclusionReason` for EVERY path on EVERY vault scan, so one fat-fingered glob
- * froze every scan. Collapsing the run is semantically identical (any-chars-incl-slash is
- * idempotent) and leaves the compiled source with only NON-adjacent quantifiers (linear).
+ * v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class — closes the rc.68 sibling): matching
+ * is now a NON-backtracking DP ({@link matchWildcardTokens}), NOT a `RegExp`. The
+ * pre-rc.71 `globToRegex` compiled `*`→`[^/]*` / `**`→`.*` and (rc.68) collapsed only
+ * ADJACENT unbounded quantifiers. A glob with wildcards SEPARATED BY LITERALS
+ * (`*a*a*…` → `^[^/]*a[^/]*a…$`, or `**a**a…`) was still catastrophic — the rc.68
+ * adjacency-collapse cannot touch a literal-separated run, and its structural guard
+ * (asserting "no adjacent quantifiers") gave false confidence against this shape. The
+ * catastrophe scales with the matched PATH length (paths can be 100+ chars deep), so a
+ * wildcard count cap is not structurally safe. This filter runs via `.test()` on EVERY
+ * path of EVERY vault scan, so one fat-fingered `--exclude-glob` / `--read-paths` froze
+ * every scan; the linear matcher removes the backtracking engine entirely.
  */
-export function globToRegex(glob: string): RegExp {
+export function compileGlob(glob: string): { test(path: string): boolean } {
   if (glob.length > MAX_GLOB_PATTERN_LEN) {
     throw new Error(`glob pattern too long (${glob.length} > ${MAX_GLOB_PATTERN_LEN} chars).`);
   }
-  let i = 0;
-  let out = "^";
-  while (i < glob.length) {
-    const ch = glob[i];
-    if (ch === "*") {
-      // `**` means cross-segment (any chars), `*` means within-segment.
-      if (glob[i + 1] === "*") {
-        out += ".*";
-        i += 2;
-        // v3.10.0-rc.68 — consume the ENTIRE remaining run of `*` so a globstar run collapses to
-        // ONE `.*` (idempotent), never adjacent `.*`/`.*[^/]*` (the rc.63 catastrophic shape).
-        while (glob[i] === "*") i += 1;
-        // Eat a trailing `/` after the globstar run so `a/**/b` matches `a/b` too.
-        if (glob[i] === "/") i += 1;
-        continue;
-      }
-      out += "[^/]*";
-      i += 1;
-      continue;
-    }
-    if (ch === "?") {
-      out += "[^/]";
-      i += 1;
-      continue;
-    }
-    // Escape regex specials.
-    if (ch && /[.+^${}()|[\]\\]/.test(ch)) {
-      out += `\\${ch}`;
-      i += 1;
-      continue;
-    }
-    out += ch ?? "";
-    i += 1;
-  }
-  // v3.10.0-rc.68 (round-3 re-sweep, ReDoS) — FINAL collapse: any adjacent unbounded quantifiers
-  // reduce to a single `.*` (idempotent for matching). The per-run `while` above handles a single
-  // globstar run (`***`), but REDUNDANT globstars separated by a slash (`a/**/**/b`) still emit
-  // `.*.*` (the first `**` consumes its trailing `/`, so the next `**` is adjacent). This pass
-  // guarantees the compiled source NEVER contains a catastrophic adjacent-quantifier run, however
-  // the globstars were spelled — the durable, total guard. (`.*[^/]*` and `[^/]*.*` ⊆ `.*`.)
-  out = out.replace(/(?:\.\*|\[\^\/\]\*){2,}/g, ".*");
-  out += "$";
-  return new RegExp(out);
+  const tokens = compileGlobTokens(glob);
+  return { test: (p: string): boolean => matchWildcardTokens(tokens, p) };
 }
 
 function stripMdExt(name: string): string {

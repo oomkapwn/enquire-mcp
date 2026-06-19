@@ -334,7 +334,13 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       if (norm) outbound.add(norm);
     }
     const ctx: EvalContext = {
-      path: e.relPath.replace(/\\/g, "/"),
+      // v3.10.0-rc.73 (post-rc.70 re-sweep, NFC sibling of rc.69) — NFC-normalize the path so the
+      // `path`/`file.path` startsWith/contains predicates resolve an NFD-on-disk path (macOS APFS
+      // returns NFD) against an NFC user literal. NFC-only, NOT case-fold: `path`/`file.path` is
+      // case-SENSITIVE in Obsidian/Dataview. The `file.name ==` branch already folds via foldName
+      // (NFC + case), idempotent under this normalize; the result projection (line ~346) keeps the
+      // raw relPath verbatim.
+      path: e.relPath.replace(/\\/g, "/").normalize("NFC"),
       tags,
       frontmatter: fm,
       outbound,
@@ -533,7 +539,9 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   const pathOp = /^(?:file\.)?path\s+(startsWith|contains)\s+(["'])([^"']+)\2$/.exec(expr);
   if (pathOp) {
     const op = pathOp[1];
-    const needle = pathOp[3] ?? "";
+    // v3.10.0-rc.73 — NFC-normalize the literal too (ctx.path is already NFC), so an NFD-typed
+    // literal also matches. NFC-only; path comparison stays case-sensitive.
+    const needle = (pathOp[3] ?? "").normalize("NFC");
     return op === "startsWith" ? ctx.path.startsWith(needle) : ctx.path.includes(needle);
   }
 

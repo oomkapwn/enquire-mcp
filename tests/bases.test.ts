@@ -370,6 +370,34 @@ views:
     expect(out.matches[0]?.path).toBe("Notes/inline.md");
   });
 
+  it("resolves an accented path across NFC/NFD forms — path/file.path startsWith+contains (rc.73 round-3 re-sweep)", async () => {
+    // v3.10.0-rc.73 (post-rc.70 re-sweep, NFC sibling of rc.69): the on-disk folder is NFD (as
+    // macOS APFS returns it); the user types the NFC literal in the `.base` filter. Pre-rc.73,
+    // ctx.path was raw NFD and the literal raw NFC, so `path startsWith "Café/"` returned ZERO
+    // matches. The `file.name ==` twin was folded in rc.46/rc.69; this path/file.path branch was
+    // the missed sibling. Both operands now NFC-normalize (NFC-only — path is case-sensitive).
+    const nfd = `Cafe${String.fromCodePoint(0x301)}`; // e + combining acute (NFD on disk)
+    const nfc = `Caf${String.fromCodePoint(0xe9)}`; // precomposed é (NFC literal)
+    expect(nfc).not.toBe(nfd); // raw forms differ — the test is non-vacuous
+    const vroot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bases-nfc-"));
+    try {
+      await fs.mkdir(path.join(vroot, nfd), { recursive: true });
+      await fs.writeFile(path.join(vroot, nfd, "note.md"), "---\ntag: x\n---\nbody\n");
+      const v = new Vault(vroot);
+      const run = async (filter: string): Promise<number> => {
+        await fs.writeFile(path.join(vroot, "q.base"), `filters: '${filter}'\nviews:\n  - type: table\n`);
+        return (await queryBase(v, { path: "q.base" })).matches.length;
+      };
+      expect(await run(`path startsWith "${nfc}/"`), "NFC literal must resolve the NFD-on-disk path").toBe(1);
+      expect(await run(`file.path startsWith "${nfc}/"`)).toBe(1);
+      expect(await run(`file.path contains "${nfc}"`)).toBe(1);
+      // NEGATIVE control: a non-matching accented prefix returns nothing.
+      expect(await run(`path startsWith "Other${String.fromCodePoint(0xe9)}/"`)).toBe(0);
+    } finally {
+      await fs.rm(vroot, { recursive: true, force: true });
+    }
+  });
+
   it("merges global filter AND view filter when view is specified", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(

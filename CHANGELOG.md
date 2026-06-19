@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.60] — 2026-06-19
+
+> **TL;DR:** **Round-2 fresh audit → WRITE-1 [HIGH data-loss], shipped first/isolated.** A 2nd from-scratch 8-lens workflow-audit (30 agents, 3-skeptic verify; deeper into the modules round 1 skimmed) found a genuine HIGH the prior 25 audit rounds missed: `renameNote(overwrite:true)` silently LOSES the source note when the destination backlinks the source. Fixed by excluding the rename destination from the backlink-rewrite plan. The 6 remaining round-2 findings (2 MED / 4 LOW) ship in rc.61–rc.62. **1249 → 1251 source tests.**
+
+**Pre-release (v3.10 line) — round-2 audit, WRITE-1 (HIGH, isolated).**
+
+### Fixed
+
+- **WRITE-1 [HIGH, data-loss] — `obsidian_rename_note({overwrite:true})` silently destroys the source when the destination backlinks the source** (`src/tools/write.ts`). The backlink-rewrite plan loop excluded only the SOURCE file (`e.absPath === fromAbs`), never the DESTINATION. With two distinct notes — `A.md` (source) and an existing `B.md` (destination) that contains `[[A]]` — the sequence was: (1) write source self-refs at the OLD path; (2) `renameFile(A→B, overwrite)` moves A's content onto `B.md` (overwriting B's original); (3) the backlink loop then `writeNote("B.md", B's-pre-rename-rewritten-content)` — **clobbering the just-moved source content.** A.md's content was permanently lost while the response still reported `{from:"A", to:"B"}` success. Root cause (class, not instance): the orchestrator builds the backlink plan against PRE-rename content but applies it POST-rename, so any path the rename mutated (the destination) is stale in the plan. Fix: also skip the destination (`e.absPath === toAbsCheck`) from the plan — its post-rename content IS the moved source (whose self-references were already fixed via `sourcePlan`), so there is nothing to rewrite there. `archiveNote` inherits the fix (it delegates to `renameNote`).
+
+### Tests (1251)
+
+- +2 source `it()` in `tests/write.test.ts`: a data-loss regression (overwrite:true where the destination backlinks the source → assert the destination holds the moved source content) + a NEGATIVE control (overwrite:true to a destination that does NOT backlink the source still works — proves the skip isn't over-broad). 1249 → 1251.
+
+> **Lesson:** the rename orchestrator computes a backlink-rewrite plan against PRE-rename disk content but writes it POST-rename — any path the rename itself mutated (the overwrite destination) is stale in that plan, and the long-standing source-only exclusion was the gap. A fresh multi-lens audit's deeper write-path lens found a real HIGH data-loss bug that 25 prior rounds + the standing test suite never surfaced — behavioral multi-lens audits remain the highest-yield gate, and a data-loss path deserves a dedicated isolated RC.
+
+---
+
 ## [3.10.0-rc.59] — 2026-06-19
 
 > **TL;DR:** **Post-rc.58 re-sweep — a 6th OPTDEP-leak sibling (`hnsw.ts`) + the detector's own blind-spot.** The mandated post-merge re-sweep found `hnsw.ts`'s `loadHnswlib` leaks the importing file's abs path via a `const msg = err.message; …throw new Error(\`…${msg}\`)` **indirection** the rc.57 leak-detector was structurally blind to (it matched only DIRECT `${err.message}`) — missed by the 8-lens audit + my rc.55 grep too. RCA: the throw is **fail-soft-caught server-side** (brute-force fallback → operator stderr, not the client) → **LOW**, but the fix + detector-strengthening are the durable close. Routed `loadHnswlib` through `optionalDepDetail`, added `hnsw.ts` to the inventory (3→6 files), and **strengthened the detector to be indirection-aware AND throw-scoped** (flags a `const`-captured error message interpolated in a `throw`, ignores server-side `stderr` logs). **1249 source tests unchanged.**

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.73] — 2026-06-19
+
+> **TL;DR:** **Post-rc.70 re-sweep, batch 3/4 — MED NFC-blind `path`/`file.path` predicate in `.base` queries (rc.69 NFC sibling).** `obsidian_query_base` compared `ctx.path` (raw relPath, NFD on macOS APFS) against the NFC `.base` filter literal in the `path`/`file.path` startsWith/contains branch with NO normalization, so `path startsWith "Café/"` silently returned zero matches for an accented folder. rc.69 fixed the DQL twin; this bases.ts branch was the missed sibling (the `file.name ==` branch 10 lines below already folds). Fixed by NFC-normalizing both operands. **1301 → 1302 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.70 re-sweep, batch 3/4 (NFC correctness, rc.69 sibling).**
+
+### Fixed
+
+- **MED — `.base` `path`/`file.path` startsWith/contains was NFC-blind (silent zero-match for accented paths on macOS)** (`src/bases.ts`). The `path startsWith "X"` / `path contains "X"` / `file.path startsWith "X"` / `file.path contains "X"` branch compared `ctx.path` (= `e.relPath` with `\`→`/`, NFD-decomposed on APFS) against the unnormalized NFC literal extracted from the `.base` filter — neither operand normalized. So a `.base` with `filters: 'path startsWith "Café/"'` silently returned ZERO rows for notes under a `Café/` folder whose on-disk path is NFD, though they exist and match user intent. This is the same FS(NFD)-vs-user(NFC) mismatch rc.69 closed for the DQL engine's `file.name`/`file.path`; the bases.ts `file.name ==` twin was folded in rc.46, but this path/file.path branch one block above did neither (the rc.46/rc.69 name-fold detector can't see it — the strip and the raw `startsWith`/`includes` are in different places, no `toLowerCase` signature to grep). **Fix: NFC-normalize `ctx.path` once at its assignment + the predicate literal — NFC-only, NOT case-fold, since `path`/`file.path` is case-SENSITIVE in Obsidian/Dataview. The result-row projection keeps the raw relPath verbatim.** `obsidian_query_base` is always-registered and bearer-reachable on serve-http, so any authed client got silent under-matching.
+
+### Tests (1302)
+
+- +1 (`tests/bases.test.ts`): an NFD-on-disk `Café/note.md` resolves an NFC `path startsWith "Café/"` (POSITIVE) + `file.path startsWith` + `file.path contains`, with a non-matching accented prefix as the NEGATIVE control — fails if the normalize is dropped. Mirrors the rc.69 DQL NFC test. **1301 → 1302.**
+
+> **Lesson:** an inventory/name-fold detector is only as complete as the signatures it greps — a comparison where the `.md`-strip and the `startsWith`/`includes` live in different functions (and that does NO `toLowerCase`, since the field is case-sensitive) escapes the rc.46/rc.69 strip-then-lowercase signature. The durable close for such a detector-missed site is a behavioral test that fails on a dropped normalize (rc.66/rc.69 lesson), not another detector signature. Batch 4/4 (rc.74 — pdfjs document/loadingTask reserve-before-try leak, rc.70 sibling) follows.
+
+---
+
 ## [3.10.0-rc.72] — 2026-06-19
 
 > **TL;DR:** **Post-rc.70 re-sweep, batch 2/4 — MED remote-DoS amplifier: `validateNoteProposal` `findBestMatch` O(K×N) (rc.67 sibling).** rc.67 closed the `suggestSimilar` re-walk in the wikilink loop, but `findBestMatch` (called per link in the SAME loop) still fell into an O(N) `endsWith` scan for the path-qualified MISS case — a 1 MB body of K distinct path-qualified broken `[[a/X]]` links → O(K×N) (measured 8+ min at K=150k/N=20k) on the always-on, bearer-reachable `obsidian_validate_note_proposal`. Fixed by adding a `bySuffix` index to the cached `EntryIndex` so the path-qualified miss is O(1). **1300 → 1301 source tests.**

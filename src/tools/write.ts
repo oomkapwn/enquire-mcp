@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { stringifyFrontmatter } from "../frontmatter.js";
+import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -212,7 +212,14 @@ export async function renameNote(
   if (fromRel === toRelCheck) {
     throw new Error(`from and to are the same path: ${fromRel}`);
   }
-  if (!args.overwrite) {
+  // v3.10.0-rc.61 (WRITE-3) — a case-only rename (Foo.md → foo.md) on a case-INSENSITIVE FS sees
+  // the "destination" as existing because it IS the source (same inode). Skip this tool-level
+  // existence guard for a case-only path difference and defer to `vault.renameFile`, which is the
+  // authority: on a case-insensitive FS it does the rename (its `isSameInodeCaseRename` inode
+  // check confirms same file); on a case-SENSITIVE FS where `to` is a distinct existing file it
+  // still throws EEXIST → "Destination already exists". A non-case-only existing dest is rejected here.
+  const caseOnlyRename = fromAbs !== toAbsCheck && fromAbs.toLowerCase() === toAbsCheck.toLowerCase();
+  if (!args.overwrite && !caseOnlyRename) {
     const exists = await vault
       .stat(toAbsCheck)
       .then(() => true)
@@ -448,6 +455,21 @@ export async function frontmatterSet(
   // when the title matches multiple notes.
   const target = await resolveTarget(vault, args, { strictOnAmbiguousTitle: true });
   const note = await vault.readNote(target.absPath, target.mtimeMs);
+  // v3.10.0-rc.61 (WRITE-2) — if the note's EXISTING frontmatter is malformed YAML (e.g.
+  // tab-indented), parseNote swallowed the parse error and fell back to a whole-file body;
+  // `note.parsed.frontmatter` is then `{}` and `note.parsed.body` still begins with `---`.
+  // Blindly `stringifyFrontmatter(body, after)` would PREPEND a second `---` block, burying
+  // the original and corrupting the file (and `before:{}` would hide the dropped keys).
+  // Re-parse the raw content; if it throws, refuse rather than corrupt. (A note with NO
+  // frontmatter parses cleanly → returns {} → adding frontmatter stays allowed.)
+  try {
+    parseFrontmatter(note.content);
+  } catch {
+    throw new Error(
+      `frontmatter_set: refusing to edit ${target.relPath} — its existing frontmatter is not valid YAML ` +
+        `(e.g. a tab used for indentation, which YAML forbids). Fix the frontmatter by hand first, then retry.`
+    );
+  }
   const before = { ...note.parsed.frontmatter };
   const after: Record<string, unknown> = { ...before };
   const changed: string[] = [];

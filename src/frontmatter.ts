@@ -145,7 +145,18 @@ function normalizeDateOnly(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeDateOnly);
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) out[k] = normalizeDateOnly(v);
+    for (const [k, v] of Object.entries(value)) {
+      // v3.10.0-rc.61 (FM-PROTO-KEY-DROP) — `out[k] = …` would silently DROP a literal
+      // `__proto__` frontmatter key (it hits the prototype-setter accessor, not an own
+      // property) — data loss vs the direct dump. defineProperty sets a real own enumerable
+      // data property for every key, so `__proto__` (and any key) is preserved + re-dumped.
+      Object.defineProperty(out, k, {
+        value: normalizeDateOnly(v),
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
     return out;
   }
   return value;

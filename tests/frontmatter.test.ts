@@ -129,4 +129,13 @@ describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {
     const out = stringifyFrontmatter("b", { at: new Date("2026-01-15T13:45:00.000Z") });
     expect(out).toMatch(/2026-01-15T13:45:00/);
   });
+
+  it("preserves a literal `__proto__` frontmatter key through stringify (rc.61 FM-PROTO-KEY-DROP)", () => {
+    // js-yaml load/dump treat `__proto__` as an OWN key; rc.58's normalizeDateOnly deep-walk
+    // rebuilt objects with `out[k]=…` which hit the prototype setter and silently DROPPED it.
+    const { data } = parseFrontmatter("---\n__proto__: danger\ntitle: ok\n---\nbody");
+    const out = stringifyFrontmatter("body", data);
+    expect(out, "the __proto__ key must survive the normalizeDateOnly deep-walk").toContain("__proto__: danger");
+    expect(out).toContain("title: ok");
+  });
 });

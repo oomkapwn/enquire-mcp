@@ -426,6 +426,24 @@ describe("renameNote (v1.1)", () => {
     expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toContain("body A");
   });
 
+  it("allows a case-only rename without overwrite on a case-insensitive FS (rc.61 WRITE-3)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Foo.md"), "# Foo\n\nkeep me\n");
+    // On a case-insensitive FS (macOS/Windows) Foo.md and foo.md are the same inode; pre-rc.61
+    // this threw a misleading "Destination already exists". Detect via realpath — skip the
+    // assertion on a genuinely case-SENSITIVE FS (where this rename is just a normal move).
+    const caseInsensitive = await fs
+      .stat(path.join(root, "foo.md"))
+      .then(() => true)
+      .catch(() => false); // foo.md resolves iff the FS is case-insensitive
+    if (!caseInsensitive) return; // case-sensitive FS — not the scenario under test
+    await renameNote(v, { from: "Foo.md", to: "foo.md" });
+    const names = (await fs.readdir(root)).filter((n) => n.toLowerCase() === "foo.md");
+    expect(names).toEqual(["foo.md"]); // renamed to the new casing, content preserved
+    expect(await fs.readFile(path.join(root, "foo.md"), "utf8")).toContain("keep me");
+  });
+
   it("auto-appends .md to from/to when missing", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

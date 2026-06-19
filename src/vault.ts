@@ -898,6 +898,21 @@ export class Vault {
    *  v3.7.16 P1-6 — destination privacy filter uses
    *  {@link canonicalRelForPrivacyCheck} (case-insensitive-FS bypass
    *  closure; parity with `writeNote`). */
+  /**
+   * v3.10.0-rc.61 (WRITE-3) — true iff `fromAbs`/`toAbs` differ only in case AND resolve to the
+   * SAME physical file (same inode) — i.e. a case-only rename on a case-INSENSITIVE filesystem.
+   * On a case-SENSITIVE FS the two are distinct files (toAbs is a different inode or absent) → false.
+   */
+  private async isSameInodeCaseRename(fromAbs: string, toAbs: string): Promise<boolean> {
+    if (fromAbs === toAbs || fromAbs.toLowerCase() !== toAbs.toLowerCase()) return false;
+    try {
+      const [a, b] = await Promise.all([this.statSafe(fromAbs), this.statSafe(toAbs)]);
+      return a.ino !== 0 && a.ino === b.ino;
+    } catch {
+      return false; // toAbs absent → a genuine new destination, not a same-file case rename
+    }
+  }
+
   async renameFile(
     fromRel: string,
     toRel: string,
@@ -941,6 +956,13 @@ export class Vault {
     // file at the new path with identical contents. For the overwrite path
     // we keep plain rename() since the user opted into replacement.
     if (opts.overwrite) {
+      await this.renameSafe(fromAbs, toAbs);
+    } else if (await this.isSameInodeCaseRename(fromAbs, toAbs)) {
+      // v3.10.0-rc.61 (WRITE-3) — a case-only rename (Foo.md → foo.md) on a case-INSENSITIVE
+      // FS (macOS APFS/HFS+, Windows NTFS) targets the SAME physical inode, so the linkSafe
+      // path below would throw EEXIST → a misleading "Destination already exists". Use plain
+      // rename, which performs the case change. (On a case-SENSITIVE FS this branch is never
+      // taken — foo.md is a distinct file; absent → linkSafe creates it, present → real EEXIST.)
       await this.renameSafe(fromAbs, toAbs);
     } else {
       try {

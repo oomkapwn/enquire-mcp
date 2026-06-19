@@ -51,6 +51,18 @@ export interface Frontmatter {
   data: Record<string, unknown>;
   /** Post-frontmatter body — a verbatim suffix of the input. */
   content: string;
+  /**
+   * v3.10.0-rc.64 (round-3 audit) — true when the frontmatter block was present
+   * and NON-EMPTY but its top-level YAML document is NOT a mapping (a bare scalar
+   * `---\nhello\n---`, a sequence `---\n- a\n---`, or a non-plain object like a
+   * `Date`), so {@link parseFrontmatter} coerced `data` to `{}` to avoid
+   * spreading corrupt data. Callers that WRITE frontmatter back (`frontmatter_set`)
+   * must refuse fail-closed on this signal — otherwise re-serializing `data` would
+   * REPLACE the original scalar/sequence block with a fresh mapping, silently
+   * destroying it. `false` for absent / empty / comment-only / valid-mapping
+   * frontmatter (the legitimate add/edit paths).
+   */
+  coerced: boolean;
 }
 
 const OPEN = "---";
@@ -83,11 +95,11 @@ export function parseFrontmatter(input: string): Frontmatter {
   // input — still a suffix of the original (the BOM is at offset 0), so parser.ts's
   // `source.lastIndexOf(body)` for bodyStartLine is unaffected.
   if (input.charCodeAt(0) === 0xfeff) input = input.slice(1);
-  if (input === "") return { data: {}, content: "" };
-  if (!input.startsWith(OPEN)) return { data: {}, content: input };
+  if (input === "") return { data: {}, content: "", coerced: false };
+  if (!input.startsWith(OPEN)) return { data: {}, content: input, coerced: false };
   // gray-matter guard: `----…` (a 4th dash right after the opening fence) is NOT
   // frontmatter — treat the whole input as body.
-  if (input.charAt(OPEN.length) === "-") return { data: {}, content: input };
+  if (input.charAt(OPEN.length) === "-") return { data: {}, content: input, coerced: false };
 
   const str = input.slice(OPEN.length);
   const len = str.length;
@@ -98,6 +110,9 @@ export function parseFrontmatter(input: string): Frontmatter {
   // Strip YAML comment-only lines for the emptiness decision (gray-matter parity).
   const block = matterBlock.replace(/^\s*#[^\n]+/gm, "").trim();
   let data: Record<string, unknown> = {};
+  // v3.10.0-rc.64 (round-3 audit) — track whether a non-empty block was coerced
+  // away from a non-mapping document (see the `coerced` field doc on Frontmatter).
+  let coerced = false;
   if (block !== "") {
     // v3.10.0-rc.54 (audit FM-SCALAR) — coerce a NON-MAPPING document (scalar / array /
     // null) to {} the way gray-matter did. Otherwise a frontmatter block that's a bare
@@ -107,7 +122,12 @@ export function parseFrontmatter(input: string): Frontmatter {
     // a bare top-level Date (`---\n2026-01-01\n---`, which js-yaml resolves to a `Date`
     // instance) slip through as `data`; require a PLAIN object (a real mapping) instead.
     const loaded = load(matterBlock);
-    data = isPlainObject(loaded) ? loaded : {};
+    if (isPlainObject(loaded)) {
+      data = loaded;
+    } else {
+      data = {};
+      coerced = true; // a non-empty block that is NOT a mapping → would be lost on write-back
+    }
   }
 
   let content: string;
@@ -118,7 +138,7 @@ export function parseFrontmatter(input: string): Frontmatter {
     if (content[0] === "\r") content = content.slice(1);
     if (content[0] === "\n") content = content.slice(1);
   }
-  return { data, content };
+  return { data, content, coerced };
 }
 
 /** `s` with a guaranteed trailing newline (gray-matter's `newline()`). */

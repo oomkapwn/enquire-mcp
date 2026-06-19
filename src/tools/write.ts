@@ -455,19 +455,31 @@ export async function frontmatterSet(
   // when the title matches multiple notes.
   const target = await resolveTarget(vault, args, { strictOnAmbiguousTitle: true });
   const note = await vault.readNote(target.absPath, target.mtimeMs);
-  // v3.10.0-rc.61 (WRITE-2) — if the note's EXISTING frontmatter is malformed YAML (e.g.
-  // tab-indented), parseNote swallowed the parse error and fell back to a whole-file body;
-  // `note.parsed.frontmatter` is then `{}` and `note.parsed.body` still begins with `---`.
-  // Blindly `stringifyFrontmatter(body, after)` would PREPEND a second `---` block, burying
-  // the original and corrupting the file (and `before:{}` would hide the dropped keys).
-  // Re-parse the raw content; if it throws, refuse rather than corrupt. (A note with NO
-  // frontmatter parses cleanly → returns {} → adding frontmatter stays allowed.)
+  // v3.10.0-rc.61 (WRITE-2) + v3.10.0-rc.64 (round-3 audit, non-mapping sibling) — guard the
+  // EXISTING frontmatter against two write-back data-loss shapes, both of which leave
+  // `note.parsed.frontmatter` as `{}` (so `before:{}` would hide the loss) while the raw block
+  // still holds real content that `stringifyFrontmatter(body, after)` would REPLACE:
+  //   (a) MALFORMED YAML (e.g. tab-indented) — parseNote swallowed the parse error and fell
+  //       back to a whole-file body; re-parsing the raw content THROWS. (rc.61)
+  //   (b) valid-YAML NON-MAPPING — a bare scalar (`---\nhello\n---`) or sequence
+  //       (`---\n- a\n---`); parseFrontmatter SUCCEEDS but coerces `data` to `{}` and sets
+  //       `coerced` (it would otherwise be spread char-indexed). (rc.64 — the sibling the
+  //       rc.61 throws-only guard missed.)
+  // Refuse fail-closed in BOTH cases. (A note with NO frontmatter parses cleanly, `coerced`
+  // is false → adding frontmatter stays allowed — the legitimate add path.)
+  let existingFm: ReturnType<typeof parseFrontmatter>;
   try {
-    parseFrontmatter(note.content);
+    existingFm = parseFrontmatter(note.content);
   } catch {
     throw new Error(
       `frontmatter_set: refusing to edit ${target.relPath} — its existing frontmatter is not valid YAML ` +
         `(e.g. a tab used for indentation, which YAML forbids). Fix the frontmatter by hand first, then retry.`
+    );
+  }
+  if (existingFm.coerced) {
+    throw new Error(
+      `frontmatter_set: refusing to edit ${target.relPath} — its existing frontmatter is not a YAML mapping ` +
+        `(it's a bare scalar or sequence). Editing it would replace and destroy that block. Fix the frontmatter by hand first, then retry.`
     );
   }
   const before = { ...note.parsed.frontmatter };

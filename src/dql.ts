@@ -268,13 +268,18 @@ function parsePredicate(raw: string): Predicate {
 }
 
 function parseValue(raw: string): string | number | boolean | null {
+  // v3.10.0-rc.69 (round-3 re-sweep, NFC) — NFC-normalize string literals so a predicate value
+  // (user-authored, NFC) matches a `file.name`/`file.path` projection that is filesystem-derived
+  // (NFD on macOS APFS). Without this, `WHERE file.name = "Café"` silently returned zero rows for
+  // an accented note. The comparators handle CASE (looseEq/contains lowercase, `like` uses `iu`),
+  // so only Unicode form needs normalizing here — matching the projection's `.normalize("NFC")`.
   const strMatch = /^"([^"]*)"$/.exec(raw);
-  if (strMatch && strMatch[1] !== undefined) return strMatch[1];
+  if (strMatch && strMatch[1] !== undefined) return strMatch[1].normalize("NFC");
   if (raw === "true") return true;
   if (raw === "false") return false;
   if (raw === "null") return null;
   if (/^-?\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
-  return raw;
+  return raw.normalize("NFC");
 }
 
 function parseSort(raw: string): { field: string; dir: "ASC" | "DESC" } {
@@ -347,8 +352,9 @@ export async function runDql(
     if (!evalWhere(query.where, fieldVal)) continue;
 
     const out: Record<string, unknown> = {
-      "file.path": entry.relPath,
-      "file.name": stripMd(entry.basename),
+      // rc.69 — project the NFC-canonical name/path (consistent with the WHERE comparison above).
+      "file.path": entry.relPath.normalize("NFC"),
+      "file.name": stripMd(entry.basename).normalize("NFC"),
       "file.mtime": new Date(mtimeMs).toISOString()
     };
     if (query.kind === "TABLE") {
@@ -383,10 +389,13 @@ function resolveField(
   mtimeMs: number
 ): unknown {
   switch (field) {
+    // v3.10.0-rc.69 (round-3 re-sweep, NFC) — NFC-normalize the filesystem-derived name/path
+    // (NFD on macOS APFS) so it compares equal to a NFC predicate literal (see parseValue). The
+    // bases.ts `file.name ==` twin was folded in rc.46; this DQL sink was the missed sibling.
     case "file.name":
-      return stripMd(entry.basename);
+      return stripMd(entry.basename).normalize("NFC");
     case "file.path":
-      return entry.relPath;
+      return entry.relPath.normalize("NFC");
     case "file.mtime":
       return new Date(mtimeMs).toISOString();
     case "file.tags":

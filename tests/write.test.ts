@@ -395,6 +395,37 @@ describe("renameNote (v1.1)", () => {
     await expect(renameNote(v, { from: "MissingSource.md", to: "AnyName.md" })).rejects.toThrow();
   });
 
+  it("overwrite:true does NOT lose the source when the destination backlinks the source (rc.60 WRITE-1)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // Source A.md (the content that must survive) + an existing distinct destination B.md
+    // that backlinks A. Pre-rc.60 the backlink-rewrite loop wrote B's PRE-rename content
+    // back onto B.md AFTER the move put A's content there → A's content was silently lost.
+    await fs.writeFile(path.join(root, "A.md"), "# Source A\n\nThe content that MUST survive.\n");
+    await fs.writeFile(path.join(root, "B.md"), "# Dest B\n\nSee [[A]] for details.\n");
+    await renameNote(v, { from: "A.md", to: "B.md", overwrite: true });
+    const dest = await fs.readFile(path.join(root, "B.md"), "utf8");
+    expect(dest, "destination must hold the moved SOURCE content, not B's clobbered old content").toContain(
+      "The content that MUST survive."
+    );
+    expect(dest).not.toContain("See [[A]] for details."); // B's old content is gone (it was overwritten by the move — correct)
+    expect(
+      await fs
+        .access(path.join(root, "A.md"))
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false); // source moved away
+  });
+
+  it("overwrite:true to a destination that does NOT backlink the source still works (rc.60 NEGATIVE control)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "A.md"), "# Source A\n\nbody A\n");
+    await fs.writeFile(path.join(root, "B.md"), "# Dest B\n\nunrelated, no link\n");
+    await renameNote(v, { from: "A.md", to: "B.md", overwrite: true });
+    expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toContain("body A");
+  });
+
   it("auto-appends .md to from/to when missing", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

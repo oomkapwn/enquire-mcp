@@ -236,6 +236,14 @@ export async function renameNote(
   let sourcePlan: RenameProposal | null = null;
   for (const e of entries) {
     const isSource = e.absPath === fromAbs;
+    // v3.10.0-rc.60 (WRITE-1, data-loss) — the DESTINATION must be excluded from the
+    // backlink-rewrite plan: under overwrite=true, `renameFile` moves the SOURCE content
+    // onto the destination path, so writing the destination's PRE-rename (rewritten) content
+    // back afterwards would clobber the just-moved source (silent data loss when the
+    // destination backlinks the source). The destination's post-rename content IS the source
+    // (its self-refs already fixed via sourcePlan), so there is nothing to rewrite there.
+    const isDest = e.absPath === toAbsCheck;
+    if (isDest) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 
     // Find every wikilink + embed whose target resolves to fromAbs. Group by

@@ -220,6 +220,16 @@ after the fence`;
 });
 
 describe("FtsIndex — full lifecycle", () => {
+  it("releases its handle when open() throws on a corrupt index — close-on-throw (rc.70 reserve-before-try)", async () => {
+    if (!canRunFts5) return;
+    await fs.writeFile(dbFile, "not a sqlite database — garbage ".repeat(40));
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+    await expect(idx.open()).rejects.toThrow();
+    // Self-cleaning resets this.db=null on a post-construction throw, so a second open() RE-THROWS
+    // (pre-rc.70 the `if (this.db) return` guard made it a silent no-op, leaking the handle).
+    await expect(idx.open()).rejects.toThrow();
+  });
+
   it("indexes files, searches with BM25, and round-trips snippets", async () => {
     if (!canRunFts5) return;
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });

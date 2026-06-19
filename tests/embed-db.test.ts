@@ -50,6 +50,19 @@ describe("EmbedDb", () => {
     db2.close();
   });
 
+  it("releases its handle when open() throws on a corrupt db — close-on-throw (rc.70 reserve-before-try)", async () => {
+    const file = path.join(dir, "corrupt.embed.db");
+    await fs.writeFile(file, "not a sqlite database — garbage ".repeat(40));
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await expect(db.open()).rejects.toThrow();
+    // Pre-rc.70 `this.db` stayed SET after the post-construction throw (pragma/bootstrapSchema),
+    // so the `if (this.db) return` guard made a SECOND open() a silent no-op — the handle (+ its
+    // WAL/SHM locks) leaked for the serve lifetime. The close-on-throw catch resets `this.db=null`,
+    // so a second open() RE-THROWS: the behavioral proof the handle was released. (NEGATIVE control:
+    // without the reset, the next line would resolve instead of reject.)
+    await expect(db.open()).rejects.toThrow();
+  });
+
   it("rebuilds when vault_root changes (cross-vault contamination guard)", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });

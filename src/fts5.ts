@@ -194,9 +194,18 @@ export class FtsIndex {
       await fs.chmod(parentDir, 0o700).catch(() => {});
     }
     this.db = new Ctor(this.file) as Db;
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
-    this.bootstrapSchema();
+    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw: release the handle if
+    // pragma/bootstrapSchema throws on a corrupt/legacy index, so no caller can leak it (mirrors
+    // EmbedDb.open()). The serve call site already wraps this in a catch, but self-cleaning here
+    // makes the contract hold for every caller (CLI build paths, future ones).
+    try {
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma("synchronous = NORMAL");
+      this.bootstrapSchema();
+    } catch (e) {
+      this.close();
+      throw e;
+    }
     // Best-effort: tighten perms on the DB and its WAL/SHM sidecar files to
     // 0600. The index stores chunked note content so it deserves the same
     // privacy posture as the persistent parse cache (see SECURITY.md).

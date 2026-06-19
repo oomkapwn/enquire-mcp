@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.70] — 2026-06-19
+
+> **TL;DR:** **Post-rc.66 re-sweep, batch 4 — CLOSES the re-sweep — reserve-before-try handle-leak class.** `EmbedDb.open()`/`FtsIndex.open()` assigned the SQLite handle before `pragma`+`bootstrapSchema`, so a throw on a corrupt db leaked it (the worst instance: `server.ts:435 db.open()` outside its try/finally → leaked for the serve lifetime). Fixed by making both `open()` methods self-cleaning (close-on-throw) + wrapping `startHttpServer`'s `listen()` reject to release prepared deps. **1286 → 1288 source tests. Closes the post-rc.66 re-sweep (6 confirmed across rc.67→rc.70).**
+
+**Pre-release (v3.10 line) — post-rc.66 re-sweep, batch 4/4 (reserve-before-try class); closes the re-sweep.**
+
+### Fixed
+
+- **MED/LOW resource leak — `open()` was not close-on-throw; one caller leaked the handle for the serve lifetime** (`src/embed-db.ts`, `src/fts5.ts`, `src/server.ts`, `src/http-transport.ts`). Three findings of one class (rc.65 `runWithPendingInit` reserve-before-try sibling): **(1)** `EmbedDb.open()` and `FtsIndex.open()` did `this.db = new Ctor(file)` and THEN ran `pragma` + `bootstrapSchema` with no try/finally — on a corrupt/legacy/locked db those throw AFTER the handle is assigned, and cleanup was left to each caller's discretion (an undocumented contract). **(2)** `server.ts`'s `--use-hnsw` path did `await db.open()` OUTSIDE its `try { … } finally { db.close() }`, and the outer catch only nulled `hnswContext` and let the server run on — so a corrupt `.embed.db` (the `existsSync`-gated path) leaked the SQLite handle + its WAL/SHM locks for the WHOLE serve session. **(3)** `startHttpServer` leaked `prepareServerDeps`' fts5 + watcher handles when `httpServer.listen()` rejected (EADDRINUSE / EACCES) — bounded (OS reclaims on boot abort) but flagged. **Fix (root-class, per the rc.45/rc.49 "fix the source every caller funnels through" lesson):** both `open()` methods are now SELF-CLEANING — `try { pragma; bootstrapSchema } catch (e) { this.close(); throw e }` after the handle assignment — so a post-construction throw releases the handle for EVERY caller regardless of its own discipline (this closes (1) + (2) at the root). Plus `startHttpServer`'s `listen()` promise now `await shutdownHttpServer(httpServer)` on reject before re-throwing (3).
+
+### Tests (1288)
+
+- +2 (close-on-throw, both primitives): a corrupt-db `EmbedDb.open()` / `FtsIndex.open()` throws, and a SECOND `open()` RE-THROWS — the precise behavioral proof the handle was released (pre-rc.70 the `if (this.db) return` guard made the second call a silent no-op; the re-throw is only possible if `this.db` was reset to null). 1286 → 1288.
+
+> **Lesson:** the rc.65 `runWithPendingInit` fix was an INSTANCE fix for one reserve-before-try site; the durable close for the CLASS is making the resource-acquiring primitive itself self-cleaning (close-on-throw inside `open()`), so no call site can leak. The "2nd open() re-throws" assertion is the behavioral proof a handle was released without reaching into private state. **This CLOSES the post-rc.66 re-sweep** (6 confirmed: 4 MED + 2 LOW across rc.67→rc.70) — the re-sweep found that the round-3 fixes had each left a sibling, the session's signature pattern, caught only by a fresh adversarial multi-lens read of the shipped commit.
+
+---
+
 ## [3.10.0-rc.69] — 2026-06-19
 
 > **TL;DR:** **Post-rc.66 re-sweep, batch 3 — MED NFC-blind DQL `file.name`/`file.path` (rc.46/rc.66 NFC sibling).** `obsidian_dataview_query` compared `file.name` (filesystem-derived, NFD on macOS) against NFC predicate literals with no normalization, so `WHERE file.name = "Café"` silently returned zero rows for an accented note. `bases.ts`'s twin was folded in rc.46; this DQL sink was missed. Fixed by NFC-normalizing both the projection and the literal. **1285 → 1286 source tests.**

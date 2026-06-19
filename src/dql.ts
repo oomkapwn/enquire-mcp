@@ -1,5 +1,6 @@
 import { capScanEntries } from "./tools/limits.js";
 import type { FileEntry, Vault } from "./vault.js";
+import { compileLikeTokens, matchWildcardTokens } from "./wildcard-match.js";
 
 /**
  * The `FROM` clause of a parsed DQL query. `"all"` means scan every note;
@@ -429,100 +430,47 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
       return false;
     case "like": {
       if (typeof pred.value !== "string") return false;
-      const re = likeToRegex(pred.value);
+      const matcher = compileLike(pred.value);
       if (Array.isArray(value)) {
-        return value.some((v) => typeof v === "string" && re.test(v));
+        return value.some((v) => typeof v === "string" && matcher.test(v));
       }
-      if (typeof value === "string") return re.test(value);
+      if (typeof value === "string") return matcher.test(value);
       return false;
     }
   }
 }
 
 /**
- * Defensive cap on a DQL `like` pattern length (v3.9.0-rc.9 audit). This bounds
- * regex-compile / match CPU on an absurdly long user-supplied LIKE value from a
- * `.base` / DQL query.
+ * Defensive cap on a DQL `like` pattern length (v3.9.0-rc.9 audit). Bounds the
+ * tokenize + match work on an absurdly long user-supplied LIKE value from a
+ * `.base` / DQL query. (Matching is already O(tokens × value.length) — see
+ * {@link compileLike} — so this is a cheap secondary bound, not the ReDoS guard.)
  *
- * v3.10.0-rc.63 (round-3 audit, ReDoS): the cap is NOT the ReDoS guard — the
- * actual guard lives in {@link likeToRegex}, which **collapses a run of
- * consecutive `*` wildcards into a single `.*`**. The pre-rc.63 TSDoc here
- * claimed likeToRegex was "catastrophic-backtracking-SAFE by construction (only
- * emits `.*` for `*`)" — that was FALSE: N adjacent `*` compiled to N adjacent
- * `.*` (`^.*.*…$`), and adjacent unbounded quantifiers backtrack catastrophically
- * against a non-matching subject WITHOUT any nesting (empirically: an 11-char
- * `**********Q` hung V8 multiple seconds — a remote event-loop DoS via the
- * always-registered `obsidian_dataview_query` on bearer-auth serve-http). The
- * collapse makes the compiled source contain only NON-adjacent `.*` separated by
- * required literals (linear-time), and likeToRegex still never emits a nested
- * quantifier — so the catastrophic-backtracking-safe property now points at a
- * real code guard.
+ * v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class): the ReDoS guard is structural —
+ * {@link compileLike} matches via a NON-backtracking DP ({@link matchWildcardTokens}),
+ * NOT a `RegExp`. The pre-rc.71 {@link compileLike} compiled `*`→`.*` and (rc.63)
+ * collapsed only ADJACENT `*` runs; a LIKE value with wildcards SEPARATED BY LITERALS
+ * (`*a*a*…` → `^.*a.*a…$`) was still catastrophic (measured 110 s for `*a`×14), since
+ * the catastrophe scales with the SUBJECT length and so cannot be bounded by any
+ * wildcard count cap. The linear matcher removes the backtracking engine entirely.
  */
 export const MAX_LIKE_PATTERN_LEN = 512;
 
-/** @internal exported for unit tests; not part of the package `exports` map. */
-export function likeToRegex(pattern: string): RegExp {
+/**
+ * Compile a DQL `like` pattern into a NON-backtracking matcher (case-insensitive,
+ * consistent with the file's other string ops which `.toLowerCase()`). `*` is the
+ * only wildcard (any run of chars); see {@link compileLikeTokens} for the escape
+ * rules (`\*` literal asterisk, etc.). The returned object exposes `.test(value)`
+ * so call sites read like the old `likeToRegex(...).test(...)`.
+ *
+ * @internal exported for unit tests; not part of the package `exports` map.
+ */
+export function compileLike(pattern: string): { test(value: string): boolean } {
   if (pattern.length > MAX_LIKE_PATTERN_LEN) {
     throw new Error(`dql: LIKE pattern too long (${pattern.length} > ${MAX_LIKE_PATTERN_LEN} chars).`);
   }
-  // Single-pass walker so escaping is unambiguous:
-  //   *  → .*   (SQL-LIKE-style wildcard, any run of chars)
-  //   \* → \*   (literal asterisk; the \ is an escape)
-  //   \\ → \\   (literal backslash; the \ escapes the next \)
-  //   \d → d    (literal d; SQL-LIKE escape passes char through; pre-v3.7.10
-  //              this incorrectly output `\d` which is regex digit-class)
-  //   trailing \ → \\  (literal backslash; pre-v3.7.10 emitted a dangling
-  //                     escape that produced invalid RegExp)
-  // v3.7.10 (external audit #13) — added `*` and `\` to the regex-specials
-  // set. `*` is regex-meta (repetition); without it in the set, an escaped
-  // `\*` would fall through to the else-branch and output literal `*` which
-  // is then mis-interpreted by RegExp. `\` itself is regex-meta and trailing
-  // backslash needs explicit handling (see trailing-\\ branch above).
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: regex meta-chars list, not a template
-  const REGEX_SPECIALS = ".+*^${}()|[]\\";
-  let out = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i];
-    // v3.7.10 (external audit #13) — handle trailing backslash as literal.
-    if (ch === "\\" && i + 1 >= pattern.length) {
-      out += "\\\\";
-      continue;
-    }
-    if (ch === "\\" && i + 1 < pattern.length) {
-      // Backslash escapes the next char. Result is the next char as a
-      // regex literal — escape it ONLY if it's regex-special, else pass
-      // through. v3.7.10 fix: pre-v3.7.10 unconditionally prepended `\`
-      // which turned escape sequences like `\d` into regex digit-class
-      // instead of literal `d`.
-      const next = pattern[i + 1] as string;
-      if (REGEX_SPECIALS.includes(next)) {
-        out += `\\${next}`;
-      } else {
-        out += next;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "*") {
-      out += ".*";
-      // v3.10.0-rc.63 (round-3 audit, ReDoS) — collapse a RUN of consecutive
-      // (unescaped) `*` into a SINGLE `.*`. A run of SQL-LIKE wildcards is
-      // semantically identical to one `*`, but emitting adjacent `.*.*…` makes
-      // the compiled `^…$` catastrophically backtrack against a non-matching
-      // subject (the engine tries every partition across the runs). Skipping the
-      // rest of the run keeps the source free of adjacent `.*` (linear-time). An
-      // ESCAPED `\*` is a literal handled by the backslash branch above and is
-      // NOT a wildcard, so this only collapses true wildcard runs.
-      while (pattern[i + 1] === "*") i++;
-      continue;
-    }
-    if (ch !== undefined && REGEX_SPECIALS.includes(ch)) {
-      out += `\\${ch}`;
-      continue;
-    }
-    out += ch;
-  }
-  return new RegExp(`^${out}$`, "iu");
+  const tokens = compileLikeTokens(pattern);
+  return { test: (value: string): boolean => matchWildcardTokens(tokens, value, { caseInsensitive: true }) };
 }
 
 function looseEq(a: unknown, b: unknown): boolean {

@@ -16,7 +16,7 @@ import {
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
 // inline below; now exercised so search.ts's embeddingsSearch filter is covered).
 import { filterExcludedEmbedHits } from "../src/tools/search.js";
-import { globToRegex, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
+import { compileGlob, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
 
 let root: string;
 let outsideDir: string;
@@ -259,58 +259,55 @@ describe("parseNote — malformed input", () => {
   });
 });
 
-describe("globToRegex (v0.11 — privacy filter)", () => {
+describe("compileGlob (v0.11 — privacy filter)", () => {
   it("`**` matches across path separators", () => {
-    expect(globToRegex("Personal/**").test("Personal/Inbox/x.md")).toBe(true);
-    expect(globToRegex("Personal/**").test("Other/Inbox/x.md")).toBe(false);
+    expect(compileGlob("Personal/**").test("Personal/Inbox/x.md")).toBe(true);
+    expect(compileGlob("Personal/**").test("Other/Inbox/x.md")).toBe(false);
   });
   it("`*` matches within a single segment only", () => {
-    expect(globToRegex("private/*.md").test("private/x.md")).toBe(true);
-    expect(globToRegex("private/*.md").test("private/sub/x.md")).toBe(false);
+    expect(compileGlob("private/*.md").test("private/x.md")).toBe(true);
+    expect(compileGlob("private/*.md").test("private/sub/x.md")).toBe(false);
   });
   it("`?` matches exactly one non-slash char", () => {
-    expect(globToRegex("?_temp.md").test("x_temp.md")).toBe(true);
-    expect(globToRegex("?_temp.md").test("xx_temp.md")).toBe(false);
-    expect(globToRegex("?_temp.md").test("/_temp.md")).toBe(false);
+    expect(compileGlob("?_temp.md").test("x_temp.md")).toBe(true);
+    expect(compileGlob("?_temp.md").test("xx_temp.md")).toBe(false);
+    expect(compileGlob("?_temp.md").test("/_temp.md")).toBe(false);
   });
-  it("escapes regex specials in literal segments", () => {
-    expect(globToRegex("(parens)/x.md").test("(parens)/x.md")).toBe(true);
-    expect(globToRegex("dot.path/x.md").test("dot.path/x.md")).toBe(true);
-    expect(globToRegex("dot.path/x.md").test("dotXpath/x.md")).toBe(false);
-  });
-
-  // v3.10.0-rc.68 (round-3 re-sweep, ReDoS — rc.63 likeToRegex sibling). The `**` branch
-  // pre-rc.68 consumed only TWO stars, so a globstar RUN emitted adjacent unbounded quantifiers
-  // (`****`→`^.*.*$`, `***`→`^.*[^/]*$`) which backtrack catastrophically on a non-matching path.
-  // The run-collapse makes the compiled source contain only NON-adjacent quantifiers (linear).
-  it("collapses consecutive `*` so the source has no adjacent unbounded quantifiers (rc.68)", () => {
-    const adjacency = /\.\*(?:\.\*|\[\^\/\]\*)/; // `.*` followed by `.*` or `[^/]*`
-    for (const pat of ["**", "***", "****", "**".repeat(20), "***".repeat(10), "a/**/**/b", "**foo**"]) {
-      expect(globToRegex(pat).source, `glob ${JSON.stringify(pat)} must not emit adjacent quantifiers`).not.toMatch(
-        adjacency
-      );
-    }
-    // semantics preserved after the collapse
-    expect(globToRegex("**").test("any/deep/path.md")).toBe(true);
-    expect(globToRegex("a/**/b").test("a/b")).toBe(true); // globstar eats the slash
-    expect(globToRegex("a/**/b").test("a/x/y/b")).toBe(true);
-    // NEGATIVE control: the adjacency detector actually fires on the pre-rc.68 shape.
-    expect("^.*.*$").toMatch(adjacency);
-    expect("^.*[^/]*$").toMatch(adjacency);
+  it("treats regex specials in literal segments as literals (no regex compilation)", () => {
+    expect(compileGlob("(parens)/x.md").test("(parens)/x.md")).toBe(true);
+    expect(compileGlob("dot.path/x.md").test("dot.path/x.md")).toBe(true);
+    expect(compileGlob("dot.path/x.md").test("dotXpath/x.md")).toBe(false);
   });
 
-  it("the collapsed regex is linear on an adversarial non-matching path (rc.68 — no catastrophic hang)", () => {
-    // Pre-rc.68 these hung V8 >15s; now they complete in <1ms. A vitest per-test timeout would
-    // catch a regression even without an explicit budget, but assert a wall-clock bound to be loud.
-    const subject = `${"x".repeat(120)}/${"y".repeat(120)}`;
+  // v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class — closes the rc.68 globToRegex sibling).
+  // rc.68 collapsed only ADJACENT unbounded quantifiers; a glob with wildcards SEPARATED BY
+  // LITERALS (`*a*a*...` -> `^[^/]*a[^/]*a...$`, or `**a**a...`) was still catastrophic, and the
+  // catastrophe scales with the matched PATH length (paths can be 100+ chars deep) so a wildcard
+  // count cap is not structurally safe. compileGlob now matches via a NON-backtracking DP (no
+  // RegExp). The full matcher unit + behavior-differential guards live in
+  // tests/wildcard-match.test.ts; these are the privacy-filter-sink-level smokes.
+  it("is linear on the literal-separated globstar/segstar shapes that hung V8 pre-rc.71", () => {
+    // Pre-rc.71 `**a**a...` and `*a*a...` against a long non-matching path hung V8 for seconds.
+    const subject = `${"a".repeat(2000)}/${"a".repeat(2000)}`; // non-matching for the trailing-X patterns
     const t0 = Date.now();
-    for (const pat of ["**".repeat(12) + "X", "***".repeat(8) + "X"]) globToRegex(pat).test(subject);
-    expect(Date.now() - t0, "collapsed globs must match in well under a second").toBeLessThan(500);
+    for (const pat of [`${"**a".repeat(30)}X`, `${"*a".repeat(40)}X`, `${"**".repeat(20)}Z`]) {
+      const m = compileGlob(pat);
+      for (let r = 0; r < 5; r++) m.test(subject);
+    }
+    expect(Date.now() - t0, "literal-separated globs must match in well under a second").toBeLessThan(500);
+  });
+
+  it("preserves globstar semantics (POSITIVE/NEGATIVE controls)", () => {
+    expect(compileGlob("**").test("any/deep/path.md")).toBe(true);
+    expect(compileGlob("a/**/b").test("a/b")).toBe(true); // globstar eats the slash
+    expect(compileGlob("a/**/b").test("a/x/y/b")).toBe(true);
+    expect(compileGlob("a/**/**/b").test("a/x/b")).toBe(true); // redundant globstars
+    expect(compileGlob("Personal/**").test("Work/x.md")).toBe(false); // NEGATIVE
   });
 
   it("throws on an over-long glob (MAX_GLOB_PATTERN_LEN cap, NEGATIVE control)", () => {
-    expect(() => globToRegex("a".repeat(MAX_GLOB_PATTERN_LEN))).not.toThrow();
-    expect(() => globToRegex("a".repeat(MAX_GLOB_PATTERN_LEN + 1))).toThrow(/too long/i);
+    expect(() => compileGlob("a".repeat(MAX_GLOB_PATTERN_LEN))).not.toThrow();
+    expect(() => compileGlob("a".repeat(MAX_GLOB_PATTERN_LEN + 1))).toThrow(/too long/i);
   });
 });
 

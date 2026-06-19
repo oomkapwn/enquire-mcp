@@ -361,7 +361,15 @@ export function registerReadTools(
       annotations: { ...READ_ONLY, title: "Validate note proposal" },
       inputSchema: {
         path: z.string().describe("Vault-relative path the LLM intends to write to (e.g. 'Inbox/idea.md')"),
-        content: z.string().describe("Full proposed markdown content including any frontmatter block"),
+        // v3.10.0-rc.67 (round-3 re-sweep, DoS) — cap the proposed content. The wikilink scan +
+        // per-broken-link suggestion is bounded by body size; 1 MB is generous for any real note
+        // draft while preventing a body packed with hundreds of thousands of broken `[[...]]`
+        // targets from amplifying into a whole-vault scan storm (defense-in-depth alongside the
+        // shared-listing + per-target memoization in validateNoteProposal).
+        content: z
+          .string()
+          .max(1_000_000, "content too large (max 1 MB)")
+          .describe("Full proposed markdown content including any frontmatter block"),
         mode: z
           .enum(["create", "overwrite", "append"])
           .optional()

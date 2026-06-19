@@ -160,6 +160,13 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   const all = await vault.listMarkdown();
   const wikilinkRe = /(?<!!)\[\[([^\]\n]+?)\]\]/g;
   const wikilinks: ValidateProposalResult["wikilinks"] = [];
+  // v3.10.0-rc.67 (round-3 re-sweep, DoS) — memoize suggestions per broken target so a body
+  // packed with thousands of distinct (or repeated) broken `[[...]]` targets does not re-rank
+  // (and, pre-rc.67, re-WALK the whole vault) once per link. Combined with passing the shared
+  // `all` listing into suggestSimilar, the per-link cost drops from a fresh filesystem walk to a
+  // single cached O(N) in-memory rank, and repeats are O(1). Closes the O(broken-links × vault)
+  // serve-http amplifier (the rc.65 readCanvas resource-bound-escape class).
+  const suggestionCache = new Map<string, string[]>();
   for (const m of bodyAfterFm.matchAll(wikilinkRe)) {
     const raw = m[0];
     const inner = (m[1] ?? "").trim();
@@ -179,7 +186,11 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
         suggestions: []
       });
     } else {
-      const suggestions = await suggestSimilar(vault, target);
+      let suggestions = suggestionCache.get(target);
+      if (suggestions === undefined) {
+        suggestions = await suggestSimilar(vault, target, all); // reuse the single listing (rc.67)
+        suggestionCache.set(target, suggestions);
+      }
       wikilinks.push({
         raw,
         target,

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.67] — 2026-06-19
+
+> **TL;DR:** **Post-rc.66 re-sweep, batch 1 — MED remote DoS in `obsidian_validate_note_proposal`.** The always-on, bearer-reachable tool called `suggestSimilar` per broken `[[wikilink]]`, each doing a FRESH whole-vault `listMarkdown()` walk, with `content` uncapped → a body of thousands of broken targets = thousands of back-to-back directory walks on the event loop (serve-http DoS). The rc.65 `readCanvas` resource-bound-escape sibling. Fixed by sharing one listing + per-target memoization + a 1 MB content cap. **1281 → 1282 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.66 re-sweep, batch 1/4 (MED remote DoS).**
+
+### Fixed
+
+- **MED remote DoS — `validateNoteProposal` re-walked the whole vault per broken wikilink** (`src/tools/meta.ts` + `src/tools/write.ts` + `src/tool-registry.ts`). `obsidian_validate_note_proposal` is always-registered (does NOT require `--enable-write`) and bearer-reachable on serve-http. For every BROKEN `[[wikilink]]` in the caller-supplied `content` (which was `z.string()` with no `.max()`), it called `suggestSimilar(vault, target)`, and `suggestSimilar` did its OWN fresh `vault.listMarkdown()` — a full filesystem directory walk, uncached. So a single request with B distinct broken targets cost B whole-vault walks: O(B × N) disk I/O on the single event loop, B fully attacker-controlled, starving all other serve-http clients. It escaped `tests/resource-bound-invariant.test.ts` for the same structural reason `readCanvas` did (rc.65): it calls `listMarkdown` but not `readNote`, so `discoverScanners` never sees it, and the whole-vault cost lives in the `suggestSimilar` helper, not a visible per-entry loop. **Fix:** `suggestSimilar` gains an optional `entries?: FileEntry[]` param; `validateNoteProposal` passes its single already-fetched `all` listing into it AND memoizes suggestions per target (a `Map`), so the `listMarkdown` count is INDEPENDENT of broken-link count (constant, not one-per-link). Plus a `.max(1_000_000)` cap on the `content` schema as defense-in-depth (generous for a real note draft; bounds the abuse input). The rc.65 fix (bound the per-item resolution) is now applied to this sibling.
+
+### Tests (1282)
+
+- +1 in `tests/tools.test.ts`: asserts `vault.listMarkdown` is called a CONSTANT number of times as the broken-wikilink count grows 3 → 60 (pre-rc.67 it grew one-per-link). Robust to internal `listTags` calls (both runs share the same constant overhead). 1281 → 1282.
+
+> **Lesson:** the round-3 audit's own fixes left siblings — exactly the session's signature pattern, and exactly why the post-merge re-sweep is non-negotiable. This is the rc.65 `readCanvas` class recurring in a tool the rc.65 sweep didn't reach: an always-on, bearer-reachable whole-vault scanner whose cost hides in a helper (so the auto-detector is blind) is a per-request DoS amplifier. The re-sweep found 6 such siblings (4 MED / 2 LOW); rc.68–rc.70 ship the rest (globToRegex ReDoS, DQL NFC, reserve-before-try handle leaks).
+
+---
+
 ## [3.10.0-rc.66] — 2026-06-19
 
 > **TL;DR:** **Round-3 audit, batch 4 — CLOSES the round-3 12-lens audit (2 LOW correctness).** **NFC graph-boost residual**: the searchHybrid in-degree tie-break was the one name-comparison site the rc.46 NFC sweep missed (raw `stripMd` without case-fold) → accented notes silently lost their graph-boost on macOS; now folded through `foldName`. **UTC-midnight Date fidelity**: an explicit midnight-UTC timestamp resolves to the same Date as a bare date and is demoted to `YYYY-MM-DD` — documented as a deliberate, pinned tradeoff. **1279 → 1281 source tests.**

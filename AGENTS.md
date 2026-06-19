@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1281+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1282+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)

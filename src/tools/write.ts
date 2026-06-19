@@ -1039,6 +1039,13 @@ export function resolvePeriodicAlias(title: string): string | null {
  * @internal
  * @param vault - The vault.
  * @param target - The missed target string (with or without `.md`).
+ * @param entries - v3.10.0-rc.67 (round-3 re-sweep, DoS) — OPTIONAL pre-fetched
+ *   `listMarkdown()` result. When a caller already holds the vault listing (e.g.
+ *   `validateNoteProposal`, which scans many wikilinks in one request), pass it
+ *   so this helper does NOT re-walk the whole vault PER broken link — a fresh
+ *   `listMarkdown()` per call is an O(broken-links × vault-size) filesystem-walk
+ *   amplifier on the single event loop (a serve-http DoS via the always-on,
+ *   bearer-reachable tool). Omitted → fetches once (the standalone contract).
  * @returns Up to 3 vault-relative paths, sorted by similarity score desc.
  *   Empty array on any error or no candidates.
  * @example
@@ -1047,9 +1054,9 @@ export function resolvePeriodicAlias(title: string): string | null {
  * // → ["Concepts/Hybrid Retrieval.md", "Reference/Retrieval.md"]
  * ```
  */
-export async function suggestSimilar(vault: Vault, target: string): Promise<string[]> {
+export async function suggestSimilar(vault: Vault, target: string, entries?: FileEntry[]): Promise<string[]> {
   try {
-    const all = await vault.listMarkdown();
+    const all = entries ?? (await vault.listMarkdown());
     const lower = foldName(target.replace(/\.md$/i, ""));
     const ranked = all
       .map((e) => {

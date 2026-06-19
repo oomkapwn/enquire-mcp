@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   findSimilar,
   getBacklinks,
@@ -559,6 +559,27 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     const alphTypo = broken.find((w) => w.target === "Alph");
     expect(alphTypo?.suggestions.length ?? 0).toBeGreaterThan(0);
     expect(alphTypo?.suggestions[0]?.toLowerCase()).toContain("alpha");
+  });
+
+  it("does NOT re-walk the vault per broken wikilink — listMarkdown count is constant (rc.67 DoS)", async () => {
+    // Pre-rc.67: suggestSimilar did a fresh vault.listMarkdown() per BROKEN link → O(broken×vault)
+    // filesystem-walk amplifier on serve-http. Now validateNoteProposal passes its single listing
+    // into suggestSimilar + memoizes per target, so the listMarkdown count is INDEPENDENT of how
+    // many broken links the (attacker-supplied) body contains.
+    const countFor = async (n: number): Promise<number> => {
+      const v = new Vault(root);
+      const spy = vi.spyOn(v, "listMarkdown");
+      const links = Array.from({ length: n }, (_, i) => `[[NoSuchNote${i}]]`).join(" ");
+      await validateNoteProposal(v, { path: "Inbox/many.md", content: `body ${links}\n` });
+      const calls = spy.mock.calls.length;
+      spy.mockRestore();
+      return calls;
+    };
+    const few = await countFor(3);
+    const many = await countFor(60);
+    // Constant overhead (the validateNoteProposal listing + listTags' own) — must NOT grow with
+    // broken-link count. Pre-rc.67 `many` would exceed `few` by ~57 (one re-walk per extra link).
+    expect(many).toBe(few);
   });
 
   it("flags new tags so the LLM doesn't fork a tag forest", async () => {

@@ -174,6 +174,31 @@ describe("extractPdfText (v2.7.0)", () => {
     });
   });
 
+  // v3.10.0-rc.74 (post-rc.70 re-sweep, reserve-before-try sibling of the rc.70 SQLite class).
+  // doc/loadingTask are acquired before the page-range + maxPages guards; pre-rc.74 the cleanup was
+  // plain trailing code (NO finally), so every post-acquisition throw leaked the pdfjs document +
+  // its worker port. The fix wraps the whole lifecycle in try/finally. A real leak would exhaust
+  // worker handles / hang across many throws; many clean throws + a final NORMAL extraction is the
+  // behavioral proof the finally releases the document on every throw path.
+  describe("extractPdfText — releases the document on a post-acquisition throw (rc.74)", () => {
+    it("does not leak the pdfjs doc across repeated maxPages / inverted-range throws", async () => {
+      const buf = makePdf({ pages: ["A", "B", "C"] });
+      for (let r = 0; r < 30; r++) {
+        // maxPages:1 over a 3-page range → requestedSpan(3) > maxPages(1) → throws AFTER doc acquired.
+        await expect(extractPdfText(buf, { pageRange: { from: 1, to: 3 }, maxPages: 1 })).rejects.toThrow(
+          /maxPages|refusing to extract/i
+        );
+        // inverted range → throws at the range-validation guard, also post-acquisition.
+        await expect(extractPdfText(buf, { pageRange: { from: 3, to: 1 } })).rejects.toThrow(/invalid page range/i);
+      }
+      // POSITIVE control: after 60 post-acquisition throws, a normal extraction still works — a leaked
+      // doc/worker would have exhausted handles or hung by now.
+      const ok = await extractPdfText(buf);
+      expect(ok.pageCount).toBe(3);
+      expect(ok.hasText).toBe(true);
+    });
+  });
+
   // v3.6.2 — branches coverage. Exercise every metadata field's
   // typeof-is-string branch (Subject, Keywords, Creator, Producer,
   // CreationDate, ModDate). Pre-fix only Title + Author were covered;

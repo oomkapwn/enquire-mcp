@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.74] — 2026-06-19
+
+> **TL;DR:** **Post-rc.70 re-sweep, batch 4/4 — CLOSES the re-sweep — pdfjs document/loadingTask reserve-before-try leak in BOTH `extractPdfText` + `extractPdfWithOcr` (rc.70 sibling).** Both pdfjs callers acquired `doc = await loadingTask.promise` before guards that throw post-acquisition (`pdf.ts` had NO try/finally at all; `ocr.ts` had the range/maxPages guards outside its try), so a crafted `obsidian_read_pdf` / `obsidian_ocr_pdf` over-span request leaked a pdfjs document + worker port per call on serve-http. Fixed by wrapping the full lifecycle in a try/finally that always destroys. **1302 → 1304 source tests. Closes the post-rc.70 re-sweep (6 confirmed across rc.71→rc.74).**
+
+**Pre-release (v3.10 line) — post-rc.70 re-sweep, batch 4/4 (reserve-before-try pdfjs-leak class); closes the re-sweep.**
+
+### Fixed
+
+- **MED/LOW resource leak — pdfjs `document` + `loadingTask` leaked on a post-acquisition throw in both PDF callers** (`src/pdf.ts`, `src/ocr.ts`). Both `extractPdfText` and `extractPdfWithOcr` did `doc = await loadingTask.promise` BEFORE guards that throw: **(pdf.ts)** the page-range validation + the `requestedSpan > maxPages` guard threw, and the `doc.cleanup()` + `loadingTask.destroy()` calls were PLAIN TRAILING CODE — there was no `try/finally` at all, so any throw (or any error in the page loop / metadata block) leaked the document. **(ocr.ts)** `resolveOcrPageRange` + the maxPages guard sat OUTSIDE the existing `try`, whose `finally` only covered the page loop, so those throws leaked `doc`/`loadingTask` (the worker isn't created yet). Reachable via the always-registered, read-only `obsidian_read_pdf` (`pages:[1,600]` on a ≥600-page PDF passes zod `600≥1` then exceeds `DEFAULT_PDF_MAX_PAGES=500`) and `obsidian_ocr_pdf` (`pages:[1,250]` exceeds `DEFAULT_OCR_MAX_PAGES=200`, or a post-clamp-inverted range); each crafted call leaked one pdfjs document + worker port on serve-http, accumulating over the serve lifetime. **Fix (per the rc.70 self-cleaning lesson): wrap the FULL lifecycle — from `doc = await loadingTask.promise` through metadata extraction — in a `try` whose `finally` always runs guarded `await doc.cleanup().catch(()=>{})` + `await loadingTask.destroy().catch(()=>{})`.** `extractPdfText` gains the finally it never had; `extractPdfWithOcr` moves `resolveOcrPageRange` + the maxPages guard + worker creation inside the try, declares `worker` before it, and the finally does `if (worker) await worker.terminate().catch(…)` (the worker is undefined when a pre-worker guard throws) then destroys doc/loadingTask — each guarded so a cleanup error never masks the original throw.
+
+### Tests (1304)
+
+- +1 (`tests/pdf.test.ts`, CI-running): `extractPdfText` survives 30× post-acquisition throws (maxPages + inverted-range) on a real `makePdf` fixture, then a NORMAL extraction still succeeds — a leaked doc/worker would have exhausted handles or hung by then (the behavioral proof the finally releases each).
+- +1 (`tests/ocr.test.ts`, deps-gated): `extractPdfWithOcr` cleanup-on-throw, probing the maxPages guard once and skipping VISIBLY (`ctx.skip()`, not a silent return) when lang packs are absent (CI), since `assertOcrLangsInstalled` gates before `getDocument`. **1302 → 1304.**
+
+> **Lesson:** the rc.70 reserve-before-try fix made the SQLite `open()` primitive self-cleaning but did NOT enumerate the pdfjs-document dimension of the same class — every resource-acquiring sink (SQLite handle, fd, HNSW index, pdfjs document, Tesseract worker) must be checked for "is the cleanup wired to a finally that covers EVERY post-acquisition throw." **This CLOSES the post-rc.70 re-sweep** (6 confirmed across rc.71→rc.74: rc.71 ReDoS class [HIGH+MED], rc.72 findBestMatch amplifier [MED], rc.73 bases NFC [MED], rc.74 pdfjs leak [MED/LOW]) — every one a sibling a named prior fix left open, caught only by a fresh adversarial multi-lens read of the shipped commit, the session's signature pattern.
+
+---
+
 ## [3.10.0-rc.73] — 2026-06-19
 
 > **TL;DR:** **Post-rc.70 re-sweep, batch 3/4 — MED NFC-blind `path`/`file.path` predicate in `.base` queries (rc.69 NFC sibling).** `obsidian_query_base` compared `ctx.path` (raw relPath, NFD on macOS APFS) against the NFC `.base` filter literal in the `path`/`file.path` startsWith/contains branch with NO normalization, so `path startsWith "Café/"` silently returned zero matches for an accented folder. rc.69 fixed the DQL twin; this bases.ts branch was the missed sibling (the `file.name ==` branch 10 lines below already folds). Fixed by NFC-normalizing both operands. **1301 → 1302 source tests.**

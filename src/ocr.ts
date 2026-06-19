@@ -351,46 +351,51 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
   });
   const doc = await loadingTask.promise;
   const pageCount = doc.numPages;
-
-  // Page range (1-indexed inclusive). v3.9.0-rc.10 — resolveOcrPageRange clamps
-  // to [1, pageCount] and throws on an inverted/empty range rather than
-  // silently returning zero pages.
-  const [from, to] = resolveOcrPageRange(opts.pages, pageCount);
-
-  // v3.7.16 P1-2 — refuse to OCR more than `maxPages` in a single call.
-  // The explicit `pages` slice can request any size (caller opted in),
-  // but the default "all pages" path must not run unbounded on
-  // adversarial PDFs (a 10000-page file would peg CPU for hours).
-  // Throws BEFORE the Tesseract worker spins up, so no resources allocated.
-  const requestedSpan = to - from + 1;
-  if (requestedSpan > maxPages) {
-    throw new Error(
-      `enquire OCR: refusing to process ${requestedSpan} pages in a single call ` +
-        `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range ` +
-        `or raise maxPages via the tool args.`
-    );
-  }
-
-  // Spin up a Tesseract worker for the requested languages. We create one
-  // worker per call rather than reusing across calls — the per-request
-  // cost is small (~200ms warm cache) and avoids cross-request state
-  // leakage in the HTTP transport.
-  const worker = await tesseract.createWorker(langs, undefined, {
-    // v3.9.0-rc.10 — pin the worker to the LOCAL tessdata cache, read-only, so
-    // it never writes or CDN-fetches. assertOcrLangsInstalled above already
-    // guaranteed the packs exist here; this is defense-in-depth on the offline
-    // guarantee. gzip:false — install-ocr-lang stores uncompressed
-    // `<lang>.traineddata` (tessdata_fast format).
-    langPath,
-    cachePath: langPath,
-    cacheMethod: "readOnly",
-    gzip: false,
-    // Quiet — Tesseract is chatty by default. Real errors still throw.
-    logger: () => {}
-  });
-
+  // v3.10.0-rc.74 (post-rc.70 re-sweep, reserve-before-try sibling of the rc.70 SQLite class):
+  // doc/loadingTask are acquired ABOVE; resolveOcrPageRange + the maxPages guard below throw
+  // post-acquisition but BEFORE the worker exists, and pre-rc.74 they sat OUTSIDE the try, so a
+  // throw leaked the pdfjs document + worker port. Open the try here so the finally always
+  // releases doc/loadingTask (and terminates the worker IF it was created) on every path.
+  let worker: Awaited<ReturnType<typeof tesseract.createWorker>> | undefined;
   const pages: OcrPdfPage[] = [];
   try {
+    // Page range (1-indexed inclusive). v3.9.0-rc.10 — resolveOcrPageRange clamps
+    // to [1, pageCount] and throws on an inverted/empty range rather than
+    // silently returning zero pages.
+    const [from, to] = resolveOcrPageRange(opts.pages, pageCount);
+
+    // v3.7.16 P1-2 — refuse to OCR more than `maxPages` in a single call.
+    // The explicit `pages` slice can request any size (caller opted in),
+    // but the default "all pages" path must not run unbounded on
+    // adversarial PDFs (a 10000-page file would peg CPU for hours).
+    // Throws BEFORE the Tesseract worker spins up, so no resources allocated.
+    const requestedSpan = to - from + 1;
+    if (requestedSpan > maxPages) {
+      throw new Error(
+        `enquire OCR: refusing to process ${requestedSpan} pages in a single call ` +
+          `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range ` +
+          `or raise maxPages via the tool args.`
+      );
+    }
+
+    // Spin up a Tesseract worker for the requested languages. We create one
+    // worker per call rather than reusing across calls — the per-request
+    // cost is small (~200ms warm cache) and avoids cross-request state
+    // leakage in the HTTP transport.
+    worker = await tesseract.createWorker(langs, undefined, {
+      // v3.9.0-rc.10 — pin the worker to the LOCAL tessdata cache, read-only, so
+      // it never writes or CDN-fetches. assertOcrLangsInstalled above already
+      // guaranteed the packs exist here; this is defense-in-depth on the offline
+      // guarantee. gzip:false — install-ocr-lang stores uncompressed
+      // `<lang>.traineddata` (tessdata_fast format).
+      langPath,
+      cachePath: langPath,
+      cacheMethod: "readOnly",
+      gzip: false,
+      // Quiet — Tesseract is chatty by default. Real errors still throw.
+      logger: () => {}
+    });
+
     const totalToProcess = to - from + 1;
     let processed = 0;
     for (let pageNum = from; pageNum <= to; pageNum++) {
@@ -467,9 +472,9 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
   } finally {
     // Always terminate the worker even if we threw above, otherwise
     // the WebAssembly state leaks and tests/CI hang.
-    await worker.terminate();
-    await doc.cleanup();
-    await loadingTask.destroy();
+    if (worker) await worker.terminate().catch(() => {});
+    await doc.cleanup().catch(() => {});
+    await loadingTask.destroy().catch(() => {});
   }
 
   const fullText = pages

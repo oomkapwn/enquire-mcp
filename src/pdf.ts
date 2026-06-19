@@ -160,101 +160,108 @@ export async function extractPdfText(buffer: Buffer, opts: ExtractPdfTextOptions
   const doc = await loadingTask.promise;
   const pageCount = doc.numPages;
   const pages: PdfPage[] = [];
-
-  // v3.7.13 H1 — restrict the iteration to the requested window so
-  // doc.getPage() / getTextContent() only fire on pages the caller asked
-  // for. `pageRange.from / to` are clamped against the actual pageCount.
-  // v3.9.0-rc.33 (external-audit H-3) — an explicit but inverted/out-of-range
-  // `pageRange` (e.g. `{from:50,to:10}`) previously clamped to an EMPTY window
-  // and returned `pages:[]` with NO error — a silent caller-error sink and a
-  // parity gap with the OCR path (`resolveOcrPageRange` throws on inverted).
-  // Now fail-closed with a clear message, matching the OCR sibling, so an
-  // agent passing a bad range gets actionable feedback instead of "no pages".
-  if (opts.pageRange) {
-    const { from, to } = opts.pageRange;
-    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) {
-      throw new Error(
-        `enquire PDF: invalid page range — 'from' (${from}) must be an integer ≥ 1 and ≤ 'to' (${to}). ` +
-          "Pass pages as [from, to] with from ≤ to (1-indexed, inclusive)."
-      );
-    }
-  }
-  const fromPage = opts.pageRange ? Math.max(1, opts.pageRange.from) : 1;
-  const toPage = opts.pageRange ? Math.min(pageCount, opts.pageRange.to) : pageCount;
-
-  // v3.7.16 Class F (sibling of P1-2 OCR cap) — refuse runaway extractions.
-  // Pre-3.7.16 a bearer-authenticated HTTP request against a 5MB text-only
-  // PDF with ~2000 pages could peg CPU for 5+ minutes. The check fires
-  // BEFORE the page loop, so adversarial inputs don't deserialize pages.
-  // Explicit `pageRange` caller opted in; an explicit `maxPages` opts to
-  // raise the cap; otherwise the default 500-page cap applies.
-  const maxPages = opts.maxPages ?? DEFAULT_PDF_MAX_PAGES;
-  const requestedSpan = toPage - fromPage + 1;
-  if (requestedSpan > maxPages) {
-    throw new Error(
-      `enquire PDF: refusing to extract ${requestedSpan} pages in a single call ` +
-        `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range or raise maxPages.`
-    );
-  }
-
-  for (let i = fromPage; i <= toPage; i++) {
-    try {
-      const page = await doc.getPage(i);
-      const content = await page.getTextContent();
-      // Each item has `.str` (the text run); some have `.hasEOL` flags
-      // we could use to insert newlines, but agents do better with
-      // space-joined text + downstream normalization.
-      // pdfjs v5 widened TextContent.items to include TextMarkedContent
-      // (structural items without a `.str`). Use the in-operator guard to
-      // narrow the union; TS infers `item.str` as string inside the guard.
-      const text = content.items
-        .map((item) => ("str" in item ? item.str : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      pages.push({
-        pageNumber: i,
-        text,
-        isEmpty: text.length === 0,
-        charCount: text.length
-      });
-      // Free per-page resources eagerly — pdfjs caches operator lists
-      // and bitmaps that we don't need after text extraction.
-      page.cleanup();
-    } catch {
-      // Don't fail the whole document on a single bad page. Surface as
-      // empty but keep going. Real callers see this in `isEmpty: true`.
-      pages.push({
-        pageNumber: i,
-        text: "",
-        isEmpty: true,
-        charCount: 0
-      });
-    }
-  }
-
-  // Doc-level metadata — best-effort, optional in PDFs.
+  // v3.10.0-rc.74 (post-rc.70 re-sweep, reserve-before-try sibling of the rc.70 SQLite class):
+  // doc/loadingTask are acquired ABOVE, but the page-range + maxPages guards below throw
+  // post-acquisition and pre-rc.74 the cleanup was plain trailing code (NO finally) — so a
+  // throw leaked the pdfjs document + its worker port. Wrap the whole lifecycle so the
+  // finally always releases them on every exit path.
   let metadata: PdfExtractionResult["metadata"] = {};
   try {
-    const meta = await doc.getMetadata();
-    const info = (meta?.info ?? {}) as Record<string, unknown>;
-    metadata = {
-      title: typeof info.Title === "string" ? info.Title : undefined,
-      author: typeof info.Author === "string" ? info.Author : undefined,
-      subject: typeof info.Subject === "string" ? info.Subject : undefined,
-      keywords: typeof info.Keywords === "string" ? info.Keywords : undefined,
-      creator: typeof info.Creator === "string" ? info.Creator : undefined,
-      producer: typeof info.Producer === "string" ? info.Producer : undefined,
-      creationDate: typeof info.CreationDate === "string" ? info.CreationDate : undefined,
-      modDate: typeof info.ModDate === "string" ? info.ModDate : undefined
-    };
-  } catch {
-    // Metadata is optional; absence is fine.
-  }
+    // v3.7.13 H1 — restrict the iteration to the requested window so
+    // doc.getPage() / getTextContent() only fire on pages the caller asked
+    // for. `pageRange.from / to` are clamped against the actual pageCount.
+    // v3.9.0-rc.33 (external-audit H-3) — an explicit but inverted/out-of-range
+    // `pageRange` (e.g. `{from:50,to:10}`) previously clamped to an EMPTY window
+    // and returned `pages:[]` with NO error — a silent caller-error sink and a
+    // parity gap with the OCR path (`resolveOcrPageRange` throws on inverted).
+    // Now fail-closed with a clear message, matching the OCR sibling, so an
+    // agent passing a bad range gets actionable feedback instead of "no pages".
+    if (opts.pageRange) {
+      const { from, to } = opts.pageRange;
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) {
+        throw new Error(
+          `enquire PDF: invalid page range — 'from' (${from}) must be an integer ≥ 1 and ≤ 'to' (${to}). ` +
+            "Pass pages as [from, to] with from ≤ to (1-indexed, inclusive)."
+        );
+      }
+    }
+    const fromPage = opts.pageRange ? Math.max(1, opts.pageRange.from) : 1;
+    const toPage = opts.pageRange ? Math.min(pageCount, opts.pageRange.to) : pageCount;
 
-  // Release the document handle so worker memory drops.
-  await doc.cleanup();
-  await loadingTask.destroy();
+    // v3.7.16 Class F (sibling of P1-2 OCR cap) — refuse runaway extractions.
+    // Pre-3.7.16 a bearer-authenticated HTTP request against a 5MB text-only
+    // PDF with ~2000 pages could peg CPU for 5+ minutes. The check fires
+    // BEFORE the page loop, so adversarial inputs don't deserialize pages.
+    // Explicit `pageRange` caller opted in; an explicit `maxPages` opts to
+    // raise the cap; otherwise the default 500-page cap applies.
+    const maxPages = opts.maxPages ?? DEFAULT_PDF_MAX_PAGES;
+    const requestedSpan = toPage - fromPage + 1;
+    if (requestedSpan > maxPages) {
+      throw new Error(
+        `enquire PDF: refusing to extract ${requestedSpan} pages in a single call ` +
+          `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range or raise maxPages.`
+      );
+    }
+
+    for (let i = fromPage; i <= toPage; i++) {
+      try {
+        const page = await doc.getPage(i);
+        const content = await page.getTextContent();
+        // Each item has `.str` (the text run); some have `.hasEOL` flags
+        // we could use to insert newlines, but agents do better with
+        // space-joined text + downstream normalization.
+        // pdfjs v5 widened TextContent.items to include TextMarkedContent
+        // (structural items without a `.str`). Use the in-operator guard to
+        // narrow the union; TS infers `item.str` as string inside the guard.
+        const text = content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+        pages.push({
+          pageNumber: i,
+          text,
+          isEmpty: text.length === 0,
+          charCount: text.length
+        });
+        // Free per-page resources eagerly — pdfjs caches operator lists
+        // and bitmaps that we don't need after text extraction.
+        page.cleanup();
+      } catch {
+        // Don't fail the whole document on a single bad page. Surface as
+        // empty but keep going. Real callers see this in `isEmpty: true`.
+        pages.push({
+          pageNumber: i,
+          text: "",
+          isEmpty: true,
+          charCount: 0
+        });
+      }
+    }
+
+    // Doc-level metadata — best-effort, optional in PDFs.
+    try {
+      const meta = await doc.getMetadata();
+      const info = (meta?.info ?? {}) as Record<string, unknown>;
+      metadata = {
+        title: typeof info.Title === "string" ? info.Title : undefined,
+        author: typeof info.Author === "string" ? info.Author : undefined,
+        subject: typeof info.Subject === "string" ? info.Subject : undefined,
+        keywords: typeof info.Keywords === "string" ? info.Keywords : undefined,
+        creator: typeof info.Creator === "string" ? info.Creator : undefined,
+        producer: typeof info.Producer === "string" ? info.Producer : undefined,
+        creationDate: typeof info.CreationDate === "string" ? info.CreationDate : undefined,
+        modDate: typeof info.ModDate === "string" ? info.ModDate : undefined
+      };
+    } catch {
+      // Metadata is optional; absence is fine.
+    }
+  } finally {
+    // Always release the pdfjs document + worker port, even on a post-acquisition throw
+    // (invalid range / maxPages). Guarded so a cleanup error never masks the real one.
+    await doc.cleanup().catch(() => {});
+    await loadingTask.destroy().catch(() => {});
+  }
 
   const fullText = pages
     .map((p) => p.text)

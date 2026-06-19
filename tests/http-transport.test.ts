@@ -30,6 +30,7 @@ import {
   parseMaxFileBytes,
   RateLimiter,
   readJsonBody,
+  runWithPendingInit,
   shutdownHttpServer,
   startHttpServer,
   verifyBearer
@@ -428,6 +429,42 @@ describe("isInitializeRequest (v3.7.13 H2)", () => {
         { jsonrpc: "2.0", method: "tools/call", id: 2, params: {} }
       ])
     ).toBe(false);
+  });
+});
+
+describe("runWithPendingInit — pendingInits stays balanced (rc.65 round-3 audit)", () => {
+  it("decrements after a SUCCESSFUL init body (returns to 0)", async () => {
+    const registry = createSessionRegistry();
+    expect(registry.pendingInits).toBe(0);
+    const r = await runWithPendingInit(registry, async () => {
+      expect(registry.pendingInits).toBe(1); // reserved during the body
+      return 42;
+    });
+    expect(r).toBe(42);
+    expect(registry.pendingInits).toBe(0);
+  });
+
+  it("NEGATIVE control — decrements even when the init body THROWS (no permanent leak → no eventual 503)", async () => {
+    // The bug: pre-rc.65 the reservation + the buildMcpServer/transport constructors sat
+    // OUTSIDE the try/finally, so a constructor throw skipped the decrement and permanently
+    // lowered the maxSessions cap. This asserts the helper's finally always releases it.
+    const registry = createSessionRegistry();
+    await expect(
+      runWithPendingInit(registry, async () => {
+        throw new Error("simulated buildMcpServer / transport-constructor failure");
+      })
+    ).rejects.toThrow(/simulated/);
+    expect(registry.pendingInits, "pendingInits must return to 0 after a throwing init").toBe(0);
+  });
+
+  it("stays balanced across many failed inits (cap is never silently eroded)", async () => {
+    const registry = createSessionRegistry();
+    for (let i = 0; i < 50; i++) {
+      await runWithPendingInit(registry, async () => {
+        throw new Error("boom");
+      }).catch(() => {});
+    }
+    expect(registry.pendingInits).toBe(0);
   });
 });
 

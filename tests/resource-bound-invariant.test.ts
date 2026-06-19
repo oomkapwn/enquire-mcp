@@ -166,6 +166,23 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(body).toContain("capScanEntries(");
   });
 
+  // v3.10.0-rc.65 (round-3 audit) — `obsidian_read_canvas` (media.ts `readCanvas`) is an
+  // always-on, bearer-reachable tool that loads the whole markdown index (`listMarkdown`) and
+  // resolves each `file:` node against it. It uses `listMarkdown` WITHOUT `readNote`, so
+  // `discoverScanners` can't see it and `media.ts` is outside SCANNER_SOURCES — it escaped the
+  // class entirely. Pre-rc.65 it did a per-node O(N) `allMarkdown.find(...)` → O(K×N) on the
+  // event loop. The fix indexes relPaths ONCE into a Map (`byRelPath`) for an O(1) per-node
+  // lookup. Assert the bounded shape separately (mirrors queryBase/buildWikilinkGraph): the
+  // O(1) index is present AND the per-node linear find is gone, so a refactor reintroducing it
+  // fails CI even though the heuristic doesn't reach this function.
+  it("media.readCanvas resolves file-nodes via the O(1) byRelPath index, not a per-node find (rc.65)", () => {
+    const body = functionBody(readFileSync(path.join(repoRoot, "src/tools/media.ts"), "utf8"), "readCanvas");
+    expect(body, "readCanvas not found in media.ts").not.toBe("");
+    expect(body, "readCanvas must build the O(1) byRelPath index").toContain("byRelPath");
+    // NEGATIVE: the O(N)-per-node linear scan must be gone (the rc.65 regression shape).
+    expect(body, "readCanvas must NOT do a per-node allMarkdown.find()").not.toMatch(/allMarkdown\.find\(/);
+  });
+
   it("every CAPPED tool is actually discovered as a scanner (didn't silently stop scanning)", () => {
     const discovered = new Set(allDiscoveredScanners());
     const missing = Object.keys(CAPPED).filter((n) => !discovered.has(n));

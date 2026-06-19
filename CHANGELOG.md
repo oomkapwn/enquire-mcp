@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.65] — 2026-06-19
+
+> **TL;DR:** **Round-3 audit, batch 3 — two serve-http per-request amplifiers.** **read_canvas [MED]**: the always-on `obsidian_read_canvas` did a per-file-node O(N) linear scan → O(K×N) event-loop stall (K canvas nodes × N vault notes); fixed with a one-pass `byRelPath` Map → O(1) per node. **pendingInits leak [LOW]**: a `buildMcpServer`/transport constructor throw leaked the stateful session reservation permanently → eventual 503; fixed by wrapping the init body in a `runWithPendingInit` try/finally helper. **1275 → 1279 source tests.**
+
+**Pre-release (v3.10 line) — round-3 audit, batch 3/4 (MED resource-DoS + LOW accounting-leak).**
+
+### Fixed
+
+- **MED resource-DoS — `obsidian_read_canvas` per-node O(N) linear scan → O(K×N)** (`src/tools/media.ts`). `readCanvas` (always-on, read-only, bearer-reachable) loaded the whole markdown index then, for EACH `file:` node, ran a fresh `allMarkdown.find(...)` linear scan — O(K×N) where K = canvas file-nodes (bounded only by the 5 MB file cap → tens of thousands) and N = vault notes, blocking the single event loop for all serve-http clients. It escaped `tests/resource-bound-invariant.test.ts` entirely because `media.ts` is outside `SCANNER_SOURCES` and `readCanvas` uses `listMarkdown` WITHOUT `readNote`, so the auto-detector never saw it. **Fix:** build a `byRelPath` Map once (O(N)) and resolve each node via an O(1) lookup (the `findBestMatch` basename fallback already has its own cached index). Total cost drops from O(K×N) to O(N+K). Added a SEPARATE resource-bound assertion (mirrors the `queryBase`/`buildWikilinkGraph` pattern) pinning the O(1) index present AND no per-node linear scan, so the class is now structurally covered.
+- **LOW resource-DoS/accounting — `pendingInits` leaked on a constructor throw → permanent 503** (`src/http-transport.ts`). In stateful serve-http, the fresh-initialize path did `registry.pendingInits += 1` and constructed `buildMcpServer(...)` + `new StreamableHTTPServerTransport(...)` OUTSIDE the `try { … } finally { pendingInits -= 1 }`. If either constructor threw, control jumped to the outer catch and the reservation was never released — permanently lowering the effective `maxSessions` cap by one each time, until every `initialize` returned 503 "max sessions reached" with zero live sessions (violating the documented "always returns to 0 after init" invariant). **Fix:** extracted an exported `runWithPendingInit(registry, fn)` helper (increment + `try/finally` decrement) and wrapped the WHOLE build+connect+initialize body in it (the constructors are now inside the try; the inner catch is undefined-guarded so a partial allocation cleans up). The decrement now runs on every exit path including a constructor throw.
+
+### Tests (1279)
+
+- +1 in `tests/resource-bound-invariant.test.ts` (readCanvas resolves via the O(1) `byRelPath` index, NOT a per-node `allMarkdown.find`); +3 in `tests/http-transport.test.ts` (`runWithPendingInit` balances on success, **NEGATIVE control** — a throwing init body leaves `pendingInits===0`, and a 50-iteration erosion check). The existing `canvas.test.ts` resolution tests (exact-path + broken-ref) already cover the Map fix's correctness. 1275 → 1279.
+
+> **Lesson:** both are serve-http per-request amplifiers the drift/claim gates are structurally blind to. `read_canvas` slipped the resource-bound inventory because its signature (`listMarkdown` without `readNote`) didn't match the auto-detector — closed with an explicit separate assertion (the same escape hatch `queryBase` needed). The `pendingInits` leak is the classic "reserve before the try" shape — closed with a pure `try/finally` helper that's unit-testable with an injected throwing body. rc.66 ships the final 2 LOW correctness items (NFC graph-boost + UTC-midnight Date).
+
+---
+
 ## [3.10.0-rc.64] — 2026-06-19
 
 > **TL;DR:** **Round-3 audit, batch 2 — MED silent write-path data-loss (the rc.61 WRITE-2 sibling).** `frontmatter_set` on a note whose existing frontmatter is a valid-YAML NON-mapping (bare scalar / sequence) silently REPLACED and destroyed it, reporting a phantom success. The rc.61 WRITE-2 guard only caught the *throws-on-parse* case; this is the *parses-but-coerced-to-`{}`* sibling. Fixed by exposing a `coerced` flag from `parseFrontmatter` and refusing fail-closed. **1273 → 1275 source tests.**

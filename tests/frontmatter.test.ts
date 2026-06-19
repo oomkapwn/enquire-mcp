@@ -142,6 +142,26 @@ describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {
     expect(out).toMatch(/2026-01-15T13:45:00/);
   });
 
+  // v3.10.0-rc.66 (round-3 audit) — DELIBERATE COLLISION, pinned as a documented contract: an
+  // EXPLICIT timestamp that lands on midnight UTC resolves (post-js-yaml `load`) to the
+  // BYTE-IDENTICAL Date as a bare date-only value, so it is indistinguishable at stringify time
+  // and BOTH render as `YYYY-MM-DD`. Accepted tradeoff (a true fix needs a custom js-yaml type;
+  // far less harmful than the rc.58 bug). This is a CONTRACT test — if it ever changes, the
+  // frontmatter.ts header note must change with it.
+  it("an explicit midnight-UTC timestamp collapses to YYYY-MM-DD on re-serialize (rc.66 documented contract)", () => {
+    const { data } = parseFrontmatter("---\ncreated: 2026-01-15T00:00:00Z\nstatus: draft\n---\nbody");
+    data.status = "published"; // unrelated edit
+    const out = stringifyFrontmatter("body", data);
+    expect(out, "midnight-UTC timestamp is demoted to a date-only scalar (accepted)").toMatch(
+      /created: '?2026-01-15'?/
+    );
+    expect(out, "no spurious time component remains").not.toMatch(/created:.*T00:00:00/);
+    // Sanity: a bare date-only value produces the identical Date (the root of the collision).
+    const bare = parseFrontmatter("---\nd: 2026-01-15\n---\nb").data.d as Date;
+    const explicit = parseFrontmatter("---\nd: 2026-01-15T00:00:00Z\n---\nb").data.d as Date;
+    expect(bare.getTime()).toBe(explicit.getTime());
+  });
+
   it("preserves a literal `__proto__` frontmatter key through stringify (rc.61 FM-PROTO-KEY-DROP)", () => {
     // js-yaml load/dump treat `__proto__` as an OWN key; rc.58's normalizeDateOnly deep-walk
     // rebuilt objects with `out[k]=…` which hit the prototype setter and silently DROPPED it.

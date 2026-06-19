@@ -1769,8 +1769,14 @@ export async function searchHybrid(
           if (!wl.target) continue;
           // Wikilinks can be by basename ("Foo") or relative path ("Sub/Foo").
           // Normalize both forms so the membership test catches either.
-          targets.add(wl.target);
-          targets.add(stripMd(wl.target));
+          // v3.10.0-rc.66 (round-3 audit) — fold through foldName (NFC + case-fold), the same
+          // canonical key the other 14 rc.46 name-comparison sites + findBestMatch use. Without
+          // it, a wikilink target (NFC, user-authored) never matched a candidate path (NFD on
+          // macOS APFS), so an accented note silently lost its graph-boost in-degree tie-break.
+          // This was the one name-comparison site the rc.46 sweep missed (it used `stripMd`
+          // WITHOUT `.toLowerCase()`, so the name-fold detector's signature didn't catch it).
+          targets.add(foldName(wl.target));
+          targets.add(foldName(stripMd(wl.target)));
         }
         outLinks.set(candidatePath, targets);
       } catch {
@@ -1784,7 +1790,8 @@ export async function searchHybrid(
       let inDegree = 0;
       for (const [otherPath, targets] of outLinks) {
         if (otherPath === fPath) continue;
-        if (targets.has(fPath) || targets.has(stripMd(fPath)) || targets.has(fBasename)) {
+        // rc.66 — fold the candidate keys through the SAME canonical key as the targets above.
+        if (targets.has(foldName(fPath)) || targets.has(foldName(stripMd(fPath))) || targets.has(foldName(fBasename))) {
           inDegree += 1;
         }
       }

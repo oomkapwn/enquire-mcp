@@ -16,7 +16,7 @@ import {
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
 // inline below; now exercised so search.ts's embeddingsSearch filter is covered).
 import { filterExcludedEmbedHits } from "../src/tools/search.js";
-import { globToRegex, Vault } from "../src/vault.js";
+import { globToRegex, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
 
 let root: string;
 let outsideDir: string;
@@ -277,6 +277,40 @@ describe("globToRegex (v0.11 — privacy filter)", () => {
     expect(globToRegex("(parens)/x.md").test("(parens)/x.md")).toBe(true);
     expect(globToRegex("dot.path/x.md").test("dot.path/x.md")).toBe(true);
     expect(globToRegex("dot.path/x.md").test("dotXpath/x.md")).toBe(false);
+  });
+
+  // v3.10.0-rc.68 (round-3 re-sweep, ReDoS — rc.63 likeToRegex sibling). The `**` branch
+  // pre-rc.68 consumed only TWO stars, so a globstar RUN emitted adjacent unbounded quantifiers
+  // (`****`→`^.*.*$`, `***`→`^.*[^/]*$`) which backtrack catastrophically on a non-matching path.
+  // The run-collapse makes the compiled source contain only NON-adjacent quantifiers (linear).
+  it("collapses consecutive `*` so the source has no adjacent unbounded quantifiers (rc.68)", () => {
+    const adjacency = /\.\*(?:\.\*|\[\^\/\]\*)/; // `.*` followed by `.*` or `[^/]*`
+    for (const pat of ["**", "***", "****", "**".repeat(20), "***".repeat(10), "a/**/**/b", "**foo**"]) {
+      expect(globToRegex(pat).source, `glob ${JSON.stringify(pat)} must not emit adjacent quantifiers`).not.toMatch(
+        adjacency
+      );
+    }
+    // semantics preserved after the collapse
+    expect(globToRegex("**").test("any/deep/path.md")).toBe(true);
+    expect(globToRegex("a/**/b").test("a/b")).toBe(true); // globstar eats the slash
+    expect(globToRegex("a/**/b").test("a/x/y/b")).toBe(true);
+    // NEGATIVE control: the adjacency detector actually fires on the pre-rc.68 shape.
+    expect("^.*.*$").toMatch(adjacency);
+    expect("^.*[^/]*$").toMatch(adjacency);
+  });
+
+  it("the collapsed regex is linear on an adversarial non-matching path (rc.68 — no catastrophic hang)", () => {
+    // Pre-rc.68 these hung V8 >15s; now they complete in <1ms. A vitest per-test timeout would
+    // catch a regression even without an explicit budget, but assert a wall-clock bound to be loud.
+    const subject = `${"x".repeat(120)}/${"y".repeat(120)}`;
+    const t0 = Date.now();
+    for (const pat of ["**".repeat(12) + "X", "***".repeat(8) + "X"]) globToRegex(pat).test(subject);
+    expect(Date.now() - t0, "collapsed globs must match in well under a second").toBeLessThan(500);
+  });
+
+  it("throws on an over-long glob (MAX_GLOB_PATTERN_LEN cap, NEGATIVE control)", () => {
+    expect(() => globToRegex("a".repeat(MAX_GLOB_PATTERN_LEN))).not.toThrow();
+    expect(() => globToRegex("a".repeat(MAX_GLOB_PATTERN_LEN + 1))).toThrow(/too long/i);
   });
 });
 

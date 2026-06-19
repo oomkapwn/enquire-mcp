@@ -1322,6 +1322,14 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
 }
 
 /**
+ * Defensive cap on a glob pattern length (v3.10.0-rc.68, round-3 re-sweep). Bounds
+ * regex-compile/match CPU on an absurd operator-supplied glob from `--exclude-glob` /
+ * `--read-paths`. The catastrophic-backtracking guard is the consecutive-`*` collapse in
+ * {@link globToRegex} (below), not this cap.
+ */
+export const MAX_GLOB_PATTERN_LEN = 1024;
+
+/**
  * Convert a minimal glob pattern to a RegExp anchored against vault-relative
  * paths (forward-slash separated). Supports:
  *   `*`   — any run of non-slash characters
@@ -1329,8 +1337,20 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
  *   `?`   — exactly one non-slash character
  * No bracket sets, no `!` negation, no `{a,b}` alternation. Patterns are
  * matched against the full vault-relative path (e.g. `02_Personal/Inbox/x.md`).
+ *
+ * v3.10.0-rc.68 (round-3 re-sweep, ReDoS — sibling of the rc.63 likeToRegex fix): a RUN of
+ * consecutive `*` is collapsed to a single `.*`. Pre-rc.68 the `**` branch consumed only TWO
+ * stars + a trailing `/`, so `****` emitted `^.*.*$` and `***` emitted `^.*[^/]*$` — ADJACENT
+ * unbounded quantifiers that backtrack catastrophically against a non-matching path (no nesting
+ * needed; measured >15s V8 hangs at ~8–12 globstar runs). The regex runs via `.test()` in
+ * `isExcluded`/`exclusionReason` for EVERY path on EVERY vault scan, so one fat-fingered glob
+ * froze every scan. Collapsing the run is semantically identical (any-chars-incl-slash is
+ * idempotent) and leaves the compiled source with only NON-adjacent quantifiers (linear).
  */
 export function globToRegex(glob: string): RegExp {
+  if (glob.length > MAX_GLOB_PATTERN_LEN) {
+    throw new Error(`glob pattern too long (${glob.length} > ${MAX_GLOB_PATTERN_LEN} chars).`);
+  }
   let i = 0;
   let out = "^";
   while (i < glob.length) {
@@ -1340,7 +1360,10 @@ export function globToRegex(glob: string): RegExp {
       if (glob[i + 1] === "*") {
         out += ".*";
         i += 2;
-        // Eat a trailing `/` after `**` so `a/**/b` matches `a/b` too.
+        // v3.10.0-rc.68 — consume the ENTIRE remaining run of `*` so a globstar run collapses to
+        // ONE `.*` (idempotent), never adjacent `.*`/`.*[^/]*` (the rc.63 catastrophic shape).
+        while (glob[i] === "*") i += 1;
+        // Eat a trailing `/` after the globstar run so `a/**/b` matches `a/b` too.
         if (glob[i] === "/") i += 1;
         continue;
       }
@@ -1362,6 +1385,13 @@ export function globToRegex(glob: string): RegExp {
     out += ch ?? "";
     i += 1;
   }
+  // v3.10.0-rc.68 (round-3 re-sweep, ReDoS) — FINAL collapse: any adjacent unbounded quantifiers
+  // reduce to a single `.*` (idempotent for matching). The per-run `while` above handles a single
+  // globstar run (`***`), but REDUNDANT globstars separated by a slash (`a/**/**/b`) still emit
+  // `.*.*` (the first `**` consumes its trailing `/`, so the next `**` is adjacent). This pass
+  // guarantees the compiled source NEVER contains a catastrophic adjacent-quantifier run, however
+  // the globstars were spelled — the durable, total guard. (`.*[^/]*` and `[^/]*.*` ⊆ `.*`.)
+  out = out.replace(/(?:\.\*|\[\^\/\]\*){2,}/g, ".*");
   out += "$";
   return new RegExp(out);
 }

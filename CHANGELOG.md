@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.68] — 2026-06-19
+
+> **TL;DR:** **Post-rc.66 re-sweep, batch 2 — MED ReDoS in `globToRegex` (the rc.63 `likeToRegex` sibling).** The `--exclude-glob`/`--read-paths` privacy-filter glob compiler had the same un-collapsed-wildcard defect rc.63 fixed: a globstar run emitted adjacent unbounded quantifiers (`****`→`^.*.*$`) that backtrack catastrophically against a non-matching path (>15s V8 hangs), run on every path of every scan. Operator-controlled (not remote). Fixed by collapsing consecutive `*` runs + a total post-process collapse on the emitted source + a length cap. **1282 → 1285 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.66 re-sweep, batch 2/4 (MED ReDoS, operator-controlled).**
+
+### Fixed
+
+- **MED ReDoS — `globToRegex` emitted adjacent unbounded quantifiers on globstar runs** (`src/vault.ts`). `globToRegex` compiles operator-supplied glob patterns (`--exclude-glob` / `--read-paths`) and runs the result via `.test()` in `isExcluded`/`exclusionReason` for EVERY path on EVERY vault scan (list/read/watch). Its `**` branch consumed only TWO stars + a trailing `/`, so a run of consecutive globstars produced adjacent unbounded quantifiers — `****` → `^.*.*$`, `***` → `^.*[^/]*$` — which backtrack catastrophically against a non-matching path (no nesting needed; measured >15s V8 hangs at ~8–12 globstar runs). The IDENTICAL un-collapsed-wildcard defect rc.63 fixed in `likeToRegex`, and exactly the un-enumerated sink rc.63's own TSDoc warned about ("a class is not closed until EVERY RegExp-compiling sink is enumerated"). **Severity MED, not HIGH:** the glob is operator-controlled at server boot, NOT caller-influenceable by a remote bearer-auth client — a self-inflicted hang (a fat-fingered `**foo**` freezes the operator's own scans), not a remote DoS. **Fix:** (a) consume the entire `*` run inline (→ one `.*`); (b) a FINAL total-collapse pass on the emitted source, `out.replace(/(?:\.\*|\[\^\/\]\*){2,}/g, ".*")` — the inline `while` handles a single run (`***`), but REDUNDANT globstars split by a slash (`a/**/**/b`) still emit `.*.*` because the first `**` eats its trailing `/` so the next is adjacent; the post-process makes the compiled source provably free of adjacent quantifiers however the globstars were spelled (any-chars-incl-slash is idempotent); (c) a `MAX_GLOB_PATTERN_LEN`=1024 cap (fail-fast on an absurd glob). The match semantics are unchanged (verified: `02_Personal/**` still excludes its subtree, `a/**/b` still matches `a/b`).
+
+### Tests (1285)
+
+- +3 in `tests/security.test.ts`: the compiled source contains no adjacent unbounded quantifiers for an adversarial globstar corpus (incl. `a/**/**/b`, `**foo**`) with semantics preserved + a NEGATIVE control proving the adjacency detector fires on `^.*.*$`/`^.*[^/]*$`; a wall-clock linearity check (adversarial patterns complete in <500 ms, were >15 s); the `MAX_GLOB_PATTERN_LEN` cap throw (+ boundary NEGATIVE control). 1282 → 1285.
+
+> **Lesson:** my first inline-only fix (consume one run) was INSUFFICIENT — the structural adjacency test caught `a/**/**/b` (two globstar runs split by a consumed slash) on the very first build, so the durable close is a TOTAL post-process collapse on the source, not a per-run consume. And `globToRegex` is precisely the "enumerate EVERY RegExp-compiling sink" the rc.63 lesson named — missed by the rc.63 sweep, found by the post-merge re-sweep. rc.69 (DQL NFC) + rc.70 (reserve-before-try handle leaks) close the re-sweep.
+
+---
+
 ## [3.10.0-rc.67] — 2026-06-19
 
 > **TL;DR:** **Post-rc.66 re-sweep, batch 1 — MED remote DoS in `obsidian_validate_note_proposal`.** The always-on, bearer-reachable tool called `suggestSimilar` per broken `[[wikilink]]`, each doing a FRESH whole-vault `listMarkdown()` walk, with `content` uncapped → a body of thousands of broken targets = thousands of back-to-back directory walks on the event loop (serve-http DoS). The rc.65 `readCanvas` resource-bound-escape sibling. Fixed by sharing one listing + per-target memoization + a 1 MB content cap. **1281 → 1282 source tests.**

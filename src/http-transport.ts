@@ -431,6 +431,26 @@ async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>
 }
 
 /**
+ * v3.10.0-rc.65 (round-3 audit) — wrap the stateful fresh-initialize body with the
+ * `pendingInits` reservation so the decrement runs in a `finally` on EVERY exit path,
+ * including a throw from `buildMcpServer` or the `StreamableHTTPServerTransport`
+ * constructor. Pre-rc.65 the `pendingInits += 1` and both constructors sat OUTSIDE the
+ * try/finally, so a constructor throw skipped the decrement → the counter leaked
+ * permanently, lowering the effective `maxSessions` cap by one each time until every
+ * `initialize` returned 503 even with zero live sessions (the documented "always returns
+ * to 0 after init" invariant was violated). Exported so the balance is unit-testable
+ * with an injected throwing `fn` (NEGATIVE control).
+ */
+export async function runWithPendingInit<T>(registry: SessionRegistry, fn: () => Promise<T>): Promise<T> {
+  registry.pendingInits += 1;
+  try {
+    return await fn();
+  } finally {
+    registry.pendingInits -= 1;
+  }
+}
+
+/**
  * v3.7.12 M4 — parse the `maxFileBytes` ServeOptions field WITHOUT calling
  * back into `prepareServerDeps` (we only need the parsed number, not the
  * full vault). Returns `undefined` for unset / malformed / non-positive
@@ -705,72 +725,74 @@ export function createHttpHandler(
         return;
       }
 
-      // v3.8.7 P2-10 — reserve the slot synchronously. Between this
-      // line and the `onsessioninitialized` callback (which inserts
-      // into `sessions`), the cap-check above can see this reservation
-      // via `pendingInits` and reject concurrent inits that would
-      // overshoot the cap.
-      registry.pendingInits += 1;
-      // Allocate session: server + transport with a fresh session id.
-      // The SDK's `sessionIdGenerator` returns a UUID; the transport
-      // sets the `Mcp-Session-Id` response header automatically on
-      // initialize. The session object is constructed up-front so the
-      // onsessioninitialized callback can insert it atomically and the
-      // refcount wrapper can use it during the initialize POST itself.
-      const server = buildMcpServer(deps, opts);
-      const session: StatefulSession = {
-        server,
-        // Filled in below once `transport` is constructed.
-        transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
-        lastActivityMs: Date.now(),
-        inFlight: 0,
-        closing: false
-      };
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomBytes(16).toString("hex"),
-        onsessioninitialized: (sid: string) => {
-          // The SDK guarantees this fires before initialize's response
-          // ships, so the entry exists when subsequent requests arrive.
-          registry.sessions.set(sid, session);
-        }
-      });
-      session.transport = transport;
-      // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) {
-          const tracked = registry.sessions.get(sid);
-          // v3.8.7 P2-10 — only mark + delete if WE inserted this entry.
-          // (Defensive — onclose can fire after closeAll already removed
-          // it, in which case `tracked` is undefined and there's nothing
-          // to do.)
-          if (tracked) {
-            tracked.closing = true;
-            registry.sessions.delete(sid);
+      // v3.8.7 P2-10 + v3.10.0-rc.65 — reserve the slot synchronously and run the WHOLE
+      // build+connect+initialize under `runWithPendingInit`, so the reservation is released on
+      // EVERY exit path — including a throw from `buildMcpServer` or the
+      // `StreamableHTTPServerTransport` constructor (pre-rc.65 those ran BEFORE the try/finally,
+      // so a constructor throw leaked `pendingInits` permanently → eventual 503). Between the
+      // reservation and the `onsessioninitialized` callback the cap-check above can see it via
+      // `pendingInits` and reject concurrent inits that would overshoot the cap.
+      await runWithPendingInit(registry, async () => {
+        // The session object is constructed up-front so `onsessioninitialized` can insert it
+        // atomically and the refcount wrapper can use it during the initialize POST itself.
+        // Declared `let` + undefined so the catch can clean up PARTIAL state if a constructor
+        // throws (rc.65 — the constructors are now inside the try, not before it).
+        let server: ReturnType<typeof buildMcpServer> | undefined;
+        let session: StatefulSession | undefined;
+        let transport: InstanceType<typeof StreamableHTTPServerTransport> | undefined;
+        try {
+          server = buildMcpServer(deps, opts);
+          session = {
+            server,
+            // Filled in below once `transport` is constructed.
+            transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
+            lastActivityMs: Date.now(),
+            inFlight: 0,
+            closing: false
+          };
+          const sess = session; // captured (definitely-assigned) for the SDK callbacks
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomBytes(16).toString("hex"),
+            onsessioninitialized: (sid: string) => {
+              // The SDK guarantees this fires before initialize's response
+              // ships, so the entry exists when subsequent requests arrive.
+              registry.sessions.set(sid, sess);
+            }
+          });
+          session.transport = transport;
+          const tr = transport; // captured (definitely-assigned) for the onclose closure
+          // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
+          tr.onclose = () => {
+            const sid = tr.sessionId;
+            if (sid) {
+              const tracked = registry.sessions.get(sid);
+              // v3.8.7 P2-10 — only mark + delete if WE inserted this entry.
+              // (Defensive — onclose can fire after closeAll already removed it.)
+              if (tracked) {
+                tracked.closing = true;
+                registry.sessions.delete(sid);
+              }
+            }
+          };
+          await server.connect(tr);
+          await runWithRefcount(session, () => tr.handleRequest(req, res, body));
+        } catch (err) {
+          process.stderr.write(
+            `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+          // Best-effort: free whatever we allocated (each guarded — a constructor may have
+          // thrown before the later ones ran). If the session was already registered, mark it
+          // closing + drop from map so concurrent requests don't grab a half-dead entry.
+          if (session) session.closing = true;
+          const sid = transport?.sessionId;
+          if (sid) registry.sessions.delete(sid);
+          if (transport) void transport.close().catch(() => {});
+          if (server) void server.close().catch(() => {});
+          if (!res.headersSent) {
+            sendJsonRpcError(res, 500, -32603, "Internal server error");
           }
         }
-      };
-      try {
-        await server.connect(transport);
-        await runWithRefcount(session, () => transport.handleRequest(req, res, body));
-      } catch (err) {
-        process.stderr.write(
-          `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
-        );
-        // Best-effort: free resources we allocated. If the session was
-        // already registered, mark it closing + drop from map so concurrent
-        // requests don't grab a half-dead entry.
-        session.closing = true;
-        const sid = transport.sessionId;
-        if (sid) registry.sessions.delete(sid);
-        void transport.close().catch(() => {});
-        void server.close().catch(() => {});
-        if (!res.headersSent) {
-          sendJsonRpcError(res, 500, -32603, "Internal server error");
-        }
-      } finally {
-        registry.pendingInits -= 1;
-      }
+      });
     } catch (err) {
       // Final safety net — if anything in the outer block throws (URL
       // parse, header read), don't leave the connection hung.

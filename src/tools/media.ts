@@ -238,6 +238,14 @@ export async function readCanvas(vault: Vault, args: { path: string }): Promise<
   // markdown index — surfaces broken canvas links the same way
   // get_unresolved_wikilinks does for note bodies.
   const allMarkdown = await vault.listMarkdown();
+  // v3.10.0-rc.65 (round-3 audit, resource-DoS) — index relPaths ONCE so each file-node's
+  // exact-path match is an O(1) Map lookup, not an O(N) linear array scan per node.
+  // Pre-rc.65 a canvas with K file-nodes in an N-note vault cost O(K×N) on the single event
+  // loop (K is attacker/user-controlled up to the 5 MB file cap → tens of thousands of minimal
+  // file-nodes), pinning serve-http for all clients. The `findBestMatch` basename fallback below
+  // already resolves path-qualified targets via its own cached index.
+  const byRelPath = new Map<string, (typeof allMarkdown)[number]>();
+  for (const m of allMarkdown) byRelPath.set(m.relPath.replace(/\\/g, "/"), m);
   const nodes: CanvasNode[] = [];
   const summary = { text: 0, file: 0, link: 0, group: 0, unknown: 0 };
   const brokenRefs: string[] = [];
@@ -271,10 +279,9 @@ export async function readCanvas(vault: Vault, args: { path: string }): Promise<
           // Strip leading slash so `findBestMatch` treats it as relative.
           const cleaned = fileRef.replace(/^\/+/, "");
           // findBestMatch only looks at the basename; for canvases we have a full
-          // vault-relative path, so try direct match first. Fall through to
-          // findBestMatch (basename) for the path-stripped case.
-          const direct =
-            cleaned.length > 0 ? allMarkdown.find((m) => m.relPath.replace(/\\/g, "/") === cleaned) : undefined;
+          // vault-relative path, so try the O(1) exact-relPath lookup first (rc.65),
+          // then fall through to findBestMatch (basename) for the path-stripped case.
+          const direct = cleaned.length > 0 ? byRelPath.get(cleaned) : undefined;
           const resolved = direct ?? (cleaned ? findBestMatch(allMarkdown, cleaned) : null);
           if (cleaned && !resolved) brokenRefs.push(cleaned);
           nodes.push({

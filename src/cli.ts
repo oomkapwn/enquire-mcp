@@ -33,6 +33,7 @@ import {
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
+import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
 import {
   type ServeOptions,
   startServer,
@@ -334,6 +335,11 @@ export async function main(): Promise<void> {
       ) {
         throw new Error(`--rate-limit must be a non-negative integer; got "${opts.rateLimit}"`);
       }
+      // v3.10.0-rc.62 (CLI-SERVEHTTP-RECENCY-FAILLATE) — fail FAST on a typo'd advanced-retrieval
+      // flag. `startHttpServer` builds `prepareServerDeps` lazily (per session, on first request),
+      // so a bad --recency-weight / --stale-days / --reranker-top-n would otherwise start the server
+      // and only throw on the first search. Validate at boot, matching stdio `serve`.
+      validateServeHttpRetrievalOpts(httpOpts);
       const { startHttpServer } = await import("./http-transport.js");
       await startHttpServer(httpOpts);
     });

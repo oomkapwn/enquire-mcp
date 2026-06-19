@@ -268,6 +268,12 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, Last-Event-ID");
+  // v3.10.0-rc.62 (HTTP-CORS-EXPOSE-SESSION-ID) — `Access-Control-Allow-Headers` only lets a
+  // browser SEND `Mcp-Session-Id` on the request; to let cross-origin JS READ the session id the
+  // server returns on `initialize`, it must be listed in `Access-Control-Expose-Headers`. Without
+  // this, a browser MCP client in stateful mode cannot capture the `Mcp-Session-Id` response header
+  // and every follow-up request is treated as a new session (the SDK exposes it as a response header).
+  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   res.setHeader("Access-Control-Max-Age", "600");
 }
 

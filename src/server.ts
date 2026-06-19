@@ -6,8 +6,8 @@ import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
+import { parseRecencyConfig } from "./retrieval-opts.js";
 import { shutdownStdioDeps } from "./shutdown.js";
-import { DEFAULT_STALE_DAYS } from "./staleness.js";
 import {
   embedDbPath,
   parsePositiveInt,
@@ -676,13 +676,7 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
   // v3.10.0-rc.5: build opt-in recency re-ranking config. Default OFF
   // (weight 0 → null → searchHybrid skips the re-rank entirely, ranking stays
   // relevance-pure). `--stale-days` only matters when weight > 0 (the half-life).
-  const recencyWeight = opts.recencyWeight !== undefined ? Number(opts.recencyWeight) : 0;
-  if (!Number.isFinite(recencyWeight) || recencyWeight < 0 || recencyWeight > 1) {
-    throw new Error(`--recency-weight must be a number in [0, 1]; got "${opts.recencyWeight}"`);
-  }
-  const recencyStaleDays =
-    opts.staleDays !== undefined ? parsePositiveInt(opts.staleDays, "--stale-days") : DEFAULT_STALE_DAYS;
-  const recencyConfig = recencyWeight > 0 ? { weight: recencyWeight, staleDays: recencyStaleDays } : null;
+  const recencyConfig = parseRecencyConfig(opts);
 
   registerReadTools(
     server,

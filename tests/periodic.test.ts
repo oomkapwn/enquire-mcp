@@ -84,6 +84,21 @@ describe("formatMoment (v1.10 Moment-format → string)", () => {
     expect(formatMoment("YYYY/MM/DD", new Date(2026, 4, 6))).toBe("2026/05/06");
   });
 
+  // v3.10.0-rc.62 (PERIODIC-WW-LOCALE-CONFLATION) — pin the DELIBERATE decision that the
+  // lowercase locale-aware Moment week tokens (ww/wo/gggg) resolve IDENTICALLY to their
+  // uppercase ISO-8601 counterparts (WW/Wo/GGGG). enquire ships no locale DB and ISO weeks are
+  // Obsidian's Periodic-Notes default, so this is a documented contract, not silent drift.
+  it("lowercase week tokens (ww/wo/gggg) resolve to ISO-8601, identical to WW/Wo/GGGG (rc.62 deliberate)", () => {
+    // Thu 2026-01-15 is ISO week 03 of ISO-week-year 2026 (Jan 1 2026 is a Thursday → wk 1).
+    const d = new Date(Date.UTC(2026, 0, 15, 12, 0, 0));
+    expect(formatMoment("ww", d)).toBe(formatMoment("WW", d)); // locale week == ISO week (by design)
+    expect(formatMoment("wo", d)).toBe(formatMoment("Wo", d)); // ordinal locale == ordinal ISO
+    expect(formatMoment("gggg", d)).toBe(formatMoment("GGGG", d)); // locale week-year == ISO week-year
+    // and the resolved value IS the ISO one (not a no-op equality of two unhandled tokens)
+    expect(formatMoment("ww", d)).toBe("03");
+    expect(formatMoment("gggg", d)).toBe("2026");
+  });
+
   // v3.6 — branches coverage uplift. The formatToken switch has many cases
   // that aren't reached by the existing canonical-format tests; each case
   // is a branch.

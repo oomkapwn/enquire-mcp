@@ -17,7 +17,8 @@ import {
   searchText,
   validateNoteProposal
 } from "../src/tools/index.js";
-import { Vault } from "../src/vault.js";
+import { findBestMatch } from "../src/tools/meta.js";
+import { type FileEntry, Vault } from "../src/vault.js";
 
 let root: string;
 
@@ -580,6 +581,29 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     // Constant overhead (the validateNoteProposal listing + listTags' own) — must NOT grow with
     // broken-link count. Pre-rc.67 `many` would exceed `few` by ~57 (one re-walk per extra link).
     expect(many).toBe(few);
+  });
+
+  it("findBestMatch resolves PATH-QUALIFIED targets in O(1), not an O(N) endsWith scan (rc.72 DoS)", () => {
+    // v3.10.0-rc.72 (post-rc.70 re-sweep): rc.67 closed the suggestSimilar re-walk in
+    // validateNoteProposal, but findBestMatch (called per wikilink in the SAME loop) still fell
+    // into a `for (const e of entries) endsWith(...)` linear scan for the path-qualified MISS case
+    // — NOT covered by the indexFor WeakMap. A body of K distinct path-qualified broken `[[a/X]]`
+    // links → O(K × N). The rc.67 test used basename-only `[[NoSuchNote{i}]]` targets that hit the
+    // O(1) byBasename miss and NEVER reached the endsWith branch (the generator could not produce
+    // the failing shape). The fix adds a `bySuffix` index so the path-qualified miss is O(1).
+    const N = 20_000;
+    const entries: FileEntry[] = Array.from(
+      { length: N },
+      (_, i) => ({ relPath: `folder${i % 50}/note${i}.md`, basename: `note${i}.md` }) as FileEntry
+    );
+    // POSITIVE: a real path-qualified suffix still resolves (same result the old scan returned).
+    expect(findBestMatch(entries, "folder3/note153", "x.md")?.relPath).toBe("folder3/note153.md");
+    // O(1) scaling: K distinct path-qualified MISSES against a large vault. The old O(K × N)
+    // endsWith scan was minutes (the audit measured 8+ min at K=150k/N=20k); the suffix index is
+    // ~tens of ms. A generous budget cleanly separates O(1) from O(K × N) without CI flake.
+    const t0 = Date.now();
+    for (let k = 0; k < 5000; k++) findBestMatch(entries, `missingdir/ghost${k}`, "x.md");
+    expect(Date.now() - t0, "path-qualified misses must be O(1) per call, not O(N)").toBeLessThan(1500);
   });
 
   it("flags new tags so the LLM doesn't fork a tag forest", async () => {

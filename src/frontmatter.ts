@@ -33,6 +33,17 @@
 // date (it becomes a quoted `'2026-01-15'`, semantically the same date — no spurious time). A
 // genuine non-midnight timestamp is left as a full ISO string.
 //
+// DELIBERATE COLLISION (v3.10.0-rc.66 audit, accepted tradeoff): an EXPLICIT timestamp that
+// lands exactly on midnight UTC — `2026-01-15T00:00:00Z`, or an offset form like
+// `2026-01-15T05:00:00+05:00` that nets to 00:00:00Z — resolves to the BYTE-IDENTICAL `Date`
+// object as the bare `2026-01-15` (both `.getTime()` === the same epoch ms). The time-of-day /
+// original timezone is GONE after `load`, so at stringify time the two are indistinguishable and
+// BOTH are rendered as `YYYY-MM-DD`. We accept this: a true time-of-day fix would require a custom
+// js-yaml timestamp type preserving the raw scalar text (real risk on the freshly-hardened
+// parser, for a value that is the same calendar date), and demoting a midnight timestamp to a
+// date is far less harmful than the rc.58 bug of appending a midnight time to every plain date.
+// Pinned as a contract in `tests/frontmatter.test.ts` so it is documented, not a silent surprise.
+//
 // Scope vs gray-matter: we support ONLY the default `---` delimiter (Obsidian's
 // frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, sections, and a
 // non-mapping top-level document (coerced to `{}`, gray-matter parity) are out of scope.

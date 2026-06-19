@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.66] — 2026-06-19
+
+> **TL;DR:** **Round-3 audit, batch 4 — CLOSES the round-3 12-lens audit (2 LOW correctness).** **NFC graph-boost residual**: the searchHybrid in-degree tie-break was the one name-comparison site the rc.46 NFC sweep missed (raw `stripMd` without case-fold) → accented notes silently lost their graph-boost on macOS; now folded through `foldName`. **UTC-midnight Date fidelity**: an explicit midnight-UTC timestamp resolves to the same Date as a bare date and is demoted to `YYYY-MM-DD` — documented as a deliberate, pinned tradeoff. **1279 → 1281 source tests.**
+
+**Pre-release (v3.10 line) — round-3 audit, batch 4/4 (2 LOW correctness); closes the round-3 audit.**
+
+### Fixed
+
+- **LOW NFC name-resolution residual — graph-boost in-degree mis-resolved accented note names** (`src/tools/search.ts`). The `searchHybrid` wikilink graph-boost built its in-degree membership set from `stripMd(wl.target)` and tested candidate paths with `targets.has(stripMd(fPath))` — WITHOUT NFC normalization or case-fold. It was the one name-comparison site the rc.46 sweep missed because its signature (raw `stripMd`, no `.toLowerCase()`) didn't match the name-fold detector's strip+lowercase pattern. On macOS (APFS returns NFD filenames; wikilinks/titles are NFC) an accented note name never matched, so it silently lost its `α=0.005` in-degree tie-break (and never contributed to others'). **Fix:** fold both sides through `foldName` (NFC + case-fold) — the same canonical key the other 14 rc.46 sites + `findBestMatch` use. Pinned with a separate `name-fold-invariant` assertion (the generic detector can't reach the no-`toLowerCase` shape).
+- **LOW Date-fidelity — explicit UTC-midnight timestamp demoted to date-only (documented, deliberate)** (`src/frontmatter.ts`). rc.58's `normalizeDateOnly` renders a date-only (midnight-UTC) `Date` as `YYYY-MM-DD` to stop `frontmatter_set` appending a spurious time to bare dates. But an EXPLICIT timestamp on midnight UTC (`2026-01-15T00:00:00Z`, or an offset form netting to 00:00:00Z) resolves — post js-yaml `load` — to the **byte-identical** `Date` as a bare `2026-01-15`, so the two are indistinguishable at stringify time and BOTH render as `YYYY-MM-DD`. The time-of-day is irrecoverable without preserving the raw scalar (a custom js-yaml type — real risk on the freshly-hardened parser, for the same calendar date). **Accepted as a deliberate tradeoff** (far less harmful than the rc.58 bug it descends from), documented in the `frontmatter.ts` header and pinned as a contract test so it is explicit, not a silent surprise.
+
+### Tests (1281)
+
+- +1 in `tests/name-fold-invariant.test.ts` pinning the graph-boost membership routes through `foldName` (POSITIVE) with the pre-rc.66 unfolded shapes asserted gone (NEGATIVE); +1 in `tests/frontmatter.test.ts` pinning the midnight-UTC → date-only contract (with the byte-identical-Date sanity check showing the root collision; the rc.58 non-midnight NEGATIVE control still holds). 1279 → 1281.
+
+> **Lesson:** the rc.46 NFC inventory invariant had a blind spot — a name comparison that does NOT lowercase (a case-SENSITIVE raw `stripMd`) escaped its strip+lowercase signature entirely. An inventory invariant is only as complete as the signatures it enumerates; the durable close for a detector-missed site is a separate pinned assertion. **This CLOSES the round-3 fresh 12-lens audit** (6 confirmed: 1 HIGH rc.63 + 2 MED rc.64/rc.65 + 3 LOW rc.65/rc.66, 0 dropped) — found by a from-scratch Workflow audit with 3-skeptic adversarial verification on the shipped rc.62 commit.
+
+---
+
 ## [3.10.0-rc.65] — 2026-06-19
 
 > **TL;DR:** **Round-3 audit, batch 3 — two serve-http per-request amplifiers.** **read_canvas [MED]**: the always-on `obsidian_read_canvas` did a per-file-node O(N) linear scan → O(K×N) event-loop stall (K canvas nodes × N vault notes); fixed with a one-pass `byRelPath` Map → O(1) per node. **pendingInits leak [LOW]**: a `buildMcpServer`/transport constructor throw leaked the stateful session reservation permanently → eventual 503; fixed by wrapping the init body in a `runWithPendingInit` try/finally helper. **1275 → 1279 source tests.**

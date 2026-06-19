@@ -117,4 +117,21 @@ describe("name-fold inventory invariant (rc.46)", () => {
     expect(findUnfoldedNameComparisons(`const k = foldName(stripMd(e.basename));`)).toHaveLength(0);
     expect(findUnfoldedNameComparisons(`const k = foldName(e.basename.replace(/\\.md$/i, ""));`)).toHaveLength(0);
   });
+
+  // v3.10.0-rc.66 (round-3 audit) — the graph-boost in-degree membership test in searchHybrid was
+  // the ONE name-comparison site the rc.46 detector couldn't catch: it used `stripMd(wl.target)`
+  // WITHOUT `.toLowerCase()` (a case-SENSITIVE raw compare), so the strip+lowercase signature
+  // never matched it, yet it still mis-resolved accented names (NFC wikilink vs NFD candidate path
+  // on macOS). Now folded through `foldName`. Pin that specific block (separate assertion, mirrors
+  // the resource-bound queryBase/buildWikilinkGraph pattern) so a regression dropping the fold
+  // there fails CI even though the generic detector's signature doesn't reach it.
+  it("searchHybrid graph-boost folds wikilink targets + candidate keys through foldName (rc.66)", () => {
+    const src = stripLineComments(readFileSync(path.join(srcDir, "tools/search.ts"), "utf8"));
+    // The folded membership shape MUST be present on both the build side and the lookup side.
+    expect(src, "graph-boost must fold wikilink targets").toContain("foldName(stripMd(wl.target))");
+    expect(src, "graph-boost must fold the candidate path key").toContain("foldName(stripMd(fPath))");
+    // NEGATIVE: the pre-rc.66 unfolded membership shapes must be GONE.
+    expect(src, "no unfolded targets.add(stripMd(wl.target))").not.toMatch(/targets\.add\(stripMd\(wl\.target\)\)/);
+    expect(src, "no unfolded targets.has(stripMd(fPath))").not.toMatch(/targets\.has\(stripMd\(fPath\)\)/);
+  });
 });

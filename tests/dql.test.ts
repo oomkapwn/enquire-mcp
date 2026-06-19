@@ -126,6 +126,28 @@ describe("runDql", () => {
     expect(rows.map((r) => r["file.name"])).toEqual(["ideas"]);
   });
 
+  it("matches an accented note name across NFC/NFD forms — WHERE file.name (rc.69 round-3 re-sweep)", async () => {
+    // The on-disk basename is NFD (as macOS APFS returns it); the user types the NFC literal.
+    // Pre-rc.69, file.name = stripMd(basename) was raw NFD and the literal raw NFC, so
+    // `file.name = "Café"` returned ZERO rows. Now both sides NFC-normalize. (bases.ts's
+    // `file.name ==` twin was folded in rc.46; this DQL sink was the missed sibling.)
+    const nfd = `Cafe${String.fromCodePoint(0x301)}`; // e + combining acute (NFD on-disk)
+    const nfc = `Caf${String.fromCodePoint(0xe9)}`; // precomposed é (NFC literal)
+    expect(nfc).not.toBe(nfd); // raw forms differ — the test is non-vacuous
+    const v2root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-dql-nfc-"));
+    try {
+      await fs.writeFile(path.join(v2root, `${nfd}.md`), "---\ntags: [x]\n---\nbody\n");
+      const v2 = new Vault(v2root);
+      const rows = await runDql(v2, parseDql(`LIST WHERE file.name = "${nfc}"`));
+      expect(rows.length, "NFC literal must resolve the NFD-on-disk note name").toBe(1);
+      // and `contains` (substring path) + a non-matching literal (NEGATIVE control)
+      expect((await runDql(v2, parseDql(`LIST WHERE file.name contains "${nfc}"`))).length).toBe(1);
+      expect((await runDql(v2, parseDql(`LIST WHERE file.name = "Other"`))).length).toBe(0);
+    } finally {
+      await fs.rm(v2root, { recursive: true, force: true });
+    }
+  });
+
   it("runs WHERE field equality", async () => {
     const v = new Vault(root);
     const rows = await runDql(v, parseDql('LIST FROM "projects" WHERE status = "active"'));

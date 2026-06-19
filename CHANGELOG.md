@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.69] — 2026-06-19
+
+> **TL;DR:** **Post-rc.66 re-sweep, batch 3 — MED NFC-blind DQL `file.name`/`file.path` (rc.46/rc.66 NFC sibling).** `obsidian_dataview_query` compared `file.name` (filesystem-derived, NFD on macOS) against NFC predicate literals with no normalization, so `WHERE file.name = "Café"` silently returned zero rows for an accented note. `bases.ts`'s twin was folded in rc.46; this DQL sink was missed. Fixed by NFC-normalizing both the projection and the literal. **1285 → 1286 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.66 re-sweep, batch 3/4 (MED NFC correctness).**
+
+### Fixed
+
+- **MED NFC-blind comparison — `obsidian_dataview_query` `WHERE file.name`/`file.path` never matched accented names on macOS** (`src/dql.ts`). `resolveField` (and the row projection) returned `file.name` as `stripMd(entry.basename)` and `file.path` as `entry.relPath` — RAW, which on macOS APFS is NFD (`Café` = `Cafe` + combining accent). A predicate literal like `"Café"` is user-authored NFC. The comparators normalize neither: `looseEq` does `a.toLowerCase() === b.toLowerCase()`, `contains` does `value.toLowerCase().includes(...)`, and `like` compiles with `iu` flags (Unicode-aware but NO normalization). So NFC literal !== NFD on-disk name even after lowercasing → `WHERE file.name = "Café"` (and `contains`/`like`) returned zero rows; `!=` returned the inverse. The `bases.ts` `file.name ==` twin was folded through `foldName` in rc.46 — this DQL sink was the missed sibling (the rc.46 `name-fold-invariant` detector can't see it: the `stripMd` is in `resolveField` and flows as a variable into the comparators, so neither detector signature appears at the comparison site). **Fix:** `.normalize("NFC")` the `file.name`/`file.path` projection (in `resolveField` and the row `out`) AND the string predicate literal (in `parseValue`) — both sides NFC, so they compare equal; the comparators continue to handle case. (Only Unicode form needs normalizing here; case is already handled.)
+
+### Tests (1286)
+
+- +1 in `tests/dql.test.ts`: an NFD-on-disk `Café.md` resolves a NFC `LIST WHERE file.name = "Café"` (and `contains`), with a non-matching literal NEGATIVE control + a `nfc !== nfd` non-vacuity assertion. The test fails if the `.normalize("NFC")` is dropped — it is the regression guard. 1285 → 1286.
+
+> **Lesson:** the rc.46 NFC inventory invariant (signature: extension-strip-then-`.toLowerCase()`) structurally cannot see a comparison where the strip and the compare live in DIFFERENT functions — DQL is the 2nd such blind spot after rc.66's graph-boost. For these the durable close is a behavioral test that fails on a dropped normalize, not another detector signature. rc.70 (reserve-before-try handle leaks) closes the re-sweep.
+
+---
+
 ## [3.10.0-rc.68] — 2026-06-19
 
 > **TL;DR:** **Post-rc.66 re-sweep, batch 2 — MED ReDoS in `globToRegex` (the rc.63 `likeToRegex` sibling).** The `--exclude-glob`/`--read-paths` privacy-filter glob compiler had the same un-collapsed-wildcard defect rc.63 fixed: a globstar run emitted adjacent unbounded quantifiers (`****`→`^.*.*$`) that backtrack catastrophically against a non-matching path (>15s V8 hangs), run on every path of every scan. Operator-controlled (not remote). Fixed by collapsing consecutive `*` runs + a total post-process collapse on the emitted source + a length cap. **1282 → 1285 source tests.**

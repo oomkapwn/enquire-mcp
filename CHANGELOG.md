@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.62] — 2026-06-19
+
+> **TL;DR:** **Round-2 audit tail, batch 3 — CLOSES the round-2 fresh 8-lens audit.** **HTTP-CORS-EXPOSE-SESSION-ID [MED]**: serve-http now sends `Access-Control-Expose-Headers: Mcp-Session-Id` so a browser MCP client can read the session id the server returns on `initialize`. **CLI-SERVEHTTP-RECENCY-FAILLATE [LOW]**: `--recency-weight` / `--stale-days` / `--reranker-top-n` are now validated FAST at serve-http boot (was: only on the first search request). **PERIODIC-WW-LOCALE-CONFLATION [LOW]**: documented the deliberate ISO-8601 resolution of lowercase week tokens (ww/wo/gggg) + a pinning test. **1255 → 1270 source tests.**
+
+**Pre-release (v3.10 line) — round-2 audit tail, batch 3 (1 MED + 2 LOW); closes the round-2 audit.**
+
+### Fixed
+
+- **HTTP-CORS-EXPOSE-SESSION-ID [MED] — browser MCP clients couldn't read the `Mcp-Session-Id` response header** (`src/http-transport.ts`). `applyCors` set `Access-Control-Allow-Headers` (which only lets a browser SEND `Mcp-Session-Id` on a request) but never `Access-Control-Expose-Headers`, so cross-origin JS could not READ the `Mcp-Session-Id` the SDK returns on `initialize` — in stateful mode every follow-up request looked like a brand-new session. Added `res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id")` to `applyCors` (runs on every request + preflight).
+- **CLI-SERVEHTTP-RECENCY-FAILLATE [LOW] — serve-http accepted bad advanced-retrieval flags at boot, failing only on the first search** (`src/cli.ts` + new `src/retrieval-opts.ts`). `startHttpServer` builds `prepareServerDeps` lazily (per session, on the first request), so a typo'd `--recency-weight 5` / `--stale-days x` / `--reranker-top-n 0` started the server cleanly and only threw when the first `obsidian_search` ran — unlike stdio `serve`, which validates eagerly at startup. The validation was extracted into a new leaf module `src/retrieval-opts.ts` (`parseRecencyConfig` + `validateServeHttpRetrievalOpts`), called at the serve-http boot (fail-fast) AND reused by `prepareServerDeps` (single source of truth — no validation drift between the two paths). The leaf module also satisfies the `no-internal-imports` Class-A invariant (test files may not value-import `src/server.ts`).
+- **PERIODIC-WW-LOCALE-CONFLATION [LOW, documented-deliberate] — lowercase week tokens resolve to ISO-8601, not Moment's locale-aware weeks** (`src/periodic.ts`). Moment's `ww`/`wo`/`gggg` are locale-aware (locale-dependent week start + numbering) while `WW`/`Wo`/`GGGG` are ISO-8601; `formatToken` intentionally resolves BOTH to ISO. enquire ships no locale database and ISO weeks are the Obsidian Periodic-Notes / Daily-Notes default, so this is the correct locale-independent behavior for filename templates — documented as a deliberate contract in the source + pinned in tests (lowercase == uppercase == ISO), not a silent conflation.
+
+### Tests (1270)
+
+- +2 in `tests/http-transport.test.ts` (Expose-Headers on preflight + on a real request); +1 in `tests/periodic.test.ts` (ww/wo/gggg == ISO contract); +12 in new `tests/serve-http-opts-validation.test.ts` (`parseRecencyConfig` + `validateServeHttpRetrievalOpts`, each with POSITIVE + NEGATIVE controls including the gating that `--reranker-top-n` is only validated when `--enable-reranker` is set). 1255 → 1270.
+
+### Notes
+
+- **Post-rc.61 re-sweep (FM-PROTO sibling).** The `frontmatter_set` SET loop (`after[k] = v` in `src/tools/write.ts`) has the same prototype-setter shape as the rc.61 FM-PROTO-KEY-DROP fix, but zod's `.record()` strips a literal `__proto__` key from `args.set` before it reaches the loop (verified empirically) → the SET path is unreachable; rc.61's fix covered the reachable file-derived path (js-yaml resolves an existing `__proto__` frontmatter key to an own property). `bases.ts` `out[k] = fm[k]` is a read-only query-result projection (no write-back), not corruption. No code change needed.
+
+> **Lesson:** this CLOSES the round-2 fresh 8-lens audit (7 confirmed: 1 HIGH in rc.60 + 2 MED + 4 LOW across rc.61 + rc.62). The CLI-SERVEHTTP fix's right shape was to extract a single shared validator (used by BOTH the eager serve-http boot and the lazy prepareServerDeps) rather than duplicate the checks — duplicated validation is its own drift class. The leaf-module placement was forced by the `no-internal-imports` invariant, which is exactly the kind of structural guard that keeps test/boilerplate coupling from creeping in.
+
+---
+
 ## [3.10.0-rc.61] — 2026-06-19
 
 > **TL;DR:** **Round-2 audit tail, batch 2 — three write-path fidelity fixes.** **WRITE-2 [MED]**: `frontmatter_set` on a note whose existing frontmatter is malformed YAML (e.g. a tab used for indentation) blindly prepended a SECOND `---` block, doubling/corrupting it — now refuses fail-closed. **WRITE-3 [LOW]**: a case-only rename (`Foo.md`→`foo.md`) on a case-insensitive FS was blocked — fixed at both the tool guard and the `vault.renameFile` primitive. **FM-PROTO-KEY-DROP [LOW, rc.58 regression]**: rc.58's `normalizeDateOnly` deep-walk silently dropped a literal `__proto__` frontmatter key — now preserved via `Object.defineProperty`. **1251 → 1255 source tests.**

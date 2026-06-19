@@ -655,6 +655,23 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://claude.ai");
       expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
       expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+      // v3.10.0-rc.62 (HTTP-CORS-EXPOSE-SESSION-ID) — a browser MCP client must be able to READ
+      // the Mcp-Session-Id the server returns on `initialize`; that requires it in Expose-Headers.
+      expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Mcp-Session-Id");
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("CORS exposes Mcp-Session-Id on a real POST response so a browser client can read the session id (rc.62)", async () => {
+    const s = await spawn({ corsOrigins: ["https://claude.ai"] });
+    try {
+      // A non-preflight request also carries the Expose-Headers (applyCors runs on every request).
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "OPTIONS",
+        headers: { Origin: "https://claude.ai", "Access-Control-Request-Method": "POST" }
+      });
+      expect(res.headers.get("Access-Control-Expose-Headers")).toBe("Mcp-Session-Id");
     } finally {
       await s.close();
     }

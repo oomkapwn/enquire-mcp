@@ -223,6 +223,14 @@ const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// v3.10.0-rc.62 (PERIODIC-WW-LOCALE-CONFLATION) — DELIBERATE: the lowercase Moment.js week tokens
+// (`ww`/`wo`/`gggg`) are LOCALE-aware in Moment (locale-dependent week start + week-numbering
+// system), while the uppercase ones (`WW`/`Wo`/`GGGG`) are ISO-8601. This formatter intentionally
+// resolves BOTH cases to ISO-8601 week semantics (`isoWeek`/`isoWeekYear`): enquire ships no locale
+// database, Obsidian's Periodic Notes / Daily Notes plugins use ISO weeks by default, and ISO is the
+// correct, locale-independent week numbering for filename templates. So a user whose vault is
+// configured for a non-ISO locale week start would see ISO week numbers — accepted, not a bug.
+// Pinned by `tests/periodic.test.ts` so this conflation is a documented contract, not silent drift.
 function formatToken(tok: string, d: Date): string {
   switch (tok) {
     case "YYYY":

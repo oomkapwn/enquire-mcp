@@ -431,11 +431,23 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
 }
 
 /**
- * Defensive cap on a DQL `like` pattern length (v3.9.0-rc.9 audit). NOT a
- * ReDoS guard — {@link likeToRegex} is catastrophic-backtracking-SAFE by
- * construction (it only ever emits `.*` for `*`, never a nested quantifier).
- * This solely bounds regex-compile / match CPU on an absurdly long
- * user-supplied LIKE value from a `.base` / DQL query.
+ * Defensive cap on a DQL `like` pattern length (v3.9.0-rc.9 audit). This bounds
+ * regex-compile / match CPU on an absurdly long user-supplied LIKE value from a
+ * `.base` / DQL query.
+ *
+ * v3.10.0-rc.63 (round-3 audit, ReDoS): the cap is NOT the ReDoS guard — the
+ * actual guard lives in {@link likeToRegex}, which **collapses a run of
+ * consecutive `*` wildcards into a single `.*`**. The pre-rc.63 TSDoc here
+ * claimed likeToRegex was "catastrophic-backtracking-SAFE by construction (only
+ * emits `.*` for `*`)" — that was FALSE: N adjacent `*` compiled to N adjacent
+ * `.*` (`^.*.*…$`), and adjacent unbounded quantifiers backtrack catastrophically
+ * against a non-matching subject WITHOUT any nesting (empirically: an 11-char
+ * `**********Q` hung V8 multiple seconds — a remote event-loop DoS via the
+ * always-registered `obsidian_dataview_query` on bearer-auth serve-http). The
+ * collapse makes the compiled source contain only NON-adjacent `.*` separated by
+ * required literals (linear-time), and likeToRegex still never emits a nested
+ * quantifier — so the catastrophic-backtracking-safe property now points at a
+ * real code guard.
  */
 export const MAX_LIKE_PATTERN_LEN = 512;
 
@@ -484,6 +496,15 @@ export function likeToRegex(pattern: string): RegExp {
     }
     if (ch === "*") {
       out += ".*";
+      // v3.10.0-rc.63 (round-3 audit, ReDoS) — collapse a RUN of consecutive
+      // (unescaped) `*` into a SINGLE `.*`. A run of SQL-LIKE wildcards is
+      // semantically identical to one `*`, but emitting adjacent `.*.*…` makes
+      // the compiled `^…$` catastrophically backtrack against a non-matching
+      // subject (the engine tries every partition across the runs). Skipping the
+      // rest of the run keeps the source free of adjacent `.*` (linear-time). An
+      // ESCAPED `\*` is a literal handled by the backslash branch above and is
+      // NOT a wildcard, so this only collapses true wildcard runs.
+      while (pattern[i + 1] === "*") i++;
       continue;
     }
     if (ch !== undefined && REGEX_SPECIALS.includes(ch)) {

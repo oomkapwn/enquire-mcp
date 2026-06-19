@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.63] — 2026-06-19
+
+> **TL;DR:** **Round-3 fresh 12-lens audit, batch 1 — HIGH ReDoS in DQL `like`.** `obsidian_dataview_query`'s `likeToRegex` translated each `*` to `.*`, so N adjacent `*` compiled to `^.*.*…$` — adjacent unbounded quantifiers that backtrack catastrophically against a non-matching subject (no nesting needed). Empirically reproduced + independently re-confirmed: an 11-char `**********Q` hangs V8 >5s, a remote event-loop DoS for ALL serve-http clients via the always-registered, read-only tool. The TSDoc falsely claimed "catastrophic-backtracking-SAFE by construction" (overclaim #21). Fixed by collapsing consecutive `*` into a single `.*`; corrected the TSDoc; added a static + an empirical (worker-timed) structural guard. **1270 → 1273 source tests.**
+
+**Pre-release (v3.10 line) — round-3 audit, batch 1/4 (HIGH ReDoS, shipped first + alone).**
+
+### Fixed
+
+- **HIGH ReDoS — `likeToRegex` emitted adjacent `.*` runs → catastrophic backtracking, remote DoS via `obsidian_dataview_query` `LIKE`** (`src/dql.ts`). The translator output one `.*` per `*` (line 486), so a pattern of N adjacent `*` produced `^.*.*…$` (N adjacent unbounded quantifiers). Against a non-matching subject the engine must try every partition of the subject across the runs — superlinear/exponential — WITHOUT any nesting, which the TSDoc on `MAX_LIKE_PATTERN_LEN` (lines 433-436) wrongly claimed was impossible ("catastrophic-backtracking-SAFE by construction"). `obsidian_dataview_query` is always-registered, read-only, and bearer-reachable on serve-http with no write/CLI gate; the `MAX_LIKE_PATTERN_LEN=512` cap permits ~255 adjacent stars, far past the danger threshold. **Empirically reproduced + independently re-confirmed** (not taken on the auditor's word): an 11-char `LIKE` pattern `**********Q` vs a 40-char non-matching subject hangs V8 >5s in a worker. The rc.21/24/25/36 detector and the rc.39 worker sink-bound both protect `obsidian_open_questions`, but DQL `like` compiles its OWN RegExp and was never covered — a second RegExp sink of the same class. **Fix:** collapse a run of consecutive (unescaped) `*` into a SINGLE `.*` (a run of SQL-LIKE wildcards is semantically identical to one `*`), so the compiled source contains only non-adjacent `.*` separated by required literals → linear-time. An escaped `\*` stays a literal (handled by the backslash branch, not collapsed). Verified post-fix: the 255-star and 10-star patterns complete in 0ms and the compiled source has no `.*.*` adjacency. The false "catastrophic-backtracking-SAFE by construction" TSDoc was corrected to point at the real guard (overclaim #21, the claimed-guarantee-vs-code-guard class).
+
+### Tests (1273)
+
+- +3 source `it()` in `tests/dql.test.ts`: (1) STATIC — `likeToRegex` collapses `**`/`***`/255-star runs to a single `.*` with no `.*.*` adjacency, and a run-in-the-middle (`a**b`) and separated runs (`*x*y*`) each stay one `.*`; (2) SQL-LIKE semantics preserved after the collapse (`****` matches anything incl. empty; `*foo*` matches/doesn't; an escaped `\*\*` stays literal); (3) EMPIRICAL — the COMPILED `likeToRegex` output for a corpus of adversarial adjacent-star patterns is run against non-matching subjects in a worker with a wall-clock budget (re-confirmed to avoid load-flake), so the next adjacency regression fails CI on behavior, not just a hand-checked source string. 1270 → 1273.
+
+> **Lesson:** the rc.39 sink-bound ended the ReDoS class FOR `obsidian_open_questions`, but a SECOND RegExp-compiling sink (DQL `like` → `likeToRegex`) existed and was never enumerated — a class is not closed until EVERY sink of that class is found, and the durable close is an evaluation-time guard (does the compiled regex actually hang?), not a source inspection or a length cap. This is the project's signature recurrence (an audit-closed class re-surfaces at a sibling sink), exactly what a fresh from-scratch multi-lens audit on the shipped commit is for. Round-3 found 6 (1 HIGH + 2 MED + 3 LOW); rc.64–rc.66 ship the remainder.
+
+---
+
 ## [3.10.0-rc.62] — 2026-06-19
 
 > **TL;DR:** **Round-2 audit tail, batch 3 — CLOSES the round-2 fresh 8-lens audit.** **HTTP-CORS-EXPOSE-SESSION-ID [MED]**: serve-http now sends `Access-Control-Expose-Headers: Mcp-Session-Id` so a browser MCP client can read the session id the server returns on `initialize`. **CLI-SERVEHTTP-RECENCY-FAILLATE [LOW]**: `--recency-weight` / `--stale-days` / `--reranker-top-n` are now validated FAST at serve-http boot (was: only on the first search request). **PERIODIC-WW-LOCALE-CONFLATION [LOW]**: documented the deliberate ISO-8601 resolution of lowercase week tokens (ww/wo/gggg) + a pinning test. **1255 → 1270 source tests.**

@@ -109,6 +109,18 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
     expect(parseFrontmatter("---\n2026-01-01\n---\nbody").data).toEqual({});
     expect(parseFrontmatter("---\n2026-01-01T10:00:00Z\n---\nbody").data).toEqual({});
   });
+
+  // v3.10.0-rc.64 (round-3 audit) — the `coerced` flag lets a write-back caller
+  // (frontmatter_set) refuse fail-closed instead of REPLACING a non-mapping block.
+  it("sets `coerced` true for a NON-MAPPING block, false for mapping / empty / absent", () => {
+    expect(parseFrontmatter("---\n- a\n- b\n---\nbody").coerced).toBe(true); // sequence
+    expect(parseFrontmatter("---\njust a scalar\n---\nbody").coerced).toBe(true); // scalar
+    expect(parseFrontmatter("---\n2026-01-01\n---\nbody").coerced).toBe(true); // Date scalar
+    expect(parseFrontmatter("---\nstatus: draft\n---\nbody").coerced).toBe(false); // mapping (POSITIVE control)
+    expect(parseFrontmatter("---\n---\nbody").coerced).toBe(false); // empty fence
+    expect(parseFrontmatter("---\n# only a comment\n---\nbody").coerced).toBe(false); // comment-only
+    expect(parseFrontmatter("no frontmatter here").coerced).toBe(false); // absent
+  });
 });
 
 describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.64] — 2026-06-19
+
+> **TL;DR:** **Round-3 audit, batch 2 — MED silent write-path data-loss (the rc.61 WRITE-2 sibling).** `frontmatter_set` on a note whose existing frontmatter is a valid-YAML NON-mapping (bare scalar / sequence) silently REPLACED and destroyed it, reporting a phantom success. The rc.61 WRITE-2 guard only caught the *throws-on-parse* case; this is the *parses-but-coerced-to-`{}`* sibling. Fixed by exposing a `coerced` flag from `parseFrontmatter` and refusing fail-closed. **1273 → 1275 source tests.**
+
+**Pre-release (v3.10 line) — round-3 audit, batch 2/4 (MED silent write-path data-loss).**
+
+### Fixed
+
+- **MED silent data-loss — `frontmatter_set` destroyed valid-YAML NON-mapping frontmatter** (`src/frontmatter.ts` + `src/tools/write.ts`). When a note's frontmatter block is valid YAML but NOT a mapping — a bare scalar (`---\nhello\n---`) or a sequence (`---\n- a\n- b\n---`) — `parseFrontmatter` deliberately coerces it to `data:{}` (the rc.54/rc.55 `isPlainObject` guard, so a non-mapping is never spread char-indexed). `frontmatterSet` therefore computed `before:{}`, built `after={...args.set}`, and `stringifyFrontmatter(body, after)` REPLACED the original block with a fresh mapping — silently destroying the scalar/sequence while the response reported a phantom success (`before:{}`, `changed_keys:['+key']`). Empirically: `---\n- item 1\n- item 2\n---\nBody.\n` after `frontmatter_set({set:{status:'done'}})` became `---\nstatus: done\n---\nBody.\n`. The rc.61 WRITE-2 guard only refused when the re-parse THREW (malformed YAML); this valid-but-non-mapping case parses cleanly, so it slipped through. **Fix:** `parseFrontmatter` now returns a `coerced` flag (it already computed the `isPlainObject` branch — the flag is free), true iff a non-empty block was coerced away from a mapping; `frontmatterSet` refuses fail-closed (`"its existing frontmatter is not a YAML mapping … editing it would replace and destroy that block"`) when `coerced` is set. This generalizes the rc.61 guard from "throws-on-parse" to "throws-OR-coerced", closing both halves of the class at one shared signal. A note with NO frontmatter parses cleanly (`coerced:false`) → the legitimate add path stays open.
+
+### Tests (1275)
+
+- +1 in `tests/frontmatter.test.ts` pinning the `coerced` contract (sequence/scalar/bare-Date → `true`; mapping/empty-fence/comment-only/absent → `false`, the POSITIVE control); +1 in `tests/frontmatter-ops.test.ts` asserting `frontmatter_set` REFUSES on a sequence AND a scalar frontmatter with the file left BYTE-unchanged (the existing rc.61 no-frontmatter test is the NEGATIVE control — adding still works). 1273 → 1275.
+
+> **Lesson:** the rc.61 WRITE-2 fix closed only the *throws-on-parse* half of "frontmatter_set must not destroy what it can't represent as a mapping" — the valid-YAML-non-mapping half stayed open one RC later, the project's signature "audit-driven fix leaves a sibling" pattern. The `coerced` flag closes the whole class at the parse layer (a single signal both guard surfaces consume), and the destroy-path test asserts BYTE-equality of the file, not merely that an error was thrown.
+
+---
+
 ## [3.10.0-rc.63] — 2026-06-19
 
 > **TL;DR:** **Round-3 fresh 12-lens audit, batch 1 — HIGH ReDoS in DQL `like`.** `obsidian_dataview_query`'s `likeToRegex` translated each `*` to `.*`, so N adjacent `*` compiled to `^.*.*…$` — adjacent unbounded quantifiers that backtrack catastrophically against a non-matching subject (no nesting needed). Empirically reproduced + independently re-confirmed: an 11-char `**********Q` hangs V8 >5s, a remote event-loop DoS for ALL serve-http clients via the always-registered, read-only tool. The TSDoc falsely claimed "catastrophic-backtracking-SAFE by construction" (overclaim #21). Fixed by collapsing consecutive `*` into a single `.*`; corrected the TSDoc; added a static + an empirical (worker-timed) structural guard. **1270 → 1273 source tests.**

@@ -134,6 +134,27 @@ describe("frontmatter_set", () => {
     const out = await fs.readFile(path.join(root, "no-fm.md"), "utf8");
     expect(out).toMatch(/^---\nstatus: new\n---/);
   });
+
+  it("refuses to edit a note whose frontmatter is a valid-YAML NON-MAPPING (rc.64 round-3 audit)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // A sequence frontmatter block is valid YAML but not a mapping. Pre-rc.64 frontmatterSet
+    // saw note.parsed.frontmatter={} (coerced), built after={...set}, and REPLACED the block —
+    // destroying the sequence while reporting before:{} (a phantom success).
+    const seqNote = "---\n- important item 1\n- important item 2\n---\nBody text.\n";
+    await fs.writeFile(path.join(root, "seq-fm.md"), seqNote);
+    await expect(frontmatterSet(v, { path: "seq-fm.md", set: { status: "done" } })).rejects.toThrow(
+      /not a YAML mapping/i
+    );
+    // File must be BYTE-unchanged (the sequence survives).
+    expect(await fs.readFile(path.join(root, "seq-fm.md"), "utf8")).toBe(seqNote);
+
+    // A bare-scalar frontmatter block is the same class.
+    const scalarNote = "---\njust a scalar\n---\nBody.\n";
+    await fs.writeFile(path.join(root, "scalar-fm.md"), scalarNote);
+    await expect(frontmatterSet(v, { path: "scalar-fm.md", set: { x: 1 } })).rejects.toThrow(/not a YAML mapping/i);
+    expect(await fs.readFile(path.join(root, "scalar-fm.md"), "utf8")).toBe(scalarNote);
+  });
 });
 
 describe("frontmatter_search", () => {

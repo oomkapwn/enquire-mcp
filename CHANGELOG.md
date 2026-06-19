@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.72] — 2026-06-19
+
+> **TL;DR:** **Post-rc.70 re-sweep, batch 2/4 — MED remote-DoS amplifier: `validateNoteProposal` `findBestMatch` O(K×N) (rc.67 sibling).** rc.67 closed the `suggestSimilar` re-walk in the wikilink loop, but `findBestMatch` (called per link in the SAME loop) still fell into an O(N) `endsWith` scan for the path-qualified MISS case — a 1 MB body of K distinct path-qualified broken `[[a/X]]` links → O(K×N) (measured 8+ min at K=150k/N=20k) on the always-on, bearer-reachable `obsidian_validate_note_proposal`. Fixed by adding a `bySuffix` index to the cached `EntryIndex` so the path-qualified miss is O(1). **1300 → 1301 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.70 re-sweep, batch 2/4 (resource-DoS amplifier, rc.67 sibling).**
+
+### Fixed
+
+- **MED (remote DoS) — `findBestMatch` path-qualified resolution was O(N) per call, amplified per wikilink in `validateNoteProposal`** (`src/tools/meta.ts`). rc.67 made `validateNoteProposal` pass its single `listMarkdown()` listing into `suggestSimilar` + memoize per target — but the SAME loop calls `findBestMatch(all, target, …)` for EVERY wikilink, and `findBestMatch`'s path-qualified MISS branch (`target.includes("/")` with no exact relPath match) fell into a `for (const e of entries) if (foldKey(e.relPath).endsWith("/" + lower)) …` linear scan that the `indexFor` WeakMap did not cover. A 1 MB body packed with K distinct path-qualified broken `[[a/X]]` links therefore costs O(K × N) (measured 8+ min at K=150k / N=20k of pure event-loop blocking). The rc.67 test used basename-only `[[NoSuchNote{i}]]` targets that hit the O(1) `byBasename` miss and NEVER reached the `endsWith` branch — the test's input generator could not produce the failing shape (the rc.25/rc.36 generator-blindspot pattern, here at the TEST level). **Root fix: `EntryIndex` gains a `bySuffix` map — every `/`-aligned tail of `foldKey(relPath)` at segment index ≥ 1, first-wins in `entries` order (byte-identical to the old scan's result) — so the path-qualified miss is an O(1) lookup. This closes the class at the `findBestMatch` HELPER, benefiting every caller (find_similar, get_note_neighbors, rename_note, validate_note_proposal).**
+
+### Tests (1301)
+
+- +1 (`tests/tools.test.ts`): `findBestMatch` resolves a PATH-QUALIFIED target (POSITIVE) and 5000 distinct path-qualified MISSES against an N=20,000 entry vault complete in O(1) per call (<1500 ms; the old O(K × N) `endsWith` scan was minutes — the audit measured 8+ min at K=150k/N=20k). Sits beside the rc.67 `listMarkdown`-count-constant test that the basename-only generator left blind to this branch. **1300 → 1301.**
+
+> **Lesson:** rc.67 fixed the `suggestSimilar` re-walk in the loop but left the `findBestMatch` `endsWith` scan in the SAME iteration — a fix that addressed the helper the auditor named while leaving an adjacent helper of the same amplifier class open. The durable close is the index (`bySuffix`), which fixes EVERY `findBestMatch` caller at once, plus a test whose generator can actually produce the path-qualified shape the rc.67 test couldn't. Batches 3/4 (rc.73 — bases.ts path/file.path NFC-blind, rc.69 sibling) and 4/4 (rc.74 — pdfjs reserve-before-try leak, rc.70 sibling) follow.
+
+---
+
 ## [3.10.0-rc.71] — 2026-06-19
 
 > **TL;DR:** **Post-rc.70 re-sweep, batch 1/4 — ReDoS class: literal-separated unbounded quantifiers in BOTH `likeToRegex` (DQL `like`, HIGH, remote) + `globToRegex` (privacy filter, MED).** A fresh 6-lens re-sweep of the shipped rc.70 commit found 6 confirmed siblings (1 HIGH / 5 MED, 0 dropped) of the rc.67→rc.70 fixes. rc.63 collapsed only ADJACENT `*` runs and rc.68 only adjacent globstar runs; a pattern with wildcards SEPARATED BY LITERALS (`*a*a*…` → `^.*a.*a…$`, `**a**a…`) was untouched and catastrophic — empirically **110 s** for `*a`×14 vs a 41-char subject via the always-on, bearer-reachable `obsidian_dataview_query`. The catastrophe scales with the SUBJECT length, so a wildcard count cap is not structurally safe. Fixed by replacing BOTH backtracking regexes with a shared NON-backtracking O(tokens×len) DP matcher (`src/wildcard-match.ts`). **1288 → 1300 source tests.**

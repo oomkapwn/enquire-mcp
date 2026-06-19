@@ -2235,6 +2235,11 @@ export function ngrams(s: string, n: number): Set<string> {
 interface EntryIndex {
   byBasename: Map<string, FileEntry[]>;
   byRelPath: Map<string, FileEntry>;
+  // v3.10.0-rc.72 (post-rc.70 re-sweep, DoS) — `/`-aligned path SUFFIX → first entry, for the
+  // path-qualified `endsWith` fallback in findBestMatch. Keyed by foldKey(relPath) tails starting
+  // at each internal `/` (segment index ≥ 1; the full path is the byRelPath case, not a `/…`
+  // suffix). First-wins in `entries` order to preserve the old linear scan's result exactly.
+  bySuffix: Map<string, FileEntry>;
 }
 const entryIndexCache = new WeakMap<FileEntry[], EntryIndex>();
 
@@ -2271,14 +2276,25 @@ export function indexFor(entries: FileEntry[]): EntryIndex {
   if (cached) return cached;
   const byBasename = new Map<string, FileEntry[]>();
   const byRelPath = new Map<string, FileEntry>();
+  const bySuffix = new Map<string, FileEntry>();
   for (const e of entries) {
     const key = foldKey(e.basename);
     const slot = byBasename.get(key);
     if (slot) slot.push(e);
     else byBasename.set(key, [e]);
-    byRelPath.set(foldKey(e.relPath), e);
+    const relKey = foldKey(e.relPath);
+    byRelPath.set(relKey, e);
+    // v3.10.0-rc.72 — index every `/`-aligned tail (segment index ≥ 1) so the path-qualified
+    // `endsWith("/" + target)` fallback in findBestMatch is O(1) instead of an O(N) per-call scan
+    // (the rc.67 validateNoteProposal amplifier sibling: K path-qualified broken links × N vault).
+    // first-wins (don't overwrite) mirrors the old `for (const e of entries) … return e` order.
+    const segs = relKey.split("/");
+    for (let i = 1; i < segs.length; i++) {
+      const suffix = segs.slice(i).join("/");
+      if (!bySuffix.has(suffix)) bySuffix.set(suffix, e);
+    }
   }
-  const idx: EntryIndex = { byBasename, byRelPath };
+  const idx: EntryIndex = { byBasename, byRelPath, bySuffix };
   entryIndexCache.set(entries, idx);
   return idx;
 }
@@ -2336,11 +2352,13 @@ export function findBestMatch(entries: FileEntry[], target: string, fromNote?: s
     const lower = foldKey(target);
     const path1 = idx.byRelPath.get(lower);
     if (path1) return path1;
-    // endsWith match — falls back to a scan, but only for path-qualified
-    // targets that don't exact-match (rare).
-    for (const e of entries) {
-      if (foldKey(e.relPath).endsWith(`/${lower}`)) return e;
-    }
+    // v3.10.0-rc.72 (post-rc.70 re-sweep, DoS) — path-qualified `endsWith` match via the O(1)
+    // `bySuffix` index (was an O(N) `for (const e of entries)` scan per call). bySuffix keys are
+    // `/`-aligned tails at segment index ≥ 1, so a hit is exactly the old `relPath.endsWith("/" +
+    // lower)` (first-wins in entries order). Closes the rc.67 validateNoteProposal amplifier
+    // sibling: a body of K distinct path-qualified broken `[[a/X]]` links no longer pays O(K × N).
+    const sfx = idx.bySuffix.get(lower);
+    if (sfx) return sfx;
   }
   return null;
 }

@@ -111,6 +111,29 @@ describe("frontmatter_set", () => {
     expect(oneNl.endsWith("Body with newline\n")).toBe(true);
     expect(oneNl.endsWith("\n\n")).toBe(false);
   });
+
+  it("refuses to edit a note whose existing frontmatter is malformed YAML (rc.61 WRITE-2)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // TAB-indented frontmatter — js-yaml@4 rejects it, so parseNote falls back to whole-file
+    // body. Pre-rc.61 frontmatterSet blindly prepended a 2nd `---` block, doubling/corrupting it.
+    const malformed = "---\nstatus: draft\n\tbad: indent\n---\n# Title\n\nBody.\n";
+    await fs.writeFile(path.join(root, "bad-fm.md"), malformed);
+    await expect(frontmatterSet(v, { path: "bad-fm.md", set: { reviewed: true } })).rejects.toThrow(/not valid YAML/i);
+    // File must be untouched (no doubled `---` block written).
+    const after = await fs.readFile(path.join(root, "bad-fm.md"), "utf8");
+    expect(after).toBe(malformed);
+    expect(after.match(/^---$/gm)?.length).toBe(2); // still exactly one frontmatter block (2 fences)
+  });
+
+  it("still ADDS frontmatter to a clean no-frontmatter note (rc.61 NEGATIVE control — not over-refusing)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    // no-fm.md (created in beforeEach) has NO frontmatter → parses cleanly → adding is allowed.
+    await frontmatterSet(v, { path: "no-fm.md", set: { status: "new" } });
+    const out = await fs.readFile(path.join(root, "no-fm.md"), "utf8");
+    expect(out).toMatch(/^---\nstatus: new\n---/);
+  });
 });
 
 describe("frontmatter_search", () => {

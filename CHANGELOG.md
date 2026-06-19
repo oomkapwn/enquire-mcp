@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.61] — 2026-06-19
+
+> **TL;DR:** **Round-2 audit tail, batch 2 — three write-path fidelity fixes.** **WRITE-2 [MED]**: `frontmatter_set` on a note whose existing frontmatter is malformed YAML (e.g. a tab used for indentation) blindly prepended a SECOND `---` block, doubling/corrupting it — now refuses fail-closed. **WRITE-3 [LOW]**: a case-only rename (`Foo.md`→`foo.md`) on a case-insensitive FS was blocked — fixed at both the tool guard and the `vault.renameFile` primitive. **FM-PROTO-KEY-DROP [LOW, rc.58 regression]**: rc.58's `normalizeDateOnly` deep-walk silently dropped a literal `__proto__` frontmatter key — now preserved via `Object.defineProperty`. **1251 → 1255 source tests.**
+
+**Pre-release (v3.10 line) — round-2 audit tail, batch 2 (2 LOW + 1 MED write-path).**
+
+### Fixed
+
+- **WRITE-2 [MED] — `frontmatter_set` on malformed-YAML frontmatter wrote a doubled `---` block** (`src/tools/write.ts`). When a note's existing frontmatter is invalid YAML (e.g. a TAB used for indentation, which YAML forbids and js-yaml@4 rejects — `parseNote` then falls back to treating the whole file as body, so `note.frontmatter` is `{}`), `frontmatterSet` treated it as "no frontmatter" and PREPENDED a fresh `---` block, producing a corrupt file with two frontmatter fences. Fix: `frontmatterSet` now re-parses `note.content` with `parseFrontmatter` up front and, if it throws, REFUSES the edit with a clear "its existing frontmatter is not valid YAML (e.g. a tab used for indentation) — fix it by hand first" error — fail-closed instead of silent corruption. A note that genuinely has no frontmatter still parses cleanly (`{}`) and gets one added as before.
+- **WRITE-3 [LOW] — case-only rename (`Foo.md` → `foo.md`) was blocked on a case-INSENSITIVE filesystem** (`src/tools/write.ts` + `src/vault.ts`). Two layers rejected it: (1) `renameNote`'s "Destination already exists" guard saw the source as the destination (same path, different case), and (2) the `vault.renameFile` primitive uses `link()`+`unlink()` for an atomic exclusive create, which cannot self-replace the same inode. Fix at both layers: `renameNote` skips its existence guard for a case-only path difference and defers to `vault.renameFile` (the authority); `vault.renameFile` gains `isSameInodeCaseRename` (paths differ only in case AND resolve to the same inode) and uses a plain `rename` for that case. A case-SENSITIVE filesystem with a distinct existing `foo.md` still throws `EEXIST` → "Destination already exists" (overwrite required).
+- **FM-PROTO-KEY-DROP [LOW, rc.58 regression] — `frontmatter_set` silently dropped a literal `__proto__` frontmatter key** (`src/frontmatter.ts`). rc.58's `normalizeDateOnly` deep-walk (bare-date fidelity) rebuilt every object with `out[k] = normalizeDateOnly(v)`; for `k === "__proto__"` that assignment hits the object's prototype SETTER rather than creating an own property, so the key vanished on re-stringify (data loss vs a direct `dump`). Fix: build each key with `Object.defineProperty(out, k, { value, enumerable, writable, configurable })`, which creates a real own enumerable data property for ANY key name — including `__proto__` — so it survives the deep-walk and is re-emitted by `dump`.
+
+### Tests (1255)
+
+- +4 source `it()`: WRITE-2 refuse-on-malformed + a NEGATIVE control (clean no-frontmatter note still gets one added) in `tests/frontmatter-ops.test.ts`; WRITE-3 case-only rename (with a case-insensitive-FS skip guard) in `tests/write.test.ts`; FM-PROTO `__proto__`-key-survives-stringify in `tests/frontmatter.test.ts`. 1251 → 1255.
+
+> **Lesson:** WRITE-3 needed fixes at BOTH layers — patching only the audit-cited `vault.renameFile` primitive left the user-facing `renameNote` tool still throwing at its own existence guard; a fix is not complete until the whole user-facing path is exercised. And FM-PROTO is the 5th recursion-pair this session: rc.58's own `normalizeDateOnly` (which closed the bare-date mutation class) regressed `__proto__`-key preservation — the post-merge re-sweep / multi-lens audit is exactly what surfaces "the audit-driven fix recursed its own class".
+
+---
+
 ## [3.10.0-rc.60] — 2026-06-19
 
 > **TL;DR:** **Round-2 fresh audit → WRITE-1 [HIGH data-loss], shipped first/isolated.** A 2nd from-scratch 8-lens workflow-audit (30 agents, 3-skeptic verify; deeper into the modules round 1 skimmed) found a genuine HIGH the prior 25 audit rounds missed: `renameNote(overwrite:true)` silently LOSES the source note when the destination backlinks the source. Fixed by excluding the rename destination from the backlink-rewrite plan. The 6 remaining round-2 findings (2 MED / 4 LOW) ship in rc.61–rc.62. **1249 → 1251 source tests.**

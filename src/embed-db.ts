@@ -275,9 +275,20 @@ export class EmbedDb {
       await fs.chmod(parentDir, 0o700).catch(() => {});
     }
     this.db = new Ctor(this.file) as Db;
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
-    this.bootstrapSchema();
+    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw. `this.db` holds the
+    // live SQLite handle BEFORE pragma + bootstrapSchema run; on a corrupt/legacy/locked file
+    // those throw, and a caller that opened outside its own try/finally (e.g. server.ts's HNSW
+    // path) would otherwise leak the handle + its WAL/SHM locks for the whole serve lifetime.
+    // Self-cleaning here protects EVERY caller regardless of its own discipline (the rc.45/rc.49
+    // "fix the source every caller funnels through" lesson).
+    try {
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma("synchronous = NORMAL");
+      this.bootstrapSchema();
+    } catch (e) {
+      this.close();
+      throw e;
+    }
     await Promise.all(
       [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
     );

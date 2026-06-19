@@ -1099,6 +1099,15 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
       httpServer.removeListener("error", reject);
       resolve();
     });
+  }).catch(async (err) => {
+    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — a listen() failure (EADDRINUSE /
+    // EACCES on a privileged port) happens AFTER prepareServerDeps already opened the fts5 +
+    // watcher-embed-db SQLite handles and started the chokidar watcher (recorded in the
+    // httpServerExtras WeakMap above). Nothing else calls shutdownHttpServer on a synchronous
+    // boot throw (the signal handlers never fire), so close those deps before re-throwing rather
+    // than leak them until the process exits.
+    await shutdownHttpServer(httpServer).catch(() => {});
+    throw err;
   });
 
   const addr = httpServer.address();

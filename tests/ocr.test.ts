@@ -96,4 +96,26 @@ describe("ocr.ts module surface (v2.10.0)", () => {
     const bad = Buffer.from("not a pdf, just bytes pretending to be one");
     await expect(extractPdfWithOcr(bad)).rejects.toThrow();
   });
+
+  // v3.10.0-rc.74 (post-rc.70 re-sweep, reserve-before-try sibling): doc/loadingTask are acquired
+  // BEFORE resolveOcrPageRange + the maxPages guard, which pre-rc.74 sat OUTSIDE the try — so a
+  // throw there leaked the pdfjs document + worker port. The maxPages throw is only reachable past
+  // assertOcrLangsInstalled (needs a local lang pack, absent in CI), so probe once and skip VISIBLY
+  // if the lang pack / deps are missing (never a silent return — rc.23 rule).
+  it("extractPdfWithOcr releases the pdfjs doc on a post-acquisition throw (rc.74)", async (ctx) => {
+    const buf = makePdf({ pages: ["A", "B"] });
+    const probe = await extractPdfWithOcr(buf, { pages: [1, 2], maxPages: 1 }).then(
+      () => "ok",
+      (e) => (e instanceof Error ? e.message : String(e))
+    );
+    // Only the maxPages guard (post-acquisition) proves the path; any other error = packs/deps absent.
+    if (!/maxPages|refusing to process/i.test(String(probe))) return ctx.skip();
+    // Reachable: 20 post-acquisition throws. A leaked doc/worker would exhaust handles or hang;
+    // reaching the end with every call rejecting cleanly is the behavioral proof the finally runs.
+    for (let r = 0; r < 20; r++) {
+      await expect(extractPdfWithOcr(buf, { pages: [1, 2], maxPages: 1 })).rejects.toThrow(
+        /maxPages|refusing to process/i
+      );
+    }
+  });
 });

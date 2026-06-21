@@ -53,6 +53,12 @@ export async function listCanvases(vault: Vault, args: { folder?: string; limit?
   await vault.ensureExists();
   const limit = args.limit ?? 100;
   const all = await vault.listFilesByExtension(".canvas", args.folder);
+  // v3.10.0-rc.76 (full-audit MEDIUM) — sort by mtime DESC BEFORE truncating to `limit`.
+  // `listFilesByExtension` returns readdir/walk order, so truncating first and sorting the
+  // already-cut subset returned an arbitrary (not-newest) set on vaults with > limit files,
+  // violating the documented "newest first" contract. Sort-then-truncate (mirrors read.ts
+  // listNotes/getRecentEdits) makes the first `limit` walked the genuinely newest.
+  all.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const out: CanvasSummary[] = [];
   for (const e of all) {
     if (out.length >= limit) break;
@@ -406,6 +412,10 @@ export async function listPdfs(vault: Vault, args: { folder?: string; limit?: nu
   await vault.ensureExists();
   const limit = args.limit ?? 100;
   const all = await vault.listFilesByExtension(".pdf", args.folder);
+  // v3.10.0-rc.76 (full-audit MEDIUM) — sort by mtime DESC BEFORE truncating to `limit`; see
+  // listCanvases. Walk order != mtime order, so truncate-then-sort returned a not-newest subset
+  // on vaults with > limit PDFs, breaking the documented "newest first" contract.
+  all.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const out: PdfSummary[] = [];
   for (const e of all) {
     if (out.length >= limit) break;

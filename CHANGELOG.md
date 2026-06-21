@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.76] — 2026-06-21
+
+> **TL;DR:** **Full state-driven audit — MEDIUM: `listPdfs`/`listCanvases`/`listBases` truncated to `limit` in walk order BEFORE sorting by mtime.** A fresh whole-project 6-lens audit (0 CRIT / 0 HIGH / 1 MED / 1 LOW) caught a latent bug the change-driven sweeps missed: all three always-on list tools broke their build loop at `out.length >= limit` over the raw readdir-order entries, then sorted only that already-cut subset — so on a vault with > `limit` (default 100) files of that type the result was an arbitrary, not-newest set, violating the documented "newest first" contract (reproduced: 4 PDFs, limit=2 → the 2 oldest). Fixed by sorting by mtime DESC before truncating at all 3 sites. **1306 → 1309 source tests.**
+
+**Pre-release (v3.10 line) — full state-driven audit, MEDIUM code fix (truncate-before-sort).**
+
+### Fixed
+
+- **MEDIUM — `obsidian_list_pdfs` / `obsidian_list_canvases` / `obsidian_list_bases` returned a not-newest subset on vaults with more than `limit` files** (`src/tools/media.ts` listCanvases + listPdfs, `src/bases.ts` listBases). Each iterated `vault.listFilesByExtension(...)` (which returns filesystem readdir/walk order — NO mtime sort), broke the loop the moment `out.length >= limit`, and only THEN sorted the already-truncated subset by mtime desc. So the `limit` truncation happened in walk order and the mtime sort applied only within that arbitrary subset — the response was NOT the `limit` most-recently-modified files, contradicting each tool's documented "newest first" / "sorted by mtime desc" contract. Empirically reproduced (4 PDFs `a_old < b_mid < y_new < z_newest`, limit=2 → `[b_mid, a_old]` instead of `[z_newest, y_new]`). The correct sort-THEN-truncate pattern is what `read.ts` listNotes/getRecentEdits/staleNotes/listTags already use. **Fix: `all.sort((a, b) => b.mtimeMs - a.mtimeMs)` BEFORE the truncation loop at all three sites**, so the first `limit` walked are genuinely the newest. This list logic had been untouched for many RCs (recent media.ts edits were rc.65 resource-bound + rc.44 canvas-OOM, not this loop), which is exactly why the change-driven sweeps missed it — a full STATE-DRIVEN audit (read every module as-is) is what surfaced it.
+
+### Tests (1309)
+
+- +3 (`tests/pdf.test.ts`, `tests/bases.test.ts`, `tests/canvas.test.ts` — one per fixed site): create 5 files with explicit ascending `fs.utimes` mtimes and assert `limit: 2` returns the 2 NEWEST (by name), not a walk-order subset. The pre-existing "honors limit" (length-only) + "sorts by mtime" (2 files, under the limit) tests provably never overlapped this >limit case. **Revert-verified: all 3 deterministically FAIL with the pre-sort removed.** **1306 → 1309.**
+
+> **Lesson:** a full STATE-DRIVEN audit (read every module as it exists, verify each contract) finds latent bugs in long-untouched code that both change-driven sweeps and behavioral re-sweeps are structurally blind to — this truncate-before-sort defect survived ~30 audit rounds because nothing recently touched those three list loops. The always-on read tools deserve the same sort-then-truncate discipline `read.ts` already had. (rc.77 closes the audit's 1 LOW: a STABILITY.md enabling-flag drift + a structural guard.)
+
+---
+
 ## [3.10.0-rc.75] — 2026-06-21
 
 > **TL;DR:** **Post-rc.74 re-sweep close — 1 LOW: DQL `LIKE` Unicode case-fold contract.** The mandatory post-rc.74 re-sweep (6-lens Workflow) returned 0 CRIT / 0 HIGH / 0 MED / 1 LOW (the first re-sweep this session that left no behavioral sibling). The LOW: rc.71's DP matcher folds via `toLowerCase()`, not the pre-rc.71 regex `i`+`u` canonical fold, so DQL `LIKE` UNDER-matches for ~22 exotic codepoints (`µ`/`ſ`/`ς`/Greek-symbol-variants/Cyrillic-small-caps); the glob privacy path is unaffected (case-sensitive). Closed accept-and-document (the rc.54 playbook): documented the contract + pinned it with a case-fold-contract test that proves the divergence via a NEGATIVE control. Docs+test only. **1304 → 1306 source tests.**

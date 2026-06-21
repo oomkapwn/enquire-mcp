@@ -268,6 +268,64 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ).toBe(false);
   });
 
+  // v3.10.0-rc.77 (full state-driven audit, LOW) — STABILITY.md (the packaged semver-contract
+  // doc) attributed obsidian_full_text_search to `--persistent-index` ALONE, but server.ts:691
+  // registers it under BOTH `--persistent-index` AND `--diagnostic-search-tools` (TOOL_MANIFEST
+  // gating = "--persistent-index + --diagnostic-search-tools"). The existing STABILITY guards pin
+  // the tool/prompt COUNTS but nothing pinned the per-flag GATING breakdown prose, so the drift
+  // (live since v3.5.1) was never caught. Pure helper so a synthetic NEGATIVE control can prove
+  // the detector isn't vacuous (rc.15 pattern).
+  function stabilityGatingMismatches(
+    stabilityText: string,
+    manifest: ReadonlyArray<{ name: string; gating: string }>
+  ): string[] {
+    // Parse "**Read|Write — opt-in via|gated by <flags> (N):** `t1`, `t2`…" breakdown lines.
+    const lineRe = /\*\*(?:Read|Write) — (?:opt-in via|gated by) (.+?) \(\d+\):\*\*\s*(.+)/g;
+    const named = new Map<string, string>(); // tool -> sorted flag-set as listed in STABILITY
+    for (const m of stabilityText.matchAll(lineRe)) {
+      const flags = [...(m[1] ?? "").matchAll(/`(--[\w-]+)`/g)].map((f) => f[1] as string).sort();
+      const tools = [...(m[2] ?? "").matchAll(/`(obsidian_[a-z_]+)`/g)].map((t) => t[1] as string);
+      for (const t of tools) named.set(t, flags.join(", "));
+    }
+    const out: string[] = [];
+    for (const entry of manifest) {
+      if (entry.gating === "always") continue;
+      const expected = [...entry.gating.matchAll(/--[\w-]+/g)]
+        .map((f) => f[0])
+        .sort()
+        .join(", ");
+      const got = named.get(entry.name);
+      if (got === undefined) {
+        out.push(`${entry.name}: not listed under any opt-in/gated breakdown heading`);
+      } else if (got !== expected) {
+        out.push(`${entry.name}: STABILITY names [${got}] but TOOL_MANIFEST gating is [${expected}]`);
+      }
+    }
+    return out;
+  }
+
+  it("STABILITY.md per-flag gating breakdown matches TOOL_MANIFEST gating (rc.77 full-audit α-guard)", async () => {
+    const stability = await read("STABILITY.md");
+    const mismatches = stabilityGatingMismatches(stability, TOOL_MANIFEST);
+    expect(
+      mismatches,
+      `STABILITY.md opt-in/gated breakdown must match TOOL_MANIFEST gating:\n${mismatches.join("\n")}`
+    ).toEqual([]);
+  });
+
+  it("stabilityGatingMismatches catches a wrong gating breakdown (NEGATIVE control)", () => {
+    const fts = [{ name: "obsidian_full_text_search", gating: "--persistent-index + --diagnostic-search-tools" }];
+    // The exact rc.77 drift — full_text_search listed under --persistent-index ALONE — must be caught.
+    const wrong = "**Read — opt-in via `--persistent-index` (1):** `obsidian_full_text_search`.";
+    const caught = stabilityGatingMismatches(wrong, fts);
+    expect(caught).toHaveLength(1);
+    expect(caught[0]).toContain("obsidian_full_text_search");
+    // …and the corrected breakdown is accepted (POSITIVE control on the pure fn).
+    const right =
+      "**Read — opt-in via `--persistent-index` + `--diagnostic-search-tools` (1):** `obsidian_full_text_search`.";
+    expect(stabilityGatingMismatches(right, fts)).toEqual([]);
+  });
+
   // v3.9.0-rc.22 (full-audit batch 2) — OIA-check-count drift guard. ROADMAP.md
   // said "8 OIA checks" while the canonical count had reached 10 (Check 9 rc.14,
   // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's

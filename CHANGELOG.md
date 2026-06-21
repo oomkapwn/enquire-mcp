@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.77] — 2026-06-22
+
+> **TL;DR:** **Full state-driven audit close — LOW: STABILITY.md `obsidian_full_text_search` enabling-flag drift + structural guard.** The packaged semver-contract doc said the FTS tool is opt-in via `--persistent-index` alone, but the code requires `--persistent-index` AND `--diagnostic-search-tools`. Corrected + added a docs-consistency invariant that derives each opt-in/gated tool's flag-set from `TOOL_MANIFEST.gating` and pins STABILITY.md's breakdown headings to it. Docs+test only. **1309 → 1311 source tests. Closes the full state-driven audit (rc.76 MED + rc.77 LOW).**
+
+**Pre-release (v3.10 line) — full state-driven audit close (1 LOW; docs+test, zero runtime change).**
+
+### Fixed
+
+- **LOW — STABILITY.md misstated the enabling flags for `obsidian_full_text_search`** (`STABILITY.md` lines 13 + 19). The packaged stability-contract doc attributed the tool to `--persistent-index` ALONE, but `server.ts:691` registers it under `if (deps.ftsIndex && opts.diagnosticSearchTools)` — i.e. it requires BOTH `--persistent-index` (for `deps.ftsIndex`) AND `--diagnostic-search-tools`. Every other surface is correct (`tool-manifest.ts` gating = `"--persistent-index + --diagnostic-search-tools"`, the tool description, and `docs/api.md` in four places); STABILITY.md was the lone outlier, drifted since v3.5.1. A user who followed STABILITY.md and started `serve --persistent-index` WITHOUT `--diagnostic-search-tools` would not get the tool registered. Same α-class as the rc.22 STABILITY reranker-default drift; LOW because it's a packaged-doc accuracy gap (no security/data impact) and the umbrella `obsidian_search` already exposes BM25/FTS5 with `--persistent-index` alone. **Fix: corrected both lines + closed the untested gap with a structural guard** — the docs-consistency STABILITY invariants pinned tool/prompt COUNTS but nothing pinned the per-flag GATING breakdown prose.
+
+### Tests (1311)
+
+- +2 (`tests/docs-consistency.test.ts`): a new invariant `stabilityGatingMismatches` (pure fn) that DERIVES each non-`"always"` tool's flag-set from `TOOL_MANIFEST.gating` and asserts STABILITY.md's "opt-in via / gated by `<flags>`" breakdown headings name exactly that set — for every opt-in/gated tool, not just FTS. Plus a NEGATIVE control feeding the exact rc.77-drift string (`--persistent-index` alone) and asserting it's caught, with a POSITIVE control on the corrected string. **1309 → 1311.**
+
+> **Lesson:** count-pinning a docs surface (tools/prompts) does not pin its PROSE breakdown (per-flag gating) — a separate claim dimension drifts independently (here since v3.5.1, surviving ~30 audit rounds). Derive the breakdown from the machine-readable source (`TOOL_MANIFEST.gating`) and pin it. **This CLOSES the full state-driven audit (rc.76 MED truncate-before-sort + rc.77 LOW gating drift) — and the entire rc.63→rc.77 cascade (round-3 12-lens audit + 2 post-merge re-sweeps + this full state-driven audit): 1 HIGH + 7 MED + 6 LOW across 15 RCs, every confirmed finding shipped or reasoned-accepted.**
+
+---
+
 ## [3.10.0-rc.76] — 2026-06-21
 
 > **TL;DR:** **Full state-driven audit — MEDIUM: `listPdfs`/`listCanvases`/`listBases` truncated to `limit` in walk order BEFORE sorting by mtime.** A fresh whole-project 6-lens audit (0 CRIT / 0 HIGH / 1 MED / 1 LOW) caught a latent bug the change-driven sweeps missed: all three always-on list tools broke their build loop at `out.length >= limit` over the raw readdir-order entries, then sorted only that already-cut subset — so on a vault with > `limit` (default 100) files of that type the result was an arbitrary, not-newest set, violating the documented "newest first" contract (reproduced: 4 PDFs, limit=2 → the 2 oldest). Fixed by sorting by mtime DESC before truncating at all 3 sites. **1306 → 1309 source tests.**

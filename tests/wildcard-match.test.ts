@@ -151,7 +151,12 @@ describe("wildcard-match — compileGlob (path glob, case-sensitive, `/`-aware)"
 });
 
 // The DIFFERENTIAL regression guard: the matcher must agree with the pre-rc.71 regex
-// semantics on every corpus pair. 0 mismatches proves the rewrite preserved behavior.
+// semantics on every corpus pair in the ASCII + ordinary-accented (`café`) corpus below.
+// 0 mismatches proves the rewrite preserved behavior on that corpus. NOTE (rc.75): the
+// case-insensitive FOLDING dimension is NOT covered here (the corpus contains no codepoint
+// whose `i`-flag canonical fold differs from `toLowerCase`); it is pinned separately by the
+// "case-fold contract" describe below — the rc.54 lesson that a differential corpus is only
+// as strong as the shapes it can produce.
 describe("wildcard-match — differential vs pre-rc.71 regex (behavior-preservation guard)", () => {
   it("LIKE: new matcher === old likeToRegex over a broad corpus", () => {
     const patterns = [
@@ -255,6 +260,40 @@ describe("wildcard-match — differential vs pre-rc.71 regex (behavior-preservat
     }
     expect(mismatches, "new glob matcher must agree with the pre-rc.71 regex on every corpus pair").toBe(0);
   });
+});
+
+// v3.10.0-rc.75 — CASE-FOLD CONTRACT (closes the post-rc.74 re-sweep's one LOW + the rc.54-class
+// "differential corpus is only as strong as the shapes it can produce" gap). DQL `LIKE` folds via
+// `toLowerCase`, NOT the pre-rc.71 regex `i`+`u` canonical fold, so it DIVERGES (under-match) for
+// ~22 exotic BMP codepoints. This pins the DP matcher's deliberate semantics for representatives of
+// that set AND proves the divergence is real (the old regex WOULD have matched) so the contract
+// isn't vacuous — the dimension the ASCII differential corpus above structurally cannot reach.
+describe("wildcard-match — LIKE Unicode case-fold contract (rc.75)", () => {
+  // [pattern, value] pairs where the pre-rc.71 `^pattern$/iu` regex matched but `toLowerCase`
+  // folding does not (verified by an exhaustive BMP brute-force in the re-sweep).
+  const divergent: Array<[string, string, string]> = [
+    ["µ", "Μ", "micro-sign U+00B5 vs Greek capital mu U+039C"],
+    ["ſ", "S", "long-s U+017F vs S"],
+    ["ς", "Σ", "final-sigma U+03C2 vs Sigma U+03A3"]
+  ];
+
+  it("ASCII/ordinary-accented case-insensitivity is UNCHANGED (POSITIVE control)", () => {
+    expect(like("FOO")("foo")).toBe(true);
+    expect(like("É")("é")).toBe(true); // ordinary accented letter still folds
+    expect(like("CAFÉ")("café")).toBe(true);
+  });
+
+  for (const [pattern, value, label] of divergent) {
+    it(`folds via toLowerCase, NOT regex iu canonical fold — ${label}`, () => {
+      // The DP matcher's CONTRACT: these do NOT match (toLowerCase semantics).
+      expect(like(pattern)(value)).toBe(false);
+      // NEGATIVE control — the divergence is REAL and the row is non-vacuous: the pre-rc.71
+      // regex (preserved inline as oldLikeToRegex) WOULD have matched.
+      expect(oldLikeToRegex(pattern).test(value)).toBe(true);
+      // sanity: a same-codepoint match still works (the char folds to itself).
+      expect(like(pattern)(pattern)).toBe(true);
+    });
+  }
 });
 
 // The structural ReDoS guard: the EXACT literal-separated shapes that hung V8 pre-rc.71

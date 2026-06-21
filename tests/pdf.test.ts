@@ -322,6 +322,26 @@ describe("listPdfs (v2.7.0)", () => {
     expect(out[0]?.path).toBe("second.pdf");
     expect(out[1]?.path).toBe("first.pdf");
   });
+
+  it("returns the NEWEST `limit` PDFs, not a walk-order subset (rc.76 truncate-before-sort)", async () => {
+    // v3.10.0-rc.76 (full-audit MEDIUM): pre-fix the loop truncated to `limit` in walk order
+    // (readdir, NOT mtime) and sorted only that already-cut subset → on a vault with > limit PDFs
+    // the result was an arbitrary, not-newest set, violating the documented "newest first" contract.
+    // Create 5 PDFs with explicit ascending mtimes (n0 oldest … n4 newest) and assert limit=2 returns
+    // the 2 NEWEST. Revert-verified: with the sort moved back AFTER the truncation loop this returns
+    // the 2 oldest-walked instead. The pre-existing "honors limit" (length-only) + "sorts by mtime"
+    // (2 files, under the limit) tests provably never overlap this >limit case.
+    const names = ["n0", "n1", "n2", "n3", "n4"];
+    for (let i = 0; i < names.length; i++) {
+      await writePdf(`${names[i]}.pdf`, `Page ${i}`);
+      const t = new Date(Date.UTC(2026, 0, 1 + i)); // n0 = Jan 1 … n4 = Jan 5 (strictly increasing)
+      await fs.utimes(path.join(root, `${names[i]}.pdf`), t, t);
+    }
+    const v = new Vault(root);
+    await v.ensureExists();
+    const out = await listPdfs(v, { limit: 2 });
+    expect(out.map((p) => p.path)).toEqual(["n4.pdf", "n3.pdf"]);
+  });
 });
 
 describe("readPdf (v2.7.0)", () => {

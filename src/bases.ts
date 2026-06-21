@@ -171,6 +171,10 @@ export async function listBases(vault: Vault, args: { folder?: string; limit?: n
   await vault.ensureExists();
   const limit = args.limit ?? 100;
   const all = await vault.listFilesByExtension(".base", args.folder);
+  // v3.10.0-rc.76 (full-audit MEDIUM) — sort by mtime DESC BEFORE truncating to `limit`; see
+  // media.ts listCanvases. Walk order != mtime order, so truncate-then-sort returned a not-newest
+  // subset on vaults with > limit .base files, breaking the documented "newest first" contract.
+  all.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const out: BaseSummary[] = [];
   for (const e of all) {
     if (out.length >= limit) break;

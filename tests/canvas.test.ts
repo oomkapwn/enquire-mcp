@@ -134,6 +134,28 @@ describe("listCanvases (v1.7)", () => {
     }
   });
 
+  it("returns the NEWEST `limit` canvases, not a walk-order subset (rc.76 truncate-before-sort)", async () => {
+    // v3.10.0-rc.76 (full-audit MEDIUM, sibling of the listPdfs/listBases bug): pre-fix the loop
+    // truncated to `limit` in walk order then sorted only the cut subset → a not-newest result on
+    // a vault with > limit .canvas files. Revert-verified.
+    const cvRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-canvas-sort-"));
+    try {
+      const names = ["c0", "c1", "c2", "c3", "c4"];
+      for (let i = 0; i < names.length; i++) {
+        const p = path.join(cvRoot, `${names[i]}.canvas`);
+        await fs.writeFile(p, JSON.stringify({ nodes: [], edges: [] }));
+        const t = new Date(Date.UTC(2026, 0, 1 + i)); // c0 oldest … c4 newest
+        await fs.utimes(p, t, t);
+      }
+      const v = new Vault(cvRoot);
+      await v.ensureExists();
+      const out = await listCanvases(v, { limit: 2 });
+      expect(out.map((c) => c.path)).toEqual(["c4.canvas", "c3.canvas"]);
+    } finally {
+      await fs.rm(cvRoot, { recursive: true, force: true });
+    }
+  });
+
   it("respects --read-paths allowlist", async () => {
     const v = new Vault(root, { readPaths: ["Notes/**"] });
     await v.ensureExists();

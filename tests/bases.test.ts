@@ -134,6 +134,22 @@ describe("listBases", () => {
     expect(out[0]?.view_count).toBe(0);
     expect(out[0]?.view_names).toEqual([]);
   });
+
+  it("returns the NEWEST `limit` bases, not a walk-order subset (rc.76 truncate-before-sort)", async () => {
+    // v3.10.0-rc.76 (full-audit MEDIUM, sibling of the media.ts list bug): pre-fix the loop
+    // truncated to `limit` in walk order then sorted the cut subset → not-newest result on a vault
+    // with > limit .base files. Revert-verified.
+    const { root, vault } = await makeBaseVault();
+    const names = ["b0", "b1", "b2", "b3", "b4"];
+    for (let i = 0; i < names.length; i++) {
+      const p = path.join(root, `${names[i]}.base`);
+      await fs.writeFile(p, "views:\n  - type: table\n");
+      const t = new Date(Date.UTC(2026, 0, 1 + i)); // b0 oldest … b4 newest
+      await fs.utimes(p, t, t);
+    }
+    const out = await listBases(vault, { limit: 2 });
+    expect(out.map((b) => b.name)).toEqual(["b4", "b3"]);
+  });
 });
 
 describe("readBase", () => {

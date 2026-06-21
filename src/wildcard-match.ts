@@ -39,6 +39,21 @@ export interface MatchOpts {
  * current token. Iterating `vi` descending lets the `any`/`segstar` self-recurrence
  * (`cur[vi+1]`) read an already-filled cell — that recurrence is what makes a wildcard
  * linear instead of a regex backtrack.
+ *
+ * v3.10.0-rc.75 — CASE-FOLD CONTRACT (accepted divergence from the pre-rc.71 regex; the
+ * post-rc.74 re-sweep's one LOW finding): when `caseInsensitive` is set (DQL `LIKE` only),
+ * folding is `String.prototype.toLowerCase()`, NOT the ECMAScript `RegExp` `i`+`u` canonical
+ * case-folding the pre-rc.71 `^…$/iu` regex used. These agree for ASCII + ordinary accented
+ * letters but DIVERGE for ~22 exotic BMP codepoints whose `i`-flag canonical fold differs from
+ * `toLowerCase` — e.g. micro-sign `µ` (U+00B5) vs Greek mu `Μ`, long-s `ſ` (U+017F) vs `S`,
+ * final-sigma `ς` (U+03C2) vs `Σ`, the Greek symbol variants `ϐϑϕϖϰϱϵ`, the U+1C80–U+1C88
+ * Cyrillic small-caps block, `ẛ` (U+1E9B), `ι` (U+1FBE). For these, `field LIKE "µ"` no longer
+ * matches a value of `"Μ"` (direction is UNDER-match — fewer rows, never over-exposure). This is
+ * a deliberate, accepted trade-off: those characters are vanishingly rare in real vaults, and a
+ * custom Unicode-canonical folder is its own bug surface; it is pinned by the case-fold-contract
+ * test in `tests/wildcard-match.test.ts` (which also proves the divergence is real via a
+ * NEGATIVE control against the old regex). The glob path ({@link compileGlob}) is case-SENSITIVE
+ * and never folds, so the privacy filter is byte-faithful to the pre-rc.71 behavior.
  */
 export function matchWildcardTokens(tokens: readonly WildcardToken[], value: string, opts?: MatchOpts): boolean {
   const ci = opts?.caseInsensitive === true;

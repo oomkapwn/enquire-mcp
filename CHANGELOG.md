@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.75] — 2026-06-21
+
+> **TL;DR:** **Post-rc.74 re-sweep close — 1 LOW: DQL `LIKE` Unicode case-fold contract.** The mandatory post-rc.74 re-sweep (6-lens Workflow) returned 0 CRIT / 0 HIGH / 0 MED / 1 LOW (the first re-sweep this session that left no behavioral sibling). The LOW: rc.71's DP matcher folds via `toLowerCase()`, not the pre-rc.71 regex `i`+`u` canonical fold, so DQL `LIKE` UNDER-matches for ~22 exotic codepoints (`µ`/`ſ`/`ς`/Greek-symbol-variants/Cyrillic-small-caps); the glob privacy path is unaffected (case-sensitive). Closed accept-and-document (the rc.54 playbook): documented the contract + pinned it with a case-fold-contract test that proves the divergence via a NEGATIVE control. Docs+test only. **1304 → 1306 source tests.**
+
+**Pre-release (v3.10 line) — post-rc.74 re-sweep close (1 LOW; docs+test, zero runtime change).**
+
+### Fixed
+
+- **LOW — DQL `LIKE` case-folding diverges from the pre-rc.71 `iu` regex for ~22 exotic Unicode codepoints (differential-corpus gap)** (`src/wildcard-match.ts`, `tests/wildcard-match.test.ts`). rc.71 replaced the backtracking `^…$/iu` regex with a non-backtracking DP matcher that case-folds via `String.prototype.toLowerCase()`. ECMAScript `RegExp` `i`+`u` uses CANONICAL case-folding, which agrees with `toLowerCase` for ASCII + ordinary accented letters but diverges for ~22 BMP codepoints whose canonical fold differs (micro-sign `µ` U+00B5, long-s `ſ` U+017F, final-sigma `ς` U+03C2, the Greek symbol variants `ϐϑϕϖϰϱϵ`, the U+1C80–U+1C88 Cyrillic small-caps block, `ẛ` U+1E9B, `ι` U+1FBE). For these, `field LIKE "µ"` no longer matches a value of `"Μ"`. **Direction is UNDER-match** (fewer rows) → no privacy over-exposure, no DoS, no crash; and the **privacy glob filter is unaffected** (`compileGlob` is case-SENSITIVE and never folds — verified byte-faithful over an 80,180-pair old-regex-vs-new differential). The rc.71 differential test corpus was ASCII + `café` only, so its "0 mismatches on every corpus pair" assertion was in reality scoped to ASCII — it structurally could not produce a folding-divergent codepoint (the rc.54 lesson: a differential corpus is only as strong as the shapes it can produce). **Fix (accept-and-document, the rc.54 playbook — a custom Unicode-canonical folder is its own bug surface, not worth it for these characters): documented the divergence as a deliberate CONTRACT in the `matchWildcardTokens` header (naming the codepoint classes + the under-match direction + the case-sensitive-glob carve-out) and re-scoped the differential describe's comment to "ASCII + ordinary-accented".**
+
+### Tests (1306)
+
+- +2 source `it()` (`tests/wildcard-match.test.ts`, new "LIKE Unicode case-fold contract" describe): a POSITIVE control (ASCII `FOO`/`foo` + ordinary accented `É`/`é` still fold) + a data-driven contract test over `µ`/`ſ`/`ς` that pins the DP `toLowerCase` semantics (these do NOT match their canonical-fold partner) AND a NEGATIVE control asserting the inlined pre-rc.71 `oldLikeToRegex` WOULD have matched — proving the divergence is real and the corpus row is non-vacuous (the dimension the ASCII differential corpus is blind to). **1304 → 1306.**
+
+> **Lesson:** the rc.54 differential-corpus principle applied to itself — when a migration's differential test asserts "byte-identical on every corpus pair", that claim is only true for the DIMENSIONS the corpus can produce; a folding/scalar/encoding divergence needs its own contract test (pinning the new semantics + a NEGATIVE control vs the old) or the "every pair" message is an overclaim. **This CLOSES the round-3 fresh 12-lens audit + both its post-merge re-sweeps (rc.63→rc.75): 1 HIGH + 6 MED + 5 LOW across 13 RCs, every confirmed finding shipped or reasoned-accepted.**
+
+---
+
 ## [3.10.0-rc.74] — 2026-06-19
 
 > **TL;DR:** **Post-rc.70 re-sweep, batch 4/4 — CLOSES the re-sweep — pdfjs document/loadingTask reserve-before-try leak in BOTH `extractPdfText` + `extractPdfWithOcr` (rc.70 sibling).** Both pdfjs callers acquired `doc = await loadingTask.promise` before guards that throw post-acquisition (`pdf.ts` had NO try/finally at all; `ocr.ts` had the range/maxPages guards outside its try), so a crafted `obsidian_read_pdf` / `obsidian_ocr_pdf` over-span request leaked a pdfjs document + worker port per call on serve-http. Fixed by wrapping the full lifecycle in a try/finally that always destroys. **1302 → 1304 source tests. Closes the post-rc.70 re-sweep (6 confirmed across rc.71→rc.74).**

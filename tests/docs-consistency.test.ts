@@ -64,7 +64,7 @@ function apiMdPromptsSection(apiMd: string): string {
 
 /** Registered prompt names absent (as a `code-span`) from a docs section. */
 function promptsMissingFrom(section: string, registered: Set<string>): string[] {
-  return [...registered].filter((p) => !new RegExp("`" + p + "`").test(section));
+  return [...registered].filter((p) => !new RegExp(`\`${p}\``).test(section));
 }
 
 describe("docs/code consistency — README mirrors registered MCP surface", () => {

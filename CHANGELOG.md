@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0-rc.78] — 2026-06-22
+
+> **TL;DR:** **Config hygiene — `biome.json` migrated to 2.5.0.** The devDep is `@biomejs/biome@^2.5.0` (installed 2.5.0) but `biome.json` still pinned `$schema` 2.4.16 and used the deprecated `recommended: true` linter field — both non-blocking lint `infos` that slipped through several RCs (the α-class stale-version claim, in a tooling config). `biome migrate` updated the schema + renamed `recommended: true` → `preset: "recommended"` (same rule set; no repo-wide cascade), and a pre-existing `useTemplate` nit was cleared so lint output is now pristine. Config + 1-line test tidy only; no runtime change. **1311 source tests unchanged.**
+
+**Pre-release (v3.10 line) — config hygiene (biome 2.5.0 migration; zero runtime change).**
+
+### Changed
+
+- **`biome.json` migrated to the installed biome 2.5.0** (`biome.json`). The `@biomejs/biome` devDep is `^2.5.0` (resolves to 2.5.0), but `biome.json` declared `"$schema": ".../2.4.16/schema.json"` AND used `"recommended": true` in `linter.rules` — which biome 2.5.0 deprecated (to be removed in the next major). Both surfaced as non-blocking `i` / DEPRECATED warnings on every `npm run lint`, so they slipped through rc.71→rc.77 as the lint "infos" until a commit (rc.77) touched a file the newer biome reformatted. Ran `biome migrate --write`: `$schema` → `2.5.0`, `recommended: true` → `preset: "recommended"` (a field rename to the same recommended rule set — verified by a full-repo `npm run lint`: 135 files, 0 errors, no format/rule cascade). Also cleared the one remaining lint info — a pre-existing `useTemplate` nit in `tests/docs-consistency.test.ts:67` (`"\`" + p + "\`"` → a template literal) — so the lint output is now 0 findings.
+
+### Tests (1311)
+
+- Unchanged (config + a 1-line `useTemplate` tidy; no `it()` added/removed). Full suite green; lint pristine.
+
+> **Lesson:** a `^`-ranged dev-tool (biome) silently minor-bumped past its config's pinned `$schema`, and the resulting version-mismatch + field-deprecation surfaced only as NON-blocking lint `infos` — so the drift survived several RCs. `biome migrate` is the clean close; the broader watch is to keep a `^`-ranged tool's config in lockstep with the installed version.
+
+---
+
 ## [3.10.0-rc.77] — 2026-06-22
 
 > **TL;DR:** **Full state-driven audit close — LOW: STABILITY.md `obsidian_full_text_search` enabling-flag drift + structural guard.** The packaged semver-contract doc said the FTS tool is opt-in via `--persistent-index` alone, but the code requires `--persistent-index` AND `--diagnostic-search-tools`. Corrected + added a docs-consistency invariant that derives each opt-in/gated tool's flag-set from `TOOL_MANIFEST.gating` and pins STABILITY.md's breakdown headings to it. Docs+test only. **1309 → 1311 source tests. Closes the full state-driven audit (rc.76 MED + rc.77 LOW).**

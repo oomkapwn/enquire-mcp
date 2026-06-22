@@ -1114,16 +1114,27 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     ).toBeLessThan(200);
   });
 
-  it("README.{es,hi,ar}.md numeric claims match canonical (tools/prompts exact, tests lower-bound)", async () => {
-    // v3.10.1 — the top-5-language READMEs (Spanish / Hindi / Arabic) are new docs surfaces; per
-    // the rc.14 rule the SAME PR pins their numeric claims, mirroring the rc.30 README.zh.md guard.
+  it("README.{es,hi,ar,ru,pt,fr,ja}.md numeric claims match canonical (tools/prompts exact, tests lower-bound)", async () => {
+    // v3.10.1 / v3.11.0-rc.2 — the top-language translated READMEs are new docs surfaces; per the
+    // rc.14 rule the SAME PR pins their numeric claims, mirroring the rc.30 README.zh.md guard.
     // Tools/prompts exact; tests a drift-proof lower bound ("N+ …") matching each stat line.
     const counts = await getActualCounts();
     const actualTests = await countActualTests();
     const langs: Array<{ file: string; tool: RegExp; prompt: RegExp; test: RegExp }> = [
       { file: "README.es.md", tool: /(\d+)\s*herramientas/, prompt: /(\d+)\s*prompts MCP/, test: /(\d+)\+\s*pruebas/ },
       { file: "README.hi.md", tool: /(\d+)\s*टूल/, prompt: /(\d+)\s*MCP\s*प्रॉम्प्ट/, test: /(\d+)\+\s*यूनिट टेस्ट/ },
-      { file: "README.ar.md", tool: /(\d+)\s*أداة/, prompt: /(\d+)\s*موجِّه\s*MCP/, test: /(\d+)\+\s*اختبار/ }
+      { file: "README.ar.md", tool: /(\d+)\s*أداة/, prompt: /(\d+)\s*موجِّه\s*MCP/, test: /(\d+)\+\s*اختبار/ },
+      // v3.11.0-rc.2 — ru/pt/fr/ja join the set (9 total). Russian matches "1329+ модульных
+      // тестов"; Japanese the spaced "MCP プロンプト".
+      { file: "README.ru.md", tool: /(\d+)\s*инструмент/, prompt: /(\d+)\s*MCP-промпт/, test: /(\d+)\+\s*модульных/ },
+      { file: "README.pt.md", tool: /(\d+)\s*ferramentas/, prompt: /(\d+)\s*prompts MCP/, test: /(\d+)\+\s*testes/ },
+      { file: "README.fr.md", tool: /(\d+)\s*outils/, prompt: /(\d+)\s*prompts MCP/, test: /(\d+)\+\s*tests/ },
+      {
+        file: "README.ja.md",
+        tool: /(\d+)\s*ツール/,
+        prompt: /(\d+)\s*MCP\s*プロンプト/,
+        test: /(\d+)\+\s*ユニットテスト/
+      }
     ];
     for (const l of langs) {
       const md = await read(l.file);
@@ -1143,11 +1154,21 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     }
   });
 
-  it("all 5 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {
-    // v3.10.1 — the 5-way language switcher is a new multi-file surface prone to drift (add a 6th
-    // language → forget to update the other 5). Pin it: each README's <sub> switcher must LINK the
-    // other 4 language files and NOT link itself (the current language is bolded, not linked).
-    const readmes = ["README.md", "README.zh.md", "README.es.md", "README.hi.md", "README.ar.md"];
+  it("all 9 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {
+    // v3.10.1 / v3.11.0-rc.2 — the language switcher is a multi-file surface prone to drift (add a
+    // 10th language → forget to update the others). Pin it: each README's <sub> switcher must LINK
+    // the other 8 language files and NOT link itself (the current language is bolded, not linked).
+    const readmes = [
+      "README.md",
+      "README.zh.md",
+      "README.es.md",
+      "README.hi.md",
+      "README.ar.md",
+      "README.ru.md",
+      "README.pt.md",
+      "README.fr.md",
+      "README.ja.md"
+    ];
     for (const self of readmes) {
       const md = await read(self);
       const switcher = /<sub>([\s\S]*?)<\/sub>/.exec(md)?.[1] ?? "";

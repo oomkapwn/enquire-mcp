@@ -4,7 +4,7 @@
 
 # enquire-mcp
 
-<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · **हिन्दी** · [العربية](./README.ar.md)</sub>
+<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · **हिन्दी** · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)</sub>
 
 ### सबसे उन्नत Obsidian MCP। AI एजेंट्स के लिए बनी दीर्घकालिक स्मृति।
 

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.1] — 2026-06-22
+
+> **TL;DR:** **Internationalization — README in the top-5 most-spoken languages.** Added full **Spanish** (`README.es.md`), **Hindi** (`README.hi.md`), and **Arabic** (`README.ar.md`, RTL) translations alongside English + 中文, with a 5-way language switcher on every README, npm `files[]` inclusion, and structural guards (per-language numeric-claim invariants + a switcher cross-link guard). Docs only — no code/API change. **1311 → 1313 tests** (+2 invariants).
+
+### Added
+
+- **README translations for the top-5 most-spoken languages** (`README.es.md`, `README.hi.md`, `README.ar.md`). Each is a full translation of the English README — badges, links, code blocks, CLI flags, and tool names preserved verbatim; only human prose translated — joining the existing English + Chinese. Arabic is rendered right-to-left (prose wrapped in `dir="rtl"`; the centered hero, badges, code, and tables stay LTR). Every README carries a 5-way switcher `[English] · [中文] · [Español] · [हिन्दी] · [العربية]` with the current language bolded, and all four translations ship in the npm tarball (`package.json` `files[]`).
+
+### Tests (1313)
+
+- +2 docs-consistency invariants (per the rc.14 "new docs surface → pin it in the same PR" rule): (1) the es/hi/ar stat lines pin the tool count (45) and prompt count (19) EXACTLY and the test count as a drift-proof lower bound (`1311+`), mirroring the rc.30 README.zh.md guard (the Arabic regex matches through the `موجِّه` diacritics); (2) a **5-way switcher cross-link guard** — each README must link the other four and NOT link itself — so a future 6th-language addition can't silently leave the set inconsistent. **1311 → 1313.**
+
+---
+
 ## [3.10.0] — 2026-06-22
 
 > **TL;DR:** **v3.10.0 STABLE — promoted `@rc` → `@latest` after 78 RCs.** The forgetting-aware retrieval line + a deep multi-round security/correctness hardening cascade. New: **`obsidian_stale_notes`** (45th tool), `age_days`/`stale` freshness signals on every hit, opt-in recency re-ranking (`--recency-weight`, default off), and **frontmatter-aware `obsidian_search`** (`filter_frontmatter`). Plus the gray-matter→js-yaml@4 frontmatter migration, pdfjs-dist 5→6, and the full closure of the ReDoS / abs-path-leak / NFC-name-resolution / reserve-before-try / resource-DoS-amplifier classes (1 HIGH + many MED/LOW across rc.1→rc.78). **No API breaks** (additive minor; the v3.x tool/argument surface is unchanged). **45 tools · 19 MCP prompts · 1311 unit tests · 11 required + advisory CI gates.**

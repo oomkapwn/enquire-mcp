@@ -1100,6 +1100,55 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     ).toBeLessThan(200);
   });
 
+  it("README.{es,hi,ar}.md numeric claims match canonical (tools/prompts exact, tests lower-bound)", async () => {
+    // v3.10.1 — the top-5-language READMEs (Spanish / Hindi / Arabic) are new docs surfaces; per
+    // the rc.14 rule the SAME PR pins their numeric claims, mirroring the rc.30 README.zh.md guard.
+    // Tools/prompts exact; tests a drift-proof lower bound ("N+ …") matching each stat line.
+    const counts = await getActualCounts();
+    const actualTests = await countActualTests();
+    const langs: Array<{ file: string; tool: RegExp; prompt: RegExp; test: RegExp }> = [
+      { file: "README.es.md", tool: /(\d+)\s*herramientas/, prompt: /(\d+)\s*prompts MCP/, test: /(\d+)\+\s*pruebas/ },
+      { file: "README.hi.md", tool: /(\d+)\s*टूल/, prompt: /(\d+)\s*MCP\s*प्रॉम्प्ट/, test: /(\d+)\+\s*यूनिट टेस्ट/ },
+      { file: "README.ar.md", tool: /(\d+)\s*أداة/, prompt: /(\d+)\s*موجِّه\s*MCP/, test: /(\d+)\+\s*اختبار/ }
+    ];
+    for (const l of langs) {
+      const md = await read(l.file);
+      const toolM = l.tool.exec(md);
+      expect(toolM, `${l.file} must state the tool count`).not.toBeNull();
+      expect(Number.parseInt(toolM?.[1] ?? "0", 10), `${l.file} tool count`).toBe(counts.allTools);
+      const promptM = l.prompt.exec(md);
+      expect(promptM, `${l.file} must state the MCP prompt count`).not.toBeNull();
+      expect(Number.parseInt(promptM?.[1] ?? "0", 10), `${l.file} prompt count`).toBe(counts.prompts);
+      const testM = l.test.exec(md);
+      expect(testM, `${l.file} must state tests as a lower bound 'N+ …'`).not.toBeNull();
+      const floor = Number.parseInt(testM?.[1] ?? "0", 10);
+      expect(floor, `${l.file} test floor exceeds actual ${actualTests}`).toBeLessThanOrEqual(actualTests);
+      expect(actualTests - floor, `${l.file} test floor ${floor} is >200 below actual ${actualTests}`).toBeLessThan(
+        200
+      );
+    }
+  });
+
+  it("all 5 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {
+    // v3.10.1 — the 5-way language switcher is a new multi-file surface prone to drift (add a 6th
+    // language → forget to update the other 5). Pin it: each README's <sub> switcher must LINK the
+    // other 4 language files and NOT link itself (the current language is bolded, not linked).
+    const readmes = ["README.md", "README.zh.md", "README.es.md", "README.hi.md", "README.ar.md"];
+    for (const self of readmes) {
+      const md = await read(self);
+      const switcher = /<sub>([\s\S]*?)<\/sub>/.exec(md)?.[1] ?? "";
+      expect(switcher, `${self} must have a <sub>…</sub> language switcher`).not.toBe("");
+      for (const other of readmes) {
+        const linksOther = switcher.includes(`](./${other})`);
+        if (other === self) {
+          expect(linksOther, `${self} switcher must NOT link itself — the current language is bolded`).toBe(false);
+        } else {
+          expect(linksOther, `${self} switcher must link ${other}`).toBe(true);
+        }
+      }
+    }
+  });
+
   it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
     const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
     expect(err, err ?? "").toBeNull();

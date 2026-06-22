@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.3] — 2026-06-22
+
+> **TL;DR:** **Dependency hygiene — safe-patch bundle.** Applied the three non-major dependabot updates: `better-sqlite3` 12.10.1 → **12.11.1**, `vitest` + `@vitest/coverage-v8` → **4.1.9**, `sharp` → **0.35.2**, `markdown-it` → **14.2.0**. All patch/minor, in-range; `npm audit` clean after re-resolution (no new transitive advisories); full suite green under vitest 4.1.9. Deps only — no source/API change. **1331 tests unchanged.** The 3 **major** dependabot PRs (js-yaml 4→5, @types/node 26, actions/checkout 7) are deliberately **not** included — they need isolated verification and are maintainer-gated.
+
+### Changed
+
+- **better-sqlite3** `^12.10.1` → `^12.11.1` (optional dep; closes dependabot #274).
+- **@vitest/coverage-v8** + **vitest** `4.1.8` → `4.1.9` (matched dev pair; part of dependabot #272).
+- **sharp** `^0.35.1` → `^0.35.2` (dev; part of dependabot #272).
+- **markdown-it** `14.1.1` → `14.2.0` (dev; closes dependabot #242).
+
+### Notes
+
+- `node scripts/check-audit.mjs` clean (prod ≥ moderate / dev ≥ high; allowlist still empty). The re-resolution surfaced no new advisories — per the recurring lesson, a dep bump's `npm install` re-resolves the whole tree against the live advisory DB, so the scoped audit gate was run as part of this RC.
+- **Deferred (maintainer's call):** js-yaml 4→5 (⚠️ the project just migrated onto js-yaml@4 in rc.53 — a major needs isolated frontmatter verification), @types/node 26, actions/checkout 7.
+
+---
+
 ## [3.11.0-rc.2] — 2026-06-22
 
 > **TL;DR:** **Internationalization round 2 — README now in 9 languages.** Added **Russian** (`README.ru.md`), **Brazilian Portuguese** (`README.pt.md`), **French** (`README.fr.md`), and **Japanese** (`README.ja.md`) alongside English + 中文 + Español + हिन्दी + العربية. Every README carries a **9-way language switcher**; the four new files ship in the npm tarball, and the existing structural guards were extended to cover them. Docs only — no code/API change. **1331 tests unchanged** (the i18n invariants are data-driven, no new `it()`).

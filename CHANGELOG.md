@@ -2,16 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.4] — 2026-06-22
+
+> **TL;DR:** **Post-rc.1–rc.3 audit response (11-lens adversarial workflow; 0 CRIT / 0 HIGH-code).** The feedback feature re-swept **clean** (provably loss-free / tmp-leak-free); the 45→46 cascade + dep bumps + i18n invariants verified sound. Real findings were concentrated in the **9-language README surface**: (1) **6 broken in-file anchors** across 4 READMEs — incl. a **pre-existing bug in the canonical README.md** (the tests badge linked `#trust`, but "🛡️ Trust" slugs to `️-trust` with a leading variation-selector, so it never resolved), plus README.ru.md's 3 un-localized nav/badge anchors and fr/pt's `#trust`. Fixed to exact github-slugger slugs + a new **anchor-integrity invariant** (`tests/readme-anchor-invariant.test.ts`) that resolves every in-file `(#anchor)` in all 9 READMEs against its heading slugs. (2) **Test-count drift** — the rc.2 translations were born at `1329` and zh/es/hi/ar/AGENTS carried a stale `1311+`; all surfaces synced to the canonical **1333**. (3) the rc.3 CHANGELOG mischaracterized `markdown-it` as a direct dev bump (it is transitive via typedoc). (4) the `prune --help` text omitted the `.feedback.json` family it now erases. (5) the feedback concurrency test was **vacuous** (passed even with serialization removed) → reworked to assert zero tmp-rename collisions, mutation-verified to discriminate. Plus two INFO hardenings on `feedback.ts` (per-write `chmod 0600` defense-in-depth; `record()` entry-count hoisted out of its loop). **1331 → 1333 tests.**
+
+### Fixed
+
+- **README anchors (HIGH).** All in-file `(#anchor)` links in the 9 READMEs now resolve. `README.md`'s tests badge `#trust` → `#️-trust` (the Trust heading's true slug; pre-existing since the section was added — no gate checked link targets). `README.ru.md` nav/badge `#-quick-start`/`#-use-cases`/`#trust` → localized slugs; `README.fr.md` / `README.pt.md` `#trust` → localized. Verified with `github-slugger` (the exact algorithm GitHub's renderer uses).
+- **Test-count sync (MED/LOW).** Every test-count surface set to the canonical **1333**: `README.md` (badge + stat + table + npm-test), `llms.txt`, `package.json`, `ROADMAP.md`, `docs/COMPARISON.md`; the 8 translations (stat lower-bound `1333+`, fr/ru/pt badges `tests-1333`, ru/fr/pt/ja table + contributing rows); `AGENTS.md` `1311+` → `1333+`. `CLAUDE.md` rc.1 bullet corrected `1313 → 1329` → `1313 → 1331` (the seed of the `1329` propagation).
+- **rc.3 CHANGELOG accuracy (MED).** `markdown-it 14.2.0` reframed as a **transitive** resolution under typedoc's `^14.1.1` range (lockfile-only), not a declared dev-dependency bump.
+- **`prune --help` (LOW).** The `prune` command description now lists `feedback.json` among the erased artifact families, matching `ENQUIRE_CACHE_ARTIFACT` and SECURITY.md's right-to-erasure claim.
+- **feedback concurrency test (MED).** The "serialized writes" test was vacuous (the shared in-memory map made the file coherent regardless of serialization). Reworked to assert **zero** `feedback persist failed` stderr lines — mutation-verified: removing the `persistChain` makes it fail with the exact ENOENT tmp-rename collisions.
+
+### Changed
+
+- **`src/feedback.ts` (INFO hardenings).** `writeOnce()` re-asserts `chmod 0600` on the landed sidecar after rename (defense-in-depth parity with the fts5/embed-db writers, so SECURITY.md's "0600 sidecar" is an enforced guard, not only writeFile's create-time mode). `record()` hoists the entry count out of its per-path loop (was re-allocating `Object.keys()` per path at the cap).
+- **devDependency** `github-slugger` `^2.0.0` added — the canonical, zero-dependency GitHub slug implementation, used only by the new anchor-integrity invariant. `scripts/check-audit.mjs` clean after the add (allowlist still empty).
+
+### Notes
+
+- The audit's INFO/verified-clean items are recorded without action: the feedback `FeedbackStore` is sound (serialized persists are loss-free and tmp-leak-free), the 45→46 tool cascade + feedback gating are fully self-consistent, the rc.3 direct dep bumps match package.json + lockfile, and the 9-language numeric/switcher invariants genuinely discriminate.
+- New structural defense: `tests/readme-anchor-invariant.test.ts` (+ NEGATIVE control) closes the anchor-drift class for the i18n surface — a future heading/anchor edit that breaks a link fails CI.
+
+---
+
 ## [3.11.0-rc.3] — 2026-06-22
 
-> **TL;DR:** **Dependency hygiene — safe-patch bundle.** Applied the three non-major dependabot updates: `better-sqlite3` 12.10.1 → **12.11.1**, `vitest` + `@vitest/coverage-v8` → **4.1.9**, `sharp` → **0.35.2**, `markdown-it` → **14.2.0**. All patch/minor, in-range; `npm audit` clean after re-resolution (no new transitive advisories); full suite green under vitest 4.1.9. Deps only — no source/API change. **1331 tests unchanged.** The 3 **major** dependabot PRs (js-yaml 4→5, @types/node 26, actions/checkout 7) are deliberately **not** included — they need isolated verification and are maintainer-gated.
+> **TL;DR:** **Dependency hygiene — safe-patch bundle.** Applied the three **direct** non-major dependabot updates: `better-sqlite3` 12.10.1 → **12.11.1**, `vitest` + `@vitest/coverage-v8` → **4.1.9**, `sharp` → **0.35.2**. A fourth (`markdown-it` → **14.2.0**, dependabot #242) is a **transitive** resolution under typedoc's existing `^14.1.1` range — lockfile-only, not a direct dependency. All patch/minor, in-range; `npm audit` clean after re-resolution (no new transitive advisories); full suite green under vitest 4.1.9. Deps only — no source/API change. **1331 tests unchanged.** The 3 **major** dependabot PRs (js-yaml 4→5, @types/node 26, actions/checkout 7) are deliberately **not** included — they need isolated verification and are maintainer-gated.
 
 ### Changed
 
 - **better-sqlite3** `^12.10.1` → `^12.11.1` (optional dep; closes dependabot #274).
 - **@vitest/coverage-v8** + **vitest** `4.1.8` → `4.1.9` (matched dev pair; part of dependabot #272).
 - **sharp** `^0.35.1` → `^0.35.2` (dev; part of dependabot #272).
-- **markdown-it** `14.1.1` → `14.2.0` (dev; closes dependabot #242).
+- **markdown-it** `14.1.1` → `14.2.0` (**transitive** via typedoc's `^14.1.1` range, resolved on lockfile re-resolution — NOT a declared dependency; closes dependabot #242).
 
 ### Notes
 

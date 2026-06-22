@@ -32,6 +32,25 @@ export function parseRecencyConfig(opts: {
 }
 
 /**
+ * v3.11.0 — parse the opt-in closed-loop-feedback config from CLI opts. Returns
+ * `null` when `--feedback-weight` is unset or 0 (the feedback feature is OFF — no
+ * `obsidian_mark_useful` tool registered, no rank boost; ranking stays
+ * relevance-pure, a provable no-op). A weight > 0 turns the whole closed loop on
+ * (mirrors `parseRecencyConfig`'s single-flag gate). Throws on an out-of-range
+ * weight so the error surfaces with the offending flag name.
+ *
+ * @param opts - `{ feedbackWeight? }` raw CLI string value.
+ * @returns `{ weight }` when feedback is on, else `null`.
+ */
+export function parseFeedbackConfig(opts: { feedbackWeight?: string }): { weight: number } | null {
+  const w = opts.feedbackWeight !== undefined ? Number(opts.feedbackWeight) : 0;
+  if (!Number.isFinite(w) || w < 0 || w > 1) {
+    throw new Error(`--feedback-weight must be a number in [0, 1]; got "${opts.feedbackWeight}"`);
+  }
+  return w > 0 ? { weight: w } : null;
+}
+
+/**
  * v3.10.0-rc.62 (CLI-SERVEHTTP-RECENCY-FAILLATE) — fail-FAST validation of the advanced retrieval
  * flags for the `serve-http` boot path. `startHttpServer` builds `prepareServerDeps` lazily (per
  * session, on the first request), so a typo'd `--recency-weight 5` / `--stale-days x` /
@@ -46,8 +65,10 @@ export function validateServeHttpRetrievalOpts(opts: {
   staleDays?: string;
   enableReranker?: boolean;
   rerankerTopN?: string;
+  feedbackWeight?: string;
 }): void {
   parseRecencyConfig(opts); // throws on bad --recency-weight / --stale-days
+  parseFeedbackConfig(opts); // throws on bad --feedback-weight
   if (opts.enableReranker && opts.rerankerTopN !== undefined) {
     parsePositiveInt(opts.rerankerTopN, "--reranker-top-n"); // throws on non-positive-int
   }

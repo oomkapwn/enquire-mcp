@@ -16,22 +16,25 @@
  * a 1-line distillation of the registerTool() `description` argument —
  * the full description stays at the registration site so MCP clients
  * still see verbatim what they did pre-refactor. Count math invariant
- * (enforced by docs-consistency.test.ts): 44 total = 33 always-on read
+ * (enforced by docs-consistency.test.ts): 46 total = 34 always-on read
  * + 1 fts (opt-in via --persistent-index) + 3 diagnostic (opt-in via
- * --diagnostic-search-tools) + 7 write (opt-in via --enable-write).
+ * --diagnostic-search-tools) + 7 write (opt-in via --enable-write)
+ * + 1 feedback (opt-in via --feedback-weight).
  */
 export interface ToolManifestEntry {
   /** Tool name as registered (e.g., "obsidian_search"). */
   name: string;
-  /** Registration kind — drives WHICH register*Tools fn picks it up. */
-  kind: "read" | "fts" | "write" | "diagnostic";
+  /** Registration kind — drives WHICH register*Tools fn picks it up. v3.11.0
+   *  adds "feedback" (the closed-loop `obsidian_mark_useful`, via registerFeedbackTool). */
+  kind: "read" | "fts" | "write" | "diagnostic" | "feedback";
   /** Human-readable gating clause shown in docs. */
   gating:
     | "always"
     | "--persistent-index"
     | "--enable-write"
     | "--diagnostic-search-tools"
-    | "--persistent-index + --diagnostic-search-tools";
+    | "--persistent-index + --diagnostic-search-tools"
+    | "--feedback-weight";
   /** One-line summary (~60 chars). Detailed description lives in the registerTool() call's `description` field. */
   summary: string;
 }
@@ -320,5 +323,15 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     kind: "write",
     gating: "--enable-write",
     summary: "Set/unset frontmatter keys atomically (round-tripped YAML)."
+  },
+
+  // --- Closed-loop feedback (1 entry) — registered by registerFeedbackTool(),
+  //     opt-in via --feedback-weight > 0. Mutates a per-vault feedback cache
+  //     sidecar (paths + counts only), NOT the vault, so it's NOT --enable-write.
+  {
+    name: "obsidian_mark_useful",
+    kind: "feedback",
+    gating: "--feedback-weight",
+    summary: "Record which recalled notes helped; boosts them in future search."
   }
 ];

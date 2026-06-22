@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1313%20passing-brightgreen.svg)](#trust)
+[![tests](https://img.shields.io/badge/tests-1329%20passing-brightgreen.svg)](#trust)
 [![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -51,7 +51,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**45 tools · 19 MCP prompts · 1313 unit tests · 50+ languages · v3.10.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1329 unit tests · 50+ languages · v3.10.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -75,11 +75,11 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 | **Per-signal observability** per hit | ✅ | ❌ | ❌ |
 | **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
 | **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **45 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes) | ✅ | n/a | varies |
+| **46 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes + 1 feedback tool) | ✅ | n/a | varies |
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1313 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
+| **1329 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -248,9 +248,9 @@ graph LR
 
 ---
 
-## 🛠️ All 45 tools
+## 🛠️ All 46 tools
 
-The umbrella `obsidian_search` plus 43 specialized tools (34 always-on read + 4 opt-in + 7 gated writes). Full reference: **[docs/api.md](./docs/api.md)**.
+46 tools total: 34 always-on read (incl. the umbrella `obsidian_search`) + 4 opt-in read + 7 gated writes + 1 closed-loop feedback. Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|
@@ -261,6 +261,7 @@ The umbrella `obsidian_search` plus 43 specialized tools (34 always-on read + 4 
 | **PDFs, Canvas & Bases** | `obsidian_read_pdf` · `obsidian_list_pdfs` · `obsidian_ocr_pdf` · `obsidian_read_canvas` · `obsidian_list_canvases` · `obsidian_list_bases` (v3.2.0) · `obsidian_read_base` (v3.2.0) · `obsidian_query_base` (v3.2.0) |
 | **Writes** (gated by `--enable-write`) | `obsidian_create_note` · `obsidian_append_to_note` · `obsidian_rename_note` · `obsidian_replace_in_notes` · `obsidian_archive_note` · `obsidian_frontmatter_set` · `obsidian_chat_thread_append` |
 | **Diagnostic / lint** | `obsidian_lint_wiki` · `obsidian_paper_audit` · `obsidian_validate_note_proposal` |
+| **Feedback** (opt-in via `--feedback-weight`) | `obsidian_mark_useful` (closed-loop: record which recalled notes helped; boosts them in future search) |
 
 Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidian://chunk/{n}/{path}`) and 19 **MCP prompts** (`summarize_recent_edits` · `review_tag` · `find_orphans` · `weekly_review` · `extract_todos` · `process_inbox` · `consolidate_tags` · `find_duplicates` · `lint_wiki` · `monthly_review` · `search_with_query_expansion` · `vault_synth` · `vault_wiki_compile` · `vault_lint_extended` · `vault_capture` · `vault_persona_search` · `vault_automation_setup` · `vault_research` · `vault_synthesis_page`) for common vault workflows.
 
@@ -317,7 +318,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1313 tests, ~12s)
+npm test       # full suite (1329 tests, ~12s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

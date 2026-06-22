@@ -140,6 +140,10 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     .option(
       "--stale-days <n>",
       "v3.10.0-rc.5 — recency half-life in days for --recency-weight (the age at which a note's recency score is 0.5). Default 365. Lower it (e.g. 90) for fast-moving notes where staleness matters sooner; raise it for stable reference vaults. No effect unless --recency-weight > 0 (it ONLY tunes recency re-ranking). NOTE: the `stale` freshness flag on search hits always uses the fixed 365-day default and is NOT affected by this flag."
+    )
+    .option(
+      "--feedback-weight <w>",
+      "v3.11.0 — OPT-IN closed-loop feedback re-ranking for `obsidian_search`, and the gate for the `obsidian_mark_useful` tool. A number in [0, 1]; default 0 (OFF — no feedback tool, no boost; ranking stays purely relevance-driven). When > 0, registers `obsidian_mark_useful` (agents record which recalled notes actually helped a query) and re-sorts the fused order by `(1 - w) * relevanceRank + w * feedbackScore`, where feedbackScore = useful/(useful+notUseful+1) per note. 0.15-0.3 gently favors notes marked useful; 1.0 sorts almost purely by recorded usefulness. State persists per-vault in a cache sidecar (relative paths + counts only — no note content, no query text; erased by `enquire-mcp prune`)."
     );
 }
 

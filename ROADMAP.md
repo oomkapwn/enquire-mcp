@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. Directly addresses the stale-fact-reuse frontier (Memora, arXiv:2604.20006) that conversation-memory stores ignore — the only Obsidian MCP with it.
-- **Process maturity** — 1313 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1329 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 
@@ -57,7 +57,7 @@ Severity-ordered, phased per the project's "no big-bang" rule; audit checkpoint 
 The capability gap is won; this closes the *visibility* gap. (Several items below need an account/OAuth action and are listed under "Requires the maintainer".)
 
 - [ ] **rc.14 — AI-search + repo-page.** **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) — dark GitHub-native palette; deliberately count-agnostic (rc.29 dropped hardcoded stat-pills to avoid a numeric-drift surface).
-- [x] **TDQS pass on all 45 tool descriptions** (shipped v3.10-rc.7) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
+- [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [ ] **Obsidian-MCP COMPARISON table** — extend `docs/COMPARISON.md` with a head-to-head vs knowledge-rag, cyanheads, mcp-obsidian, Smart Connections, obsidian-brain (today it compares only to plugins / mem0-class). Make the standalone + hybrid + reranker + HyDE + Bases + OCR exclusivity explicit.
 
 ## Tier 3 — Memory-layer credibility (v3.10)

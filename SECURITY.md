@@ -200,6 +200,16 @@ When `--persistent-index` is enabled, the search-index file at `<vault-hash>.fts
 - Manual purge: `enquire-mcp clear-index --vault <path>` removes the `.fts5.db`, `.fts5.db-wal`, and `.fts5.db-shm` files.
 - **Caveat:** SQLite WAL mode keeps the most-recent uncommitted writes in `<file>-wal`. If you delete only `<file>` manually (not via `clear-index`), some recently-indexed chunks may persist in the sidecar. Always use `clear-index` for full removal.
 
+## Closed-loop feedback store (v3.11.0): data-at-rest posture
+
+When `--feedback-weight > 0`, the `obsidian_mark_useful` tool records which recalled notes helped a query, into a per-vault JSON sidecar at `<vault-hash>.feedback.json` (same cache dir as the parse cache / FTS5 index).
+
+- **Low-sensitivity by design.** The file holds ONLY **relative note paths** + integer **useful / not-useful counts** + an ISO timestamp per note. It does **NOT** store note content, snippets, or the query text — so unlike `.fts5.db` / `.embed.db`, it cannot leak note *bodies*. The worst-case disclosure to a local reader is *which* notes were marked useful (a usage-pattern signal), not their content.
+- **0600 chmod** on the sidecar; written atomically (tmp + rename) so a crash never leaves a torn file. Parent dir mode is `0700` (shared with the other cache artifacts).
+- **Bounded.** At most `MAX_FEEDBACK_ENTRIES` (100,000) distinct notes are tracked; at the cap, existing entries still update but new paths are ignored — bounding disk growth from a misbehaving `serve-http` client.
+- **Right-to-erasure.** `enquire-mcp prune` erases a decommissioned vault's `<hash>.feedback.json` (+ any `.tmp` leftover) along with every other per-vault artifact — pinned by the erasure-completeness invariant (`tests/erasure-invariant.test.ts`). It is **preserved across `clear-cache`** (it is user-generated signal, not regenerable cache); delete the vault's cache artifacts via `prune` to remove it.
+- **Opt-in.** With `--feedback-weight` unset or 0 (the default), the tool is not registered, no boost is applied, and no feedback file is ever created.
+
 ## HTTP transport (v2.6.0): bearer auth + remote-MCP posture
 
 The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) so claude.ai web, ChatGPT, Cursor HTTP mode, and mobile MCP clients can reach a remote vault. It introduces a network-exposed endpoint that the default stdio path doesn't have. The threat model + deployment recipes are documented at length in [`docs/http-transport.md`](docs/http-transport.md); this section is the canonical security posture.

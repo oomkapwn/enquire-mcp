@@ -1480,6 +1480,15 @@ export async function searchHybrid(
      * `staleDays` is the recency half-life (the age at which recency = 0.5).
      */
     recency?: { weight: number; staleDays: number };
+    /**
+     * v3.11.0 — optional opt-in closed-loop feedback re-ranking. When `weight > 0`
+     * AND `scores` is non-empty, the final fused order is re-sorted by a blend of
+     * relevance rank and each note's feedback score (`useful/(useful+notUseful+1)`,
+     * from `obsidian_mark_useful` via the `FeedbackStore`). `weight = 0` / empty
+     * `scores` is a provable no-op. Applied AFTER recency so a "human said this
+     * helped" signal is the final tie-break. `scores` is keyed by relPath.
+     */
+    feedback?: { weight: number; scores: ReadonlyMap<string, number> };
   }
 ): Promise<SearchHybridResponse> {
   await vault.ensureExists();
@@ -1950,6 +1959,36 @@ export async function searchHybrid(
       }
     } catch {
       // node:fs/promises import failed (should never happen) — keep relevance order.
+    }
+  }
+
+  // ─── v3.11.0: opt-in closed-loop feedback re-ranking ────────────────────────
+  // OFF unless `--feedback-weight > 0` AND at least one note has feedback. Blends
+  // each candidate's RELEVANCE RANK (current `pos` in `fused`, after RRF +
+  // graph-boost + reranker + any recency re-rank above) with its feedback score:
+  //   key = (1 - w) * 1/(1+pos) + w * feedbackScore(path)
+  // Same scale-free rank-based relevance term as the recency block, so the blend
+  // is order-source-agnostic. `w = 0` (or no scores) ⇒ `key` strictly decreasing
+  // in `pos` ⇒ order preserved exactly (provable no-op). Pure + in-memory (no
+  // disk I/O) — the score map is computed once per call from the FeedbackStore.
+  // Applied AFTER recency so the explicit human "this helped" signal wins ties.
+  if (ctx.feedback && ctx.feedback.weight > 0 && ctx.feedback.scores.size > 0 && fused.length > 1) {
+    const w = Math.min(1, Math.max(0, ctx.feedback.weight));
+    const fbScores = ctx.feedback.scores;
+    const fbPathOf = (id: string): string => {
+      if (granularity !== "block") return id;
+      const h = id.lastIndexOf("#");
+      return h > 0 ? id.slice(0, h) : id;
+    };
+    const blended = fused.map((f, pos) => {
+      const fb = fbScores.get(fbPathOf(f.id)) ?? 0;
+      const relevance = 1 / (1 + pos);
+      return { f, key: (1 - w) * relevance + w * fb };
+    });
+    blended.sort((a, b) => b.key - a.key);
+    for (let i = 0; i < blended.length; i++) {
+      const b = blended[i];
+      if (b) fused[i] = b.f;
     }
   }
 

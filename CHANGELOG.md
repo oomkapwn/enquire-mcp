@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.1] — 2026-06-22
+
+> **TL;DR:** **Closed-loop retrieval feedback (the "Karpathy loop") — the 46th tool, opt-in.** New `obsidian_mark_useful` (gated by `--feedback-weight <0..1>`, default **0 = OFF**): an agent records which recalled notes actually helped a query; the recorded usefulness then gently boosts those notes in subsequent `obsidian_search` results — a provable no-op at weight 0, mirroring the rc.5 recency boost. State lives in a per-vault cache sidecar (relative paths + counts only — **no note content, no query text**), erased by `prune`. Ships on `@rc`; `@latest` promotion is maintainer-gated. **45 → 46 tools · 1313 → 1329 tests.** No API breaks (additive minor).
+
+### Added
+
+- **`obsidian_mark_useful` (46th tool, opt-in via `--feedback-weight`)** — closes the retrieval feedback loop. The agent passes the `path`(s) of the search hits that actually helped (or `useful: false` for ones that looked relevant but didn't); the per-note tally feeds a Laplace-smoothed score `useful/(useful+notUseful+1)`.
+- **`--feedback-weight <w>`** (in `addAdvancedRetrievalOptions`, so both `serve` + `serve-http` accept it). When `w > 0`, registers the tool and blends feedback into the fused `obsidian_search` order: `(1-w)·relevanceRank + w·feedbackScore`, applied AFTER recency re-ranking. `w = 0` (default) is a provable no-op — no tool registered, ranking stays purely relevance-driven.
+- New leaf module `src/feedback.ts` (`FeedbackStore` + `defaultFeedbackFile` + `feedbackScore`). The store loads once in `prepareServerDeps` (shared across HTTP sessions so a mark in one session influences the boost in all — an in-session closed loop), persists atomically (tmp + rename), and is capped at `MAX_FEEDBACK_ENTRIES` (100,000) to bound disk growth.
+
+### Privacy / security
+
+- The feedback sidecar (`<vault-hash>.feedback.json`) holds **only** relative note paths + integer counts + an ISO timestamp — never note content or query text (lower sensitivity than `.fts5.db` / `.embed.db`). `0600`, atomic writes.
+- **Right-to-erasure:** the sidecar matches the `ENQUIRE_CACHE_ARTIFACT` pattern, so a cross-vault `enquire-mcp prune` erases a decommissioned vault's feedback (+ any `.tmp` leftover) — pinned by the erasure-completeness invariant. Preserved across `clear-cache` (user-generated signal, not regenerable cache). New SECURITY.md section "Closed-loop feedback store: data-at-rest posture".
+- **K-3:** `obsidian_mark_useful` is annotated `...WRITE` (honest `readOnlyHint: false`, consistent with the additive `obsidian_append_to_note`) via a named `markUseful` handler. It mutates the feedback STORE, not the vault — so it's gated by `--feedback-weight`, not `--enable-write`.
+
+### Tests (1329)
+
+- `tests/feedback.test.ts` (+16): the store (open/record/scores/cap/fail-soft/atomic-persist), `defaultFeedbackFile` dir+hash parity with `defaultIndexFile`, prune erasure of the feedback family, and the `searchHybrid` boost — a PROVABLE no-op at weight 0 + a marked note rising at weight 1, each with a NEGATIVE control.
+- Erasure-invariant gains the feedback family (writers ⊆ prune-eraser); K-3 `KNOWN_WRITE_HANDLERS` gains `markUseful`; cli-parity flag count 13 → 14; docs-consistency api.md-math + STABILITY-gating + llms-breakdown regexes extended for the new `feedback` term. **1313 → 1329.**
+
+### Count cascade (45 → 46)
+
+- `TOOL_MANIFEST` gains a `feedback` kind + `--feedback-weight` gating; STABILITY.md (+ Feedback section), `docs/api.md` (tool table + flag table + count math), README.md + all four translations (zh/es/hi/ar), llms.txt, AGENTS.md, COMPARISON.md, ROADMAP.md all updated to 46. All numeric-claim invariants stay green.
+
+---
+
 ## [3.10.1] — 2026-06-22
 
 > **TL;DR:** **Internationalization — README in the top-5 most-spoken languages.** Added full **Spanish** (`README.es.md`), **Hindi** (`README.hi.md`), and **Arabic** (`README.ar.md`, RTL) translations alongside English + 中文, with a 5-way language switcher on every README, npm `files[]` inclusion, and structural guards (per-language numeric-claim invariants + a switcher cross-link guard). Docs only — no code/API change. **1311 → 1313 tests** (+2 invariants).

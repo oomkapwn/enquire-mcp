@@ -860,8 +860,17 @@ export function defaultIndexFile(vaultRoot: string): string {
  * HNSW sidecars but LEFT its `<hash>.json` (+ any `<hash>.json.tmp`) full-text
  * cache on disk forever. Now covered (writers ⊆ erasers — the erasure invariant
  * pins this so a future writer family can't silently escape prune again).
+ *
+ * v3.11.0 — the `feedback\.json` family is the closed-loop feedback store
+ * (`<hash>.feedback.json`, written by `FeedbackStore`; relative note paths +
+ * usefulness counts). Listed so a cross-vault `prune` erases a decommissioned
+ * vault's feedback (right-to-erasure), like every other per-vault artifact.
+ * `feedback\.json` MUST precede `json` in the alternation (regex alternation is
+ * leftmost-first: `json` first would match the `json` tail of `feedback.json`
+ * and leave `.feedback` unconsumed, failing the `$` anchor).
  */
-const ENQUIRE_CACHE_ARTIFACT = /^[0-9a-f]{12}\.(json|fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm|\.tmp)?$/;
+const ENQUIRE_CACHE_ARTIFACT =
+  /^[0-9a-f]{12}\.(feedback\.json|json|fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm|\.tmp)?$/;
 
 /**
  * Plan a cache prune: given the filenames present in enquire's cache directory

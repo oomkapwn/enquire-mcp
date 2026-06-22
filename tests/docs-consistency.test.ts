@@ -134,12 +134,20 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
   it("docs/api.md tool-count math is consistent (always-on + opt-in + write = total)", async () => {
     const apiMd = await read("docs/api.md");
     // Match: "30 MCP tools (24 always-on read + 1 opt-in read via --persistent-index + 5 opt-in write via --enable-write)"
-    const m = /(\d+) MCP tools \((\d+) always-on read \+ (\d+) opt-in read[^+]*\+ (\d+) opt-in write/.exec(apiMd);
+    // v3.11.0 — the optional `+ N opt-in feedback` term covers obsidian_mark_useful
+    // (kind "feedback", gated by --feedback-weight). Summed into the total too.
+    const m =
+      /(\d+) MCP tools \((\d+) always-on read \+ (\d+) opt-in read[^+]*\+ (\d+) opt-in write(?:[^+]*\+ (\d+) opt-in feedback)?/.exec(
+        apiMd
+      );
     expect(m, "docs/api.md must declare tool counts in the standard format").not.toBeNull();
     if (!m) return;
-    const [, total, always, fts, write] = m;
+    const [, total, always, fts, write, feedback] = m;
     expect(Number.parseInt(total ?? "0", 10)).toBe(
-      Number.parseInt(always ?? "0", 10) + Number.parseInt(fts ?? "0", 10) + Number.parseInt(write ?? "0", 10)
+      Number.parseInt(always ?? "0", 10) +
+        Number.parseInt(fts ?? "0", 10) +
+        Number.parseInt(write ?? "0", 10) +
+        Number.parseInt(feedback ?? "0", 10)
     );
   });
 
@@ -280,7 +288,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     manifest: ReadonlyArray<{ name: string; gating: string }>
   ): string[] {
     // Parse "**Read|Write — opt-in via|gated by <flags> (N):** `t1`, `t2`…" breakdown lines.
-    const lineRe = /\*\*(?:Read|Write) — (?:opt-in via|gated by) (.+?) \(\d+\):\*\*\s*(.+)/g;
+    const lineRe = /\*\*(?:Read|Write|Feedback) — (?:opt-in via|gated by) (.+?) \(\d+\):\*\*\s*(.+)/g;
     const named = new Map<string, string>(); // tool -> sorted flag-set as listed in STABILITY
     for (const m of stabilityText.matchAll(lineRe)) {
       const flags = [...(m[1] ?? "").matchAll(/`(--[\w-]+)`/g)].map((f) => f[1] as string).sort();
@@ -901,7 +909,13 @@ function checkLlmsToolBreakdown(
   optIn: number,
   writes: number
 ): string | null {
-  const m = /(\d+)\s+tools\s*\((\d+)\s+always-on read\s*\+\s*(\d+)\s+opt-in\s*\+\s*(\d+)\s+gated writes\)/.exec(llms);
+  // v3.11.0 — the optional `+ N feedback` term covers obsidian_mark_useful (kind
+  // "feedback"); the total (group 1) already pins the full count, so the term is
+  // matched-but-not-summed here (always-on/opt-in/writes stay the read+write split).
+  const m =
+    /(\d+)\s+tools\s*\((\d+)\s+always-on read\s*\+\s*(\d+)\s+opt-in\s*\+\s*(\d+)\s+gated writes(?:\s*\+\s*\d+\s+feedback)?\)/.exec(
+      llms
+    );
   if (!m) return "llms.txt must declare 'N tools (A always-on read + B opt-in + C gated writes)'";
   if (Number.parseInt(m[1] ?? "0", 10) !== total) return `llms.txt total ${m[1]} ≠ ${total}`;
   if (Number.parseInt(m[2] ?? "0", 10) !== alwaysOn) return `llms.txt always-on ${m[2]} ≠ ${alwaysOn}`;

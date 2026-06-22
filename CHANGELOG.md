@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.2] — 2026-06-22
+
+> **TL;DR:** **Internationalization round 2 — README now in 9 languages.** Added **Russian** (`README.ru.md`), **Brazilian Portuguese** (`README.pt.md`), **French** (`README.fr.md`), and **Japanese** (`README.ja.md`) alongside English + 中文 + Español + हिन्दी + العربية. Every README carries a **9-way language switcher**; the four new files ship in the npm tarball, and the existing structural guards were extended to cover them. Docs only — no code/API change. **1331 tests unchanged** (the i18n invariants are data-driven, no new `it()`).
+
+### Added
+
+- **README translations for Russian, Portuguese, French, and Japanese** (`README.ru.md`, `README.pt.md`, `README.fr.md`, `README.ja.md`) — full translations of the English README with badges, links, code blocks, CLI flags, and tool names preserved verbatim; only prose translated. Generated via a 4-agent parallel translation Workflow. With the existing EN/zh/es/hi/ar, enquire's README now covers **9 of the most-spoken languages**.
+- **9-way language switcher** (`[English] · [中文] · [Español] · [हिन्दी] · [العربية] · [Русский] · [Português] · [Français] · [日本語]`) on every README (current language bolded). All four new files in `package.json` `files[]`.
+
+### Tests (1331)
+
+- The per-language numeric-claim invariant (tools/prompts exact, tests `N+` lower bound) extended to ru/pt/fr/ja — the Russian regex matches `1329+ модульных тестов`, the Japanese the spaced `MCP プロンプト`. The switcher cross-link guard extended from 5 → **9 READMEs** (each links the other 8, bolds itself). Both are data-driven (no new `it()`), so the canonical count stays **1331**.
+
+---
+
 ## [3.11.0-rc.1] — 2026-06-22
 
 > **TL;DR:** **Closed-loop retrieval feedback (the "Karpathy loop") — the 46th tool, opt-in.** New `obsidian_mark_useful` (gated by `--feedback-weight <0..1>`, default **0 = OFF**): an agent records which recalled notes actually helped a query; the recorded usefulness then gently boosts those notes in subsequent `obsidian_search` results — a provable no-op at weight 0, mirroring the rc.5 recency boost. State lives in a per-vault cache sidecar (relative paths + counts only — **no note content, no query text**), erased by `prune`. Ships on `@rc`; `@latest` promotion is maintainer-gated. **45 → 46 tools · 1313 → 1331 tests.** No API breaks (additive minor).

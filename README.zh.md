@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 期间零云端调用。** 模型本地缓存（一次性从 HuggingFace 下载）。你的仓库内容永不离开本机。默认即可离线/隔离运行。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**45 个工具 · 19 个 MCP 提示词 · 1311+ 单元测试 · 50+ 语言 · v3.10.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**46 个工具 · 19 个 MCP 提示词 · 1311+ 单元测试 · 50+ 语言 · v3.10.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -124,7 +124,7 @@ enquire-mcp doctor --vault <path>    # 彩色 ✓/⚠/✗ 健康检查
 | **远程 MCP**（HTTP + bearer 鉴权 + 有状态会话） | ✅ | ❌ | 部分 |
 | **MCP 原生**（Claude · Cursor · ChatGPT · Codex · OpenClaw · 任意客户端） | ✅ | ❌ 仅 Obsidian | 不一 |
 | **隐私过滤**在每条检索 + 写入路径校验 | ✅ | 不适用 | ❌ |
-| **45 个生产级工具**（34 常驻读 + 4 可选 + 7 受控写） | ✅ | 不适用 | 不一 |
+| **46 个生产级工具**（34 常驻读 + 4 可选 + 7 受控写 + 1 反馈） | ✅ | 不适用 | 不一 |
 | **GraphRAG-light**（Louvain 模块度社群检测） | ✅ **独有** | ❌ | ❌ |
 | **独立 `.base` 查询执行**（无需运行 Obsidian） | ✅ **独有** | ❌ | ❌ |
 | **HyDE 检索** + 子问题分解 | ✅ **独有** | ❌ | ❌ |
@@ -156,9 +156,9 @@ enquire-mcp doctor --vault <path>    # 彩色 ✓/⚠/✗ 健康检查
 
 ---
 
-## 🛠️ 全部 45 个工具
+## 🛠️ 全部 46 个工具
 
-总入口 `obsidian_search` 加上 43 个专用工具（34 个常驻读 + 4 个可选 + 7 个受控写）。完整参考见 **[docs/api.md](./docs/api.md)**，涵盖：搜索与检索、Wikilink 与图、Frontmatter 与 Dataview、Canvas、Obsidian Bases、PDF + OCR、社群检测、写入工具（需 `--enable-write`）等。
+共 46 个工具：34 个常驻读（含总入口 `obsidian_search`）+ 4 个可选读 + 7 个受控写 + 1 个闭环反馈。完整参考见 **[docs/api.md](./docs/api.md)**，涵盖：搜索与检索、Wikilink 与图、Frontmatter 与 Dataview、Canvas、Obsidian Bases、PDF + OCR、社群检测、写入工具（需 `--enable-write`）等。
 
 ---
 

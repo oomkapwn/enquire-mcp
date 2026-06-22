@@ -12,7 +12,7 @@
 
 - [README](https://github.com/oomkapwn/enquire-mcp/blob/main/README.md): use cases, comparison vs other Obsidian-MCPs, 7-tier retrieval setup ladder
 - [API reference (auto-generated TypeDoc)](https://oomkapwn.github.io/enquire-mcp/): every tool, prompt, exported helper with `@param`/`@returns`/`@example`
-- [Tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md): 45 tools (34 always-on read + 4 opt-in + 7 gated writes), 19 MCP prompts
+- [Tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md): 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback), 19 MCP prompts
 - [Quickstart guide](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md): step-by-step onboarding
 - [Comparison vs alternatives](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/COMPARISON.md): side-by-side feature matrix
 - [Retrieval benchmarks](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/benchmarks.md): NDCG@10, Recall@K, MRR with reranker ablation
@@ -28,7 +28,7 @@
 
 ## What enquire-mcp does
 
-- Reads `.md` files from an Obsidian vault and exposes them via 45 MCP tools (search, read, list, write, frontmatter, canvas, bases, PDFs, wikilink graph)
+- Reads `.md` files from an Obsidian vault and exposes them via 46 MCP tools (search, read, list, write, frontmatter, canvas, bases, PDFs, wikilink graph)
 - Indexes content with FTS5 (BM25), TF-IDF, and multilingual ML embeddings (BGE-base, BGE-multilingual, or any compatible Hugging Face model)
 - Fuses multiple retrieval signals via Reciprocal Rank Fusion (RRF, k=60 per Cormack et al)
 - Optional BGE cross-encoder reranking (+15.5 NDCG@10 / +24.7 MRR measured on a 60-query ablation)
@@ -65,7 +65,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1313 unit tests passing on every PR
+- 1331 unit tests passing on every PR
 - 9 required + 5 advisory CI gates per merge (lint, test ×2 [Node 22/24], smoke, audit, coverage, version-consistency, docs, oia + macOS + docker + CodeQL + Analyze)
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
 - Semver-bound public surface — see [STABILITY.md](https://github.com/oomkapwn/enquire-mcp/blob/main/STABILITY.md)

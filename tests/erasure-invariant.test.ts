@@ -200,7 +200,12 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       "FTS5 WAL sidecar": `${OTHER}.fts5.db-wal`,
       "embed-db": `${OTHER}.embed.db`,
       "HNSW index": `${OTHER}.hnsw.bin`,
-      "HNSW meta sidecar (raw text_preview)": `${OTHER}.hnsw.meta.json`
+      "HNSW meta sidecar (raw text_preview)": `${OTHER}.hnsw.meta.json`,
+      // v3.11.0 — the closed-loop feedback store (relative note paths + usefulness
+      // counts). Right-to-erasure: a decommissioned vault's feedback must not survive
+      // prune. + its atomic-write .tmp leftover.
+      "feedback store (paths + counts)": `${OTHER}.feedback.json`,
+      "feedback store atomic-write temp": `${OTHER}.feedback.json.tmp`
     };
     for (const [family, name] of Object.entries(WRITER_FAMILIES)) {
       it(`prune selects the ${family} of OTHER vaults (${name})`, () => {

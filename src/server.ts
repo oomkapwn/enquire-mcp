@@ -3,15 +3,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
 import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
+import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
-import { parseRecencyConfig } from "./retrieval-opts.js";
+import { parseFeedbackConfig, parseRecencyConfig } from "./retrieval-opts.js";
 import { shutdownStdioDeps } from "./shutdown.js";
 import {
   embedDbPath,
   parsePositiveInt,
   registerChunkResource,
+  registerFeedbackTool,
   registerFtsTools,
   registerReadTools,
   registerResources,
@@ -106,6 +108,13 @@ export interface ServeOptions {
    *  flag on hits always uses the fixed 365-day default (rc.40 #9 — was mis-claimed
    *  as this flag's threshold). */
   staleDays?: string;
+  /** v3.11.0 — opt-in closed-loop feedback weight in [0,1]. Default 0 (OFF —
+   *  no `obsidian_mark_useful` tool, no rank boost; ranking stays relevance-pure).
+   *  When > 0, registers `obsidian_mark_useful` and blends each note's recorded
+   *  usefulness (`useful/(useful+notUseful+1)`) into the `obsidian_search` order:
+   *  `(1-w)*relevanceRank + w*feedbackScore`. State persists in a per-vault cache
+   *  sidecar (`<hash>.feedback.json`; paths + counts only). */
+  feedbackWeight?: string;
   /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
   lateChunkContext?: string;
   /** v2.16.0 — persist HNSW index to disk for fast reload on next serve.
@@ -148,6 +157,14 @@ export interface ServerDeps {
    * handler in {@link startServer}.
    */
   watcherEmbedDb: EmbedDb | null;
+  /**
+   * v3.11.0 — opt-in closed-loop feedback store, opened once on serve start when
+   * `--feedback-weight > 0`. Shared across every per-session `McpServer` (HTTP)
+   * so a `mark_useful` in one session influences the search boost in all of them.
+   * `null` when feedback is off. Holds an in-memory tally + a per-vault JSON
+   * sidecar; no open file handle to close at shutdown.
+   */
+  feedbackStore: import("./feedback.js").FeedbackStore | null;
   disabledTools: Set<string>;
   enabledTools: Set<string>;
   warningTracker: { printed: boolean };
@@ -594,11 +611,20 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     }
   }
 
+  // v3.11.0 — open the opt-in closed-loop feedback store ONCE (shared across HTTP
+  // sessions so a mark_useful in one session feeds the search boost in all). ON
+  // only when `--feedback-weight > 0`; `parseFeedbackConfig` throws here on a bad
+  // value (eager boot validation, like recency). `FeedbackStore.open` is fail-soft
+  // (a corrupt/missing sidecar yields an empty store — never breaks boot).
+  const feedbackStore =
+    parseFeedbackConfig(opts) !== null ? await FeedbackStore.open(defaultFeedbackFile(opts.vault)) : null;
+
   return {
     vault,
     ftsIndex,
     watcher,
     watcherEmbedDb,
+    feedbackStore,
     disabledTools: new Set(opts.disabledTools ?? []),
     enabledTools: new Set(opts.enabledTools ?? []),
     warningTracker: { printed: false },
@@ -678,6 +704,13 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
   // relevance-pure). `--stale-days` only matters when weight > 0 (the half-life).
   const recencyConfig = parseRecencyConfig(opts);
 
+  // v3.11.0 — opt-in closed-loop feedback. `feedbackContext` (weight + the shared
+  // store) is passed to the search tool for the boost; the `obsidian_mark_useful`
+  // tool is registered only when the store was opened (`--feedback-weight > 0`).
+  const feedbackConfig = parseFeedbackConfig(opts);
+  const feedbackContext =
+    feedbackConfig && deps.feedbackStore ? { weight: feedbackConfig.weight, store: deps.feedbackStore } : null;
+
   registerReadTools(
     server,
     deps.vault,
@@ -685,8 +718,10 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
     opts.diagnosticSearchTools ?? false,
     rerankerConfig,
     deps.hnswContext,
-    recencyConfig
+    recencyConfig,
+    feedbackContext
   );
+  if (deps.feedbackStore) registerFeedbackTool(server, deps.feedbackStore);
   if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault);
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
   registerResources(server, deps.vault);

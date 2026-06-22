@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** Modelos en caché local (una descarga única desde HuggingFace). El contenido de tu bóveda nunca sale de tu máquina. Seguro para entornos aislados por defecto.
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**45 herramientas · 19 prompts MCP · 1311+ pruebas unitarias · 50+ idiomas · v3.10.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1311+ pruebas unitarias · 50+ idiomas · v3.10.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -124,7 +124,7 @@ No-objetivos honestos: recurre a otra cosa cuando:
 | **MCP remoto** sobre HTTP + autenticación bearer + sesiones con estado | ✅ | ❌ | parcial |
 | **Nativo de MCP** (Claude · Cursor · ChatGPT · Codex · OpenClaw · cualquier cliente) | ✅ | ❌ solo Obsidian | varía |
 | **Filtro de privacidad** verificado en cada ruta de búsqueda + escritura | ✅ | n/d | ❌ |
-| **45 herramientas de producción** (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas) | ✅ | n/d | varía |
+| **46 herramientas de producción** (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación) | ✅ | n/d | varía |
 | **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
 | **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ |
 | **Recuperación HyDE** + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
@@ -156,9 +156,9 @@ Activable por niveles, según lo que necesites:
 
 ---
 
-## 🛠️ Las 45 herramientas
+## 🛠️ Las 46 herramientas
 
-El paraguas `obsidian_search` más 43 herramientas especializadas (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas). Referencia completa en **[docs/api.md](./docs/api.md)**, que abarca: búsqueda y recuperación, wikilinks y grafo, frontmatter y Dataview, Canvas, Obsidian Bases, PDF + OCR, detección de comunidades, herramientas de escritura (requieren `--enable-write`), etc.
+46 herramientas en total: 34 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa en **[docs/api.md](./docs/api.md)**, que abarca: búsqueda y recuperación, wikilinks y grafo, frontmatter y Dataview, Canvas, Obsidian Bases, PDF + OCR, detección de comunidades, herramientas de escritura (requieren `--enable-write`), etc.
 
 ---
 

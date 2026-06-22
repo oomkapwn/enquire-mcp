@@ -143,7 +143,14 @@ export function registerReadTools(
    * relevance rank and the note's live-mtime recency. `null` (default) keeps
    * ranking purely relevance-driven.
    */
-  recencyConfig: { weight: number; staleDays: number } | null = null
+  recencyConfig: { weight: number; staleDays: number } | null = null,
+  /**
+   * v3.11.0 — optional opt-in closed-loop feedback context for obsidian_search.
+   * When set (weight > 0), the final fused order is re-sorted by a blend of
+   * relevance rank and each note's recorded usefulness (live `store.scores()`
+   * snapshot, computed per call). `null` (default) keeps ranking relevance-pure.
+   */
+  feedbackContext: { weight: number; store: import("./feedback.js").FeedbackStore } | null = null
 ): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
 
@@ -975,7 +982,10 @@ export function registerReadTools(
           embedFile,
           ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
           ...(hnswContext ? { hnsw: hnswContext } : {}),
-          ...(recencyConfig ? { recency: recencyConfig } : {})
+          ...(recencyConfig ? { recency: recencyConfig } : {}),
+          ...(feedbackContext
+            ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }
+            : {})
         })
       );
     }
@@ -1068,6 +1078,67 @@ export function registerReadTools(
     },
     async (args) => textResult(await frontmatterSearch(vault, args))
   );
+}
+
+/**
+ * v3.11.0 — register `obsidian_mark_useful`, the closed-loop retrieval feedback
+ * tool. Registered ONLY when `--feedback-weight > 0` (the `store` is non-null).
+ * It records which recalled note(s) actually helped a query into the per-vault
+ * `FeedbackStore`; the recorded usefulness then boosts those notes in subsequent
+ * `obsidian_search` results (the "Karpathy loop"). NOT read-only — it mutates the
+ * feedback store (a cache-dir sidecar, NOT the vault), so `enableWrite` does not
+ * gate it; it never touches note files. The store holds only relative paths +
+ * counts (no content), is erased by `prune`, and the boost is opt-in.
+ */
+export function registerFeedbackTool(server: McpServer, store: import("./feedback.js").FeedbackStore): void {
+  // K-3 invariant: `obsidian_mark_useful` is NOT read-only (it mutates the feedback
+  // store), so it carries the WRITE annotation — consistent with how the additive
+  // `obsidian_append_to_note` is annotated WRITE. It does NOT mutate the VAULT, so
+  // `--enable-write` does not gate it (`--feedback-weight > 0` does); its handler
+  // `markUseful` is listed in KNOWN_WRITE_HANDLERS as a state-mutator (cache sidecar,
+  // not a vault writer) so the K-3 "WRITE tool wires to a known write handler" check holds.
+  const WRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
+  server.registerTool(
+    "obsidian_mark_useful",
+    {
+      title: "Mark recalled notes useful",
+      description:
+        "Close the retrieval feedback loop: after using `obsidian_search` results, call this with the note path(s) that ACTUALLY helped answer the query (pass the `path` field of the useful hits). The recorded usefulness gently boosts those notes in future searches for this vault (active only when the server was started with `--feedback-weight`). Set `useful: false` to record a note that looked relevant but was NOT helpful (lowers its boost). Stores ONLY relative note paths + counts — never note content or your query — in a per-vault cache sidecar that `enquire-mcp prune` erases. Each call increments the tally (not idempotent).",
+      annotations: { ...WRITE, title: "Mark useful" },
+      inputSchema: {
+        paths: z
+          .array(z.string().min(1).max(1024))
+          .min(1)
+          .max(50)
+          .describe("Relative vault paths of the notes that were useful (the `path` field from search hits). 1–50."),
+        useful: z
+          .boolean()
+          .optional()
+          .describe("true (default) = the notes helped; false = they looked relevant but did not help.")
+      }
+    },
+    async (args) => textResult(await markUseful(store, args))
+  );
+}
+
+/**
+ * Handler for `obsidian_mark_useful` — records usefulness marks into the feedback
+ * store (a cache sidecar, NOT the vault). Extracted + named so the K-3 invariant
+ * can pin it as the tool's write handler (`KNOWN_WRITE_HANDLERS`). `new Date()` is
+ * called here (not in the Date-free `feedback.ts` module) and injected into `record`.
+ */
+async function markUseful(
+  store: import("./feedback.js").FeedbackStore,
+  args: { paths: string[]; useful?: boolean }
+): Promise<{ recorded: number; useful: boolean; total_notes_with_feedback: number; note: string }> {
+  const useful = args.useful !== false;
+  const recorded = await store.record(args.paths, useful, new Date().toISOString());
+  return {
+    recorded,
+    useful,
+    total_notes_with_feedback: store.size(),
+    note: "Feedback boosts future obsidian_search ranking for this vault when --feedback-weight > 0."
+  };
 }
 
 export function registerWriteTools(server: McpServer, vault: Vault): void {

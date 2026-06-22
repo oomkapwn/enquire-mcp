@@ -8,9 +8,9 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 
 ## v3.x stable surfaces
 
-### MCP tool names (45 tools)
+### MCP tool names (46 tools)
 
-45 tools total = **34 always-on read** + **1 opt-in via `--persistent-index` + `--diagnostic-search-tools`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`**. Names + argument shapes are stable in v3.x.
+46 tools total = **34 always-on read** + **1 opt-in via `--persistent-index` + `--diagnostic-search-tools`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`** + **1 opt-in via `--feedback-weight`**. Names + argument shapes are stable in v3.x.
 
 **Read — always-on (34):**
 
@@ -21,6 +21,8 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 **Read — opt-in via `--diagnostic-search-tools` (3):** `obsidian_search_text`, `obsidian_semantic_search`, `obsidian_embeddings_search`. Registered alongside `obsidian_search` for diagnostic / A/B benchmarking.
 
 **Write — gated by `--enable-write` (7):** `obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_replace_in_notes`, `obsidian_archive_note`, `obsidian_frontmatter_set`, `obsidian_chat_thread_append`.
+
+**Feedback — opt-in via `--feedback-weight` (1):** `obsidian_mark_useful`. Records which recalled notes helped a query (closed-loop retrieval feedback); the recorded usefulness boosts those notes in subsequent `obsidian_search` results. Mutates a per-vault feedback cache sidecar (relative paths + counts only), NOT the vault — so it is gated by `--feedback-weight`, not `--enable-write`.
 
 ### MCP resource URIs
 

@@ -8,7 +8,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultFeedbackFile, FeedbackStore, feedbackScore, MAX_FEEDBACK_ENTRIES } from "../src/feedback.js";
 import { defaultIndexFile, planCachePrune } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
@@ -157,10 +157,26 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
   // sessions and the SDK dispatches tool calls concurrently — persist()s must be
   // serialized so they never interleave into a torn file (which the fail-soft
   // open() would silently discard, losing ALL feedback).
-  it("concurrent record() calls persist a coherent, non-torn file (serialized writes)", async () => {
+  it("concurrent record() calls serialize persists — no tmp-rename collision (DISCRIMINATES the persistChain)", async () => {
+    // The naive non-serialized version (writeOnce called directly from persist())
+    // lets two concurrent writes stream into the SAME <file>.tmp; the first rename
+    // consumes it, the rest hit ENOENT — which writeOnce logs as "feedback persist
+    // failed". The shared in-memory map means the file still ends coherent either
+    // way, so asserting JSON/tally alone is VACUOUS (it passed even without the
+    // fix — the rc.4 audit finding). The ENOENT stderr line is the only signal
+    // that actually distinguishes serialized from racing writes, so we assert on it.
     const store = await FeedbackStore.open(file);
-    await Promise.all(Array.from({ length: 25 }, () => store.record(["Hot.md"], true, NOW)));
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")); // throws if torn → fails
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let errs: string[] = [];
+    try {
+      await Promise.all(Array.from({ length: 25 }, () => store.record(["Hot.md"], true, NOW)));
+      errs = spy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      spy.mockRestore();
+    }
+    // Zero persist failures ⇒ the persistChain prevented every tmp-rename collision.
+    expect(errs.filter((l) => /feedback persist failed/.test(l))).toEqual([]);
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")); // and the file is coherent
     expect(parsed.entries["Hot.md"].useful).toBe(25);
     // a fresh open sees the full tally → proves no corrupt-file fail-soft discard
     expect((await FeedbackStore.open(file)).scores().get("Hot.md")).toBeGreaterThan(0);

@@ -127,17 +127,22 @@ export class FeedbackStore {
    */
   async record(paths: readonly string[], useful: boolean, nowIso: string): Promise<number> {
     const seen = new Set<string>();
+    // Hoist the entry count out of the loop (was recomputed per path — up to 50
+    // fresh Object.keys() allocations over a 100k-entry map at the cap); track it
+    // locally and bump only when a genuinely-new path is admitted.
+    let count = Object.keys(this.data.entries).length;
     for (const p of paths) {
       const rel = p.trim();
       if (!rel || seen.has(rel)) continue;
       const existing = this.data.entries[rel];
       // At the cap, only UPDATE existing entries; ignore brand-new paths.
-      if (!existing && Object.keys(this.data.entries).length >= MAX_FEEDBACK_ENTRIES) continue;
+      if (!existing && count >= MAX_FEEDBACK_ENTRIES) continue;
       seen.add(rel);
       const e = existing ?? { useful: 0, notUseful: 0, lastMarked: "" };
       if (useful) e.useful += 1;
       else e.notUseful += 1;
       e.lastMarked = nowIso;
+      if (!existing) count += 1;
       this.data.entries[rel] = e;
     }
     if (seen.size > 0) await this.persist();
@@ -199,6 +204,11 @@ export class FeedbackStore {
       if (!dirExisted) await fs.chmod(dir, 0o700).catch(() => {});
       await fs.writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
       await fs.rename(tmp, this.file);
+      // Defense-in-depth, matching the fts5.ts / embed-db.ts every-write posture:
+      // re-assert 0600 on the landed file so SECURITY.md's "sidecar is chmod'd to
+      // 0600" is an ENFORCED guard, not merely writeFile's create-time mode (which
+      // a 'w'-truncate over a pre-existing looser-mode <file> would not re-apply).
+      await fs.chmod(this.file, 0o600).catch(() => {});
     } catch (err) {
       // Best-effort persistence: a write failure leaves the in-memory tally
       // intact (the session still benefits). Surface to STDERR for the operator

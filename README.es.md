@@ -158,7 +158,7 @@ Activable por niveles, según lo que necesites:
 
 ## 🛠️ Las 46 herramientas
 
-El paraguas `obsidian_search` más 43 herramientas especializadas (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas). Referencia completa en **[docs/api.md](./docs/api.md)**, que abarca: búsqueda y recuperación, wikilinks y grafo, frontmatter y Dataview, Canvas, Obsidian Bases, PDF + OCR, detección de comunidades, herramientas de escritura (requieren `--enable-write`), etc.
+46 herramientas en total: 34 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa en **[docs/api.md](./docs/api.md)**, que abarca: búsqueda y recuperación, wikilinks y grafo, frontmatter y Dataview, Canvas, Obsidian Bases, PDF + OCR, detección de comunidades, herramientas de escritura (requieren `--enable-write`), etc.
 
 ---
 

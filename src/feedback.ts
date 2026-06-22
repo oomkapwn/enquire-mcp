@@ -163,10 +163,40 @@ export class FeedbackStore {
     return Object.keys(this.data.entries).length;
   }
 
+  /**
+   * Serializes persists behind a per-store promise chain. The store is a SINGLE
+   * instance shared across all serve-http sessions and the MCP SDK dispatches tool
+   * calls concurrently, so two `record()` calls can both reach `persist()` before
+   * either finishes. Without serialization both `writeOnce()` calls would stream
+   * into the SAME `<file>.tmp` and `fs.rename` would promote a torn file — which,
+   * if invalid JSON, the fail-soft `open()` silently discards on next boot (losing
+   * ALL feedback). Chaining makes every write atomic AND sequential.
+   */
+  private persistChain: Promise<void> = Promise.resolve();
+
   private async persist(): Promise<void> {
+    const next = this.persistChain.then(() => this.writeOnce());
+    // Swallow on the chain so one failed write doesn't poison the next; the
+    // returned promise still resolves (writeOnce never throws — fail-soft).
+    this.persistChain = next.catch(() => {});
+    return next;
+  }
+
+  private async writeOnce(): Promise<void> {
     const tmp = `${this.file}.tmp`;
+    const dir = path.dirname(this.file);
     try {
-      await fs.mkdir(path.dirname(this.file), { recursive: true });
+      // Mirror the sibling per-vault cache writers (fts5.ts / embed-db.ts /
+      // vault.ts): create the cache dir 0700 and chmod it when WE created it, so
+      // the SECURITY.md "Parent dir mode is 0700" guarantee holds even when the
+      // feedback store is the FIRST writer to materialize <cache>/enquire (e.g.
+      // `serve --feedback-weight 0.2` with no --persistent-index / embeddings).
+      const dirExisted = await fs
+        .stat(dir)
+        .then(() => true)
+        .catch(() => false);
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      if (!dirExisted) await fs.chmod(dir, 0o700).catch(() => {});
       await fs.writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
       await fs.rename(tmp, this.file);
     } catch (err) {

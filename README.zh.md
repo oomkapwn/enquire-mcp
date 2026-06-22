@@ -158,7 +158,7 @@ enquire-mcp doctor --vault <path>    # 彩色 ✓/⚠/✗ 健康检查
 
 ## 🛠️ 全部 46 个工具
 
-总入口 `obsidian_search` 加上 43 个专用工具（34 个常驻读 + 4 个可选 + 7 个受控写）。完整参考见 **[docs/api.md](./docs/api.md)**，涵盖：搜索与检索、Wikilink 与图、Frontmatter 与 Dataview、Canvas、Obsidian Bases、PDF + OCR、社群检测、写入工具（需 `--enable-write`）等。
+共 46 个工具：34 个常驻读（含总入口 `obsidian_search`）+ 4 个可选读 + 7 个受控写 + 1 个闭环反馈。完整参考见 **[docs/api.md](./docs/api.md)**，涵盖：搜索与检索、Wikilink 与图、Frontmatter 与 Dataview、Canvas、Obsidian Bases、PDF + OCR、社群检测、写入工具（需 `--enable-write`）等。
 
 ---
 

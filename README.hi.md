@@ -158,7 +158,7 @@ enquire-mcp doctor --vault <path>    # रंग-कोडित ✓/⚠/✗ स
 
 ## 🛠️ सभी 46 टूल
 
-अम्ब्रेला `obsidian_search` और 43 विशेषीकृत टूल (34 हमेशा-चालू read + 4 opt-in + 7 gated writes)। पूर्ण संदर्भ **[docs/api.md](./docs/api.md)** में, जो शामिल करता है: खोज व retrieval, Wikilink व ग्राफ़, Frontmatter व Dataview, Canvas, Obsidian Bases, PDF + OCR, समुदाय-पहचान, लेखन टूल (`--enable-write` ज़रूरी) आदि।
+कुल 46 टूल: 34 हमेशा-चालू read (अम्ब्रेला `obsidian_search` सहित) + 4 opt-in + 7 gated writes + 1 क्लोज़्ड-लूप फ़ीडबैक। पूर्ण संदर्भ **[docs/api.md](./docs/api.md)** में, जो शामिल करता है: खोज व retrieval, Wikilink व ग्राफ़, Frontmatter व Dataview, Canvas, Obsidian Bases, PDF + OCR, समुदाय-पहचान, लेखन टूल (`--enable-write` ज़रूरी) आदि।
 
 इसके अलावा 3 MCP resources और सामान्य vault वर्कफ़्लो के लिए 19 **MCP प्रॉम्प्ट**।
 

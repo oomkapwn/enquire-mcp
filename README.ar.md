@@ -196,7 +196,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 <div dir="rtl" align="right">
 
-المدخل الجامع `obsidian_search` إضافةً إلى 43 أداة متخصصة (34 قراءة دائمة + 4 اختيارية + 7 كتابات محكومة). المرجع الكامل في **[docs/api.md](./docs/api.md)**، ويشمل: البحث والاسترجاع، وWikilink والرسم، وFrontmatter وDataview، وCanvas، وObsidian Bases، وPDF + OCR، وكشف المجتمعات، وأدوات الكتابة (تتطلب `--enable-write`) وغيرها.
+46 أداة إجمالاً: 34 قراءة دائمة (بما في ذلك المدخل الجامع `obsidian_search`) + 4 اختيارية + 7 كتابات محكومة + 1 تغذية راجعة بحلقة مغلقة. المرجع الكامل في **[docs/api.md](./docs/api.md)**، ويشمل: البحث والاسترجاع، وWikilink والرسم، وFrontmatter وDataview، وCanvas، وObsidian Bases، وPDF + OCR، وكشف المجتمعات، وأدوات الكتابة (تتطلب `--enable-write`) وغيرها.
 
 </div>
 

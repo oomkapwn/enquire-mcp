@@ -140,6 +140,31 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
   it("NEGATIVE control — prune never selects a non-enquire file sharing the dir", () => {
     expect(planCachePrune(["my-notes.feedback.json", "feedback.json", "x.feedback.json"], "aaaaaaaaaaaa")).toEqual([]);
   });
+
+  // v3.11.0-rc.1 audit response (MED): persist() must create the cache dir 0700
+  // (every sibling cache writer does), so SECURITY.md's "Parent dir mode is 0700"
+  // holds even when the feedback store is the FIRST writer to materialize it.
+  it("persist creates the cache dir 0700 (not 0755) and the file 0600", async () => {
+    // A parent that does NOT exist yet, so writeOnce's mkdir is the creator.
+    const freshFile = path.join(dir, "nested", "enquire", "abc123def456.feedback.json");
+    const store = await FeedbackStore.open(freshFile);
+    await store.record(["A.md"], true, NOW); // first persist → mkdir + chmod
+    expect((await fs.stat(path.dirname(freshFile))).mode & 0o777).toBe(0o700); // no group/world access
+    expect((await fs.stat(freshFile)).mode & 0o777).toBe(0o600);
+  });
+
+  // v3.11.0-rc.1 audit response (MED): the store is shared across serve-http
+  // sessions and the SDK dispatches tool calls concurrently — persist()s must be
+  // serialized so they never interleave into a torn file (which the fail-soft
+  // open() would silently discard, losing ALL feedback).
+  it("concurrent record() calls persist a coherent, non-torn file (serialized writes)", async () => {
+    const store = await FeedbackStore.open(file);
+    await Promise.all(Array.from({ length: 25 }, () => store.record(["Hot.md"], true, NOW)));
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")); // throws if torn → fails
+    expect(parsed.entries["Hot.md"].useful).toBe(25);
+    // a fresh open sees the full tally → proves no corrupt-file fail-soft discard
+    expect((await FeedbackStore.open(file)).scores().get("Hot.md")).toBeGreaterThan(0);
+  });
 });
 
 describe("searchHybrid feedback boost (v3.11.0)", () => {

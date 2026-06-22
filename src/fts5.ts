@@ -865,9 +865,10 @@ export function defaultIndexFile(vaultRoot: string): string {
  * (`<hash>.feedback.json`, written by `FeedbackStore`; relative note paths +
  * usefulness counts). Listed so a cross-vault `prune` erases a decommissioned
  * vault's feedback (right-to-erasure), like every other per-vault artifact.
- * `feedback\.json` MUST precede `json` in the alternation (regex alternation is
- * leftmost-first: `json` first would match the `json` tail of `feedback.json`
- * and leave `.feedback` unconsumed, failing the `$` anchor).
+ * (`feedback\.json` is listed before `json` for readability; ordering is NOT
+ * load-bearing — the alternation is anchored right after the `\.` following the
+ * 12-hex hash, so for `<hash>.feedback.json` the `json` alternative is tried at
+ * the `f` and can't match the `json` tail; either order matches correctly.)
  */
 const ENQUIRE_CACHE_ARTIFACT =
   /^[0-9a-f]{12}\.(feedback\.json|json|fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm|\.tmp)?$/;

@@ -4,7 +4,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [3.11.0-rc.1] — 2026-06-22
 
-> **TL;DR:** **Closed-loop retrieval feedback (the "Karpathy loop") — the 46th tool, opt-in.** New `obsidian_mark_useful` (gated by `--feedback-weight <0..1>`, default **0 = OFF**): an agent records which recalled notes actually helped a query; the recorded usefulness then gently boosts those notes in subsequent `obsidian_search` results — a provable no-op at weight 0, mirroring the rc.5 recency boost. State lives in a per-vault cache sidecar (relative paths + counts only — **no note content, no query text**), erased by `prune`. Ships on `@rc`; `@latest` promotion is maintainer-gated. **45 → 46 tools · 1313 → 1329 tests.** No API breaks (additive minor).
+> **TL;DR:** **Closed-loop retrieval feedback (the "Karpathy loop") — the 46th tool, opt-in.** New `obsidian_mark_useful` (gated by `--feedback-weight <0..1>`, default **0 = OFF**): an agent records which recalled notes actually helped a query; the recorded usefulness then gently boosts those notes in subsequent `obsidian_search` results — a provable no-op at weight 0, mirroring the rc.5 recency boost. State lives in a per-vault cache sidecar (relative paths + counts only — **no note content, no query text**), erased by `prune`. Ships on `@rc`; `@latest` promotion is maintainer-gated. **45 → 46 tools · 1313 → 1331 tests.** No API breaks (additive minor).
 
 ### Added
 
@@ -17,11 +17,12 @@ All notable changes to this project will be documented here. The format follows 
 - The feedback sidecar (`<vault-hash>.feedback.json`) holds **only** relative note paths + integer counts + an ISO timestamp — never note content or query text (lower sensitivity than `.fts5.db` / `.embed.db`). `0600`, atomic writes.
 - **Right-to-erasure:** the sidecar matches the `ENQUIRE_CACHE_ARTIFACT` pattern, so a cross-vault `enquire-mcp prune` erases a decommissioned vault's feedback (+ any `.tmp` leftover) — pinned by the erasure-completeness invariant. Preserved across `clear-cache` (user-generated signal, not regenerable cache). New SECURITY.md section "Closed-loop feedback store: data-at-rest posture".
 - **K-3:** `obsidian_mark_useful` is annotated `...WRITE` (honest `readOnlyHint: false`, consistent with the additive `obsidian_append_to_note`) via a named `markUseful` handler. It mutates the feedback STORE, not the vault — so it's gated by `--feedback-weight`, not `--enable-write`.
+- **Pre-ship adversarial audit** (4 lenses × 3-skeptic verify; 0 CRIT/0 HIGH) hardened two `FeedbackStore.persist()` issues before tag: (1) it now creates the cache dir `0700` + chmods it when it's the creator (mirroring the sibling cache writers, so SECURITY.md's "Parent dir mode is 0700" holds even when feedback is the first writer to materialize `<cache>/enquire`); (2) writes are **serialized** behind a per-store promise chain — the store is shared across serve-http sessions and the SDK dispatches concurrently, so unsynchronized writes to the shared `.tmp` could interleave into a torn file that the fail-soft `open()` would silently discard. The 4 translated-README breakdown sentences were also corrected to the 46-tool count. +2 tests (dir-mode + 25-way concurrent-persist).
 
-### Tests (1329)
+### Tests (1331)
 
 - `tests/feedback.test.ts` (+16): the store (open/record/scores/cap/fail-soft/atomic-persist), `defaultFeedbackFile` dir+hash parity with `defaultIndexFile`, prune erasure of the feedback family, and the `searchHybrid` boost — a PROVABLE no-op at weight 0 + a marked note rising at weight 1, each with a NEGATIVE control.
-- Erasure-invariant gains the feedback family (writers ⊆ prune-eraser); K-3 `KNOWN_WRITE_HANDLERS` gains `markUseful`; cli-parity flag count 13 → 14; docs-consistency api.md-math + STABILITY-gating + llms-breakdown regexes extended for the new `feedback` term. **1313 → 1329.**
+- Erasure-invariant gains the feedback family (writers ⊆ prune-eraser); K-3 `KNOWN_WRITE_HANDLERS` gains `markUseful`; cli-parity flag count 13 → 14; docs-consistency api.md-math + STABILITY-gating + llms-breakdown regexes extended for the new `feedback` term. **1313 → 1331.**
 
 ### Count cascade (45 → 46)
 

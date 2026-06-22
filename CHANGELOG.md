@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0] — 2026-06-22
+
+> **TL;DR:** **v3.10.0 STABLE — promoted `@rc` → `@latest` after 78 RCs.** The forgetting-aware retrieval line + a deep multi-round security/correctness hardening cascade. New: **`obsidian_stale_notes`** (45th tool), `age_days`/`stale` freshness signals on every hit, opt-in recency re-ranking (`--recency-weight`, default off), and **frontmatter-aware `obsidian_search`** (`filter_frontmatter`). Plus the gray-matter→js-yaml@4 frontmatter migration, pdfjs-dist 5→6, and the full closure of the ReDoS / abs-path-leak / NFC-name-resolution / reserve-before-try / resource-DoS-amplifier classes (1 HIGH + many MED/LOW across rc.1→rc.78). **No API breaks** (additive minor; the v3.x tool/argument surface is unchanged). **45 tools · 19 MCP prompts · 1311 unit tests · 11 required + advisory CI gates.**
+
+**Promotes the entire v3.10.0-rc.1 → rc.78 pre-release line to `@latest`** (per-RC detail in the entries below). Maintainer call on the ≥2-independent-external-auditor promotion gate (the rc.32 deep-audit + rc.34/rc.35 from-scratch Mavis passes + the round-1/2/3 + state-driven internal multi-lens Workflow audits constitute the evidence base; the fresh-on-HEAD external pass was waived as for v3.9.0). CI publishes `@latest` with signed npm build provenance (SLSA Build L2) and syncs the canonical MCP Registry via OIDC.
+
+### Highlights (delivered across the rc line)
+
+- **Forgetting-aware staleness** (rc.1→rc.10): live-mtime `age_days` + `stale` on every retrieval hit; the `obsidian_stale_notes` tool; opt-in recency re-ranking (provable no-op at weight 0); frontmatter-aware `obsidian_search` (`filter_frontmatter`).
+- **Frontmatter engine migration** (rc.53→rc.56): dropped gray-matter → in-repo `src/frontmatter.ts` on js-yaml@4, resolving GHSA-h67p-54hq-rp68 at the root (allowlist empty); scalar-resolution contract documented + pinned.
+- **Dependency majors** (rc.52): pdfjs-dist 5→6; protobufjs/hono advisory overrides; scoped `check-audit.mjs` gate.
+- **Security/correctness class closures** (rc.16→rc.78, multi-round adversarial Workflow audits + post-merge re-sweeps): ReDoS (non-backtracking DP matcher for DQL `LIKE` + globs, worker sink-bound for `obsidian_open_questions`); abs-path-leak (Vault `sanitizeFsError` at the source + inventory invariant); NFC name-resolution (`src/name-fold.ts` + inventory invariant); reserve-before-try handle leaks (self-cleaning `open()` + pdfjs try/finally); resource-DoS amplifiers (read_canvas/validateNoteProposal O(1) indices, caps); HNSW right-to-erasure; truncate-before-sort in the list tools.
+- **Discoverability** (rc.13→rc.31): official MCP Registry (auto-published on stable via OIDC), Docker/Glama introspection, Schema.org JSON-LD, bilingual `README.zh.md`, `llms.txt` agent contract.
+
+### Quality bar
+
+All 11 required CI gates green; 1311 unit tests; lint pristine (biome 2.5.0); coverage thresholds met; OIA (12 checks) + scope-completeness + docs-consistency + version-consistency clean; `npm audit` allowlist empty.
+
+---
+
 ## [3.10.0-rc.78] — 2026-06-22
 
 > **TL;DR:** **Config hygiene — `biome.json` migrated to 2.5.0.** The devDep is `@biomejs/biome@^2.5.0` (installed 2.5.0) but `biome.json` still pinned `$schema` 2.4.16 and used the deprecated `recommended: true` linter field — both non-blocking lint `infos` that slipped through several RCs (the α-class stale-version claim, in a tooling config). `biome migrate` updated the schema + renamed `recommended: true` → `preset: "recommended"` (same rule set; no repo-wide cascade), and a pre-existing `useTemplate` nit was cleared so lint output is now pristine. Config + 1-line test tidy only; no runtime change. **1311 source tests unchanged.**

@@ -11,7 +11,7 @@
 **别再每次会话都向 Claude、Cursor、ChatGPT、Codex、OpenClaw 重新解释上下文。你的 Obsidian 笔记成为所有 MCP 兼容智能体之间共享、可检索的记忆——你的知识，任何模型，永远属于你。**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![stable](https://img.shields.io/badge/v3.9.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 期间零云端调用。** 模型本地缓存（一次性从 HuggingFace 下载）。你的仓库内容永不离开本机。默认即可离线/隔离运行。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**45 个工具 · 19 个 MCP 提示词 · 1311+ 单元测试 · 50+ 语言 · v3.9.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**45 个工具 · 19 个 MCP 提示词 · 1311+ 单元测试 · 50+ 语言 · v3.10.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -195,7 +195,7 @@ enquire-mcp doctor --vault <path>    # 彩色 ✓/⚠/✗ 健康检查
 
 ## 🚀 发布
 
-通道：`npm install @oomkapwn/enquire-mcp` → 最新稳定版（`@latest` = v3.9.x）。预览版：`npm install @oomkapwn/enquire-mcp@rc`（最新候选版）。完整变更日志见 **[CHANGELOG.md](./CHANGELOG.md)** · 路线图见 **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**。
+通道：`npm install @oomkapwn/enquire-mcp` → 最新稳定版（`@latest` = v3.10.x）。预览版：`npm install @oomkapwn/enquire-mcp@rc`（最新候选版）。完整变更日志见 **[CHANGELOG.md](./CHANGELOG.md)** · 路线图见 **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**。
 
 ## 🤝 参与贡献
 

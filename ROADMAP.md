@@ -8,7 +8,7 @@ This is the *public* roadmap. Per-release detail lives in [`CHANGELOG.md`](./CHA
 
 ---
 
-## Where we are (v3.9.x stable on `@latest`)
+## Where we are (v3.10.x stable on `@latest`)
 
 Already shipped and differentiating:
 

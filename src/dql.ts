@@ -1,4 +1,4 @@
-import { foldTag, nfcLower } from "./name-fold.js";
+import { foldTag, lookupFoldedKey, nfcLower } from "./name-fold.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { FileEntry, Vault } from "./vault.js";
 import { compileLikeTokens, matchWildcardTokens } from "./wildcard-match.js";
@@ -407,7 +407,10 @@ function resolveField(
     case "file.tags":
       return tags;
     default:
-      return frontmatter[field];
+      // v3.11.0-rc.10 (H1) — case/NFC-insensitive frontmatter KEY resolution
+      // (Dataview accesses fields by normalized name); rc.69 folded file.name/path
+      // but the frontmatter key was still exact-string.
+      return lookupFoldedKey(frontmatter, field).value;
   }
 }
 

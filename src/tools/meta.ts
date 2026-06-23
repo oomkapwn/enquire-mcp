@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag } from "../name-fold.js";
+import { INLINE_TAG_RE } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
@@ -217,9 +218,11 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   } else if (typeof fmTags === "string" && fmTags) {
     for (const t of fmTags.split(/[\s,]+/)) if (t) proposedTagsRaw.add(t.replace(/^#/, ""));
   }
-  // Inline tags.
-  const inlineTagRe = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
-  for (const m of bodyAfterFm.matchAll(inlineTagRe)) {
+  // Inline tags. v3.11.0-rc.10 (M1) — shared INLINE_TAG_RE (was a byte-identical
+  // copy of parser's) + NFC-normalize BEFORE matching so an NFD inline tag isn't
+  // truncated at its combining mark (parity with extractInlineTags); the
+  // existing-vs-new classification below folds both sides via foldTag.
+  for (const m of bodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {
     if (m[1]) proposedTagsRaw.add(m[1]);
   }
   const tags: ValidateProposalResult["tags"] = [];

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
-import { foldName, foldTag, nfcLower } from "../name-fold.js";
+import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
@@ -450,7 +450,12 @@ export function tokenizeForTfidf(text: string): string[] {
   // then run the Unicode regex per-segment. This produces real word tokens
   // instead of "認可サーバーがアクセストークン" as a single 12-char token
   // that the length filter would drop.
-  const lower = text.toLowerCase();
+  // v3.11.0-rc.10 (M1 LOW sibling) — NFC-normalize before lowercasing so the TF-IDF
+  // tokenizer is symmetric across Unicode forms: an NFD-on-disk body and an NFC query
+  // (or vice versa) tokenize identically (`café`-NFD → `café`-NFC) instead of the body
+  // tokenizing to `cafe` and the query to `café`. This tokenizer serves BOTH the indexed
+  // body and the query, so normalizing here closes the asymmetry at a single point.
+  const lower = text.normalize("NFC").toLowerCase();
   const out: string[] = [];
   if (CJK_OR_THAI_RANGES.test(lower) && typeof Intl !== "undefined" && typeof Intl.Segmenter !== "undefined") {
     const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
@@ -1406,8 +1411,13 @@ export function frontmatterMatches(
 ): boolean {
   if (!frontmatter) return false;
   for (const [key, want] of Object.entries(filter)) {
-    if (!(key in frontmatter)) return false;
-    if (!frontmatterValueMatches(frontmatter[key], want)) return false;
+    // v3.11.0-rc.10 (H1, external audit) — case/NFC-insensitive KEY lookup. rc.9
+    // folded the VALUE side but the KEY was still exact-string (`Status` filter
+    // missed `status`, NFC key missed an NFD-on-disk key). Obsidian properties are
+    // case-insensitive, so fold the key at lookup time (never destructively at parse).
+    const { present, value } = lookupFoldedKey(frontmatter, key);
+    if (!present) return false;
+    if (!frontmatterValueMatches(value, want)) return false;
   }
   return true;
 }

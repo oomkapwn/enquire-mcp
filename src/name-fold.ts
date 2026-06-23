@@ -77,3 +77,30 @@ export function nfcLower(value: string): string {
 export function nfc(value: string): string {
   return value.normalize("NFC");
 }
+
+/**
+ * Case/NFC-insensitive frontmatter KEY lookup. Obsidian "properties" / Dataview
+ * treat field NAMES case-insensitively, but a raw `frontmatter[key]` / `key in
+ * frontmatter` is exact-string by JS semantics — so a filter key `Status` (or an
+ * NFC key vs an NFD-on-disk key) silently missed `status`. This folds BOTH sides
+ * via {@link nfcLower} at LOOKUP time — NEVER at parse time (folding keys in
+ * `parseFrontmatter` would collide a distinct-cased key and corrupt write
+ * round-trips). v3.11.0-rc.10 (H1, external audit — the KEY sibling of the rc.9
+ * VALUE fold).
+ *
+ * Precedence: an EXACT own-key wins (preserves byte-exact semantics when the key
+ * is present verbatim); otherwise the FIRST own key (insertion order) whose fold
+ * matches wins (deterministic on a `Status`+`status` collision).
+ *
+ * @param obj - a frontmatter object (own enumerable string keys)
+ * @param key - the user/agent-supplied filter key
+ * @returns `{ present, value }` — `present:false`, `value:undefined` if no own key folds to `key`.
+ */
+export function lookupFoldedKey(obj: Record<string, unknown>, key: string): { present: boolean; value: unknown } {
+  if (Object.hasOwn(obj, key)) return { present: true, value: obj[key] };
+  const want = nfcLower(key);
+  for (const k of Object.keys(obj)) {
+    if (nfcLower(k) === want) return { present: true, value: obj[k] };
+  }
+  return { present: false, value: undefined };
+}

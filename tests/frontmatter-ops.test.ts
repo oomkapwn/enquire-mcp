@@ -115,7 +115,7 @@ describe("frontmatter_set", () => {
   it("refuses to edit a note whose existing frontmatter is malformed YAML (rc.61 WRITE-2)", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
-    // TAB-indented frontmatter — js-yaml@4 rejects it, so parseNote falls back to whole-file
+    // TAB-indented frontmatter — js-yaml@5 rejects it, so parseNote falls back to whole-file
     // body. Pre-rc.61 frontmatterSet blindly prepended a 2nd `---` block, doubling/corrupting it.
     const malformed = "---\nstatus: draft\n\tbad: indent\n---\n# Title\n\nBody.\n";
     await fs.writeFile(path.join(root, "bad-fm.md"), malformed);

@@ -408,7 +408,7 @@ export interface FrontmatterSetArgs {
 
 /**
  * Atomic YAML frontmatter mutation — set, update, or delete keys via a
- * `parseFrontmatter`∘`stringifyFrontmatter` round-trip (js-yaml@4).
+ * `parseFrontmatter`∘`stringifyFrontmatter` round-trip (js-yaml@5).
  *
  * Replaces the error-prone "find/replace YAML text" pattern. Parses the
  * frontmatter, applies the diff, re-serializes via js-yaml (so date-like

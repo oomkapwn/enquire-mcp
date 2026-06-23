@@ -1092,7 +1092,7 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
 // Surgical YAML manipulation. Pre-fix, agents wanting to set `status:
 // published` on 12 notes had to find/replace text — error-prone (multi-line
 // strings, special chars, key-collision). Now: parse via `parseFrontmatter`
-// (js-yaml@4), edit, rewrite. Delimiter-aware (frontmatter is delimited
+// (js-yaml@5), edit, rewrite. Delimiter-aware (frontmatter is delimited
 // strictly by leading `---`, so no fence ambiguity).
 //
 // _get is read-only; _set + _delete are write-gated.

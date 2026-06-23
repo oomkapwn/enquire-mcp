@@ -1,10 +1,11 @@
 // v3.10.0-rc.53 — minimal YAML-frontmatter parse/stringify, replacing gray-matter.
+// v3.11.0-rc.6 — engine migrated js-yaml@4 → @5 (see DATES / MERGE KEYS / EMPTY INPUT below).
 //
-// WHY: gray-matter@4.0.3 hard-binds js-yaml@3's `safeLoad`/`safeDump` at module load
-// (`lib/engines.js`), so it CANNOT run on js-yaml@4 — and js-yaml@3 (<=4.1.1) carries the
-// merge-key quadratic-DoS advisory GHSA-h67p-54hq-rp68 with no v3 fix. To remove the
-// vulnerable js-yaml from the tree entirely we drop gray-matter and parse frontmatter
-// ourselves on js-yaml@4 (whose `load`/`dump` are safe-by-default — the v3 `safeLoad`/
+// WHY (rc.53): gray-matter@4.0.3 hard-binds js-yaml@3's `safeLoad`/`safeDump` at module load
+// (`lib/engines.js`), so it could not run on a modern js-yaml — and js-yaml@3 (<=4.1.1) carried
+// the merge-key quadratic-DoS advisory GHSA-h67p-54hq-rp68 with no v3 fix. To remove the
+// vulnerable js-yaml from the tree we dropped gray-matter and parse frontmatter ourselves; the
+// engine is now js-yaml@5 (`load`/`dump` safe-by-default, YAML 1.2 core — the v3 `safeLoad`/
 // `safeDump` semantics).
 //
 // The STRUCTURAL split + stringify logic below is a faithful PORT of gray-matter's own
@@ -14,43 +15,45 @@
 // gray-matter) confirmed byte-identical `{data,content}` + stringify on those STRUCTURAL
 // paths over a broad corpus.
 //
-// NOT byte-identical on SCALAR RESOLUTION (v3.10.0-rc.54 audit FM-1/SC-2): the engine is
-// js-yaml@4 (YAML 1.2 core), whereas gray-matter used js-yaml@3 (YAML 1.1). They resolve
-// some scalar shapes DIFFERENTLY, so a `frontmatter_set` edit re-persists them per js-yaml@4:
+// NOT byte-identical on SCALAR RESOLUTION (v3.10.0-rc.54 audit FM-1/SC-2; re-verified UNCHANGED
+// on js-yaml@5 in rc.6): the engine is js-yaml@5 (YAML 1.2 core), whereas gray-matter used
+// js-yaml@3 (YAML 1.1). They resolve some scalar shapes DIFFERENTLY from the old gray-matter
+// behavior, so a `frontmatter_set` edit re-persists them per YAML 1.2 (identical on @4 and @5):
 //   • bare octal `0755` → 755 (v3: 493)    • leading-zero `0888` → 888 (v3: "0888")
 //   • sexagesimal `12:34:56` / `1:30` → string (v3: 45296 / 90 ints)
 //   • underscore ints `1_000` → "1_000" string (v3: 1000)
-// js-yaml@4 (YAML 1.2) is the intended modern default; these cases are pinned in
-// `tests/frontmatter.test.ts` as the documented contract, not silently re-asserted as
-// "byte-identical". Common frontmatter (tags, plain strings/ints) is unaffected.
+// These are pinned in `tests/frontmatter.test.ts` as the documented contract, not silently
+// re-asserted as "byte-identical". Common frontmatter (tags, plain strings/ints) is unaffected.
 //
-// BARE (unquoted) DATES (v3.10.0-rc.58 audit FM-DATE-SILENT-MUTATION): js-yaml (v3 AND v4)
-// resolves a bare `created: 2026-01-15` to a JS `Date`, and a naive `dump` re-serializes it
-// as a full ISO timestamp `2026-01-15T00:00:00.000Z` — so a `frontmatter_set` on an UNRELATED
-// key silently appended a midnight time to every bare date (breaking date-only Dataview
-// queries). `stringifyFrontmatter` now normalizes any `Date` with no time-of-day component
-// (midnight UTC) back to a `YYYY-MM-DD` string before dump, so an unrelated edit preserves the
-// date (it becomes a quoted `'2026-01-15'`, semantically the same date — no spurious time). A
-// genuine non-midnight timestamp is left as a full ISO string.
+// DATES — js-yaml@5 NO LONGER coerces to `Date` (v3.11.0-rc.6): a bare `created: 2026-01-15` OR an
+// explicit `2026-01-15T00:00:00Z` now loads as a plain STRING (js-yaml@5 dropped the implicit
+// YAML-1.1 `timestamp` type from its default schema). This ROOT-FIXES the rc.58
+// FM-DATE-SILENT-MUTATION bug: under js-yaml@4 a bare date loaded as a midnight `Date` and a naive
+// `dump` re-serialized it as `2026-01-15T00:00:00.000Z`, silently appending a time on any unrelated
+// `frontmatter_set`. On @5 the date string round-trips FAITHFULLY — it re-emits as a quoted
+// `'2026-01-15'` (same string value, no time appended, no information loss), and the rc.66
+// midnight/timestamp COLLISION cannot occur (the two distinct strings stay distinct). The
+// `normalizeDateOnly` helper below is therefore now DEFENSIVE-ONLY: it still demotes a midnight-UTC
+// `Date` to `YYYY-MM-DD`, but `parseFrontmatter` no longer yields `Date`s, so it fires only if a
+// CALLER passes a `Date` object directly (pinned by a direct-Date unit test in `frontmatter.test.ts`).
 //
-// DELIBERATE COLLISION (v3.10.0-rc.66 audit, accepted tradeoff): an EXPLICIT timestamp that
-// lands exactly on midnight UTC — `2026-01-15T00:00:00Z`, or an offset form like
-// `2026-01-15T05:00:00+05:00` that nets to 00:00:00Z — resolves to the BYTE-IDENTICAL `Date`
-// object as the bare `2026-01-15` (both `.getTime()` === the same epoch ms). The time-of-day /
-// original timezone is GONE after `load`, so at stringify time the two are indistinguishable and
-// BOTH are rendered as `YYYY-MM-DD`. We accept this: a true time-of-day fix would require a custom
-// js-yaml timestamp type preserving the raw scalar text (real risk on the freshly-hardened
-// parser, for a value that is the same calendar date), and demoting a midnight timestamp to a
-// date is far less harmful than the rc.58 bug of appending a midnight time to every plain date.
-// Pinned as a contract in `tests/frontmatter.test.ts` so it is documented, not a silent surprise.
+// MERGE KEYS (`<<`) — js-yaml@5 does NOT resolve them (YAML 1.2 core has no merge key); a literal
+// `<<` is kept as a plain mapping key. This is exactly WHY GHSA-h67p-54hq-rp68 (the merge-key
+// quadratic DoS) is gone at the ROOT in v5, not merely version-bumped. No enquire feature relies on
+// merge-key resolution, so dropping it is a pure security gain.
+//
+// EMPTY INPUT — js-yaml@5 `load("")` / whitespace-only THROWS ("expected a document") where v4
+// returned `undefined`. `parseFrontmatter` never calls `load` on an empty/whitespace/comment-only
+// block (the `block !== ""` guard precedes the call); `bases.ts parseBase` guards an empty `.base`
+// body explicitly.
 //
 // Scope vs gray-matter: we support ONLY the default `---` delimiter (Obsidian's
 // frontmatter). Language tags (`---yaml`), custom delimiters, excerpts, sections, and a
 // non-mapping top-level document (coerced to `{}`, gray-matter parity) are out of scope.
 //
-// TAB-INDENTED YAML (v3.10.0-rc.56 audit FM-3, verdict: NOT a regression): js-yaml@4
+// TAB-INDENTED YAML (v3.10.0-rc.56 audit FM-3, verdict: NOT a regression): js-yaml@5
 // throws "tab characters must not be used in indentation" — but the YAML spec FORBIDS
-// tabs for indentation and js-yaml@3 (gray-matter) enforced this identically, so this is
+// tabs for indentation and js-yaml@3/@4 enforced this identically, so this is
 // not a behavior change from the migration. On a throw, callers (`parseNote`) fall back
 // to treating the whole file as body — the frontmatter TEXT is still indexed/searchable
 // (no data loss), it just isn't parsed into structured `data`. Pinned in tests.
@@ -161,8 +164,13 @@ function withNewline(s: string): string {
  * v3.10.0-rc.58 (FM-DATE-SILENT-MUTATION) — deep-clone `value`, converting any `Date` with
  * NO time-of-day component (exactly midnight UTC) to a `YYYY-MM-DD` string so `dump` emits a
  * date-only scalar instead of a full ISO timestamp. A genuine timestamp (any non-zero
- * time-of-day) is left as a `Date` (dump → full ISO). Recurses through arrays + plain objects;
- * all other values pass through untouched. Pure (no input mutation).
+ * time-of-day) is left as a `Date` (dump → full ISO). Recurses through arrays + plain objects
+ * (the rebuild also preserves a literal `__proto__` key via defineProperty — rc.61); all other
+ * values pass through untouched. Pure (no input mutation).
+ *
+ * v3.11.0-rc.6: under js-yaml@5 `parseFrontmatter` yields date STRINGS, not `Date`s, so the Date
+ * branch is now DEFENSIVE-ONLY — it fires only if a caller passes a `Date` object directly (the
+ * deep-walk + `__proto__` preservation still run on every write). Pinned by a direct-Date unit.
  */
 function normalizeDateOnly(value: unknown): unknown {
   if (value instanceof Date) {

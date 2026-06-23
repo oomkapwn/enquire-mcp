@@ -935,7 +935,10 @@ export function planCachePrune(entries: readonly string[], keepHash: string): st
  * args (modelAlias / dim / tokenize / quantization).
  *
  * Returns null if the file doesn't exist OR doesn't have a `meta` table
- * yet. Throws only on actual SQLite open/read errors.
+ * yet. v3.11.0-rc.9 (audit re-verify) — TSDoc corrected: this NEVER throws
+ * (rc.33 wrapped `new Database()` + the meta queries in a catch that maps ANY
+ * failure — corrupt / unreadable / not-a-DB / directory / missing dep — to null);
+ * it is the pre-open peek on the serve boot path, so a throw would crash serve.
  *
  * @param file - Absolute path to a `.fts5.db` file.
  * @returns Meta dict if the file is a populated fts5 index, null otherwise.

@@ -390,6 +390,19 @@ export class VaultWatcher {
    * is already updated, so the next serve restart will rebuild HNSW
    * from the correct state. (Same posture as the watcher's existing
    * embed-db fail-soft.)
+   *
+   * CONCURRENCY CONTRACT (v3.11.0-rc.9, external audit T-MED-1 re-verify): this
+   * method and the `HnswIndex.applyDiff` it calls are FULLY SYNCHRONOUS — there is
+   * NO `await` between `markDelete` and `addPoint`, nor around the shared
+   * `hnswRowsByLabel` delete/set. On Node's single-threaded event loop that makes
+   * the entire shared-state mutation an atomic critical section: two DIFFERENT-file
+   * `handle()` chains can only context-switch at their `await`ed embed steps (which
+   * don't touch the shared index), so they CANNOT interleave a partial apply. The
+   * synchronicity IS the cross-file serialization — an explicit mutation queue would
+   * be redundant. **A future edit MUST NOT introduce an `await` into this method or
+   * applyDiff** (it would open a real cross-file interleave window); the per-file
+   * `fileQueues` (rc.11 H1) serialize only SAME-file events, whose chains span the
+   * diff-compute awaits. (Enforced by `tests/hnsw-sync-critical-section.test.ts`.)
    */
   private syncHnswForFile(
     relPath: string,

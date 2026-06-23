@@ -31,7 +31,7 @@ import * as path from "node:path";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
-import { foldName } from "./name-fold.js";
+import { foldName, foldTag, nfc } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
@@ -515,7 +515,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   // taggedWith(file.file, "x")
   const taggedWith = /^taggedWith\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/.exec(expr);
   if (taggedWith) {
-    const tag = (taggedWith[2] ?? "").toLowerCase().replace(/^#/, "");
+    const tag = foldTag(taggedWith[2] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — NFC + case fold + strip
     return ctx.tags.includes(tag);
   }
 
@@ -535,7 +535,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   const tagEq = /^tag\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
   if (tagEq) {
     const op = tagEq[1];
-    const tag = (tagEq[3] ?? "").toLowerCase().replace(/^#/, "");
+    const tag = foldTag(tagEq[3] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — NFC + case fold + strip
     const has = ctx.tags.includes(tag);
     return op === "==" ? has : !has;
   }
@@ -569,8 +569,12 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
     const key = fmContains[1] ?? "";
     const needle = fmContains[3] ?? "";
     const v = ctx.frontmatter[key];
-    if (typeof v === "string") return v.includes(needle);
-    if (Array.isArray(v)) return v.some((x) => typeof x === "string" && x.includes(needle));
+    // v3.11.0-rc.9 (audit re-verify) — NFC-normalize both sides (case-PRESERVED,
+    // matching Obsidian Bases' case-sensitive `contains`) so `café`(NFC) matches an
+    // NFD-stored value. The DQL twin folds case too (nfcLower); Bases keeps case by design.
+    const needleNfc = nfc(needle);
+    if (typeof v === "string") return nfc(v).includes(needleNfc);
+    if (Array.isArray(v)) return v.some((x) => typeof x === "string" && nfc(x).includes(needleNfc));
     return false;
   }
 
@@ -620,7 +624,10 @@ function literalEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a)) return a.some((x) => literalEqual(x, b));
   if (typeof a === "number" && typeof b === "number") return a === b;
-  if (typeof a === "string" && typeof b === "string") return a === b;
+  // v3.11.0-rc.9 (audit re-verify) — NFC-normalize string equality (case-PRESERVED,
+  // Bases semantics) so `café`(NFC) === `café`(NFD); even a case-sensitive engine
+  // should treat the same string in two Unicode forms as equal.
+  if (typeof a === "string" && typeof b === "string") return nfc(a) === nfc(b);
   return false;
 }
 
@@ -629,11 +636,13 @@ function literalEqual(a: unknown, b: unknown): boolean {
 function collectTags(fm: Record<string, unknown>, body: string): string[] {
   const out = new Set<string>();
   const fmTags = fm.tags;
+  // v3.11.0-rc.9 (L-TAG-1) — foldTag (NFC + case fold + strip) so a Unicode
+  // frontmatter tag canonicalizes identically to the predicate side.
   if (typeof fmTags === "string") {
-    for (const t of fmTags.split(/[\s,]+/).filter(Boolean)) out.add(t.toLowerCase().replace(/^#/, ""));
+    for (const t of fmTags.split(/[\s,]+/).filter(Boolean)) out.add(foldTag(t));
   } else if (Array.isArray(fmTags)) {
     for (const t of fmTags) {
-      if (typeof t === "string") out.add(t.toLowerCase().replace(/^#/, ""));
+      if (typeof t === "string") out.add(foldTag(t));
     }
   }
   // Inline #tags. Matches `#word`, `#word/subword`, ignores leading-# in
@@ -641,7 +650,7 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
   for (const line of body.split("\n")) {
     if (/^#{1,6}\s/.test(line)) continue;
     for (const m of line.matchAll(/(?:^|\s)(#[A-Za-z][\w/-]*)/g)) {
-      const tag = (m[1] ?? "").slice(1).toLowerCase();
+      const tag = foldTag(m[1] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — strip `#` + NFC + lowercase
       if (tag) out.add(tag);
     }
   }

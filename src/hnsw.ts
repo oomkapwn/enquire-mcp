@@ -431,9 +431,13 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
     },
     capacity(): { currentCount: number; maxElements: number } {
       if (!hasLiveUpdate) {
-        // Best-effort fallback — we know `size` at build time but not
-        // maxElements (it was passed to initIndex internally).
-        return { currentCount: size, maxElements: size };
+        // v3.11.0-rc.9 (audit I-HNSW-1) — HONEST fallback. The read-only binding
+        // can't introspect the real maxElements, so report it as Infinity (capacity
+        // unknown / effectively unbounded) rather than fabricating `size`. The old
+        // `maxElements: size` lied (cap == count → "0 free slots"); a future caller
+        // computing `free = max - current` now reads Infinity ("never needs resize"),
+        // which is correct here since resize()/applyDiff() both throw on this binding.
+        return { currentCount: size, maxElements: Number.POSITIVE_INFINITY };
       }
       return { currentCount: ctor.getCurrentCount(), maxElements: ctor.getMaxElements() };
     },

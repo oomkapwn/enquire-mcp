@@ -32,3 +32,48 @@
 export function foldName(name: string): string {
   return name.normalize("NFC").toLowerCase();
 }
+
+/**
+ * NFC-fold + case-fold a TAG for comparison or tag-keyed Maps/Sets. Strips any
+ * leading `#`(s) first, then applies {@link foldName}. Tags are a user-authored
+ * Unicode identity surface (Obsidian permits Unicode letters in tags), so the
+ * SAME canonical-key discipline as note names applies: a `#café` tag stored NFD
+ * (macOS) must match an NFC `café` query and dedupe against an NFC frontmatter
+ * `tags: [café]`. v3.11.0-rc.9 — the NFC class's tag sibling (the rc.46 name
+ * sweep + its invariant covered note names, never the parallel tag surface;
+ * confirmed by an external re-audit as L-TAG-1, with ~13 unfolded tag sites).
+ *
+ * @param tag - a raw tag, with or without leading `#`
+ * @returns the `#`-stripped, NFC-normalized, lower-cased comparison key
+ */
+export function foldTag(tag: string): string {
+  return foldName(tag.replace(/^#+/, ""));
+}
+
+/**
+ * NFC + case fold for a user-authored frontmatter / query VALUE before a
+ * case-INSENSITIVE compare (DQL `looseEq` / `contains`, `obsidian_search`
+ * `filter_frontmatter`). Semantically identical to {@link foldName} but named for
+ * the value surface so intent — and the NFC-class invariant — is explicit, so an
+ * NFD-on-disk value matches an NFC query literal. v3.11.0-rc.9 centralizes the
+ * rc.8 DQL-local `nfcLower` here so every query surface shares ONE implementation.
+ *
+ * @param value - a user-authored frontmatter or query-literal string
+ * @returns the NFC-normalized, lower-cased value
+ */
+export function nfcLower(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+/**
+ * NFC-normalize a value WITHOUT case-folding, for a case-SENSITIVE compare
+ * (Obsidian Bases frontmatter `==` / `contains`, which mirror Bases' own
+ * case-sensitive semantics). Canonicalizes Unicode form only — `café`(NFC) ===
+ * `café`(NFD) — while still distinguishing `Café` from `café`. v3.11.0-rc.9.
+ *
+ * @param value - a user-authored frontmatter or query-literal string
+ * @returns the NFC-normalized value (original case preserved)
+ */
+export function nfc(value: string): string {
+  return value.normalize("NFC");
+}

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
-import { foldName } from "../name-fold.js";
+import { foldName, foldTag } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { findBestMatch, stripMd } from "./meta.js";
@@ -984,7 +984,7 @@ export function extractFrontmatterTagsLower(fm: Record<string, unknown>): string
     : typeof raw === "string"
       ? raw.split(/[,\s]+/).filter(Boolean)
       : [];
-  return list.map((t) => t.replace(/^#+/, "").toLowerCase());
+  return list.map((t) => foldTag(t)); // v3.11.0-rc.9 (L-TAG-1) — strip `#` + NFC + lowercase
 }
 
 /**

@@ -414,6 +414,33 @@ views:
     }
   });
 
+  it("resolves an accented TAG + frontmatter VALUE across NFC/NFD forms (v3.11.0-rc.9, L-TAG-1 + value sibling)", async () => {
+    // v3.11.0-rc.9 (external re-audit): `.base` `tag ==`/`taggedWith` were NFC-blind
+    // (foldTag now), and `<key> ==`/`contains` frontmatter-value compares were NFC-blind
+    // too (nfc now — case PRESERVED, mirroring Bases' case-sensitive semantics + the
+    // rc.73 path fix). An NFD-stored accented tag/value must resolve an NFC `.base` literal.
+    const nfd = `Cafe${String.fromCodePoint(0x301)}`; // NFD on disk
+    const nfc = `Caf${String.fromCodePoint(0xe9)}`; // NFC in the .base filter
+    expect(nfc).not.toBe(nfd);
+    const vroot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bases-tagnfc-"));
+    try {
+      await fs.writeFile(path.join(vroot, "note.md"), `---\ntags: [${nfd}]\nstatus: ${nfd}\n---\nbody\n`);
+      const v = new Vault(vroot);
+      const run = async (filter: string): Promise<number> => {
+        await fs.writeFile(path.join(vroot, "q.base"), `filters: '${filter}'\nviews:\n  - type: table\n`);
+        return (await queryBase(v, { path: "q.base" })).matches.length;
+      };
+      expect(await run(`tag == "${nfc}"`), "NFC tag literal resolves NFD-stored tag").toBe(1);
+      expect(await run(`taggedWith(file.file, "${nfc}")`), "taggedWith NFC resolves NFD tag").toBe(1);
+      expect(await run(`status == "${nfc}"`), "NFC value literal resolves NFD-stored frontmatter value").toBe(1);
+      expect(await run(`status contains "${nfc}"`), "NFC contains resolves NFD-stored value").toBe(1);
+      // NEGATIVE control: a non-matching accented literal returns nothing.
+      expect(await run(`status == "Other${String.fromCodePoint(0xe9)}"`)).toBe(0);
+    } finally {
+      await fs.rm(vroot, { recursive: true, force: true });
+    }
+  });
+
   it("merges global filter AND view filter when view is specified", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(

@@ -1,4 +1,5 @@
 import { parseDql, runDql } from "../dql.js";
+import { foldTag } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -784,7 +785,7 @@ export async function listTags(
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const fmSet = new Set(extractFrontmatterTagsLower(parsed.frontmatter));
     for (const t of parsed.tags) {
-      const key = t.toLowerCase();
+      const key = foldTag(t); // v3.11.0-rc.9 (L-TAG-1) — NFC+case fold so accented tag forms count as one
       const slot = counts.get(key) ?? { count: 0, fm: 0, inline: 0 };
       slot.count += 1;
       if (fmSet.has(key)) slot.fm += 1;
@@ -1307,7 +1308,7 @@ export async function getNoteNeighbors(
   // an absurdly large vault only trims the neighbor tail.
   const entries = capScanEntries(await vault.listMarkdown(), "obsidian_get_note_neighbors");
   const { parsed: targetParsed } = await vault.readNote(target.absPath, target.mtimeMs);
-  const targetTagsLower = new Set(targetParsed.tags.map((t) => t.toLowerCase()));
+  const targetTagsLower = new Set(targetParsed.tags.map((t) => foldTag(t)));
 
   // Outbound: resolved unique destinations from the target.
   const seenOut = new Set<string>();
@@ -1348,7 +1349,7 @@ export async function getNoteNeighbors(
       const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
       const shared: string[] = [];
       for (const t of parsed.tags) {
-        if (targetTagsLower.has(t.toLowerCase())) shared.push(t);
+        if (targetTagsLower.has(foldTag(t))) shared.push(t);
       }
       if (shared.length > 0) {
         candidates.push({ path: e.relPath, title: stripMd(e.basename), shared });
@@ -1452,7 +1453,7 @@ export async function getVaultStats(vault: Vault, args: { top_tags?: number }): 
     if (Object.keys(parsed.frontmatter).length > 0) withFm += 1;
     if (parsed.wikilinks.length > 0) outboundPresence.add(e.relPath);
     for (const t of parsed.tags) {
-      const key = t.toLowerCase();
+      const key = foldTag(t); // v3.11.0-rc.9 (L-TAG-1) — NFC+case fold for top-tag counting
       tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1);
     }
     for (const link of parsed.wikilinks) {

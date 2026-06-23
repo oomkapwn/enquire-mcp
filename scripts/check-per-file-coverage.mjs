@@ -59,7 +59,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 27 }, // current 29.41% (integration-dep; rc.55 OPTDEP fix removed the 2 import-catch `instanceof Error`/`String(err)` ternary arms → branch% rose 27.27→29.41; floor kept at 27 as margin; applyOfflineEnv + offline-catch still need a real model load to cover)
+  "src/embeddings.ts": { branches: 27 }, // current 35.29% (integration-dep; rc.12 L-2 exported applyOfflineEnv + its mock-mod test covered the offline-env arms → branch% rose 29.41→35.29; floor kept at 27 as margin — embedder/reranker load + offline catch still need a real model download to fully cover; rc.13 AUD-02 synced after OIA Check 6 flagged the drift)
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a
@@ -100,7 +100,7 @@ const FLOORS = {
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 at floor 84% (2pp below current 86.84%).
-  "src/embed-pipeline.ts": { branches: 84 } // current 86.95% (v3.9.0-rc.28 MAX_EMBED_CHARS clamp branch)
+  "src/embed-pipeline.ts": { branches: 84 } // current 85.41% (v3.9.0-rc.28 MAX_EMBED_CHARS clamp branch; rc.13 AUD-03 added the lookupFoldedAny title-fold `|| basename` branch → 86.95→85.41, still > 84 floor)
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

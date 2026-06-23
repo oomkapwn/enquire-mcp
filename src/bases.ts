@@ -31,7 +31,7 @@ import * as path from "node:path";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
-import { foldName, foldTag, lookupFoldedKey, nfc } from "./name-fold.js";
+import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
@@ -639,7 +639,9 @@ function literalEqual(a: unknown, b: unknown): boolean {
  *  `#tags` in the body. Lowercased + leading-# stripped. */
 function collectTags(fm: Record<string, unknown>, body: string): string[] {
   const out = new Set<string>();
-  const fmTags = fm.tags;
+  // v3.11.0-rc.13 (rc.12-audit AUD-03) — fold the `tags` KEY so a `Tags:` frontmatter
+  // property is visible to Bases tag filters (the producer sibling of the H1 key-fold class).
+  const fmTags = lookupFoldedAny(fm, ["tags"]);
   // v3.11.0-rc.9 (L-TAG-1) — foldTag (NFC + case fold + strip) so a Unicode
   // frontmatter tag canonicalizes identically to the predicate side.
   if (typeof fmTags === "string") {

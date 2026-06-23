@@ -1,5 +1,5 @@
 import { parseFrontmatter } from "./frontmatter.js";
-import { nfc } from "./name-fold.js";
+import { lookupFoldedAny, nfc } from "./name-fold.js";
 
 /**
  * A parsed Obsidian wikilink (`[[Target]]`, `[[Target#section]]`,
@@ -218,7 +218,11 @@ export function extractInlineTags(text: string): string[] {
  * @returns Normalized tag list. Empty array when no `tags` / `tag` key.
  */
 export function extractFrontmatterTags(fm: Record<string, unknown>): string[] {
-  const raw = fm.tags ?? fm.tag;
+  // v3.11.0-rc.13 (rc.12-audit AUD-03) — fold the `tags`/`tag` KEY (case/NFC) so a
+  // `Tags:`/`Tag:` (or NFD-on-disk) frontmatter property is not invisible to tag
+  // retrieval (list_tags / list_notes(tag) / DQL `FROM #tag` / Bases / paper_audit).
+  // The PRODUCER sibling of the rc.10/rc.12 H1 frontmatter-key-fold class.
+  const raw = lookupFoldedAny(fm, ["tags", "tag"]);
   if (!raw) return [];
   if (Array.isArray(raw)) {
     return raw.filter((t): t is string => typeof t === "string").map(normalizeTag);

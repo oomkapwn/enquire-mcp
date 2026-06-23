@@ -58,6 +58,15 @@ import type { Vault } from "./vault.js";
  */
 const MAX_QUERY_LEN = 4096;
 const MAX_TAG_ARG_LEN = 256;
+/**
+ * v3.11.0-rc.13 (rc.12-audit AUD-04) — upper bound on a frontmatter KEY argument. An
+ * uncapped key on `obsidian_frontmatter_search` / `frontmatter_get` / `filter_frontmatter`
+ * / `frontmatter_set` is multiplied by a whole-vault scan and `nfcLower(key)`-folded
+ * per note, so a multi-MB key is a bearer-reachable CPU/event-loop DoS amplifier
+ * (measured ~9.5s for a 4 MB key on a 2k-note vault). A real property name is short;
+ * 256 is generous. Sibling of the rc.11/rc.12 free-form string-cap class.
+ */
+const MAX_FRONTMATTER_KEY_LEN = 256;
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 export function embedDbPath(vaultRoot: string): string {
@@ -989,7 +998,7 @@ export function registerReadTools(
           ),
         filter_frontmatter: z
           .record(
-            z.string(),
+            z.string().max(MAX_FRONTMATTER_KEY_LEN),
             z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
           )
           .optional()
@@ -1078,7 +1087,11 @@ export function registerReadTools(
       inputSchema: {
         path: z.string().optional().describe("Vault-relative path"),
         title: z.string().optional().describe("Note title (filename without .md, accepts periodic aliases)"),
-        key: z.string().optional().describe("Single key to read; omit for full frontmatter")
+        key: z
+          .string()
+          .max(MAX_FRONTMATTER_KEY_LEN)
+          .optional()
+          .describe("Single key to read; omit for full frontmatter")
       }
     },
     async (args) => textResult(await frontmatterGet(vault, args))
@@ -1092,7 +1105,7 @@ export function registerReadTools(
         "Find every note where frontmatter.<key> matches a predicate. Useful as a precursor to bulk frontmatter_set: 'find all notes with status:draft and set their status to published'. Predicates are exclusive: pass exactly one of `equals` (strict equality), `exists` (key must be present), `contains` (for array values, member match).",
       annotations: { ...READ_ONLY, title: "Search frontmatter" },
       inputSchema: {
-        key: z.string().min(1).describe("Frontmatter key to test"),
+        key: z.string().min(1).max(MAX_FRONTMATTER_KEY_LEN).describe("Frontmatter key to test"),
         equals: z.unknown().optional().describe("Strict equality predicate (JSON.stringify comparison)"),
         exists: z.boolean().optional().describe("Predicate: key must exist (any value)"),
         contains: z.unknown().optional().describe("For array values, value must be a member"),
@@ -1316,7 +1329,7 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         path: z.string().optional().describe("Vault-relative path"),
         title: z.string().optional().describe("Note title (filename without .md)"),
         set: z
-          .record(z.string(), z.unknown())
+          .record(z.string().max(MAX_FRONTMATTER_KEY_LEN), z.unknown())
           .describe("Keys to set. Pass `null` as value to delete a key (e.g. {status: 'published', draft: null})"),
         dry_run: z.boolean().optional().describe("Preview the diff without writing (default false)")
       }

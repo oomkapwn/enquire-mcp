@@ -293,3 +293,40 @@ describe("H1 — frontmatter KEY lookup is case/NFC-insensitive (rc.10, external
     expect('source: "frontmatter.last_reviewed"').not.toMatch(RAW_REVIEW_ACCESS);
   });
 });
+
+describe("frontmatter-key PRODUCER fold guard (rc.13, rc.12-audit AUD-03 + embed-title sibling)", () => {
+  // rc.10/rc.12 folded the CONSUMER (query) frontmatter-key reads; the dual rc.12 audit
+  // found the PRODUCER side still read the identity keys raw — `fm.tags ?? fm.tag` (parser/
+  // meta/write), `fm.tags` (bases), `frontmatter?.title` (embed-pipeline) — so a case/NFC
+  // -variant `Tags:`/`Title:` was invisible to tag retrieval / embedding context. rc.13
+  // routes every producer through `lookupFoldedAny`. Narrow static guard (precise anti-
+  // pattern strings, NOT a broad `frontmatter.<ident>` detector that would over-flag, per
+  // the rc.39 don't-chase-EDA rule): the raw producer shapes must not reappear.
+  const PRODUCER_FILES = [
+    "src/parser.ts",
+    "src/bases.ts",
+    "src/tools/meta.ts",
+    "src/tools/write.ts",
+    "src/embed-pipeline.ts"
+  ];
+  // `fm.tags ?? fm.tag`, `fmData.tags ?? fmData.tag`, bare `fm.tags;`, `frontmatter?.title`
+  const RAW_TAG_OR = /\b[\w.]+\.tags\s*\?\?\s*[\w.]+\.tag\b/;
+  const RAW_TITLE = /\bfrontmatter\?\.\s*title\b/;
+
+  it("no producer reads the tags/tag/title KEY raw — all route through lookupFoldedAny (POSITIVE)", () => {
+    const offenders: string[] = [];
+    for (const rel of PRODUCER_FILES) {
+      const src = stripLineComments(readFileSync(path.join(repoRoot, rel), "utf8"));
+      if (RAW_TAG_OR.test(src)) offenders.push(`${rel}: raw \`fm.tags ?? fm.tag\``);
+      if (RAW_TITLE.test(src)) offenders.push(`${rel}: raw \`frontmatter?.title\``);
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+
+  it("the raw-producer detector actually fires on the pre-rc.13 shapes (NEGATIVE control)", () => {
+    expect("const raw = fm.tags ?? fm.tag;").toMatch(RAW_TAG_OR);
+    expect("const t = note.parsed.frontmatter?.title || base;").toMatch(RAW_TITLE);
+    // a folded read does NOT trip either detector
+    expect('const raw = lookupFoldedAny(fm, ["tags", "tag"]);').not.toMatch(RAW_TAG_OR);
+  });
+});

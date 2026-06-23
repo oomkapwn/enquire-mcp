@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -577,9 +577,9 @@ export class Vault {
       throw this.sanitizeFsError(err);
     }
   }
-  private async openSafe(p: string, flags: string): Promise<import("node:fs/promises").FileHandle> {
+  private async openSafe(p: string, flags: string, mode?: number): Promise<import("node:fs/promises").FileHandle> {
     try {
-      return await fs.open(p, flags);
+      return mode === undefined ? await fs.open(p, flags) : await fs.open(p, flags, mode);
     } catch (err) {
       throw this.sanitizeFsError(err);
     }
@@ -779,20 +779,35 @@ export class Vault {
       throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
     }
     if (opts.overwrite) {
-      // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling `.tmp`
-      // then rename(2) over the target, so a crash/SIGKILL mid-write can never
-      // truncate the note (it leaves a stale `.tmp`, cleaned on the next write,
-      // never a half-written file). Mirrors the cacheFile writer; the tmp sits in
-      // the same already-validated parent dir so the rename is same-filesystem +
-      // atomic. A plain writeFile keeps the existing inode's perms; tmp+rename makes
-      // a NEW inode, so copy the destination's mode forward on overwrite (default
-      // perms for a brand-new path). `.md.tmp` is not watched (watcher matches .md).
-      const tmp = `${abs}.tmp`;
+      // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
+      // rename(2) over the target, so a crash/SIGKILL mid-write can never truncate the
+      // note (never a half-written file). The tmp sits in the same already-validated
+      // parent dir so the rename is same-filesystem + atomic. A plain writeFile keeps
+      // the existing inode's perms; tmp+rename makes a NEW inode, so copy the dest's
+      // mode forward on overwrite (default perms for a brand-new path).
+      //
+      // v3.11.0-rc.13 (rc.12-audit AUD-01, symlink-escape) — the tmp leaf MUST be a
+      // RANDOM, unpredictable name opened EXCLUSIVE-create (`wx` → O_CREAT|O_EXCL). The
+      // rc.12 fix used a deterministic `${abs}.tmp` written with plain writeFile, which
+      // FOLLOWS a symlink at that path (writeNote only lstat-checks the final target
+      // `abs`, never the tmp leaf). An attacker who can drop `victim.md.tmp` as a symlink
+      // to an out-of-vault file would redirect the write outside the vault AND leave the
+      // note as a symlink. O_EXCL refuses to open an existing path (incl. a symlink), and
+      // the random suffix means the path can't be pre-planted; together they close it.
+      // (The random name also fixes the rc.12 stale-`.tmp` footgun — a leftover tmp from a
+      // crashed write no longer blocks future overwrites under a fixed `wx` name.)
       const existing = await this.statSafe(abs).catch(() => null);
+      const tmpMode = existing ? existing.mode & 0o777 : 0o666;
+      const tmp = `${abs}.${randomBytes(8).toString("hex")}.tmp`;
+      let fh: import("node:fs/promises").FileHandle | undefined;
       try {
-        await this.writeFileSafe(tmp, content, existing ? { encoding: "utf8", mode: existing.mode & 0o777 } : "utf8");
+        fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
+        await fh.writeFile(content, "utf8");
+        await fh.close();
+        fh = undefined;
         await this.renameSafe(tmp, abs);
       } catch (err) {
+        if (fh) await fh.close().catch(() => {});
         await this.unlinkSafe(tmp).catch(() => {});
         throw err;
       }

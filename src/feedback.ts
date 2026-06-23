@@ -89,13 +89,20 @@ export class FeedbackStore {
    * (non-finite / negative counts → 0; non-string `lastMarked` → "").
    */
   static async open(file: string): Promise<FeedbackStore> {
-    let data: FeedbackData = { version: 1, entries: {} };
+    // v3.11.0-rc.8 (pre-promotion audit MED) — `entries` is a NULL-PROTOTYPE map.
+    // record() writes agent-supplied path strings directly as keys; on a normal
+    // object an agent calling obsidian_mark_useful with `paths:["__proto__"]` would
+    // resolve `entries["__proto__"]` to Object.prototype and pollute it process-wide
+    // (remotely reachable on bearer serve-http when --feedback-weight > 0). A
+    // null-proto map has no Object.prototype on its chain, so "__proto__" / "constructor"
+    // become harmless OWN keys (a note literally named __proto__.md still round-trips).
+    let data: FeedbackData = { version: 1, entries: Object.create(null) as Record<string, FeedbackEntry> };
     try {
       const raw = await fs.readFile(file, "utf8");
       const parsed = JSON.parse(raw) as unknown;
       const rawEntries = parsed && typeof parsed === "object" ? (parsed as { entries?: unknown }).entries : undefined;
       if (rawEntries && typeof rawEntries === "object") {
-        const entries: Record<string, FeedbackEntry> = {};
+        const entries: Record<string, FeedbackEntry> = Object.create(null);
         for (const [k, v] of Object.entries(rawEntries as Record<string, unknown>)) {
           if (v && typeof v === "object") {
             const e = v as Partial<FeedbackEntry>;

@@ -44,7 +44,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
 | Forgetting-aware freshness (`age_days` / recency re-rank) | Yes (v3.10)     | No               | No               | No               | No               |
-| Test count (public)                           | **1336**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **1340**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 46                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
@@ -57,7 +57,7 @@ Notes on the matrix:
 
 - **"Limited" for markus on Obsidian-side operations:** it covers a smaller subset of REST endpoints than cyanheads.
 
-- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 46-tool count is exact for v3.8.x stable and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
+- **Tool counts for alternatives** are approximate from public READMEs and may have shifted. enquire-mcp's 46-tool count is exact as of the current release and is verified by `tests/docs-consistency.test.ts` against `src/tool-manifest.ts` (machine-readable single source of truth, introduced v3.6.0-rc.2).
 
 - **License row** is informational, not a recommendation. MIT and Apache-2.0 are both permissive; pick what your org's policy requires.
 

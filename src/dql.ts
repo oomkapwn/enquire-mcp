@@ -424,8 +424,9 @@ function evalPredicate(pred: Predicate, value: unknown): boolean {
       }
       if (typeof value === "string" && typeof pred.value === "string") {
         // Strings keep substring semantics — `title contains "draft"` is
-        // typically what users want.
-        return value.toLowerCase().includes(pred.value.toLowerCase());
+        // typically what users want. v3.11.0-rc.8 (pre-promotion audit) — NFC-fold both
+        // operands (see {@link nfcLower}) so an NFC literal matches an NFD-stored value.
+        return nfcLower(value).includes(nfcLower(pred.value));
       }
       return false;
     case "like": {
@@ -473,9 +474,22 @@ export function compileLike(pattern: string): { test(value: string): boolean } {
   return { test: (value: string): boolean => matchWildcardTokens(tokens, value, { caseInsensitive: true }) };
 }
 
+/**
+ * v3.11.0-rc.8 (pre-promotion audit LOW) — NFC-fold before the case-insensitive
+ * compare. The DQL predicate literal + the `file.name`/`file.path` projections are
+ * already NFC-normalized (rc.69), but an arbitrary FRONTMATTER value flows through
+ * `resolveField`'s default branch UNnormalized, so an NFC literal (`author == "café"`)
+ * silently missed an NFD-stored value (macOS APFS / decomposed YAML). Folding BOTH
+ * operands here closes the `=`/`!=`/array-`contains` + string-`contains` paths in one
+ * place (sibling of the rc.46/rc.69 NFC name-comparison class).
+ */
+function nfcLower(s: string): string {
+  return s.normalize("NFC").toLowerCase();
+}
+
 function looseEq(a: unknown, b: unknown): boolean {
   if (a === b) return true;
-  if (typeof a === "string" && typeof b === "string") return a.toLowerCase() === b.toLowerCase();
+  if (typeof a === "string" && typeof b === "string") return nfcLower(a) === nfcLower(b);
   if (a == null || b == null) return false;
   return String(a) === String(b);
 }

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.5] — 2026-06-23
+
+> **TL;DR:** **Dependency majors — the two GO ones, after isolated-worktree evaluation.** Each of the three open dependabot majors was checked out in its own worktree and run through the full gate battery before deciding. **Merged:** `@types/node` 25.9.3 → **26.0.0** (#273 — types-only; `tsc` strict + 1427 tests clean) and `actions/checkout` 6.0.2 → **7.0.0** (#271 — SHA verified against the real v7.0.0 tag; v7's `node24` runtime is supported on our GitHub-hosted runners). **Deferred (NOT merged):** `js-yaml` 4 → **5** (#275) — a genuine behavioral major in the frontmatter/bases area (v5 drops `Date` coercion + merge-key resolution and makes `load("")` throw), breaking 2 pinned contracts; it needs a deliberate migration RC, not an auto-bump. Deps/CI-config only — no source/API change. **1333 tests unchanged.**
+
+### Changed
+
+- **`@types/node`** `^25.9.3` → `^26.0.0` (dev; closes dependabot #273). Verified in an isolated worktree: `npm ci`, `tsc` (strict + `noUncheckedIndexedAccess`), the full 1427-test suite, and lint all clean — a types-only bump with no runtime surface.
+- **`actions/checkout`** `6.0.2` → `7.0.0` across all 4 workflows (13 pins; closes dependabot #271). Pinned to the verified v7.0.0 commit SHA `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`. **Also corrected the `# vN` comment** dependabot left stale — all 13 pins now read `# v7` (the bump had kept `# v6` on the v7 SHA). checkout v7 runs on `node24`, supported by our GitHub-hosted `ubuntu-latest`/`macos-latest` runners.
+
+### Notes
+
+- **`js-yaml` 5.0.0 (#275) deferred — evaluated, NO-GO as a bump.** A v4-vs-v5 differential + the test suite found four behavioral changes in the project's most-hardened area: (1) timestamps/bare dates load as **strings**, not `Date` (so the rc.58/rc.66 `normalizeDateOnly` date-collapse contract fails); (2) **`load("")` throws** `YAMLException: expected a document` where v4 returned `undefined` (breaks `parseBase`'s `load(body) ?? {}`); (3) **merge keys (`<<`) are no longer resolved** — which is *why* GHSA-h67p-54hq-rp68 is gone in v5 (fixed at the root, not version-bumped); (4) the bump leaves `@types/js-yaml@4` redundant (v5 bundles its own types). 2 pinned tests fail under v5. The upside (v5 removes the Date-mutation root cause and the merge-key advisory at the source) makes it worth a **deliberate migration RC** later — guarding `load("")`, re-deriving the date contracts under string semantics, dropping `@types/js-yaml`, re-running the differential corpus.
+- `node scripts/check-audit.mjs` clean after re-resolution (allowlist still empty).
+- Synced 3 stale `// current X%` coverage annotations in `scripts/check-per-file-coverage.mjs` (OIA Check 6 drift, pre-existing, surfaced when rc.4's coverage run refreshed the summary): `ocr.ts` branches 74.41→71.11, `http-transport.ts` 77.61→75.23, `media.ts` 67.93→69.17. The floors themselves are unchanged.
+
+---
+
 ## [3.11.0-rc.4] — 2026-06-22
 
 > **TL;DR:** **Post-rc.1–rc.3 audit response (11-lens adversarial workflow; 0 CRIT / 0 HIGH-code).** The feedback feature re-swept **clean** (provably loss-free / tmp-leak-free); the 45→46 cascade + dep bumps + i18n invariants verified sound. Real findings were concentrated in the **9-language README surface**: (1) **6 broken in-file anchors** across 4 READMEs — incl. a **pre-existing bug in the canonical README.md** (the tests badge linked `#trust`, but "🛡️ Trust" slugs to `️-trust` with a leading variation-selector, so it never resolved), plus README.ru.md's 3 un-localized nav/badge anchors and fr/pt's `#trust`. Fixed to exact github-slugger slugs + a new **anchor-integrity invariant** (`tests/readme-anchor-invariant.test.ts`) that resolves every in-file `(#anchor)` in all 9 READMEs against its heading slugs. (2) **Test-count drift** — the rc.2 translations were born at `1329` and zh/es/hi/ar/AGENTS carried a stale `1311+`; all surfaces synced to the canonical **1333**. (3) the rc.3 CHANGELOG mischaracterized `markdown-it` as a direct dev bump (it is transitive via typedoc). (4) the `prune --help` text omitted the `.feedback.json` family it now erases. (5) the feedback concurrency test was **vacuous** (passed even with serialization removed) → reworked to assert zero tmp-rename collisions, mutation-verified to discriminate. Plus two INFO hardenings on `feedback.ts` (per-write `chmod 0600` defense-in-depth; `record()` entry-count hoisted out of its loop). **1331 → 1333 tests.**

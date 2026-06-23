@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
-import { foldName } from "../name-fold.js";
+import { foldName, foldTag } from "../name-fold.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
@@ -207,7 +207,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   }
 
   // 4. Tag pre-classification (existing vs new).
-  const existingTags = new Set((await listTags(vault, {})).map((t) => t.tag.toLowerCase()));
+  const existingTags = new Set((await listTags(vault, {})).map((t) => foldTag(t.tag)));
   const proposedTagsRaw = new Set<string>();
   // Frontmatter tags.
   const fmData = yamlReport.parsed ? parseFrontmatter(args.content).data : {};
@@ -224,7 +224,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   }
   const tags: ValidateProposalResult["tags"] = [];
   for (const t of proposedTagsRaw) {
-    const status = existingTags.has(t.toLowerCase()) ? "existing" : "new";
+    const status = existingTags.has(foldTag(t)) ? "existing" : "new";
     tags.push({ name: t, status });
     if (status === "new") {
       warnings.push({
@@ -1606,7 +1606,7 @@ export async function paperAudit(
   args: { tag?: string; folder?: string; limit?: number }
 ): Promise<{ scanned: number; flagged: PaperAuditFinding[] }> {
   await vault.ensureExists();
-  const tag = (args.tag ?? "paper").replace(/^#+/, "").toLowerCase();
+  const tag = foldTag(args.tag ?? "paper");
   const limit = args.limit ?? 100;
   const entries = await vault.listMarkdown(args.folder);
 
@@ -1619,7 +1619,7 @@ export async function paperAudit(
   for (const e of entries) {
     if (flagged.length >= limit) break;
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    const tagsLower = parsed.tags.map((t) => t.toLowerCase());
+    const tagsLower = parsed.tags.map((t) => foldTag(t));
     if (!tagsLower.includes(tag)) continue;
     scanned += 1;
 
@@ -2400,5 +2400,8 @@ export function stripMd(name: string): string {
  * ```
  */
 export function normalizeTag(t: string): string {
-  return t.replace(/^#+/, "").toLowerCase();
+  // v3.11.0-rc.9 (L-TAG-1) — route through foldTag (strip `#` + NFC + lowercase)
+  // so an NFD-on-disk accented tag matches its NFC query form (the rc.46 NFC
+  // name-fold class, generalized to the tag identity surface).
+  return foldTag(t);
 }

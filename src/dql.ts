@@ -1,3 +1,4 @@
+import { foldTag, nfcLower } from "./name-fold.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { FileEntry, Vault } from "./vault.js";
 import { compileLikeTokens, matchWildcardTokens } from "./wildcard-match.js";
@@ -342,12 +343,16 @@ export async function runDql(
   // this is a defense-in-depth cap: on a vault larger than MAX_SCAN_NOTES the
   // result is partial (logged once), never a hang. Real vaults are far under it.
   const entries = capScanEntries(await vault.listMarkdown(folder), "obsidian_dataview_query");
-  const wantTag = query.source.type === "tag" ? query.source.tag.toLowerCase() : null;
+  // v3.11.0-rc.9 (audit re-verify) — NFC-fold the `FROM #tag` source filter too.
+  // rc.8 NFC-fixed the WHERE-value comparators (looseEq/contains) but left this
+  // dedicated source path on plain .toLowerCase(), so `FROM #café` silently missed
+  // an NFD-stored tag while `WHERE file.tags contains "café"` matched it.
+  const wantTag = query.source.type === "tag" ? foldTag(query.source.tag) : null;
 
   const rows: Row[] = [];
   for (const entry of entries) {
     const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
-    if (wantTag && !parsed.tags.some((t) => t.toLowerCase() === wantTag)) continue;
+    if (wantTag && !parsed.tags.some((t) => foldTag(t) === wantTag)) continue;
 
     const fieldVal = (field: string) => resolveField(field, entry, parsed.frontmatter, parsed.tags, mtimeMs);
     if (!evalWhere(query.where, fieldVal)) continue;
@@ -472,19 +477,6 @@ export function compileLike(pattern: string): { test(value: string): boolean } {
   }
   const tokens = compileLikeTokens(pattern);
   return { test: (value: string): boolean => matchWildcardTokens(tokens, value, { caseInsensitive: true }) };
-}
-
-/**
- * v3.11.0-rc.8 (pre-promotion audit LOW) — NFC-fold before the case-insensitive
- * compare. The DQL predicate literal + the `file.name`/`file.path` projections are
- * already NFC-normalized (rc.69), but an arbitrary FRONTMATTER value flows through
- * `resolveField`'s default branch UNnormalized, so an NFC literal (`author == "café"`)
- * silently missed an NFD-stored value (macOS APFS / decomposed YAML). Folding BOTH
- * operands here closes the `=`/`!=`/array-`contains` + string-`contains` paths in one
- * place (sibling of the rc.46/rc.69 NFC name-comparison class).
- */
-function nfcLower(s: string): string {
-  return s.normalize("NFC").toLowerCase();
 }
 
 function looseEq(a: unknown, b: unknown): boolean {

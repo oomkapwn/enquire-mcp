@@ -125,6 +125,25 @@ describe("runDql", () => {
     expect(rows.map((r) => r["file.name"])).toEqual(["ideas"]);
   });
 
+  it("matches an accented TAG across NFC/NFD forms — FROM #tag (v3.11.0-rc.9, L-TAG-1 behavioral net)", async () => {
+    // Behavioral ceiling for the NFC-tag class: an NFD-stored frontmatter tag must
+    // resolve an NFC `FROM #tag` query. rc.8 NFC-fixed the WHERE-value comparators but
+    // left the FROM-source tag path on plain .toLowerCase() until rc.9. (Catches any
+    // missed tag site regardless of whether the static detector enumerates its shape.)
+    const nfd = `Cafe${String.fromCodePoint(0x301)}`; // NFD tag value on disk
+    const nfc = `Caf${String.fromCodePoint(0xe9)}`; // NFC tag in the query
+    expect(nfc).not.toBe(nfd);
+    const v2root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-dql-tagnfc-"));
+    try {
+      await fs.writeFile(path.join(v2root, "n.md"), `---\ntags: [${nfd}]\n---\nbody\n`);
+      const v2 = new Vault(v2root);
+      expect((await runDql(v2, parseDql(`LIST FROM #${nfc}`))).length, "NFC #tag resolves NFD-stored tag").toBe(1);
+      expect((await runDql(v2, parseDql("LIST FROM #nonexistent"))).length, "NEGATIVE control").toBe(0);
+    } finally {
+      await fs.rm(v2root, { recursive: true, force: true });
+    }
+  });
+
   it("matches an accented note name across NFC/NFD forms — WHERE file.name (rc.69 round-3 re-sweep)", async () => {
     // The on-disk basename is NFD (as macOS APFS returns it); the user types the NFC literal.
     // Pre-rc.69, file.name = stripMd(basename) was raw NFD and the literal raw NFC, so

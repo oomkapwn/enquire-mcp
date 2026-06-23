@@ -1,4 +1,5 @@
 import { parseFrontmatter } from "./frontmatter.js";
+import { nfc } from "./name-fold.js";
 
 /**
  * A parsed Obsidian wikilink (`[[Target]]`, `[[Target#section]]`,
@@ -179,7 +180,10 @@ const TAG_RE = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
 export function extractInlineTags(text: string): string[] {
   const found = new Set<string>();
   for (const m of text.matchAll(TAG_RE)) {
-    if (m[1] !== undefined) found.add(m[1]);
+    // v3.11.0-rc.9 (L-TAG-1) — NFC-normalize at the producer so a macOS-NFD
+    // inline tag stores the same canonical form as an NFC frontmatter tag, and
+    // collectTags dedups the two forms to one (display case preserved).
+    if (m[1] !== undefined) found.add(nfc(m[1]));
   }
   return [...found];
 }
@@ -208,7 +212,9 @@ export function extractFrontmatterTags(fm: Record<string, unknown>): string[] {
 }
 
 function normalizeTag(t: string): string {
-  return t.replace(/^#+/, "");
+  // v3.11.0-rc.9 (L-TAG-1) — NFC-normalize the stored tag (display case kept) so
+  // frontmatter + inline forms of one accented tag canonicalize to a single key.
+  return nfc(t.replace(/^#+/, ""));
 }
 
 function collectTags(fm: Record<string, unknown>, body: string): string[] {

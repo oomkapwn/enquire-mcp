@@ -77,7 +77,7 @@ const FLOORS = {
   // raised per-file branches from 67.66% → 73.85%.
   "src/tools/meta.ts": { branches: 74 }, // current 78.51% (rc.25 added leadingAtomSet/branchIsNullable/bodyVariable detector branches)
   "src/tools/media.ts": { branches: 65 }, // current 69.17%
-  "src/bases.ts": { branches: 71 }, // current 74.71% (rc.15 boundedSetAdd tests lifted it +1.5pp)
+  "src/bases.ts": { branches: 71 }, // current 75.84% (rc.9 NFC foldTag/nfc tag+value tests lifted it)
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts
   // with a PDF embed-sync block (lines 240-288); the fail-soft error branches
   // (embedder throws) required dependency injection to test deterministically.

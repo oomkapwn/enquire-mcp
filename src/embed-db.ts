@@ -796,7 +796,10 @@ export function hnswPersistBase(embedDbFile: string): string {
  * and `tests/k1-ast-invariant.test.ts` (AST def-use trace).
  *
  * Returns null if the file doesn't exist OR doesn't have a `meta` table
- * yet (fresh db). Throws only on actual SQLite open/read errors.
+ * yet (fresh db). v3.11.0-rc.9 (audit re-verify) — TSDoc corrected: this NEVER
+ * throws (rc.34 wrapped `new Database()` + the meta queries in a catch that maps
+ * ANY failure — corrupt / unreadable / not-a-DB / directory / missing dep — to
+ * null), since it runs unguarded on the search hot path + in CLI subcommands.
  *
  * The opened SQLite handle is read-only and closed before return — no
  * lock contention with a subsequent `EmbedDb.open()`.

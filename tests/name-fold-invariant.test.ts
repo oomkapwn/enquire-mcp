@@ -28,7 +28,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { foldName } from "../src/name-fold.js";
+import { foldName, foldTag, nfc } from "../src/name-fold.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const srcDir = path.join(repoRoot, "src");
@@ -67,6 +67,31 @@ function findUnfoldedNameComparisons(source: string): string[] {
   // B: stripMd / stripMdExt then lowercase.
   const stripFn = /stripMd(?:Ext)?\([^)]*\)\s*\.toLowerCase\(\)/g;
   for (const re of [extStrip, stripFn]) {
+    for (const m of code.matchAll(re)) hits.push(m[0]);
+  }
+  return hits;
+}
+
+/**
+ * v3.11.0-rc.9 (external re-audit L-TAG-1) — the TAG sibling of the detector above.
+ * The rc.46 inventory invariant was scoped to the NOTE-NAME signature
+ * (extension-strip / stripMd then `.toLowerCase()`); TAG normalization uses a
+ * DIFFERENT shape — a leading-`#` strip then `.toLowerCase()` (either ordering) —
+ * so the whole tag identity surface (~13 sites) was structurally invisible to it,
+ * which is exactly why an external auditor (not a gate) had to find the NFC-blind
+ * tag comparisons. This detector flags the `#`-strip-then-lowercase tag-fold
+ * signature lacking NFC; every tag comparison must route through `foldTag`
+ * (which adds `.normalize("NFC")`). NB: the parser PRODUCER (`nfc(t.replace(/^#+/,""))`,
+ * NFC without lowercase — display case preserved) is intentionally NOT this shape.
+ */
+function findUnfoldedTagComparisons(source: string): string[] {
+  const code = stripLineComments(source);
+  const hits: string[] = [];
+  // A: `#`-strip then lowercase — `.replace(/^#+/, "").toLowerCase()`.
+  const stripThenLower = /\.replace\(\s*\/\^#\+?\/[a-z]*\s*,\s*""\s*\)\s*\.toLowerCase\(\)/g;
+  // B: lowercase then `#`-strip — `.toLowerCase().replace(/^#/, "")` (the bases ordering).
+  const lowerThenStrip = /\.toLowerCase\(\)\s*\.replace\(\s*\/\^#\+?\/[a-z]*\s*,\s*""\s*\)/g;
+  for (const re of [stripThenLower, lowerThenStrip]) {
     for (const m of code.matchAll(re)) hits.push(m[0]);
   }
   return hits;
@@ -133,5 +158,49 @@ describe("name-fold inventory invariant (rc.46)", () => {
     // NEGATIVE: the pre-rc.66 unfolded membership shapes must be GONE.
     expect(src, "no unfolded targets.add(stripMd(wl.target))").not.toMatch(/targets\.add\(stripMd\(wl\.target\)\)/);
     expect(src, "no unfolded targets.has(stripMd(fPath))").not.toMatch(/targets\.has\(stripMd\(fPath\)\)/);
+  });
+});
+
+describe("name-fold — foldTag / nfc Unicode correctness (rc.9, L-TAG-1)", () => {
+  const nfc4 = `caf${String.fromCodePoint(0xe9)}`; // precomposed é (NFC)
+  const nfd4 = `cafe${String.fromCodePoint(0x301)}`; // e + combining acute (NFD)
+
+  it("foldTag strips `#`, NFC-folds, and case-folds — NFC and NFD tag forms collapse to one key (POSITIVE)", () => {
+    expect(nfc4).not.toBe(nfd4);
+    expect(`#${nfc4}`.replace(/^#+/, "").toLowerCase()).not.toBe(`${nfd4}`.toLowerCase()); // strip+lower alone fails
+    expect(foldTag(`#${nfc4}`)).toBe(foldTag(nfd4)); // foldTag resolves them
+    expect(foldTag("#Draft")).toBe("draft"); // strips # + lowercases (ASCII regression)
+    expect(foldTag("##Idea")).toBe("idea"); // multiple leading #
+  });
+
+  it("foldTag does NOT strip diacritics — accented tag folds to NFC, not ASCII (NEGATIVE control on over-folding)", () => {
+    expect(foldTag(`#${nfd4}`)).not.toBe("cafe");
+    expect(foldTag(`#${nfd4}`)).toBe(nfc4.toLowerCase());
+  });
+
+  it("nfc normalizes Unicode form but PRESERVES case (for Bases case-sensitive value compares)", () => {
+    expect(nfc(nfd4)).toBe(nfc4); // NFD → NFC
+    expect(nfc("Café")).not.toBe(nfc("café")); // case preserved — Café ≠ café
+  });
+});
+
+describe("name-fold inventory invariant — TAG surface (rc.9, L-TAG-1)", () => {
+  it("no src/ site folds a tag via `#`-strip + lowercase WITHOUT NFC (POSITIVE — the class gate)", () => {
+    const offenders: string[] = [];
+    for (const file of collectTsFiles(srcDir)) {
+      const hits = findUnfoldedTagComparisons(readFileSync(file, "utf8"));
+      for (const h of hits) offenders.push(`${path.relative(repoRoot, file)}: ${h}`);
+    }
+    expect(offenders, `Unfolded tag comparisons (route through foldTag):\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("tag detector flags the bug signature in both orderings so the gate is not vacuous (NEGATIVE control)", () => {
+    // The exact pre-rc.9 shapes (parser/meta/read/write/bases) — each MUST be caught.
+    expect(findUnfoldedTagComparisons(`return t.replace(/^#+/, "").toLowerCase();`)).toHaveLength(1);
+    expect(findUnfoldedTagComparisons(`const tag = (x ?? "").toLowerCase().replace(/^#/, "");`)).toHaveLength(1);
+    // The CORRECT, folded form must NOT be flagged (no false positive).
+    expect(findUnfoldedTagComparisons(`return foldTag(t);`)).toHaveLength(0);
+    // The parser PRODUCER (NFC without lowercase, display case preserved) must NOT be flagged.
+    expect(findUnfoldedTagComparisons(`return nfc(t.replace(/^#+/, ""));`)).toHaveLength(0);
   });
 });

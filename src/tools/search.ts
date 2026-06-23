@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { FtsIndex } from "../fts5.js";
-import { foldName } from "../name-fold.js";
+import { foldName, foldTag, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
@@ -262,7 +262,7 @@ export async function findSimilar(
   const metas = new Map<string, NoteMeta>();
   for (const e of entries) {
     const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    const tags = new Set(parsed.tags.map((t) => t.toLowerCase()));
+    const tags = new Set(parsed.tags.map((t) => foldTag(t)));
     const title3grams = ngrams(foldName(stripMd(e.basename)), 3);
     const outbound = new Set<string>();
     for (const link of parsed.wikilinks) {
@@ -1363,7 +1363,10 @@ export type FrontmatterFilterValue = FrontmatterFilterScalar | FrontmatterFilter
  * strictly. Mixed types never match (`"1"` ≠ `1`).
  */
 function frontmatterScalarEq(a: unknown, b: FrontmatterFilterScalar): boolean {
-  if (typeof b === "string") return typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+  // v3.11.0-rc.9 (audit re-verify sibling of rc.8 DQL nfcLower) — NFC-fold both
+  // operands so an NFC `filter_frontmatter` value matches an NFD-on-disk value
+  // (macOS); case-insensitive matches the prior `.toLowerCase()` contract.
+  if (typeof b === "string") return typeof a === "string" && nfcLower(a.trim()) === nfcLower(b.trim());
   return a === b; // number / boolean — strict
 }
 

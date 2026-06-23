@@ -50,6 +50,10 @@ export interface ValidateProposalResult {
     parsed: boolean;
     error: string | null;
     keys: string[];
+    /** v3.11.0-rc.11 (rc.9-audit L4) — true if the frontmatter is valid YAML but NOT
+     *  a mapping (a bare scalar / sequence), which `frontmatter_set` refuses (rc.64).
+     *  Surfaced so an agent isn't surprised by a later refusal after a green validate. */
+    coerced: boolean;
   };
   wikilinks: Array<{
     raw: string;
@@ -145,13 +149,25 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   }
 
   // 2. YAML parse via the shared frontmatter module (the same parser used at write time).
-  const yamlReport = { parsed: false, error: null as string | null, keys: [] as string[] };
+  const yamlReport = { parsed: false, error: null as string | null, keys: [] as string[], coerced: false };
   let bodyAfterFm = args.content;
   try {
     const parsed = parseFrontmatter(args.content);
     yamlReport.parsed = true;
     yamlReport.keys = Object.keys(parsed.data ?? {});
     bodyAfterFm = parsed.content;
+    // v3.11.0-rc.11 (rc.9-audit L4) — a valid-YAML-but-non-mapping frontmatter (bare
+    // scalar / sequence) is coerced to {} here; frontmatter_set will REFUSE it (rc.64).
+    // Surface it so an agent that validates green isn't surprised by a later refusal.
+    yamlReport.coerced = parsed.coerced === true;
+    if (yamlReport.coerced) {
+      warnings.push({
+        kind: "frontmatter-non-mapping",
+        message:
+          "Frontmatter is valid YAML but not a key/value mapping (a bare scalar or list); obsidian_frontmatter_set will refuse to edit it.",
+        suggestion: "Use a `key: value` mapping block if you intend to set frontmatter fields."
+      });
+    }
   } catch (err) {
     yamlReport.error = err instanceof Error ? err.message : String(err);
     errors.push({ kind: "yaml-invalid", message: `YAML frontmatter could not be parsed: ${yamlReport.error}` });

@@ -104,3 +104,27 @@ export function lookupFoldedKey(obj: Record<string, unknown>, key: string): { pr
   }
   return { present: false, value: undefined };
 }
+
+/**
+ * Folded lookup across an ORDERED list of candidate frontmatter keys: returns the first
+ * candidate present with a non-nullish value (case/NFC-insensitive via {@link lookupFoldedKey}),
+ * else `undefined`. Preserves `a ?? b`-style precedence while folding the key — so a
+ * producer reading `fm.tags ?? fm.tag` (or `fm.title`) no longer goes blind to a case/NFC
+ * -variant property name (`Tags:`, `Title:`, an NFD-on-disk key).
+ *
+ * v3.11.0-rc.13 (rc.12-audit AUD-03 + the embed-title sibling) — closes the PRODUCER side
+ * of the rc.10/rc.12 H1 frontmatter-key-fold class: rc.10/rc.12 folded the *consumer*
+ * (query) reads, but the tag/title *producers* (parser/bases/meta/write/embed-pipeline)
+ * still read the key raw, so `Tags: [x]` was invisible to tag search / DQL / Bases.
+ *
+ * @param obj - a frontmatter object
+ * @param keys - candidate key names in precedence order (e.g. `["tags", "tag"]`)
+ * @returns the first present non-nullish folded value, or `undefined`
+ */
+export function lookupFoldedAny(obj: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) {
+    const hit = lookupFoldedKey(obj, k);
+    if (hit.present && hit.value != null) return hit.value;
+  }
+  return undefined;
+}

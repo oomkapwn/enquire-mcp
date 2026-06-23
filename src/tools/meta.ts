@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
-import { foldName, foldTag, lookupFoldedKey } from "../name-fold.js";
+import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
@@ -228,7 +228,8 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   const proposedTagsRaw = new Set<string>();
   // Frontmatter tags.
   const fmData = yamlReport.parsed ? parseFrontmatter(args.content).data : {};
-  const fmTags = fmData.tags ?? fmData.tag;
+  // v3.11.0-rc.13 (rc.12-audit AUD-03) — fold the `tags`/`tag` KEY (producer sibling of H1).
+  const fmTags = lookupFoldedAny(fmData, ["tags", "tag"]);
   if (Array.isArray(fmTags)) {
     for (const t of fmTags) if (typeof t === "string" && t) proposedTagsRaw.add(t.replace(/^#/, ""));
   } else if (typeof fmTags === "string" && fmTags) {

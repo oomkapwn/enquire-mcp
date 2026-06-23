@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
-import { foldName, foldTag } from "../name-fold.js";
+import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { findBestMatch, stripMd } from "./meta.js";
@@ -488,20 +488,25 @@ export async function frontmatterSet(
         `(it's a bare scalar or sequence). Editing it would replace and destroy that block. Fix the frontmatter by hand first, then retry.`
     );
   }
-  const before = { ...note.parsed.frontmatter };
-  const after: Record<string, unknown> = { ...before };
+  // v3.11.0-rc.13 (rc.12-audit AUD-05) — null-prototype maps + `Object.hasOwn` + a
+  // `defineProperty` write, so a LITERAL `__proto__` (or `constructor`) frontmatter key
+  // round-trips as a real own data property instead of hitting the inherited setter
+  // (which silently dropped it + mis-reported it as `~` via prototype-chain `in`). The
+  // serializer already preserves such keys (rc.61 FM-PROTO); this aligns the producer.
+  const before: Record<string, unknown> = Object.assign(Object.create(null), note.parsed.frontmatter);
+  const after: Record<string, unknown> = Object.assign(Object.create(null), before);
   const changed: string[] = [];
   for (const [k, v] of Object.entries(args.set)) {
     if (v === null) {
-      if (k in after) {
+      if (Object.hasOwn(after, k)) {
         delete after[k];
         changed.push(`-${k}`);
       }
     } else {
-      const prev = after[k];
+      const prev = Object.hasOwn(after, k) ? after[k] : undefined;
       if (JSON.stringify(prev) !== JSON.stringify(v)) {
-        after[k] = v;
-        changed.push(`${k in before ? "~" : "+"}${k}`);
+        Object.defineProperty(after, k, { value: v, writable: true, enumerable: true, configurable: true });
+        changed.push(`${Object.hasOwn(before, k) ? "~" : "+"}${k}`);
       }
     }
   }
@@ -977,7 +982,8 @@ export function composeNote(frontmatter: Record<string, unknown> | undefined, co
  * ```
  */
 export function extractFrontmatterTagsLower(fm: Record<string, unknown>): string[] {
-  const raw = fm.tags ?? fm.tag;
+  // v3.11.0-rc.13 (rc.12-audit AUD-03) — fold the `tags`/`tag` KEY (producer sibling of H1).
+  const raw = lookupFoldedAny(fm, ["tags", "tag"]);
   if (!raw) return [];
   const list: string[] = Array.isArray(raw)
     ? raw.filter((t): t is string => typeof t === "string")

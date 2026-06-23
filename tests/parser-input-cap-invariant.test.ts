@@ -29,7 +29,12 @@ const PARSER_FED_TOOLS = [
   // above the HTTP body cap). A future query-fed tool added without a cap fails here.
   { tool: "obsidian_search", field: "query", cap: "MAX_QUERY_LEN" },
   { tool: "obsidian_context_pack", field: "query", cap: "MAX_QUERY_LEN" },
-  { tool: "obsidian_paper_audit", field: "tag", cap: "MAX_TAG_ARG_LEN" }
+  { tool: "obsidian_paper_audit", field: "tag", cap: "MAX_TAG_ARG_LEN" },
+  // v3.11.0-rc.13 (rc.12-audit AUD-04) — frontmatter KEY args feed a whole-vault scan
+  // with a per-note `nfcLower(key)` fold, so an uncapped multi-MB key is a bearer-reachable
+  // CPU-DoS amplifier (measured ~9.5s for a 4 MB key). Capped to MAX_FRONTMATTER_KEY_LEN.
+  { tool: "obsidian_frontmatter_search", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" },
+  { tool: "obsidian_frontmatter_get", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" }
 ];
 
 /**

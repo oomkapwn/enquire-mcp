@@ -65,7 +65,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1365 unit tests passing on every PR
+- 1374 unit tests passing on every PR
 - 9 required + 5 advisory CI gates per merge (lint, test ×2 [Node 22/24], smoke, audit, coverage, version-consistency, docs, oia + macOS + docker + CodeQL + Analyze)
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
 - Semver-bound public surface — see [STABILITY.md](https://github.com/oomkapwn/enquire-mcp/blob/main/STABILITY.md)

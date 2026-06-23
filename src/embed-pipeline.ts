@@ -29,6 +29,7 @@
 import * as path from "node:path";
 import type { loadEmbedder } from "./embeddings.js";
 import { chunkContent } from "./fts5.js";
+import { lookupFoldedAny } from "./name-fold.js";
 import type { Vault } from "./vault.js";
 
 /**
@@ -141,7 +142,12 @@ export async function embedSingleNote(
   // full content) so deep-link `line_start`/`line_end` point at the right line
   // in notes with frontmatter. `bodyStartLine` is 1 (offset 0) without frontmatter.
   const lineOffset = note.parsed.bodyStartLine - 1;
-  const docTitle = note.parsed.frontmatter?.title || path.basename(entry.relPath, ".md");
+  // v3.11.0-rc.13 (rc.12-audit, embed-title sibling of AUD-03) — fold the `title` KEY so a
+  // case/NFC-variant `Title:` property still seeds the embedding context (instead of
+  // silently falling back to the file basename → weaker semantic-search signal).
+  const docTitle =
+    (lookupFoldedAny(note.parsed.frontmatter ?? {}, ["title"]) as string | undefined) ||
+    path.basename(entry.relPath, ".md");
   const embedTexts = chunks.map((_c, i) =>
     buildEmbedText(chunks, i, {
       docTitle: typeof docTitle === "string" ? docTitle : undefined,

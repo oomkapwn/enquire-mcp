@@ -121,7 +121,7 @@ export interface BaseQueryResult {
   unevaluated_predicates: string[];
 }
 
-// v3.10.0-rc.53 — frontmatter + `.base` YAML now go through js-yaml@4 directly
+// v3.10.0-rc.53 — frontmatter + `.base` YAML now go through js-yaml@5 directly (rc.6: @4 → @5)
 // (`load`/`dump` are safe-by-default — the v3 `safeLoad`/`safeDump` semantics). gray-matter
 // was dropped (it hard-bound js-yaml@3's removed `safeLoad`, which pinned the vulnerable
 // js-yaml@3 in the tree — GHSA-h67p-54hq-rp68). Note frontmatter parses via the shared
@@ -159,8 +159,11 @@ const baseShape = z
 
 /** Parse a .base file body into typed structure. Throws on malformed YAML. */
 export async function parseBase(body: string): Promise<ParsedBase> {
-  // js-yaml@4 `load` is safe-by-default (no merge-key/`!!js` exploits — the v3 SAFE_SCHEMA semantics).
-  const raw = (load(body) as Record<string, unknown> | null) ?? {};
+  // js-yaml@5 `load` is safe-by-default (YAML 1.2 core: no merge-key, no `!!js` — the v3 SAFE_SCHEMA
+  // semantics). v3.11.0-rc.6: js-yaml@5 THROWS ("expected a document") on an empty/whitespace-only
+  // body where v4 returned `undefined`, so guard an empty `.base` to `{}` (empty base = no fields)
+  // before loading — preserves the v4 `load(body) ?? {}` contract.
+  const raw = body.trim() === "" ? {} : ((load(body) as Record<string, unknown> | null) ?? {});
   const parsed = baseShape.parse(raw);
   return parsed as ParsedBase;
 }

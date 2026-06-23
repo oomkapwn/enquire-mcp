@@ -1,7 +1,7 @@
 // v3.10.0-rc.54 — GRAY-MATTER-REMOVAL INVENTORY INVARIANT (structural defense).
 //
 // rc.53 dropped the `gray-matter` dependency entirely, replacing it with the
-// in-repo `src/frontmatter.ts` on js-yaml@4. This invariant makes the removal
+// in-repo `src/frontmatter.ts` on js-yaml@5. This invariant makes the removal
 // permanent: it fails CI if `gray-matter` ever reappears as a declared dependency
 // OR if any `src/**/*.ts` module imports/requires it again. Without this guard a
 // future PR could silently re-add the (vulnerable js-yaml@3-binding) dep and the

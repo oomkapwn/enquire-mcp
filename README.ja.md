@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1333+ ユニットテスト · 50+ 言語 · v3.10.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1335+ ユニットテスト · 50+ 言語 · v3.10.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain モジュラリティによる wikilink コミュニティ検出） | ✅ **ここだけ** | ❌ | ❌ |
 | **スタンドアロンの `.base` クエリ実行**（Obsidian を起動せずに動作） | ✅ **ここだけ** | ❌ | ❌ Obsidian に委譲 |
 | **HyDE 検索**（Gao et al 2023）+ サブクエスチョン分解 | ✅ **ここだけ** | ❌ | ❌ |
-| **1333 ユニットテスト · PR ごとに 9 個の必須 + 5 個のアドバイザリ CI ゲート** | ✅ | 該当なし | まれ |
+| **1335 ユニットテスト · PR ごとに 9 個の必須 + 5 個のアドバイザリ CI ゲート** | ✅ | 該当なし | まれ |
 | **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2） | ✅ | 該当なし | ❌ |
 | **semver 準拠の公開サーフェス**（[STABILITY.md](./STABILITY.md)） | ✅ | 該当なし | ❌ |
 | スタンドアロン（Obsidian プラグイン不要） | ✅ | ❌ Obsidian が必要 | まちまち |
@@ -273,7 +273,7 @@ graph LR
 | **パス安全性** | すべての読み書きで realpath チェック；ボールト外を指すシンボリックリンクは拒否 |
 | **プライバシーフィルタ** | FTS5 + embed-db + chunk リソースパスで検証；空の許可 / 拒否リストには fail-closed |
 | **HTTP トランスポート** | Bearer 認証（定数時間 SHA-256 + `timingSafeEqual`）、トークン別レート制限、厳格な CORS |
-| **Frontmatter** | `js-yaml@4` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
+| **Frontmatter** | `js-yaml@5` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
 | **キャッシュ + インデックスファイル** | chmod 0600、親ディレクトリ 0700 |
 | **CI** | **9 個の必須**ブランチ保護ゲート：(1) `lint`、(2) Node 22 での `test`、(3) Node 24 での `test`、(4) `smoke`、(5) `audit`、(6) `coverage`、(7) `version-consistency`、(8) `docs`、(9) `oia`。**5 個のアドバイザリ**：`test-macos` + `docker`（Dockerfile ビルド + `tools/list` イントロスペクションスモーク）を `.github/workflows/ci.yml` 経由で；CodeQL ×2 + Analyze アクションを [GitHub の default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 経由で（ワークフローファイルではありません）。リリースワークフローは、npm 公開の前に、タグ付き SHA で 9 個の必須すべてが通過したことを再検証します。_v3.7.10 —— `docs`（TypeDoc 生成ゲート）を必須セットに追加。v3.7.13 —— CI マトリクスに合わせて `engines.node` の下限を `>=22.13.0` に引き上げ。v3.8.0-rc.6 —— `oia`（Outside-In Audit）をアドバイザリから昇格。_ |
 | **カバレッジ** | 行 ≥86% · ステートメント ≥82% · 関数 ≥75% · 分岐 ≥74%（ゲート付き） |
@@ -315,7 +315,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # フルスイート（1333 テスト、約 12 秒）
+npm test       # フルスイート（1335 テスト、約 12 秒）
 npm run lint   # 警告ゼロ
 npm run build  # tsc → dist/
 ```

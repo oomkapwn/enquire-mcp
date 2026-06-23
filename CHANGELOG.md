@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.6] — 2026-06-23
+
+> **TL;DR:** **js-yaml 4 → 5 migration (#275) — the deferred major, done deliberately.** Closes the last open dependabot major. js-yaml@5 is a *behavioral* major in the frontmatter/`.base` area, so this is a real migration, not a bump: (1) v5 no longer coerces YAML timestamps to `Date` — bare dates / timestamps load as **strings** that round-trip FAITHFULLY, which **root-fixes** the rc.58 date-mutation bug (no more silent time-appending) and dissolves the rc.66 midnight/timestamp collision; (2) v5 **`load("")` throws** ("expected a document") where v4 returned `undefined` → `bases.ts parseBase` now guards an empty `.base` body; (3) v5 **does not resolve YAML merge keys (`<<`)** — which is *why* GHSA-h67p-54hq-rp68 is gone at the ROOT in v5, not merely patched; (4) the now-redundant `@types/js-yaml` devDep is **removed** (v5 ships its own types). Scalar resolution (octal/sexagesimal/underscore — the rc.54 contracts) is **identical** on @4 and @5, re-verified. **1333 → 1335 tests.**
+
+### Changed
+
+- **`js-yaml`** `^4.2.0` → `^5.0.0` (resolved 5.1.0; direct dep; closes dependabot #275). The frontmatter port + `.base` parser run unchanged on v5's `load`/`dump`; behavioral deltas handled below.
+- **Removed `@types/js-yaml`** (devDep) — js-yaml@5 bundles its own type declarations; `tsc` strict builds clean on them.
+- **`src/bases.ts`** `parseBase` guards an empty/whitespace-only `.base` body to `{}` before `load` (v5 `load("")` throws; preserves the v4 `load(body) ?? {}` contract).
+- **`src/frontmatter.ts`** header + `normalizeDateOnly` TSDoc rewritten to v5 reality: dates load as strings (faithful round-trip), `normalizeDateOnly` is now DEFENSIVE-ONLY (fires only for a directly-passed `Date`), merge keys dropped, empty-input throw documented. `parseFrontmatter` is unaffected (its `block !== ""` guard never calls `load` on empty input).
+
+### Tests
+
+- `tests/frontmatter.test.ts`: the rc.58/rc.66 date contracts re-derived for v5 — an explicit midnight-UTC timestamp is now **preserved verbatim** (no Date coercion → no collapse); a direct-`Date` unit pins `normalizeDateOnly`'s now-defensive midnight branch; a new **merge-key security contract** test pins that `<<` stays a literal key (a future engine that silently re-enables merge-key expansion fails CI). Stale `Date`-era comments refreshed across the suite.
+
+### Notes
+
+- The whole `js-yaml@4` → `@5` reference sweep landed across SECURITY.md (the `.base` threat-model now states merge keys are removed in v5, not "fixed in v4"), README ×5, `docs/api.md`, `read.ts`/`write.ts`/`bases.ts` TSDoc, and the test comments. `node scripts/check-audit.mjs` is clean on js-yaml@5 (allowlist still empty). The migration was verified on the installed **5.1.0** with a fresh v4-vs-v5 differential (scalar contracts unchanged; the date/merge-key/empty-input deltas are the three handled above) before any code change — the rc.54 differential discipline.
+
+---
+
 ## [3.11.0-rc.5] — 2026-06-23
 
 > **TL;DR:** **Dependency majors — the two GO ones, after isolated-worktree evaluation.** Each of the three open dependabot majors was checked out in its own worktree and run through the full gate battery before deciding. **Merged:** `@types/node` 25.9.3 → **26.0.0** (#273 — types-only; `tsc` strict + 1427 tests clean) and `actions/checkout` 6.0.2 → **7.0.0** (#271 — SHA verified against the real v7.0.0 tag; v7's `node24` runtime is supported on our GitHub-hosted runners). **Deferred (NOT merged):** `js-yaml` 4 → **5** (#275) — a genuine behavioral major in the frontmatter/bases area (v5 drops `Date` coercion + merge-key resolution and makes `load("")` throw), breaking 2 pinned contracts; it needs a deliberate migration RC, not an auto-bump. Deps/CI-config only — no source/API change. **1333 tests unchanged.**

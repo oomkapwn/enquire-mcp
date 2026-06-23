@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1333%20passing-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1335%20passing-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -51,7 +51,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 3. **Zero cloud calls during serve.** Models cached locally (one-time download from HuggingFace). Your vault content never leaves your machine. Air-gap-safe by default.
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**46 tools · 19 MCP prompts · 1333 unit tests · 50+ languages · v3.10.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1335 unit tests · 50+ languages · v3.10.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -79,7 +79,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1333 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
+| **1335 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -276,7 +276,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **Path safety** | Realpath check on every read+write; symlinks-out-of-vault rejected |
 | **Privacy filter** | Verified at FTS5 + embed-db + chunk resource paths; fail-closed on empty allow-/deny-lists |
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
-| **Frontmatter** | `js-yaml@4` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
+| **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
 | **CI** | **9 required** branch-protection gates: (1) `lint`, (2) `test` on Node 22, (3) `test` on Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 advisory**: `test-macos` + `docker` (Dockerfile build + `tools/list` introspection smoke) via `.github/workflows/ci.yml`; CodeQL ×2 + Analyze actions via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (not workflow files). Release workflow re-verifies all 9 required passed on tagged SHA before npm publish. _v3.7.10 — `docs` (TypeDoc generation gate) added to required set. v3.7.13 — `engines.node` floor bumped to `>=22.13.0` to match the CI matrix. v3.8.0-rc.6 — `oia` (Outside-In Audit) promoted from advisory._ |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
@@ -318,7 +318,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1333 tests, ~12s)
+npm test       # full suite (1335 tests, ~12s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

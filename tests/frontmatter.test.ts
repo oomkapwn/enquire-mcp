@@ -50,7 +50,7 @@ describe("parseFrontmatter (rc.53)", () => {
   });
 
   it("throws on TAB-indented frontmatter (rc.56 FM-3 — YAML spec forbids tabs; js-yaml@3 enforced this too)", () => {
-    // Not a migration regression: js-yaml@4 and the dropped js-yaml@3/gray-matter both
+    // Not a migration regression: js-yaml@5 and the dropped js-yaml@3/gray-matter both
     // reject tabs for indentation. parseNote's catch then falls back to whole-body, so the
     // frontmatter text stays indexed/searchable — it just isn't parsed into `data`.
     expect(() => parseFrontmatter("---\nparent:\n\tchild: 1\n---\nbody")).toThrow();
@@ -77,10 +77,10 @@ describe("stringifyFrontmatter (rc.53)", () => {
   });
 });
 
-describe("YAML-1.2 scalar resolution — the documented js-yaml@4 contract (rc.54 FM-1/SC-2)", () => {
+describe("YAML-1.2 scalar resolution — the documented js-yaml@5 contract (rc.54 FM-1/SC-2)", () => {
   // These shapes resolve DIFFERENTLY than the dropped gray-matter (js-yaml@3, YAML 1.1).
   // Pinned here so the divergence is a deliberate, gated contract — NOT silently
-  // re-asserted as "byte-identical". js-yaml@4 (YAML 1.2 core) is the intended default.
+  // re-asserted as "byte-identical". js-yaml@5 (YAML 1.2 core) is the intended default.
   it("bare octal `0755` resolves to decimal 755 (YAML 1.2), not 493 (YAML 1.1 octal)", () => {
     expect(parseFrontmatter("---\nmode: 0755\n---\nb").data.mode).toBe(755);
   });
@@ -104,8 +104,9 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
   it("a sequence frontmatter block → {} (NEGATIVE control — arrays are not mappings)", () => {
     expect(parseFrontmatter("---\n- a\n- b\n---\nbody").data).toEqual({});
   });
-  it("a bare-date frontmatter block → {} (rc.55 FM-SCALAR-DATE — js-yaml resolves it to a Date, not a mapping)", () => {
-    // rc.54's `typeof === "object" && !Array.isArray` let this Date instance slip through.
+  it("a bare-date frontmatter block → {} (rc.55 FM-SCALAR; under js-yaml@5 a top-level scalar is a STRING, still not a mapping)", () => {
+    // A top-level non-mapping document (a bare date/scalar) must coerce to {} — under js-yaml@5 it
+    // loads as a STRING (js-yaml@4 made it a Date), but `isPlainObject` rejects both, so the contract holds.
     expect(parseFrontmatter("---\n2026-01-01\n---\nbody").data).toEqual({});
     expect(parseFrontmatter("---\n2026-01-01T10:00:00Z\n---\nbody").data).toEqual({});
   });
@@ -115,7 +116,7 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
   it("sets `coerced` true for a NON-MAPPING block, false for mapping / empty / absent", () => {
     expect(parseFrontmatter("---\n- a\n- b\n---\nbody").coerced).toBe(true); // sequence
     expect(parseFrontmatter("---\njust a scalar\n---\nbody").coerced).toBe(true); // scalar
-    expect(parseFrontmatter("---\n2026-01-01\n---\nbody").coerced).toBe(true); // Date scalar
+    expect(parseFrontmatter("---\n2026-01-01\n---\nbody").coerced).toBe(true); // date scalar (a STRING under js-yaml@5)
     expect(parseFrontmatter("---\nstatus: draft\n---\nbody").coerced).toBe(false); // mapping (POSITIVE control)
     expect(parseFrontmatter("---\n---\nbody").coerced).toBe(false); // empty fence
     expect(parseFrontmatter("---\n# only a comment\n---\nbody").coerced).toBe(false); // comment-only
@@ -125,9 +126,10 @@ describe("non-mapping frontmatter coercion (rc.54 FM-SCALAR — corruption guard
 
 describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {
   it("a bare date survives an unrelated frontmatter_set without gaining a time component", () => {
-    // js-yaml resolves `created: 2026-01-15` (bare) to a midnight-UTC Date; a naive dump
-    // re-serialized it as `2026-01-15T00:00:00.000Z`, silently corrupting an untouched field
-    // on any unrelated edit. stringifyFrontmatter now renders date-only Dates as YYYY-MM-DD.
+    // Under js-yaml@4 a bare `created: 2026-01-15` loaded as a midnight Date and a naive dump
+    // re-serialized it as `2026-01-15T00:00:00.000Z`, silently corrupting an untouched field on
+    // any unrelated edit. js-yaml@5 loads it as a STRING, so it round-trips faithfully (re-emitted
+    // as a quoted `'2026-01-15'`, same value, no time appended) — the bug is root-fixed.
     const { data } = parseFrontmatter("---\ncreated: 2026-01-15\nstatus: draft\n---\nbody");
     data.status = "published"; // unrelated edit
     const out = stringifyFrontmatter("body", data);
@@ -142,24 +144,37 @@ describe("bare-date write fidelity (rc.58 FM-DATE-SILENT-MUTATION)", () => {
     expect(out).toMatch(/2026-01-15T13:45:00/);
   });
 
-  // v3.10.0-rc.66 (round-3 audit) — DELIBERATE COLLISION, pinned as a documented contract: an
-  // EXPLICIT timestamp that lands on midnight UTC resolves (post-js-yaml `load`) to the
-  // BYTE-IDENTICAL Date as a bare date-only value, so it is indistinguishable at stringify time
-  // and BOTH render as `YYYY-MM-DD`. Accepted tradeoff (a true fix needs a custom js-yaml type;
-  // far less harmful than the rc.58 bug). This is a CONTRACT test — if it ever changes, the
-  // frontmatter.ts header note must change with it.
-  it("an explicit midnight-UTC timestamp collapses to YYYY-MM-DD on re-serialize (rc.66 documented contract)", () => {
+  // v3.11.0-rc.6 — js-yaml@5 dropped Date coercion: dates/timestamps load as STRINGS, so the rc.58
+  // mutation bug AND the rc.66 midnight/timestamp collision both vanish at the ROOT. An explicit
+  // timestamp is now PRESERVED VERBATIM (no demotion to date-only); a bare date stays a bare date.
+  it("an explicit midnight-UTC timestamp is preserved verbatim under js-yaml@5 (no Date coercion → no collapse)", () => {
     const { data } = parseFrontmatter("---\ncreated: 2026-01-15T00:00:00Z\nstatus: draft\n---\nbody");
+    expect(data.created, "js-yaml@5 loads the timestamp as a STRING, not a Date").toBe("2026-01-15T00:00:00Z");
     data.status = "published"; // unrelated edit
     const out = stringifyFrontmatter("body", data);
-    expect(out, "midnight-UTC timestamp is demoted to a date-only scalar (accepted)").toMatch(
-      /created: '?2026-01-15'?/
-    );
-    expect(out, "no spurious time component remains").not.toMatch(/created:.*T00:00:00/);
-    // Sanity: a bare date-only value produces the identical Date (the root of the collision).
-    const bare = parseFrontmatter("---\nd: 2026-01-15\n---\nb").data.d as Date;
-    const explicit = parseFrontmatter("---\nd: 2026-01-15T00:00:00Z\n---\nb").data.d as Date;
-    expect(bare.getTime()).toBe(explicit.getTime());
+    expect(out, "the full timestamp string round-trips verbatim").toMatch(/created: '2026-01-15T00:00:00Z'/);
+    // No Date object + no date/timestamp collision: the two distinct scalars stay distinct strings.
+    expect(parseFrontmatter("---\nd: 2026-01-15\n---\nb").data.d).toBe("2026-01-15");
+    expect(parseFrontmatter("---\nd: 2026-01-15T00:00:00Z\n---\nb").data.d).toBe("2026-01-15T00:00:00Z");
+  });
+
+  // v3.11.0-rc.6 — normalizeDateOnly is now DEFENSIVE-ONLY (parse yields strings, not Dates); pin
+  // its midnight-collapse branch via a DIRECT Date (the only way a Date now reaches stringify).
+  it("stringifyFrontmatter still demotes a directly-passed midnight-UTC Date to YYYY-MM-DD (defensive)", () => {
+    const out = stringifyFrontmatter("b", { created: new Date("2026-01-15T00:00:00Z") });
+    expect(out).toMatch(/created: '?2026-01-15'?/);
+    expect(out, "the defensive Date branch still strips a midnight time-of-day").not.toMatch(/T00:00:00/);
+  });
+
+  // v3.11.0-rc.6 — js-yaml@5 does NOT resolve YAML merge keys (`<<`); it keeps `<<` as a literal
+  // mapping key (YAML 1.2 core has no merge key). This is why GHSA-h67p-54hq-rp68 is root-fixed in
+  // v5. Pinned so a future engine change that silently re-enables merge-key expansion fails CI.
+  it("does NOT resolve a YAML merge key — `<<` stays a literal key (js-yaml@5 security contract)", () => {
+    const { data } = parseFrontmatter("---\nbase: &b\n  shared: 1\nchild:\n  <<: *b\n  own: 2\n---\nbody");
+    const child = data.child as Record<string, unknown>;
+    expect(child).toHaveProperty(["<<"]); // NOT merged — `<<` is a literal key
+    expect(child.shared, "merge expansion must NOT have pulled `shared` up into child").toBeUndefined();
+    expect(child.own).toBe(2);
   });
 
   it("preserves a literal `__proto__` frontmatter key through stringify (rc.61 FM-PROTO-KEY-DROP)", () => {

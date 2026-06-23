@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0-rc.7] — 2026-06-23
+
+> **TL;DR:** **CI-guard flake hardening — a transient gh-auth blip can no longer block a release.** During the rc.6 ship, `tests/github-metadata-invariant.test.ts`'s "CI GUARD — gh is actually authenticated" test flaked: `gh auth status` makes a network call to validate the token, and it transiently failed on the main-push run (the identical commit had PASSED on the PR run minutes earlier). That failed CI and blocked the rc.6 publish (`release.yml`'s "assert CI green on main" guard correctly refused) until a manual re-run. Same flake-blocks-a-release class as the rc.20 `npm ci` incident. Fix: a bounded retry (`retryUntil`, 3 attempts / 750 ms backoff) around the network-y `gh auth status` + `gh api` calls — recovering a momentary blip **without** masking a genuine auth failure (every attempt must fail before concluding "unavailable"). Test-infra only. **1335 → 1336 tests.**
+
+### Changed
+
+- **`tests/github-metadata-invariant.test.ts`** — extracted `ghAuthStatusOnce` / `fetchRepoMetaOnce` and wrapped both in a generic `retryUntil(attempt, ok, attempts, backoffMs, sleep)` helper. `ghIsAvailable()` + `fetchRepoMeta()` now retry **only in a CI/token context** (`CI || GH_TOKEN || GITHUB_TOKEN`), so pure local dev without a token still fails fast (1 attempt, no backoff penalty on every `npm test`). The CI-GUARD reuses the once-computed `available` (no second retry storm) and now fails only after the retry is exhausted — a genuine broken-token regression, not a single transient blip. Synchronous backoff via `Atomics.wait` (no busy-spin).
+
+### Tests (1336)
+
+- New control (`+1`): `retryUntil recovers a transient blip but still fails a genuine no-auth` — NEGATIVE control proves a truly-unauthenticated gh (every attempt fails) still returns `false` *after exhausting all retries* (the guard still fails loudly); POSITIVE controls prove a fail-twice-then-succeed sequence recovers to `true`, and a first-try success makes exactly one probe (no wasted retries). `sleep` is injected so the controls run instantly.
+
+### Notes
+
+- Preserves the guard's purpose: it still hard-fails in CI when `GH_TOKEN` is set but `gh` is genuinely unauthenticated (the About/Topics invariants would otherwise silently no-op). Only transient network/API errors are now tolerated. Closes the spawn-task flagged after the rc.6 publish-recovery.
+
+---
+
 ## [3.11.0-rc.6] — 2026-06-23
 
 > **TL;DR:** **js-yaml 4 → 5 migration (#275) — the deferred major, done deliberately.** Closes the last open dependabot major. js-yaml@5 is a *behavioral* major in the frontmatter/`.base` area, so this is a real migration, not a bump: (1) v5 no longer coerces YAML timestamps to `Date` — bare dates / timestamps load as **strings** that round-trip FAITHFULLY, which **root-fixes** the rc.58 date-mutation bug (no more silent time-appending) and dissolves the rc.66 midnight/timestamp collision; (2) v5 **`load("")` throws** ("expected a document") where v4 returned `undefined` → `bases.ts parseBase` now guards an empty `.base` body; (3) v5 **does not resolve YAML merge keys (`<<`)** — which is *why* GHSA-h67p-54hq-rp68 is gone at the ROOT in v5, not merely patched; (4) the now-redundant `@types/js-yaml` devDep is **removed** (v5 ships its own types). Scalar resolution (octal/sexagesimal/underscore — the rc.54 contracts) is **identical** on @4 and @5, re-verified. **1333 → 1335 tests.**

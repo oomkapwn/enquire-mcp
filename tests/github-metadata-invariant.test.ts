@@ -43,7 +43,58 @@ const REQUIRED_TOPICS = [
 // the About copy out-of-band via gh api, and round-11 caught the test drift).
 const ABOUT_LEADS_WITH = /^The most advanced Obsidian MCP/i;
 
-function ghIsAvailable(): boolean {
+// v3.11.0-rc.7 — flake hardening for the (network-y) gh auth/API calls. On
+// 2026-06-23 the CI-GUARD below flaked: `gh auth status` makes a network call to
+// validate the token, and it transiently failed on a main-push run (the identical
+// commit had PASSED on the PR run minutes earlier). That failed CI and BLOCKED the
+// v3.11.0-rc.6 release (release.yml's "assert CI green on main" guard correctly
+// refused to publish). Same flake-blocks-a-release class as the rc.20 npm-ci
+// incident (fixed there with a bounded retry). Fix: a short bounded retry around
+// the gh calls so a momentary blip doesn't fail — WITHOUT masking a genuine auth
+// failure (every attempt must fail before we conclude "unavailable").
+const GH_RETRY_ATTEMPTS = 3;
+const GH_RETRY_BACKOFF_MS = 750;
+
+/** Synchronous backoff — Atomics.wait sleeps the thread without busy-spinning. */
+function sleepMs(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Retry only in a CI/token context — there a gh failure is plausibly a transient
+ * GitHub-API/network blip. Pure local dev WITHOUT a token fails fast (1 attempt,
+ * no backoff) so `npm test` isn't slowed on every run by a genuine "no auth".
+ */
+function shouldRetryGh(): boolean {
+  return Boolean(process.env.CI || process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
+}
+
+/**
+ * Run `attempt` up to `attempts` times, returning the FIRST result for which `ok`
+ * is true. If no attempt satisfies `ok`, returns the LAST result — so a genuine
+ * failure (gh truly unauthenticated: every attempt fails) is NOT masked, while a
+ * transient blip (one attempt fails, a later one succeeds) recovers. `sleep` is
+ * injected so the control tests below run instantly. NOT exported (biome
+ * `noExportsInTest`); tested in-file via the negative/positive controls.
+ */
+function retryUntil<T>(
+  attempt: () => T,
+  ok: (r: T) => boolean,
+  attempts: number,
+  backoffMs: number,
+  sleep: (ms: number) => void
+): T {
+  let last = attempt();
+  for (let i = 1; i < attempts && !ok(last); i++) {
+    sleep(backoffMs);
+    last = attempt();
+  }
+  return last;
+}
+
+/** One `gh auth status` probe — exits 0 iff authenticated. */
+function ghAuthStatusOnce(): boolean {
   try {
     // `gh auth status` exits 0 when authenticated, non-zero otherwise. We
     // pipe stderr → /dev/null to keep the test output clean.
@@ -54,12 +105,18 @@ function ghIsAvailable(): boolean {
   }
 }
 
+function ghIsAvailable(): boolean {
+  // Retry the auth probe in CI/token context so a transient blip doesn't read as
+  // "unauthenticated"; a genuine no-auth still fails (every attempt returns false).
+  return retryUntil(ghAuthStatusOnce, (b) => b, shouldRetryGh() ? GH_RETRY_ATTEMPTS : 1, GH_RETRY_BACKOFF_MS, sleepMs);
+}
+
 interface RepoMeta {
   description: string;
   topics: string[];
 }
 
-function fetchRepoMeta(): RepoMeta | null {
+function fetchRepoMetaOnce(): RepoMeta | null {
   const res = spawnSync("gh", ["api", `repos/${REPO}`, "--jq", "{description, topics}"], {
     encoding: "utf8",
     timeout: 15_000
@@ -70,6 +127,19 @@ function fetchRepoMeta(): RepoMeta | null {
   } catch {
     return null;
   }
+}
+
+function fetchRepoMeta(): RepoMeta | null {
+  // Same flake hardening: retry the `gh api` call on a transient null (network /
+  // rate-limit blip) in CI/token context. A persistent failure still returns null
+  // → the production About/Topics tests then fail loud (correct, not masked).
+  return retryUntil(
+    fetchRepoMetaOnce,
+    (m) => m !== null,
+    shouldRetryGh() ? GH_RETRY_ATTEMPTS : 1,
+    GH_RETRY_BACKOFF_MS,
+    sleepMs
+  );
 }
 
 /**
@@ -128,9 +198,13 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // `coverage` — are not asserted against; the `&& GH_TOKEN` gate skips them.)
   it("CI GUARD — when CI provides GH_TOKEN, gh is actually authenticated (metadata invariants run)", () => {
     if (!process.env.CI || !process.env.GH_TOKEN) return;
+    // Reuse the `available` computed once above (it already applied the bounded
+    // retry) — re-calling ghIsAvailable() would just repeat the retried probe.
+    // v3.11.0-rc.7: this now fails only after the retry is exhausted (a genuine
+    // broken-token regression), not on a single transient GitHub-API blip.
     expect(
-      ghIsAvailable(),
-      "GH_TOKEN is set in CI but `gh auth status` failed — the About/Topics invariants would silently no-op"
+      available,
+      "GH_TOKEN is set in CI but `gh auth status` failed across retries — the About/Topics invariants would silently no-op"
     ).toBe(true);
   });
 
@@ -244,6 +318,56 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(findSlsaOverclaim("The most advanced Obsidian MCP — no provenance mention")).toBeNull();
       // Guard against false-positive on unrelated digits near "SLSA"-free text.
       expect(findSlsaOverclaim("Supports 3 transports and L3 caching")).toBeNull();
+    });
+
+    it("retryUntil recovers a transient blip but still fails a genuine no-auth (v3.11.0-rc.7 flake hardening)", () => {
+      const noSleep = (): void => {};
+      // NEGATIVE control — a GENUINE failure (every attempt fails) is NOT masked:
+      // returns false only AFTER exhausting all attempts (so a truly-unauthenticated
+      // gh still reads as unavailable and the CI-GUARD still fails loudly).
+      let genuineCalls = 0;
+      const genuine = retryUntil(
+        () => {
+          genuineCalls++;
+          return false;
+        },
+        (b) => b,
+        3,
+        0,
+        noSleep
+      );
+      expect(genuine, "a truly-unauthenticated gh must still read as unavailable").toBe(false);
+      expect(genuineCalls, "must exhaust all retries before concluding failure").toBe(3);
+
+      // POSITIVE — a TRANSIENT blip (fails attempts 1-2, succeeds on 3) recovers to true.
+      let transientCalls = 0;
+      const transient = retryUntil(
+        () => {
+          transientCalls++;
+          return transientCalls >= 3;
+        },
+        (b) => b,
+        3,
+        0,
+        noSleep
+      );
+      expect(transient, "a momentary blip that recovers must read as available").toBe(true);
+      expect(transientCalls).toBe(3);
+
+      // POSITIVE — first-try success makes NO wasted retries (healthy gh probed once).
+      let okCalls = 0;
+      const fast = retryUntil(
+        () => {
+          okCalls++;
+          return true;
+        },
+        (b) => b,
+        3,
+        0,
+        noSleep
+      );
+      expect(fast).toBe(true);
+      expect(okCalls, "a healthy gh is probed exactly once — no backoff penalty").toBe(1);
     });
   });
 });

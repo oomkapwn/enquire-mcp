@@ -12,7 +12,12 @@
 // CLAUDE.md rule since v3.6.4.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { isEmbeddingsOffline, offlineModelLoadError, setEmbeddingsOffline } from "../src/embeddings.js";
+import {
+  applyOfflineEnv,
+  isEmbeddingsOffline,
+  offlineModelLoadError,
+  setEmbeddingsOffline
+} from "../src/embeddings.js";
 
 afterEach(() => {
   setEmbeddingsOffline(false); // module-global flag — reset so it can't leak across tests
@@ -49,5 +54,24 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
     const err = offlineModelLoadError("bge", "Xenova-bge", "/Users/secret/.cache/huggingface/blob fail");
     expect(err.message).not.toMatch(/raw string failure|secret|huggingface|\.cache/);
     expect(err.message).toMatch(/Xenova-bge/); // the model id (no slash) is still named
+  });
+
+  // rc.12 (rc.11-audit L-2) — the tests above cover the FLAG; this covers the WIRE-UP:
+  // applyOfflineEnv must actually mutate a transformers.js-shaped `{ env }` so a
+  // cache-miss fails closed (no CDN fetch). Closes the "flag set but not wired" gap the
+  // auditor flagged in the project's own claimed-guarantee-vs-code-guard class.
+  it("applyOfflineEnv sets allowRemoteModels=false on the transformers env when offline (POSITIVE)", () => {
+    setEmbeddingsOffline(true);
+    const mod = { env: { allowRemoteModels: true, allowLocalModels: false } };
+    applyOfflineEnv(mod);
+    expect(mod.env.allowRemoteModels).toBe(false); // CDN fetch blocked
+    expect(mod.env.allowLocalModels).toBe(true); // local cache still allowed
+  });
+
+  it("applyOfflineEnv is a NO-OP when ONLINE so build-embeddings/install-model can fetch (NEGATIVE control)", () => {
+    // default is online (afterEach resets); do NOT toggle offline here.
+    const mod = { env: { allowRemoteModels: true, allowLocalModels: true } };
+    applyOfflineEnv(mod);
+    expect(mod.env.allowRemoteModels).toBe(true); // untouched — download path intact
   });
 });

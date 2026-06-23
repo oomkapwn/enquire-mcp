@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
-import { foldName, foldTag } from "../name-fold.js";
+import { foldName, foldTag, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { capScanEntries } from "./limits.js";
@@ -471,9 +471,17 @@ export async function lintWiki(vault: Vault, args: LintWikiArgs): Promise<LintWi
     }
 
     // Stale pass — frontmatter `last_reviewed` overrides mtime if present.
-    // js-yaml parses ISO dates into Date objects automatically,
-    // so we accept Date | string | number.
-    const lastReviewedRaw = parsed.frontmatter?.last_reviewed ?? parsed.frontmatter?.["last-reviewed"];
+    // v3.11.0-rc.12 (rc.11-audit H-2) — read the key through `lookupFoldedKey` so a
+    // case/NFC-variant property (`Last_Reviewed`, `LAST_REVIEWED`, an NFD-on-disk
+    // accented key) resolves, matching Obsidian's case-insensitive property semantics
+    // and the rc.10 H1 key-fold class (this was the 7th, unwired, key-lookup site).
+    // Both spellings (`last_reviewed` / `last-reviewed`) are kept — they are distinct
+    // keys under the fold (`_` vs `-` is a spelling difference, not case; rc.9 narrowing).
+    // js-yaml@5 (rc.6) loads YAML timestamps as strings (not Date); the Date branch
+    // below stays as a defensive fallback for a caller that hands us a real Date.
+    const fmForReview = parsed.frontmatter ?? {};
+    const lastReviewedRaw =
+      lookupFoldedKey(fmForReview, "last_reviewed").value ?? lookupFoldedKey(fmForReview, "last-reviewed").value;
     let lastTouchedMs = mtimeMs;
     if (lastReviewedRaw instanceof Date) {
       const t = lastReviewedRaw.getTime();

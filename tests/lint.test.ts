@@ -257,3 +257,40 @@ describe("paperAudit (v1.5)", () => {
     expect(result.flagged.every((f) => f.path.startsWith("Papers/"))).toBe(true);
   });
 });
+
+describe("lintWiki — H-2 (rc.12, rc.11-audit): stale pass honors a case/NFC-variant `last_reviewed` key", () => {
+  // The rc.10 H1 NFC-key-fold class had a 7th, unwired site: the `lint_vault_wiki`
+  // stale pass read `frontmatter.last_reviewed` by RAW exact string, so a case-variant
+  // property (`Last_Reviewed`, the common Obsidian convention) silently fell back to
+  // mtime → a recently-reviewed note was wrongly reported stale. rc.12 routes it
+  // through `lookupFoldedKey`. Isolated temp vault so the shared fixture's bucket
+  // counts are untouched.
+  it("a case-variant `Last_Reviewed` (future) with an ANCIENT mtime is NOT stale (POSITIVE — folded key wins)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-h2-"));
+    const body = `${"reviewed content ".repeat(60)} plenty of words to clear the stub threshold.`;
+    const p = path.join(dir, "CaseVariantReview.md");
+    // Case-variant KEY + a clearly-future review date; js-yaml@5 loads it as a string.
+    await fs.writeFile(p, `---\nLast_Reviewed: 2099-01-01\n---\n\n${body}\n[[Hub]]\n`);
+    const ancient = new Date(Date.now() - 800 * 86_400_000); // > default 365-day stale window
+    await fs.utimes(p, ancient, ancient);
+    const v = new Vault(dir);
+    const res = await lintWiki(v, { stale_days: 365 });
+    const stalePaths = res.findings.stale.map((f) => f.path);
+    expect(stalePaths).not.toContain("CaseVariantReview.md");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("NEGATIVE control — same ancient mtime but NO last_reviewed key IS stale (proves the test discriminates)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-h2neg-"));
+    const body = `${"unreviewed content ".repeat(60)} plenty of words to clear the stub threshold.`;
+    const p = path.join(dir, "NoReviewKey.md");
+    await fs.writeFile(p, `${body}\n[[Hub]]\n`);
+    const ancient = new Date(Date.now() - 800 * 86_400_000);
+    await fs.utimes(p, ancient, ancient);
+    const v = new Vault(dir);
+    const res = await lintWiki(v, { stale_days: 365 });
+    const stalePaths = res.findings.stale.map((f) => f.path);
+    expect(stalePaths).toContain("NoReviewKey.md");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});

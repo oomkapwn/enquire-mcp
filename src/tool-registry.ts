@@ -1244,8 +1244,11 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         "Walks the vault (or a `folder` subset), substitutes every occurrence of `search` with `replace` outside fenced code blocks (` ``` ` / `~~~`), and writes each modified file back. Reuses the same line-walker rename_note uses, so example snippets and code documentation stay verbatim. Pass `dry_run=true` to preview the plan without touching disk — you get per-file occurrence counts + total. `case_sensitive` defaults to true. Refuses identical search/replace and empty search to prevent footguns. WRITE TOOL — only registered when --enable-write is passed.",
       annotations: { ...WRITE, title: "Replace in notes" },
       inputSchema: {
-        search: z.string().min(1).describe("Literal substring to find. Empty string is rejected."),
-        replace: z.string().describe("Replacement text. Empty string means delete every occurrence."),
+        search: z.string().min(1).max(MAX_QUERY_LEN).describe("Literal substring to find. Empty string is rejected."),
+        replace: z
+          .string()
+          .max(MAX_QUERY_LEN)
+          .describe("Replacement text. Empty string means delete every occurrence."),
         folder: z.string().optional().describe("Restrict to a subfolder (vault-relative). Default: whole vault."),
         dry_run: z.boolean().optional().describe("Preview the plan without writing anything to disk (default false)"),
         case_sensitive: z

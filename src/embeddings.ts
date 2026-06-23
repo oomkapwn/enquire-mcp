@@ -167,8 +167,11 @@ export function isEmbeddingsOffline(): boolean {
   return embeddingsOffline;
 }
 /** Force transformers.js to local-cache-only when serve has set the offline flag.
- *  Idempotent; a no-op when online (build-embeddings). */
-function applyOfflineEnv(mod: unknown): void {
+ *  Idempotent; a no-op when online (build-embeddings).
+ *  v3.11.0-rc.12 (rc.11-audit L-2) — exported so a unit test asserts the WIRE-UP
+ *  (a transformers.js-shaped `{ env }` actually gets `allowRemoteModels=false`),
+ *  not merely that `setEmbeddingsOffline` flips the flag. */
+export function applyOfflineEnv(mod: unknown): void {
   if (!embeddingsOffline) return;
   const env = (mod as { env?: { allowRemoteModels?: boolean; allowLocalModels?: boolean } }).env;
   if (env) {

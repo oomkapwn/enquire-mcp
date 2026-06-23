@@ -265,4 +265,31 @@ describe("H1 — frontmatter KEY lookup is case/NFC-insensitive (rc.10, external
   it("a genuinely-absent key is not present (NEGATIVE control)", () => {
     expect(lookupFoldedKey({ status: "active" }, "author")).toEqual({ present: false, value: undefined });
   });
+
+  // rc.12 (rc.11-audit H-2) — the rc.10 H1 fix wired 6 key-lookup sites but missed a
+  // 7th: the `lint_vault_wiki` stale pass read `frontmatter.last_reviewed` by RAW exact
+  // string, so a case-variant `Last_Reviewed` key fell back to mtime (wrong staleness).
+  // Narrow regression guard (precise — NOT a broad `frontmatter.<ident>` detector, which
+  // would over-flag legitimate raw reads; see rc.11-audit L-4 verdict): the stale-pass
+  // key read in meta.ts must route through `lookupFoldedKey`, never raw `.last_reviewed`.
+  // The regex targets the `parsed.frontmatter?.<key>` ACCESS shape (the actual bug),
+  // NOT the bare label string `"frontmatter.last_reviewed"` the tool emits in its output
+  // (no `parsed.` prefix), so the legit output label doesn't false-positive.
+  const RAW_REVIEW_ACCESS = /parsed\.frontmatter\??\.\s*last_reviewed/;
+  const RAW_REVIEW_BRACKET = /parsed\.frontmatter\??\.\s*\[\s*["']last-reviewed["']\s*\]/;
+  it("meta.ts reads the staleness key via lookupFoldedKey, not a raw frontmatter.last_reviewed (POSITIVE)", () => {
+    const meta = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
+    expect(meta).not.toMatch(RAW_REVIEW_ACCESS);
+    expect(meta).not.toMatch(RAW_REVIEW_BRACKET);
+    // …and the folded helper must be the path used for the review key.
+    expect(meta).toMatch(/lookupFoldedKey\([^)]*"last_reviewed"\)/);
+  });
+
+  it("the raw-read regression detector actually fires on the pre-rc.12 anti-pattern (NEGATIVE control)", () => {
+    const buggy = 'const x = parsed.frontmatter?.last_reviewed ?? parsed.frontmatter?.["last-reviewed"];';
+    expect(buggy).toMatch(RAW_REVIEW_ACCESS);
+    expect(buggy).toMatch(RAW_REVIEW_BRACKET);
+    // the bare output-label string must NOT trip the detector (it has no `parsed.` access)
+    expect('source: "frontmatter.last_reviewed"').not.toMatch(RAW_REVIEW_ACCESS);
+  });
 });

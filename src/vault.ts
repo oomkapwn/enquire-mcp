@@ -779,7 +779,23 @@ export class Vault {
       throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
     }
     if (opts.overwrite) {
-      await this.writeFileSafe(abs, content, "utf8");
+      // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling `.tmp`
+      // then rename(2) over the target, so a crash/SIGKILL mid-write can never
+      // truncate the note (it leaves a stale `.tmp`, cleaned on the next write,
+      // never a half-written file). Mirrors the cacheFile writer; the tmp sits in
+      // the same already-validated parent dir so the rename is same-filesystem +
+      // atomic. A plain writeFile keeps the existing inode's perms; tmp+rename makes
+      // a NEW inode, so copy the destination's mode forward on overwrite (default
+      // perms for a brand-new path). `.md.tmp` is not watched (watcher matches .md).
+      const tmp = `${abs}.tmp`;
+      const existing = await this.statSafe(abs).catch(() => null);
+      try {
+        await this.writeFileSafe(tmp, content, existing ? { encoding: "utf8", mode: existing.mode & 0o777 } : "utf8");
+        await this.renameSafe(tmp, abs);
+      } catch (err) {
+        await this.unlinkSafe(tmp).catch(() => {});
+        throw err;
+      }
     } else {
       try {
         await this.writeFileSafe(abs, content, { encoding: "utf8", flag: "wx" });

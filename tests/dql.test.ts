@@ -147,6 +147,30 @@ describe("runDql", () => {
     }
   });
 
+  it("matches an accented FRONTMATTER VALUE across NFC/NFD forms — WHERE <key> = / contains (v3.11.0-rc.8 pre-promotion audit)", async () => {
+    // Sibling of the rc.69 file.name fix, on the arbitrary-frontmatter-value surface:
+    // looseEq + the string-contains branch compared via `.toLowerCase()` WITHOUT
+    // `.normalize("NFC")`, so an NFC literal silently missed an NFD-stored frontmatter
+    // value. Now nfcLower folds both operands. (file.name/file.path were rc.69; this is
+    // the uncovered value-equality sibling — the name-fold-invariant signature can't see it.)
+    const nfd = `Cafe${String.fromCodePoint(0x301)}`; // NFD value stored in frontmatter
+    const nfc = `Caf${String.fromCodePoint(0xe9)}`; // NFC literal the user types
+    expect(nfc).not.toBe(nfd); // raw forms differ — non-vacuous
+    const v2root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-dql-fmnfc-"));
+    try {
+      await fs.writeFile(path.join(v2root, "n.md"), `---\nauthor: ${nfd}\n---\nbody\n`);
+      const v2 = new Vault(v2root);
+      expect(
+        (await runDql(v2, parseDql(`LIST WHERE author = "${nfc}"`))).length,
+        "= matches an NFD-stored value via an NFC literal"
+      ).toBe(1);
+      expect((await runDql(v2, parseDql(`LIST WHERE author contains "${nfc}"`))).length, "contains too").toBe(1);
+      expect((await runDql(v2, parseDql(`LIST WHERE author = "Nobody"`))).length, "NEGATIVE control").toBe(0);
+    } finally {
+      await fs.rm(v2root, { recursive: true, force: true });
+    }
+  });
+
   it("runs WHERE field equality", async () => {
     const v = new Vault(root);
     const rows = await runDql(v, parseDql('LIST FROM "projects" WHERE status = "active"'));

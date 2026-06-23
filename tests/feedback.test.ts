@@ -91,6 +91,26 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
     expect(store.scores().has("A.md")).toBe(false);
   });
 
+  // v3.11.0-rc.8 (pre-promotion audit MED) — prototype-pollution NEGATIVE control.
+  // record() writes agent-supplied path strings as map keys; "__proto__" / "constructor"
+  // must NOT reach Object.prototype (the entries map is null-prototype). Discriminates the
+  // fix: on a normal-object map this leaves ({}).useful === NaN + size 0 (the vuln).
+  it('record(["__proto__"]) must NOT pollute Object.prototype — stored as a harmless own key', async () => {
+    const store = await FeedbackStore.open(file);
+    await store.record(["__proto__", "constructor", "Real.md"], true, NOW);
+    // Object.prototype untouched — a fresh plain object has none of the entry fields.
+    expect(({} as Record<string, unknown>).useful).toBeUndefined();
+    expect(({} as Record<string, unknown>).notUseful).toBeUndefined();
+    expect(({} as Record<string, unknown>).lastMarked).toBeUndefined();
+    // …and the reserved-named notes are still tracked as OWN keys (no silent data loss).
+    expect(store.size()).toBe(3);
+    expect(store.scores().get("__proto__")).toBeCloseTo(0.5, 10);
+    // Round-trips through persist → reopen without polluting on reload either.
+    const reopened = await FeedbackStore.open(file);
+    expect(({} as Record<string, unknown>).useful).toBeUndefined();
+    expect(reopened.scores().get("__proto__")).toBeCloseTo(0.5, 10);
+  });
+
   it("feedbackScore is the Laplace-smoothed ratio useful/(useful+notUseful+1)", () => {
     expect(feedbackScore({ useful: 0, notUseful: 0, lastMarked: "" })).toBe(0);
     expect(feedbackScore({ useful: 1, notUseful: 0, lastMarked: "" })).toBeCloseTo(0.5, 10);

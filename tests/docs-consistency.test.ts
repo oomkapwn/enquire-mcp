@@ -1260,4 +1260,25 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     // Zero mentions → fail
     expect(checkAgentsCiGates("no claim", 9)).toMatch(/at least once/);
   });
+
+  // v3.11.0-rc.8 (pre-promotion audit LOW) — CITATION.cff `version` tracks the @latest
+  // STABLE line (its own stated contract) but is deliberately NOT in
+  // check-version-consistency.mjs (which pins the in-flight rc), so it silently drifted
+  // at v3.9.1 across two stable promotions. Pin it to the newest NON-rc CHANGELOG heading
+  // so the next stable promotion can't forget to bump it.
+  it("CITATION.cff version equals the latest STABLE release in CHANGELOG (drift guard)", async () => {
+    const changelog = await read("CHANGELOG.md");
+    // First heading of the form `## [X.Y.Z]` with NO prerelease suffix = the latest stable
+    // (the `-rc.N` headings above it don't match — the `]` isn't immediately after the patch).
+    const stable = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m);
+    expect(stable, "a stable (non-prerelease) CHANGELOG heading must exist").not.toBeNull();
+    const latestStable = (stable as RegExpMatchArray)[1];
+    const cff = await read("CITATION.cff");
+    const v = cff.match(/^version:\s*"([^"]+)"/m);
+    expect(v, "CITATION.cff must declare a version").not.toBeNull();
+    expect(
+      (v as RegExpMatchArray)[1],
+      `CITATION.cff version must equal the latest STABLE release ${latestStable} (its own tracking rule) — bump version + date-released at each stable promotion`
+    ).toBe(latestStable);
+  });
 });

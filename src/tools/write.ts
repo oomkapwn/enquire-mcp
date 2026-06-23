@@ -249,7 +249,13 @@ export async function renameNote(
     // back afterwards would clobber the just-moved source (silent data loss when the
     // destination backlinks the source). The destination's post-rename content IS the source
     // (its self-refs already fixed via sourcePlan), so there is nothing to rewrite there.
-    const isDest = e.absPath === toAbsCheck;
+    // v3.11.0-rc.8 (pre-promotion audit LOW) — also match against the destination's
+    // REALPATH-canonical rel (`canonicalToRel`, already computed for the privacy check).
+    // `toAbsCheck` carries the USER's case while `e.absPath` is the on-disk (canonical)
+    // case from readdir, so on a case-insensitive FS (macOS/Windows) a case-variant `to`
+    // (e.g. `Posts/Existing.md` for on-disk `posts/existing.md`) slipped the bare `===`
+    // and reopened the rc.60 WRITE-1 data-loss for that destination.
+    const isDest = e.absPath === toAbsCheck || vault.toRel(e.absPath) === canonicalToRel;
     if (isDest) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 

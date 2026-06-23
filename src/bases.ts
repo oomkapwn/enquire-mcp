@@ -31,7 +31,7 @@ import * as path from "node:path";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
-import { foldName, foldTag, nfc } from "./name-fold.js";
+import { foldName, foldTag, lookupFoldedKey, nfc } from "./name-fold.js";
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
@@ -568,7 +568,9 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   if (fmContains) {
     const key = fmContains[1] ?? "";
     const needle = fmContains[3] ?? "";
-    const v = ctx.frontmatter[key];
+    // v3.11.0-rc.10 (H1) — case/NFC-insensitive KEY lookup (Obsidian property names
+    // are case-insensitive); the VALUE compare below stays case-sensitive (Bases semantics).
+    const v = lookupFoldedKey(ctx.frontmatter, key).value;
     // v3.11.0-rc.9 (audit re-verify) — NFC-normalize both sides (case-PRESERVED,
     // matching Obsidian Bases' case-sensitive `contains`) so `café`(NFC) matches an
     // NFD-stored value. The DQL twin folds case too (nfcLower); Bases keeps case by design.
@@ -585,7 +587,9 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
     const key = fmEq[1] ?? "";
     const op = fmEq[2];
     const rhsRaw = (fmEq[3] ?? "").trim();
-    const lhs = ctx.frontmatter[key];
+    // v3.11.0-rc.10 (H1) — case/NFC-insensitive KEY lookup (key names case-insensitive
+    // per Obsidian; the literalEqual value compare below remains case-sensitive).
+    const lhs = lookupFoldedKey(ctx.frontmatter, key).value;
     const rhs = parseLiteral(rhsRaw);
     if (rhs === SKIP) {
       // v3.6.2 HN-2 — unparseable RHS literal (bare identifier, etc) is
@@ -649,8 +653,13 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
   // headings (lines starting with # are markdown headings, not tags).
   for (const line of body.split("\n")) {
     if (/^#{1,6}\s/.test(line)) continue;
-    for (const m of line.matchAll(/(?:^|\s)(#[A-Za-z][\w/-]*)/g)) {
-      const tag = foldTag(m[1] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — strip `#` + NFC + lowercase
+    // v3.11.0-rc.10 (M1, external audit) — was ASCII-only (`#[A-Za-z][\w/-]*`), which
+    // silently dropped EVERY non-ASCII inline tag (accented `#café` → `#caf`, CJK
+    // `#日本語` → no match). Now Unicode-aware (`\p{L}` + `u` flag), and the line is
+    // NFC-normalized FIRST so an NFD `#café` (macOS APFS) composes its combining mark
+    // into the base letter before matching (parity with parser's extractInlineTags).
+    for (const m of line.normalize("NFC").matchAll(/(?:^|\s)(#[\p{L}][\p{L}\p{N}_/-]*)/gu)) {
+      const tag = foldTag(m[1] ?? ""); // strip `#` + NFC + lowercase
       if (tag) out.add(tag);
     }
   }

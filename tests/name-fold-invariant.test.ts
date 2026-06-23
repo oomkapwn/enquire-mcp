@@ -28,7 +28,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { foldName, foldTag, nfc } from "../src/name-fold.js";
+import { foldName, foldTag, lookupFoldedKey, nfc } from "../src/name-fold.js";
+import { extractInlineTags } from "../src/parser.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const srcDir = path.join(repoRoot, "src");
@@ -202,5 +203,66 @@ describe("name-fold inventory invariant — TAG surface (rc.9, L-TAG-1)", () => 
     expect(findUnfoldedTagComparisons(`return foldTag(t);`)).toHaveLength(0);
     // The parser PRODUCER (NFC without lowercase, display case preserved) must NOT be flagged.
     expect(findUnfoldedTagComparisons(`return nfc(t.replace(/^#+/, ""));`)).toHaveLength(0);
+  });
+});
+
+describe("M1 — tag PRODUCER recovers NFD / accented / non-Latin tags (rc.10, external audit)", () => {
+  // The rc.9 consumer-side foldTag/nfc could not recover a combining mark the
+  // EXTRACTION regex never captured. rc.10 NFC-normalizes the body before matching.
+  const nfc4 = `caf${String.fromCodePoint(0xe9)}`; // precomposed é (NFC)
+  const nfd4 = `cafe${String.fromCodePoint(0x301)}`; // e + combining acute (NFD on macOS APFS)
+
+  it("extractInlineTags recovers an NFD inline tag instead of truncating at the mark (POSITIVE — the bug)", () => {
+    expect(nfc4).not.toBe(nfd4);
+    expect(extractInlineTags(`see #${nfd4} here`), "NFD #café must extract café, not cafe").toEqual([nfc4]);
+    expect(extractInlineTags(`see #${nfc4} here`)).toEqual([nfc4]); // NFC unchanged
+  });
+
+  it("extractInlineTags extracts non-Latin inline tags (POSITIVE)", () => {
+    expect(extractInlineTags("topic #日本語 end")).toEqual(["日本語"]);
+    expect(extractInlineTags("see #naïve note".normalize("NFD"))).toEqual(["naïve"]); // NFD ï recovered
+  });
+
+  it("no src/ tag-extraction regex is ASCII-only `#[A-Za-z]` (POSITIVE — the producer class gate)", () => {
+    // An ASCII-only tag lead drops EVERY non-ASCII inline tag (the pre-rc.10 bases bug).
+    // Every tag producer must use `\\p{L}` + the `u` flag (and callers NFC-normalize first).
+    const offenders: string[] = [];
+    for (const file of collectTsFiles(srcDir)) {
+      const code = stripLineComments(readFileSync(file, "utf8"));
+      for (const m of code.matchAll(/#\[A-Za-z\]/g)) offenders.push(`${path.relative(repoRoot, file)}: ${m[0]}`);
+    }
+    expect(offenders, `ASCII-only tag regex (use #[\\p{L}] + u flag):\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it("the ASCII-only-tag detector fires on the pre-rc.10 shape (NEGATIVE control)", () => {
+    const bad = String.raw`for (const m of line.matchAll(/(?:^|\s)(#[A-Za-z][\w/-]*)/g)) {`;
+    expect(/#\[A-Za-z\]/.test(bad)).toBe(true);
+    expect(/#\[A-Za-z\]/.test(String.raw`/(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu`)).toBe(false);
+  });
+});
+
+describe("H1 — frontmatter KEY lookup is case/NFC-insensitive (rc.10, external audit)", () => {
+  const nfc4 = `Caf${String.fromCodePoint(0xe9)}`; // NFC key
+  const nfd4 = `Cafe${String.fromCodePoint(0x301)}`; // NFD key (macOS)
+
+  it("lookupFoldedKey resolves a case-different filter key (POSITIVE)", () => {
+    expect(lookupFoldedKey({ status: "active" }, "Status")).toEqual({ present: true, value: "active" });
+    expect(lookupFoldedKey({ Status: "active" }, "status")).toEqual({ present: true, value: "active" });
+  });
+
+  it("lookupFoldedKey resolves an NFC vs NFD key (POSITIVE)", () => {
+    expect(nfc4).not.toBe(nfd4);
+    expect(lookupFoldedKey({ [nfd4]: 1 }, nfc4)).toEqual({ present: true, value: 1 });
+  });
+
+  it("an EXACT own-key wins; FIRST own-key wins on a fold collision (precedence)", () => {
+    // exact match returns the exact key's value even when a fold-sibling exists
+    expect(lookupFoldedKey({ Status: "X", status: "y" }, "status")).toEqual({ present: true, value: "y" });
+    // neither exact → first own key (insertion order) whose fold matches
+    expect(lookupFoldedKey({ Status: "X", status: "y" }, "STATUS")).toEqual({ present: true, value: "X" });
+  });
+
+  it("a genuinely-absent key is not present (NEGATIVE control)", () => {
+    expect(lookupFoldedKey({ status: "active" }, "author")).toEqual({ present: false, value: undefined });
   });
 });

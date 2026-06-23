@@ -1,5 +1,5 @@
 import { parseDql, runDql } from "../dql.js";
-import { foldTag } from "../name-fold.js";
+import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -1136,7 +1136,9 @@ export async function frontmatterGet(
     return {
       path: target.relPath,
       frontmatter: note.parsed.frontmatter,
-      value: note.parsed.frontmatter[args.key]
+      // v3.11.0-rc.10 (H1) — case/NFC-insensitive key resolution (Obsidian property
+      // names are case-insensitive); was a raw exact-string `frontmatter[args.key]`.
+      value: lookupFoldedKey(note.parsed.frontmatter, args.key).value
     };
   }
   return { path: target.relPath, frontmatter: note.parsed.frontmatter };
@@ -1219,7 +1221,8 @@ export async function frontmatterSearch(
     if (matches.length >= limit) break;
     try {
       const note = await vault.readNote(e.absPath, e.mtimeMs);
-      const value = note.parsed.frontmatter[args.key];
+      // v3.11.0-rc.10 (H1) — case/NFC-insensitive key resolution; was exact-string.
+      const value = lookupFoldedKey(note.parsed.frontmatter, args.key).value;
       let hit = false;
       if (args.exists === true) hit = value !== undefined;
       else if (args.equals !== undefined) hit = JSON.stringify(value) === JSON.stringify(args.equals);

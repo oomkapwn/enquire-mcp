@@ -548,6 +548,28 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     expect(result.collision.kind).toBe("none");
   });
 
+  // v3.11.0-rc.11 (rc.9-audit L4) — a valid-YAML-but-non-mapping frontmatter parses
+  // green but frontmatter_set will refuse it; surface `coerced` + a warning so an
+  // agent isn't surprised by a later refusal after a clean validate.
+  it("surfaces yaml.coerced + a warning when frontmatter is valid YAML but not a mapping", async () => {
+    const v = new Vault(root);
+    const scalar = await validateNoteProposal(v, {
+      path: "Inbox/scalar-fm.md",
+      content: "---\njust a bare scalar\n---\n\nBody.\n"
+    });
+    expect(scalar.yaml.parsed).toBe(true);
+    expect(scalar.yaml.coerced).toBe(true);
+    expect(scalar.warnings.some((w) => w.kind === "frontmatter-non-mapping")).toBe(true);
+
+    // NEGATIVE control: a normal key/value mapping is NOT coerced and gets no warning.
+    const mapping = await validateNoteProposal(v, {
+      path: "Inbox/map-fm.md",
+      content: "---\ntags: [planning]\n---\n\nBody.\n"
+    });
+    expect(mapping.yaml.coerced).toBe(false);
+    expect(mapping.warnings.some((w) => w.kind === "frontmatter-non-mapping")).toBe(false);
+  });
+
   it("flags broken wikilinks with did-you-mean suggestions", async () => {
     const v = new Vault(root);
     const result = await validateNoteProposal(v, {

@@ -19,10 +19,17 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "..");
 const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
 
-// Inventory: always-registered tools whose free-string input flows into a parser/regex.
+// Inventory: always-registered tools whose free-string input flows into a parser/regex
+// OR a superlinear per-note scan (tokenize / .toLowerCase() across the vault).
 const PARSER_FED_TOOLS = [
   { tool: "obsidian_open_questions", field: "pattern", cap: "MAX_QUESTION_PATTERN_LEN" },
-  { tool: "obsidian_dataview_query", field: "query", cap: "MAX_DQL_QUERY_LEN" }
+  { tool: "obsidian_dataview_query", field: "query", cap: "MAX_DQL_QUERY_LEN" },
+  // v3.11.0-rc.11 (rc.9-audit L1) — free-form query / tag args that feed a per-note
+  // tokenize+score scan; capped to MAX_QUERY_LEN / MAX_TAG_ARG_LEN (defense-in-depth
+  // above the HTTP body cap). A future query-fed tool added without a cap fails here.
+  { tool: "obsidian_search", field: "query", cap: "MAX_QUERY_LEN" },
+  { tool: "obsidian_context_pack", field: "query", cap: "MAX_QUERY_LEN" },
+  { tool: "obsidian_paper_audit", field: "tag", cap: "MAX_TAG_ARG_LEN" }
 ];
 
 /**

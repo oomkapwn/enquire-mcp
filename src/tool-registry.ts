@@ -49,6 +49,16 @@ import {
 } from "./tools/index.js";
 import type { Vault } from "./vault.js";
 
+/**
+ * v3.11.0-rc.11 (rc.9-audit L1, defense-in-depth) — upper bound on a free-form
+ * query / tag string at the schema boundary. The HTTP transport already caps the
+ * body, but a per-tool `.max()` fails an absurd query fast (before a per-note
+ * `.toLowerCase()` / tokenize scan) and documents the bound. Mirrors
+ * `MAX_DQL_QUERY_LEN` / `MAX_QUESTION_PATTERN_LEN`.
+ */
+const MAX_QUERY_LEN = 4096;
+const MAX_TAG_ARG_LEN = 256;
+
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 export function embedDbPath(vaultRoot: string): string {
   // Match the FTS5 location convention by stripping the .fts5.db extension
@@ -229,6 +239,7 @@ export function registerReadTools(
           query: z
             .string()
             .min(1)
+            .max(MAX_QUERY_LEN)
             .describe('Search string. With mode=all/any, whitespace tokenizes ("foo bar" → ["foo","bar"]).'),
           folder: z.string().optional().describe("Restrict to a subfolder"),
           limit: z.number().int().positive().max(200).optional().describe("Max results (default 25)"),
@@ -515,6 +526,7 @@ export function registerReadTools(
       inputSchema: {
         tag: z
           .string()
+          .max(MAX_TAG_ARG_LEN)
           .optional()
           .describe("Tag identifying paper notes — with or without leading # (default 'paper')"),
         folder: z.string().optional().describe("Restrict the audit to a subfolder"),
@@ -837,7 +849,11 @@ export function registerReadTools(
           "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free / offline / no model download — closes the gap to Smart Connections without paywall, ML deps, or HTTP. Use this when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first). **v3.10:** each hit also carries `age_days` + a `stale` flag (from the note's live mtime) — a freshness signal you can reason over.",
         annotations: { ...READ_ONLY, title: "Semantic search" },
         inputSchema: {
-          query: z.string().min(1).describe("Free-form query — multi-word, natural language is fine"),
+          query: z
+            .string()
+            .min(1)
+            .max(MAX_QUERY_LEN)
+            .describe("Free-form query — multi-word, natural language is fine"),
           folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
           limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
           min_score: z
@@ -864,7 +880,11 @@ export function registerReadTools(
           "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index (~1ms/chunk on M1). Subsequent queries are sub-100ms top-10. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
         annotations: { ...READ_ONLY, title: "Embeddings search" },
         inputSchema: {
-          query: z.string().min(1).describe("Free-form query — multi-word, natural language, any supported language"),
+          query: z
+            .string()
+            .min(1)
+            .max(MAX_QUERY_LEN)
+            .describe("Free-form query — multi-word, natural language, any supported language"),
           folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
           limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
           min_score: z
@@ -933,7 +953,11 @@ export function registerReadTools(
         '**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it matches Smart Connections-quality retrieval — free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. **v2.8.0:** when `--include-pdfs` was passed to `serve` (or `enquire-mcp index --include-pdfs` ran), PDF chunks are blended into results — each hit carries a `kind: "md" | "pdf"` flag and PDF chunks include `[page: N]` markers in snippets so agents can cite the right page. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics. **v3.10 (forgetting-aware):** every hit also carries `age_days` (whole days since the note was last edited, from its live mtime) and a `stale` boolean (true past ~1 year) — use these to flag a recalled fact as possibly out-of-date instead of stating it as current. Ranking stays relevance-driven by default; if the server was started with `--recency-weight`, fresher notes are blended upward.',
       annotations: { ...READ_ONLY, title: "Hybrid search" },
       inputSchema: {
-        query: z.string().min(1).describe("Free-form query — multi-word natural language is the sweet spot"),
+        query: z
+          .string()
+          .min(1)
+          .max(MAX_QUERY_LEN)
+          .describe("Free-form query — multi-word natural language is the sweet spot"),
         folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
         limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
         min_signals: z
@@ -1015,7 +1039,7 @@ export function registerReadTools(
         "Given a question, retrieve the top relevant notes (via hybrid search), gather backlinks summaries + optionally recent dailies, deduplicate, pack to a token budget, return a single ready-to-paste markdown bundle. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.",
       annotations: { ...READ_ONLY, title: "Context pack" },
       inputSchema: {
-        query: z.string().min(1).describe("Topic or question to gather context for"),
+        query: z.string().min(1).max(MAX_QUERY_LEN).describe("Topic or question to gather context for"),
         budget_tokens: z
           .number()
           .int()

@@ -100,7 +100,11 @@ export async function searchText(
   const tokens = mode === "phrase" ? [q] : q.trim().split(/\s+/);
   const lowerTokens = tokens.map((t) => t.toLowerCase());
 
-  const entries = await vault.listMarkdown(args.folder);
+  // v3.11.0-rc.11 (rc.9-audit L2, defense-in-depth) — cap the whole-vault scan
+  // (parity with findSimilar/validateNoteProposal). This tool is gated behind
+  // --diagnostic-search-tools, but a bounded scan keeps a pathological vault from
+  // a sustained per-note read+tokenize amplifier on serve-http.
+  const entries = capScanEntries(await vault.listMarkdown(args.folder), "obsidian_search_text");
 
   // Parallel file reads — was sequential, slow on large vaults. Chunk to
   // bound concurrency (avoid blowing the open-fd limit on huge vaults).

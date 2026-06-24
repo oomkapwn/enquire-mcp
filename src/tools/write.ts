@@ -3,6 +3,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { stripTrailingSlashes } from "../wildcard-match.js";
 import { findBestMatch, stripMd } from "./meta.js";
 
 /**
@@ -552,7 +553,7 @@ export async function frontmatterSet(
 export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("archive_note: `path` is required");
-  const folder = (args.archive_folder ?? "Archive").replace(/\/+$/, "");
+  const folder = stripTrailingSlashes(args.archive_folder ?? "Archive");
   // Strip leading folders from the source so the basename lands cleanly in
   // the archive — e.g. `Inbox/Foo.md` → `Archive/Foo.md`, not
   // `Archive/Inbox/Foo.md`. Preserves the user's `.md` extension or appends
@@ -688,7 +689,7 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   // (a representative path inside) — the user's glob may use `**` which
   // matches subpaths but not the bare folder name.
   if (args.folder) {
-    const folderTrim = args.folder.replace(/\/+$/, "");
+    const folderTrim = stripTrailingSlashes(args.folder);
     if (vault.isExcluded(folderTrim) || vault.isExcluded(`${folderTrim}/_probe.md`)) {
       throw new Error(`replace_in_notes: folder is excluded by privacy filter: ${args.folder}`);
     }

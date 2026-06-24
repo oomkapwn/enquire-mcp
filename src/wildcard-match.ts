@@ -188,3 +188,48 @@ export function compileGlobTokens(glob: string): WildcardToken[] {
   flushLit();
   return tokens;
 }
+
+// ── Linear (non-backtracking) trailing/leading run strips ──────────────────────
+//
+// v3.11.0-rc.14 (CodeQL js/polynomial-redos #13, HIGH) — these REPLACE the
+// `s.replace(/<class>+$/, "")` idiom that was duplicated across the folder-prefix
+// builders (fts5 / embed-db / tools.search ×2 / tools.write ×2), the periodic-notes
+// folder normalizer, and the trailing-newline/ATX-hash strippers. `/<class>+$/` is a
+// POLYNOMIAL-time regex: on `<class>×n + <one non-class char>` (e.g. `"/"×n + "x"`)
+// the anchored `+$` retries from EVERY run position → O(n²). Empirically a 4 MB
+// `folder` arg (bearer-reachable on serve-http) hung V8 for minutes. The prior
+// "$ anchor makes it O(n)" code comment was WRONG — it only held for the all-class
+// input, never for class-then-other. These loops are O(n) for ANY input.
+const SLASH = 47; // '/'
+const NEWLINE = 10; // '\n'
+const HASH = 35; // '#'
+
+/** Strip the trailing run of chars satisfying `pred` — O(n), no backtracking. */
+export function stripTrailingRun(s: string, pred: (code: number) => boolean): string {
+  let end = s.length;
+  while (end > 0 && pred(s.charCodeAt(end - 1))) end--;
+  return s.slice(0, end);
+}
+/** Strip the leading run of chars satisfying `pred` — O(n), no backtracking. */
+export function stripLeadingRun(s: string, pred: (code: number) => boolean): string {
+  let start = 0;
+  while (start < s.length && pred(s.charCodeAt(start))) start++;
+  return s.slice(start);
+}
+const isSlash = (c: number): boolean => c === SLASH;
+/** `s.replace(/\/+$/, "")` — linear. */
+export function stripTrailingSlashes(s: string): string {
+  return stripTrailingRun(s, isSlash);
+}
+/** `s.replace(/^\/+|\/+$/g, "")` — linear (leading AND trailing slash runs). */
+export function stripSurroundingSlashes(s: string): string {
+  return stripTrailingRun(stripLeadingRun(s, isSlash), isSlash);
+}
+/** `s.replace(/\n+$/, "")` — linear. */
+export function stripTrailingNewlines(s: string): string {
+  return stripTrailingRun(s, (c) => c === NEWLINE);
+}
+/** `s.replace(/#+$/, "")` — linear (ATX heading closing hashes). */
+export function stripTrailingHashes(s: string): string {
+  return stripTrailingRun(s, (c) => c === HASH);
+}

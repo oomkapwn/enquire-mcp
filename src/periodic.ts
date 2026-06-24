@@ -12,6 +12,7 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { stripSurroundingSlashes } from "./wildcard-match.js";
 
 export type PeriodicKind = "daily" | "weekly" | "monthly" | "quarterly" | "yearly";
 
@@ -106,7 +107,7 @@ export async function loadPeriodicConfig(
 function normaliseFolder(folder: string): string {
   // Strip leading/trailing slashes, normalize backslashes, then re-add a
   // single trailing slash if non-empty so callers can concatenate cleanly.
-  const stripped = folder.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const stripped = stripSurroundingSlashes(folder.replace(/\\/g, "/"));
   return stripped ? `${stripped}/` : "";
 }
 

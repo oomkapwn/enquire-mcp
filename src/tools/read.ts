@@ -3,6 +3,7 @@ import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { stripTrailingNewlines } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -961,7 +962,7 @@ export async function chatThreadAppend(
   // blank line, since the heading is on line 5. Now derive both from the heading marker
   // in the FINAL written content, so all three branches are correct (and frontmatter-
   // free of off-by-N). `existed` ⇒ overwrite; new note ⇒ create (no clobber).
-  const trimmed = existed ? body.replace(/\n+$/, "") : "";
+  const trimmed = existed ? stripTrailingNewlines(body) : "";
   const newBody = trimmed + toAppend;
   const result = await vault.writeNote(targetRel, newBody, { overwrite: existed });
   const headingMarker = `### ${role} · ${timestamp}`;

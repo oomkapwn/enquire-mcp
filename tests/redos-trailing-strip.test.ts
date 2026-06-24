@@ -87,3 +87,54 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
     expect("stripTrailingSlashes(opts.folder)").not.toMatch(ANTI); // the fixed form is clean
   });
 });
+
+describe("ReDoS — heading-regex class split to fts5's safe form (rc.16, sibling of CodeQL #13)", () => {
+  // read.ts:extractHeadings + meta.ts:getOpenQuestions used the SAME combined
+  // `/^(#{1,6})\s+(.+?)\s*#*\s*$/` capture that fts5.ts:796 already split for CodeQL
+  // js/polynomial-redos. Empirically the combined form is only mildly super-linear in
+  // V8 (~12 ms at a 500 KB line, bounded by maxFileBytes — NOT a multi-second DoS),
+  // but leaving two siblings unsplit after fts5 split the identical regex is the
+  // project's signature "instance fixed, sibling missed". rc.16 split both to
+  // `^(#{1,6})\s+(.+)$` + stripTrailingHashes. This guard fails CI if any heading
+  // sink reintroduces the combined capture.
+  const HEADING_SINKS = ["src/tools/read.ts", "src/tools/meta.ts", "src/fts5.ts"];
+  // matches the literal `(.+?)\s*#*\s*$` trailing-strip-inside-the-capture shape
+  const COMBINED = /\(\.\+\?\)\\s\*#\*\\s\*\$/;
+
+  it("no heading sink retains the combined (.+?)\\s*#*\\s*$ capture (static guard)", () => {
+    const offenders: string[] = [];
+    for (const rel of HEADING_SINKS) {
+      const src = readFileSync(path.join(repoRoot, rel), "utf8");
+      for (const [i, line] of src.split("\n").entries()) {
+        if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
+        if (COMBINED.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      }
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+
+  it("the static detector fires on the pre-rc.16 combined shape (NEGATIVE control)", () => {
+    expect("const m = /^(#{1,6})\\s+(.+?)\\s*#*\\s*$/.exec(line);").toMatch(COMBINED);
+    expect("const m = /^(#{1,6})\\s+(.+)$/.exec(ln);").not.toMatch(COMBINED); // the split form is clean
+  });
+
+  it("split form is byte-identical to the old combined capture on normal headings (POSITIVE)", () => {
+    const OLD = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+    const splitText = (line: string): string => {
+      const m = /^(#{1,6})\s+(.+)$/.exec(line);
+      return m?.[2] ? stripTrailingHashes(m[2].trim()).trim() : "";
+    };
+    const oldText = (line: string): string => OLD.exec(line)?.[2] ?? "";
+    for (const h of ["# Foo", "## Bar baz", "### a b c", "#### Title ###", "# trailing   ", "## with#hash mid"]) {
+      expect(splitText(h), `heading: ${JSON.stringify(h)}`).toBe(oldText(h));
+    }
+  });
+
+  it("a degenerate ATX-close-only heading yields empty text → skipped (matches fts5; documented edge)", () => {
+    const splitText = (line: string): string => {
+      const m = /^(#{1,6})\s+(.+)$/.exec(line);
+      return m?.[2] ? stripTrailingHashes(m[2].trim()).trim() : "";
+    };
+    expect(splitText("# ###")).toBe(""); // all-# ATX close → no real text → not emitted
+  });
+});

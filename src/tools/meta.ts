@@ -5,6 +5,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { stripTrailingHashes } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { searchHybrid } from "./search.js";
@@ -1520,9 +1521,14 @@ export async function getOpenQuestions(
     let currentHeading: string | null = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
-      const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      // v3.11.0-rc.16 — split the polynomial-ReDoS-class `(.+?)\s*#*\s*$` heading
+      // capture (parity with fts5.ts:796 + read.ts extractHeadings; see those for
+      // the empirical-linearity note). A heading line still `continue`s (never a
+      // candidate) even when its text is degenerate (all-`#` ATX close → empty).
+      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
       if (headingMatch?.[2]) {
-        currentHeading = headingMatch[2]; // track for context; heading lines aren't hits
+        const ht = stripTrailingHashes(headingMatch[2].trim()).trim();
+        if (ht) currentHeading = ht; // track for context; heading lines aren't hits
         continue;
       }
       candidates.push({

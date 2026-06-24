@@ -3,7 +3,7 @@ import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingNewlines } from "../wildcard-match.js";
+import { stripTrailingHashes, stripTrailingNewlines } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -236,9 +236,20 @@ function extractHeadings(body: string, bodyStartLine: number): Array<{ level: nu
       continue;
     }
     if (inFence) continue;
-    const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    // v3.11.0-rc.16 — split the combined `(.+?)\s*#*\s*$` heading capture (a
+    // polynomial-ReDoS-class shape — CodeQL js/polynomial-redos; fts5.ts:796
+    // already split it for exactly this reason) into a single anchored capture +
+    // linear trailing-trim. Empirically the combined form is only mildly
+    // super-linear in V8 (~12 ms at a 500 KB line), bounded by maxFileBytes —
+    // NOT the multi-second DoS a prep-audit subagent over-claimed — but leaving
+    // two siblings unsplit after fts5 split the identical regex is the project's
+    // signature "instance fixed, sibling missed". `.trim()` + stripTrailingHashes
+    // is byte-identical to the old capture on every heading except a degenerate
+    // ATX-close-only heading (`# ###` → empty text → skipped, matching fts5).
+    const m = /^(#{1,6})\s+(.+)$/.exec(line);
     if (m?.[1] && m[2]) {
-      out.push({ level: m[1].length, text: m[2], line: bodyStartLine + i });
+      const text = stripTrailingHashes(m[2].trim()).trim();
+      if (text) out.push({ level: m[1].length, text, line: bodyStartLine + i });
     }
   }
   return out;

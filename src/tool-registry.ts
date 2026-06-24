@@ -930,12 +930,14 @@ export function registerReadTools(
         query: z
           .string()
           .min(1)
+          .max(MAX_QUERY_LEN)
           .describe(
             "The original user question. Echoed in the response for audit-trail; does NOT influence retrieval when hypothetical_answer is non-empty."
           ),
         hypothetical_answer: z
           .string()
           .min(1)
+          .max(MAX_QUERY_LEN)
           .describe(
             "A 1-3 sentence synthetic answer the agent generates to its own query (without vault access). This is what gets embedded. Make it topically dense + match the register/style of your vault notes."
           ),

@@ -3,6 +3,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { stripTrailingSlashes } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
@@ -644,7 +645,7 @@ export async function semanticSearch(
   }
 
   // Cosine = Σ q[t]·d[t] over shared terms (both vectors are L2-normed).
-  const folderPrefix = args.folder ? `${args.folder.replace(/\/+$/, "")}/` : null;
+  const folderPrefix = args.folder ? `${stripTrailingSlashes(args.folder)}/` : null;
   const scored: Array<{ doc: DocVector; score: number; matchedTerms: string[] }> = [];
   for (const doc of docs) {
     if (folderPrefix && !doc.relPath.startsWith(folderPrefix) && doc.relPath !== args.folder) continue;
@@ -1093,7 +1094,7 @@ export async function embeddingsSearch(
       const maxLabels = Math.max(hnsw.rowByLabel.size, 1);
       const initialK = Math.min(Math.max(overFetch * 3, 50), maxLabels);
       const { hnswResultsToHits } = await import("../hnsw.js");
-      const folderPrefix = args.folder ? `${args.folder.replace(/\/+$/, "")}/` : null;
+      const folderPrefix = args.folder ? `${stripTrailingSlashes(args.folder)}/` : null;
       rawHits = adaptiveHnswRefill({
         initialK,
         maxLabels,

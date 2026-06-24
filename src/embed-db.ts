@@ -21,6 +21,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
+import { stripTrailingSlashes } from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 3;
 // v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
@@ -561,7 +562,7 @@ export class EmbedDb {
     // positive: the `$` anchor forces match from end-of-string, and `\/+`
     // consumes only `/` chars greedily. Worst-case input (long trailing
     // run of slashes) is O(n), not O(n²).
-    const folderPrefix = opts.folder ? `${opts.folder.replace(/\/+$/, "")}/` : null;
+    const folderPrefix = opts.folder ? `${stripTrailingSlashes(opts.folder)}/` : null;
 
     // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern
     // semantics so folder names containing `%` / `_` (rare but possible in

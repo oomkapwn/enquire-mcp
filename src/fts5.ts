@@ -16,6 +16,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
+import { stripTrailingHashes, stripTrailingSlashes } from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
@@ -519,11 +520,11 @@ export class FtsIndex {
       // Prefix-equality via substr — avoids GLOB pattern semantics so folder
       // names containing `*`, `?`, `[`, `]` (rare but possible in Obsidian)
       // don't expand into wider matches.
-      // CodeQL js/polynomial-redos flags `\/+$` here as polynomial. False
-      // positive: the `$` anchor forces the engine to match from end-of-
-      // string, and `\/+` consumes only `/` chars greedily. Worst-case input
-      // is O(n) (a single trailing run of slashes), not O(n²).
-      const prefix = `${opts.folder.replace(/\/+$/, "")}/`;
+      // v3.11.0-rc.14 (CodeQL js/polynomial-redos #13, HIGH) — linear strip. The old
+      // `replace(/\/+$/, "")` WAS exploitable: O(n²) on `/`×n + a non-slash char via the
+      // bearer-reachable `folder` arg (measured a multi-second V8 hang). The prior
+      // "$ anchor ⇒ O(n)" note was wrong — it held only for all-slash input.
+      const prefix = `${stripTrailingSlashes(opts.folder)}/`;
       // rc.43 M1 — let SQLite compute the prefix length via length() (which counts
       // CHARACTERS, exactly like substr's 3rd arg). Binding JS `prefix.length` (UTF-16
       // code UNITS) diverged for any folder name with an astral-plane char (emoji): e.g.
@@ -790,11 +791,12 @@ function computeBreadcrumbsByLine(content: string): string[] {
     // two linear trailing-trim ops, instead of one combined regex with
     // `(.+?)\s*#*\s*$` (CodeQL js/polynomial-redos: O(n²) on pathological
     // input like `## h<spaces×100000>####`). Each replace below is
-    // anchored at `$` so engine matches from the end — strictly linear.
+    // a linear (non-backtracking) helper — the old `replace(/\s+$/)` + `/#+$/`
+    // were the SAME polynomial-ReDoS class as #13 (whitespace/hash run + non-match).
     const headingMatch = /^(#{1,6})\s+(.+)$/.exec(ln);
     if (headingMatch?.[1] && headingMatch[2]) {
       const depth = headingMatch[1].length;
-      const text = headingMatch[2].replace(/\s+$/, "").replace(/#+$/, "").trim();
+      const text = stripTrailingHashes(headingMatch[2].trim()).trim();
       // Trim stack to current depth - 1, then push at depth.
       stack.length = depth - 1;
       stack.push(text);

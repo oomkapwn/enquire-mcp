@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
-import { stripTrailingHashes, stripTrailingSlashes } from "./wildcard-match.js";
+import { stripTrailingHashes, stripTrailingLineEnds, stripTrailingSlashes } from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
@@ -793,7 +793,11 @@ function computeBreadcrumbsByLine(content: string): string[] {
     // input like `## h<spaces×100000>####`). Each replace below is
     // a linear (non-backtracking) helper — the old `replace(/\s+$/)` + `/#+$/`
     // were the SAME polynomial-ReDoS class as #13 (whitespace/hash run + non-match).
-    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(ln);
+    // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
+    // terminator first; `(.+)$` won't match across a CRLF note's trailing `\r`,
+    // which silently dropped this heading from the breadcrumb enrichment (latent
+    // here since v3.5.8). Same fix as readNote map + getOpenQuestions.
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(ln));
     if (headingMatch?.[1] && headingMatch[2]) {
       const depth = headingMatch[1].length;
       const text = stripTrailingHashes(headingMatch[2].trim()).trim();

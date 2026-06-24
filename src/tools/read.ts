@@ -1107,6 +1107,13 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
  * state before issuing a write. When `key` is set, the response includes
  * the resolved `value` (which may be `undefined` if the key is absent).
  *
+ * @remarks Trust boundary — this is an in-process API that trusts its
+ * `key` argument's length. The MCP boundary (`obsidian_frontmatter_get` in
+ * `tool-registry.ts`) caps `key` at `MAX_FRONTMATTER_KEY_LEN` (256, rc.13
+ * AUD-04) so a remote bearer client cannot drive an unbounded multi-MB key
+ * through the per-note `lookupFoldedKey` fold; direct internal callers are
+ * not capped and must pass sane keys.
+ *
  * @param vault - The vault to read from.
  * @param args - One of `path` or `title` is required. `key` narrows the
  *   response to a single value.
@@ -1175,6 +1182,13 @@ export interface FrontmatterSearchArgs {
  * "find all notes with `status: draft` and set their status to `published`",
  * or "find notes whose `aliases` array contains a typo". Single predicate
  * per call by design — combine with multiple calls if you need AND/OR logic.
+ *
+ * @remarks Trust boundary — in-process API that trusts its `key` length.
+ * The MCP boundary (`obsidian_frontmatter_search` in `tool-registry.ts`)
+ * caps `key` at `MAX_FRONTMATTER_KEY_LEN` (256, rc.13 AUD-04) so a remote
+ * bearer client cannot drive an unbounded multi-MB key through the
+ * whole-vault per-note `nfcLower(key)` fold; direct internal callers are
+ * not capped and must pass sane keys.
  *
  * @param vault - The vault to scan.
  * @param args - {@link FrontmatterSearchArgs}. `key` is required and

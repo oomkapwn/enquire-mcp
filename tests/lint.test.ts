@@ -258,6 +258,42 @@ describe("paperAudit (v1.5)", () => {
   });
 });
 
+describe("paperAudit — AUD-NEW-1 (rc.15, rc.14-re-audit): case-variant citation keys ARE recognized", () => {
+  // The rc.14 re-audit claimed paperAudit's frontmatter-citation check (`arxiv`/`doi`/
+  // `url`/`isbn`) misses case-variant (`ArXiv:`) and NFD keys because it `.toLowerCase()`s
+  // but does not NFC-fold — a purported sibling of the rc.10/rc.12 H1 NFC-key class.
+  // Re-verified EMPIRICALLY as a FALSE POSITIVE: the four target keys are pure ASCII, so
+  // `nfcLower` (NFC + lowercase) is byte-IDENTICAL to `.toLowerCase()` for any key that
+  // could match them — an ASCII word has no distinct NFD form (`"Arxiv" === "Arxiv".NFD`),
+  // and `.toLowerCase()` already covers every case variant. This contract pins the non-bug
+  // so a future audit doesn't re-litigate it. Isolated temp vault — shared fixture untouched.
+  it("a mixed-case `ArXiv:` frontmatter key is recognized → NOT flagged (POSITIVE — .toLowerCase covers it)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-audnew1-"));
+    await fs.writeFile(path.join(dir, "Mixed.md"), `---\ntags: [paper]\nArXiv: 2401.12345\n---\n\nA paper note.\n`);
+    await fs.writeFile(path.join(dir, "Nfd.md"), `---\ntags: [paper]\nArxiv: 2401.54321\n---\n\nAnother paper note.\n`);
+    await fs.writeFile(path.join(dir, "Doi.md"), `---\ntags: [paper]\nDOI: 10.1000/xyz\n---\n\nThird paper note.\n`);
+    const v = new Vault(dir);
+    const result = await paperAudit(v, { tag: "paper" });
+    expect(result.scanned).toBe(3);
+    expect(result.flagged.length).toBe(0); // all three citations recognized despite key-case variation
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("NEGATIVE control — a #paper note with NO citation key and NO body identifier IS flagged (proves discrimination)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-audnew1neg-"));
+    await fs.writeFile(
+      path.join(dir, "Missing.md"),
+      `---\ntags: [paper]\ntitle: No citation here\n---\n\nBody with no identifiers.\n`
+    );
+    const v = new Vault(dir);
+    const result = await paperAudit(v, { tag: "paper" });
+    expect(result.scanned).toBe(1);
+    expect(result.flagged.length).toBe(1);
+    expect(result.flagged[0]?.path).toBe("Missing.md");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe("lintWiki — H-2 (rc.12, rc.11-audit): stale pass honors a case/NFC-variant `last_reviewed` key", () => {
   // The rc.10 H1 NFC-key-fold class had a 7th, unwired site: the `lint_vault_wiki`
   // stale pass read `frontmatter.last_reviewed` by RAW exact string, so a case-variant

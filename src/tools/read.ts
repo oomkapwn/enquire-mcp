@@ -3,7 +3,7 @@ import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingHashes, stripTrailingNewlines } from "../wildcard-match.js";
+import { stripTrailingHashes, stripTrailingLineEnds, stripTrailingNewlines } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -246,7 +246,13 @@ function extractHeadings(body: string, bodyStartLine: number): Array<{ level: nu
     // signature "instance fixed, sibling missed". `.trim()` + stripTrailingHashes
     // is byte-identical to the old capture on every heading except a degenerate
     // ATX-close-only heading (`# ###` → empty text → skipped, matching fts5).
-    const m = /^(#{1,6})\s+(.+)$/.exec(line);
+    // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
+    // terminator FIRST: `body.split("\n")` leaves a `\r` on every CRLF-saved line,
+    // and JS `(.+)$` (no `s`/`m`) won't match across it → the heading was silently
+    // dropped (readNote map returned []). The pre-rc.16 combined form absorbed the
+    // `\r` via its trailing `\s*`. (linear strip — a `replace(/[\r…]+$/)` would be
+    // the polynomial-ReDoS class.)
+    const m = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(line));
     if (m?.[1] && m[2]) {
       const text = stripTrailingHashes(m[2].trim()).trim();
       if (text) out.push({ level: m[1].length, text, line: bodyStartLine + i });

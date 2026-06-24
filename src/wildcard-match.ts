@@ -203,6 +203,9 @@ export function compileGlobTokens(glob: string): WildcardToken[] {
 const SLASH = 47; // '/'
 const NEWLINE = 10; // '\n'
 const HASH = 35; // '#'
+const CR = 13; // '\r'
+const LS = 0x2028; // LINE SEPARATOR
+const PS = 0x2029; // PARAGRAPH SEPARATOR
 
 /** Strip the trailing run of chars satisfying `pred` — O(n), no backtracking. */
 export function stripTrailingRun(s: string, pred: (code: number) => boolean): string {
@@ -232,4 +235,20 @@ export function stripTrailingNewlines(s: string): string {
 /** `s.replace(/#+$/, "")` — linear (ATX heading closing hashes). */
 export function stripTrailingHashes(s: string): string {
   return stripTrailingRun(s, (c) => c === HASH);
+}
+/**
+ * Strip the trailing run of JS line-terminator chars (`\n` `\r` U+2028 U+2029) — linear.
+ *
+ * v3.11.0-rc.17 (rc.16 re-audit, CRLF heading-drop regression) — a line obtained
+ * from `body.split("\n")` retains a trailing `\r` on a CRLF (Windows) note, and
+ * ` `/` ` are never split on at all. The rc.16 heading capture
+ * `/^(#{1,6})\s+(.+)$/` then MATCHES NOTHING, because JS `.` (no `s` flag) does
+ * not match a line terminator and `$` (no `m` flag) only matches true end-of-input
+ * — so the trailing `\r` makes `(.+)$` fail and the heading is silently dropped.
+ * The pre-rc.16 combined form absorbed the `\r` via its trailing `\s*`. Strip the
+ * terminator (linearly — a `replace(/[\r\n…]+$/,"")` would itself be the
+ * polynomial-ReDoS class the static guard polices) before the heading match.
+ */
+export function stripTrailingLineEnds(s: string): string {
+  return stripTrailingRun(s, (c) => c === NEWLINE || c === CR || c === LS || c === PS);
 }

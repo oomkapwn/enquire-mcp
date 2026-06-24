@@ -105,12 +105,64 @@ export function parseNote(source: string): ParsedNote {
   };
 }
 
-const WIKILINK_RE = /(?<!!)\[\[([^\]\n]+?)\]\]/g;
-const EMBED_RE = /!\[\[([^\]\n]+?)\]\]/g;
+/**
+ * Linear, non-backtracking scan for `[[wikilink]]` (embed=false) / `![[embed]]`
+ * (embed=true) INNER captures, in source order. Byte-equivalent to the `m[1]`
+ * sequence of the former regexes `/(?<!!)\[\[([^\]\n]+?)\]\]/g` (wikilink) and
+ * `/!\[\[([^\]\n]+?)\]\]/g` (embed) — proven by `tests/wikilink-scan.test.ts`'s
+ * differential against inlined copies of those regexes over a broad corpus.
+ *
+ * v3.11.0-rc.17 (rc.16 re-audit, HIGH ReDoS) — REPLACES those two regexes. The
+ * lazy `[^\]\n]+?` searching for the 2-char `]]` delimiter is O(n²) on an
+ * unclosed `[[`-run: each `[[` start lazily extends to EOF hunting a `]]` that
+ * never comes (measured 195 KB → 10.7 s; reachable via the always-on
+ * `obsidian_read_note` → `parseNote` over adversarial note CONTENT = a
+ * bearer-reachable serve-http event-loop hang — the rc.39 worker sink-bound and
+ * the rc.14/rc.71 linear matchers never covered this wikilink/embed sink). This
+ * scan visits each `]` / `[[` / `\n` at most once → O(n) for ANY input. Inner
+ * excludes `]` and `\n` (a wikilink never crosses a line); the close is the first
+ * `]` after `[[`, which must be doubled (`]]`).
+ *
+ * @param text - Markdown source (already stripped of code spans, ideally).
+ * @param embed - false = `[[wikilink]]` (preceding char not `!`); true = `![[embed]]`.
+ * @returns Inner capture strings in source order.
+ */
+export function scanWikilinkInners(text: string, embed = false): string[] {
+  const out: string[] = [];
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf("[[", from);
+    if (open < 0) break;
+    const innerStart = open + 2;
+    const bracket = text.indexOf("]", innerStart);
+    if (bracket < 0) break; // no closing ']' anywhere → no further match is possible
+    const nl = text.indexOf("\n", innerStart);
+    if (nl >= 0 && nl < bracket) {
+      // a newline precedes the first ']' → inner would cross `\n` (forbidden);
+      // no `[[` start ≤ nl can match → skip past the newline.
+      from = nl + 1;
+      continue;
+    }
+    if (bracket === innerStart) {
+      from = open + 1; // empty inner (`[[]]`) — the inner needs ≥1 char; try next start
+      continue;
+    }
+    if (text.charCodeAt(bracket + 1) === 93 /* ']' */) {
+      const isEmbed = open > 0 && text.charCodeAt(open - 1) === 33; /* '!' */
+      if (isEmbed === embed) out.push(text.slice(innerStart, bracket));
+      from = bracket + 2; // consume past `]]`
+    } else {
+      // lone ']' (not doubled) — inner can't cross it and the close isn't `]]`;
+      // no `[[` start ≤ bracket can match → skip past this ']'.
+      from = bracket + 1;
+    }
+  }
+  return out;
+}
 
 /**
  * Extract all `[[wikilinks]]` from a markdown string. Excludes `![[embeds]]`
- * via a negative lookbehind on `!`. Caller is responsible for stripping
+ * via the preceding-`!` check. Caller is responsible for stripping
  * code fences / inline code first if recall over example markdown matters
  * (use the same pipeline as {@link parseNote}).
  *
@@ -118,7 +170,7 @@ const EMBED_RE = /!\[\[([^\]\n]+?)\]\]/g;
  * @returns Wikilinks in source order. Empty array if none found.
  */
 export function extractWikilinks(text: string): Wikilink[] {
-  return matchLinks(text, WIKILINK_RE);
+  return matchLinks(text, false);
 }
 
 /**
@@ -129,14 +181,12 @@ export function extractWikilinks(text: string): Wikilink[] {
  * @returns Embeds in source order. Empty array if none found.
  */
 export function extractEmbeds(text: string): Embed[] {
-  return matchLinks(text, EMBED_RE);
+  return matchLinks(text, true);
 }
 
-function matchLinks(text: string, re: RegExp): Wikilink[] {
+function matchLinks(text: string, embed: boolean): Wikilink[] {
   const out: Wikilink[] = [];
-  for (const m of text.matchAll(re)) {
-    const raw = m[1];
-    if (raw === undefined) continue;
+  for (const raw of scanWikilinkInners(text, embed)) {
     let alias: string | undefined;
     let rest = raw;
     const pipe = rest.indexOf("|");

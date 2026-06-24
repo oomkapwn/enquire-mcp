@@ -3,9 +3,9 @@ import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
-import { INLINE_TAG_RE } from "../parser.js";
+import { INLINE_TAG_RE, scanWikilinkInners } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingHashes } from "../wildcard-match.js";
+import { stripTrailingHashes, stripTrailingLineEnds } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { searchHybrid } from "./search.js";
@@ -176,7 +176,6 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
 
   // 3. Wikilink resolution against the live vault.
   const all = await vault.listMarkdown();
-  const wikilinkRe = /(?<!!)\[\[([^\]\n]+?)\]\]/g;
   const wikilinks: ValidateProposalResult["wikilinks"] = [];
   // v3.10.0-rc.67 (round-3 re-sweep, DoS) — memoize suggestions per broken target so a body
   // packed with thousands of distinct (or repeated) broken `[[...]]` targets does not re-rank
@@ -185,9 +184,13 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   // single cached O(N) in-memory rank, and repeats are O(1). Closes the O(broken-links × vault)
   // serve-http amplifier (the rc.65 readCanvas resource-bound-escape class).
   const suggestionCache = new Map<string, string[]>();
-  for (const m of bodyAfterFm.matchAll(wikilinkRe)) {
-    const raw = m[0];
-    const inner = (m[1] ?? "").trim();
+  // v3.11.0-rc.17 (rc.16 re-audit, HIGH ReDoS) — was a BYTE-IDENTICAL hand-copy of
+  // parser.ts's O(n²) lazy-quantifier wikilink regex (the rc.10 INLINE_TAG_RE
+  // copy-class). Routed through the shared linear scanner; `raw` reconstructs the
+  // full `[[…]]` match (the former `m[0]`) faithfully since inner excludes `]`/`\n`.
+  for (const innerRaw of scanWikilinkInners(bodyAfterFm, false)) {
+    const raw = `[[${innerRaw}]]`;
+    const inner = innerRaw.trim();
     if (!inner) continue;
     // Strip alias / section / block to get the bare target name.
     const beforePipe = inner.split("|")[0] ?? "";
@@ -1525,7 +1528,11 @@ export async function getOpenQuestions(
       // capture (parity with fts5.ts:796 + read.ts extractHeadings; see those for
       // the empirical-linearity note). A heading line still `continue`s (never a
       // candidate) even when its text is degenerate (all-`#` ATX close → empty).
-      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
+      // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
+      // terminator first so a CRLF note's headings still set `currentHeading`
+      // (otherwise `(.+)$` fails on the trailing `\r` and questions lose their
+      // section breadcrumb). Same fix as readNote map + fts5 heading enrichment.
+      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(line));
       if (headingMatch?.[2]) {
         const ht = stripTrailingHashes(headingMatch[2].trim()).trim();
         if (ht) currentHeading = ht; // track for context; heading lines aren't hits

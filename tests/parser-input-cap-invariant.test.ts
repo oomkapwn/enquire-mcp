@@ -34,7 +34,13 @@ const PARSER_FED_TOOLS = [
   // with a per-note `nfcLower(key)` fold, so an uncapped multi-MB key is a bearer-reachable
   // CPU-DoS amplifier (measured ~9.5s for a 4 MB key). Capped to MAX_FRONTMATTER_KEY_LEN.
   { tool: "obsidian_frontmatter_search", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" },
-  { tool: "obsidian_frontmatter_get", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" }
+  { tool: "obsidian_frontmatter_get", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" },
+  // v3.11.0-rc.16 — hyde_search was the ONE remaining always-on bearer-reachable
+  // free-form query tool the rc.11 L1 cap sweep missed; `hypothetical_answer` is the
+  // string that gets embedded (CPU), `query` is echoed/fallback-embedded. Both capped
+  // to MAX_QUERY_LEN (defense-in-depth above the HTTP body cap).
+  { tool: "obsidian_hyde_search", field: "query", cap: "MAX_QUERY_LEN" },
+  { tool: "obsidian_hyde_search", field: "hypothetical_answer", cap: "MAX_QUERY_LEN" }
 ];
 
 /**

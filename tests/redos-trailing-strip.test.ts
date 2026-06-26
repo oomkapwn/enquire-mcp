@@ -82,6 +82,7 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
     // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
     // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
     const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#)\+\$\/[gimsuy]*\s*,/;
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — a SAMPLE of source code (a real `${…}` line) matched against the ANTI regex.
     expect('const p = `${opts.folder.replace(/\\/+$/, "")}/`;').toMatch(ANTI);
     expect('body.replace(/\\n+$/, "")').toMatch(ANTI);
     expect("stripTrailingSlashes(opts.folder)").not.toMatch(ANTI); // the fixed form is clean

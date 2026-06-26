@@ -86,22 +86,29 @@ describe("wikilink/embed scanner (rc.17) — differential vs the pre-rc.17 regex
 });
 
 describe("wikilink scanner (rc.17) — linear time on the catastrophic shape", () => {
-  it("scanWikilinkInners stays O(n) on a 2 MB unclosed `[[`-run (POSITIVE — <100 ms)", () => {
+  // v3.11.0-rc.20 — these wall-clock timing tests flaked the rc.19 release (a loaded CI
+  // runner missed a tight absolute `<150ms` budget). Hardened: the big-input POSITIVE uses a
+  // GENEROUS absolute ceiling (the op is ~14 ms; the quadratic would be ~8 s, so a 2000 ms
+  // ceiling can't be tripped by load yet still fails on a re-introduced O(n²)), and the
+  // NEGATIVE control is a RATIO (old/new ≥ N×) — environment-INDEPENDENT, since both run on
+  // the same runner so absolute speed cancels out (the rc.25 generative-fuzz robustness move).
+  it("scanWikilinkInners stays O(n) on a 2 MB unclosed `[[`-run (POSITIVE — generous ceiling)", () => {
     const evil = "[".repeat(2_000_000); // no closing `]]` → the worst case
     let res: string[] = [];
     const t = ms(() => {
       res = scanWikilinkInners(evil, false);
     });
     expect(res).toEqual([]);
-    expect(t).toBeLessThan(100);
+    expect(t).toBeLessThan(2000); // ~sub-ms actual; an O(n²) regression would be many seconds
   });
 
-  it("the OLD regex IS quadratic on the same shape (NEGATIVE control — proves the timing test discriminates)", () => {
-    const evil = "[".repeat(40_000) + "x";
+  it("the OLD regex IS quadratic on the same shape (NEGATIVE control — RATIO discriminates)", () => {
+    const evil = `${"[".repeat(40_000)}x`;
     const linear = ms(() => scanWikilinkInners(evil, false));
     const quad = ms(() => oldInners(evil, false));
-    expect(linear).toBeLessThan(20); // the fix is fast …
-    expect(quad).toBeGreaterThan(150); // … while the old lazy-quantifier regex is quadratic even at 40k
+    // Ratio, not absolute ms — robust to runner speed: the old lazy-quantifier regex is
+    // hugely slower than the linear scan on the unclosed-run shape (typically 100×+).
+    expect(quad / Math.max(linear, 0.05)).toBeGreaterThan(8);
   });
 });
 
@@ -142,22 +149,22 @@ function rc17UnboundedNlScan(text: string): number {
 }
 
 describe("wikilink scanner (rc.18) — linear on a DENSE closed `[[a]]`-run (the rc.17 regression)", () => {
-  it("scanWikilinkInners stays O(n) on a 2 MB dense `[[a]]` run, no newlines (POSITIVE — <150 ms)", () => {
+  // rc.20 — generous absolute ceiling for the big POSITIVE + RATIO NEGATIVE (see the rc.17 note above).
+  it("scanWikilinkInners stays O(n) on a 2 MB dense `[[a]]` run, no newlines (POSITIVE — generous ceiling)", () => {
     const evil = "[[a]]".repeat(400_000); // 2 MB, 400k closed links, no `\n` — MOC/index-note shape
     let res: string[] = [];
     const t = ms(() => {
       res = scanWikilinkInners(evil, false);
     });
     expect(res).toHaveLength(400_000);
-    expect(t).toBeLessThan(150);
+    expect(t).toBeLessThan(2000); // ~14 ms actual; the pre-rc.18 unbounded-`\n` form was ~8 s here
   });
 
-  it("the pre-rc.18 unbounded-`\\n` scan IS quadratic on the same shape (NEGATIVE control)", () => {
-    const evil = "[[a]]".repeat(80_000); // 400k chars; the unbounded form is already quadratic here
+  it("the pre-rc.18 unbounded-`\\n` scan IS quadratic on the same shape (NEGATIVE control — RATIO)", () => {
+    const evil = "[[a]]".repeat(80_000); // 400k chars; the unbounded form is quadratic here
     const linear = ms(() => scanWikilinkInners(evil, false));
     const quad = ms(() => rc17UnboundedNlScan(evil));
-    expect(linear).toBeLessThan(25); // the bounded-window fix is fast …
-    expect(quad).toBeGreaterThan(120); // … while the rc.17 unbounded-`\n` scan is quadratic even at 80k
+    expect(quad / Math.max(linear, 0.05)).toBeGreaterThan(8); // ratio: old unbounded-`\n` scan ≫ bounded
   });
 });
 

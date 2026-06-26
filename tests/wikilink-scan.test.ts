@@ -102,13 +102,16 @@ describe("wikilink scanner (rc.17) — linear time on the catastrophic shape", (
     expect(t).toBeLessThan(2000); // ~sub-ms actual; an O(n²) regression would be many seconds
   });
 
-  it("the OLD regex IS quadratic on the same shape (NEGATIVE control — RATIO discriminates)", () => {
+  it("the OLD regex IS quadratic on the same shape (NEGATIVE control — FLOOR on the old time)", () => {
     const evil = `${"[".repeat(40_000)}x`;
-    const linear = ms(() => scanWikilinkInners(evil, false));
     const quad = ms(() => oldInners(evil, false));
-    // Ratio, not absolute ms — robust to runner speed: the old lazy-quantifier regex is
-    // hugely slower than the linear scan on the unclosed-run shape (typically 100×+).
-    expect(quad / Math.max(linear, 0.05)).toBeGreaterThan(8);
+    // v3.11.0-rc.22 — absolute FLOOR on the OLD catastrophic time, NOT a ratio. The rc.20
+    // `quad/linear > 8` form flaked on CI (measured 7.50 < 8) because the `linear` denominator
+    // is a sub-ms op whose wall-clock is noise-dominated on a contended runner (read ~43 ms vs
+    // ~2.5 ms locally). The OLD lazy-quantifier regex is ~430 ms here on a dev laptop and a CI
+    // runner is only SLOWER — so a 50 ms floor can only fail if the runner ran the quadratic 8×
+    // FASTER than a laptop (impossible). Load pushes the quad UP, never below the floor.
+    expect(quad).toBeGreaterThan(50);
   });
 });
 
@@ -160,11 +163,12 @@ describe("wikilink scanner (rc.18) — linear on a DENSE closed `[[a]]`-run (the
     expect(t).toBeLessThan(2000); // ~14 ms actual; the pre-rc.18 unbounded-`\n` form was ~8 s here
   });
 
-  it("the pre-rc.18 unbounded-`\\n` scan IS quadratic on the same shape (NEGATIVE control — RATIO)", () => {
+  it("the pre-rc.18 unbounded-`\\n` scan IS quadratic on the same shape (NEGATIVE control — FLOOR)", () => {
     const evil = "[[a]]".repeat(80_000); // 400k chars; the unbounded form is quadratic here
-    const linear = ms(() => scanWikilinkInners(evil, false));
     const quad = ms(() => rc17UnboundedNlScan(evil));
-    expect(quad / Math.max(linear, 0.05)).toBeGreaterThan(8); // ratio: old unbounded-`\n` scan ≫ bounded
+    // rc.22 — absolute floor, not a ratio (see the rc.17 NEGATIVE note above). The unbounded-`\n`
+    // scan is ~325 ms here on a laptop; CI is slower, so 50 ms can only fail at 6× laptop speed.
+    expect(quad).toBeGreaterThan(50);
   });
 });
 

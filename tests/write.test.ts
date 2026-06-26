@@ -835,11 +835,13 @@ describe("replaceStringOutsideCodeFences (rc.18 audit) — Unicode offset + line
     expect(t).toBeLessThan(2000); // ~1 ms actual; the pre-rc.18 O(n²) loop was ~30 s
   });
 
-  it("NEGATIVE control — the pre-rc.18 quadratic loop is slow on the same shape (RATIO)", () => {
+  it("NEGATIVE control — the pre-rc.18 quadratic loop is slow on the same shape (FLOOR on the old time)", () => {
     const note = "a".repeat(2_000);
-    const fast = ms(() => replaceStringOutsideCodeFences(note, "a", "B".repeat(4096), true));
     const slow = ms(() => oldReplaceCS(note, "a", "B".repeat(4096)));
-    expect(slow / Math.max(fast, 0.05)).toBeGreaterThan(8); // ratio: O(n²) slice+concat rebuild ≫ single-pass
+    // rc.22 — absolute floor, not a ratio (the rc.20 `slow/fast > 8` divided by a noise-dominated
+    // sub-ms `fast` and flaked on CI). The O(n²) slice+concat rebuild is ~830 ms here on a laptop;
+    // CI is slower, so a 50 ms floor can only fail at 16× laptop speed. Load pushes `slow` UP.
+    expect(slow).toBeGreaterThan(50);
   });
 });
 

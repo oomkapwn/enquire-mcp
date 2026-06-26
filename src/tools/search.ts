@@ -116,7 +116,9 @@ export async function searchText(
     const results = await Promise.all(
       chunk.map(async (e) => {
         const { content } = await vault.readNote(e.absPath, e.mtimeMs);
-        const lower = content.toLowerCase();
+        // rc.21 — fold with an offset map so `firstHit` maps back to the ORIGINAL
+        // string before slicing (a length-expanding fold char would drift the offset).
+        const { folded: lower, map: foldMap } = foldWithMap(content);
         let totalScore = 0;
         let firstHit = -1;
         let firstHitLen = 0;
@@ -145,7 +147,8 @@ export async function searchText(
         // least one; "phrase" requires the raw query (single token).
         if (mode === "all" && matched.length !== lowerTokens.filter(Boolean).length) return null;
         if (totalScore === 0) return null;
-        const { snippet, line } = sliceSnippet(content, firstHit, firstHitLen);
+        const origHit = firstHit >= 0 ? (foldMap[firstHit] ?? firstHit) : firstHit;
+        const { snippet, line } = sliceSnippet(content, origHit, firstHitLen);
         const hit: SearchHit = {
           path: e.relPath,
           snippet,
@@ -676,7 +679,9 @@ export async function semanticSearch(
     const body = parsed.body;
     let snippetText = "";
     for (const t of matchedTerms) {
-      const idx = body.toLowerCase().indexOf(t);
+      // rc.21 — original-string offset (not the toLowerCase() copy's): a
+      // length-expanding fold char before the term shifted the naive offset.
+      const idx = foldedIndexOf(body, t);
       if (idx >= 0) {
         const { snippet } = sliceSnippet(body, idx, t.length);
         snippetText = snippet;
@@ -2182,6 +2187,57 @@ export async function searchHybrid(
  * // → { snippet: "Hello world, this is a long text", line: 1 }
  * ```
  */
+/**
+ * Case-fold a string while recording, for every folded code unit, the index in
+ * the ORIGINAL string it came from.
+ *
+ * `String.prototype.toLowerCase()` is NOT length-preserving (`İ` U+0130 → `i̇`,
+ * 1 code unit → 2; final-sigma; the German ẞ; …). So an offset obtained from
+ * `original.toLowerCase().indexOf(needle)` is an index into the FOLDED string and
+ * drifts past the true position in `original` by the cumulative expansion of
+ * every fold-expanding char before the match. Feeding that drifted offset to
+ * {@link sliceSnippet} mis-centres the window and miscounts the line number.
+ *
+ * Iterates by code POINT so a surrogate pair maps to the code-unit index where
+ * the pair begins (matching `sliceSnippet`'s code-unit slicing). `map.length ===
+ * folded.length`; `map[k]` is the original code-unit index of folded unit `k`.
+ *
+ * v3.11.0-rc.21 — the read/snippet-path siblings of the rc.18 `replaceLineOnce`
+ * fold-offset class (found by the post-rc.20 re-sweep in `semanticSearch` +
+ * `searchText`, where a folded offset was sliced against the original body).
+ */
+export function foldWithMap(original: string): { folded: string; map: number[] } {
+  let folded = "";
+  const map: number[] = [];
+  let i = 0;
+  while (i < original.length) {
+    const cp = original.codePointAt(i);
+    if (cp === undefined) break;
+    const ch = String.fromCodePoint(cp);
+    const width = ch.length; // 1 or 2 UTF-16 code units
+    const lo = ch.toLowerCase();
+    for (let j = 0; j < lo.length; j++) {
+      folded += lo[j];
+      map.push(i);
+    }
+    i += width;
+  }
+  return { folded, map };
+}
+
+/**
+ * Case-insensitive `indexOf` that returns the offset into the ORIGINAL string
+ * (not the folded copy). `needleLower` must already be lower-cased. Returns -1
+ * if not found. See {@link foldWithMap} for why the naive
+ * `original.toLowerCase().indexOf(needle)` is wrong for length-changing folds.
+ */
+export function foldedIndexOf(original: string, needleLower: string): number {
+  if (needleLower === "") return 0;
+  const { folded, map } = foldWithMap(original);
+  const f = folded.indexOf(needleLower);
+  return f < 0 ? -1 : (map[f] ?? -1);
+}
+
 export function sliceSnippet(text: string, idx: number, qLen: number): { snippet: string; line: number } {
   if (idx < 0) return { snippet: "", line: 0 };
   const before = Math.max(0, idx - 60);

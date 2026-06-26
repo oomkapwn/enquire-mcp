@@ -67,6 +67,18 @@ const MAX_TAG_ARG_LEN = 256;
  * 256 is generous. Sibling of the rc.11/rc.12 free-form string-cap class.
  */
 const MAX_FRONTMATTER_KEY_LEN = 256;
+/**
+ * v3.11.0-rc.21 (post-rc.20 re-sweep) — upper bound on the stringified `equals` /
+ * `contains` VALUE predicate of `obsidian_frontmatter_search`. rc.13 capped the
+ * `key` but left the value predicates `z.unknown()` (uncapped); the handler
+ * `JSON.stringify`s the predicate and string-compares it against every note's
+ * frontmatter across the whole vault, so a multi-MB value is a bearer-reachable
+ * O(notes × valueLen) CPU/event-loop amplifier (measured ~3.9s for a 4 MB
+ * `contains` over a 2k-note vault) — the exact input-cap class rc.18 closed for
+ * `obsidian_full_text_search`, here in the value dimension the inventory missed.
+ * A real frontmatter value is short; 8 KiB is very generous.
+ */
+const MAX_FRONTMATTER_VALUE_LEN = 8192;
 
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 export function embedDbPath(vaultRoot: string): string {
@@ -1116,9 +1128,24 @@ export function registerReadTools(
       annotations: { ...READ_ONLY, title: "Search frontmatter" },
       inputSchema: {
         key: z.string().min(1).max(MAX_FRONTMATTER_KEY_LEN).describe("Frontmatter key to test"),
-        equals: z.unknown().optional().describe("Strict equality predicate (JSON.stringify comparison)"),
+        // rc.21 — bound the stringified value predicate: it is JSON.stringify'd and
+        // string-compared against EVERY note's frontmatter across the whole vault, so an
+        // uncapped multi-MB value is a bearer-reachable O(notes × valueLen) DoS amplifier.
+        equals: z
+          .unknown()
+          .optional()
+          .refine((v) => v === undefined || JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN, {
+            message: `equals predicate too large (stringified > ${MAX_FRONTMATTER_VALUE_LEN} chars)`
+          })
+          .describe("Strict equality predicate (JSON.stringify comparison)"),
         exists: z.boolean().optional().describe("Predicate: key must exist (any value)"),
-        contains: z.unknown().optional().describe("For array values, value must be a member"),
+        contains: z
+          .unknown()
+          .optional()
+          .refine((v) => v === undefined || JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN, {
+            message: `contains predicate too large (stringified > ${MAX_FRONTMATTER_VALUE_LEN} chars)`
+          })
+          .describe("For array values, value must be a member"),
         folder: z.string().optional().describe("Restrict search to a folder"),
         limit: z.number().int().positive().max(1000).optional().describe("Max matches (default 100)")
       }

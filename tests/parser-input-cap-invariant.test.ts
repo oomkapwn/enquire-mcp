@@ -40,7 +40,13 @@ const PARSER_FED_TOOLS = [
   // string that gets embedded (CPU), `query` is echoed/fallback-embedded. Both capped
   // to MAX_QUERY_LEN (defense-in-depth above the HTTP body cap).
   { tool: "obsidian_hyde_search", field: "query", cap: "MAX_QUERY_LEN" },
-  { tool: "obsidian_hyde_search", field: "hypothetical_answer", cap: "MAX_QUERY_LEN" }
+  { tool: "obsidian_hyde_search", field: "hypothetical_answer", cap: "MAX_QUERY_LEN" },
+  // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-tool-registry-fts-query-cap) —
+  // the opt-in FTS5 diagnostic tool (--persistent-index --diagnostic-search-tools) registered
+  // `query` uncapped; a 4096-byte repeated-token query stalled SQLite FTS5 `MATCH` ~33s. This
+  // inventory previously omitted it (curated around always-on parser-fed tools). Now pinned —
+  // a future opt-in remote tool added without a `query` cap fails CI here.
+  { tool: "obsidian_full_text_search", field: "query", cap: "MAX_QUERY_LEN" }
 ];
 
 /**

@@ -85,19 +85,27 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
         "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with BOTH `--persistent-index` (so the FTS5 index exists) AND `--diagnostic-search-tools` (single-ranker diagnostic surface; the hybrid `obsidian_search` tool is the recommended default).",
       annotations: { ...READ_ONLY, title: "Full-text search" },
       inputSchema: {
+        // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-tool-registry-fts-query-cap)
+        // — these were uncapped `z.string()` while every other search tool caps `query`.
+        // A 4096-byte repeated-token `query` flows into SQLite FTS5 `MATCH` and stalled the
+        // event loop ~33s (bearer-reachable under --persistent-index --diagnostic-search-tools).
+        // Cap every free-form FTS input; parser-input-cap-invariant now inventories this tool.
         query: z
           .string()
           .min(1)
+          .max(MAX_QUERY_LEN)
           .describe(
             "Search query. Whitespace-tokenized; FTS5 BM25 matching with `unicode61` (default) or `trigram` tokenizer."
           ),
-        folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
+        folder: z.string().max(MAX_QUERY_LEN).optional().describe("Restrict to a subfolder (vault-relative)"),
         tag: z
           .string()
+          .max(MAX_TAG_ARG_LEN)
           .optional()
           .describe("Exact tag membership (e.g. 'project'). Matches frontmatter + inline tags. No leading #."),
         since: z
           .string()
+          .max(MAX_TAG_ARG_LEN)
           .optional()
           .describe("ISO 8601 date or timestamp — restrict to chunks from notes modified on/after this."),
         limit: z.number().int().positive().max(200).optional().describe("Max hits (default 25)")

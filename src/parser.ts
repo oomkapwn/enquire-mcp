@@ -136,10 +136,24 @@ export function scanWikilinkInners(text: string, embed = false): string[] {
     const innerStart = open + 2;
     const bracket = text.indexOf("]", innerStart);
     if (bracket < 0) break; // no closing ']' anywhere → no further match is possible
-    const nl = text.indexOf("\n", innerStart);
-    if (nl >= 0 && nl < bracket) {
-      // a newline precedes the first ']' → inner would cross `\n` (forbidden);
-      // no `[[` start ≤ nl can match → skip past the newline.
+    // A `\n` before the first `]` means the inner would cross a newline (inner is
+    // `[^\]\n]`), so no `[[` start ≤ that `\n` can match → skip past it.
+    // v3.11.0-rc.18 (rc.17 external audit, HIGH ReDoS regression) — scan ONLY the
+    // bounded inner window [innerStart, bracket). The rc.17 form used the UNBOUNDED
+    // `text.indexOf("\n", innerStart)`: on a body with no `\n` between `[[` and EOF
+    // (a dense single-line `[[a]]`-run / MOC-index note) it rescanned to EOF every
+    // iteration → O(n²) (400k links = 8.2s; ~50s at the 5 MB cap, bearer-reachable
+    // via the always-on obsidian_read_note → parseNote). This bounded charCodeAt
+    // scan visits each inner char at most once → O(n) overall, and is
+    // byte-equivalent (it finds the same first `\n`-before-`]`, if any).
+    let nl = -1;
+    for (let k = innerStart; k < bracket; k++) {
+      if (text.charCodeAt(k) === 10 /* '\n' */) {
+        nl = k;
+        break;
+      }
+    }
+    if (nl >= 0) {
       from = nl + 1;
       continue;
     }

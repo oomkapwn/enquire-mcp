@@ -34,6 +34,13 @@ const PARSER_FED_TOOLS = [
   // with a per-note `nfcLower(key)` fold, so an uncapped multi-MB key is a bearer-reachable
   // CPU-DoS amplifier (measured ~9.5s for a 4 MB key). Capped to MAX_FRONTMATTER_KEY_LEN.
   { tool: "obsidian_frontmatter_search", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" },
+  // v3.11.0-rc.21 (post-rc.20 re-sweep) — the VALUE predicates rc.13 left `z.unknown()`
+  // (uncapped). The handler JSON.stringify's them and string-compares against EVERY note's
+  // frontmatter across the whole vault → O(notes × valueLen) bearer-reachable DoS amplifier
+  // (~3.9s for a 4 MB `contains` over a 2k-note vault). Capped via a `.refine()` length
+  // bound (the value is arbitrary JSON, not a string, so `.max()` doesn't apply).
+  { tool: "obsidian_frontmatter_search", field: "equals", cap: "MAX_FRONTMATTER_VALUE_LEN" },
+  { tool: "obsidian_frontmatter_search", field: "contains", cap: "MAX_FRONTMATTER_VALUE_LEN" },
   { tool: "obsidian_frontmatter_get", field: "key", cap: "MAX_FRONTMATTER_KEY_LEN" },
   // v3.11.0-rc.16 — hyde_search was the ONE remaining always-on bearer-reachable
   // free-form query tool the rc.11 L1 cap sweep missed; `hypothetical_answer` is the
@@ -61,28 +68,39 @@ function registerBlock(source: string, tool: string): string | null {
   return source.slice(nameIdx, next < 0 ? undefined : next);
 }
 
-/** Pure detector — does the block cap the field with `.max(<cap>)`? */
-function fieldHasMaxCap(block: string, field: string, cap: string): boolean {
-  // The field's schema chain and the `.max(cap)` must both be present in the block.
-  return block.includes(`${field}:`) && new RegExp(`\\.max\\(\\s*${cap}\\b`).test(block);
+/**
+ * Pure detector — is the field present AND bounded by the length cap `cap`?
+ * Accepts EITHER a `.max(<cap>)` (string fields) OR a `.refine(... <cap> ...)`
+ * (v3.11.0-rc.21 — the frontmatter value predicates are arbitrary JSON, so they
+ * are capped by a stringified-length `.refine()`, not `.max()`). The cap token
+ * must appear in the tool's registered block (same locality as the original).
+ */
+function fieldHasCap(block: string, field: string, cap: string): boolean {
+  return block.includes(`${field}:`) && new RegExp(`\\b${cap}\\b`).test(block);
 }
 
 describe("parser-input length-cap invariant (rc.57)", () => {
   it("every parser-fed tool input carries a .max() cap in its registered schema (POSITIVE)", () => {
     const offenders = PARSER_FED_TOOLS.filter((t) => {
       const block = registerBlock(registry, t.tool);
-      return !block || !fieldHasMaxCap(block, t.field, t.cap);
-    }).map((t) => `${t.tool}.${t.field} missing .max(${t.cap})`);
+      return !block || !fieldHasCap(block, t.field, t.cap);
+    }).map((t) => `${t.tool}.${t.field} missing cap ${t.cap}`);
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
-  it("the detector flags a missing cap and accepts a present one (NEGATIVE control — not vacuous)", () => {
+  it("the detector flags a missing cap and accepts both .max() and .refine() forms (NEGATIVE control — not vacuous)", () => {
     const capped = 'query: z.string().min(1).max(MAX_DQL_QUERY_LEN).describe("x")';
     const uncapped = 'query: z.string().min(1).describe("x")';
-    expect(fieldHasMaxCap(capped, "query", "MAX_DQL_QUERY_LEN")).toBe(true);
-    expect(fieldHasMaxCap(uncapped, "query", "MAX_DQL_QUERY_LEN")).toBe(false);
+    expect(fieldHasCap(capped, "query", "MAX_DQL_QUERY_LEN")).toBe(true);
+    expect(fieldHasCap(uncapped, "query", "MAX_DQL_QUERY_LEN")).toBe(false);
     // a wrong-cap reference must also be rejected
-    expect(fieldHasMaxCap("query: z.string().max(SOME_OTHER)", "query", "MAX_DQL_QUERY_LEN")).toBe(false);
+    expect(fieldHasCap("query: z.string().max(SOME_OTHER)", "query", "MAX_DQL_QUERY_LEN")).toBe(false);
+    // rc.21 — the .refine()-based value-predicate cap is accepted, and an unbounded
+    // z.unknown() predicate is rejected (the precise regression this entry guards).
+    const refined =
+      "equals: z.unknown().optional().refine((v) => JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN)";
+    expect(fieldHasCap(refined, "equals", "MAX_FRONTMATTER_VALUE_LEN")).toBe(true);
+    expect(fieldHasCap("equals: z.unknown().optional()", "equals", "MAX_FRONTMATTER_VALUE_LEN")).toBe(false);
   });
 
   it("registerBlock locates a real tool block and returns null for an absent tool (control)", () => {

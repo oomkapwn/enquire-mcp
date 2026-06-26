@@ -1247,6 +1247,11 @@ export async function frontmatterSearch(
     throw new Error("frontmatter_search: exactly one of `equals` / `exists` / `contains` must be set");
   }
   const limit = args.limit ?? 100;
+  // v3.11.0-rc.21 — hoist the predicate's JSON.stringify OUT of the per-note loop
+  // (it is loop-invariant). Pre-rc.21 this re-stringified the (schema-capped) value
+  // once per note across the whole vault — an O(notes × valueLen) amplifier.
+  const equalsJson = args.equals !== undefined ? JSON.stringify(args.equals) : undefined;
+  const containsJson = args.contains !== undefined ? JSON.stringify(args.contains) : undefined;
   const entries = await vault.listMarkdown(args.folder);
   const matches: Array<{ path: string; value: unknown; mtime: string }> = [];
   for (const e of entries) {
@@ -1257,10 +1262,10 @@ export async function frontmatterSearch(
       const value = lookupFoldedKey(note.parsed.frontmatter, args.key).value;
       let hit = false;
       if (args.exists === true) hit = value !== undefined;
-      else if (args.equals !== undefined) hit = JSON.stringify(value) === JSON.stringify(args.equals);
-      else if (args.contains !== undefined) {
+      else if (equalsJson !== undefined) hit = JSON.stringify(value) === equalsJson;
+      else if (containsJson !== undefined) {
         if (Array.isArray(value)) {
-          hit = value.some((v) => JSON.stringify(v) === JSON.stringify(args.contains));
+          hit = value.some((v) => JSON.stringify(v) === containsJson);
         }
       }
       if (hit) {

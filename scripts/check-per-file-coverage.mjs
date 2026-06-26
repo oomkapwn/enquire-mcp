@@ -144,6 +144,55 @@ for (const [relPath, floors] of Object.entries(FLOORS)) {
   }
 }
 
+// v3.11.0-rc.19 (rc.17 external audit, Cursor LOW-1) — SELF-VALIDATE the inline
+// `// current X%` annotations against the summary THIS script just consumed. Pre-rc.19
+// the only check of these comments was OIA Check 6, which runs in the artifact-LESS
+// `oia` CI job (existsSync-gated → silent skip), so an `embed-pipeline.ts` comment
+// drifted (85.41 → 86.95) undetected on CI. This check runs inside `check:per-file-coverage`
+// — i.e. the `coverage` CI job, which HAS coverage-summary.json — so the drift now fails CI
+// where the data lives, with no workflow change and no silent skip. Threshold 1pp (matches OIA Check 6).
+{
+  const selfSrc = readFileSync(__filename, "utf8");
+  // 2pp tolerance — branch coverage is mildly ENVIRONMENT-SENSITIVE (which optional deps
+  // are built changes which branches execute), and the FLOORS are themselves set ~2pp below
+  // the measured value, so the annotations are accurate to ~2pp by construction. A tighter
+  // gate would flake across CI runners; 2pp still catches a genuinely stale comment (a
+  // refactor that shifts coverage several pp without updating the `// current X%` note).
+  const COMMENT_DRIFT_PP = 2;
+  // The integration-dep files (transformers.js / tesseract.js) only fully cover with a real
+  // model download, so their branch% swings widely by environment — their comments document
+  // that explicitly and their floors sit far below the comment. Exempt them from the drift gate.
+  const SELF_CHECK_EXEMPT = new Set(["src/embeddings.ts", "src/ocr.ts"]);
+  const commentDrifts = [];
+  for (const relPath of Object.keys(FLOORS)) {
+    if (SELF_CHECK_EXEMPT.has(relPath)) continue;
+    const actualBranches = summary[resolve(repoRoot, relPath)]?.branches?.pct;
+    if (typeof actualBranches !== "number") continue; // the floor loop already errored on this file
+    const lineRe = new RegExp(
+      `"${relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}":[^\\n]*//[^\\n]*current (?:branches )?(\\d+(?:\\.\\d+)?)%`
+    );
+    const m = lineRe.exec(selfSrc);
+    if (!m) continue; // no `// current X%` annotation on this entry → nothing to validate
+    const claimed = Number(m[1]);
+    const drift = Math.abs(claimed - actualBranches);
+    if (drift > COMMENT_DRIFT_PP) {
+      commentDrifts.push(
+        `  ✗ ${relPath}: comment says ~${claimed}% but coverage-summary.json branches = ${actualBranches.toFixed(2)}% (drift ${drift.toFixed(2)}pp)`
+      );
+    }
+  }
+  if (commentDrifts.length > 0) {
+    console.error(
+      `\n[per-file-coverage] ${commentDrifts.length} stale '// current X%' comment(s) — sync each to the measured value (drift > ${COMMENT_DRIFT_PP}pp):`
+    );
+    for (const d of commentDrifts) console.error(d);
+    console.error(
+      "  (runs in the `coverage` CI job which has the summary — closes the OIA Check 6 silent-skip on CI; rc.19, Cursor LOW-1.)"
+    );
+    hasError = true;
+  }
+}
+
 if (passing.length > 0) {
   console.log(`[per-file-coverage] ${passing.length} floors met:`);
   for (const p of passing) console.log(p);

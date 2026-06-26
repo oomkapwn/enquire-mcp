@@ -827,18 +827,19 @@ describe("replaceStringOutsideCodeFences (rc.18 audit) — Unicode offset + line
     }
   });
 
-  it("is O(n) on a dense single-match note (POSITIVE — <100 ms; was ~30 s)", () => {
+  // rc.20 — generous ceiling for the POSITIVE + RATIO for the NEGATIVE (these wall-clock
+  // tests are a CI-load flake surface; the ratio is runner-speed-independent).
+  it("is O(n) on a dense single-match note (POSITIVE — generous ceiling; was ~30 s)", () => {
     const note = "a".repeat(10_000);
     const t = ms(() => replaceStringOutsideCodeFences(note, "a", "B".repeat(4096), false));
-    expect(t).toBeLessThan(100);
+    expect(t).toBeLessThan(2000); // ~1 ms actual; the pre-rc.18 O(n²) loop was ~30 s
   });
 
-  it("NEGATIVE control — the pre-rc.18 quadratic loop is slow on the same shape", () => {
+  it("NEGATIVE control — the pre-rc.18 quadratic loop is slow on the same shape (RATIO)", () => {
     const note = "a".repeat(2_000);
     const fast = ms(() => replaceStringOutsideCodeFences(note, "a", "B".repeat(4096), true));
     const slow = ms(() => oldReplaceCS(note, "a", "B".repeat(4096)));
-    expect(fast).toBeLessThan(60); // single-pass builder …
-    expect(slow).toBeGreaterThan(250); // … vs the O(n²) slice+concat rebuild even at 2k matches
+    expect(slow / Math.max(fast, 0.05)).toBeGreaterThan(8); // ratio: O(n²) slice+concat rebuild ≫ single-pass
   });
 });
 

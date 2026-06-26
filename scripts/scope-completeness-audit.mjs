@@ -371,13 +371,11 @@ export function runCliFlagCoverageAudit() {
     "--per-query",
     "--json",
     "--embedding-model",
-    "--skip-embeddings",
-    "--no-recurse",
-    "--lang",
-    "--max-pages",
-    "--scale",
-    "--pages",
-    "--out"
+    "--skip-embeddings"
+    // (v3.11.0-rc.20: pruned 6 phantom exempts — --no-recurse/--lang/--max-pages/--scale/
+    //  --pages/--out — leftovers of a removed media subcommand that match NO current cli.ts
+    //  flag, so they were dead cover that could silently exempt a future real flag of the
+    //  same name. Verified absent from src/cli.ts before removal.)
   ]);
   for (const flag of flagSet) {
     if (subcommandExempts.has(flag)) continue;

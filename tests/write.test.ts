@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendToNote, archiveNote, createNote, renameNote, replaceInNotes } from "../src/tools/index.js";
+import { replaceStringOutsideCodeFences } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -759,5 +760,111 @@ describe("archiveNote (v1.11)", () => {
     await fs.writeFile(path.join(root, "Note.md"), "x\n");
     const out = await archiveNote(v, { path: "Note.md", archive_folder: "Archive///" });
     expect(out.to).toBe(path.join("Archive", "Note.md"));
+  });
+});
+
+// v3.11.0-rc.18 — fixes for the 4-way external rc.17 audit (Codex findings).
+// Inlined copies of the PRE-rc.18 (buggy/quadratic) loops serve as NEGATIVE controls.
+function oldReplaceCI(line: string, search: string, needle: string, replace: string): string {
+  let mutated = line;
+  let lowered = mutated.toLowerCase();
+  let idx = lowered.indexOf(needle);
+  while (idx !== -1) {
+    mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
+    lowered = mutated.toLowerCase();
+    idx = lowered.indexOf(needle, idx + replace.length);
+  }
+  return mutated;
+}
+function oldReplaceCS(line: string, search: string, replace: string): { content: string; count: number } {
+  let mutated = line;
+  let idx = mutated.indexOf(search);
+  let count = 0;
+  while (idx !== -1) {
+    mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
+    count += 1;
+    idx = mutated.indexOf(search, idx + replace.length);
+  }
+  return { content: mutated, count };
+}
+function ms(fn: () => void): number {
+  const a = process.hrtime.bigint();
+  fn();
+  return Number(process.hrtime.bigint() - a) / 1e6;
+}
+
+describe("replaceStringOutsideCodeFences (rc.18 audit) — Unicode offset + linearity", () => {
+  it("case-insensitive replace applies offsets to ORIGINAL chars, not the folded string (Codex DATA-INTEGRITY)", () => {
+    // `İ`(U+0130).toLowerCase() = `i̇` (2 units) → the rc.17 code mis-offset every match after it.
+    expect(replaceStringOutsideCodeFences("İX", "x", "Y", false)).toEqual({ content: "İY", count: 1 });
+    expect(replaceStringOutsideCodeFences("İX\nplain X\n", "x", "Y", false).content).toBe("İY\nplain Y\n");
+    expect(replaceStringOutsideCodeFences("aBc", "b", "_", false).content).toBe("a_c"); // ASCII unaffected
+  });
+
+  it("NEGATIVE control — the pre-rc.18 fold-index-on-original code produced the wrong span", () => {
+    // Proves the test discriminates: the old loop writes `İXY` (target X survives, Y misplaced).
+    expect(oldReplaceCI("İX", "x", "x", "Y")).toBe("İXY");
+    expect(replaceStringOutsideCodeFences("İX", "x", "Y", false).content).not.toBe("İXY");
+  });
+
+  it("case-sensitive single-pass ≡ the pre-rc.18 slice+concat loop (DIFFERENTIAL — fence-free corpus)", () => {
+    const corpus: Array<[string, string, string]> = [
+      ["abab", "ab", "x"],
+      ["aaaa", "aa", "Z"],
+      ["aaa", "aa", "X"],
+      ["No match here", "zzz", "q"],
+      ["a.b.c.d", ".", "/"],
+      ["xXxX", "x", "—"],
+      ["GPT-3.5 and GPT-3.5", "GPT-3.5", "GPT-4"],
+      ["edge", "e", "EE"],
+      ["", "a", "b"],
+      ["repeat", "e", ""]
+    ];
+    for (const [line, s, r] of corpus) {
+      const got = replaceStringOutsideCodeFences(line, s, r, true);
+      const old = oldReplaceCS(line, s, r);
+      expect(got, `mismatch for ${JSON.stringify([line, s, r])}`).toEqual(old);
+    }
+  });
+
+  it("is O(n) on a dense single-match note (POSITIVE — <100 ms; was ~30 s)", () => {
+    const note = "a".repeat(10_000);
+    const t = ms(() => replaceStringOutsideCodeFences(note, "a", "B".repeat(4096), false));
+    expect(t).toBeLessThan(100);
+  });
+
+  it("NEGATIVE control — the pre-rc.18 quadratic loop is slow on the same shape", () => {
+    const note = "a".repeat(2_000);
+    const fast = ms(() => replaceStringOutsideCodeFences(note, "a", "B".repeat(4096), true));
+    const slow = ms(() => oldReplaceCS(note, "a", "B".repeat(4096)));
+    expect(fast).toBeLessThan(60); // single-pass builder …
+    expect(slow).toBeGreaterThan(250); // … vs the O(n²) slice+concat rebuild even at 2k matches
+  });
+});
+
+describe("replaceInNotes (rc.18 audit) — projected-size cap refuses over-limit rewrites in BOTH modes", () => {
+  it("dry_run reports an over-limit note as an error, not a phantom success (Codex RESOURCE-DOS)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-rc18-cap-"));
+    const v = new Vault(dir, { enableWrite: true, maxFileBytes: 1000 });
+    await v.ensureExists();
+    await fs.writeFile(path.join(dir, "big.md"), "a".repeat(600)); // 600 'a' × replace "BB" → 1200 B > 1000
+    const out = await replaceInNotes(v, { search: "a", replace: "BB", dry_run: true });
+    expect(out.partial).toBe(true);
+    expect(out.files_updated.length).toBe(0); // NOT reported as updated
+    expect(out.errors?.[0]?.message).toMatch(/projected \d+ bytes exceeds limit 1000/);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("apply mode refuses the over-limit note and leaves it byte-unchanged (NEGATIVE control: a small note IS rewritten)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-rc18-cap2-"));
+    const v = new Vault(dir, { enableWrite: true, maxFileBytes: 1000 });
+    await v.ensureExists();
+    await fs.writeFile(path.join(dir, "big.md"), "a".repeat(600));
+    await fs.writeFile(path.join(dir, "small.md"), "a a a"); // tiny → rewritten fine
+    const out = await replaceInNotes(v, { search: "a", replace: "BB" });
+    expect(await fs.readFile(path.join(dir, "big.md"), "utf8")).toBe("a".repeat(600)); // refused, unchanged
+    expect(await fs.readFile(path.join(dir, "small.md"), "utf8")).toBe("BB BB BB"); // applied
+    expect(out.files_updated.map((f) => f.path)).toEqual(["small.md"]);
+    await fs.rm(dir, { recursive: true, force: true });
   });
 });

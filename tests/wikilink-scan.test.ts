@@ -105,6 +105,62 @@ describe("wikilink scanner (rc.17) — linear time on the catastrophic shape", (
   });
 });
 
+// The pre-rc.18 scanner bounded the `]`/`[[` scans but used an UNBOUNDED
+// `text.indexOf("\n", innerStart)` — so on a DENSE run of closed `[[a]]` links
+// with no newline (a real single-line MOC/index note), the `\n` search rescanned
+// to EOF every iteration → O(n²) (400k links = 8.2s; ~50s at the 5 MB cap,
+// bearer-reachable via the always-on obsidian_read_note → parseNote). The rc.17
+// timing test only exercised the UNCLOSED-`[[`-run shape, so this regression slipped
+// through (the recurring rc.36/rc.54 "the corpus can't produce the failing shape").
+// Inlined as the NEGATIVE control to prove the new bounded-window scan discriminates.
+function rc17UnboundedNlScan(text: string): number {
+  let from = 0;
+  let count = 0;
+  for (;;) {
+    const open = text.indexOf("[[", from);
+    if (open < 0) break;
+    const innerStart = open + 2;
+    const bracket = text.indexOf("]", innerStart);
+    if (bracket < 0) break;
+    const nl = text.indexOf("\n", innerStart); // UNBOUNDED — the rc.17 regression
+    if (nl >= 0 && nl < bracket) {
+      from = nl + 1;
+      continue;
+    }
+    if (bracket === innerStart) {
+      from = open + 1;
+      continue;
+    }
+    if (text.charCodeAt(bracket + 1) === 93) {
+      count += 1;
+      from = bracket + 2;
+    } else {
+      from = bracket + 1;
+    }
+  }
+  return count;
+}
+
+describe("wikilink scanner (rc.18) — linear on a DENSE closed `[[a]]`-run (the rc.17 regression)", () => {
+  it("scanWikilinkInners stays O(n) on a 2 MB dense `[[a]]` run, no newlines (POSITIVE — <150 ms)", () => {
+    const evil = "[[a]]".repeat(400_000); // 2 MB, 400k closed links, no `\n` — MOC/index-note shape
+    let res: string[] = [];
+    const t = ms(() => {
+      res = scanWikilinkInners(evil, false);
+    });
+    expect(res).toHaveLength(400_000);
+    expect(t).toBeLessThan(150);
+  });
+
+  it("the pre-rc.18 unbounded-`\\n` scan IS quadratic on the same shape (NEGATIVE control)", () => {
+    const evil = "[[a]]".repeat(80_000); // 400k chars; the unbounded form is already quadratic here
+    const linear = ms(() => scanWikilinkInners(evil, false));
+    const quad = ms(() => rc17UnboundedNlScan(evil));
+    expect(linear).toBeLessThan(25); // the bounded-window fix is fast …
+    expect(quad).toBeGreaterThan(120); // … while the rc.17 unbounded-`\n` scan is quadratic even at 80k
+  });
+});
+
 describe("wikilink scanner (rc.17) — class guard: no lazy `[^\\]\\n]+?]]` wikilink regex in src/", () => {
   // The polynomial shape, scoped to src/ CODE (doc-comments in parser.ts legitimately
   // name the old regex). The de-dup also closes the rc.10 INLINE_TAG_RE copy-class

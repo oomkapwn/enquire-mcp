@@ -696,7 +696,14 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   }
 
   const entries = await vault.listMarkdown(args.folder);
-  const plan: Array<{ path: string; before: string; after: string; count: number }> = [];
+  // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-replace-in-notes-expansion):
+  // refuse an over-limit projected rewrite per note BEFORE storing it — in BOTH apply and
+  // dry_run (which previously never reached `writeNote`'s cap and reported a phantom success
+  // for a 5 KB note projecting to tens of MB). The O(n) `replaceLineOnce` builder already
+  // removed the CPU blow-up; this bounds the in-memory `plan`. (`before` dropped from the
+  // plan — it was unused and doubled the retained content held across all matched notes.)
+  const plan: Array<{ path: string; after: string; count: number }> = [];
+  const oversized: Array<{ path: string; message: string }> = [];
   let total = 0;
   for (const e of entries) {
     const { content } = await vault.readNote(e.absPath, e.mtimeMs);
@@ -707,7 +714,15 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
       caseSensitive
     );
     if (count === 0) continue;
-    plan.push({ path: e.relPath, before: content, after: rewritten, count });
+    const projected = Buffer.byteLength(rewritten, "utf8");
+    if (projected > vault.maxFileBytes) {
+      oversized.push({
+        path: e.relPath,
+        message: `Refusing to rewrite — projected ${projected} bytes exceeds limit ${vault.maxFileBytes}`
+      });
+      continue;
+    }
+    plan.push({ path: e.relPath, after: rewritten, count });
     total += count;
   }
 
@@ -722,7 +737,7 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   // immediately rather than returning a "partial: true" with N errors —
   // that's a config problem, not a per-file failure.
   const updated: ReplaceInNotesFileResult[] = [];
-  const errors: Array<{ path: string; message: string }> = [];
+  const errors: Array<{ path: string; message: string }> = [...oversized]; // over-limit refusals surface in both modes
   if (!dryRun) {
     if (!vault.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
@@ -901,31 +916,75 @@ export function replaceStringOutsideCodeFences(
       out.push(line);
       continue;
     }
-    if (caseSensitive) {
-      let mutated = line;
-      let idx = mutated.indexOf(needle);
-      while (idx !== -1) {
-        mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
-        count += 1;
-        idx = mutated.indexOf(needle, idx + replace.length);
-      }
-      out.push(mutated);
-    } else {
-      // Case-insensitive: walk by lowering only when comparing, but preserve
-      // the rest of the original line. Replace verbatim with `replace`.
-      let mutated = line;
-      let lowered = mutated.toLowerCase();
-      let idx = lowered.indexOf(needle);
-      while (idx !== -1) {
-        mutated = mutated.slice(0, idx) + replace + mutated.slice(idx + search.length);
-        lowered = mutated.toLowerCase();
-        count += 1;
-        idx = lowered.indexOf(needle, idx + replace.length);
-      }
-      out.push(mutated);
-    }
+    const r = replaceLineOnce(line, search, needle, replace, caseSensitive);
+    out.push(r.line);
+    count += r.n;
   }
   return { content: out.join("\n"), count };
+}
+
+/**
+ * Replace every non-overlapping occurrence of `search` in a single line, O(n).
+ *
+ * @internal
+ * v3.11.0-rc.18 (rc.17 external audit, Codex) — replaces the prior per-occurrence
+ * `slice + concat` rebuild (and, in the case-insensitive branch, a full
+ * `mutated.toLowerCase()` recompute on EVERY replacement). That was O(n²) per line:
+ * a write-enabled bearer client could push a 5000-char single-match line through
+ * `replace_in_notes` and burn ~30 s of CPU (RESOURCE-DOS-replace-in-notes-expansion).
+ * This builder copies each char at most once → O(n).
+ *
+ * It also fixes DATA-INTEGRITY-replace-in-notes-unicode-lower-index: the old
+ * case-insensitive branch found the match index in `line.toLowerCase()` but sliced
+ * the ORIGINAL `line` at that index. `String.toLowerCase()` is NOT length-preserving
+ * (`"İ"` → `"i̇"`, 1 unit → 2), so any match after an expanding char was
+ * applied at the wrong offset (`İX` + search `x` wrote `İXY` instead of `İY`). Here
+ * the folded line is built ONCE with a per-folded-unit map back to the original
+ * `[start, end)` span, so a folded match index always resolves to whole original chars.
+ */
+function replaceLineOnce(
+  line: string,
+  search: string,
+  needle: string,
+  replace: string,
+  caseSensitive: boolean
+): { line: string; n: number } {
+  let result = "";
+  let n = 0;
+  if (caseSensitive) {
+    let cursor = 0;
+    let idx = line.indexOf(search);
+    while (idx !== -1) {
+      result += line.slice(cursor, idx) + replace;
+      cursor = idx + search.length;
+      n += 1;
+      idx = line.indexOf(search, cursor); // scan the ORIGINAL — never re-match the inserted `replace`
+    }
+    return { line: result + line.slice(cursor), n };
+  }
+  // Case-insensitive — fold once, mapping each folded code unit back to the original char span.
+  const startOf: number[] = [];
+  const endOf: number[] = [];
+  let lowered = "";
+  for (let oi = 0; oi < line.length; oi++) {
+    const lc = line.charAt(oi).toLowerCase(); // may expand to 1+ code units
+    lowered += lc;
+    for (let j = 0; j < lc.length; j++) {
+      startOf.push(oi);
+      endOf.push(oi + 1);
+    }
+  }
+  let cursor = 0; // next ORIGINAL index to copy from
+  let li = lowered.indexOf(needle);
+  while (li !== -1) {
+    const origStart = startOf[li] ?? line.length;
+    const origEnd = endOf[li + needle.length - 1] ?? line.length;
+    result += line.slice(cursor, origStart) + replace;
+    cursor = origEnd;
+    n += 1;
+    li = lowered.indexOf(needle, li + needle.length);
+  }
+  return { line: result + line.slice(cursor), n };
 }
 
 /**

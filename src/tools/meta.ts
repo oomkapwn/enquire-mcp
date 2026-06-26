@@ -1558,7 +1558,13 @@ export async function getOpenQuestions(
   // (the rc.39 ReDoS sink-bound — the main event loop can never hang, any pattern);
   // the safe default runs inline (zero overhead). Each match yields the FIRST capture
   // group as the question text (the `re.exec(line)?.[1]` contract).
-  const lineTexts = candidates.map((c) => c.line);
+  // v3.11.0-rc.19 (rc.17 external audit, Cursor MED-1 — the 4th CRLF-blind `(.+)$` site
+  // the rc.17 heading fix missed). `c.line` is a raw `parsed.body.split("\n")` line, so on
+  // a CRLF note it keeps a trailing `\r` that JS `.`/`$` (no `s`/`m`) won't cross — the
+  // default `…(.+)$` question pattern (and any caller pattern) then matched NOTHING on
+  // every CRLF line, silently dropping a Windows note's open questions. Strip the trailing
+  // line terminator before matching (covers BOTH the worker and inline paths below).
+  const lineTexts = candidates.map((c) => stripTrailingLineEnds(c.line));
   let matches: { idx: number; q: string }[];
   if (args.pattern !== undefined) {
     matches = await matchLinesBounded(args.pattern, lineTexts, args.scanBudgetMs ?? MAX_QUESTION_SCAN_MS);

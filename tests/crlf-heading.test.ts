@@ -14,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readNote } from "../src/tools/index.js";
+import { getOpenQuestions, readNote } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 import { stripTrailingLineEnds } from "../src/wildcard-match.js";
 
@@ -100,5 +100,42 @@ describe("CRLF heading (rc.17) — every heading-exec site strips line ends (inv
     HEAD_EXEC.lastIndex = 0;
     expect(m).not.toBeNull();
     expect(/stripTrailingLineEnds\(/.test(m?.[1] ?? "")).toBe(false); // would be flagged
+  });
+});
+
+describe("CRLF open_questions (rc.19) — getOpenQuestions matches on CRLF candidate lines", () => {
+  // The 4th `(.+)$`-over-a-`split("\n")`-line site the rc.17 heading fix missed: the
+  // open-questions matcher ran the default/caller pattern on raw `c.line` candidates,
+  // so a CRLF note's `Q: …` lines (trailing `\r`) never matched. rc.19 strips
+  // `lineTexts` before matching. (Cursor MED-1.)
+  let root: string;
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-crlf-oq-"));
+  });
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("a CRLF note's open question is found (POSITIVE — was silently dropped pre-rc.19)", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Crlf.md"), "## Section\r\nbody\r\nQ: What is the CRLF answer?\r\n");
+    const out = await getOpenQuestions(v, {});
+    expect(out.map((q) => q.question)).toContain("What is the CRLF answer?");
+  });
+
+  it("the LF sibling is found too (control)", async () => {
+    const v = new Vault(root);
+    await fs.writeFile(path.join(root, "Lf.md"), "## Section\nbody\nQ: What is the LF answer?\n");
+    const out = await getOpenQuestions(v, {});
+    expect(out.map((q) => q.question)).toContain("What is the LF answer?");
+  });
+
+  it("getOpenQuestions builds `lineTexts` through stripTrailingLineEnds (inventory guard + NEGATIVE control)", () => {
+    const src = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
+    const m = /const lineTexts = candidates\.map\(([^;]*)\)/.exec(src);
+    expect(m, "lineTexts candidate map not found in meta.ts (moved? update the guard)").not.toBeNull();
+    expect(/stripTrailingLineEnds\(/.test(m?.[1] ?? "")).toBe(true);
+    // NEGATIVE control — the pre-rc.19 raw form would NOT contain the strip.
+    expect(/stripTrailingLineEnds\(/.test("candidates.map((c) => c.line)")).toBe(false);
   });
 });

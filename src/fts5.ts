@@ -16,7 +16,13 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
-import { splitLines, stripTrailingHashes, stripTrailingLineEnds, stripTrailingSlashes } from "./wildcard-match.js";
+import {
+  countLineBreaks,
+  splitLines,
+  stripTrailingHashes,
+  stripTrailingLineEnds,
+  stripTrailingSlashes
+} from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
@@ -822,14 +828,14 @@ function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentC
   for (const match of text.matchAll(re)) {
     const start = match.index ?? 0;
     const slice = text.slice(lastIndex, start);
-    const linesInSlice = (slice.match(/\n/g) ?? []).length;
+    const linesInSlice = countLineBreaks(slice);
     out.push({ text: slice, lineStart: lastLine, lineEnd: lastLine + linesInSlice, breadcrumb: "" });
-    lastLine += linesInSlice + (match[0].match(/\n/g) ?? []).length;
+    lastLine += linesInSlice + countLineBreaks(match[0]);
     lastIndex = start + match[0].length;
   }
   const tail = text.slice(lastIndex);
   if (tail) {
-    const linesInTail = (tail.match(/\n/g) ?? []).length;
+    const linesInTail = countLineBreaks(tail);
     out.push({ text: tail, lineStart: lastLine, lineEnd: lastLine + linesInTail, breadcrumb: "" });
   }
   return out;

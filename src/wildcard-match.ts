@@ -278,3 +278,18 @@ const LINE_SPLIT_RE = /\r\n|[\n\r\u2028\u2029]/;
 export function splitLines(text: string): string[] {
   return text.split(LINE_SPLIT_RE);
 }
+
+/**
+ * Count the line BREAKS in `text` per the {@link splitLines} terminator set
+ * (LF / CRLF / CR / U+2028 / U+2029) \u2014 i.e. `splitLines(text).length - 1`.
+ *
+ * v3.11.0-rc.25 (post-rc.24 pre-promotion re-sweep) \u2014 the COUNTING sibling of the rc.23
+ * split class. Line-NUMBER math that used `(text.match(/\n/g) ?? []).length` counts only LF,
+ * so on a bare-CR / U+2028 / U+2029 note the reported `line_start`/`line_end` (chatThreadAppend)
+ * and breadcrumb line numbers (fts5) drifted \u2014 the same blindness `splitLines` fixed for the
+ * splitting form. The rc.23 inventory invariant only patrolled `.split("\n")`; it now also
+ * flags `.match(/\n/g)`, and these counters route through here.
+ */
+export function countLineBreaks(text: string): number {
+  return splitLines(text).length - 1;
+}

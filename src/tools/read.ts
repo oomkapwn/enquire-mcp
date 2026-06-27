@@ -3,7 +3,13 @@ import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { splitLines, stripTrailingHashes, stripTrailingLineEnds, stripTrailingNewlines } from "../wildcard-match.js";
+import {
+  countLineBreaks,
+  splitLines,
+  stripTrailingHashes,
+  stripTrailingLineEnds,
+  stripTrailingNewlines
+} from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -992,10 +998,10 @@ export async function chatThreadAppend(
   const appendOffset = toAppend.indexOf(headingMarker);
   const headingOffset = appendOffset >= 0 ? trimmed.length + appendOffset : -1;
   const lineStart =
-    headingOffset >= 0 ? splitLines(newBody.slice(0, headingOffset)).length : (trimmed.match(/\n/g) ?? []).length + 1;
+    headingOffset >= 0 ? splitLines(newBody.slice(0, headingOffset)).length : countLineBreaks(trimmed) + 1;
   // line_end spans through the message's last content line: the heading line plus the
   // newline count of the trimmed message block (heading → blank → content[…]).
-  const lineEnd = lineStart + (messageBlock.trim().match(/\n/g) ?? []).length;
+  const lineEnd = lineStart + countLineBreaks(messageBlock.trim());
   return { note_path: result.relPath, line_start: lineStart, line_end: lineEnd };
 }
 

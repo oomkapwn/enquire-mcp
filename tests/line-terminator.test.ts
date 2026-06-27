@@ -133,30 +133,36 @@ describe('line-terminator inventory (rc.23) — no raw split("\\n") on note cont
     return out;
   }
 
-  // Pure detector — strip comments, then find a code-level `.split("\n")`.
-  function rawSplitOffenders(source: string): boolean {
+  // Pure detector — strip comments, then find a code-level LF-only line op: `.split("\n")`
+  // (the splitting form) OR `.match(/\n/g)` (the COUNTING form, v3.11.0-rc.25). Both are
+  // CR/LS/PS-blind; note content must go through splitLines() / countLineBreaks().
+  function rawLineOpOffenders(source: string): boolean {
     const noBlock = source.replace(/\/\*[\s\S]*?\*\//g, "");
     return noBlock
       .split("\n")
       .map((l) => l.replace(/\/\/.*$/, "")) // drop line comments
-      .some((l) => /\.split\(\s*["']\\n["']\s*\)/.test(l));
+      .some((l) => /\.split\(\s*["']\\n["']\s*\)/.test(l) || /\.match\(\/\\n\/g\)/.test(l));
   }
 
-  it("every note-content split goes through splitLines (POSITIVE)", () => {
+  it("every note-content line op goes through splitLines / countLineBreaks (POSITIVE)", () => {
     const offenders: string[] = [];
     for (const f of tsFiles(SRC)) {
       if (ALLOW.has(path.basename(f))) continue;
-      if (rawSplitOffenders(readFileSync(f, "utf8"))) {
-        offenders.push(`${path.relative(SRC, f)} uses a raw .split("\\n") — route note content through splitLines()`);
+      if (rawLineOpOffenders(readFileSync(f, "utf8"))) {
+        offenders.push(
+          `${path.relative(SRC, f)} uses a raw .split("\\n") or .match(/\\n/g) — route note content through splitLines()/countLineBreaks()`
+        );
       }
     }
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
-  it("the detector fires on a raw split and ignores a comment / splitLines call (NEGATIVE control)", () => {
-    expect(rawSplitOffenders('const lines = body.split("\\n");')).toBe(true);
-    expect(rawSplitOffenders('// a comment about body.split("\\n") is fine')).toBe(false);
-    expect(rawSplitOffenders("const lines = splitLines(body);")).toBe(false);
-    expect(rawSplitOffenders('/* block: body.split("\\n") */')).toBe(false);
+  it("the detector fires on a raw split AND a raw match-count, ignores comments / helper calls (NEGATIVE control)", () => {
+    expect(rawLineOpOffenders('const lines = body.split("\\n");')).toBe(true);
+    expect(rawLineOpOffenders("const n = (body.match(/\\n/g) ?? []).length;")).toBe(true); // rc.25 counting form
+    expect(rawLineOpOffenders('// a comment about body.split("\\n") is fine')).toBe(false);
+    expect(rawLineOpOffenders("const lines = splitLines(body);")).toBe(false);
+    expect(rawLineOpOffenders("const n = countLineBreaks(body);")).toBe(false);
+    expect(rawLineOpOffenders('/* block: body.split("\\n") */')).toBe(false);
   });
 });

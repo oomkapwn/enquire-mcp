@@ -2240,7 +2240,7 @@ export function foldWithMap(original: string): { folded: string; map: number[] }
  * (query and document tokens are both whole-string-folded the same way upstream, so the
  * hit still ranks). The materially-harmful sibling (a SILENT under-replace in
  * `replace_in_notes`) was fixed in v3.11.1-rc.1 by folding the needle per code point
- * ({@link foldForMatch}); aligning the read path here would require re-folding the whole
+ * (`foldForMatch`, wildcard-match.ts); aligning the read path here would require re-folding the whole
  * TF-IDF token pipeline per code point (a scoring-path change) — disproportionate for a
  * snippet-window position, so the cosmetic residual is accepted and pinned by a contract test.
  */

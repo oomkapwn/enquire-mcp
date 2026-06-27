@@ -35,6 +35,7 @@ import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc } from "./name
 import { extractWikilinks } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
+import { splitLines } from "./wildcard-match.js";
 
 /** Top-level shape of a parsed `.base` file. Mirrors the Obsidian schema. */
 export interface ParsedBase {
@@ -653,7 +654,7 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
   }
   // Inline #tags. Matches `#word`, `#word/subword`, ignores leading-# in
   // headings (lines starting with # are markdown headings, not tags).
-  for (const line of body.split("\n")) {
+  for (const line of splitLines(body)) {
     if (/^#{1,6}\s/.test(line)) continue;
     // v3.11.0-rc.10 (M1, external audit) — was ASCII-only (`#[A-Za-z][\w/-]*`), which
     // silently dropped EVERY non-ASCII inline tag (accented `#café` → `#caf`, CJK

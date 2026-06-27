@@ -3,7 +3,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingSlashes } from "../wildcard-match.js";
+import { splitLines, stripTrailingSlashes } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
@@ -2245,6 +2245,6 @@ export function sliceSnippet(text: string, idx: number, qLen: number): { snippet
   let snippet = text.slice(before, after).replace(/\s+/g, " ").trim();
   if (before > 0) snippet = `…${snippet}`;
   if (after < text.length) snippet = `${snippet}…`;
-  const line = text.slice(0, idx).split("\n").length;
+  const line = splitLines(text.slice(0, idx)).length;
   return { snippet, line };
 }

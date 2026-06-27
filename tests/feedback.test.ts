@@ -9,7 +9,13 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultFeedbackFile, FeedbackStore, feedbackScore, MAX_FEEDBACK_ENTRIES } from "../src/feedback.js";
+import {
+  defaultFeedbackFile,
+  FeedbackStore,
+  feedbackScore,
+  MAX_FEEDBACK_ENTRIES,
+  MAX_FEEDBACK_FILE_BYTES
+} from "../src/feedback.js";
 import { defaultIndexFile, planCachePrune } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
@@ -248,5 +254,37 @@ describe("searchHybrid feedback boost (v3.11.0)", () => {
     const base = await order();
     const noise = await order({ weight: 1, scores: new Map([["Unrelated/Ghost.md", 0.99]]) });
     expect(noise).toEqual(base); // no candidate matches the marked path ⇒ no reorder
+  });
+});
+
+describe("FeedbackStore.open file-size guard (rc.24 — external rc.21 audit, Goose FIND-2)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "feedback-size-"));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("a valid under-cap file still loads its entries (POSITIVE — guard doesn't break the happy path)", async () => {
+    const file = path.join(dir, "fb.json");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ version: 1, entries: { "a.md": { useful: 3, notUseful: 1, lastMarked: "x" } } })
+    );
+    const store = await FeedbackStore.open(file);
+    expect(store.size()).toBe(1);
+    expect(store.scores().get("a.md")).toBeGreaterThan(0); // 3/(3+1+1) = 0.6
+  });
+
+  it("an over-MAX_FEEDBACK_FILE_BYTES file fail-softs to an EMPTY store (NEGATIVE control)", async () => {
+    const file = path.join(dir, "huge.json");
+    // A sparse file: stat.size exceeds the cap, but no disk is actually written — proves the
+    // guard rejects on SIZE before readFile+JSON.parse (a real 64 MB write is unnecessary).
+    const fh = await fs.open(file, "w");
+    await fh.truncate(MAX_FEEDBACK_FILE_BYTES + 1);
+    await fh.close();
+    const store = await FeedbackStore.open(file);
+    expect(store.size()).toBe(0); // empty store — guard rejected before parse
   });
 });

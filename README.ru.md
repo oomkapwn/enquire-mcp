@@ -16,7 +16,7 @@
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-1427%20passing-brightgreen.svg)](#️-доверие)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -53,7 +53,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **Ноль обращений в облако в режиме serve.** Модели кешируются локально (однократная загрузка с HuggingFace). Содержимое вашего хранилища никогда не покидает вашу машину. По умолчанию безопасно для изолированных сред.
 > 4. **Поиск с учётом свежести.** Каждый результат сообщает, насколько стара заметка; опциональное переранжирование по давности позволяет агенту предпочитать свежие знания и помечать устаревшие факты для повторной проверки — рубеж «осознания забывания», построенный на `mtime`, который ваши файлы уже имеют.
 
-**46 инструментов · 19 MCP-промптов · 1427+ модульных тестов · 50+ языков · стабильная ветка v3.10.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
+**46 инструментов · 19 MCP-промптов · 1427+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
 
 ---
 
@@ -311,7 +311,7 @@ graph LR
 
 `v2.0` гибридный поиск (BM25+TF-IDF+эмбеддинги через RRF) · `v2.6` удалённый MCP · `v2.7-2.8` вплетённые PDF · `v2.9` BGE-реранкер · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` фреймворк оценки · `v2.13` HNSW · `v2.14` сессии с состоянием · `v2.15` late-chunking · `v2.16` персистентность HNSW · `v2.17` int8-квантизация · `v3.8.0` стабильная · `v3.8.7` усиление HTTP-транспорта · **`v3.9.0` стабильная**: embed-синхронизация watcher для PDF с OCR, живое обновление HNSW в памяти при изменении файлов, адаптивное дозаполнение HNSW R-10 (закрывает недовозврат при >66% исключённых). · **`v3.10` (`@rc`)**: свежесть с осознанием забывания — `age_days` + флаг `stale` + опциональное переранжирование `--recency-weight` + `obsidian_search` с учётом frontmatter.
 
-Канал: `npm install @oomkapwn/enquire-mcp` → последняя стабильная (`@latest` = v3.10.x). Предрелиз: `npm install @oomkapwn/enquire-mcp@rc` (последний кандидат на релиз — см. [CHANGELOG.md](./CHANGELOG.md)). Полный список изменений: **[CHANGELOG.md](./CHANGELOG.md)** · Дальнейший план: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Канал: `npm install @oomkapwn/enquire-mcp` → последняя стабильная (`@latest` = v3.11.x). Предрелиз: `npm install @oomkapwn/enquire-mcp@rc` (последний кандидат на релиз — см. [CHANGELOG.md](./CHANGELOG.md)). Полный список изменений: **[CHANGELOG.md](./CHANGELOG.md)** · Дальнейший план: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 

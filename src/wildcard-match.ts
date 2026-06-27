@@ -293,3 +293,30 @@ export function splitLines(text: string): string[] {
 export function countLineBreaks(text: string): number {
   return splitLines(text).length - 1;
 }
+
+/**
+ * Case-fold a string for case-INSENSITIVE substring matching by lower-casing each
+ * Unicode CODE POINT independently (context-free). Use this for BOTH the needle AND
+ * the haystack of any case-insensitive search — NEVER whole-string
+ * `String.prototype.toLowerCase()` on one side and a per-code-point fold on the other.
+ *
+ * Whole-string `.toLowerCase()` applies CONTEXT-SENSITIVE rules — most notably Greek
+ * word-final sigma: `"ΟΔΟΣ".toLowerCase()` → `"οδος"` (final `ς`), whereas a
+ * per-code-point fold yields `"οδοσ"` (medial `σ`, no context). So a whole-string-folded
+ * needle (`"οδος"`) silently FAILS to match a per-code-point-folded haystack (`"…οδοσ…"`)
+ * → a SILENT miss. That is exactly what bit `replace_in_notes` (the needle was
+ * `search.toLowerCase()` while the line was folded per code unit → a case-insensitive
+ * Greek replace ending in a capital Σ reported 0 replacements) and is the same hazard the
+ * read-path `foldWithMap` (search.ts) avoids by folding the haystack per code point.
+ *
+ * v3.11.1-rc.1 (v3.11.0 STABLE external audit — anti-anchoring finding) — the fold sibling
+ * of the rc.18/rc.21/rc.46 case-fold-asymmetry class. Iterates by code point (`for..of`),
+ * so astral case-folding chars (e.g. Deseret `𐐀`→`𐐨`) fold correctly too — a per-UTF-16-unit
+ * `charAt` loop would split the surrogate pair and leave them UNfolded, re-introducing the
+ * very asymmetry on the astral plane.
+ */
+export function foldForMatch(s: string): string {
+  let out = "";
+  for (const ch of s) out += ch.toLowerCase();
+  return out;
+}

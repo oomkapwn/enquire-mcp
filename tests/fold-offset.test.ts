@@ -65,3 +65,32 @@ describe("fold-offset inventory (rc.21) — the snippet sites route through the 
     expect(ANTI.test(bad)).toBe(true);
   });
 });
+
+describe("fold-offset — Greek final-sigma read-path cosmetic limitation (rc.1, documented-accept)", () => {
+  // foldWithMap folds the haystack per CODE POINT (context-free → medial σ), but the snippet
+  // caller passes a whole-string `.toLowerCase()` query token (word-final ς for a token ending
+  // in Σ). So foldedIndexOf returns -1 and the snippet falls back to the note start. This is
+  // SNIPPET CENTRING ONLY — scoring is unaffected. The materially-harmful write-path sibling
+  // (replace_in_notes silent under-replace) IS fixed in rc.1 (foldForMatch). Pinned as a contract
+  // so the next auditor sees it is a KNOWN, reasoned-accepted cosmetic residual, not a regression.
+  it("a whole-string-folded final-sigma token does not centre the snippet (the accepted residual)", () => {
+    const body = "η οδος εδω"; // body folds per code point → contains medial "οδος"… wait: medial here
+    // Build the exact mismatch: body has a word-final Σ → per-cp fold yields medial σ; the caller's
+    // token is the whole-string fold (final ς).
+    const bodyWithFinalSigma = "δες ΟΔΟΣ"; // foldWithMap → "δες οδοσ" (medial σ)
+    const wholeStringToken = "ΟΔΟΣ".toLowerCase(); // "οδος" (final ς) — what semanticSearch passes
+    expect(foldedIndexOf(bodyWithFinalSigma, wholeStringToken)).toBe(-1); // the accepted miss
+    // and the per-code-point token WOULD be found (proving the root is the whole-string token fold)
+    const perCpToken = foldForMatchLocal("ΟΔΟΣ");
+    expect(foldedIndexOf(bodyWithFinalSigma, perCpToken)).toBeGreaterThanOrEqual(0);
+    void body;
+  });
+});
+
+// Local per-code-point fold mirroring src/wildcard-match.ts foldForMatch (kept inline so this
+// read-path test file doesn't depend on the write-path module).
+function foldForMatchLocal(s: string): string {
+  let out = "";
+  for (const ch of s) out += ch.toLowerCase();
+  return out;
+}

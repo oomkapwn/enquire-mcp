@@ -807,6 +807,31 @@ describe("replaceStringOutsideCodeFences (rc.18 audit) — Unicode offset + line
     expect(replaceStringOutsideCodeFences("İX", "x", "Y", false).content).not.toBe("İXY");
   });
 
+  it("v3.11.1-rc.1 — case-insensitive Greek word-final sigma matches (was a SILENT under-replace)", () => {
+    // `"ΟΔΟΣ".toLowerCase()` === "οδος" (word-final ς) but the line folds per code point to
+    // "οδοσ" (medial σ) — so the pre-rc.1 whole-string needle missed. Both fold per code point now.
+    expect(replaceStringOutsideCodeFences("ΟΔΟΣ here", "ΟΔΟΣ", "ROAD", false)).toEqual({
+      content: "ROAD here",
+      count: 1
+    });
+    // medial-σ body, final-Σ search → still matches (the fold is context-free on both sides)
+    expect(replaceStringOutsideCodeFences("οδοσ here", "ΟΔΟΣ", "ROAD", false).count).toBe(1);
+    // controls that must NOT regress:
+    expect(replaceStringOutsideCodeFences("ΟΔΟΣ here", "ΟΔΟΣ", "ROAD", true).count).toBe(1); // case-sensitive
+    expect(replaceStringOutsideCodeFences("ΣΟ here", "ΣΟ", "X", false).count).toBe(1); // non-final sigma
+    expect(replaceStringOutsideCodeFences("İX", "x", "Y", false)).toEqual({ content: "İY", count: 1 }); // rc.18 İ holds
+  });
+
+  it("NEGATIVE control — the pre-rc.1 whole-string `search.toLowerCase()` needle missed the final-sigma match", () => {
+    // Reproduce the bug inline: whole-string fold the needle, per-code-point fold the haystack.
+    const search = "ΟΔΟΣ";
+    const body = "ΟΔΟΣ here";
+    const wholeNeedle = search.toLowerCase(); // "οδος" (final ς) — the bug
+    const perCpHaystack = [...body].map((c) => c.toLowerCase()).join(""); // "οδοσ here" (medial σ)
+    expect(perCpHaystack.indexOf(wholeNeedle)).toBe(-1); // the silent miss the fix removes
+    expect(replaceStringOutsideCodeFences(body, search, "ROAD", false).count).toBe(1); // fixed
+  });
+
   it("case-sensitive single-pass ≡ the pre-rc.18 slice+concat loop (DIFFERENTIAL — fence-free corpus)", () => {
     const corpus: Array<[string, string, string]> = [
       ["abab", "ab", "x"],

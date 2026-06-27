@@ -3,7 +3,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { splitLines, stripTrailingSlashes } from "../wildcard-match.js";
+import { foldForMatch, splitLines, stripTrailingSlashes } from "../wildcard-match.js";
 import { findBestMatch, stripMd } from "./meta.js";
 
 /**
@@ -905,7 +905,11 @@ export function replaceStringOutsideCodeFences(
   let inFence = false;
   let count = 0;
   const out: string[] = [];
-  const needle = caseSensitive ? search : search.toLowerCase();
+  // v3.11.1-rc.1 — fold the needle PER CODE POINT (foldForMatch), NOT whole-string
+  // `search.toLowerCase()`: whole-string fold applies Greek word-final-sigma (Σ→ς) while
+  // replaceLineOnce folds the line per code point (Σ→σ), so a case-insensitive search
+  // ending in a capital Σ silently matched nothing. Both sides now fold identically.
+  const needle = caseSensitive ? search : foldForMatch(search);
   for (const line of lines) {
     if (/^\s*(```|~~~)/.test(line)) {
       inFence = !inFence;
@@ -941,6 +945,13 @@ export function replaceStringOutsideCodeFences(
  * applied at the wrong offset (`İX` + search `x` wrote `İXY` instead of `İY`). Here
  * the folded line is built ONCE with a per-folded-unit map back to the original
  * `[start, end)` span, so a folded match index always resolves to whole original chars.
+ *
+ * v3.11.1-rc.1 (v3.11.0 STABLE external audit — anti-anchoring) — the fold is now PER CODE
+ * POINT and the `needle` is `foldForMatch(search)` (also per code point), closing a SILENT
+ * under-replace: the prior `needle = search.toLowerCase()` folded the whole string, which
+ * applies Greek word-final sigma (`"ΟΔΟΣ"` → `"οδος"`, final `ς`), while the line folded
+ * per char (`Σ`→`σ`), so `lowered.indexOf(needle)` missed → a case-insensitive replace of a
+ * Greek term ending in `Σ` reported 0 replacements. Same case-fold-asymmetry class as rc.18.
  */
 function replaceLineOnce(
   line: string,
@@ -962,17 +973,29 @@ function replaceLineOnce(
     }
     return { line: result + line.slice(cursor), n };
   }
-  // Case-insensitive — fold once, mapping each folded code unit back to the original char span.
+  // Case-insensitive — fold once, mapping each folded code unit back to the original span.
+  // v3.11.1-rc.1: iterate by CODE POINT (not UTF-16 unit) so the fold matches `foldForMatch`
+  // (which produced `needle`) for ALL chars — a per-unit `charAt` loop splits an astral
+  // surrogate pair and leaves astral case-folding chars (e.g. Deseret 𐐀→𐐨) UNfolded, the
+  // same needle/haystack asymmetry on the astral plane. `width` is the original char's span
+  // (1 or 2 units); each folded unit maps back to the whole `[oi, oi+width)` source char, so
+  // a length-changing fold (İ U+0130 → "i̇") still resolves to whole original chars (rc.18).
   const startOf: number[] = [];
   const endOf: number[] = [];
   let lowered = "";
-  for (let oi = 0; oi < line.length; oi++) {
-    const lc = line.charAt(oi).toLowerCase(); // may expand to 1+ code units
+  let oi = 0;
+  while (oi < line.length) {
+    const cp = line.codePointAt(oi);
+    if (cp === undefined) break;
+    const ch = String.fromCodePoint(cp);
+    const width = ch.length; // 1 or 2 UTF-16 units in the ORIGINAL line
+    const lc = ch.toLowerCase(); // context-free per code point; may expand to 1+ units
     lowered += lc;
     for (let j = 0; j < lc.length; j++) {
       startOf.push(oi);
-      endOf.push(oi + 1);
+      endOf.push(oi + width);
     }
+    oi += width;
   }
   let cursor = 0; // next ORIGINAL index to copy from
   let li = lowered.indexOf(needle);

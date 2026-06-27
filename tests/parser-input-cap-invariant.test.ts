@@ -19,6 +19,21 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "..");
 const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
 
+// SCOPE (v3.11.1-rc.1 — reasoned-rejection of the v3.11.0-STABLE external "validate-then-write
+// gap" LOW, documented so it is NOT re-litigated): this inventory pins inputs that flow into a
+// PARSER/REGEX or a SUPERLINEAR per-note/whole-vault scan — the CPU-DoS class. The write-content
+// BODY fields (`create_note.content`, `append_to_note.content`/`separator`) are DELIBERATELY out
+// of scope: they flow LINEARLY into `composeNote` → `vault.writeNote`/`appendNote` (one
+// `stringifyFrontmatter` + one `Buffer.byteLength`, no parser, no per-note/whole-vault scan), and
+// are double-bounded already — by the serve-http body cap (`deriveHttpBodyCap` = max(4 MB,
+// maxFileBytes×1.5) = 7.5 MB default, enforced streaming BEFORE the handler) and by the sink
+// (`writeNote`/`appendNote` reject > maxFileBytes = 5 MB default). A boundary `.max(1_000_000)`
+// (the auditor's proposed parity with `validate_note_proposal`, whose 1 MB cap exists because IT
+// has a superlinear wikilink scan) would sit BELOW the real 5 MB write limit and REJECT legitimate
+// large notes (long pastes / OCR dumps / merged logs) — a regression, not a fix. `frontmatter_set`
+// is included below ONLY because its single-note YAML value is the rc.24 value-dimension sibling,
+// not because all write-content must be capped.
+//
 // Inventory: always-registered tools whose free-string input flows into a parser/regex
 // OR a superlinear per-note scan (tokenize / .toLowerCase() across the vault).
 const PARSER_FED_TOOLS = [

@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** Modelos en caché local (una descarga única desde HuggingFace). El contenido de tu bóveda nunca sale de tu máquina. Seguro para entornos aislados por defecto.
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1427+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1433+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 

@@ -2230,6 +2230,19 @@ export function foldWithMap(original: string): { folded: string; map: number[] }
  * (not the folded copy). `needleLower` must already be lower-cased. Returns -1
  * if not found. See {@link foldWithMap} for why the naive
  * `original.toLowerCase().indexOf(needle)` is wrong for length-changing folds.
+ *
+ * KNOWN COSMETIC LIMITATION (v3.11.1-rc.1, documented-accept) — `foldWithMap` folds the
+ * haystack per CODE POINT (context-free), but `needleLower` here is the caller's
+ * whole-string-`toLowerCase()` query token, which applies Greek word-final sigma
+ * (`"ΟΔΟΣ"`→`"οδος"`, `ς`) while the body folds to `σ`. So a query token ending in a
+ * capital Σ can return -1 and the snippet falls back to the note start instead of
+ * centring on the hit. This is SNIPPET CENTRING ONLY — TF-IDF SCORING is unaffected
+ * (query and document tokens are both whole-string-folded the same way upstream, so the
+ * hit still ranks). The materially-harmful sibling (a SILENT under-replace in
+ * `replace_in_notes`) was fixed in v3.11.1-rc.1 by folding the needle per code point
+ * (`foldForMatch`, wildcard-match.ts); aligning the read path here would require re-folding the whole
+ * TF-IDF token pipeline per code point (a scoring-path change) — disproportionate for a
+ * snippet-window position, so the cosmetic residual is accepted and pinned by a contract test.
  */
 export function foldedIndexOf(original: string, needleLower: string): number {
   if (needleLower === "") return 0;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileGlobTokens, compileLikeTokens, matchWildcardTokens } from "../src/wildcard-match.js";
+import { compileGlobTokens, compileLikeTokens, foldForMatch, matchWildcardTokens } from "../src/wildcard-match.js";
 
 // v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class — closes the rc.63 likeToRegex + rc.68
 // globToRegex siblings). Both sinks previously compiled the pattern into a backtracking
@@ -350,5 +350,29 @@ describe("wildcard-match — tokenizers", () => {
     expect(compileGlobTokens("*.md")).toEqual([{ kind: "segstar" }, { lit: ".md" }]);
     expect(compileGlobTokens("a/**/b")).toEqual([{ lit: "a/" }, { kind: "any" }, { lit: "b" }]);
     expect(compileGlobTokens("?x")).toEqual([{ kind: "question" }, { lit: "x" }]);
+  });
+});
+
+describe("wildcard-match — foldForMatch (rc.1, context-free per-code-point case fold)", () => {
+  it("folds Greek capital sigma to MEDIAL σ regardless of position (context-free)", () => {
+    // The bug it closes: whole-string `"ΟΔΟΣ".toLowerCase()` applies word-final ς.
+    expect("ΟΔΟΣ".toLowerCase()).toBe("οδος"); // JS context-sensitive fold (final ς)
+    expect(foldForMatch("ΟΔΟΣ")).toBe("οδοσ"); // context-free (medial σ) — matches a per-cp haystack
+    expect(foldForMatch("ΣΟ")).toBe("σο"); // non-final Σ unchanged in meaning
+  });
+
+  it("is idempotent for ASCII + handles length-changing folds (İ) per code point", () => {
+    expect(foldForMatch("ABC")).toBe("abc");
+    expect(foldForMatch("abc")).toBe("abc");
+    expect(foldForMatch("İ")).toBe("i̇"); // U+0130 → 2 units, like the haystack fold
+    expect(foldForMatch("")).toBe("");
+  });
+
+  it("folds an ASTRAL case-folding char (Deseret 𐐀→𐐨) — a per-UTF-16-unit charAt loop would NOT", () => {
+    expect(foldForMatch("𐐀")).toBe("𐐨"); // for..of iterates by code point, so the surrogate pair folds
+    // NEGATIVE control: a per-UTF-16-unit fold splits the pair and leaves it UNfolded (the old hazard)
+    const perUnit = [..."𐐀".split("")].map((c) => c.toLowerCase()).join("");
+    expect(perUnit).toBe("𐐀");
+    expect(foldForMatch("𐐀")).not.toBe(perUnit);
   });
 });

@@ -11,7 +11,7 @@
 **Deja de reexplicarle el contexto a Claude, Cursor, ChatGPT, Codex y OpenClaw en cada sesión. Tus notas de Obsidian se convierten en una memoria compartida y consultable entre todos los agentes compatibles con MCP: tu conocimiento, cualquier modelo, tuyo para siempre.**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** Modelos en caché local (una descarga única desde HuggingFace). El contenido de tu bóveda nunca sale de tu máquina. Seguro para entornos aislados por defecto.
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1427+ pruebas unitarias · 50+ idiomas · v3.10.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1427+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -195,7 +195,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superficie de estabilidad:
 
 ## 🚀 Publicaciones
 
-Canal: `npm install @oomkapwn/enquire-mcp` → última versión estable (`@latest` = v3.10.x). Versión preliminar: `npm install @oomkapwn/enquire-mcp@rc` (el último candidato a versión). Registro de cambios completo en **[CHANGELOG.md](./CHANGELOG.md)** · Hoja de ruta en **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Canal: `npm install @oomkapwn/enquire-mcp` → última versión estable (`@latest` = v3.11.x). Versión preliminar: `npm install @oomkapwn/enquire-mcp@rc` (el último candidato a versión). Registro de cambios completo en **[CHANGELOG.md](./CHANGELOG.md)** · Hoja de ruta en **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ## 🤝 Cómo contribuir
 

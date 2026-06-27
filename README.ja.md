@@ -11,7 +11,7 @@
 **セッションのたびに Claude、Cursor、ChatGPT、Codex、OpenClaw へコンテキストを説明し直すのはもう終わりです。あなたの Obsidian ノートが、すべての MCP 対応エージェント間で共有・検索可能な記憶になります——あなたの知識を、あらゆるモデルで、永遠にあなたのものに。**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1427+ ユニットテスト · 50+ 言語 · v3.10.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1427+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
@@ -306,7 +306,7 @@ graph LR
 
 `v2.0` ハイブリッド検索（BM25+TF-IDF+埋め込みを RRF で） · `v2.6` リモート MCP · `v2.7-2.8` PDF 統合 · `v2.9` BGE リランカー · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` 評価ハーネス · `v2.13` HNSW · `v2.14` ステートフルセッション · `v2.15` late-chunking · `v2.16` HNSW 永続化 · `v2.17` int8 量子化 · `v3.8.0` 安定版 · `v3.8.7` HTTP トランスポート強化 · **`v3.9.0` 安定版**：OCR された PDF のウォッチャー embed-sync、ファイル変更時の HNSW インメモリライブ更新、R-10 適応的 HNSW リフィル（>66% 除外時のアンダーリターンを解消）。 · **`v3.10`（`@rc`）**：忘却を意識した鮮度 —— `age_days` + `stale` フラグ + オプトインの `--recency-weight` リランキング + frontmatter を意識した `obsidian_search`。
 
-チャネル：`npm install @oomkapwn/enquire-mcp` → 最新安定版（`@latest` = v3.10.x）。プレリリース：`npm install @oomkapwn/enquire-mcp@rc`（最新のリリース候補 —— [CHANGELOG.md](./CHANGELOG.md) を参照）。完全な変更履歴：**[CHANGELOG.md](./CHANGELOG.md)** · 今後の計画：**[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**。
+チャネル：`npm install @oomkapwn/enquire-mcp` → 最新安定版（`@latest` = v3.11.x）。プレリリース：`npm install @oomkapwn/enquire-mcp@rc`（最新のリリース候補 —— [CHANGELOG.md](./CHANGELOG.md) を参照）。完全な変更履歴：**[CHANGELOG.md](./CHANGELOG.md)** · 今後の計画：**[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**。
 
 ---
 

@@ -16,7 +16,7 @@
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-1427%20passing-brightgreen.svg)](#️-confiance)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -53,7 +53,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > 3. **Zéro appel au cloud pendant le service.** Modèles mis en cache localement (téléchargement unique depuis HuggingFace). Le contenu de votre coffre ne quitte jamais votre machine. Sûr en environnement isolé par défaut.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
-**46 outils · 19 prompts MCP · 1427+ tests unitaires · 50+ langues · v3.10.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
+**46 outils · 19 prompts MCP · 1427+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
 
 ---
 
@@ -311,7 +311,7 @@ Posture complète : **[SECURITY.md](./SECURITY.md)** · Surface de stabilité : 
 
 `v2.0` récupération hybride (BM25+TF-IDF+embeddings via RRF) · `v2.6` MCP distant · `v2.7-2.8` PDF fondus · `v2.9` reranker BGE · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` harnais d'évaluation · `v2.13` HNSW · `v2.14` sessions à état · `v2.15` late-chunking · `v2.16` persistance HNSW · `v2.17` quantification int8 · `v3.8.0` stable · `v3.8.7` durcissement du transport HTTP · **`v3.9.0` stable** : embed-sync du watcher pour les PDF OCRisés, mise à jour HNSW en mémoire en temps réel lors des modifications de fichiers, refill HNSW adaptatif R-10 (clôt la sous-restitution avec >66 % d'exclusion). · **`v3.10` (`@rc`)** : fraîcheur consciente de l'oubli — indicateur `age_days` + `stale` + reclassement optionnel `--recency-weight` + `obsidian_search` conscient du frontmatter.
 
-Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@latest` = v3.10.x). Préversion : `npm install @oomkapwn/enquire-mcp@rc` (le dernier candidat à la version — voir [CHANGELOG.md](./CHANGELOG.md)). Changelog complet : **[CHANGELOG.md](./CHANGELOG.md)** · Plan à venir : **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@latest` = v3.11.x). Préversion : `npm install @oomkapwn/enquire-mcp@rc` (le dernier candidat à la version — voir [CHANGELOG.md](./CHANGELOG.md)). Changelog complet : **[CHANGELOG.md](./CHANGELOG.md)** · Plan à venir : **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 

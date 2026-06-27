@@ -11,7 +11,7 @@
 **كُفّ عن إعادة شرح السياق لـ Claude وCursor وChatGPT وCodex وOpenClaw في كل جلسة. تصبح ملاحظاتك في Obsidian ذاكرةً مشتركةً قابلةً للبحث عبر كل وكيل متوافق مع MCP — معرفتك، وكل نموذج، وتظل ملكاً لك إلى الأبد.**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -54,7 +54,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **صفر استدعاءات سحابية أثناء التشغيل.** النماذج مخزّنة محلياً (تنزيل لمرة واحدة من HuggingFace). محتوى مكتبتك لا يغادر جهازك أبداً. آمنة للعمل المعزول (air-gap) افتراضياً.
 > 4. **استدعاء واعٍ بالحداثة.** تُبلّغ كل نتيجة عن عمر الملاحظة؛ وإعادة الترتيب الاختيارية بالحداثة تتيح للوكيل تفضيل المعرفة الحديثة ووسم الحقائق القديمة لإعادة التحقق — حدود "الوعي بالنسيان"، مبنيّة على `mtime` الذي تملكه ملفاتك أصلاً.
 
-**46 أداة · 19 موجِّه MCP · 1427+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.10.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
+**46 أداة · 19 موجِّه MCP · 1427+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
 
 </div>
 
@@ -245,7 +245,7 @@ enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 
 <div dir="rtl" align="right">
 
-القناة: `npm install @oomkapwn/enquire-mcp` ← أحدث إصدار مستقر (`@latest` = v3.10.x). الإصدار التجريبي: `npm install @oomkapwn/enquire-mcp@rc` (أحدث مرشّح إصدار). سجل التغييرات الكامل في **[CHANGELOG.md](./CHANGELOG.md)** · خارطة الطريق في **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+القناة: `npm install @oomkapwn/enquire-mcp` ← أحدث إصدار مستقر (`@latest` = v3.11.x). الإصدار التجريبي: `npm install @oomkapwn/enquire-mcp@rc` (أحدث مرشّح إصدار). سجل التغييرات الكامل في **[CHANGELOG.md](./CHANGELOG.md)** · خارطة الطريق في **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 </div>
 

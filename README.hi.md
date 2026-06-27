@@ -11,7 +11,7 @@
 **हर सत्र में Claude, Cursor, ChatGPT, Codex, OpenClaw को संदर्भ दोबारा समझाना बंद करें। आपके Obsidian नोट्स हर MCP-संगत एजेंट के बीच साझा, खोजने-योग्य स्मृति बन जाते हैं — आपका ज्ञान, हर मॉडल, हमेशा आपका अपना।**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve के दौरान शून्य क्लाउड कॉल।** मॉडल स्थानीय रूप से कैश्ड (HuggingFace से एक-बार डाउनलोड)। आपके vault की सामग्री कभी आपकी मशीन नहीं छोड़ती। डिफ़ॉल्ट रूप से एयर-गैप-सुरक्षित।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 1427+ यूनिट टेस्ट · 50+ भाषाएँ · v3.10.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 1427+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -197,7 +197,7 @@ enquire-mcp doctor --vault <path>    # रंग-कोडित ✓/⚠/✗ स
 
 ## 🚀 रिलीज़
 
-चैनल: `npm install @oomkapwn/enquire-mcp` → नवीनतम स्थिर (`@latest` = v3.10.x)। प्री-रिलीज़: `npm install @oomkapwn/enquire-mcp@rc` (नवीनतम release candidate)। पूर्ण changelog देखें **[CHANGELOG.md](./CHANGELOG.md)** · रोडमैप देखें **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**।
+चैनल: `npm install @oomkapwn/enquire-mcp` → नवीनतम स्थिर (`@latest` = v3.11.x)। प्री-रिलीज़: `npm install @oomkapwn/enquire-mcp@rc` (नवीनतम release candidate)। पूर्ण changelog देखें **[CHANGELOG.md](./CHANGELOG.md)** · रोडमैप देखें **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**।
 
 ## 🤝 योगदान
 

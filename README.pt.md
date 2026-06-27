@@ -16,7 +16,7 @@
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![tests](https://img.shields.io/badge/tests-1427%20passing-brightgreen.svg)](#️-confiança)
-[![stable](https://img.shields.io/badge/v3.10.x-stable-brightgreen.svg)](./STABILITY.md)
+[![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
@@ -53,7 +53,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 > 3. **Zero chamadas à nuvem durante o serve.** Modelos em cache local (download único do HuggingFace). O conteúdo do seu vault nunca sai da sua máquina. Seguro para ambientes isolados (air-gap) por padrão.
 > 4. **Recuperação consciente da atualidade.** Cada resultado informa quão antiga é a nota; o reranqueamento por recência opcional permite que um agente prefira conhecimento recente e sinalize fatos desatualizados para reverificação — a fronteira consciente do esquecimento, construída sobre o `mtime` que seus arquivos já têm.
 
-**46 ferramentas · 19 prompts MCP · 1427+ testes unitários · 50+ idiomas · v3.10.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
+**46 ferramentas · 19 prompts MCP · 1427+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
 
 ---
 
@@ -311,7 +311,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superfície de estabilidad
 
 `v2.0` recuperação híbrida (BM25+TF-IDF+embeddings via RRF) · `v2.6` MCP remoto · `v2.7-2.8` PDFs mesclados · `v2.9` reranker BGE · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` harness de avaliação · `v2.13` HNSW · `v2.14` sessões com estado · `v2.15` late-chunking · `v2.16` persistência do HNSW · `v2.17` quantização int8 · `v3.8.0` estável · `v3.8.7` endurecimento do transporte HTTP · **`v3.9.0` estável**: embed-sync do watcher de PDFs com OCR, atualização ao vivo do HNSW em memória em mudanças de arquivo, refill adaptativo do HNSW R-10 (fecha o under-return de >66% excluído). · **`v3.10` (`@rc`)**: atualidade consciente do esquecimento — flag `age_days` + `stale` + reranqueamento opcional `--recency-weight` + `obsidian_search` consciente de frontmatter.
 
-Canal: `npm install @oomkapwn/enquire-mcp` → último estável (`@latest` = v3.10.x). Pré-lançamento: `npm install @oomkapwn/enquire-mcp@rc` (o release candidate mais recente — veja [CHANGELOG.md](./CHANGELOG.md)). Changelog completo: **[CHANGELOG.md](./CHANGELOG.md)** · Plano futuro: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Canal: `npm install @oomkapwn/enquire-mcp` → último estável (`@latest` = v3.11.x). Pré-lançamento: `npm install @oomkapwn/enquire-mcp@rc` (o release candidate mais recente — veja [CHANGELOG.md](./CHANGELOG.md)). Changelog completo: **[CHANGELOG.md](./CHANGELOG.md)** · Plano futuro: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 

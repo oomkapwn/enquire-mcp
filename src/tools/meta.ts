@@ -5,7 +5,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE, scanWikilinkInners } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingHashes, stripTrailingLineEnds } from "../wildcard-match.js";
+import { splitLines, stripTrailingHashes, stripTrailingLineEnds } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { searchHybrid } from "./search.js";
@@ -1520,7 +1520,7 @@ export async function getOpenQuestions(
   const candidates: Candidate[] = [];
   for (const e of entries) {
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
-    const lines = parsed.body.split("\n");
+    const lines = splitLines(parsed.body);
     let currentHeading: string | null = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";

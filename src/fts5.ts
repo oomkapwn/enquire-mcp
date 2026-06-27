@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
-import { stripTrailingHashes, stripTrailingLineEnds, stripTrailingSlashes } from "./wildcard-match.js";
+import { splitLines, stripTrailingHashes, stripTrailingLineEnds, stripTrailingSlashes } from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
@@ -764,7 +764,7 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
  * Skips heading-style chars inside fenced code blocks (``` and ~~~).
  */
 function computeBreadcrumbsByLine(content: string): string[] {
-  const lines = content.split("\n");
+  const lines = splitLines(content);
   const out: string[] = new Array(lines.length).fill("");
   const stack: string[] = []; // index = depth-1, value = heading text
   let inFence = false;

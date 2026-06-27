@@ -252,3 +252,29 @@ export function stripTrailingHashes(s: string): string {
 export function stripTrailingLineEnds(s: string): string {
   return stripTrailingRun(s, (c) => c === NEWLINE || c === CR || c === LS || c === PS);
 }
+
+/**
+ * Split text into lines on EVERY terminator enquire treats as one — LF (`\n`),
+ * CRLF (`\r\n`), bare CR (`\r`, classic-Mac), U+2028 LINE SEPARATOR, U+2029
+ * PARAGRAPH SEPARATOR — i.e. the SAME set {@link stripTrailingLineEnds} strips
+ * (rc.17/rc.19). A raw `text.split("\n")` splits ONLY on LF, so the strip and the
+ * split disagreed: a note saved with bare CR, or with U+2028/U+2029 as the line
+ * SEPARATOR (not just a trailing terminator), collapsed to one "line".
+ *
+ * That inconsistency had two consequences the external rc.21 audits surfaced:
+ *   • read-path (LOW): `extractHeadings`, `getOpenQuestions`, snippet line-numbers
+ *     and FTS breadcrumbs merged or mis-counted lines on such notes;
+ *   • write-path (MEDIUM, data corruption): the per-line code-fence detection in
+ *     `rewriteOutsideCodeFences` / `replaceStringOutsideCodeFences` never fired, so
+ *     a wikilink INSIDE a fenced code block was rewritten on rename/replace.
+ *
+ * For an LF-only note this is byte-identical to `split("\n")` (no other terminator
+ * present), so the common path is unchanged. NEL (U+0085) / VT (U+000B) / FF
+ * (U+000C) are deliberately NOT split on — neither `stripTrailingLineEnds` nor
+ * CommonMark/Obsidian treat them as line breaks, so splitting on them would diverge
+ * from how the note renders. v3.11.0-rc.23 — the sibling of the rc.17/rc.19 CRLF fix.
+ */
+const LINE_SPLIT_RE = /\r\n|[\n\r\u2028\u2029]/;
+export function splitLines(text: string): string[] {
+  return text.split(LINE_SPLIT_RE);
+}

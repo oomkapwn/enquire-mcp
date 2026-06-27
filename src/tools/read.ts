@@ -3,7 +3,7 @@ import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { stripTrailingHashes, stripTrailingLineEnds, stripTrailingNewlines } from "../wildcard-match.js";
+import { splitLines, stripTrailingHashes, stripTrailingLineEnds, stripTrailingNewlines } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -224,7 +224,7 @@ export async function readNote(
  *  to file line `bodyStartLine + i`. */
 function extractHeadings(body: string, bodyStartLine: number): Array<{ level: number; text: string; line: number }> {
   const out: Array<{ level: number; text: string; line: number }> = [];
-  const lines = body.split("\n");
+  const lines = splitLines(body);
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
@@ -992,7 +992,7 @@ export async function chatThreadAppend(
   const appendOffset = toAppend.indexOf(headingMarker);
   const headingOffset = appendOffset >= 0 ? trimmed.length + appendOffset : -1;
   const lineStart =
-    headingOffset >= 0 ? newBody.slice(0, headingOffset).split("\n").length : (trimmed.match(/\n/g) ?? []).length + 1;
+    headingOffset >= 0 ? splitLines(newBody.slice(0, headingOffset)).length : (trimmed.match(/\n/g) ?? []).length + 1;
   // line_end spans through the message's last content line: the heading line plus the
   // newline count of the trimmed message block (heading → blank → content[…]).
   const lineEnd = lineStart + (messageBlock.trim().match(/\n/g) ?? []).length;
@@ -1029,7 +1029,7 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
   const targetRel = args.note_path.toLowerCase().endsWith(".md") ? args.note_path : `${args.note_path}.md`;
   const abs = vault.resolveInside(targetRel);
   const body = await vault.readFile(abs);
-  const lines = body.split("\n");
+  const lines = splitLines(body);
   let threadTitle: string | null = null;
   let inThread = false;
   const messages: ChatThreadMessage[] = [];

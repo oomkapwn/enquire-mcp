@@ -1,5 +1,6 @@
 import { parseFrontmatter } from "./frontmatter.js";
 import { lookupFoldedAny, nfc } from "./name-fold.js";
+import { splitLines } from "./wildcard-match.js";
 
 /**
  * A parsed Obsidian wikilink (`[[Target]]`, `[[Target#section]]`,
@@ -94,7 +95,7 @@ export function parseNote(source: string): ParsedNote {
   // a frontmatter line (e.g. `---\nx: hi\n---\nhi`), reporting too-early a line.
   // 1 when there's no frontmatter, an empty body, or the defensive not-found case.
   const bodyIdx = body.length > 0 ? source.lastIndexOf(body) : -1;
-  const bodyStartLine = bodyIdx > 0 ? source.slice(0, bodyIdx).split("\n").length : 1;
+  const bodyStartLine = bodyIdx > 0 ? splitLines(source.slice(0, bodyIdx)).length : 1;
   return {
     frontmatter,
     body,

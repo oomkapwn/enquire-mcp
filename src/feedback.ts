@@ -36,6 +36,11 @@ interface FeedbackData {
  *  marks unbounded fake paths over a long `serve-http` session (a mild fill-DoS).
  *  At the cap, EXISTING entries still update; NEW paths are ignored. */
 export const MAX_FEEDBACK_ENTRIES = 100_000;
+/** v3.11.0-rc.24 (Goose FIND-2) — upper bound on the sidecar file size read at `open()`.
+ *  At MAX_FEEDBACK_ENTRIES × ~200 B/entry the legitimate file is ~20 MB; 64 MB is generous
+ *  and bounds a corrupt/hostile file before readFile+JSON.parse (defense-in-depth — the
+ *  sidecar is operator-controlled, not bearer-reachable). */
+export const MAX_FEEDBACK_FILE_BYTES = 64 * 1024 * 1024;
 
 /**
  * Cache-dir location of the per-vault feedback sidecar. MIRRORS `defaultIndexFile`
@@ -98,6 +103,13 @@ export class FeedbackStore {
     // become harmless OWN keys (a note literally named __proto__.md still round-trips).
     let data: FeedbackData = { version: 1, entries: Object.create(null) as Record<string, FeedbackEntry> };
     try {
+      // v3.11.0-rc.24 (external rc.21 audit, Goose FIND-2) — bound the file size BEFORE
+      // readFile+JSON.parse, mirroring vault.ts:loadDiskCache's `stat.size` guard. The
+      // sidecar is operator-controlled (cache dir, not bearer-reachable) so this is
+      // defense-in-depth, not an exploit fix; a corrupt/hostile multi-GB file now
+      // fail-softs to an empty store instead of being parsed into memory.
+      const stat = await fs.stat(file);
+      if (stat.size > MAX_FEEDBACK_FILE_BYTES) return new FeedbackStore(file, data);
       const raw = await fs.readFile(file, "utf8");
       const parsed = JSON.parse(raw) as unknown;
       const rawEntries = parsed && typeof parsed === "object" ? (parsed as { entries?: unknown }).entries : undefined;

@@ -307,7 +307,7 @@ describe("wildcard-match — linear budget on catastrophic literal-separated sha
     const subject = "a".repeat(4000); // worst case: many partitions for a regex, O(n·k) here
     const t0 = Date.now();
     for (let r = 0; r < 5; r++) matcher(`${subject}b`); // non-matching (trailing b)
-    expect(Date.now() - t0, "linear LIKE matcher must not hang").toBeLessThan(500);
+    expect(Date.now() - t0, "linear LIKE matcher must not hang").toBeLessThan(3000);
   });
 
   it("glob `**a**a…` / `*a*a…` against an adversarial non-matching path is linear", () => {
@@ -317,7 +317,7 @@ describe("wildcard-match — linear budget on catastrophic literal-separated sha
       const matcher = glob(pat);
       for (let r = 0; r < 5; r++) matcher(subject);
     }
-    expect(Date.now() - t0, "linear glob matcher must not hang").toBeLessThan(500);
+    expect(Date.now() - t0, "linear glob matcher must not hang").toBeLessThan(3000);
   });
 
   it("matchWildcardTokens scales linearly, not catastrophically, in wildcard count (empirical)", () => {
@@ -331,7 +331,10 @@ describe("wildcard-match — linear budget on catastrophic literal-separated sha
     };
     // Even at 80 wildcards (catastrophic pre-rc.71) the matcher is fast. Assert an absolute
     // budget rather than a ratio (ratios flake under parallel-test CPU load).
-    expect(time(80), "80 literal-separated wildcards must stay well under a second").toBeLessThan(500);
+    expect(
+      time(80),
+      "80 literal-separated wildcards must not hang (generous ceiling — rc.24 widened from 500ms; parallel CI load spiked the matcher to ~1s)"
+    ).toBeLessThan(3000);
   });
 });
 

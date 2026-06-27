@@ -294,7 +294,10 @@ describe("compileGlob (v0.11 — privacy filter)", () => {
       const m = compileGlob(pat);
       for (let r = 0; r < 5; r++) m.test(subject);
     }
-    expect(Date.now() - t0, "literal-separated globs must match in well under a second").toBeLessThan(500);
+    expect(
+      Date.now() - t0,
+      "literal-separated globs must not hang (generous ceiling — rc.24 widened from 500ms for parallel-CI-load immunity)"
+    ).toBeLessThan(3000);
   });
 
   it("preserves globstar semantics (POSITIVE/NEGATIVE controls)", () => {

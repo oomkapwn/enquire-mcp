@@ -1021,7 +1021,15 @@ export function registerReadTools(
         filter_frontmatter: z
           .record(
             z.string().max(MAX_FRONTMATTER_KEY_LEN),
-            z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+            // rc.24 (external rc.21 audit, Cursor LOW-2) — cap the string value arms. The
+            // filter runs only on the fused candidate pool (O(fanOutK), bounded), so this is
+            // defense-in-depth, the value-dimension sibling of the rc.21 frontmatter_search cap.
+            z.union([
+              z.string().max(MAX_FRONTMATTER_VALUE_LEN),
+              z.number(),
+              z.boolean(),
+              z.array(z.union([z.string().max(MAX_FRONTMATTER_VALUE_LEN), z.number(), z.boolean()]))
+            ])
           )
           .optional()
           .describe(
@@ -1367,6 +1375,14 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         title: z.string().optional().describe("Note title (filename without .md)"),
         set: z
           .record(z.string().max(MAX_FRONTMATTER_KEY_LEN), z.unknown())
+          // rc.24 (external rc.21 audit, Cursor LOW-3) — bound each value's stringified length
+          // (write-gated single-note YAML materialization; the value-dimension sibling of the
+          // rc.21 frontmatter_search cap). `null`/`undefined` (the delete sentinel) are exempt.
+          .refine(
+            (rec) =>
+              Object.values(rec).every((v) => v == null || JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN),
+            { message: `a frontmatter value exceeds ${MAX_FRONTMATTER_VALUE_LEN} chars (stringified)` }
+          )
           .describe("Keys to set. Pass `null` as value to delete a key (e.g. {status: 'published', draft: null})"),
         dry_run: z.boolean().optional().describe("Preview the diff without writing (default false)")
       }

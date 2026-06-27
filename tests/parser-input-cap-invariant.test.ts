@@ -53,7 +53,14 @@ const PARSER_FED_TOOLS = [
   // `query` uncapped; a 4096-byte repeated-token query stalled SQLite FTS5 `MATCH` ~33s. This
   // inventory previously omitted it (curated around always-on parser-fed tools). Now pinned —
   // a future opt-in remote tool added without a `query` cap fails CI here.
-  { tool: "obsidian_full_text_search", field: "query", cap: "MAX_QUERY_LEN" }
+  { tool: "obsidian_full_text_search", field: "query", cap: "MAX_QUERY_LEN" },
+  // v3.11.0-rc.24 (external rc.21 audit, Cursor LOW-2/LOW-3) — the VALUE-dimension siblings of
+  // the rc.21 frontmatter_search cap the inventory missed: filter_frontmatter on obsidian_search
+  // (bounded by the fused candidate pool, defense-in-depth) + the write-gated frontmatter_set
+  // value predicates (single-note YAML materialization). Both capped via the value-length form
+  // (filter: `.max` on the string arms; set: a `.refine()`), recognized by the generalized detector.
+  { tool: "obsidian_search", field: "filter_frontmatter", cap: "MAX_FRONTMATTER_VALUE_LEN" },
+  { tool: "obsidian_frontmatter_set", field: "set", cap: "MAX_FRONTMATTER_VALUE_LEN" }
 ];
 
 /**

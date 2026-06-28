@@ -178,6 +178,25 @@ describe("searchText", () => {
     expect(result.matches[0].path.startsWith("subfolder/")).toBe(true);
   });
 
+  it("v3.11.1-rc.2 — matches a Greek word-final-sigma query token (was a SILENT note drop)", async () => {
+    // The needle was whole-string-folded (`"ΟΔΟΣ".toLowerCase()` → "οδος", final ς) while the
+    // haystack folds per code point ("οδοσ", medial σ), so `indexOf` returned -1 and the note was
+    // dropped (tokenScore 0 → null). Both sides now fold per code point via foldForMatch.
+    const sroot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-sigma-"));
+    try {
+      await fs.writeFile(path.join(sroot, "greek.md"), "# Οδός\nΗ ΟΔΟΣ ειναι εδω.\n");
+      const v = new Vault(sroot);
+      const hit = await searchText(v, { query: "ΟΔΟΣ" });
+      expect(hit.matches.map((m) => m.path)).toContain("greek.md"); // the fix: the note is found
+      // NEGATIVE control: the pre-fix whole-string needle would have missed the per-code-point body.
+      const wholeNeedle = "ΟΔΟΣ".toLowerCase(); // "οδος" (final ς)
+      const perCpBody = [..."Η ΟΔΟΣ ειναι εδω."].map((c) => c.toLowerCase()).join(""); // medial σ
+      expect(perCpBody.indexOf(wholeNeedle)).toBe(-1); // the silent miss the fix removes
+    } finally {
+      await fs.rm(sroot, { recursive: true, force: true });
+    }
+  });
+
   it("default mode `all` requires every token to match (audit v0.9 P1)", async () => {
     const v = new Vault(root);
     // "alpha note" — both words appear in Alpha.md (frontmatter title is

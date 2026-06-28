@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.1-rc.2] — 2026-06-28
+
+> **TL;DR:** **Pre-promotion re-sweep of rc.1 caught a third instance of the case-fold-asymmetry class — `searchText` — and it's worse than the documented-accept sibling.** Before flipping `@latest` I ran the mandatory pre-promotion re-sweep (3-lens Workflow `wom27daqi`); the fold-fix was verified regression-free over a 10,368-case differential, but the sibling sweep found `obsidian_search_text` carries the same needle-vs-haystack fold mismatch — and there `indexOf` is the SOLE matcher, so a Greek word-final-sigma query token **silently dropped the whole note** (a recall miss, not the cosmetic snippet mis-centring of the `semanticSearch` sibling). Fixed before promotion.
+
+### Fixed
+
+- **`obsidian_search_text` silently dropped notes for a Greek word-final-sigma query token (LOW, pre-existing — surfaced by the rc.1 pre-promotion re-sweep).** `searchText` folded each query token whole-string (`tokens.map((t) => t.toLowerCase())` → `"ΟΔΟΣ"`→`"οδος"`, final `ς`) while the note body folds **per code point** via `foldWithMap` (→ `"οδοσ"`, medial `σ`). The match is `lower.indexOf(needle)` (search.ts:132) — the **only** scoring path for this tool — so the token scored 0 and the note was excluded (`totalScore === 0 → return null`). Reproduced through `dist/` (`foldWithMap("…ΟΔΟΣ…")` = `"…οδοσ…"`; whole-string needle `"οδος"` → `indexOf` -1). **Fix:** route the needle through the shared `foldForMatch` (per code point) introduced in rc.1, so both the needle and the `foldWithMap` haystack fold identically — the same close as the rc.1 `replace_in_notes` fix. +1 test (Greek POSITIVE + a NEGATIVE control reproducing the whole-string miss). This is the **third** instance of the class (rc.1 write-path `replace_in_notes` + the documented-accept `semanticSearch` snippet-centring + this `searchText` recall miss); the `semanticSearch` one stays documented-accept (cosmetic — TF-IDF scoring is unaffected).
+
+**1433 → 1434 source tests.** No API changes. Diagnostic-tool-gated (`--diagnostic-search-tools`), bearer-reachable; `@latest` stays 3.11.0 until promotion. **Lesson: the pre-promotion re-sweep is non-negotiable — it caught a more-severe sibling of the exact class rc.1 fixed, in a path my rc.1 anti-anchoring sweep traced only as far as the cosmetic `semanticSearch` snippet (it never reached `searchText`, where the same fold IS the matcher).**
+
 ## [3.11.1-rc.1] — 2026-06-27
 
 > **TL;DR:** **v3.11.0-STABLE external-audit response — 2 independent auditors (Cursor 4.3/ship, Goose 4.4/ship), both 0 CRIT / 0 HIGH / 0 MED.** The cleanest external round of the line: both re-verified the rc.17→rc.25 hardening (hostile-FS symlink, offline cache-miss, dense-`[[a]]` quadratic, the line-terminator class) HOLDS through `dist/`. **The only shippable fix came from an internal anti-anchoring lens — a real LOW *neither* auditor caught.**

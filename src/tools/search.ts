@@ -3,7 +3,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { splitLines, stripTrailingSlashes } from "../wildcard-match.js";
+import { foldForMatch, splitLines, stripTrailingSlashes } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
@@ -99,7 +99,13 @@ export async function searchText(
 
   // Tokenize on whitespace for "all" / "any". Phrase mode keeps the raw query.
   const tokens = mode === "phrase" ? [q] : q.trim().split(/\s+/);
-  const lowerTokens = tokens.map((t) => t.toLowerCase());
+  // v3.11.1-rc.2 — fold the needle PER CODE POINT (foldForMatch), NOT whole-string
+  // `.toLowerCase()`: the haystack below is folded per code point by `foldWithMap`, and a
+  // whole-string fold applies Greek word-final sigma (`"ΟΔΟΣ"`→`"οδος"`, final `ς`) while the
+  // haystack folds to medial `σ` → `indexOf` returns -1 and the note is SILENTLY DROPPED
+  // (tokenScore 0 → return null). Unlike the semanticSearch snippet sibling (cosmetic), here
+  // `indexOf` is the SOLE matcher, so the asymmetry is a recall miss, not just mis-centring.
+  const lowerTokens = tokens.map((t) => foldForMatch(t));
 
   // v3.11.0-rc.11 (rc.9-audit L2, defense-in-depth) — cap the whole-vault scan
   // (parity with findSimilar/validateNoteProposal). This tool is gated behind

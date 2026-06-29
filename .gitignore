@@ -14,6 +14,7 @@ coverage/
 # a fresh `npm run bench` on the maintainer's machine; contributors should
 # generate their own and not commit them.
 bench/results.md
+bench/context-savings.json
 # Note: bench/benchmarks.json (retrieval-quality bench) IS committed —
 # `docs/benchmarks.md` references it as the canonical reproducible
 # artifact. MRR/NDCG/Recall are bit-identical across hardware (only

@@ -486,6 +486,35 @@ centerpiece, so it goes through the same "measured, reproducible, reviewed"
 bar as every other number in this document — never a placeholder or an
 estimate).
 
+## Context efficiency (token cost)
+
+Code-intelligence memory tools advertise a flagship "Nx fewer tokens" figure —
+the context an agent saves by querying a memory layer instead of reading source
+files one by one. The same lever applies to a **notes** memory: `obsidian_context_pack`
+returns a single budget-capped bundle (`budget_tokens × 4` chars, default 4000)
+instead of the agent's naive *search → `read_note` every top hit in full* loop.
+
+**What we measure.** Per question, two paths over the **same** hybrid retrieval:
+(a) the `context_pack` bundle's token count, vs (b) the summed full bodies of the
+top-K hits the agent would otherwise open. Token estimate is `chars / 4` (a rough,
+deterministic heuristic — the same on both sides, so the *ratio* is robust to it).
+
+**Harness.** [`scripts/bench-context.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-context.mjs)
+(shipped v3.11.2) builds a deterministic synthetic vault, indexes FTS5 +
+embeddings, and reports `baseline_tokens` / `pack_tokens` / savings ratio per
+question + the mean (pure helpers covered by `tests/bench-context.test.ts` with
+NEGATIVE controls so an inflated ratio can't ship).
+
+```bash
+npm run bench:context
+```
+
+**Status:** the harness ships in v3.11.2; **no headline "Nx less context" figure
+is published** from a synthetic-vault run. A README claim requires a run on a
+**representative vault** + maintainer sign-off — the same "measured, reproducible,
+reviewed" bar as the LongMemEval score above. The synthetic-vault number the
+script prints is an illustration of the *method*, not a claim about real vaults.
+
 ## Future work
 
 - Reproduce on **public BEIR / TREC subsets** so numbers can be compared

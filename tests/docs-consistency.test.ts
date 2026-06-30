@@ -1136,7 +1136,7 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
         test: /(\d+)\+\s*ユニットテスト/
       },
       // v3.11.3 — ko/de join the set (11 total). Korean states the counts word-first
-      // ("도구 46개" / "MCP 프롬프트 19개" / "단위 테스트 1439+개"); German uses the tech
+      // ("도구 46개" / "MCP 프롬프트 19개" / "단위 테스트 1440+개"); German uses the tech
       // anglicisms "Tools" / "MCP-Prompts" / "Unit-Tests". Tests are a "N+" lower bound.
       {
         file: "README.ko.md",
@@ -1251,6 +1251,40 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
         countToolRows(md),
         `${file} must keep the full per-tool table (${canonToolRows} obsidian_ rows in README.md), not a prose summary`
       ).toBe(canonToolRows);
+    }
+  });
+
+  it("no shipped-stable release is mislabelled `@rc` in any README/llms Releases reel (currency)", async () => {
+    // v3.11.3 — the rc.1 relabel of `v3.10` (`@rc`) → `v3.10` stable was an INSTANCE fix: it
+    // covered en/ko/de but left fr/ru/pt/ja + llms.txt still advertising the now-stable v3.10
+    // line as a pre-release in the Releases highlight reel (the pre-promotion re-sweep caught
+    // it). That currency class recurred 3× this release line. v3.10 has shipped to @latest, so
+    // NO surface may pair it with `@rc`. Version codes are language-neutral, so this holds
+    // across every translation regardless of script.
+    const files = [
+      "README.md",
+      "README.zh.md",
+      "README.es.md",
+      "README.hi.md",
+      "README.ar.md",
+      "README.ru.md",
+      "README.pt.md",
+      "README.fr.md",
+      "README.ja.md",
+      "README.ko.md",
+      "README.de.md",
+      "llms.txt"
+    ];
+    // `v3.10` optionally + `+`, optional backtick/space, a half- OR full-width open paren,
+    // optional space/backtick, then `@rc` — the exact shape of the stale label.
+    const STALE = /v3\.10`?\+?[\s`]*[(（][\s`]*@rc/;
+    // Non-vacuous: the canonical reel DOES mention v3.10, so absence-of-@rc is meaningful.
+    const canon = await read("README.md");
+    expect(/v3\.10/.test(canon), "README.md Releases reel must mention v3.10").toBe(true);
+    expect(STALE.test("`v3.10` (`@rc`)"), "the STALE detector must fire on the known bad shape").toBe(true);
+    for (const file of files) {
+      const md = await read(file);
+      expect(STALE.test(md), `${file} must NOT label shipped-stable v3.10 as @rc (it is @latest-stable)`).toBe(false);
     }
   });
 

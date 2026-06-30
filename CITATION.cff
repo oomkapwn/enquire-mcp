@@ -28,7 +28,7 @@ license: MIT
 # so it updates only on a stable promotion — no per-RC sync burden, and it's
 # deliberately NOT in check-version-consistency.mjs (which pins the current
 # in-flight version across the 7 build surfaces).
-version: "3.11.2"
+version: "3.11.3"
 date-released: "2026-06-30"
 keywords:
   - "MCP"

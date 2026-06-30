@@ -44,7 +44,7 @@
 - **v3.9.0-rc.1+:** OCR'd PDF watcher embed-sync (`--ocr-pdfs`) — scanned PDFs that change during a session stay in semantic-search via Tesseract OCR feeding the embed pipeline
 - **v3.9.0-rc.2+:** HNSW in-memory live update — semantic search reflects vault edits within the watcher debounce window (~250ms); pre-3.9.0 needed serve restart
 - **v3.9.0-rc.3+:** R-10 adaptive HNSW refill — auto-doubles k up to 3 attempts when post-filter hits < limit, closing the >66% excluded under-return class
-- **v3.10+ (`@rc`):** forgetting-aware freshness — every search hit carries `age_days` + a `stale` flag from the note's live mtime; the `obsidian_stale_notes` tool surfaces aged notes; opt-in `--recency-weight` re-ranking (default off) prefers fresher knowledge. Plus frontmatter-aware `obsidian_search` (`filter_frontmatter` scopes hybrid search by YAML)
+- **v3.10+ stable:** forgetting-aware freshness — every search hit carries `age_days` + a `stale` flag from the note's live mtime; the `obsidian_stale_notes` tool surfaces aged notes; opt-in `--recency-weight` re-ranking (default off) prefers fresher knowledge. Plus frontmatter-aware `obsidian_search` (`filter_frontmatter` scopes hybrid search by YAML)
 
 ## What enquire-mcp is NOT
 
@@ -65,7 +65,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1440 unit tests passing on every PR
+- 1441 unit tests passing on every PR
 - 9 required + 5 advisory CI gates per merge (lint, test ×2 [Node 22/24], smoke, audit, coverage, version-consistency, docs, oia + macOS + docker + CodeQL + Analyze)
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
 - Semver-bound public surface — see [STABILITY.md](https://github.com/oomkapwn/enquire-mcp/blob/main/STABILITY.md)

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.2] — 2026-06-30
+
+> **TL;DR:** **v3.11.2 STABLE — promoted `@rc` → `@latest`. A positioning + eval-rigor patch, zero `src/` behavior change.** Born from a study of a 21k★ adjacent-domain competitor (DeusData/codebase-memory-mcp, *code* memory): borrow the **discipline** (lead with one *measured* number, re-narrate constraints as moats, broaden agent-SEO), never the domain or an unmeasured claim. Ships **`bench:context`** (a context-savings harness — our niche analog of "Nx fewer tokens", with **no figure published** until a representative-vault run + sign-off) + **`docs/EVALUATION_PLAN.md`** (a pre-registered, score-free methodology) + a README hero that now **leads with the already-measured reranker delta** (+15.5 NDCG@10 / +24.7 MRR on a reproducible 60-query ablation) and re-frames the on-device model's weight as the privacy/grounded **moat** (zero cloud calls during serve — *enforced* via `setEmbeddingsOffline`, not aspirational). Every positioning claim is substantiated + invariant-pinned; the no-overclaim rule held (the own-diff sweep even caught + reverted a stray synthetic-vault number `git add -A` had committed). **46 tools · 19 prompts · 1439 tests · 0 CodeQL · 0 open dependabot.** No API breaks (additive patch). CI publishes `@latest` + signed provenance (SLSA L2) + OIDC MCP-registry sync. **Per-RC detail: rc.1 below.**
+
 ## [3.11.2-rc.1] — 2026-06-29
 
 > **TL;DR:** **Competitive-study response (DeusData/codebase-memory-mcp, 21k★) — eval rigor + number-led positioning, all inside the no-overclaim rule.** A study of that project's positioning playbook (which drove its stars via one measured hook + frictionless install) yielded three borrowable, niche-correct moves — and an explicit list of what NOT to copy (its code-domain features, single-binary rewrite, SLSA-3 claim, any borrowed number).

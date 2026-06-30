@@ -1134,7 +1134,17 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
         tool: /(\d+)\s*ツール/,
         prompt: /(\d+)\s*MCP\s*プロンプト/,
         test: /(\d+)\+\s*ユニットテスト/
-      }
+      },
+      // v3.11.3 — ko/de join the set (11 total). Korean states the counts word-first
+      // ("도구 46개" / "MCP 프롬프트 19개" / "단위 테스트 1439+개"); German uses the tech
+      // anglicisms "Tools" / "MCP-Prompts" / "Unit-Tests". Tests are a "N+" lower bound.
+      {
+        file: "README.ko.md",
+        tool: /도구\s*(\d+)\s*개/,
+        prompt: /MCP\s*프롬프트\s*(\d+)\s*개/,
+        test: /단위\s*테스트\s*(\d+)\+/
+      },
+      { file: "README.de.md", tool: /(\d+)\s*Tools/, prompt: /(\d+)\s*MCP-Prompts/, test: /(\d+)\+\s*Unit-Tests/ }
     ];
     for (const l of langs) {
       const md = await read(l.file);
@@ -1154,7 +1164,7 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     }
   });
 
-  it("all 9 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {
+  it("all 11 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {
     // v3.10.1 / v3.11.0-rc.2 — the language switcher is a multi-file surface prone to drift (add a
     // 10th language → forget to update the others). Pin it: each README's <sub> switcher must LINK
     // the other 8 language files and NOT link itself (the current language is bolded, not linked).
@@ -1167,7 +1177,9 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
       "README.ru.md",
       "README.pt.md",
       "README.fr.md",
-      "README.ja.md"
+      "README.ja.md",
+      "README.ko.md",
+      "README.de.md"
     ];
     for (const self of readmes) {
       const md = await read(self);

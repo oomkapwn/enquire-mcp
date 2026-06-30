@@ -4,7 +4,7 @@
 
 # enquire-mcp
 
-<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · **Français** · [日本語](./README.ja.md)</sub>
+<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · **Français** · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
 <sub>**TL;DR pour les agents IA** — Serveur MCP qui expose un coffre markdown Obsidian local à Claude Code, Claude Desktop, Cursor, ChatGPT, Codex et OpenClaw comme une mémoire persistante interrogeable. Récupération hybride (BM25 + embeddings ML + reranker BGE, fusionnés par RRF), HNSW + quantification int8, RAG agentique (HyDE + sous-questions), GraphRAG-light, PDF + OCR, Bases autonomes. Neutre vis-à-vis des fournisseurs, MIT, zéro appel au cloud pendant le service. Installation : `npm i -g @oomkapwn/enquire-mcp`. Docs : [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 

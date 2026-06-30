@@ -37,7 +37,7 @@ async function readmeFiles(): Promise<string[]> {
   return (await fs.readdir(ROOT)).filter((f) => /^README.*\.md$/.test(f)).sort();
 }
 
-describe("README anchor-integrity invariant (9-language surface)", () => {
+describe("README anchor-integrity invariant (11-language surface)", () => {
   it("every in-file (#anchor) in every README resolves to a heading", async () => {
     const files = await readmeFiles();
     expect(files.length).toBeGreaterThanOrEqual(9); // EN + zh/es/hi/ar/ru/pt/fr/ja

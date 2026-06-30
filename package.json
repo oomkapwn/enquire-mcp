@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.11.3",
+  "version": "3.11.4-rc.1",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
   "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1441 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
@@ -199,13 +199,13 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
-    "js-yaml": "^5.0.0",
+    "js-yaml": "^5.2.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.1",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@vitest/coverage-v8": "^4.1.9",
     "github-slugger": "^2.0.0",
     "husky": "^9.1.7",
@@ -216,10 +216,10 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@napi-rs/canvas": "^1.0.0",
+    "@napi-rs/canvas": "^1.0.1",
     "better-sqlite3": "^12.11.1",
     "hnswlib-node": "^3.0.0",
-    "pdfjs-dist": "^6.0.227",
+    "pdfjs-dist": "^6.1.200",
     "tesseract.js": "^7.0.0"
   },
   "overrides": {

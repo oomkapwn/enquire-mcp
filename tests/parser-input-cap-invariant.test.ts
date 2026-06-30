@@ -91,14 +91,32 @@ function registerBlock(source: string, tool: string): string | null {
 }
 
 /**
+ * Pure detector — slice out `field`'s OWN schema chain from a registerTool block:
+ * from its `name:` declaration (word-boundary so `set` ≠ `offset`) up to the NEXT
+ * sibling field declaration (`name: z.` at a line/comma boundary) or block end.
+ * v3.11.4-rc.2 (full-audit PARSERCAP-FIELD-1) — the cap must live in THIS field's
+ * chain; the prior block-wide token test let a per-field cap drop on a multi-field
+ * tool (e.g. frontmatter_search `equals` losing its `.refine()` while `contains`
+ * keeps the same `MAX_FRONTMATTER_VALUE_LEN`) slip past undetected.
+ */
+function fieldSlice(block: string, field: string): string {
+  const decl = new RegExp(`(?:^|[^\\w$])${field}\\s*:`).exec(block);
+  if (!decl) return "";
+  const rest = block.slice(decl.index + decl[0].length);
+  const sib = rest.search(/[\n,]\s*[a-zA-Z_$][\w$]*\s*:\s*z\./);
+  return sib < 0 ? rest : rest.slice(0, sib);
+}
+
+/**
  * Pure detector — is the field present AND bounded by the length cap `cap`?
  * Accepts EITHER a `.max(<cap>)` (string fields) OR a `.refine(... <cap> ...)`
  * (v3.11.0-rc.21 — the frontmatter value predicates are arbitrary JSON, so they
  * are capped by a stringified-length `.refine()`, not `.max()`). The cap token
- * must appear in the tool's registered block (same locality as the original).
+ * must appear within THIS field's own schema slice, not anywhere in the block.
  */
 function fieldHasCap(block: string, field: string, cap: string): boolean {
-  return block.includes(`${field}:`) && new RegExp(`\\b${cap}\\b`).test(block);
+  const slice = fieldSlice(block, field);
+  return slice !== "" && new RegExp(`\\b${cap}\\b`).test(slice);
 }
 
 describe("parser-input length-cap invariant (rc.57)", () => {
@@ -123,6 +141,15 @@ describe("parser-input length-cap invariant (rc.57)", () => {
       "equals: z.unknown().optional().refine((v) => JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN)";
     expect(fieldHasCap(refined, "equals", "MAX_FRONTMATTER_VALUE_LEN")).toBe(true);
     expect(fieldHasCap("equals: z.unknown().optional()", "equals", "MAX_FRONTMATTER_VALUE_LEN")).toBe(false);
+    // v3.11.4-rc.2 (PARSERCAP-FIELD-1) — PER-FIELD binding: in a two-field block where `equals`
+    // LOST its cap but the sibling `contains` still references the SAME constant, the detector must
+    // flag `equals` (the prior block-wide token search returned a FALSE NEGATIVE on exactly this).
+    const twoField =
+      "equals: z.unknown().optional(),\n    contains: z.unknown().optional().refine((v) => JSON.stringify(v).length <= MAX_FRONTMATTER_VALUE_LEN)";
+    expect(fieldHasCap(twoField, "equals", "MAX_FRONTMATTER_VALUE_LEN")).toBe(false); // uncapped → flagged
+    expect(fieldHasCap(twoField, "contains", "MAX_FRONTMATTER_VALUE_LEN")).toBe(true); // its sibling is capped
+    // word-boundary: `set` must not match `offset:`
+    expect(fieldHasCap("offset: z.number().max(MAX_X)", "set", "MAX_X")).toBe(false);
   });
 
   it("registerBlock locates a real tool block and returns null for an absent tool (control)", () => {

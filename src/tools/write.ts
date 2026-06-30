@@ -3,7 +3,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { foldForMatch, splitLines, stripTrailingSlashes } from "../wildcard-match.js";
+import { foldForMatch, splitLinesWithEnds, stripTrailingSlashes } from "../wildcard-match.js";
 import { findBestMatch, stripMd } from "./meta.js";
 
 /**
@@ -839,7 +839,7 @@ export function rewriteOutsideCodeFences(
   content: string,
   oldRawsToNew: Map<string, { kind: "wikilink" | "embed"; newRaw: string }>
 ): { content: string; count: number } {
-  const lines = splitLines(content);
+  const { lines, ends } = splitLinesWithEnds(content);
   let inFence = false;
   let count = 0;
   const out: string[] = [];
@@ -868,7 +868,7 @@ export function rewriteOutsideCodeFences(
     }
     out.push(mutated);
   }
-  return { content: out.join("\n"), count };
+  return { content: out.map((l, i) => l + (ends[i] ?? "")).join(""), count };
 }
 
 /**
@@ -901,7 +901,7 @@ export function replaceStringOutsideCodeFences(
   caseSensitive: boolean
 ): { content: string; count: number } {
   if (!search) return { content, count: 0 };
-  const lines = splitLines(content);
+  const { lines, ends } = splitLinesWithEnds(content);
   let inFence = false;
   let count = 0;
   const out: string[] = [];
@@ -924,7 +924,7 @@ export function replaceStringOutsideCodeFences(
     out.push(r.line);
     count += r.n;
   }
-  return { content: out.join("\n"), count };
+  return { content: out.map((l, i) => l + (ends[i] ?? "")).join(""), count };
 }
 
 /**

@@ -4,7 +4,7 @@
 
 # enquire-mcp
 
-<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · **Русский** · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md)</sub>
+<sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · **Русский** · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
 <sub>**TL;DR для AI-агентов** — MCP-сервер, открывающий локальное Obsidian-хранилище из markdown-файлов для Claude Code, Claude Desktop, Cursor, ChatGPT, Codex и OpenClaw как постоянную поисковую память. Гибридный поиск (BM25 + ML-эмбеддинги + BGE-реранкер, объединённые через RRF), HNSW + int8-квантизация, агентный RAG (HyDE + декомпозиция на подвопросы), GraphRAG-light, PDF + OCR, автономные Bases. Нейтральность к вендору, MIT, ноль обращений в облако в режиме serve. Установка: `npm i -g @oomkapwn/enquire-mcp`. Документация: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 

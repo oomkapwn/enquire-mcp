@@ -27,6 +27,12 @@ const REPO = "oomkapwn/enquire-mcp";
 //   - context-engineering removed (swapped for openclaw in v3.7.8 Topics rebalance)
 // Per round-11 audit: the test was carrying the v3.7.0 8-topic shortlist
 // while the v3.7.8 metadata had moved on. Bringing the invariant up to date.
+// v3.11.2 (codebase-memory-mcp competitive study — agent-SEO) — pin the broadened
+// agent-community targeting so a future Topics rebalance can't silently drop it. The
+// repo is at GitHub's 20-topic cap, so these 4 replaced the redundant retrieval cluster
+// (agentic-rag / hybrid-search / semantic-search — "rag" kept as the umbrella) + generic
+// "claude" (we keep the targeted claude-code / claude-memory). Each surfaces enquire in
+// that client community's GitHub topic search; we are client-agnostic over MCP by design.
 const REQUIRED_TOPICS = [
   "ai-memory",
   "agent-memory",
@@ -35,7 +41,11 @@ const REQUIRED_TOPICS = [
   "claude-memory",
   "second-brain",
   "openclaw",
-  "obsidian-mcp"
+  "obsidian-mcp",
+  "aider",
+  "windsurf",
+  "zed",
+  "gemini-cli"
 ];
 // v3.7.8 — About now leads with "The most advanced Obsidian MCP" credential
 // followed by the value prop. v3.7.9 invariant matches this new lead phrase

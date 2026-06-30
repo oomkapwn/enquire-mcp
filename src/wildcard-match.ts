@@ -280,6 +280,31 @@ export function splitLines(text: string): string[] {
 }
 
 /**
+ * Split `text` into lines AND the exact terminator that followed each line.
+ * `lines[i]` is the line text (terminator-stripped, identical to {@link splitLines});
+ * `ends[i]` is the terminator that followed it (`""` for the final line when the text
+ * has no trailing terminator). Rejoin faithfully with
+ * `lines.map((l, i) => l + ends[i]).join("")` \u2014 this PRESERVES CRLF / CR / U+2028 /
+ * U+2029 line endings on every line, including untouched ones.
+ *
+ * v3.11.4-rc.2 \u2014 the write-path rewriters (`rewriteOutsideCodeFences` /
+ * `replaceStringOutsideCodeFences`) split with the terminator-aware {@link splitLines}
+ * (rc.23) but rejoined with a hard-coded `"\n"`, silently flattening a whole CRLF
+ * (Windows) note to LF on any `replace_in_notes` / `rename_note` edit. Splitting on a
+ * CAPTURING terminator group keeps each line's own ending so the rejoin is byte-faithful.
+ */
+export function splitLinesWithEnds(text: string): { lines: string[]; ends: string[] } {
+  const parts = text.split(/(\r\n|[\n\r\u2028\u2029])/);
+  const lines: string[] = [];
+  const ends: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    lines.push(parts[i] ?? "");
+    ends.push(parts[i + 1] ?? "");
+  }
+  return { lines, ends };
+}
+
+/**
  * Count the line BREAKS in `text` per the {@link splitLines} terminator set
  * (LF / CRLF / CR / U+2028 / U+2029) \u2014 i.e. `splitLines(text).length - 1`.
  *

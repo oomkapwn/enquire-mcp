@@ -1162,6 +1162,24 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
         200
       );
     }
+    // v3.11.4-rc.2 (full-audit DOCS-TESTCOUNT-I18N-1) — the tests BADGE is an EXACT, language-
+    // NEUTRAL surface (`tests-N%20passing`) that the lower-bound stat-line check above does NOT
+    // cover; the rc.1 1440→1441 bump synced only en/fr and left the translation badges stale at
+    // 1440. Guard every README badge (canonical + translations) === the real count so an exact
+    // badge can't silently drift again. Translations without a badge are simply skipped.
+    const allReadmes = ["README.md", ...langs.map((l) => l.file)];
+    let badgesChecked = 0;
+    for (const file of allReadmes) {
+      const md = await read(file);
+      const badge = /tests-(\d+)(?:%20| )passing/.exec(md);
+      if (!badge) continue;
+      badgesChecked += 1;
+      expect(Number.parseInt(badge[1] ?? "0", 10), `${file} tests badge must equal the real count ${actualTests}`).toBe(
+        actualTests
+      );
+    }
+    // non-vacuous: the canonical README + the badge-carrying translations must actually be checked.
+    expect(badgesChecked, "at least 2 README test badges must be present + checked").toBeGreaterThanOrEqual(2);
   });
 
   it("all 11 language READMEs cross-link each other in the switcher (i18n consistency)", async () => {

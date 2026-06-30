@@ -1362,10 +1362,16 @@ export async function getNoteNeighbors(
   for (const link of targetParsed.wikilinks) {
     const m = findBestMatch(entries, link.target, target.relPath);
     if (!m || seenOut.has(m.relPath)) continue;
+    // v3.11.4-rc.2 (full-audit NEIGHBORS-OUTBOUND-CAP-2) — track EVERY resolved outbound
+    // destination in seenOut (a cheap O(1) indexed lookup) so the tag_siblings exclude set
+    // below is complete; only the expensive readNote + DISPLAY is capped at `cap`. Pre-fix the
+    // loop broke at `cap`, leaving outbound dests past the cap out of seenOut, so a genuine
+    // outbound neighbor that also shared a tag was mis-surfaced as a tag_sibling.
     seenOut.add(m.relPath);
-    const { parsed: nbrParsed } = await vault.readNote(m.absPath, m.mtimeMs);
-    outbound.push({ path: m.relPath, title: stripMd(m.basename), tags: nbrParsed.tags });
-    if (outbound.length >= cap) break;
+    if (outbound.length < cap) {
+      const { parsed: nbrParsed } = await vault.readNote(m.absPath, m.mtimeMs);
+      outbound.push({ path: m.relPath, title: stripMd(m.basename), tags: nbrParsed.tags });
+    }
   }
 
   // Inbound: notes that link to target, with backlink count.

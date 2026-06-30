@@ -19,9 +19,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getOpenQuestions, readNote } from "../src/tools/index.js";
-import { rewriteOutsideCodeFences } from "../src/tools/write.js";
+import { replaceStringOutsideCodeFences, rewriteOutsideCodeFences } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
-import { splitLines } from "../src/wildcard-match.js";
+import { splitLines, splitLinesWithEnds } from "../src/wildcard-match.js";
 
 const LS = "\u2028";
 const PS = "\u2029";
@@ -164,5 +164,47 @@ describe('line-terminator inventory (rc.23) — no raw split("\\n") on note cont
     expect(rawLineOpOffenders("const lines = splitLines(body);")).toBe(false);
     expect(rawLineOpOffenders("const n = countLineBreaks(body);")).toBe(false);
     expect(rawLineOpOffenders('/* block: body.split("\\n") */')).toBe(false);
+  });
+});
+
+// v3.11.4-rc.2 (full-audit CRLF-WRITEBACK-1, MED) — the WRITE-PATH terminator-PRESERVATION leg.
+// rc.23 routed the write rewriters through the terminator-aware splitLines() (fixing fence
+// detection on CR/LS/PS notes) BUT they rejoined with a hard-coded out.join("\n") — so a single
+// replace_in_notes / rename_note on a CRLF (Windows) note silently flattened EVERY line ending to
+// LF, producing a whole-file spurious diff. Fix: split with splitLinesWithEnds (captures each
+// line's own terminator) and rejoin line+terminator. These behavioral round-trips are the durable
+// guard the inventory invariant (split-only) couldn't give — a future regression to join("\n") fails.
+describe("write-path rewriters PRESERVE the original line terminator (v3.11.4-rc.2 CRLF-WRITEBACK-1)", () => {
+  it("splitLinesWithEnds.lines is byte-identical to splitLines (no read-path regression)", () => {
+    for (const s of ["a\nb\nc", "a\r\nb\r\n", "a\rb", "x y z", "", "abc", "a\nb\n"]) {
+      expect(splitLinesWithEnds(s).lines).toEqual(splitLines(s));
+    }
+  });
+
+  it("replaceStringOutsideCodeFences keeps CRLF / CR / U+2028 (POSITIVE), LF unchanged", () => {
+    const crlf = replaceStringOutsideCodeFences("alpha foo\r\nbeta\r\ngamma\r\n", "foo", "bar", false);
+    expect(crlf.content).toBe("alpha bar\r\nbeta\r\ngamma\r\n");
+    expect(crlf.count).toBe(1);
+    expect(replaceStringOutsideCodeFences("a\rb\rc", "b", "B", false).content).toBe("a\rB\rc");
+    expect(replaceStringOutsideCodeFences("p q r", "q", "Q", false).content).toBe("p Q r");
+    // common path: LF-only note is byte-identical to the old behavior
+    expect(replaceStringOutsideCodeFences("a\nb\nc", "b", "B", false).content).toBe("a\nB\nc");
+  });
+
+  it("rewriteOutsideCodeFences (rename backlinks) keeps CRLF (POSITIVE)", () => {
+    const r = rewriteOutsideCodeFences(
+      "see [[Old]]\r\nand [[Old]] again\r\n",
+      new Map([["Old", { kind: "wikilink", newRaw: "New" }]])
+    );
+    expect(r.content).toBe("see [[New]]\r\nand [[New]] again\r\n");
+    expect(r.count).toBe(2);
+  });
+
+  it('NEGATIVE control: a bare out.join("\\n") rejoin would FLATTEN CRLF — proving the test discriminates', () => {
+    // Simulate the pre-fix rejoin (split-aware, join LF) and assert it loses the terminator,
+    // so the POSITIVE tests above are non-vacuous (they only pass because the real code preserves it).
+    const flattened = splitLinesWithEnds("a\r\nb\r\n").lines.join("\n");
+    expect(flattened.includes("\r\n")).toBe(false);
+    expect(flattened).toBe("a\nb\n");
   });
 });

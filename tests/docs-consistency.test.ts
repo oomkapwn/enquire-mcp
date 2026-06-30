@@ -1196,6 +1196,64 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     }
   });
 
+  it("all translated READMEs are at full SECTION-PARITY with README.md (same H2/H3 count)", async () => {
+    // v3.11.3 — the rc.1 i18n audit found zh/es/hi/ar were ABBREVIATED (13 H2 / 1 H3 vs the
+    // canonical 15 / 2): they had silently dropped the "Set up in your AI agent", "API reference",
+    // and "Example queries" sections while staying GREEN on the numeric + anchor + switcher gates
+    // (those check claims/links, never section COMPLETENESS). This structural guard closes that
+    // blind spot: every translation must carry the same number of H2 (`## `) and H3 (`### `)
+    // headings as the English source, so a future translation can't drift incomplete unnoticed.
+    const countHeadings = (md: string, level: 2 | 3): number => {
+      const prefix = `${"#".repeat(level)} `;
+      return md.split("\n").filter((l) => l.startsWith(prefix) && !l.startsWith(`${prefix}#`)).length;
+    };
+    const canon = await read("README.md");
+    const canonH2 = countHeadings(canon, 2);
+    const canonH3 = countHeadings(canon, 3);
+    // Within-section CONTENT-block parity: heading-count parity alone let hi/ar keep a PROSE
+    // summary where English has a richer block (the rc.2 finding — a translation can have all
+    // 15 H2 yet still drop the mermaid diagram or collapse the 46-tool table to one sentence).
+    // Pin the two concrete, language-agnostic blocks every complete translation carries:
+    //   - the retrieval mermaid diagram (a ```mermaid fence — code, identical across languages)
+    //   - the tool table rows that name an `obsidian_*` tool (verbatim, so countable in any script)
+    const countMermaid = (md: string): number => (md.match(/```mermaid/g) ?? []).length;
+    const countToolRows = (md: string): number =>
+      md.split("\n").filter((l) => l.startsWith("|") && /obsidian_/.test(l)).length;
+    const canonMermaid = countMermaid(canon);
+    const canonToolRows = countToolRows(canon);
+    // Sanity: the source itself has a non-trivial section set + content blocks (guards vacuous passes).
+    expect(canonH2, "README.md must have >10 H2 sections").toBeGreaterThan(10);
+    expect(canonMermaid, "README.md must have a ```mermaid retrieval diagram").toBeGreaterThanOrEqual(1);
+    expect(canonToolRows, "README.md must have the per-tool table (>5 obsidian_ rows)").toBeGreaterThan(5);
+    const translations = [
+      "README.zh.md",
+      "README.es.md",
+      "README.hi.md",
+      "README.ar.md",
+      "README.ru.md",
+      "README.pt.md",
+      "README.fr.md",
+      "README.ja.md",
+      "README.ko.md",
+      "README.de.md"
+    ];
+    for (const file of translations) {
+      const md = await read(file);
+      expect(
+        countHeadings(md, 2),
+        `${file} H2 count must equal README.md (${canonH2}) — a missing section drops it`
+      ).toBe(canonH2);
+      expect(countHeadings(md, 3), `${file} H3 count must equal README.md (${canonH3})`).toBe(canonH3);
+      expect(countMermaid(md), `${file} must keep the mermaid retrieval diagram (README.md has ${canonMermaid})`).toBe(
+        canonMermaid
+      );
+      expect(
+        countToolRows(md),
+        `${file} must keep the full per-tool table (${canonToolRows} obsidian_ rows in README.md), not a prose summary`
+      ).toBe(canonToolRows);
+    }
+  });
+
   it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
     const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
     expect(err, err ?? "").toBeNull();

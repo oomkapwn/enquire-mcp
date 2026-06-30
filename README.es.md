@@ -38,17 +38,53 @@ Cada sesión de IA empieza desde cero. Vuelves a explicar tu proyecto, tus decis
 
 Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y consultable** para cualquier agente compatible con MCP. Una sola instalación: tu conocimiento queda al instante accesible desde Claude Code, Claude Desktop, Cursor, el GPT personalizado de ChatGPT, Codex, OpenClaw y cualquier otro cliente MCP. Archivos markdown planos **que son tuyos**, indexados localmente, buscados con todo el stack moderno de recuperación de información (IR), y recordados en cada sesión y con cada modelo.
 
-**Anclado en tus textos, no extraído.** Las herramientas de memoria conversacional (mem0, Zep, Supermemory, Memobase) *extraen* hechos de tus registros de chat hacia un almacén aparte que no puedes leer. enquire-mcp es lo contrario: está **anclado en el conocimiento que ya escribiste** —tus propias notas `.md`, literales, con citas— de modo que la recuperación es auditable, editable en cualquier editor y nunca un resumen con pérdidas de un chat que recuerdas a medias. Y a diferencia de las plataformas de memoria de ***flota*** del lado del servidor —almacenes en la nube multiinquilino que parafrasean el tráfico de los agentes hacia una base de datos compartida— enquire es **monousuario y local-first**: una única bóveda que posees por completo y que puedes leer, editar y borrar tú mismo, con cero llamadas a la nube durante el servicio.
+**Anclado en tus textos, no extraído.** Las herramientas de memoria conversacional (mem0, Zep, Supermemory, Memobase) *extraen* hechos de tus registros de chat hacia un almacén aparte que no puedes leer. enquire-mcp es lo contrario: está **anclado en el conocimiento que ya escribiste** —tus propias notas `.md`, literales, con citas— de modo que la recuperación es auditable, editable en cualquier editor y nunca un resumen con pérdidas de un chat que recuerdas a medias. Y a diferencia de las plataformas de memoria de ***flota*** del lado del servidor —almacenes en la nube multiinquilino que parafrasean el tráfico de los agentes hacia una base de datos compartida— enquire es **monousuario y local-first**: una única bóveda que posees por completo y que puedes leer, editar y borrar tú mismo, con cero llamadas a la nube durante el servicio. (Esa crítica de "extraído" es específica del grupo de la memoria de chat, no de las herramientas de grafo de conocimiento / ETL como cognee, ni de pares de búsqueda personal como Khoj.)
 
 **Anclado —— y consciente de la frescura.** Recordar un hecho es solo la mitad del problema; saber si sigue siendo *cierto* es la otra mitad. El [benchmark Memora](https://arxiv.org/abs/2604.20006) (abril de 2026) mostró que los sistemas de memoria fallan sistemáticamente al reutilizar hechos obsoletos: recuerdan una nota de hace un año como si se hubiera escrito hoy. Como la memoria de enquire *son* tus archivos markdown reales, cada resultado de búsqueda incluye `age_days` (días de antigüedad) y una marca `stale` (obsoleto) derivada de la hora real de última modificación de la nota, y puedes activar el ranking ponderado por recencia (`--recency-weight`) para que las notas más recientes salgan primero. Tu conocimiento, consciente de la frescura, no un bloque atemporal.
 
 > **Lo que hace diferente a enquire-mcp**:
 > 1. **Neutral respecto al proveedor.** Tu memoria vive en archivos `.md`. Cambia de Claude a Cursor: tu memoria viaja contigo.
 > 2. **Recuperación de primer nivel.** BM25 híbrido + embeddings multilingües + reranker cross-encoder BGE fusionados mediante RRF, escalados con HNSW + cuantización int8. El mismo stack de IR que montaría una startup de búsqueda, en código abierto y en un solo binario.
-> 3. **Cero llamadas a la nube durante el servicio.** Modelos en caché local (una descarga única desde HuggingFace). El contenido de tu bóveda nunca sale de tu máquina. Seguro para entornos aislados por defecto.
+> 3. **Cero llamadas a la nube durante el servicio.** El modelo de embeddings se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local única (~110 MB), no una clave de API en la nube. Estar anclado y ser privado no sale gratis, y no fingimos que sí: el contenido de tu bóveda nunca sale de tu máquina, seguro para entornos aislados por defecto ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1439+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1440+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+
+---
+
+## 🏆 Por qué es el mejor
+
+**Seis funciones que ningún otro Obsidian-MCP tiene en absoluto** (GraphRAG-light, ejecución autónoma de `.base`, HyDE, cuantización int8, late-chunking, arnés de evaluación incorporado), **más todo el stack moderno de IR** (BM25 + embeddings + reranking con cross-encoder + HNSW), del que los competidores ofrecen como mucho uno o dos elementos. Cara a cara:
+
+| Capacidad | enquire-mcp | Smart Connections | Otros Obsidian-MCP |
+|---|:---:|:---:|:---:|
+| Recuperación híbrida (BM25 + TF-IDF + embeddings de ML, fusionados con RRF) | ✅ | ❌ | ❌ |
+| **Reranking con cross-encoder** (BGE, +15.5 NDCG@10 medido) | ✅ | ❌ | ❌ |
+| **Índice vectorial HNSW** (top-K en menos de 10 ms, persistido) | ✅ | ❌ | ❌ |
+| **Cuantización vectorial int8** (embed-db ~4× más pequeña) | ✅ | ❌ | ❌ |
+| **Late-chunking** (embeddings con ventana de contexto) | ✅ | ❌ | ❌ |
+| **PDF mezclados en la búsqueda híbrida** (citas `[page: N]`) | ✅ | ❌ | ❌ |
+| **OCR para PDF escaneados** (Tesseract.js, multilingüe) | ✅ | ❌ | ❌ |
+| **Graph-boost de wikilinks** como señal de recuperación | ✅ | ❌ | ❌ |
+| **Búsqueda semántica multilingüe** (50+ idiomas, en el dispositivo) | ✅ | 💰 de pago | ❌ |
+| **Arnés de evaluación de calidad de recuperación incorporado** (NDCG, Recall, MRR, matriz A/B) | ✅ | ❌ | ❌ |
+| **MCP remoto** sobre HTTP + autenticación bearer + sesiones con estado | ✅ | ❌ | parcial |
+| **Observabilidad por señal** en cada resultado | ✅ | ❌ | ❌ |
+| **Nativo de MCP** (Claude · Cursor · ChatGPT · Codex · OpenClaw · cualquier cliente) | ✅ | ❌ solo Obsidian | varía |
+| **Filtro de privacidad** verificado en cada ruta de búsqueda + escritura | ✅ | n/d | ❌ |
+| **46 herramientas de producción** (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación) | ✅ | n/d | varía |
+| **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
+| **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ delega en Obsidian |
+| **Recuperación HyDE** (Gao et al. 2023) + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
+| **1440 pruebas unitarias · 9 puertas de CI requeridas + 5 indicativas por PR** | ✅ | n/d | raro |
+| **Procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2) | ✅ | n/d | ❌ |
+| **Superficie pública ligada a semver** ([STABILITY.md](./STABILITY.md)) | ✅ | n/d | ❌ |
+| Autónomo (sin necesidad de plugin de Obsidian) | ✅ | ❌ requiere Obsidian | varía |
+| Licencia | MIT, gratis | propietaria, de pago | varía |
+
+<sub>Comparación basada en las capacidades públicas de cada proyecto a fecha de la versión estable v3.8.x (instantánea inicial v3.7.0 / 2026-05-15; actualizada en v3.8.4). Smart Connections es un plugin de pago de Obsidian (no un servidor MCP). "Otros Obsidian-MCP" se refiere a los servidores Obsidian-MCP públicos de código abierto en GitHub en el momento de redactar esto. Los benchmarks de recuperación de extremo a extremo de enquire-mcp se publican en <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a>: el delta medido de `rerank-bge` es +24.7 MRR / +15.5 NDCG@10 frente al híbrido puro en una ablación de 60 consultas.</sub>
+
+> Afirmación estratégica: enquire-mcp es el backend de código abierto para [wikis de LLM al estilo Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sobre tu bóveda de Obsidian existente. Conocimiento que se acumula, trazable hasta sus fuentes.
 
 ---
 
@@ -84,6 +120,72 @@ enquire-mcp doctor --vault <path>    # chequeo de salud con código de color ✓
 
 ---
 
+## 🤖 Configúralo en tu agente de IA — prompts para copiar y pegar
+
+Una vez instalado `enquire-mcp`, pega estos prompts en tu agente para que sepa que la bóveda está disponible como memoria.
+
+<details>
+<summary><b>Claude Code (terminal)</b> — añade el servidor MCP + primer prompt</summary>
+
+```bash
+# Añade el servidor MCP a tu configuración de Claude Code (una sola vez)
+claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
+```
+
+Luego, en cualquier sesión de Claude Code:
+
+> Ahora dispones de herramientas `obsidian_*` que buscan y leen mi bóveda de Obsidian, mi memoria a largo plazo. Antes de responder a preguntas sobre proyectos, decisiones, personas o contexto técnico, llama a `obsidian_search` con los términos relevantes. Cita cada hecho con la nota fuente (y `[page: N]` para los PDF). Si no encuentras una nota relevante, dilo: no adivines.
+
+</details>
+
+<details>
+<summary><b>Claude Desktop</b> — archivo de configuración + primer prompt</summary>
+
+Deposita [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) en la configuración MCP de Claude Desktop (edita primero la ruta de la bóveda). Reinicia Claude Desktop y luego:
+
+> Tienes mi bóveda de Obsidian conectada como memoria consultable a través de las herramientas `obsidian_*`. Comprueba siempre `obsidian_search` primero cuando te pregunte por cualquier cosa de mis notas: contexto de reuniones, investigación, decisiones, entradas de diario. Cita la ruta de la nota fuente en cada hecho.
+
+</details>
+
+<details>
+<summary><b>Cursor</b> — configuración MCP stdio + regla de agente</summary>
+
+Deposita [`examples/cursor-mcp.json`](./examples/cursor-mcp.json) en `~/.cursor/mcp.json` (edita la ruta de la bóveda). En tu archivo `.cursorrules` o en el chat:
+
+> Antes de sugerir código que toque un tema sobre el que pueda tener notas (decisiones de arquitectura, contratos de API, evaluaciones de proveedores), llama primero a `obsidian_search`. Trata mi bóveda de Obsidian como contexto autoritativo.
+
+</details>
+
+<details>
+<summary><b>GPT personalizado de ChatGPT</b> — MCP remoto sobre HTTP</summary>
+
+Sigue [`examples/chatgpt-actions.md`](./examples/chatgpt-actions.md) para exponer `serve-http` a través de un túnel con autenticación bearer. En las instrucciones de tu GPT personalizado:
+
+> Tienes acceso de lectura a mi bóveda de Obsidian a través de la familia de herramientas `obsidian_*`. Busca antes de responder a cualquier cosa que pueda estar en mis notas; cita la ruta del archivo fuente en cada afirmación.
+
+</details>
+
+<details>
+<summary><b>OpenClaw / Codex / cualquier otro cliente MCP</b></summary>
+
+El mismo comando `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funciona para cualquier cliente compatible con MCP. Consulta la documentación de configuración MCP del propio cliente para saber dónde colocar la entrada del servidor, y luego usa cualquiera de los prompts anteriores.
+
+</details>
+
+**Regla de agente reutilizable** (deposítala en cualquier `AGENTS.md` / `CLAUDE.md` / `.cursorrules` para que el agente sepa *cuándo* recurrir a la bóveda):
+
+> Cuando mi pregunta toque mis propias notas, decisiones, proyectos, personas o investigación, **busca primero en mi bóveda de Obsidian** mediante las herramientas `obsidian_*` (empieza por `obsidian_search`) y cita la nota fuente en cada hecho. Prefiere enquire para el recall *conceptual / entre idiomas / "qué dije sobre X"*; usa `grep` / `ripgrep` simple para cadenas literales exactas. Si no vuelve nada relevante, dilo: no adivines.
+
+### Ejemplos de consultas que funcionan bien
+
+- *"Encuentra cada nota donde hablé de estrategia de precios, resume la evolución."* — la fusión RRF + el reranker manejan "evolución" semánticamente
+- *"¿Cuál fue mi decisión sobre PostgreSQL vs MongoDB? Cita la nota diaria."* — el graph-boost de wikilinks saca a la luz el documento de decisión central
+- *"Анализируй мои заметки о RAG за последние 3 месяца"* — embeddings multilingües + filtro de fecha en el frontmatter
+- *"¿Qué páginas del PDF del artículo de LLaMA-3 hablan del escalado?"* — PDF mezclados en la búsqueda con citas `[page: N]`
+- *"Muéstrame las comunidades temáticas de mi bóveda de investigación: ¿qué temas he estado explorando?"* — `obsidian_get_communities` (GraphRAG-light)
+
+---
+
 ## 🧠 Casos de uso
 
 **1 —— Memoria a largo plazo para agentes de IA.** Conecta tu bóveda de Obsidian a cualquier agente compatible con MCP (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). El agente dispone entonces de una recuperación semántica duradera sobre cada nota de reunión, entrada de diario, registro de investigación y documento de decisión que hayas escrito jamás, a través de sesiones, modelos y proveedores. A diferencia de `Claude Memory` o `ChatGPT Memory`, tu conocimiento no queda encerrado en la nube de un proveedor; vive en markdown plano que posees y puedes migrar libremente.
@@ -107,42 +209,29 @@ No-objetivos honestos: recurre a otra cosa cuando:
 
 ---
 
-## 🏆 Por qué es el mejor
+## 📖 Referencia de la API
 
-**Seis funciones que ningún otro Obsidian-MCP tiene en absoluto** (GraphRAG-light, ejecución autónoma de `.base`, HyDE, cuantización int8, late-chunking, arnés de evaluación incorporado), **más todo el stack moderno de IR** (BM25 + embeddings + reranking con cross-encoder + HNSW), del que los competidores ofrecen como mucho uno o dos elementos. Cara a cara:
-
-| Capacidad | enquire-mcp | Smart Connections | Otros Obsidian-MCP |
-|---|:---:|:---:|:---:|
-| Recuperación híbrida (BM25 + TF-IDF + embeddings, fusionados con RRF) | ✅ | ❌ | ❌ |
-| **Reranking con cross-encoder** (BGE, +15.5 NDCG@10 medido) | ✅ | ❌ | ❌ |
-| **Índice vectorial HNSW** (top-K en menos de 10 ms, persistido) | ✅ | ❌ | ❌ |
-| **Cuantización vectorial int8** (embed-db ~4× más pequeña) | ✅ | ❌ | ❌ |
-| **Búsqueda semántica multilingüe** (50+ idiomas, en el dispositivo) | ✅ | 💰 de pago | ❌ |
-| **PDF mezclados en la búsqueda híbrida** (citas `[page: N]` + OCR) | ✅ | ❌ | ❌ |
-| **Graph-boost de wikilinks** como señal de recuperación | ✅ | ❌ | ❌ |
-| **Arnés de evaluación de calidad de recuperación incorporado** (NDCG, Recall, MRR) | ✅ | ❌ | ❌ |
-| **MCP remoto** sobre HTTP + autenticación bearer + sesiones con estado | ✅ | ❌ | parcial |
-| **Nativo de MCP** (Claude · Cursor · ChatGPT · Codex · OpenClaw · cualquier cliente) | ✅ | ❌ solo Obsidian | varía |
-| **Filtro de privacidad** verificado en cada ruta de búsqueda + escritura | ✅ | n/d | ❌ |
-| **46 herramientas de producción** (34 de lectura siempre activas + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación) | ✅ | n/d | varía |
-| **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
-| **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ |
-| **Recuperación HyDE** + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
-| **Procedencia de compilación firmada** (npm + Sigstore, SLSA L2) | ✅ | n/d | ❌ |
-| Autónomo (sin necesidad de plugin de Obsidian) | ✅ | ❌ requiere Obsidian | varía |
-| Licencia | MIT, gratis | propietaria, de pago | varía |
-
-<sub>Comparación basada en las capacidades públicas de cada proyecto a fecha de la versión estable v3.8.x. Smart Connections es un plugin de pago de Obsidian (no un servidor MCP). "Otros Obsidian-MCP" se refiere a los servidores Obsidian-MCP públicos de código abierto en GitHub en el momento de redactar esto. Los benchmarks de recuperación de extremo a extremo de enquire-mcp se publican en <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a>: el delta medido de `rerank-bge` es +24.7 MRR / +15.5 NDCG@10 frente al híbrido puro en una ablación de 60 consultas.</sub>
-
-> Afirmación estratégica: enquire-mcp es el backend de código abierto para [wikis de LLM al estilo Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sobre tu bóveda de Obsidian existente. Conocimiento que se acumula, trazable hasta sus fuentes.
+**[Referencia de la API autogenerada en oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — cada herramienta, prompt y helper exportado con TSDoc completo (`@param` / `@returns` / `@example`). Reconstruida desde el código fuente en cada push a `main` mediante [`publish-docs.yml`](https://github.com/oomkapwn/enquire-mcp/blob/main/.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Sin deriva por construcción: el mismo TSDoc que ven los agentes de IA y los IDE es el que se publica.
 
 ---
 
 ## 🏗️ Cómo funciona la recuperación
 
-`obsidian_search` detecta automáticamente las señales disponibles y degrada con elegancia: BM25 / FTS5 + TF-IDF + embeddings (HNSW) → fusión RRF (k=60) → graph-boost de wikilinks (α × grado de entrada, PageRank personalizado de un paso) → reranker cross-encoder BGE → resultados ordenados con observabilidad `per_signal`. Cada resultado devuelve `per_signal: { bm25, tfidf, embeddings }`, para que veas *por qué* se posicionó.
+```mermaid
+graph LR
+    Q[Query] --> S[obsidian_search]
+    S --> BM25[BM25 / FTS5]
+    S --> TFIDF[TF-IDF cosine]
+    S --> EMB[ML embeddings<br/>HNSW]
+    BM25 --> RRF{RRF fusion<br/>k=60}
+    TFIDF --> RRF
+    EMB --> RRF
+    RRF --> GB[Graph boost<br/>α × in-degree]
+    GB --> RR[BGE cross-encoder<br/>reranker]
+    RR --> R[Ranked hits<br/>per_signal observability]
+```
 
-Activable por niveles, según lo que necesites:
+`obsidian_search` detecta automáticamente las señales disponibles y degrada con elegancia. El graph-boost de wikilinks reordena el top-K mediante un PageRank personalizado de un paso. El reranking con cross-encoder opcional vuelve a puntuar el top-N para +15.5 NDCG@10 medido. Cada resultado devuelve `per_signal: { bm25, tfidf, embeddings }`, para que veas POR QUÉ se posicionó.
 
 | Nivel | Configuración | Lo que obtienes |
 |---|---|---|
@@ -158,7 +247,20 @@ Activable por niveles, según lo que necesites:
 
 ## 🛠️ Las 46 herramientas
 
-46 herramientas en total: 34 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa en **[docs/api.md](./docs/api.md)**, que abarca: búsqueda y recuperación, wikilinks y grafo, frontmatter y Dataview, Canvas, Obsidian Bases, PDF + OCR, detección de comunidades, herramientas de escritura (requieren `--enable-write`), etc.
+46 herramientas en total: 34 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa: **[docs/api.md](./docs/api.md)**.
+
+| Categoría | Herramientas |
+|---|---|
+| **Búsqueda y recuperación** | `obsidian_search` (paraguas, fusionado con RRF) · `obsidian_hyde_search` (aumentado con HyDE, v3.1.0) · `obsidian_search_text` · `obsidian_full_text_search` · `obsidian_semantic_search` · `obsidian_embeddings_search` · `obsidian_find_similar` |
+| **Wikilinks y grafo** | `obsidian_resolve_wikilink` · `obsidian_get_backlinks` · `obsidian_get_outbound_links` · `obsidian_get_note_neighbors` · `obsidian_get_unresolved_wikilinks` · `obsidian_find_path` · `obsidian_get_communities` (v3.4.0, GraphRAG-light) |
+| **Frontmatter y Dataview** | `obsidian_frontmatter_get` · `obsidian_frontmatter_search` · `obsidian_dataview_query` · `obsidian_list_tags` |
+| **Leer y navegar** | `obsidian_read_note` · `obsidian_list_notes` · `obsidian_get_recent_edits` · `obsidian_stale_notes` · `obsidian_open_questions` · `obsidian_context_pack` · `obsidian_chat_thread_read` · `obsidian_open_in_ui` · `obsidian_stats` |
+| **PDF, Canvas y Bases** | `obsidian_read_pdf` · `obsidian_list_pdfs` · `obsidian_ocr_pdf` · `obsidian_read_canvas` · `obsidian_list_canvases` · `obsidian_list_bases` (v3.2.0) · `obsidian_read_base` (v3.2.0) · `obsidian_query_base` (v3.2.0) |
+| **Escrituras** (restringidas por `--enable-write`) | `obsidian_create_note` · `obsidian_append_to_note` · `obsidian_rename_note` · `obsidian_replace_in_notes` · `obsidian_archive_note` · `obsidian_frontmatter_set` · `obsidian_chat_thread_append` |
+| **Diagnóstico / lint** | `obsidian_lint_wiki` · `obsidian_paper_audit` · `obsidian_validate_note_proposal` |
+| **Retroalimentación** (opcional vía `--feedback-weight`) | `obsidian_mark_useful` (bucle cerrado: registra qué notas recuperadas ayudaron; las potencia en búsquedas futuras) |
+
+Además 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidian://chunk/{n}/{path}`) y 19 **prompts MCP** (`summarize_recent_edits` · `review_tag` · `find_orphans` · `weekly_review` · `extract_todos` · `process_inbox` · `consolidate_tags` · `find_duplicates` · `lint_wiki` · `monthly_review` · `search_with_query_expansion` · `vault_synth` · `vault_wiki_compile` · `vault_lint_extended` · `vault_capture` · `vault_persona_search` · `vault_automation_setup` · `vault_research` · `vault_synthesis_page`) para los flujos de trabajo habituales sobre la bóveda.
 
 ---
 
@@ -171,7 +273,12 @@ Activable por niveles, según lo que necesites:
 | **Seguridad de rutas** | Comprobación de realpath en cada lectura+escritura; se rechazan los symlinks que salen de la bóveda |
 | **Filtro de privacidad** | Verificado en las rutas de recurso de FTS5 + embed-db + chunk; fail-closed ante listas de permitidos/denegados vacías |
 | **Transporte HTTP** | Autenticación bearer (SHA-256 de tiempo constante + `timingSafeEqual`), límite de tasa por token, CORS estricto |
-| **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA L2) |
+| **Frontmatter** | `js-yaml@5` `load` (esquema núcleo YAML 1.2, seguro por defecto) — sin ejecución de código |
+| **Archivos de caché + índice** | chmod 0600, directorio padre 0700 |
+| **CI** | **9 puertas** de protección de rama **requeridas**: (1) `lint`, (2) `test` en Node 22, (3) `test` en Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 indicativas**: `test-macos` + `docker` (build del Dockerfile + smoke de introspección `tools/list`) vía `.github/workflows/ci.yml`; CodeQL ×2 + acciones Analyze vía el [default-setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (no archivos de workflow). El workflow de release reverifica que las 9 puertas requeridas pasaron sobre el SHA etiquetado antes de la publicación en npm. _v3.7.10 — `docs` (puerta de generación de TypeDoc) añadida al conjunto requerido. v3.7.13 — piso de `engines.node` elevado a `>=22.13.0` para coincidir con la matriz de CI. v3.8.0-rc.6 — `oia` (Outside-In Audit) promovida desde el conjunto indicativo._ |
+| **Cobertura** | Líneas ≥86 % · sentencias ≥82 % · funciones ≥75 % · ramas ≥74 % (con guarda) |
+| **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2; generador L3 en la hoja de ruta) |
+| **Estabilidad** | v3.0+ ligada a semver — cada flag de CLI, nombre de herramienta, recurso MCP, prompt y símbolo exportado es un contrato |
 
 Postura completa: **[SECURITY.md](./SECURITY.md)** · Superficie de estabilidad: **[STABILITY.md](./STABILITY.md)** · Vulnerabilidades: `oomkapwn@gmail.com`.
 

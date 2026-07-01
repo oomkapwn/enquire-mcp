@@ -835,6 +835,38 @@ describe("findSimilar / getNoteNeighbors / getVaultStats (v0.13)", () => {
     expect(out.inbound.length).toBeLessThanOrEqual(1);
     expect(out.tag_siblings.length).toBeLessThanOrEqual(1);
   });
+
+  // v3.11.4-rc.2 (full-audit NEIGHBORS-OUTBOUND-CAP-2) — a genuine outbound neighbor past
+  // max_per_bucket must NEVER be mis-classified as a tag_sibling. Pre-fix, seenOut only tracked
+  // destinations up to the display cap, so a Hub linking to 3+ tag-sharing notes with
+  // max_per_bucket:1 leaked outbound targets #2+ into tag_siblings (they share the "hub-shared"
+  // tag AND are genuinely outbound — the two buckets must stay mutually exclusive).
+  describe("outbound-cap exclusion (NEIGHBORS-OUTBOUND-CAP-2)", () => {
+    let croot: string;
+    beforeAll(async () => {
+      croot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-neighbors-cap-"));
+      await fs.writeFile(path.join(croot, "Hub.md"), "---\ntags: [hub-shared]\n---\n\n[[Out1]] [[Out2]] [[Out3]]\n");
+      for (const name of ["Out1", "Out2", "Out3"]) {
+        await fs.writeFile(path.join(croot, `${name}.md`), "---\ntags: [hub-shared]\n---\n\nBody.\n");
+      }
+    });
+    afterAll(async () => {
+      await fs.rm(croot, { recursive: true, force: true });
+    });
+
+    it("an outbound target past max_per_bucket is excluded from tag_siblings, not leaked in", async () => {
+      const v = new Vault(croot);
+      const out = await getNoteNeighbors(v, { path: "Hub.md", max_per_bucket: 1 });
+      expect(out.outbound.length).toBe(1); // display capped
+      // ALL three (Out1/Out2/Out3) resolve + share the tag; none may appear as a tag_sibling —
+      // the two beyond the display cap must still be recognized as outbound internally.
+      const siblingTitles = out.tag_siblings.map((s) => s.title);
+      expect(siblingTitles).not.toContain("Out1");
+      expect(siblingTitles).not.toContain("Out2");
+      expect(siblingTitles).not.toContain("Out3");
+      expect(out.tag_siblings.length).toBe(0);
+    });
+  });
 });
 
 // v3.1.0 — HyDE (Hypothetical Document Embeddings) helper. The decision

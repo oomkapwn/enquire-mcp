@@ -93,17 +93,26 @@ function registerBlock(source: string, tool: string): string | null {
 /**
  * Pure detector — slice out `field`'s OWN schema chain from a registerTool block:
  * from its `name:` declaration (word-boundary so `set` ≠ `offset`) up to the NEXT
- * sibling field declaration (`name: z.` at a line/comma boundary) or block end.
+ * sibling field declaration (`name: z` — the `z` NAMESPACE TOKEN at a line/comma
+ * boundary, `\b`-bounded so it matches z's chain starting either on the SAME line
+ * (`field: z.string()`) or on the NEXT line (`field: z\n  .string()`)) or block end.
  * v3.11.4-rc.2 (full-audit PARSERCAP-FIELD-1) — the cap must live in THIS field's
  * chain; the prior block-wide token test let a per-field cap drop on a multi-field
  * tool (e.g. frontmatter_search `equals` losing its `.refine()` while `contains`
  * keeps the same `MAX_FRONTMATTER_VALUE_LEN`) slip past undetected.
+ * v3.11.4-rc.3 (pre-promotion re-sweep) — the FIRST version of this fix required
+ * `z.` (dot immediately after z), so it only recognized the single-line
+ * `field: z.string()` shape and silently bled through every multi-line
+ * `field: z\n  .string()` chain (58 of 160 fields in tool-registry.ts, incl.
+ * obsidian_hyde_search's `query`) into the NEXT field's slice — reproduced by
+ * removing a real `.max()` cap and watching the detector still pass because it
+ * found the SIBLING's cap. `z\b` (word-boundary, not a literal dot) closes both shapes.
  */
 function fieldSlice(block: string, field: string): string {
   const decl = new RegExp(`(?:^|[^\\w$])${field}\\s*:`).exec(block);
   if (!decl) return "";
   const rest = block.slice(decl.index + decl[0].length);
-  const sib = rest.search(/[\n,]\s*[a-zA-Z_$][\w$]*\s*:\s*z\./);
+  const sib = rest.search(/[\n,]\s*[a-zA-Z_$][\w$]*\s*:\s*z\b/);
   return sib < 0 ? rest : rest.slice(0, sib);
 }
 
@@ -150,6 +159,15 @@ describe("parser-input length-cap invariant (rc.57)", () => {
     expect(fieldHasCap(twoField, "contains", "MAX_FRONTMATTER_VALUE_LEN")).toBe(true); // its sibling is capped
     // word-boundary: `set` must not match `offset:`
     expect(fieldHasCap("offset: z.number().max(MAX_X)", "set", "MAX_X")).toBe(false);
+    // v3.11.4-rc.3 (pre-promotion re-sweep on rc.2's OWN fix) — the MULTI-LINE chain shape
+    // (`field: z\n  .string()...`, tool-registry.ts's DOMINANT convention, 58 of 160 fields)
+    // is the exact shape the rc.2 fix's `z.` sibling-boundary MISSED: it bled `query`'s slice
+    // through into `hypothetical_answer`'s cap, so an UNCAPPED `query` (a real, reproduced
+    // regression on obsidian_hyde_search) still passed. This mirrors the real HyDE shape 1:1.
+    const multiLineTwoField =
+      'query: z\n    .string()\n    .min(1)\n    .describe("x"),\n  hypothetical_answer: z\n    .string()\n    .min(1)\n    .max(MAX_QUERY_LEN)\n    .describe("y")';
+    expect(fieldHasCap(multiLineTwoField, "query", "MAX_QUERY_LEN")).toBe(false); // uncapped → flagged
+    expect(fieldHasCap(multiLineTwoField, "hypothetical_answer", "MAX_QUERY_LEN")).toBe(true); // its sibling is capped
   });
 
   it("registerBlock locates a real tool block and returns null for an absent tool (control)", () => {

@@ -73,4 +73,17 @@ describe("prepareServerDeps validates retrieval flags before acquiring resources
       "parseFeedbackConfig(opts) is never called before acquisition"
     );
   });
+
+  // v3.11.5-rc.4 (post-rc.3 re-sweep) — CRL-1 sibling: --reranker-top-n was validated only in
+  // buildMcpServer (one call-frame later), which stdio `serve` invokes AFTER prepareServerDeps
+  // acquired the FTS5 handle / watcher / embed-db / HNSW, so a bad value leaked them. It is now
+  // hoisted into prepareServerDeps' fail-fast block — this pins that ordering structurally.
+  it("--reranker-top-n is validated BEFORE the first `new Vault(` acquisition (CRL-1 sibling)", async () => {
+    const src = await fs.readFile(path.join(repoRoot, "src", "server.ts"), "utf8");
+    const fnSrc = extractPrepareServerDeps(src);
+    const acquireAt = fnSrc.indexOf("new Vault(");
+    const validateAt = fnSrc.indexOf("parsePositiveInt(opts.rerankerTopN");
+    expect(validateAt, "prepareServerDeps must validate --reranker-top-n at boot").toBeGreaterThan(-1);
+    expect(validateAt).toBeLessThan(acquireAt); // before any resource is acquired
+  });
 });

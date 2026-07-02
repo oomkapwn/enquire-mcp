@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendToNote, archiveNote, createNote, renameNote, replaceInNotes } from "../src/tools/index.js";
-import { replaceStringOutsideCodeFences } from "../src/tools/write.js";
+import { opensBlockFence, replaceStringOutsideCodeFences, rewriteOutsideCodeFences } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -894,5 +894,47 @@ describe("replaceInNotes (rc.18 audit) — projected-size cap refuses over-limit
     expect(await fs.readFile(path.join(dir, "small.md"), "utf8")).toBe("BB BB BB"); // applied
     expect(out.files_updated.map((f) => f.path)).toEqual(["small.md"]);
     await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
+// v3.11.5-rc.1 (full-audit WRITE-FENCE-TOGGLE-INLINE-SPAN, MED) — the write-path fence classifier
+// used a bare `/^\s*(```|~~~)/` line-toggle that disagreed with the parser's stripCodeAndInline: a
+// line STARTING with a self-contained inline ```span``` flipped inFence with no closing bare-fence
+// line to flip it back, so every following line was treated as in-fence and rename_note backlink
+// rewrites / replace_in_notes edits were silently dropped (rename still reported success). Fixed with
+// opensBlockFence(), which recognizes an inline span (leading fence run CLOSED on the same line) as
+// NOT a block-fence toggle. These pin the classifier + both rewriters + a real-block-fence control.
+describe("write-path code-fence classifier — inline-span desync (v3.11.5-rc.1)", () => {
+  it("opensBlockFence: bare/info-string fences toggle, a line-leading inline span does NOT", () => {
+    for (const l of ["```", "```js", "~~~", "   ```", "````", "~~~ruby"]) {
+      expect(opensBlockFence(l), `${JSON.stringify(l)} is a block-fence delimiter`).toBe(true);
+    }
+    for (const l of ["```inline``` at line start", "```a```", "`code`", "not a fence", "text ```x```"]) {
+      expect(opensBlockFence(l), `${JSON.stringify(l)} is NOT a block-fence delimiter`).toBe(false);
+    }
+  });
+
+  it("rename_note backlink rewrite is NOT dropped after a line-leading inline span (POSITIVE)", () => {
+    const r = rewriteOutsideCodeFences(
+      "```inline``` at line start\n[[Target]] should be renamed",
+      new Map([["Target", { kind: "wikilink", newRaw: "Renamed" }]])
+    );
+    expect(r.count).toBe(1);
+    expect(r.content).toContain("[[Renamed]]");
+  });
+
+  it("replace_in_notes edit is NOT skipped after a line-leading inline span (POSITIVE)", () => {
+    const r = replaceStringOutsideCodeFences("```inline``` at line start\nplease fix teh typo", "teh", "the", true);
+    expect(r.count).toBe(1);
+    expect(r.content).toContain("the typo");
+  });
+
+  it("a REAL multi-line block fence still shields its contents (NEGATIVE control)", () => {
+    const r = rewriteOutsideCodeFences(
+      "[[A]] before\n```\n[[A]] inside\n```\n[[A]] after",
+      new Map([["A", { kind: "wikilink", newRaw: "B" }]])
+    );
+    expect(r.count).toBe(2); // only the two OUTSIDE links
+    expect(r.content).toContain("[[A]] inside"); // in-fence link untouched
   });
 });

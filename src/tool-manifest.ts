@@ -51,7 +51,7 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     summary: "BM25 full-text search backed by the SQLite FTS5 inverted index."
   },
 
-  // --- Always-on read tools (33 entries) — registered by registerReadTools()
+  // --- Always-on read tools (34 entries) — registered by registerReadTools()
   //     OUTSIDE the `if (diagnosticSearchTools)` blocks.
   {
     name: "obsidian_list_notes",

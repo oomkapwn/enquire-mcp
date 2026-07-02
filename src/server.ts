@@ -208,6 +208,14 @@ export interface ServerDeps {
  * each call this exactly once at startup.
  */
 export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps> {
+  // v3.11.5-rc.1 CRL-1 — fail fast on a bad --feedback-weight / --recency-weight /
+  // --stale-days BEFORE acquiring any resource (vault cache, FTS5 handle, watcher,
+  // embed-db, HNSW). These parsers throw on an out-of-range value; validating them
+  // here means a typo can no longer leak an open SQLite handle / running watcher for
+  // the process lifetime. buildMcpServer re-parses the (now-validated) values cheaply.
+  parseFeedbackConfig(opts);
+  parseRecencyConfig(opts);
+
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
     maxFileBytes: opts.maxFileBytes !== undefined ? parsePositiveInt(opts.maxFileBytes, "--max-file-bytes") : undefined,
@@ -613,9 +621,10 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
 
   // v3.11.0 — open the opt-in closed-loop feedback store ONCE (shared across HTTP
   // sessions so a mark_useful in one session feeds the search boost in all). ON
-  // only when `--feedback-weight > 0`; `parseFeedbackConfig` throws here on a bad
-  // value (eager boot validation, like recency). `FeedbackStore.open` is fail-soft
-  // (a corrupt/missing sidecar yields an empty store — never breaks boot).
+  // only when `--feedback-weight > 0`. The weight was already validated at the top
+  // of prepareServerDeps (CRL-1), so this re-parse only decides whether to open the
+  // store. `FeedbackStore.open` is fail-soft (a corrupt/missing sidecar yields an
+  // empty store — never breaks boot).
   const feedbackStore =
     parseFeedbackConfig(opts) !== null ? await FeedbackStore.open(defaultFeedbackFile(opts.vault)) : null;
 

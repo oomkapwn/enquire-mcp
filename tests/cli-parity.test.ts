@@ -351,3 +351,28 @@ describe("CLI parity — no byte-identical inline help text across subcommands (
     expect(checkNoIdenticalInlineDrift(flagMap)).toBeNull();
   });
 });
+
+// v3.11.5-rc.1 (CLI-QUANT-NORM-1) — both `serve` and `serve-http` must forward the
+// NORMALIZED quantization mode (aliases "q8"/"float32"/"none" → "int8"/"f32"), not the
+// raw --quantize-embeddings string. Downstream (server.ts) exact-matches "f32"/"int8",
+// so a discarded parseQuantizationMode() result silently degrades an aliased value to the
+// default. Pre-fix stdio `serve` called parseQuantizationMode() for VALIDATION but threw
+// the return away and forwarded raw opts; serve-http captured + spread it.
+describe("CLI parity — serve and serve-http both forward the NORMALIZED quantize mode (v3.11.5-rc.1)", () => {
+  it("spreads the normalized quantMode into forwarded opts in BOTH serve + serve-http (2 spreads)", async () => {
+    const src = await readCli();
+    // The distinctive normalized-forward signal: `quantizeEmbeddings: quantMode` — one per
+    // long-lived serve subcommand (serve + serve-http). Pre-fix stdio serve had none (it
+    // forwarded raw opts), so this was 1; post-fix it is 2.
+    const spreads = src.match(/quantizeEmbeddings:\s*quantMode/g) ?? [];
+    expect(spreads.length, "both serve + serve-http must spread the normalized quantMode into forwarded opts").toBe(2);
+  });
+
+  it("NEGATIVE control — no discarded (statement-position) parseQuantizationMode() call remains", async () => {
+    const src = await readCli();
+    // The regression shape: a bare `parseQuantizationMode(...)` on its own line whose result is
+    // thrown away (not `const x =` / `= ` / `return `). That is exactly what forwarded the raw string.
+    const discarded = src.split("\n").filter((l) => /^\s*parseQuantizationMode\(/.test(l));
+    expect(discarded, `discarded parseQuantizationMode() call(s): ${discarded.join(" | ")}`).toEqual([]);
+  });
+});

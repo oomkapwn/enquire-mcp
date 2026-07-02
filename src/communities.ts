@@ -29,7 +29,7 @@
 
 import * as path from "node:path";
 import { foldName } from "./name-fold.js";
-import { extractWikilinks } from "./parser.js";
+import { parseNote } from "./parser.js";
 import type { Vault } from "./vault.js";
 
 /**
@@ -119,7 +119,12 @@ export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
     } catch {
       continue;
     }
-    const links = extractWikilinks(body);
+    // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — go through parseNote so
+    // frontmatter + fenced/inline code are stripped BEFORE link extraction. Pre-rc.3 this
+    // called extractWikilinks on the RAW file body, so a `[[link]]` inside a ``` fence (or
+    // in frontmatter) created a phantom graph edge that skewed the community clustering +
+    // modularity the always-on obsidian_get_communities tool returns.
+    const links = parseNote(body).wikilinks;
     for (const link of links) {
       // Normalize: strip section/block, take just the target part.
       const target = link.target.split(/[#^]/)[0]?.trim();

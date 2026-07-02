@@ -314,7 +314,18 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
   return [...out];
 }
 
-function stripCodeAndInline(text: string): string {
+/**
+ * Strip fenced (` ``` ` / `~~~`) and inline (`` `…` ``) code from Markdown so that
+ * `[[wikilinks]]`, `#tags`, and `![[embeds]]` inside code are NOT treated as real —
+ * the canonical sanitizer `parseNote` applies before every extraction. Any consumer that
+ * extracts links/tags from a note body MUST route through this (or `parseNote`) so its
+ * view matches the parser + Obsidian, which do not index links/tags inside code blocks.
+ *
+ * Exported in v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — several always-on
+ * tools (query_base, get_communities, validate_note_proposal) re-extracted from the RAW
+ * body and disagreed with this sanitizer; guarded by `tests/parser-desync-invariant.test.ts`.
+ */
+export function stripCodeAndInline(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, "")
     .replace(/~~~[\s\S]*?~~~/g, "")

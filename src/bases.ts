@@ -32,7 +32,7 @@ import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc } from "./name-fold.js";
-import { extractWikilinks } from "./parser.js";
+import { extractWikilinks, stripCodeAndInline } from "./parser.js";
 import { capScanEntries } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
 import { splitLines } from "./wildcard-match.js";
@@ -327,7 +327,14 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     } catch {
       continue;
     }
-    const tags = collectTags(fm, body);
+    // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — sanitize (strip fenced +
+    // inline code) BEFORE collecting tags/links, matching the canonical parseNote. Pre-rc.3
+    // both collectTags and extractWikilinks ran on the RAW (fm-stripped-only) body, so a
+    // `#tag` or `[[link]]` whose only occurrence is inside a ``` fence was treated as real —
+    // `tag ==` / `linksTo()` .base filters then matched notes they shouldn't (parity break
+    // with obsidian_search + Obsidian, which ignore links/tags inside code).
+    const sanitizedBody = stripCodeAndInline(body);
+    const tags = collectTags(fm, sanitizedBody);
     // v3.5.0 — collect outbound wikilink targets (basename-normalized,
     // lowercased) for `linksTo()` predicate evaluation. We don't resolve
     // against the vault's basename index here — `linksTo("Foo")` just
@@ -335,7 +342,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     // `[[Foo#section]]`) outbound link; matching the basename is the
     // semantic Obsidian uses too.
     const outbound = new Set<string>();
-    for (const link of extractWikilinks(body)) {
+    for (const link of extractWikilinks(sanitizedBody)) {
       const t = link.target.split(/[#^]/)[0]?.trim();
       if (!t) continue;
       const norm = foldName((t.split("/").pop() ?? t).replace(/\.md$/i, ""));

@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
+import { opensBlockFence } from "../fence.js";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
-import { INLINE_TAG_RE, scanWikilinkInners } from "../parser.js";
+import { INLINE_TAG_RE, scanWikilinkInners, stripCodeAndInline } from "../parser.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { splitLines, stripTrailingHashes, stripTrailingLineEnds } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
@@ -174,6 +175,13 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     errors.push({ kind: "yaml-invalid", message: `YAML frontmatter could not be parsed: ${yamlReport.error}` });
   }
 
+  // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — sanitize (strip fenced +
+  // inline code) before scanning for the proposed note's wikilinks + inline tags, matching
+  // the canonical parseNote. Pre-rc.3 both scans ran on `bodyAfterFm` (frontmatter-stripped
+  // only), so a `[[link]]` / `#tag` whose only occurrence is inside a ``` fence was reported
+  // as a real (broken-link / proposed-tag) finding — a false positive vs Obsidian semantics.
+  const sanitizedBodyAfterFm = stripCodeAndInline(bodyAfterFm);
+
   // 3. Wikilink resolution against the live vault.
   const all = await vault.listMarkdown();
   const wikilinks: ValidateProposalResult["wikilinks"] = [];
@@ -188,7 +196,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   // parser.ts's O(n²) lazy-quantifier wikilink regex (the rc.10 INLINE_TAG_RE
   // copy-class). Routed through the shared linear scanner; `raw` reconstructs the
   // full `[[…]]` match (the former `m[0]`) faithfully since inner excludes `]`/`\n`.
-  for (const innerRaw of scanWikilinkInners(bodyAfterFm, false)) {
+  for (const innerRaw of scanWikilinkInners(sanitizedBodyAfterFm, false)) {
     const raw = `[[${innerRaw}]]`;
     const inner = innerRaw.trim();
     if (!inner) continue;
@@ -243,7 +251,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   // copy of parser's) + NFC-normalize BEFORE matching so an NFD inline tag isn't
   // truncated at its combining mark (parity with extractInlineTags); the
   // existing-vs-new classification below folds both sides via foldTag.
-  for (const m of bodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {
+  for (const m of sanitizedBodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {
     if (m[1]) proposedTagsRaw.add(m[1]);
   }
   const tags: ValidateProposalResult["tags"] = [];
@@ -1522,8 +1530,19 @@ export async function getOpenQuestions(
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
     const lines = splitLines(parsed.body);
     let currentHeading: string | null = null;
+    let inFence = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
+      // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC / fence-toggle class) — track code
+      // fences via the shared opensBlockFence so a fenced line is neither surfaced as a real
+      // open question (a `Q:` / `TODO?` inside a ``` block is example text) nor mistaken for
+      // an ATX heading that mis-sets the next question's context_heading. Line numbers are
+      // preserved (we still advance `i`; fenced lines just aren't candidates/headings).
+      if (opensBlockFence(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) continue;
       // v3.11.0-rc.16 — split the polynomial-ReDoS-class `(.+?)\s*#*\s*$` heading
       // capture (parity with fts5.ts:796 + read.ts extractHeadings; see those for
       // the empirical-linearity note). A heading line still `continue`s (never a

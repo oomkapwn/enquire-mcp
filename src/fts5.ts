@@ -785,14 +785,19 @@ export function computeBreadcrumbsByLine(content: string): string[] {
     // on the shared `opensBlockFence` so a line-leading self-contained inline span
     // (`` ```code``` ``) is NOT mistaken for a block-fence open; pre-rc.2 the naive
     // `/^(```|~~~)/` match flipped `inFence` on such a line, freezing every following
-    // line's breadcrumb to the wrong heading stack. `fenceMatch[1]` still supplies the
-    // marker for close-matching (``` closes only ```).
-    const fenceMatch = /^(```|~~~)/.exec(ln);
-    if (fenceMatch?.[1] && opensBlockFence(ln)) {
+    // line's breadcrumb to the wrong heading stack.
+    // v3.11.5-rc.4 (post-rc.3 re-sweep) — allow leading whitespace + a variable-length
+    // fence run (`` `{3,} `` / `~{3,}`), so an INDENTED code fence (up to 3 spaces, valid
+    // CommonMark) is detected — matching read.ts extractHeadings, which routes through
+    // opensBlockFence (indent-tolerant). Close-matching keys on the fence CHAR (``` closes
+    // only ```, ~~~ only ~~~) so it is robust across differing run lengths.
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(ln);
+    const fenceChar = fenceMatch?.[1]?.[0];
+    if (fenceChar && opensBlockFence(ln)) {
       if (!inFence) {
         inFence = true;
-        fenceMarker = fenceMatch[1];
-      } else if (fenceMatch[1] === fenceMarker) {
+        fenceMarker = fenceChar;
+      } else if (fenceChar === fenceMarker) {
         inFence = false;
         fenceMarker = "";
       }

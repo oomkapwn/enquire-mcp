@@ -215,6 +215,15 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // the process lifetime. buildMcpServer re-parses the (now-validated) values cheaply.
   parseFeedbackConfig(opts);
   parseRecencyConfig(opts);
+  // v3.11.5-rc.4 (post-rc.3 re-sweep, CRL-1 sibling) — `--reranker-top-n` was validated
+  // only inside buildMcpServer (server.ts, one call-frame LATER), which the stdio `serve`
+  // path invokes AFTER prepareServerDeps has already acquired the FTS5 handle / watcher /
+  // embed-db / HNSW, so a bad value (`--reranker-top-n 0`) leaked them all. serve-http
+  // already fails fast via validateServeHttpRetrievalOpts; hoist the same check here so
+  // BOTH paths validate before any acquire. Only consumed when reranking is on.
+  if (opts.enableReranker && opts.rerankerTopN !== undefined) {
+    parsePositiveInt(opts.rerankerTopN, "--reranker-top-n");
+  }
 
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,

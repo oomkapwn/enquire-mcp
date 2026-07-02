@@ -57,6 +57,14 @@ describe("fts5.ts computeBreadcrumbsByLine — inline span does not freeze the b
     // "# Fenced" is inside the fence → the "after" line's breadcrumb stays "Top", not "Fenced".
     expect(crumbs[4]).toBe("Top");
   });
+
+  it("v3.11.5-rc.4 — an INDENTED code fence (≤3 spaces, CommonMark) is detected too", () => {
+    // Pre-rc.4 the fenceMatch was `/^(```|~~~)/` (anchored at column 0), so an indented
+    // fence was NOT detected and "# Fenced" leaked into the breadcrumb (was "Fenced").
+    // Now it routes through the same indent-tolerant detection read.ts uses.
+    const crumbs = computeBreadcrumbsByLine("# Top\n   ```\n# Fenced\n   ```\nafter\n");
+    expect(crumbs[4]).toBe("Top"); // was "Fenced" pre-rc.4
+  });
 });
 
 /**

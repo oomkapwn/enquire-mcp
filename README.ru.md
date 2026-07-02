@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1467%20passing-brightgreen.svg)](#️-доверие)
+[![tests](https://img.shields.io/badge/tests-1469%20passing-brightgreen.svg)](#️-доверие)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **Ноль обращений в облако в режиме serve.** Модели кешируются локально (однократная загрузка с HuggingFace). Содержимое вашего хранилища никогда не покидает вашу машину. По умолчанию безопасно для изолированных сред.
 > 4. **Поиск с учётом свежести.** Каждый результат сообщает, насколько стара заметка; опциональное переранжирование по давности позволяет агенту предпочитать свежие знания и помечать устаревшие факты для повторной проверки — рубеж «осознания забывания», построенный на `mtime`, который ваши файлы уже имеют.
 
-**46 инструментов · 19 MCP-промптов · 1467+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
+**46 инструментов · 19 MCP-промптов · 1469+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (детекция сообществ по wikilink-графу через модулярность Лувена) | ✅ **только здесь** | ❌ | ❌ |
 | **Автономное выполнение `.base`-запросов** (работает без запущенного Obsidian) | ✅ **только здесь** | ❌ | ❌ делегирует Obsidian |
 | **HyDE-поиск** (Gao et al 2023) + декомпозиция на подвопросы | ✅ **только здесь** | ❌ | ❌ |
-| **1467 модульных тестов · 9 обязательных + 5 совещательных CI-гейтов на каждый PR** | ✅ | н/д | редко |
+| **1469 модульных тестов · 9 обязательных + 5 совещательных CI-гейтов на каждый PR** | ✅ | н/д | редко |
 | **Подтверждённое происхождение сборки** (npm + Sigstore, SLSA Build L2) | ✅ | н/д | ❌ |
 | **Публичная поверхность с гарантиями semver** ([STABILITY.md](./STABILITY.md)) | ✅ | н/д | ❌ |
 | Автономность (плагин Obsidian не нужен) | ✅ | ❌ требует Obsidian | по-разному |
@@ -320,7 +320,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # полный набор (1467 тестов, ~12с)
+npm test       # полный набор (1469 тестов, ~12с)
 npm run lint   # ноль предупреждений
 npm run build  # tsc → dist/
 ```

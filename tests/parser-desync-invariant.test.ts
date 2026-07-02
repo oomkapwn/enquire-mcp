@@ -78,22 +78,33 @@ describe("PARSER-DESYNC behavior — fenced-only links/tags/questions are not su
 });
 
 /**
- * Every call to the raw extractors `extractWikilinks(` / `extractInlineTags(` OUTSIDE
- * `src/parser.ts` must receive a `stripCodeAndInline`-sanitized argument (an inline
- * `stripCodeAndInline(...)` call, or an identifier assigned from one in the same file).
- * Returns the list of offending `file:arg` pairs.
+ * Every note-body extraction primitive used OUTSIDE `src/parser.ts` must receive a
+ * `stripCodeAndInline`-sanitized argument. v3.11.5-rc.5 (meta-audit) — broadened from the
+ * two wrappers (`extractWikilinks`/`extractInlineTags`) to ALSO cover the lower-level
+ * primitives `scanWikilinkInners(x)` and `x.matchAll(INLINE_TAG_RE)` that `validateNoteProposal`
+ * actually uses — the rc.3 invariant was scope-too-narrow (grepped only the wrappers), so a
+ * future edit to a raw arg on either primitive would reintroduce the fenced-link/tag desync
+ * while CI stayed green. `arg` is safe if it is (a) an inline `stripCodeAndInline(...)` call or
+ * (b) an identifier assigned from `stripCodeAndInline` in the same file.
  */
 function rawExtractionViolations(files: Array<{ rel: string; src: string }>): string[] {
   const out: string[] = [];
+  const isSanitized = (arg: string, src: string): boolean =>
+    arg === "stripCodeAndInline" || new RegExp(`\\b${arg}\\s*=\\s*stripCodeAndInline\\b`).test(src);
   for (const { rel, src } of files) {
     if (rel.endsWith("src/parser.ts")) continue; // the extractors' home; sanitizes internally
-    for (const m of src.matchAll(/\bextract(?:Wikilinks|InlineTags)\s*\(\s*([A-Za-z0-9_.]+)/g)) {
+    // (1) wrappers + scanWikilinkInners: the arg is the first call argument.
+    for (const m of src.matchAll(
+      /\b(extractWikilinks|extractInlineTags|scanWikilinkInners)\s*\(\s*([A-Za-z0-9_.]+)/g
+    )) {
+      const arg = m[2] ?? "";
+      if (!isSanitized(arg, src)) out.push(`${rel}: ${m[1]}(${arg})`);
+    }
+    // (2) INLINE_TAG_RE matcher: the arg is the RECEIVER of `.matchAll(INLINE_TAG_RE)`
+    //     (optionally with a `.normalize(...)` in between).
+    for (const m of src.matchAll(/\b([A-Za-z0-9_]+)(?:\.normalize\([^)]*\))?\.matchAll\(\s*INLINE_TAG_RE\b/g)) {
       const arg = m[1] ?? "";
-      // Inline `stripCodeAndInline(x)` is captured as `stripCodeAndInline` here — safe.
-      if (arg === "stripCodeAndInline") continue;
-      // Otherwise the arg must be an identifier assigned from stripCodeAndInline in this file.
-      if (new RegExp(`\\b${arg}\\s*=\\s*stripCodeAndInline\\b`).test(src)) continue;
-      out.push(`${rel}: extract…(${arg})`);
+      if (!isSanitized(arg, src)) out.push(`${rel}: ${arg}.matchAll(INLINE_TAG_RE)`);
     }
   }
   return out;
@@ -121,13 +132,19 @@ describe("PARSER-DESYNC inventory invariant (v3.11.5-rc.3)", () => {
     expect(rawExtractionViolations(files)).toEqual([]);
   });
 
-  it("NEGATIVE control — a raw extractWikilinks(body) call (no sanitize) is flagged", () => {
+  it("NEGATIVE control — raw calls on any of the 3 primitives (no sanitize) are flagged", () => {
     const bad = [
       { rel: "src/tools/newthing.ts", src: "const body = await read();\nconst links = extractWikilinks(body);" },
+      { rel: "src/tools/newq.ts", src: "for (const i of scanWikilinkInners(bodyAfterFm, false)) {}" }, // raw primitive
+      { rel: "src/tools/newtag.ts", src: 'for (const m of bodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {}' }, // raw matcher
       { rel: "src/parser.ts", src: "return extractWikilinks(sanitized);" }, // exempt (the home)
       { rel: "src/tools/ok.ts", src: "const sanitized = stripCodeAndInline(body);\nextractWikilinks(sanitized);" },
       { rel: "src/tools/ok2.ts", src: "extractWikilinks(stripCodeAndInline(body));" }
     ];
-    expect(rawExtractionViolations(bad)).toEqual(["src/tools/newthing.ts: extract…(body)"]);
+    expect(rawExtractionViolations(bad)).toEqual([
+      "src/tools/newthing.ts: extractWikilinks(body)",
+      "src/tools/newq.ts: scanWikilinkInners(bodyAfterFm)",
+      "src/tools/newtag.ts: bodyAfterFm.matchAll(INLINE_TAG_RE)"
+    ]);
   });
 });

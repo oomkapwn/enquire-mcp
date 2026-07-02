@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { opensBlockFence } from "../fence.js";
+import { advanceFence, type FenceChar } from "../fence.js";
 import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
@@ -841,16 +841,15 @@ export function rewriteOutsideCodeFences(
   oldRawsToNew: Map<string, { kind: "wikilink" | "embed"; newRaw: string }>
 ): { content: string; count: number } {
   const { lines, ends } = splitLinesWithEnds(content);
-  let inFence = false;
+  let fenceMarker: FenceChar | null = null;
   let count = 0;
   const out: string[] = [];
   for (const line of lines) {
-    if (opensBlockFence(line)) {
-      inFence = !inFence;
-      out.push(line);
-      continue;
-    }
-    if (inFence) {
+    const st = advanceFence(line, fenceMarker);
+    fenceMarker = st.marker;
+    if (st.delimiter || fenceMarker !== null) {
+      // A block-fence delimiter, or any line inside the fence (incl. a mismatched-char
+      // inner fence, which is literal code) — copy verbatim, never rewrite.
       out.push(line);
       continue;
     }
@@ -903,7 +902,7 @@ export function replaceStringOutsideCodeFences(
 ): { content: string; count: number } {
   if (!search) return { content, count: 0 };
   const { lines, ends } = splitLinesWithEnds(content);
-  let inFence = false;
+  let fenceMarker: FenceChar | null = null;
   let count = 0;
   const out: string[] = [];
   // v3.11.1-rc.1 — fold the needle PER CODE POINT (foldForMatch), NOT whole-string
@@ -912,12 +911,10 @@ export function replaceStringOutsideCodeFences(
   // ending in a capital Σ silently matched nothing. Both sides now fold identically.
   const needle = caseSensitive ? search : foldForMatch(search);
   for (const line of lines) {
-    if (opensBlockFence(line)) {
-      inFence = !inFence;
-      out.push(line);
-      continue;
-    }
-    if (inFence) {
+    const st = advanceFence(line, fenceMarker);
+    fenceMarker = st.marker;
+    if (st.delimiter || fenceMarker !== null) {
+      // delimiter or in-fence (incl. mismatched-char inner fence = literal code) → verbatim
       out.push(line);
       continue;
     }

@@ -1,5 +1,5 @@
 import { parseDql, runDql } from "../dql.js";
-import { opensBlockFence } from "../fence.js";
+import { advanceFence, type FenceChar } from "../fence.js";
 import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
@@ -232,22 +232,19 @@ export async function readNote(
 function extractHeadings(body: string, bodyStartLine: number): Array<{ level: number; text: string; line: number }> {
   const out: Array<{ level: number; text: string; line: number }> = [];
   const lines = splitLines(body);
-  let inFence = false;
+  let fenceMarker: FenceChar | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
     // v3.8.0-rc.10 P3-25 — detect both backtick (```) AND tilde (~~~) fences.
-    // Pre-rc.10 only backtick fences toggled `inFence`, so headings inside
-    // tilde-delimited code blocks were incorrectly extracted.
-    // v3.11.5-rc.2 (post-rc.1 re-sweep, WRITE-FENCE sibling) — route through the
-    // shared `opensBlockFence` so a line-leading self-contained inline span
-    // (`` ```code``` ``) is NOT mistaken for a block-fence open; pre-rc.2 the naive
-    // `/^\s*(```|~~~)/` toggle flipped `inFence` on such a line and DROPPED every
-    // heading that followed (readNote format:"map" returned []).
-    if (opensBlockFence(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
+    // v3.11.5-rc.2 — route through opensBlockFence so a line-leading inline span isn't
+    // mistaken for a block-fence open. v3.11.5-rc.5 (meta-audit) — track the fence CHAR
+    // via advanceFence so a `~~~` line inside a ``` block (or vice versa) is literal code,
+    // not a spurious toggle (the char-blind `inFence = !inFence` surfaced headings inside
+    // a code block AND dropped the real heading after it).
+    const st = advanceFence(line, fenceMarker);
+    fenceMarker = st.marker;
+    if (st.delimiter) continue;
+    if (fenceMarker !== null) continue;
     // v3.11.0-rc.16 — split the combined `(.+?)\s*#*\s*$` heading capture (a
     // polynomial-ReDoS-class shape — CodeQL js/polynomial-redos; fts5.ts:796
     // already split it for exactly this reason) into a single anchored capture +

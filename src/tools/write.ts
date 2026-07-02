@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { opensBlockFence } from "../fence.js";
 import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
@@ -811,31 +812,6 @@ export function rewriteRawTarget(raw: string, oldTarget: string, newBasename: st
   const suffixStart = idxs.length === 0 ? raw.length : Math.min(...idxs);
   const suffix = raw.slice(suffixStart);
   return `${newTargetBare}${suffix}`;
-}
-
-/**
- * Is `line` a BLOCK code-fence delimiter (open or close) that should toggle
- * `inFence`? A line whose leading `` ``` `` / `~~~` run is CLOSED by another run
- * of the SAME char ON THE SAME LINE is a self-contained INLINE span (e.g.
- * `` ```code``` text ``), NOT a block fence — so it must NOT toggle.
- *
- * v3.11.5-rc.1 (full-audit WRITE-FENCE-TOGGLE-INLINE-SPAN, MED) — the naive
- * `/^\s*(``` `|~~~)/` line-toggle desynced from the parser's `stripCodeAndInline`
- * (which consumes an inline span as one unit): a line STARTING with a
- * self-contained inline span flipped `inFence` with no closing bare-fence line to
- * flip it back, so every following line was treated as in-fence — silently
- * dropping `rename_note` backlink rewrites (the file left the plan reporting
- * success) and `replace_in_notes` edits. Aligning with the parser closes the desync.
- * @internal
- */
-export function opensBlockFence(line: string): boolean {
-  const m = /^\s*(`{3,}|~{3,})/.exec(line);
-  if (!m?.[1]) return false;
-  const fenceChar = m[1][0] ?? "`";
-  const rest = line.slice(m.index + m[0].length);
-  // A later run of the SAME fence char on this line closes it inline → an inline
-  // span, not a block-fence delimiter.
-  return !rest.includes(fenceChar.repeat(3));
 }
 
 /**

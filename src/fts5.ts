@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { opensBlockFence } from "./fence.js";
 import { optionalDepDetail } from "./optional-dep.js";
 import {
   countLineBreaks,
@@ -768,8 +769,11 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
  * that line — i.e., the heading the line lives under.
  *
  * Skips heading-style chars inside fenced code blocks (``` and ~~~).
+ *
+ * Exported for the v3.11.5-rc.2 inline-span regression test (the fence-toggle
+ * sibling of the rc.1 write-path MED).
  */
-function computeBreadcrumbsByLine(content: string): string[] {
+export function computeBreadcrumbsByLine(content: string): string[] {
   const lines = splitLines(content);
   const out: string[] = new Array(lines.length).fill("");
   const stack: string[] = []; // index = depth-1, value = heading text
@@ -777,8 +781,14 @@ function computeBreadcrumbsByLine(content: string): string[] {
   let fenceMarker = "";
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i] ?? "";
+    // v3.11.5-rc.2 (post-rc.1 re-sweep, WRITE-FENCE sibling) — gate the marker logic
+    // on the shared `opensBlockFence` so a line-leading self-contained inline span
+    // (`` ```code``` ``) is NOT mistaken for a block-fence open; pre-rc.2 the naive
+    // `/^(```|~~~)/` match flipped `inFence` on such a line, freezing every following
+    // line's breadcrumb to the wrong heading stack. `fenceMatch[1]` still supplies the
+    // marker for close-matching (``` closes only ```).
     const fenceMatch = /^(```|~~~)/.exec(ln);
-    if (fenceMatch?.[1]) {
+    if (fenceMatch?.[1] && opensBlockFence(ln)) {
       if (!inFence) {
         inFence = true;
         fenceMarker = fenceMatch[1];

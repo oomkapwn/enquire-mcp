@@ -1,4 +1,5 @@
 import { parseDql, runDql } from "../dql.js";
+import { opensBlockFence } from "../fence.js";
 import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
@@ -237,7 +238,12 @@ function extractHeadings(body: string, bodyStartLine: number): Array<{ level: nu
     // v3.8.0-rc.10 P3-25 — detect both backtick (```) AND tilde (~~~) fences.
     // Pre-rc.10 only backtick fences toggled `inFence`, so headings inside
     // tilde-delimited code blocks were incorrectly extracted.
-    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+    // v3.11.5-rc.2 (post-rc.1 re-sweep, WRITE-FENCE sibling) — route through the
+    // shared `opensBlockFence` so a line-leading self-contained inline span
+    // (`` ```code``` ``) is NOT mistaken for a block-fence open; pre-rc.2 the naive
+    // `/^\s*(```|~~~)/` toggle flipped `inFence` on such a line and DROPPED every
+    // heading that followed (readNote format:"map" returned []).
+    if (opensBlockFence(line)) {
       inFence = !inFence;
       continue;
     }

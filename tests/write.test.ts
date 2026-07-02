@@ -938,4 +938,20 @@ describe("write-path code-fence classifier — inline-span desync (v3.11.5-rc.1)
     expect(r.count).toBe(2); // only the two OUTSIDE links
     expect(r.content).toContain("[[A]] inside"); // in-fence link untouched
   });
+
+  it("v3.11.5-rc.5 — a `~~~` inside a ``` block does not un-shield later links (char-aware toggle)", () => {
+    // Pre-rc.5 the char-blind toggle treated the inner `~~~` as closing the ``` block, so
+    // [[B]] (still inside the block) was wrongly rewritten AND [[C]] (real, after) was skipped.
+    const r = rewriteOutsideCodeFences(
+      "```\n[[A]] in\n~~~\n[[B]] still in\n```\n[[C]] out",
+      new Map([
+        ["A", { kind: "wikilink", newRaw: "X" }],
+        ["B", { kind: "wikilink", newRaw: "Y" }],
+        ["C", { kind: "wikilink", newRaw: "Z" }]
+      ])
+    );
+    expect(r.count).toBe(1); // only [[C]] → [[Z]]
+    expect(r.content).toContain("[[B]] still in"); // in-fence, untouched (was [[Y]] pre-rc.5)
+    expect(r.content).toContain("[[Z]] out"); // real, rewritten (was skipped pre-rc.5)
+  });
 });

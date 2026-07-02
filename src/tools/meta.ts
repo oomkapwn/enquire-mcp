@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import { opensBlockFence } from "../fence.js";
+import { advanceFence, type FenceChar } from "../fence.js";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
@@ -1530,19 +1530,20 @@ export async function getOpenQuestions(
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
     const lines = splitLines(parsed.body);
     let currentHeading: string | null = null;
-    let inFence = false;
+    let fenceMarker: FenceChar | null = null;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
-      // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC / fence-toggle class) — track code
-      // fences via the shared opensBlockFence so a fenced line is neither surfaced as a real
-      // open question (a `Q:` / `TODO?` inside a ``` block is example text) nor mistaken for
-      // an ATX heading that mis-sets the next question's context_heading. Line numbers are
-      // preserved (we still advance `i`; fenced lines just aren't candidates/headings).
-      if (opensBlockFence(line)) {
-        inFence = !inFence;
-        continue;
-      }
-      if (inFence) continue;
+      // v3.11.5-rc.3 (PARSER-DESYNC) — track code fences so a fenced line is neither surfaced
+      // as a real open question (a `Q:` / `TODO?` inside a ``` block is example text) nor
+      // mistaken for an ATX heading that mis-sets the next question's context_heading. Line
+      // numbers are preserved (we still advance `i`; fenced lines just aren't candidates).
+      // v3.11.5-rc.5 (meta-audit) — track the fence CHAR via advanceFence so a `~~~` line
+      // inside a ``` block (or vice versa) is literal code, not a spurious toggle (the
+      // char-blind `inFence = !inFence` surfaced a fenced Q: and could suppress a real one).
+      const st = advanceFence(line, fenceMarker);
+      fenceMarker = st.marker;
+      if (st.delimiter) continue;
+      if (fenceMarker !== null) continue;
       // v3.11.0-rc.16 — split the polynomial-ReDoS-class `(.+?)\s*#*\s*$` heading
       // capture (parity with fts5.ts:796 + read.ts extractHeadings; see those for
       // the empirical-linearity note). A heading line still `continue`s (never a

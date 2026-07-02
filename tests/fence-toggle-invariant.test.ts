@@ -42,6 +42,14 @@ describe("read.ts extractHeadings — inline span at line start does not drop he
     const r = await readNote(vault, { path: "m.md", format: "map" });
     expect((r.headings ?? []).map((h) => h.text)).toEqual(["Before", "After"]);
   });
+
+  it("v3.11.5-rc.5 — a `~~~` inside a ``` block does not un-shield the code (char-aware toggle)", async () => {
+    // Pre-rc.5 the char-blind toggle treated the `~~~` as closing the ``` block, so
+    // "## FakeInside" (still inside) was extracted and "## RealAfter" was dropped.
+    await fs.writeFile(path.join(dir, "x.md"), "```\ncode\n~~~\n## FakeInside\nmore\n```\n## RealAfter\n");
+    const r = await readNote(vault, { path: "x.md", format: "map" });
+    expect((r.headings ?? []).map((h) => h.text)).toEqual(["RealAfter"]);
+  });
 });
 
 describe("fts5.ts computeBreadcrumbsByLine — inline span does not freeze the breadcrumb (v3.11.5-rc.2)", () => {
@@ -61,28 +69,39 @@ describe("fts5.ts computeBreadcrumbsByLine — inline span does not freeze the b
   it("v3.11.5-rc.4 — an INDENTED code fence (≤3 spaces, CommonMark) is detected too", () => {
     // Pre-rc.4 the fenceMatch was `/^(```|~~~)/` (anchored at column 0), so an indented
     // fence was NOT detected and "# Fenced" leaked into the breadcrumb (was "Fenced").
-    // Now it routes through the same indent-tolerant detection read.ts uses.
     const crumbs = computeBreadcrumbsByLine("# Top\n   ```\n# Fenced\n   ```\nafter\n");
     expect(crumbs[4]).toBe("Top"); // was "Fenced" pre-rc.4
   });
+
+  it("v3.11.5-rc.5 — a `~~~` line inside a ``` block is literal code, not a fence close", () => {
+    // Pre-rc.5 the char-BLIND `inFence = !inFence` flipped the state on the ~~~ line, so
+    // "# FakeInside" (still inside the ``` block) leaked into the breadcrumb.
+    const crumbs = computeBreadcrumbsByLine("# Top\n```\n~~~\n# FakeInside\n```\nafter\n");
+    expect(crumbs[5]).toBe("Top"); // was "FakeInside" pre-rc.5
+  });
 });
 
+/** Strip `//` line + `/* *​/` block comments so a comment MENTIONING the old idiom is not flagged. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
 /**
- * Every `inFence` line-walker in src/ must route its fence detection through the shared
- * `opensBlockFence` (src/fence.ts). Returns the list of offending relative paths (files that
- * reference `inFence` but not `opensBlockFence`). `fence.ts` itself is exempt (it DEFINES the
- * helper and has no `inFence` state machine).
+ * v3.11.5-rc.5 (meta-audit) — the char-BLIND fence toggle `inFence = !inFence` cannot tell a
+ * ``` delimiter from a `~~~`, so a mismatched inner fence flips the state (the bug the meta-audit
+ * found live in write.ts/read.ts/meta.ts). Every per-line fence state machine must use the
+ * char-aware `advanceFence` (src/fence.ts). Returns files whose LIVE code boolean-toggles a
+ * fence-named state variable (`= !…fence…`), which is exactly the forbidden idiom.
  */
-function fenceToggleViolations(files: Array<{ rel: string; src: string }>): string[] {
+function charBlindToggleViolations(files: Array<{ rel: string; src: string }>): string[] {
   const out: string[] = [];
   for (const { rel, src } of files) {
-    if (rel.endsWith("src/fence.ts")) continue;
-    if (/\binFence\b/.test(src) && !/\bopensBlockFence\b/.test(src)) out.push(rel);
+    if (/\b[A-Za-z_]*[Ff]ence[A-Za-z_]*\s*=\s*!/.test(stripComments(src))) out.push(rel);
   }
   return out;
 }
 
-describe("fence-toggle inventory invariant (v3.11.5-rc.2)", () => {
+describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3.11.5-rc.5)", () => {
   async function walkSrc(): Promise<Array<{ rel: string; src: string }>> {
     const files: Array<{ rel: string; src: string }> = [];
     async function walk(dir: string) {
@@ -97,22 +116,27 @@ describe("fence-toggle inventory invariant (v3.11.5-rc.2)", () => {
     return files;
   }
 
-  it("every src/ inFence walker uses the shared opensBlockFence (no naive fence regex)", async () => {
-    const files = await walkSrc();
-    // Sanity: the invariant is non-vacuous — there ARE inFence walkers to guard.
-    expect(files.some((f) => /\binFence\b/.test(f.src))).toBe(true);
-    expect(fenceToggleViolations(files)).toEqual([]);
+  it("no src/ file uses a char-blind `= !inFence`-style fence toggle", async () => {
+    expect(charBlindToggleViolations(await walkSrc())).toEqual([]);
   });
 
-  it("NEGATIVE control — a synthetic inFence walker WITHOUT opensBlockFence is flagged", () => {
+  it("every per-line fence walker routes through the shared char-aware advanceFence", async () => {
+    const files = await walkSrc();
+    for (const rel of ["src/tools/write.ts", "src/tools/read.ts", "src/tools/meta.ts", "src/fts5.ts"]) {
+      const f = files.find((x) => x.rel.endsWith(rel));
+      expect(f && /\badvanceFence\b/.test(f.src), `${rel} must use advanceFence`).toBe(true);
+    }
+  });
+
+  it("NEGATIVE control — a live char-blind toggle is flagged; a comment mentioning it is not", () => {
     const bad = [
-      { rel: "src/tools/newthing.ts", src: "let inFence = false;\nif (/^\\s*(`{3,})/.test(line)) inFence = !inFence;" },
-      { rel: "src/fence.ts", src: "export function opensBlockFence(){}" }, // exempt (definer)
+      { rel: "src/tools/newthing.ts", src: "let inFence = false;\nif (opensBlockFence(l)) inFence = !inFence;" },
+      // comment-only mention (the real read.ts/meta.ts shape) + the correct advanceFence use → NOT flagged
       {
         rel: "src/tools/ok.ts",
-        src: 'import { opensBlockFence } from "../fence.js";\nlet inFence=false; if(opensBlockFence(l)) inFence=!inFence;'
+        src: "// pre-rc.5 the char-blind `inFence = !inFence` was wrong\nconst st = advanceFence(l, m);"
       }
     ];
-    expect(fenceToggleViolations(bad)).toEqual(["src/tools/newthing.ts"]);
+    expect(charBlindToggleViolations(bad)).toEqual(["src/tools/newthing.ts"]);
   });
 });

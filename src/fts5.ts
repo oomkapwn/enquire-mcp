@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { opensBlockFence } from "./fence.js";
+import { advanceFence, type FenceChar } from "./fence.js";
 import { optionalDepDetail } from "./optional-dep.js";
 import {
   countLineBreaks,
@@ -777,34 +777,17 @@ export function computeBreadcrumbsByLine(content: string): string[] {
   const lines = splitLines(content);
   const out: string[] = new Array(lines.length).fill("");
   const stack: string[] = []; // index = depth-1, value = heading text
-  let inFence = false;
-  let fenceMarker = "";
+  let fenceMarker: FenceChar | null = null;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i] ?? "";
-    // v3.11.5-rc.2 (post-rc.1 re-sweep, WRITE-FENCE sibling) — gate the marker logic
-    // on the shared `opensBlockFence` so a line-leading self-contained inline span
-    // (`` ```code``` ``) is NOT mistaken for a block-fence open; pre-rc.2 the naive
-    // `/^(```|~~~)/` match flipped `inFence` on such a line, freezing every following
-    // line's breadcrumb to the wrong heading stack.
-    // v3.11.5-rc.4 (post-rc.3 re-sweep) — allow leading whitespace + a variable-length
-    // fence run (`` `{3,} `` / `~{3,}`), so an INDENTED code fence (up to 3 spaces, valid
-    // CommonMark) is detected — matching read.ts extractHeadings, which routes through
-    // opensBlockFence (indent-tolerant). Close-matching keys on the fence CHAR (``` closes
-    // only ```, ~~~ only ~~~) so it is robust across differing run lengths.
-    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(ln);
-    const fenceChar = fenceMatch?.[1]?.[0];
-    if (fenceChar && opensBlockFence(ln)) {
-      if (!inFence) {
-        inFence = true;
-        fenceMarker = fenceChar;
-      } else if (fenceChar === fenceMarker) {
-        inFence = false;
-        fenceMarker = "";
-      }
-      out[i] = stack.join(" > ");
-      continue;
-    }
-    if (inFence) {
+    // v3.11.5-rc.5 (meta-audit) — the canonical char-aware fence walk lives in fence.ts's
+    // advanceFence: an inline span isn't a block fence (rc.2), an indented fence IS detected
+    // (rc.4), and a `~~~` line inside a ``` block is literal content, not a close (this walker
+    // pioneered the char-aware close-match; all walkers now share the one implementation).
+    const st = advanceFence(ln, fenceMarker);
+    fenceMarker = st.marker;
+    if (st.delimiter || fenceMarker !== null) {
+      // a fence delimiter, or any line inside the fence → breadcrumb stays the current stack
       out[i] = stack.join(" > ");
       continue;
     }

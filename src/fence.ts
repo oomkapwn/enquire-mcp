@@ -28,11 +28,39 @@
  * opensBlockFence("plain text");          // false
  */
 export function opensBlockFence(line: string): boolean {
+  return blockFenceDelimiter(line) !== null;
+}
+
+/** The fence character (`` ` `` or `~`) if `line` is a BLOCK code-fence delimiter, else null.
+ *  A leading run closed by another same-char run on the SAME line is an inline span → null. */
+export type FenceChar = "`" | "~";
+export function blockFenceDelimiter(line: string): FenceChar | null {
   const m = /^\s*(`{3,}|~{3,})/.exec(line);
-  if (!m?.[1]) return false;
-  const fenceChar = m[1][0] ?? "`";
+  if (!m?.[1]) return null;
+  const ch: FenceChar = m[1][0] === "~" ? "~" : "`";
   const rest = line.slice(m.index + m[0].length);
-  // A later run of the SAME fence char on this line closes it inline → an inline
-  // span, not a block-fence delimiter.
-  return !rest.includes(fenceChar.repeat(3));
+  // A later run of the SAME fence char on this line closes it inline → an inline span.
+  return rest.includes(ch.repeat(3)) ? null : ch;
+}
+
+/**
+ * Advance a CHAR-AWARE fence state machine by one line. Returns the new open-fence
+ * marker (the char that opened the current block, or null when outside) and whether
+ * this line is a block-fence DELIMITER (an open, or a CLOSE whose char matches the open).
+ *
+ * v3.11.5-rc.5 (meta-audit) — the correct pattern to replace the char-BLIND `inFence =
+ * !inFence` toggle: a `` ``` `` line inside a `~~~` block (or vice versa) is LITERAL code,
+ * NOT a delimiter, so it must not flip the state — matching CommonMark + the parser's
+ * `stripCodeAndInline` (which pairs ``` with ``` and ~~~ with ~~~ independently). Only
+ * fts5's breadcrumb walker tracked this; write.ts/read.ts/meta.ts used the blind toggle,
+ * so a mismatched inner fence corrupted rename/replace edits, the heading map, and
+ * open-questions. Callers: `const s = advanceFence(line, marker); marker = s.marker; if
+ * (s.delimiter) {…continue…} if (marker !== null) {…in-fence…}`.
+ */
+export function advanceFence(line: string, marker: FenceChar | null): { marker: FenceChar | null; delimiter: boolean } {
+  const d = blockFenceDelimiter(line);
+  if (!d) return { marker, delimiter: false };
+  if (marker === null) return { marker: d, delimiter: true }; // opens a block
+  if (d === marker) return { marker: null, delimiter: true }; // closes it (matching char)
+  return { marker, delimiter: false }; // different-char fence inside a block = literal content
 }

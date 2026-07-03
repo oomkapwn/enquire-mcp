@@ -90,13 +90,41 @@ function stripComments(src: string): string {
  * v3.11.5-rc.5 (meta-audit) — the char-BLIND fence toggle `inFence = !inFence` cannot tell a
  * ``` delimiter from a `~~~`, so a mismatched inner fence flips the state (the bug the meta-audit
  * found live in write.ts/read.ts/meta.ts). Every per-line fence state machine must use the
- * char-aware `advanceFence` (src/fence.ts). Returns files whose LIVE code boolean-toggles a
- * fence-named state variable (`= !…fence…`), which is exactly the forbidden idiom.
+ * char-aware `advanceFence` (src/fence.ts). Returns files whose LIVE code toggles a fence-named
+ * state variable via either forbidden idiom:
+ *   (a) negation      — `inFence = !inFence`
+ *   (b) ternary self-toggle — `fenceMarker = fenceMarker ? … : …`  (v3.11.6-rc.1)
+ * The pre-promotion re-sweep noted the rc.5 detector matched only (a), so a ternary blind toggle
+ * on a fence-named var (caught then only by the rc.6 generative net) slipped this static check.
  */
 function charBlindToggleViolations(files: Array<{ rel: string; src: string }>): string[] {
   const out: string[] = [];
   for (const { rel, src } of files) {
-    if (/\b[A-Za-z_]*[Ff]ence[A-Za-z_]*\s*=\s*!/.test(stripComments(src))) out.push(rel);
+    const code = stripComments(src);
+    if (
+      /\b[A-Za-z_]*[Ff]ence[A-Za-z_]*\s*=\s*!/.test(code) ||
+      /\b([A-Za-z_]*[Ff]ence[A-Za-z_]*)\s*=\s*\1\s*\?/.test(code)
+    )
+      out.push(rel);
+  }
+  return out;
+}
+
+/**
+ * v3.11.6-rc.1 — a DYNAMIC walker inventory replacing reliance on a fixed file list. Any src file
+ * (except fence.ts, which OWNS the primitive) that declares a per-line fence-state variable — a
+ * `let`/`var` whose name contains `fence`/`Fence`, or a `: FenceChar` annotation — MUST route
+ * through `advanceFence`. This catches a FUTURE walker in a NEW file regardless of its toggle
+ * shape or var name, closing the "fixed 4-file list" blind spot the pre-promotion re-sweep named.
+ */
+function fenceStateFilesMissingAdvanceFence(files: Array<{ rel: string; src: string }>): string[] {
+  const out: string[] = [];
+  for (const { rel, src } of files) {
+    if (rel.endsWith("src/fence.ts")) continue;
+    const code = stripComments(src);
+    const declaresFenceState =
+      /\b(?:let|var)\s+[A-Za-z_]*[Ff]ence[A-Za-z_]*\b/.test(code) || /:\s*FenceChar\b/.test(code);
+    if (declaresFenceState && !/\badvanceFence\b/.test(code)) out.push(rel);
   }
   return out;
 }
@@ -116,11 +144,11 @@ describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3
     return files;
   }
 
-  it("no src/ file uses a char-blind `= !inFence`-style fence toggle", async () => {
+  it("no src/ file uses a char-blind fence toggle (negation OR ternary)", async () => {
     expect(charBlindToggleViolations(await walkSrc())).toEqual([]);
   });
 
-  it("every per-line fence walker routes through the shared char-aware advanceFence", async () => {
+  it("every KNOWN per-line fence walker routes through the shared char-aware advanceFence", async () => {
     const files = await walkSrc();
     for (const rel of ["src/tools/write.ts", "src/tools/read.ts", "src/tools/meta.ts", "src/fts5.ts"]) {
       const f = files.find((x) => x.rel.endsWith(rel));
@@ -128,15 +156,42 @@ describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3
     }
   });
 
-  it("NEGATIVE control — a live char-blind toggle is flagged; a comment mentioning it is not", () => {
+  it("v3.11.6-rc.1 — EVERY fence-state-declaring src file uses advanceFence (dynamic inventory)", async () => {
+    // Catches a FUTURE walker in a new file, or one whose state var isn't named *fence*.
+    expect(fenceStateFilesMissingAdvanceFence(await walkSrc())).toEqual([]);
+  });
+
+  it("NEGATIVE control — a live char-blind toggle (negation OR ternary) is flagged; a comment is not", () => {
     const bad = [
       { rel: "src/tools/newthing.ts", src: "let inFence = false;\nif (opensBlockFence(l)) inFence = !inFence;" },
+      // ternary self-toggle on a fence-named var — the shape the rc.5 detector MISSED (v3.11.6-rc.1)
+      { rel: "src/tools/newternary.ts", src: "let fenceMarker = null;\nfenceMarker = fenceMarker ? null : m;" },
       // comment-only mention (the real read.ts/meta.ts shape) + the correct advanceFence use → NOT flagged
       {
         rel: "src/tools/ok.ts",
         src: "// pre-rc.5 the char-blind `inFence = !inFence` was wrong\nconst st = advanceFence(l, m);"
       }
     ];
-    expect(charBlindToggleViolations(bad)).toEqual(["src/tools/newthing.ts"]);
+    expect(charBlindToggleViolations(bad)).toEqual(["src/tools/newthing.ts", "src/tools/newternary.ts"]);
+  });
+
+  it("v3.11.6-rc.1 NEGATIVE control — a fence-state-declaring file without advanceFence is flagged; with it is not", () => {
+    const bad = [
+      // a NEW-file walker (a 5th file) that hand-rolls fence state and never uses advanceFence
+      {
+        rel: "src/tools/newwalker.ts",
+        src: "let fenceMarker: FenceChar | null = null;\nfor (const l of lines) { /* naive */ }"
+      },
+      // a state var NOT named *fence* but typed FenceChar — still caught via the annotation
+      { rel: "src/tools/aliaswalker.ts", src: "let mode: FenceChar | null = null;\nmode = null;" },
+      // correct: declares the state AND routes through advanceFence → NOT flagged
+      {
+        rel: "src/tools/okwalker.ts",
+        src: "let fenceMarker: FenceChar | null = null;\nconst st = advanceFence(l, fenceMarker);"
+      },
+      // fence.ts itself DEFINES FenceChar/advanceFence → exempt
+      { rel: "src/fence.ts", src: "export type FenceChar = 'x';\nlet fenceRun = 0;" }
+    ];
+    expect(fenceStateFilesMissingAdvanceFence(bad)).toEqual(["src/tools/newwalker.ts", "src/tools/aliaswalker.ts"]);
   });
 });

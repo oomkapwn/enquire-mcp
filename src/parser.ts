@@ -1,3 +1,4 @@
+import { advanceFence, type FenceChar } from "./fence.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { lookupFoldedAny, nfc } from "./name-fold.js";
 import { splitLines } from "./wildcard-match.js";
@@ -315,6 +316,32 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
 }
 
 /**
+ * Drop an UNCLOSED block code fence (an opening ` ``` ` / `~~~` line with no matching close
+ * before EOF) and everything after it. Per CommonMark §4.5 an unclosed fence runs to
+ * end-of-document, so its body is code — exactly what the char-aware line-walkers
+ * (`advanceFence`, used by read.ts / meta.ts / fts5.ts / write.ts) already do. The paired-fence
+ * regexes in `stripCodeAndInline` REQUIRE a closing fence, so without this an unclosed fence's
+ * body would survive and every parser-based always-on tool (`buildWikilinkGraph`, `queryBase`,
+ * `validateNoteProposal`) would surface phantom wikilinks / tags / questions from inside it.
+ * Shares the fence primitive with the walkers so the two can never diverge on this shape.
+ * Well-formed notes (all fences paired) are returned byte-unchanged.
+ */
+function dropUnclosedBlockFence(text: string): string {
+  const lines = splitLines(text); // terminator-aware (CR/LS/PS), matches the walkers + rc.23 inventory
+  let marker: FenceChar | null = null;
+  let openLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const wasOutside = marker === null;
+    const st = advanceFence(lines[i] ?? "", marker);
+    marker = st.marker;
+    if (wasOutside && marker !== null)
+      openLine = i; // this line opened a block fence
+    else if (marker === null) openLine = -1; // a matching close returned us outside
+  }
+  return marker !== null && openLine >= 0 ? lines.slice(0, openLine).join("\n") : text;
+}
+
+/**
  * Strip fenced (` ``` ` / `~~~`) and inline (`` `…` ``) code from Markdown so that
  * `[[wikilinks]]`, `#tags`, and `![[embeds]]` inside code are NOT treated as real —
  * the canonical sanitizer `parseNote` applies before every extraction. Any consumer that
@@ -324,9 +351,22 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
  * Exported in v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — several always-on
  * tools (query_base, get_communities, validate_note_proposal) re-extracted from the RAW
  * body and disagreed with this sanitizer; guarded by `tests/parser-desync-invariant.test.ts`.
+ *
+ * v3.11.6-rc.1 — reconciled with the char-aware line-walkers on the UNCLOSED-fence shape:
+ * the paired regexes require a closing fence, so an unclosed ` ``` ` used to leak its body
+ * (phantom links/tags), while the walkers correctly treat it as code-to-EOF. `dropUnclosedBlockFence`
+ * closes that divergence up front. Now covered by `tests/canonical-parser-agreement.test.ts`.
+ *
+ * KNOWN RESIDUAL (pre-existing, deferred): the non-greedy paired regexes still diverge from the
+ * char-aware walkers on an EXOTIC shape — a line-leading self-contained inline `` ``` `` span
+ * *inside* a fenced block makes the regex pair fences early, so a `[[link]]`/`#tag` still inside the
+ * block can surface as a phantom (a read-side false positive in `buildWikilinkGraph`/`queryBase`/
+ * `validateNoteProposal`; not DoS, not data loss). This is the regex-vs-char-aware gap the meta-audit
+ * named for the deferred canonical structure accessors (a fence-aware iterator on `ParsedNote`), not a
+ * v3.11.6-rc.1 regression — the behavior is byte-identical to prior stable on that shape.
  */
 export function stripCodeAndInline(text: string): string {
-  return text
+  return dropUnclosedBlockFence(text)
     .replace(/```[\s\S]*?```/g, "")
     .replace(/~~~[\s\S]*?~~~/g, "")
     .replace(/`[^`\n]*`/g, "");

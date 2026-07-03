@@ -9,7 +9,7 @@
 // corpus was LF-only and could not produce the divergent shape (the recurring
 // rc.36/rc.54 "differential corpus can't produce the failing shape" lesson).
 
-import { promises as fs, readFileSync } from "node:fs";
+import { promises as fs, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,26 +70,45 @@ describe("readNote map (rc.17) — CRLF notes keep their headings", () => {
   });
 });
 
-describe("CRLF heading (rc.17) — every heading-exec site strips line ends (inventory guard)", () => {
-  // Each file's `/^(#{1,6})\s+(.+)$/` heading capture MUST run on a line-end-stripped
-  // line. A 4th site (or a regression that drops the strip) fails CI here.
-  const SITES = ["src/tools/read.ts", "src/tools/meta.ts", "src/fts5.ts"];
-  const HEAD_EXEC = /\/\^\(#\{1,6\}\)\\s\+\(\.\+\)\$\/\.exec\(([^)]*)\)/g;
+describe("CRLF heading (rc.17) — the heading-exec site strips line ends (inventory guard)", () => {
+  // The ATX-heading capture `/^(#{1,6})\s+(.+)$/` MUST run on a line-end-stripped line.
+  // v3.11.6-rc.2 — read.ts / meta.ts / fts5.ts stopped hand-rolling this; the ONE heading
+  // parse now lives in src/structure.ts (`HEADING_RE.exec(stripTrailingLineEnds(t))`), so the
+  // single-authority consolidation shrank this guard's SITES from 3 walkers to 1 module. A
+  // regression that drops the strip — or a NEW file that re-hand-rolls the exec un-stripped —
+  // fails CI here (the detector matches BOTH the inline literal and the named `HEADING_RE` form).
+  // The ATX-heading exec as the inline literal `/^(#{1,6})\s+(.+)$/.exec(x)` OR the named
+  // `HEADING_RE.exec(x)` (structure.ts). `\b` before HEADING_RE excludes unrelated regexes whose
+  // name merely ENDS in it (e.g. CHAT_HEADING_RE — a `### role · ts` parser whose `\s*$` already
+  // absorbs a trailing `\r`, so it is NOT the CRLF-vulnerable `(.+)$` shape).
+  const HEAD_EXEC = /(?:\/\^\(#\{1,6\}\)\\s\+\(\.\+\)\$\/|\bHEADING_RE)\.exec\(([^)]*)\)/g;
 
-  it("the 3 known heading-exec sites wrap their line in stripTrailingLineEnds (POSITIVE)", () => {
+  it("EVERY heading-exec across src/ wraps its line in stripTrailingLineEnds (POSITIVE)", () => {
     const offenders: string[] = [];
-    for (const rel of SITES) {
-      const src = readFileSync(path.join(repoRoot, rel), "utf8");
-      let m: RegExpExecArray | null = HEAD_EXEC.exec(src);
-      let found = 0;
-      while (m !== null) {
-        found++;
-        if (!/stripTrailingLineEnds\(/.test(m[1] ?? "")) offenders.push(`${rel}: exec(${m[1]}) not line-end-stripped`);
-        m = HEAD_EXEC.exec(src);
+    let total = 0;
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!e.name.endsWith(".ts")) continue;
+        const src = readFileSync(full, "utf8");
+        const rel = path.relative(repoRoot, full);
+        HEAD_EXEC.lastIndex = 0;
+        let m: RegExpExecArray | null = HEAD_EXEC.exec(src);
+        while (m !== null) {
+          total++;
+          if (!/stripTrailingLineEnds\(/.test(m[1] ?? ""))
+            offenders.push(`${rel}: exec(${m[1]}) not line-end-stripped`);
+          m = HEAD_EXEC.exec(src);
+        }
       }
-      if (found === 0) offenders.push(`${rel}: heading-exec site not found (moved? update SITES)`);
-      HEAD_EXEC.lastIndex = 0;
-    }
+    };
+    walk(path.join(repoRoot, "src"));
+    // Non-vacuous: the ATX-heading parse must exist somewhere (it lives in src/structure.ts since rc.2).
+    expect(total, "no heading-exec found in src/ (renamed? the parse lives in structure.ts)").toBeGreaterThan(0);
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 

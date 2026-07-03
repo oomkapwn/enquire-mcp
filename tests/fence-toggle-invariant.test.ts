@@ -148,11 +148,18 @@ describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3
     expect(charBlindToggleViolations(await walkSrc())).toEqual([]);
   });
 
-  it("every KNOWN per-line fence walker routes through the shared char-aware advanceFence", async () => {
+  it("every KNOWN per-line fence walker is fence-aware (advanceFence directly OR delegates to structure.ts)", async () => {
+    // v3.11.6-rc.2 — read/meta/fts5 migrated their hand-rolled fence walk onto the canonical
+    // src/structure.ts iterators (iterateBodyLines/iterateContentLines/noteHeadings), which own the
+    // one advanceFence loop; write.ts still uses advanceFence directly (its terminator-preserving
+    // rewriters migrate in a later RC). Either form is fence-aware — a naive `/^\s*(```|~~~)/` toggle
+    // in any of them is what this + charBlindToggleViolations forbid.
     const files = await walkSrc();
+    const delegatesToStructure = (src: string) => /\b(iterateBodyLines|iterateContentLines|noteHeadings)\b/.test(src);
     for (const rel of ["src/tools/write.ts", "src/tools/read.ts", "src/tools/meta.ts", "src/fts5.ts"]) {
       const f = files.find((x) => x.rel.endsWith(rel));
-      expect(f && /\badvanceFence\b/.test(f.src), `${rel} must use advanceFence`).toBe(true);
+      const fenceAware = !!f && (/\badvanceFence\b/.test(f.src) || delegatesToStructure(f.src));
+      expect(fenceAware, `${rel} must be fence-aware (advanceFence directly OR structure.ts delegation)`).toBe(true);
     }
   });
 

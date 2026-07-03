@@ -15,15 +15,9 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { advanceFence, type FenceChar } from "./fence.js";
 import { optionalDepDetail } from "./optional-dep.js";
-import {
-  countLineBreaks,
-  splitLines,
-  stripTrailingHashes,
-  stripTrailingLineEnds,
-  stripTrailingSlashes
-} from "./wildcard-match.js";
+import { iterateContentLines } from "./structure.js";
+import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
 
 const SCHEMA_VERSION = 4;
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
@@ -774,48 +768,11 @@ export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): Conte
  * sibling of the rc.1 write-path MED).
  */
 export function computeBreadcrumbsByLine(content: string): string[] {
-  const lines = splitLines(content);
-  const out: string[] = new Array(lines.length).fill("");
-  const stack: string[] = []; // index = depth-1, value = heading text
-  let fenceMarker: FenceChar | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const ln = lines[i] ?? "";
-    // v3.11.5-rc.5 (meta-audit) — the canonical char-aware fence walk lives in fence.ts's
-    // advanceFence: an inline span isn't a block fence (rc.2), an indented fence IS detected
-    // (rc.4), and a `~~~` line inside a ``` block is literal content, not a close (this walker
-    // pioneered the char-aware close-match; all walkers now share the one implementation).
-    const st = advanceFence(ln, fenceMarker);
-    fenceMarker = st.marker;
-    if (st.delimiter || fenceMarker !== null) {
-      // a fence delimiter, or any line inside the fence → breadcrumb stays the current stack
-      out[i] = stack.join(" > ");
-      continue;
-    }
-    // v3.5.8 — split the heading parse into a single anchored capture +
-    // two linear trailing-trim ops, instead of one combined regex with
-    // `(.+?)\s*#*\s*$` (CodeQL js/polynomial-redos: O(n²) on pathological
-    // input like `## h<spaces×100000>####`). Each replace below is
-    // a linear (non-backtracking) helper — the old `replace(/\s+$/)` + `/#+$/`
-    // were the SAME polynomial-ReDoS class as #13 (whitespace/hash run + non-match).
-    // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
-    // terminator first; `(.+)$` won't match across a CRLF note's trailing `\r`,
-    // which silently dropped this heading from the breadcrumb enrichment (latent
-    // here since v3.5.8). Same fix as readNote map + getOpenQuestions.
-    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(ln));
-    if (headingMatch?.[1] && headingMatch[2]) {
-      const depth = headingMatch[1].length;
-      const text = stripTrailingHashes(headingMatch[2].trim()).trim();
-      // Trim stack to current depth - 1, then push at depth.
-      stack.length = depth - 1;
-      stack.push(text);
-      // Heading line itself gets its OWN breadcrumb (the heading is part of
-      // its section's identity).
-      out[i] = stack.join(" > ");
-      continue;
-    }
-    out[i] = stack.join(" > ");
-  }
-  return out;
+  // v3.11.6-rc.2 — delegates to the canonical structure iterator (src/structure.ts), the single
+  // fence-walk + heading-parse authority. `breadcrumb` carries fts5's exact heading-stack semantics
+  // (a heading line includes itself; a degenerate `# ###` pushes empty), so this is byte-identical
+  // to the former hand-rolled walk — pinned by the fence-toggle + breadcrumb behavioral tests.
+  return [...iterateContentLines(content)].map((l) => l.breadcrumb.join(" > "));
 }
 
 function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentChunk[] {

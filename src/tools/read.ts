@@ -1,16 +1,10 @@
 import { parseDql, runDql } from "../dql.js";
-import { advanceFence, type FenceChar } from "../fence.js";
 import { foldTag, lookupFoldedKey } from "../name-fold.js";
 import type { Embed, Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
+import { noteHeadings } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
-import {
-  countLineBreaks,
-  splitLines,
-  stripTrailingHashes,
-  stripTrailingLineEnds,
-  stripTrailingNewlines
-} from "../wildcard-match.js";
+import { countLineBreaks, splitLines, stripTrailingNewlines } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
@@ -197,7 +191,7 @@ export async function readNote(
       title: stripMd(entry.basename),
       format: "map",
       frontmatter_keys: Object.keys(parsed.frontmatter),
-      headings: extractHeadings(parsed.body, parsed.bodyStartLine),
+      headings: noteHeadings(parsed),
       wikilinks_count: parsed.wikilinks.length,
       embeds_count: parsed.embeds.length,
       tags: parsed.tags,
@@ -229,46 +223,6 @@ export async function readNote(
  *  jumping to a heading line would land too early). `bodyStartLine` (the file
  *  line where the body begins; 1 when there's no frontmatter) maps body line `i`
  *  to file line `bodyStartLine + i`. */
-function extractHeadings(body: string, bodyStartLine: number): Array<{ level: number; text: string; line: number }> {
-  const out: Array<{ level: number; text: string; line: number }> = [];
-  const lines = splitLines(body);
-  let fenceMarker: FenceChar | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    // v3.8.0-rc.10 P3-25 — detect both backtick (```) AND tilde (~~~) fences.
-    // v3.11.5-rc.2 — route through opensBlockFence so a line-leading inline span isn't
-    // mistaken for a block-fence open. v3.11.5-rc.5 (meta-audit) — track the fence CHAR
-    // via advanceFence so a `~~~` line inside a ``` block (or vice versa) is literal code,
-    // not a spurious toggle (the char-blind `inFence = !inFence` surfaced headings inside
-    // a code block AND dropped the real heading after it).
-    const st = advanceFence(line, fenceMarker);
-    fenceMarker = st.marker;
-    if (st.delimiter) continue;
-    if (fenceMarker !== null) continue;
-    // v3.11.0-rc.16 — split the combined `(.+?)\s*#*\s*$` heading capture (a
-    // polynomial-ReDoS-class shape — CodeQL js/polynomial-redos; fts5.ts:796
-    // already split it for exactly this reason) into a single anchored capture +
-    // linear trailing-trim. Empirically the combined form is only mildly
-    // super-linear in V8 (~12 ms at a 500 KB line), bounded by maxFileBytes —
-    // NOT the multi-second DoS a prep-audit subagent over-claimed — but leaving
-    // two siblings unsplit after fts5 split the identical regex is the project's
-    // signature "instance fixed, sibling missed". `.trim()` + stripTrailingHashes
-    // is byte-identical to the old capture on every heading except a degenerate
-    // ATX-close-only heading (`# ###` → empty text → skipped, matching fts5).
-    // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
-    // terminator FIRST: `body.split("\n")` leaves a `\r` on every CRLF-saved line,
-    // and JS `(.+)$` (no `s`/`m`) won't match across it → the heading was silently
-    // dropped (readNote map returned []). The pre-rc.16 combined form absorbed the
-    // `\r` via its trailing `\s*`. (linear strip — a `replace(/[\r…]+$/)` would be
-    // the polynomial-ReDoS class.)
-    const m = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(line));
-    if (m?.[1] && m[2]) {
-      const text = stripTrailingHashes(m[2].trim()).trim();
-      if (text) out.push({ level: m[1].length, text, line: bodyStartLine + i });
-    }
-  }
-  return out;
-}
 
 /**
  * Resolve an Obsidian wikilink string to a concrete vault file (or report

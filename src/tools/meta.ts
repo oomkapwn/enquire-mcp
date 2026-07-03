@@ -1,12 +1,12 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import { advanceFence, type FenceChar } from "../fence.js";
 import { parseFrontmatter } from "../frontmatter.js";
 import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE, scanWikilinkInners, stripCodeAndInline } from "../parser.js";
+import { iterateBodyLines } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
-import { splitLines, stripTrailingHashes, stripTrailingLineEnds } from "../wildcard-match.js";
+import { stripTrailingLineEnds } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { searchHybrid } from "./search.js";
@@ -1528,47 +1528,22 @@ export async function getOpenQuestions(
   const candidates: Candidate[] = [];
   for (const e of entries) {
     const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
-    const lines = splitLines(parsed.body);
+    // v3.11.6-rc.2 — the fence-aware line walk + ATX-heading parse now come from the canonical
+    // structure iterator (src/structure.ts): `l.text` === the former `splitLines(parsed.body)[i]`,
+    // `l.line` === `bodyStartLine + i`, and `l.heading` mirrors the old headingMatch (a degenerate
+    // `# ###` yields `l.heading` with empty text, so it still `continue`s as a non-hit heading line).
     let currentHeading: string | null = null;
-    let fenceMarker: FenceChar | null = null;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i] ?? "";
-      // v3.11.5-rc.3 (PARSER-DESYNC) — track code fences so a fenced line is neither surfaced
-      // as a real open question (a `Q:` / `TODO?` inside a ``` block is example text) nor
-      // mistaken for an ATX heading that mis-sets the next question's context_heading. Line
-      // numbers are preserved (we still advance `i`; fenced lines just aren't candidates).
-      // v3.11.5-rc.5 (meta-audit) — track the fence CHAR via advanceFence so a `~~~` line
-      // inside a ``` block (or vice versa) is literal code, not a spurious toggle (the
-      // char-blind `inFence = !inFence` surfaced a fenced Q: and could suppress a real one).
-      const st = advanceFence(line, fenceMarker);
-      fenceMarker = st.marker;
-      if (st.delimiter) continue;
-      if (fenceMarker !== null) continue;
-      // v3.11.0-rc.16 — split the polynomial-ReDoS-class `(.+?)\s*#*\s*$` heading
-      // capture (parity with fts5.ts:796 + read.ts extractHeadings; see those for
-      // the empirical-linearity note). A heading line still `continue`s (never a
-      // candidate) even when its text is degenerate (all-`#` ATX close → empty).
-      // v3.11.0-rc.17 (rc.16 re-audit, CRLF regression) — strip the trailing line
-      // terminator first so a CRLF note's headings still set `currentHeading`
-      // (otherwise `(.+)$` fails on the trailing `\r` and questions lose their
-      // section breadcrumb). Same fix as readNote map + fts5 heading enrichment.
-      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(stripTrailingLineEnds(line));
-      if (headingMatch?.[2]) {
-        const ht = stripTrailingHashes(headingMatch[2].trim()).trim();
-        if (ht) currentHeading = ht; // track for context; heading lines aren't hits
+    for (const l of iterateBodyLines(parsed)) {
+      if (l.inFence) continue;
+      if (l.heading) {
+        if (l.heading.text) currentHeading = l.heading.text; // heading lines set context, aren't hits
         continue;
       }
       candidates.push({
-        line,
+        line: l.text,
         relPath: e.relPath,
         basename: e.basename,
-        // v3.10.0-rc.47 (range-arithmetic) — FILE-absolute line number. `lines`
-        // indexes `parsed.body` (frontmatter-stripped), so `i + 1` was BODY-relative
-        // and off by the frontmatter length for any note with YAML — an agent jumping
-        // to `line` in the file would land too early. `bodyStartLine` is the file line
-        // where the body begins (1 when there's no frontmatter), so body line `i` maps
-        // to file line `bodyStartLine + i`.
-        lineNo: parsed.bodyStartLine + i,
+        lineNo: l.line,
         heading: currentHeading,
         mtimeMs
       });

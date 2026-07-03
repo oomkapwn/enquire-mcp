@@ -93,9 +93,12 @@ function rawExtractionViolations(files: Array<{ rel: string; src: string }>): st
     arg === "stripCodeAndInline" || new RegExp(`\\b${arg}\\s*=\\s*stripCodeAndInline\\b`).test(src);
   for (const { rel, src } of files) {
     if (rel.endsWith("src/parser.ts")) continue; // the extractors' home; sanitizes internally
-    // (1) wrappers + scanWikilinkInners: the arg is the first call argument.
+    // (1) wrappers + scanWikilinkInners + extractEmbeds: the arg is the first call argument.
+    //     extractEmbeds (v3.11.6-rc.1, post-rc.1 re-sweep) shares matchLinks→scanWikilinkInners, so
+    //     a raw extractEmbeds(rawBody) would surface a fenced `![[embed]]` — same desync class. No
+    //     live external caller today (embeds are read via `parsed.embeds`), so this is a latent guard.
     for (const m of src.matchAll(
-      /\b(extractWikilinks|extractInlineTags|scanWikilinkInners)\s*\(\s*([A-Za-z0-9_.]+)/g
+      /\b(extractWikilinks|extractInlineTags|scanWikilinkInners|extractEmbeds)\s*\(\s*([A-Za-z0-9_.]+)/g
     )) {
       const arg = m[2] ?? "";
       if (!isSanitized(arg, src)) out.push(`${rel}: ${m[1]}(${arg})`);
@@ -105,6 +108,14 @@ function rawExtractionViolations(files: Array<{ rel: string; src: string }>): st
     for (const m of src.matchAll(/\b([A-Za-z0-9_]+)(?:\.normalize\([^)]*\))?\.matchAll\(\s*INLINE_TAG_RE\b/g)) {
       const arg = m[1] ?? "";
       if (!isSanitized(arg, src)) out.push(`${rel}: ${arg}.matchAll(INLINE_TAG_RE)`);
+    }
+    // (3) collectTags(fm, body) — v3.11.6-rc.1: the note-body arg (2nd positional) must be
+    //     fence-stripped. bases.ts's collectTags uses its OWN inline-tag regex (not the shared
+    //     INLINE_TAG_RE), so it escapes checks (1)+(2). The `fm: Type, body: Type` DEFINITION
+    //     never matches (the `:` after the 1st param breaks the `ident, ` shape); only CALL sites do.
+    for (const m of src.matchAll(/\bcollectTags\s*\(\s*[A-Za-z0-9_.]+\s*,\s*([A-Za-z0-9_.]+)/g)) {
+      const arg = m[1] ?? "";
+      if (!isSanitized(arg, src)) out.push(`${rel}: collectTags(_, ${arg})`);
     }
   }
   return out;
@@ -132,19 +143,28 @@ describe("PARSER-DESYNC inventory invariant (v3.11.5-rc.3)", () => {
     expect(rawExtractionViolations(files)).toEqual([]);
   });
 
-  it("NEGATIVE control — raw calls on any of the 3 primitives (no sanitize) are flagged", () => {
+  it("NEGATIVE control — raw calls on every covered surface (no sanitize) are flagged", () => {
     const bad = [
       { rel: "src/tools/newthing.ts", src: "const body = await read();\nconst links = extractWikilinks(body);" },
       { rel: "src/tools/newq.ts", src: "for (const i of scanWikilinkInners(bodyAfterFm, false)) {}" }, // raw primitive
       { rel: "src/tools/newtag.ts", src: 'for (const m of bodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {}' }, // raw matcher
+      { rel: "src/basething.ts", src: "const tags = collectTags(fm, bodyAfterFm);" }, // raw collectTags body (v3.11.6-rc.1)
+      { rel: "src/tools/newembeds.ts", src: "const body = await read();\nconst e = extractEmbeds(body);" }, // raw extractEmbeds body (v3.11.6-rc.1 re-sweep)
       { rel: "src/parser.ts", src: "return extractWikilinks(sanitized);" }, // exempt (the home)
       { rel: "src/tools/ok.ts", src: "const sanitized = stripCodeAndInline(body);\nextractWikilinks(sanitized);" },
-      { rel: "src/tools/ok2.ts", src: "extractWikilinks(stripCodeAndInline(body));" }
+      { rel: "src/tools/ok2.ts", src: "extractWikilinks(stripCodeAndInline(body));" },
+      // collectTags DEFINITION (typed params) must NOT match, and a sanitized call must NOT flag.
+      {
+        rel: "src/basegood.ts",
+        src: "function collectTags(fm: Rec, body: string) {}\nconst sb = stripCodeAndInline(b);\ncollectTags(fm, sb);"
+      }
     ];
     expect(rawExtractionViolations(bad)).toEqual([
       "src/tools/newthing.ts: extractWikilinks(body)",
       "src/tools/newq.ts: scanWikilinkInners(bodyAfterFm)",
-      "src/tools/newtag.ts: bodyAfterFm.matchAll(INLINE_TAG_RE)"
+      "src/tools/newtag.ts: bodyAfterFm.matchAll(INLINE_TAG_RE)",
+      "src/basething.ts: collectTags(_, bodyAfterFm)",
+      "src/tools/newembeds.ts: extractEmbeds(body)"
     ]);
   });
 });

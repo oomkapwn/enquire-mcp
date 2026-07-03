@@ -7,11 +7,19 @@
 // tags/headings inside code.
 //
 // This is the "one net catches the whole class" defense the meta-audit designed: for EACH
-// fence shape (backtick, tilde, indented, mismatched-inner-char, line-start inline span) it
-// plants a UNIQUE decoy element inside the fence + a real control outside, and asserts every
-// always-on extractor surfaces the real one and NOT the decoy. A future extractor (or a
-// regressed one) that hand-rolls fence handling and diverges from the parser fails here on
-// whichever shape it mishandles — the generator's shape-coverage IS the class coverage.
+// fence shape (backtick, tilde, indented, mismatched-inner-char, line-start inline span, and —
+// v3.11.6-rc.1 — the UNCLOSED-fence variants) it plants a UNIQUE decoy element inside the fence
+// + a real control outside, and asserts every always-on extractor surfaces the real one and NOT
+// the decoy. A future extractor (or a regressed one) that hand-rolls fence handling and diverges
+// from the parser fails here on whichever shape it mishandles — the generator's shape-coverage IS
+// the class coverage.
+//
+// v3.11.6-rc.1 (pre-promotion-re-sweep follow-up) — the generator originally emitted only
+// SELF-CLOSING fences, so the unclosed-fence-at-EOF shape (where the parser's paired-fence regex
+// leaked the body while the char-aware walkers correctly treated it as code-to-EOF) was outside
+// the corpus — the rc.25/rc.36 generator-blind-spot lesson. `src/parser.ts stripCodeAndInline` was
+// reconciled with the walkers (drop an unclosed fence to EOF) and the `unclosed*` shapes added, so
+// the net now proves parser↔walker agreement on that shape too.
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,13 +39,24 @@ import { Vault } from "../src/vault.js";
  *  - mismatchedInner         : a ``` block whose body contains a `~~~` line before `inner`
  *                              (the char-blind toggle bug, rc.5 — a ~~~ must NOT close a ``` block)
  *  - inlineSpanLineStart     : `inner` wrapped in a line-leading triple-backtick inline span (rc.1)
+ *  - unclosed*               : an UNCLOSED fence (open, no matching close) — per CommonMark it
+ *                              runs to end-of-document, so `inner` is code (v3.11.6-rc.1: the
+ *                              parser's `stripCodeAndInline` was reconciled with the walkers here,
+ *                              closing the generator blind-spot the pre-promotion re-sweep named).
+ *                              These wrappers deliberately emit NO closing fence, so any REAL
+ *                              control the caller appends AFTER them is (correctly) also code.
  */
+const BT = "```"; // fence chars kept as consts so the wrappers use template literals
+const TT = "~~~"; // (biome useTemplate) without escaping backticks/tildes inline
 const SHAPES: Record<string, (inner: string) => string> = {
-  backtick: (i) => "```\n" + i + "\n```",
-  tilde: (i) => "~~~\n" + i + "\n~~~",
-  indented: (i) => "   ```\n" + i + "\n   ```",
-  mismatchedInner: (i) => "```\n~~~\n" + i + "\n```",
-  inlineSpanLineStart: (i) => "```" + i + "```"
+  backtick: (i) => `${BT}\n${i}\n${BT}`,
+  tilde: (i) => `${TT}\n${i}\n${TT}`,
+  indented: (i) => `   ${BT}\n${i}\n   ${BT}`,
+  mismatchedInner: (i) => `${BT}\n${TT}\n${i}\n${BT}`,
+  inlineSpanLineStart: (i) => `${BT}${i}${BT}`,
+  unclosed: (i) => `${BT}\n${i}`,
+  unclosedTilde: (i) => `${TT}\n${i}`,
+  unclosedMismatchedInner: (i) => `${BT}\n${TT}\n${i}`
 };
 const SHAPE_KEYS = Object.keys(SHAPES);
 

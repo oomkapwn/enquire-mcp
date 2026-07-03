@@ -29,7 +29,7 @@ Verify the install:
 enquire-mcp --version
 ```
 
-Expected output: the current version string (e.g. `3.10.x` on `@latest`).
+Expected output: your installed version string (matching the newest `@latest` release in the [CHANGELOG](../CHANGELOG.md)).
 
 ## Step 2 — Smoke test (30 seconds)
 

@@ -203,14 +203,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.1",
+    "@biomejs/biome": "^2.5.2",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
     "github-slugger": "^2.0.0",
     "husky": "^9.1.7",
-    "sharp": "^0.35.2",
-    "typedoc": "^0.28.19",
+    "sharp": "^0.35.3",
+    "typedoc": "^0.28.20",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },

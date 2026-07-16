@@ -288,3 +288,63 @@ describe("FeedbackStore.open file-size guard (rc.24 — external rc.21 audit, Go
     expect(store.size()).toBe(0); // empty store — guard rejected before parse
   });
 });
+
+describe("FeedbackStore vault_root keying + guard (v3.11.6-rc.8 — RFC latent-bug hardening)", () => {
+  let dir: string;
+  let file: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-fb-vroot-"));
+    file = path.join(dir, "test.feedback.json");
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("persists vault_root and re-loads entries when the root matches (POSITIVE)", async () => {
+    const store = await FeedbackStore.open(file, "/canonical/vault");
+    await store.record(["A.md"], true, NOW);
+    const onDisk = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(onDisk.vault_root).toBe("/canonical/vault");
+    // same root → entries load
+    const reopened = await FeedbackStore.open(file, "/canonical/vault");
+    expect(reopened.size()).toBe(1);
+    expect(reopened.scores().get("A.md")).toBeCloseTo(0.5, 10);
+  });
+
+  it("NEGATIVE control — a sidecar recorded for a DIFFERENT vault_root is NOT loaded (no cross-vault feedback bleed)", async () => {
+    const store = await FeedbackStore.open(file, "/vault/A");
+    await store.record(["Secret.md"], true, NOW);
+    // opening the same file for a different vault must ignore the foreign entries
+    const foreign = await FeedbackStore.open(file, "/vault/B");
+    expect(foreign.size()).toBe(0);
+    expect(foreign.scores().get("Secret.md")).toBeUndefined();
+  });
+
+  it("a pre-rc.8 sidecar with no vault_root is adopted (backward compat)", async () => {
+    // hand-write a legacy file with entries but no vault_root field
+    await fs.writeFile(
+      file,
+      JSON.stringify({ version: 1, entries: { "Old.md": { useful: 2, notUseful: 0, lastMarked: NOW } } })
+    );
+    const store = await FeedbackStore.open(file, "/any/vault");
+    expect(store.size()).toBe(1);
+    expect(store.scores().get("Old.md")).toBeCloseTo(2 / 3, 10); // 2/(2+0+1)
+  });
+
+  it("keys the sidecar off the CANONICAL vault root — path-spelling variants collapse to one file (the fix)", async () => {
+    // A Vault canonicalizes its root; a trailing-slash spelling resolves to the
+    // same root, so defaultFeedbackFile(vault.root) is stable across spellings —
+    // which is why server.ts must pass vault.root, not the raw --vault arg.
+    const physical = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-fb-canon-"));
+    try {
+      const v1 = new Vault(physical);
+      await v1.ensureExists();
+      const v2 = new Vault(`${physical}/`); // trailing slash — same physical dir
+      await v2.ensureExists();
+      expect(v1.root).toBe(v2.root); // canonicalized to the same root
+      expect(defaultFeedbackFile(v1.root)).toBe(defaultFeedbackFile(v2.root));
+    } finally {
+      await fs.rm(physical, { recursive: true, force: true });
+    }
+  });
+});

@@ -634,8 +634,14 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // of prepareServerDeps (CRL-1), so this re-parse only decides whether to open the
   // store. `FeedbackStore.open` is fail-soft (a corrupt/missing sidecar yields an
   // empty store — never breaks boot).
+  // v3.11.6-rc.8 (RFC-surfaced latent bug) — key the feedback sidecar off the
+  // CANONICAL vault.root (realpath'd), NOT the raw `opts.vault`. The FTS5/embed/
+  // parse-cache sidecars all use vault.root, so a symlinked or trailing-slash
+  // `--vault` path used to give the feedback file a DIFFERENT sha1 hash than the
+  // rest — fragmenting feedback across path spellings and desyncing it from the
+  // realpath-keyed prune eraser. vault.root is also passed as the on-open guard.
   const feedbackStore =
-    parseFeedbackConfig(opts) !== null ? await FeedbackStore.open(defaultFeedbackFile(opts.vault)) : null;
+    parseFeedbackConfig(opts) !== null ? await FeedbackStore.open(defaultFeedbackFile(vault.root), vault.root) : null;
 
   return {
     vault,

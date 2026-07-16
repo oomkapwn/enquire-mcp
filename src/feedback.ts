@@ -28,6 +28,13 @@ export interface FeedbackEntry {
 
 interface FeedbackData {
   version: 1;
+  /**
+   * v3.11.6-rc.8 (RFC-surfaced latent bug) — the canonical vault root this store
+   * belongs to. Persisted + verified on open so a sidecar cannot be mis-attributed
+   * to the wrong vault (mirrors the `data.root !== this.root` guard fts5/embed-db
+   * already have). Optional so pre-rc.8 sidecars (no `vault_root`) still load.
+   */
+  vault_root?: string;
   entries: Record<string, FeedbackEntry>;
 }
 
@@ -93,7 +100,7 @@ export class FeedbackStore {
    * so a corrupt file can't break `serve` boot. Loaded entries are sanitized
    * (non-finite / negative counts → 0; non-string `lastMarked` → "").
    */
-  static async open(file: string): Promise<FeedbackStore> {
+  static async open(file: string, vaultRoot?: string): Promise<FeedbackStore> {
     // v3.11.0-rc.8 (pre-promotion audit MED) — `entries` is a NULL-PROTOTYPE map.
     // record() writes agent-supplied path strings directly as keys; on a normal
     // object an agent calling obsidian_mark_useful with `paths:["__proto__"]` would
@@ -101,7 +108,11 @@ export class FeedbackStore {
     // (remotely reachable on bearer serve-http when --feedback-weight > 0). A
     // null-proto map has no Object.prototype on its chain, so "__proto__" / "constructor"
     // become harmless OWN keys (a note literally named __proto__.md still round-trips).
-    let data: FeedbackData = { version: 1, entries: Object.create(null) as Record<string, FeedbackEntry> };
+    let data: FeedbackData = {
+      version: 1,
+      ...(vaultRoot ? { vault_root: vaultRoot } : {}),
+      entries: Object.create(null) as Record<string, FeedbackEntry>
+    };
     try {
       // v3.11.0-rc.24 (external rc.21 audit, Goose FIND-2) — bound the file size BEFORE
       // readFile+JSON.parse, mirroring vault.ts:loadDiskCache's `stat.size` guard. The
@@ -112,6 +123,17 @@ export class FeedbackStore {
       if (stat.size > MAX_FEEDBACK_FILE_BYTES) return new FeedbackStore(file, data);
       const raw = await fs.readFile(file, "utf8");
       const parsed = JSON.parse(raw) as unknown;
+      // v3.11.6-rc.8 — foreign-vault guard: if the on-disk sidecar records a
+      // vault_root that disagrees with the one we were opened for, do NOT load
+      // its entries (it belongs to a different vault — a hash collision or a
+      // relocated cache dir). Return the empty, correctly-keyed store instead of
+      // boosting one vault's search with another's feedback. A sidecar with no
+      // vault_root (pre-rc.8) is adopted as-is.
+      const storedRoot =
+        parsed && typeof parsed === "object" ? (parsed as { vault_root?: unknown }).vault_root : undefined;
+      if (vaultRoot && typeof storedRoot === "string" && storedRoot.length > 0 && storedRoot !== vaultRoot) {
+        return new FeedbackStore(file, data);
+      }
       const rawEntries = parsed && typeof parsed === "object" ? (parsed as { entries?: unknown }).entries : undefined;
       if (rawEntries && typeof rawEntries === "object") {
         const entries: Record<string, FeedbackEntry> = Object.create(null);
@@ -127,7 +149,7 @@ export class FeedbackStore {
             };
           }
         }
-        data = { version: 1, entries };
+        data = { version: 1, ...(vaultRoot ? { vault_root: vaultRoot } : {}), entries };
       }
     } catch {
       // missing / unreadable / malformed JSON — start empty (fail-soft).

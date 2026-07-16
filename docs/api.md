@@ -43,7 +43,7 @@ Canonical list of every registered MCP tool. The `Kind` column splits read/write
 | `obsidian_read_pdf` | read | always | Extract per-page text + `full_text` + doc-level metadata from a PDF. |
 | `obsidian_ocr_pdf` | read | always | Tesseract OCR for image-only / scanned PDFs (multilingual via `lang`). |
 | `obsidian_hyde_search` | read | always | HyDE retrieval — agent supplies a synthetic answer; server embeds it for retrieval. |
-| `obsidian_search` | read | always | Hybrid retrieval — BM25 + TF-IDF + embeddings fused via RRF (v2.0 default). |
+| `obsidian_search` | read | always | Hybrid retrieval — BM25 + TF-IDF + embeddings fused via RRF (v2.0 default). v3.11.6-rc.7 adds optional `queries: string[]` (multi-query fan-out, max 8) — each phrasing is searched and the result lists are RRF-merged with the main `query`, so a note matching ANY phrasing floats up (complements HyDE). |
 | `obsidian_chat_thread_read` | read | always | Parse a note's `## Chat: <title>` block into structured messages. |
 | `obsidian_context_pack` | read | always | Retrieve + pack vault context for a question to a token budget. |
 | `obsidian_frontmatter_get` | read | always | Read parsed YAML frontmatter (full object or single key). |

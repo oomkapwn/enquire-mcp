@@ -10,7 +10,13 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
-import { filterExcludedEmbedHits, frontmatterMatches, pruneExcludedHits } from "../src/tools/search.js";
+import {
+  filterExcludedEmbedHits,
+  frontmatterMatches,
+  MAX_FANOUT_QUERIES,
+  pruneExcludedHits,
+  searchHybridMulti
+} from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -669,5 +675,65 @@ describe("searchHybrid — opt-in frontmatter filter (v3.10 rc.10)", () => {
       { ftsIndex: null, embedFile: path.join(fmRoot, "nonexistent.embed.db") }
     );
     expect(result.matches.map((m) => m.path).sort()).toEqual(["active.md", "done.md"]); // both projects, nofm excluded
+  });
+});
+
+describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
+  const noEmbed = () => ({ ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") });
+
+  it("fuses two phrasings so a note matching EITHER floats up (union behavior)", async () => {
+    const v = new Vault(root);
+    // "OAuth authentication" → OAuth Flows.md; "refresh token rotation" → JWT Validation.md.
+    // Neither phrasing alone surfaces both Auth notes; the fan-out should.
+    const result = await searchHybridMulti(
+      v,
+      { queries: ["OAuth authentication", "refresh token rotation"], limit: 5 },
+      noEmbed()
+    );
+    expect(result.method).toBe("rrf");
+    const paths = result.matches.map((m) => m.path);
+    expect(paths).toContain("Auth/OAuth Flows.md");
+    expect(paths).toContain("Auth/JWT Validation.md");
+    // NEGATIVE control — irrelevant cooking notes stay out.
+    expect(paths.some((p) => p.startsWith("Cooking/"))).toBe(false);
+    // the echo joins the phrasings for observability
+    expect(result.query).toBe("OAuth authentication | refresh token rotation");
+  });
+
+  it("a note ranking well in ANY single phrasing is not dropped by an unrelated phrasing", async () => {
+    const v = new Vault(root);
+    // "JWT signature validation" strongly hits JWT Validation.md; the second
+    // phrasing is unrelated (carbonara) → JWT note must still surface via q0.
+    const result = await searchHybridMulti(
+      v,
+      { queries: ["JWT signature validation", "carbonara guanciale"], limit: 5 },
+      noEmbed()
+    );
+    const paths = result.matches.map((m) => m.path);
+    expect(paths).toContain("Auth/JWT Validation.md");
+  });
+
+  it("single-phrasing fan-out returns the same top note as plain searchHybrid (sanity)", async () => {
+    const v = new Vault(root);
+    const multi = await searchHybridMulti(v, { queries: ["OAuth JWT tokens"], limit: 5 }, noEmbed());
+    const single = await searchHybrid(v, { query: "OAuth JWT tokens", limit: 5 }, noEmbed());
+    expect(multi.matches[0]?.path).toBe(single.matches[0]?.path);
+  });
+
+  it("dedupes a note that appears in multiple phrasings (one entry, fused score)", async () => {
+    const v = new Vault(root);
+    // both phrasings hit OAuth Flows.md; it must appear exactly once.
+    const result = await searchHybridMulti(
+      v,
+      { queries: ["OAuth authorization server", "OAuth access tokens"], limit: 5 },
+      noEmbed()
+    );
+    const oauthEntries = result.matches.filter((m) => m.path === "Auth/OAuth Flows.md");
+    expect(oauthEntries.length).toBe(1);
+  });
+
+  it("caps the fan-out count (MAX_FANOUT_QUERIES = 8) — DoS bound on an always-on tool", () => {
+    // The schema enforces the cap at the boundary; the constant is the contract.
+    expect(MAX_FANOUT_QUERIES).toBe(8);
   });
 });

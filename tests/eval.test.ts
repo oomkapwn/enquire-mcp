@@ -15,13 +15,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  allRelevantAtK,
   classifyFailureBucket,
+  compareEvalResults,
   type EvalQuery,
+  type EvalQueryScore,
   type EvalResult,
   FAILURE_BUCKETS,
   type FailureBucket,
+  formatEvalComparison,
   formatEvalMatrix,
   formatEvalResult,
+  groupByCategory,
+  hitAtK,
+  MEANINGFUL_DELTA,
+  missedPaths,
   ndcgAtK,
   readQueriesJsonl,
   recallAtK,
@@ -457,5 +465,132 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
 
   it("formatEvalMatrix handles empty input gracefully", () => {
     expect(formatEvalMatrix([])).toBe("(no results)");
+  });
+});
+
+// ─── v3.11.6-rc.5 eval overhaul (competitive-study C-1) ────────────────────
+
+describe("hitAtK (v3.11.6-rc.5)", () => {
+  it("true when a relevant doc is within k", () => {
+    expect(hitAtK(["a", "b", "c"], new Set(["c"]), 3)).toBe(true);
+  });
+  it("false when the only relevant doc is beyond k (Hit@1 vs Hit@3)", () => {
+    expect(hitAtK(["a", "b", "c"], new Set(["c"]), 1)).toBe(false);
+    expect(hitAtK(["a", "b", "c"], new Set(["c"]), 3)).toBe(true);
+  });
+  it("NEGATIVE control — false when there is no ground truth", () => {
+    expect(hitAtK(["a", "b"], new Set(), 5)).toBe(false);
+  });
+});
+
+describe("allRelevantAtK (v3.11.6-rc.5)", () => {
+  it("true only when EVERY relevant doc is in top-k", () => {
+    expect(allRelevantAtK(["a", "b", "c"], new Set(["a", "c"]), 3)).toBe(true);
+  });
+  it("false when one required evidence doc is missing (the AllRel signal)", () => {
+    expect(allRelevantAtK(["a", "b", "c"], new Set(["a", "z"]), 3)).toBe(false);
+  });
+  it("false when a required doc is beyond k even though another is in top-k", () => {
+    expect(allRelevantAtK(["a", "b", "c"], new Set(["a", "c"]), 2)).toBe(false);
+  });
+  it("NEGATIVE control — false when there is no ground truth", () => {
+    expect(allRelevantAtK(["a"], new Set(), 5)).toBe(false);
+  });
+});
+
+describe("missedPaths (v3.11.6-rc.5)", () => {
+  it("returns the relevant paths NOT in top-k", () => {
+    expect(missedPaths(["a", "b"], new Set(["a", "z"]), 5).sort()).toEqual(["z"]);
+  });
+  it("empty when all relevant retrieved (NEGATIVE control)", () => {
+    expect(missedPaths(["a", "b"], new Set(["a", "b"]), 5)).toEqual([]);
+  });
+  it("respects k — a relevant doc beyond k counts as missed", () => {
+    expect(missedPaths(["a", "b", "c"], new Set(["c"]), 2)).toEqual(["c"]);
+  });
+});
+
+describe("groupByCategory (v3.11.6-rc.5)", () => {
+  const row = (over: Partial<EvalQueryScore>): EvalQueryScore => ({
+    id: "q",
+    query: "q",
+    ndcg_at_k: 1,
+    recall_at_k: 1,
+    mrr: 1,
+    hits_relevant: 1,
+    hits_total_relevant: 1,
+    latency_ms: 1,
+    failure_bucket: "hit_rank_1",
+    hit_at_1: true,
+    hit_at_k: true,
+    all_relevant_at_k: true,
+    ...over
+  });
+  it("groups per-query rows by category and averages each group", () => {
+    const g = groupByCategory([
+      row({ category: "keyword", ndcg_at_k: 1.0 }),
+      row({ category: "keyword", ndcg_at_k: 0.5 }),
+      row({ category: "conceptual", ndcg_at_k: 0.2, hit_at_1: false })
+    ]);
+    expect(g.keyword?.query_count).toBe(2);
+    expect(g.keyword?.mean_ndcg).toBeCloseTo(0.75, 4);
+    expect(g.conceptual?.mean_ndcg).toBeCloseTo(0.2, 4);
+    expect(g.conceptual?.mean_hit_at_1).toBe(0); // the one conceptual row missed rank-1
+  });
+  it("uncategorized bucket when no category is set (NEGATIVE control — no phantom categories)", () => {
+    const g = groupByCategory([row({}), row({})]);
+    expect(Object.keys(g)).toEqual(["uncategorized"]);
+    expect(g.uncategorized?.query_count).toBe(2);
+  });
+});
+
+describe("compareEvalResults + formatEvalComparison (v3.11.6-rc.5)", () => {
+  const res = (over: Partial<EvalResult>): EvalResult =>
+    ({
+      label: "x",
+      k: 10,
+      query_count: 60,
+      query_errors: 0,
+      per_query: [],
+      mean_ndcg: 0.6,
+      mean_recall: 0.7,
+      mean_mrr: 0.65,
+      mean_latency_ms: 10,
+      total_wall_ms: 1,
+      mean_hit_at_1: 0.5,
+      mean_hit_at_k: 0.8,
+      all_rel_at_k: 0.4,
+      ...over
+    }) as EvalResult;
+
+  it("marks a delta ≥ MEANINGFUL_DELTA as meaningful, a smaller one as noise", () => {
+    const cmp = compareEvalResults(res({ label: "before", mean_ndcg: 0.6 }), res({ label: "after", mean_ndcg: 0.65 }));
+    const ndcg = cmp.deltas.find((d) => d.metric === "nDCG@k");
+    expect(ndcg?.delta).toBeCloseTo(0.05, 4);
+    expect(ndcg?.meaningful).toBe(true);
+  });
+  it("NEGATIVE control — a sub-threshold delta is NOT meaningful", () => {
+    const cmp = compareEvalResults(res({ mean_ndcg: 0.6 }), res({ mean_ndcg: 0.6 + MEANINGFUL_DELTA / 2 }));
+    expect(cmp.deltas.find((d) => d.metric === "nDCG@k")?.meaningful).toBe(false);
+  });
+  it("formatEvalComparison flags a meaningful regression as such", () => {
+    const cmp = compareEvalResults(res({ label: "before", mean_mrr: 0.7 }), res({ label: "after", mean_mrr: 0.6 }));
+    const out = formatEvalComparison(cmp);
+    expect(out).toMatch(/regression/);
+  });
+});
+
+describe("readQueriesJsonl category parsing (v3.11.6-rc.5)", () => {
+  it("parses an optional category field", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "eval-cat-"));
+    const file = path.join(dir, "q.jsonl");
+    await fs.writeFile(
+      file,
+      `{"query":"a","relevant":["x.md"],"category":"keyword"}\n{"query":"b","relevant":["y.md"]}\n`
+    );
+    const qs = await readQueriesJsonl(file);
+    expect(qs[0]?.category).toBe("keyword");
+    expect(qs[1]?.category).toBeUndefined(); // NEGATIVE control — absent category stays undefined
+    await fs.rm(dir, { recursive: true, force: true });
   });
 });

@@ -59,7 +59,7 @@ if (!existsSync(SUMMARY_PATH)) {
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 27 }, // current 35.29% (integration-dep; rc.12 L-2 exported applyOfflineEnv + its mock-mod test covered the offline-env arms → branch% rose 29.41→35.29; floor kept at 27 as margin — embedder/reranker load + offline catch still need a real model download to fully cover; rc.13 AUD-02 synced after OIA Check 6 flagged the drift)
+  "src/embeddings.ts": { branches: 27 }, // current 43.13% (integration-dep; rc.12 L-2 exported applyOfflineEnv covered the offline-env arms; v3.11.6-rc.3 T-11 serve-offline-network test drove the REAL embedder cache-miss offline load → branch% rose 35.29→43.13; floor kept at 27 as margin — embedder/reranker warm load still needs a real model download to fully cover; synced after OIA Check 6 flagged the drift)
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a

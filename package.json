@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.11.6-rc.4",
+  "version": "3.11.6-rc.5",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1515 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1531 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -100,7 +100,9 @@
     "check:audit": "node scripts/check-audit.mjs",
     "prepare": "rm -rf dist && tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
     "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && node scripts/check-audit.mjs && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
-    "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md"
+    "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md",
+    "eval": "node dist/index.js eval",
+    "eval:compare": "node scripts/eval-compare.mjs"
   },
   "keywords": [
     "ai-memory",

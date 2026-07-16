@@ -1043,6 +1043,12 @@ export function registerReadTools(
           .optional()
           .describe(
             "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits."
+          ),
+        explain: z
+          .boolean()
+          .optional()
+          .describe(
+            "v3.11.6 (S-5): when true, attach a per-hit `explain` object showing WHY each hit ranked where it did — the RRF rank/score, wikilink graph-boost (in_degree + score_delta), reranker score, and (when the server enables them) the `--recency-weight` / `--feedback-weight` rank movement (rank_before→rank_after). Diagnostic: use it to verify the opt-in recency/feedback re-ranks actually change the order. Single-query only (dropped when `queries[]` fan-out is used)."
           )
       }
     },
@@ -1062,7 +1068,8 @@ export function registerReadTools(
       // fuse the main query + each phrasing via RRF so a note matching ANY floats up.
       const extraQueries = (args.queries ?? []).map((q) => q.trim()).filter((q) => q.length > 0);
       if (extraQueries.length > 0) {
-        const { queries: _drop, ...rest } = args;
+        // S-5 — `explain` is single-query only; drop it before the multi fan-out.
+        const { queries: _drop, explain: _dropExplain, ...rest } = args;
         return textResult(
           await searchHybridMulti(vault, { ...rest, queries: [args.query, ...extraQueries] }, searchCtx)
         );

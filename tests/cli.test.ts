@@ -214,6 +214,33 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("clear-cache");
     expect(out).toContain("clear-index");
     expect(out).toContain("index");
+    expect(out).toContain("configure"); // v3.11.6-rc.4 activation command
+  });
+
+  // v3.11.6-rc.4 (activation, audit P0) — `configure` prints a ready-to-paste
+  // MCP client config for the given vault. Non-destructive (writes nothing).
+  it("`configure --vault <v> --client cursor` prints parseable mcpServers JSON, exit 0", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "configure", "--vault", vault, "--client", "cursor"], {
+      encoding: "utf8",
+      timeout: 15000
+    });
+    expect(res.status).toBe(0);
+    const out = res.stdout ?? "";
+    // extract the fenced JSON body and assert it parses with the vault wired in
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { args: string[] }> };
+    expect(parsed.mcpServers.obsidian?.args).toContain(vault);
+  });
+
+  it("`configure --tier bogus` fails fast (exit 1) with valid tiers listed", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "configure", "--vault", vault, "--tier", "bogus"], {
+      encoding: "utf8",
+      timeout: 15000
+    });
+    expect(res.status).toBe(1);
+    expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/basic \| hybrid \| hybrid-live/);
   });
 
   // v3.10.0-rc.13 (bug-report Issue 3) — install-model now resolves BOTH the

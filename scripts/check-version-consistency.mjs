@@ -59,11 +59,26 @@ if (/-rc\.\d+$/.test(pkg.version)) {
         "current release. This is the α-class status-stale guard (added v3.10.0-rc.32)."
     );
   }
+
+  // v3.11.6-rc.3 (audit G-4) — the CLAUDE.md TOP HEADER currency guard. The
+  // North-Star header (lines 1-30) is what every new session reads FIRST; it
+  // is a separate surface from the roll-up above and had drifted ~2 minor lines
+  // (it described v3.10.x/v3.9-in-flight and deferred the already-shipped
+  // install-ocr-lang at the v3.11.6-rc.2 commit). The header MUST carry the
+  // marker `<!-- current header; \`@rc\`=X.Y.Z-rc.N ... -->`.
+  const headerRc = /current header;\s*`@rc`\s*=\s*(\d+\.\d+\.\d+-rc\.\d+)/.exec(claudeMd)?.[1];
+  if (headerRc !== pkg.version) {
+    errors.push(
+      `CLAUDE.md top-header \`@rc\`=${headerRc ?? "(marker missing)"} but package.json is ${pkg.version} — ` +
+        "advance the header's `<!-- current header; `@rc`=<version> -->` marker (and the 'Current state' line) to the " +
+        "current release. This is the North-Star-header currency guard (added v3.11.6-rc.3, audit G-4)."
+    );
+  }
 }
 
 if (errors.length === 0) {
   process.stdout.write(
-    `OK — version ${pkg.version} consistent across ${Object.keys(surfaces).length} surfaces + CLAUDE.md roll-up @rc currency\n`
+    `OK — version ${pkg.version} consistent across ${Object.keys(surfaces).length} surfaces + CLAUDE.md roll-up + header @rc currency\n`
   );
   process.exit(0);
 }

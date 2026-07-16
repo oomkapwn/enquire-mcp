@@ -2,10 +2,10 @@
 // Smoke test: spawn the built MCP server, run the JSON-RPC handshake,
 // then call a few tools. Prints PASS/FAIL summary and exits non-zero on failure.
 import { spawn } from "node:child_process";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOL_MANIFEST } from "../dist/tool-manifest.js";
+import { createSyntheticVault } from "./synthetic-vault.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -16,7 +16,14 @@ const bin = path.join(root, "dist", "index.js");
 // chunk resource).
 const args = process.argv.slice(2);
 const positional = args.filter((a) => !a.startsWith("--"));
-const vault = positional[0] ?? path.join(os.homedir(), "Documents", "Obsidian Vault");
+// v3.11.6-rc.3 (audit G-1): with NO explicit vault arg, build a throwaway
+// synthetic vault under the OS temp dir — never fall back to the maintainer's
+// real ~/Documents/Obsidian Vault (that silently changed the smoke target and
+// printed real note titles/paths). CI still passes an explicit synthetic path.
+const vault = positional[0] ?? (await createSyntheticVault());
+if (!positional[0]) {
+  console.log(`(no vault arg — using a throwaway synthetic vault at ${vault})`);
+}
 const withFts = args.includes("--with-fts");
 
 // v2.0.0-beta.3: enable --diagnostic-search-tools so smoke exercises the

@@ -132,16 +132,99 @@ export function aggregateByType(perInstance) {
   return rows;
 }
 
+// ─── v3.11.6-rc.10 (C-2) — OHS-comparable peer-protocol aggregation ──────────
+// The competitive study's C-2: publish an apples-to-apples LongMemEval-S
+// retrieval number vs `flowing-abyss/obsidian-hybrid-search` (OHS). OHS's public
+// protocol is scope-per-question (each query searches ONLY its own generated
+// mini-vault — which this harness already models by materializing one temp vault
+// per question) at k=10, reporting nDCG@5/@10, MRR, Hit@1/@5, Recall@10, AllRel@10
+// grouped by LongMemEval `question_type`. These pure aggregators produce that
+// exact shape from per-instance scores so the number is one command from the
+// dataset. (Metric COMPUTATION uses the rc.5 `src/eval.ts` functions in main();
+// AGGREGATION is pure + unit-testable here, mirroring `aggregateByType`.)
+
+/** The OHS-comparable metric keys, in display order. */
+export const OHS_METRICS = ["ndcg_5", "ndcg_10", "mrr", "hit_1", "hit_5", "recall_10", "all_rel_10"];
+
+/** Mean of every OHS metric over a list of per-instance score objects. Pure. */
+function meanMetrics(rows) {
+  const out = { n: rows.length };
+  for (const m of OHS_METRICS) {
+    out[m] = rows.length ? Math.round((rows.reduce((s, r) => s + (r[m] ?? 0), 0) / rows.length) * 10000) / 10000 : 0;
+  }
+  return out;
+}
+
+/**
+ * Aggregate per-instance OHS-metric scores into `{ overall, by_category }`,
+ * where `by_category` is keyed by `question_type` (the LongMemEval category).
+ * Each value is the mean of every OHS metric over that group. Pure.
+ * Categories are sorted weakest-nDCG@5 first in the returned array form via
+ * {@link byCategoryRows}, matching OHS's "diagnose the weak slice first" flow.
+ */
+export function aggregateByCategory(scored) {
+  const groups = new Map();
+  for (const r of scored) {
+    const t = r.type ?? "unknown";
+    if (!groups.has(t)) groups.set(t, []);
+    groups.get(t).push(r);
+  }
+  const by_category = {};
+  for (const [type, rows] of groups) by_category[type] = meanMetrics(rows);
+  return { overall: meanMetrics(scored), by_category };
+}
+
+/** `by_category` as an array sorted weakest-nDCG@5 first (the diagnostic order). */
+export function byCategoryRows(byCategory) {
+  return Object.entries(byCategory)
+    .map(([type, m]) => ({ type, ...m }))
+    .sort((a, b) => a.ndcg_5 - b.ndcg_5);
+}
+
+/**
+ * Per-category metric delta between a baseline run and a second run (e.g.
+ * `--recency-weight` OFF vs ON) — the differentiator diagnostic. For each
+ * category present in both, returns `after - before` per OHS metric. Pure.
+ * Leads the C-2 write-up: freshness helps exactly the temporal-reasoning /
+ * knowledge-update / preference categories where a static retriever is weakest.
+ */
+export function recencyDelta(baseByCategory, afterByCategory) {
+  const out = {};
+  for (const type of Object.keys(baseByCategory)) {
+    const b = baseByCategory[type];
+    const a = afterByCategory[type];
+    if (!a) continue;
+    const d = { n: b.n };
+    for (const m of OHS_METRICS) d[m] = Math.round(((a[m] ?? 0) - (b[m] ?? 0)) * 10000) / 10000;
+    out[type] = d;
+  }
+  return out;
+}
+
 // ─── CLI (skipped when imported by tests) ───────────────────────────────────
 
 function parseArgs(argv) {
-  const args = { dataset: null, limit: Infinity, k: 10, embeddings: false };
+  const args = {
+    dataset: null,
+    limit: Infinity,
+    k: 10,
+    embeddings: false,
+    // v3.11.6-rc.10 (C-2) — peer-protocol options.
+    output: null, // write the full result JSON (raw per-category, for publishing)
+    recencyCompare: false, // also run with --recency-weight ON and report the by-category delta
+    recencyWeight: 0.3, // the ON-pass weight for --recency-compare
+    staleDays: 365
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dataset") args.dataset = argv[++i];
     else if (a === "--limit") args.limit = Number.parseInt(argv[++i], 10);
     else if (a === "--k") args.k = Number.parseInt(argv[++i], 10);
     else if (a === "--embeddings") args.embeddings = true;
+    else if (a === "--output") args.output = argv[++i];
+    else if (a === "--recency-compare") args.recencyCompare = true;
+    else if (a === "--recency-weight") args.recencyWeight = Number.parseFloat(argv[++i]);
+    else if (a === "--stale-days") args.staleDays = Number.parseInt(argv[++i], 10);
   }
   return args;
 }
@@ -177,15 +260,30 @@ async function main() {
   const { FtsIndex } = await import(path.join(distDir, "fts5.js"));
   const { syncFtsIndex } = await import(path.join(distDir, "server.js"));
   const { searchHybrid } = await import(path.join(distDir, "tools", "index.js"));
-  const { recallAtK, reciprocalRank, ndcgAtK } = await import(path.join(distDir, "eval.js"));
+  // v3.11.6-rc.10 (C-2) — the rc.5 OHS-comparable metric set.
+  const { recallAtK, reciprocalRank, ndcgAtK, hitAtK, allRelevantAtK } = await import(path.join(distDir, "eval.js"));
 
   const k = args.k;
-  const perInstance = [];
+  /** Compute the full OHS metric set for one question's retrieved paths. */
+  const scoreOhs = (retrieved, relevant, type) => ({
+    type,
+    ndcg_5: ndcgAtK(retrieved, relevant, 5),
+    ndcg_10: ndcgAtK(retrieved, relevant, 10),
+    mrr: reciprocalRank(retrieved, relevant, k),
+    hit_1: hitAtK(retrieved, relevant, 1) ? 1 : 0,
+    hit_5: hitAtK(retrieved, relevant, 5) ? 1 : 0,
+    recall_10: recallAtK(retrieved, relevant, 10),
+    all_rel_10: allRelevantAtK(retrieved, relevant, 10) ? 1 : 0
+  });
+
+  const base = []; // recency OFF (the headline)
+  const withRecency = []; // recency ON (only when --recency-compare)
   let abstentions = 0;
   let processed = 0;
   const total = Math.min(instances.length, args.limit);
   process.stderr.write(
-    `enquire LongMemEval: ${total} question(s), k=${k}, embeddings=${args.embeddings ? "on" : "off (BM25+TF-IDF)"}\n`
+    `enquire LongMemEval: ${total} question(s), k=${k}, embeddings=${args.embeddings ? "on" : "off (BM25+TF-IDF)"}` +
+      `${args.recencyCompare ? `, recency-compare w=${args.recencyWeight}` : ""}\n`
   );
 
   for (let qi = 0; qi < total; qi++) {
@@ -196,7 +294,7 @@ async function main() {
       continue; // abstention questions have no in-haystack relevant session
     }
     const relevant = relevantSessionPaths(inst);
-    if (relevant.size === 0) continue; // can't score recall without ground truth
+    if (relevant.size === 0) continue; // can't score without ground truth
 
     const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-vault-"));
     const idxDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-idx-"));
@@ -212,15 +310,30 @@ async function main() {
       const vault = new Vault(vaultRoot);
       const ftsIndex = new FtsIndex({ file: path.join(idxDir, "lme.fts5.db"), vaultRoot: vault.root });
       await syncFtsIndex(vault, ftsIndex);
-      const result = await searchHybrid(vault, { query: inst.question, limit: k }, { ftsIndex });
-      const retrieved = result.matches.map((m) => m.path);
-      perInstance.push({
-        type: inst.question_type ?? "unknown",
-        recall: recallAtK(retrieved, relevant, k),
-        mrr: reciprocalRank(retrieved, relevant, k),
-        ndcg: ndcgAtK(retrieved, relevant, k),
-        hit: retrieved.slice(0, k).some((p) => relevant.has(p))
-      });
+      const type = inst.question_type ?? "unknown";
+      // scope-per-question: this vault IS the question's LongMemEval haystack.
+      const r0 = await searchHybrid(vault, { query: inst.question, limit: k }, { ftsIndex });
+      base.push(
+        scoreOhs(
+          r0.matches.map((m) => m.path),
+          relevant,
+          type
+        )
+      );
+      if (args.recencyCompare) {
+        const r1 = await searchHybrid(
+          vault,
+          { query: inst.question, limit: k },
+          { ftsIndex, recency: { weight: args.recencyWeight, staleDays: args.staleDays } }
+        );
+        withRecency.push(
+          scoreOhs(
+            r1.matches.map((m) => m.path),
+            relevant,
+            type
+          )
+        );
+      }
       ftsIndex.close?.();
       processed += 1;
       if (processed % 25 === 0) process.stderr.write(`  …${processed}/${total}\n`);
@@ -230,22 +343,70 @@ async function main() {
     }
   }
 
-  const round = (n) => Math.round(n * 10000) / 10000;
-  const mean = (arr, f) => (arr.length ? arr.reduce((s, x) => s + f(x), 0) / arr.length : 0);
-  process.stdout.write("\n=== LongMemEval RETRIEVAL quality (recall of answer-bearing sessions) ===\n");
-  process.stdout.write(`scored ${perInstance.length} question(s) · ${abstentions} abstention(s) skipped · k=${k}\n\n`);
-  process.stdout.write(`overall  recall@${k}=${round(mean(perInstance, (x) => x.recall))}  `);
-  process.stdout.write(`MRR=${round(mean(perInstance, (x) => x.mrr))}  `);
-  process.stdout.write(`NDCG@${k}=${round(mean(perInstance, (x) => x.ndcg))}  `);
-  process.stdout.write(`hit-rate=${round(mean(perInstance, (x) => (x.hit ? 1 : 0)))}\n\n`);
-  process.stdout.write("by question type:\n");
-  for (const row of aggregateByType(perInstance)) {
+  const agg = aggregateByCategory(base);
+  const fmt = (m) => `${m.toFixed(4)}`;
+
+  // ── Disclosure header (per the C-2 honest-publishing bar) ──
+  process.stdout.write(`\n=== enquire LongMemEval-S RETRIEVAL (peer-protocol; scope-per-question, k=${k}) ===\n`);
+  process.stdout.write(
+    `embedding backend: ${args.embeddings ? "LOCAL on-device (transformers.js)" : "OFF (BM25 + TF-IDF only)"} — ` +
+      "NOT a cloud model; a cloud-embedding peer number (e.g. bge-m3) is a different measurement.\n"
+  );
+  process.stdout.write(`scored ${base.length} question(s) · ${abstentions} abstention(s) skipped\n\n`);
+  process.stdout.write(
+    `overall  nDCG@5=${fmt(agg.overall.ndcg_5)}  nDCG@10=${fmt(agg.overall.ndcg_10)}  MRR=${fmt(agg.overall.mrr)}  ` +
+      `Hit@1=${fmt(agg.overall.hit_1)}  Hit@5=${fmt(agg.overall.hit_5)}  Recall@10=${fmt(agg.overall.recall_10)}  ` +
+      `AllRel@10=${fmt(agg.overall.all_rel_10)}\n\n`
+  );
+  process.stdout.write("by category (weakest nDCG@5 first):\n");
+  for (const row of byCategoryRows(agg.by_category)) {
     process.stdout.write(
-      `  ${row.type.padEnd(28)} n=${String(row.count).padStart(4)}  recall@${k}=${round(row.recall)}  MRR=${round(row.mrr)}  hit=${round(row.hit_rate)}\n`
+      `  ${row.type.padEnd(26)} n=${String(row.n).padStart(4)}  nDCG@5=${fmt(row.ndcg_5)}  MRR=${fmt(row.mrr)}  ` +
+        `Recall@10=${fmt(row.recall_10)}  AllRel@10=${fmt(row.all_rel_10)}\n`
     );
   }
+
+  let recencyReport = null;
+  if (args.recencyCompare && withRecency.length > 0) {
+    const aggR = aggregateByCategory(withRecency);
+    const delta = recencyDelta(agg.by_category, aggR.by_category);
+    recencyReport = { weight: args.recencyWeight, stale_days: args.staleDays, overall: aggR.overall, delta };
+    process.stdout.write(
+      `\n--- freshness differentiator: --recency-weight ${args.recencyWeight} ON vs OFF (Δ nDCG@5) ---\n`
+    );
+    // Highlight the categories freshness is designed to help.
+    for (const row of byCategoryRows(delta)) {
+      const sign = row.ndcg_5 >= 0 ? "+" : "";
+      process.stdout.write(
+        `  ${row.type.padEnd(26)} ΔnDCG@5=${sign}${row.ndcg_5.toFixed(4)}  ΔMRR=${sign}${row.mrr.toFixed(4)}\n`
+      );
+    }
+    process.stdout.write(
+      "  (temporal-reasoning / knowledge-update / preference are where a static retriever is weakest)\n"
+    );
+  }
+
+  if (args.output) {
+    const payload = {
+      meta: {
+        protocol: "longmemeval-s-scope-per-question",
+        k,
+        embeddings: args.embeddings,
+        embedding_backend: args.embeddings ? "local-transformers.js" : "none-bm25-tfidf",
+        scored: base.length,
+        abstentions_skipped: abstentions
+      },
+      summary: agg.overall,
+      by_category: agg.by_category,
+      ...(recencyReport ? { recency: recencyReport } : {})
+    };
+    await fs.writeFile(args.output, `${JSON.stringify(payload, null, 2)}\n`);
+    process.stderr.write(`\nwrote result JSON → ${args.output}\n`);
+  }
+
   process.stdout.write(
-    "\nNOTE: retrieval recall, NOT end-to-end QA accuracy. Answer generation is the calling agent's job.\n"
+    "\nNOTE: retrieval quality (does search rank the answer-bearing session near the top), NOT end-to-end QA\n" +
+      "accuracy (answer generation is the calling agent's job). See docs/EVALUATION.md for the publishing bar.\n"
   );
 }
 

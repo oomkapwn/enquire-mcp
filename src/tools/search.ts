@@ -2172,6 +2172,80 @@ export async function searchHybrid(
   return response;
 }
 
+/** Max phrasings a single `obsidian_search` call may fan out over (rc.7). */
+export const MAX_FANOUT_QUERIES = 8;
+
+type SearchHybridArgs = Parameters<typeof searchHybrid>[1];
+type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
+
+/**
+ * v3.11.6-rc.7 (competitive-study C-4) — MULTI-QUERY FAN-OUT. Runs
+ * {@link searchHybrid} once per phrasing and RRF-merges the result LISTS by
+ * note path, so a note that ranks well for ANY phrasing floats to the top.
+ * Useful when the note may use different vocabulary than the caller's first
+ * phrasing (complements HyDE, which reshapes ONE query into an answer vector;
+ * this fuses N independent phrasings). RRF fuses RANKS, not scores, so the
+ * per-query reranker scores — explicitly "not comparable across queries" — are
+ * combined safely by position.
+ *
+ * Each sub-query runs the full hybrid pipeline (BM25 + TF-IDF + embeddings +
+ * optional rerank/recency/feedback); cost scales linearly with the phrasing
+ * count, which is why the caller-facing schema caps it at {@link MAX_FANOUT_QUERIES}.
+ */
+export async function searchHybridMulti(
+  vault: Vault,
+  args: SearchHybridArgs & { queries: string[] },
+  ctx: SearchHybridCtx
+): Promise<SearchHybridResponse> {
+  const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
+  const { queries, ...rest } = args;
+  const limit = args.limit ?? 10;
+  // Over-fetch per sub-query so the fused top-`limit` has a deep enough pool.
+  const perQueryLimit = Math.min(100, Math.max(limit * 3, 30));
+
+  const perQuery = await Promise.all(
+    queries.map((q) => searchHybrid(vault, { ...rest, query: q, limit: perQueryLimit }, ctx))
+  );
+
+  // Keep, per path, the best-scoring hit object across sub-queries for display
+  // metadata (snippet / per_signal / kind); RRF decides the final order.
+  const bestHit = new Map<string, SearchHybridHit>();
+  const signals: Record<string, ReturnType<typeof toRanked>> = {};
+  perQuery.forEach((res, i) => {
+    signals[`q${i}`] = toRanked(res.matches, { idOf: (h) => h.path, scoreOf: (h) => h.score });
+    for (const h of res.matches) {
+      const cur = bestHit.get(h.path);
+      if (!cur || h.score > cur.score) bestHit.set(h.path, h);
+    }
+  });
+
+  const fused = reciprocalRankFusion(signals, { topK: limit });
+  const matches: SearchHybridHit[] = fused
+    .map((f) => {
+      const h = bestHit.get(f.id);
+      return h ? { ...h, score: f.score } : null;
+    })
+    .filter((h): h is SearchHybridHit => h !== null);
+
+  // Union the per-query signal usage + errors so the response stays honest.
+  const signalsUsed = new Set<"bm25" | "tfidf" | "embeddings">();
+  const signalErrors: NonNullable<SearchHybridResponse["signal_errors"]> = {};
+  for (const res of perQuery) {
+    for (const s of res.signals_used) signalsUsed.add(s);
+    if (res.signal_errors) Object.assign(signalErrors, res.signal_errors);
+  }
+
+  return {
+    query: queries.join(" | "),
+    method: "rrf",
+    k: RRF_K,
+    signals_used: [...signalsUsed],
+    ...(Object.keys(signalErrors).length > 0 ? { signal_errors: signalErrors } : {}),
+    total_candidates: bestHit.size,
+    matches
+  };
+}
+
 /**
  * Build a fixed-width snippet centered on a character index within `text`,
  * plus the 1-based line number where the match starts.

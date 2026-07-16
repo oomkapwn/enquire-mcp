@@ -31,6 +31,7 @@ import {
   listNotes,
   listPdfs,
   listTags,
+  MAX_FANOUT_QUERIES,
   MAX_QUESTION_PATTERN_LEN,
   ocrPdf,
   openInUi,
@@ -42,6 +43,7 @@ import {
   replaceInNotes,
   resolveWikilink,
   searchHybrid,
+  searchHybridMulti,
   searchText,
   semanticSearch,
   staleNotes,
@@ -989,6 +991,13 @@ export function registerReadTools(
           .min(1)
           .max(MAX_QUERY_LEN)
           .describe("Free-form query — multi-word natural language is the sweet spot"),
+        queries: z
+          .array(z.string().min(1).max(MAX_QUERY_LEN))
+          .max(MAX_FANOUT_QUERIES)
+          .optional()
+          .describe(
+            "v3.11.6-rc.7 — optional additional query PHRASINGS (multi-query fan-out). Each is searched and the result lists are RRF-merged with the main `query`, so a note that ranks well for ANY phrasing floats to the top. Use when the note may use different vocabulary than your first phrasing (e.g. `query: 'auth flow'`, `queries: ['login sequence', 'session handshake']`). Complements HyDE. Max 8; each runs the full hybrid pipeline so cost scales with the count."
+          ),
         folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
         limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),
         min_signals: z
@@ -1039,18 +1048,26 @@ export function registerReadTools(
     },
     async (args) => {
       const embedFile = embedDbPath(vault.root);
-      return textResult(
-        await searchHybrid(vault, args, {
-          ftsIndex,
-          embedFile,
-          ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
-          ...(hnswContext ? { hnsw: hnswContext } : {}),
-          ...(recencyConfig ? { recency: recencyConfig } : {}),
-          ...(feedbackContext
-            ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }
-            : {})
-        })
-      );
+      const searchCtx = {
+        ftsIndex,
+        embedFile,
+        ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
+        ...(hnswContext ? { hnsw: hnswContext } : {}),
+        ...(recencyConfig ? { recency: recencyConfig } : {}),
+        ...(feedbackContext
+          ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }
+          : {})
+      };
+      // v3.11.6-rc.7 (C-4) — multi-query fan-out: when extra phrasings are given,
+      // fuse the main query + each phrasing via RRF so a note matching ANY floats up.
+      const extraQueries = (args.queries ?? []).map((q) => q.trim()).filter((q) => q.length > 0);
+      if (extraQueries.length > 0) {
+        const { queries: _drop, ...rest } = args;
+        return textResult(
+          await searchHybridMulti(vault, { ...rest, queries: [args.query, ...extraQueries] }, searchCtx)
+        );
+      }
+      return textResult(await searchHybrid(vault, args, searchCtx));
     }
   );
 

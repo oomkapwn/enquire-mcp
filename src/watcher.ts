@@ -20,7 +20,7 @@ import * as path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { EmbedDb } from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
-import type { FtsIndex } from "./fts5.js";
+import { deriveFtsTitle, extractAliases, type FtsIndex } from "./fts5.js";
 import type { HnswIndex } from "./hnsw.js";
 import type { Vault } from "./vault.js";
 
@@ -727,7 +727,15 @@ export class VaultWatcher {
       }
       const note = await this.vault.readNote(absPath, stat.mtimeMs);
       const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      this.ftsIndex?.reindexFile(relPath, stat.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);
+      this.ftsIndex?.reindexFile(
+        relPath,
+        stat.mtimeMs,
+        note.content,
+        wikilinkTargets,
+        note.parsed.tags,
+        deriveFtsTitle(relPath),
+        extractAliases(note.parsed.frontmatter)
+      );
       // v3.8.0-rc.2 R-7 — re-embed + upsert if embed-db is wired.
       // Failures here are logged but DON'T fail the whole watcher event
       // (FTS5 update already succeeded; embed-db will resync on next bulk

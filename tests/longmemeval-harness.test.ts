@@ -11,8 +11,12 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs build script, no type declarations (CLI guarded by isEntrypoint).
 import {
+  aggregateByCategory,
   aggregateByType,
+  byCategoryRows,
   isAbstention,
+  OHS_METRICS,
+  recencyDelta,
   relevantSessionPaths,
   sessionNotePath,
   sessionToMarkdown
@@ -101,5 +105,81 @@ describe("aggregateByType (v3.9.0-rc.19)", () => {
   });
   it("returns [] for no input (NEGATIVE control)", () => {
     expect(aggregateByType([])).toEqual([]);
+  });
+});
+
+// ─── v3.11.6-rc.10 (C-2) — OHS peer-protocol aggregation ────────────────────
+describe("aggregateByCategory + byCategoryRows (v3.11.6-rc.10)", () => {
+  const scored = [
+    {
+      type: "temporal-reasoning",
+      ndcg_5: 0.5,
+      ndcg_10: 0.6,
+      mrr: 0.5,
+      hit_1: 0,
+      hit_5: 1,
+      recall_10: 1,
+      all_rel_10: 1
+    },
+    { type: "temporal-reasoning", ndcg_5: 0.9, ndcg_10: 0.9, mrr: 1, hit_1: 1, hit_5: 1, recall_10: 1, all_rel_10: 1 },
+    { type: "single-session-user", ndcg_5: 1.0, ndcg_10: 1.0, mrr: 1, hit_1: 1, hit_5: 1, recall_10: 1, all_rel_10: 1 }
+  ];
+  it("means the OHS metric set overall + per category", () => {
+    const agg = aggregateByCategory(scored);
+    expect(agg.overall.n).toBe(3);
+    expect(agg.overall.ndcg_5).toBeCloseTo(0.8, 4); // (0.5+0.9+1.0)/3
+    expect(agg.by_category["temporal-reasoning"]?.n).toBe(2);
+    expect(agg.by_category["temporal-reasoning"]?.ndcg_5).toBeCloseTo(0.7, 4);
+    expect(agg.by_category["temporal-reasoning"]?.hit_1).toBeCloseTo(0.5, 4); // one of two hit rank-1
+    // every OHS metric key is present on each group
+    for (const m of OHS_METRICS) expect(agg.by_category["single-session-user"]).toHaveProperty(m);
+  });
+  it("byCategoryRows sorts weakest nDCG@5 first (the diagnostic order)", () => {
+    const rows = byCategoryRows(aggregateByCategory(scored).by_category);
+    expect(rows.map((r) => r.type)).toEqual(["temporal-reasoning", "single-session-user"]);
+  });
+  it("NEGATIVE control — empty input yields zeroed overall + no categories", () => {
+    const agg = aggregateByCategory([]);
+    expect(agg.overall.n).toBe(0);
+    expect(agg.overall.ndcg_5).toBe(0);
+    expect(Object.keys(agg.by_category)).toEqual([]);
+  });
+});
+
+describe("recencyDelta (v3.11.6-rc.10 — freshness differentiator)", () => {
+  it("computes after-minus-before per OHS metric, per shared category", () => {
+    const before = {
+      "temporal-reasoning": {
+        n: 2,
+        ndcg_5: 0.5,
+        ndcg_10: 0.5,
+        mrr: 0.5,
+        hit_1: 0,
+        hit_5: 1,
+        recall_10: 1,
+        all_rel_10: 1
+      }
+    };
+    const after = {
+      "temporal-reasoning": {
+        n: 2,
+        ndcg_5: 0.7,
+        ndcg_10: 0.7,
+        mrr: 0.6,
+        hit_1: 0,
+        hit_5: 1,
+        recall_10: 1,
+        all_rel_10: 1
+      }
+    };
+    const d = recencyDelta(before, after);
+    expect(d["temporal-reasoning"]?.ndcg_5).toBeCloseTo(0.2, 4); // recency helped
+    expect(d["temporal-reasoning"]?.mrr).toBeCloseTo(0.1, 4);
+  });
+  it("NEGATIVE control — a category missing from the after run is skipped", () => {
+    const before = {
+      a: { n: 1, ndcg_5: 0.5, ndcg_10: 0.5, mrr: 0.5, hit_1: 0, hit_5: 0, recall_10: 0, all_rel_10: 0 }
+    };
+    expect(recencyDelta(before, {})).toEqual({});
   });
 });

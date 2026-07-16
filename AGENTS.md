@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1498+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1515+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -21,7 +21,7 @@ All 9 required CI gates run on every PR. Local checks above must pass before pus
 
 ```
 src/
-├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, install-model, build-embeddings, index, doctor, eval, install-ocr-lang)
+├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, configure, install-model, build-embeddings, index, doctor, eval, install-ocr-lang)
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── server.ts           — MCP server bootstrap + dependency wiring
 ├── tool-registry.ts    — tool registration manifest

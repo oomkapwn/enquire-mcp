@@ -32,6 +32,15 @@ import {
 } from "./embeddings.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
+import {
+  CONFIG_CLIENTS,
+  type ConfigClient,
+  type ConfigInput,
+  type ConfigTier,
+  preflightHint,
+  renderAllClients,
+  renderClientConfig
+} from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
 import {
@@ -150,9 +159,9 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
 /**
  * CLI entry point — the function `dist/index.js` invokes when a user runs
  * `enquire-mcp` from the terminal. Builds the commander program, registers every
- * subcommand (`serve`, `serve-http`, `setup`, `install-model`, `install-ocr-lang`,
- * `build-embeddings`, `index`, `eval`, `doctor`, `clear-cache`, `clear-index`,
- * `clear-embeddings`, `gen-token`), wires the shared retrieval flags via
+ * subcommand (`serve`, `serve-http`, `setup`, `configure`, `install-model`,
+ * `install-ocr-lang`, `build-embeddings`, `index`, `eval`, `doctor`, `clear-cache`,
+ * `clear-index`, `clear-embeddings`, `gen-token`), wires the shared retrieval flags via
  * `addAdvancedRetrievalOptions`, and parses `process.argv`. Each subcommand
  * action handles its own errors and sets `process.exitCode`; `main` itself does
  * not catch — an unexpected throw propagates to the top-level handler in
@@ -848,6 +857,53 @@ export async function main(): Promise<void> {
         process.stdout.write(`${formatDoctorResult(result)}\n`);
       }
       if (!result.ready) process.exit(1);
+    });
+
+  program
+    .command("configure")
+    .description(
+      "Print a ready-to-paste MCP client config for THIS vault. Non-destructive — it writes nothing; it prints the exact snippet (and where it goes) for Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Codex, or a remote HTTP client. Pick a `--tier` (basic = live scan, no setup; hybrid = full retrieval, needs `setup`) and optionally a `--client`. Run this right after install to skip hand-assembling config."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--client <name>", `Target client: ${CONFIG_CLIENTS.join(" | ")} (default: print all)`)
+    .option(
+      "--tier <tier>",
+      "Capability tier: basic (live scan, zero setup) | hybrid (FTS5 + reranker + HNSW, needs `setup`) | hybrid-live (hybrid + PDFs + --watch). Default: hybrid",
+      "hybrid"
+    )
+    .option("--name <name>", "MCP server key/name in the generated config (default: obsidian)", "obsidian")
+    .option("--http", "Emit the remote serve-http (Streamable HTTP + bearer) form instead of local stdio")
+    .action(async (opts: { vault: string; client?: string; tier?: string; name?: string; http?: boolean }) => {
+      const tier = (opts.tier ?? "hybrid") as ConfigTier;
+      if (!["basic", "hybrid", "hybrid-live"].includes(tier)) {
+        process.stderr.write(`enquire configure: invalid --tier '${opts.tier}'. Use basic | hybrid | hybrid-live.\n`);
+        process.exit(1);
+      }
+      if (opts.client && !CONFIG_CLIENTS.includes(opts.client as ConfigClient)) {
+        process.stderr.write(
+          `enquire configure: invalid --client '${opts.client}'. Use one of: ${CONFIG_CLIENTS.join(", ")} (or omit for all).\n`
+        );
+        process.exit(1);
+      }
+      // Resolve to an absolute path so the emitted config is portable (a
+      // relative --vault would be meaningless from the client's cwd).
+      const input: ConfigInput = {
+        vault: path.resolve(opts.vault),
+        tier,
+        name: opts.name ?? "obsidian",
+        http: opts.http ?? false
+      };
+      const body =
+        opts.client && opts.client !== "http" && input.http
+          ? renderClientConfig("http", input)
+          : opts.client
+            ? renderClientConfig(opts.client as ConfigClient, input)
+            : input.http
+              ? renderClientConfig("http", input)
+              : renderAllClients(input);
+      process.stdout.write(`# enquire-mcp configure — ${input.name} → ${input.vault} (${tier})\n\n`);
+      process.stdout.write(`${body}\n\n`);
+      process.stdout.write(`---\n${preflightHint(input)}\n`);
     });
 
   program

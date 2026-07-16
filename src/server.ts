@@ -4,7 +4,7 @@ import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
 import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
 import { type loadEmbedder, resolveModel } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
-import { defaultIndexFile, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
+import { defaultIndexFile, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { registerPrompts } from "./prompts.js";
 import { parseFeedbackConfig, parseRecencyConfig } from "./retrieval-opts.js";
@@ -947,7 +947,15 @@ export async function syncFtsIndex(
     try {
       const note = await vault.readNote(entry.absPath, entry.mtimeMs);
       const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      idx.reindexFile(relPath, entry.mtimeMs, note.content, wikilinkTargets, note.parsed.tags);
+      idx.reindexFile(
+        relPath,
+        entry.mtimeMs,
+        note.content,
+        wikilinkTargets,
+        note.parsed.tags,
+        deriveFtsTitle(relPath),
+        extractAliases(note.parsed.frontmatter)
+      );
     } catch (err) {
       process.stderr.write(
         `enquire: skipping ${relPath} during fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`

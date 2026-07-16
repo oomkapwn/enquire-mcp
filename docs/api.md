@@ -53,7 +53,7 @@ Canonical list of every registered MCP tool. The `Kind` column splits read/write
 
 | Tool | Kind | Gating | Summary |
 |---|---|---|---|
-| `obsidian_full_text_search` | read | `--persistent-index` (+ `--diagnostic-search-tools`) | BM25-ranked search over a SQLite FTS5 inverted index. |
+| `obsidian_full_text_search` | read | `--persistent-index` (+ `--diagnostic-search-tools`) | BM25-ranked search over a SQLite FTS5 inverted index. v3.11.6-rc.6 indexes the note **title** + frontmatter **aliases** as weighted columns (title 10× / aliases 5× / content 1×), so a note is findable by an alias its body never mentions and a title match outranks a passing body mention (also feeds the hybrid `obsidian_search`). |
 | `obsidian_search_text` | read | `--diagnostic-search-tools` | Case-insensitive token search (AND / OR / phrase modes). |
 | `obsidian_semantic_search` | read | `--diagnostic-search-tools` | Pure-JS TF-IDF cosine retrieval (no model download). |
 | `obsidian_embeddings_search` | read | `--diagnostic-search-tools` | ML-embedding retrieval via `@huggingface/transformers` (persistent vector index). |

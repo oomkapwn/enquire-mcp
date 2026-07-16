@@ -19,7 +19,59 @@ import { optionalDepDetail } from "./optional-dep.js";
 import { iterateContentLines } from "./structure.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+
+// v3.11.6-rc.6 (competitive-study C-3) — FTS5 column weights for BM25. The
+// chunks table indexes `content` (col 0), `title` (col 1), `aliases` (col 2);
+// bm25(chunks, ...) takes a weight per column in definition order. A note whose
+// TITLE or a frontmatter ALIAS matches the query should outrank a note that only
+// mentions the term in its body — mirrors OHS's title-10× / alias-5× / content-1×
+// weighting, tunable against the eval harness (`enquire eval` + `eval:compare`).
+const BM25_WEIGHT_CONTENT = 1.0;
+const BM25_WEIGHT_TITLE = 10.0;
+const BM25_WEIGHT_ALIASES = 5.0;
+
+/**
+ * Extract the searchable alias strings from a note's frontmatter. Obsidian
+ * accepts `aliases: [a, b]`, `aliases: a`, or the singular `alias: a`. Values
+ * are coerced to trimmed non-empty strings; non-string entries are dropped.
+ * (v3.11.6-rc.6 — used to populate the FTS5 `aliases` column.)
+ */
+// v3.11.6-rc.6 re-sweep fix — bound the alias blob that gets FTS5-tokenized.
+// Frontmatter is note-content (an --enable-write agent or a paste can author a
+// pathological `aliases:` array); cap the count + per-alias length so the always-on
+// index build can't be amplified by a single note. Mirrors the MAX_* input-cap convention.
+const MAX_ALIASES = 64;
+const MAX_ALIAS_LEN = 256;
+const MAX_FTS_TITLE_LEN = 512;
+
+export function extractAliases(frontmatter: Record<string, unknown> | undefined | null): string[] {
+  if (!frontmatter) return [];
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (out.length >= MAX_ALIASES) return;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t.length > 0) out.push(t.length > MAX_ALIAS_LEN ? t.slice(0, MAX_ALIAS_LEN) : t);
+    }
+  };
+  for (const key of ["aliases", "alias"]) {
+    const raw = frontmatter[key];
+    if (Array.isArray(raw)) for (const v of raw) push(v);
+    else push(raw);
+  }
+  return out;
+}
+
+/**
+ * The searchable title for a note = its basename with the `.md` extension
+ * stripped (the note's canonical Obsidian identity). Populates the weighted
+ * FTS5 `title` column. (v3.11.6-rc.6.)
+ */
+export function deriveFtsTitle(relPath: string): string {
+  const title = path.basename(relPath).replace(/\.md$/i, "");
+  return title.length > MAX_FTS_TITLE_LEN ? title.slice(0, MAX_FTS_TITLE_LEN) : title;
+}
 // v2 added the `tags` UNINDEXED column for tag-filtered search.
 // v3 added `raw_content` UNINDEXED so the chunk resource can return the
 // original note text, while FTS5's `content` column keeps the enriched
@@ -27,6 +79,11 @@ const SCHEMA_VERSION = 4;
 // v4 added the `kind` UNINDEXED column ("md" | "pdf") so PDF chunks live
 // in the same index as markdown — `obsidian_search` returns blended hits
 // with the kind flag exposed to agents. Schema bump auto-rebuilds.
+// v5 (v3.11.6-rc.6) added the INDEXED `title` (col 1) + `aliases` (col 2)
+// columns after `content`, with bm25 positional weights 1.0/10.0/5.0 so a
+// title/alias match outranks a body-only mention. title/aliases are stored
+// ONLY on chunk 0 of each note (not every chunk) to avoid one note's
+// title-match flooding the BM25 candidate set. Schema bump auto-rebuilds.
 
 /**
  * FTS5 tokenizer mode. `unicode61` (default) tokenizes on Unicode word
@@ -280,6 +337,8 @@ export class FtsIndex {
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
           content,
+          title,
+          aliases,
           rel_path UNINDEXED,
           chunk_index UNINDEXED,
           line_start UNINDEXED,
@@ -418,15 +477,22 @@ export class FtsIndex {
     mtimeMs: number,
     content: string,
     wikilinkTargets: string[] = [],
-    tags: string[] = []
+    tags: string[] = [],
+    // v3.11.6-rc.6 (C-3) — the note's title + frontmatter aliases, stored in the
+    // weighted FTS5 `title`/`aliases` columns so a title/alias match outranks a
+    // body-only match. Default "" / [] keeps older callers valid (they simply get
+    // no title/alias boost until they pass them).
+    title = "",
+    aliases: string[] = []
   ): number {
     const db = this.requireDb();
     const chunks = chunkContent(content);
     const tagsSerialized = tags.length ? tags.join(",") : "";
+    const aliasesSerialized = aliases.length ? aliases.join(" ") : "";
     const txn = db.transaction(() => {
       db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
       const insert = db.prepare(
-        "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, 'md')"
+        "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
       );
       // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
       // with leading/trailing commas for exact-tag matching at query time.
@@ -442,7 +508,24 @@ export class FtsIndex {
         const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
         const linksSuffix = wikilinkTargets.length ? `\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : "";
         const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
-        insert.run(enriched, relPath, i, c.lineStart, c.lineEnd, tagsSerialized, c.text);
+        // v3.11.6-rc.6 re-sweep fix: store title/aliases ONLY on chunk 0, not
+        // every chunk. Repeating them per-chunk made a title/alias-matching query
+        // score ALL of a note's chunks high (10×/5× weight) — a single large note
+        // could then flood the fixed BM25 candidate set (fanOutK) and evict other
+        // notes' body chunks. One title-boosted chunk per note surfaces the note
+        // for a title/alias match (best-chunk-per-note collapse picks it) without
+        // the saturation, and also removes the per-chunk IDF dilution + storage cost.
+        insert.run(
+          enriched,
+          i === 0 ? title : "",
+          i === 0 ? aliasesSerialized : "",
+          relPath,
+          i,
+          c.lineStart,
+          c.lineEnd,
+          tagsSerialized,
+          c.text
+        );
       });
       db.prepare(
         "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'md', ?)"
@@ -471,17 +554,23 @@ export class FtsIndex {
     // a marker so chunks downstream of them can still cite the right page.
     const joined = pages.map((p) => `[page: ${p.pageNumber}]\n${p.text}`).join("\n\n");
     const chunks = chunkContent(joined);
+    // v3.11.6-rc.6 (C-3) — a PDF has no frontmatter aliases, but its filename IS
+    // its title; index it in the weighted `title` column so a PDF is findable by
+    // name even when the query terms aren't in the extracted page text.
+    const pdfTitle = path.basename(relPath).replace(/\.pdf$/i, "");
     // v3.7.10 (external audit #10) — same transaction wrapper as
     // reindexFile(). See its TSDoc for rationale.
     const txn = db.transaction(() => {
       db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
       const insert = db.prepare(
-        "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, '', ?, 'pdf')"
+        "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, ?, ?, ?, '', ?, 'pdf')"
       );
       chunks.forEach((c, i) => {
         // No wikilink/tag enrichment for PDFs (they don't have either). The
         // page marker is already in c.text so it shows up in snippets.
-        insert.run(c.text, relPath, i, c.lineStart, c.lineEnd, c.text);
+        // rc.6 re-sweep: title on chunk 0 only (see reindexFile) to avoid the
+        // per-chunk title-match candidate-set saturation.
+        insert.run(c.text, i === 0 ? pdfTitle : "", relPath, i, c.lineStart, c.lineEnd, c.text);
       });
       db.prepare(
         "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
@@ -559,7 +648,7 @@ export class FtsIndex {
              chunks.line_start AS line_start, chunks.line_end AS line_end,
              chunks.kind AS kind,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
-             bm25(chunks) AS score
+             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}) AS score
       FROM chunks
       ${join}
       WHERE ${where.join(" AND ")}

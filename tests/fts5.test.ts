@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { chunkContent, FtsIndex, peekFtsMetaSafe, safeFts5Query } from "../src/fts5.js";
+import { chunkContent, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe, safeFts5Query } from "../src/fts5.js";
 
 let canRunFts5 = true;
 beforeAll(async () => {
@@ -659,5 +659,158 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
 
     const meta = await peekFtsMetaSafe(dbFile);
     expect(meta?.tokenize_mode).toBe("unicode61");
+  });
+});
+
+// ─── v3.11.6-rc.6 — alias indexing + FTS5 column weights (competitive-study C-3) ───
+
+describe("extractAliases (v3.11.6-rc.6)", () => {
+  it("reads an aliases array", () => {
+    expect(extractAliases({ aliases: ["Foo", "Bar"] })).toEqual(["Foo", "Bar"]);
+  });
+  it("reads a singular `alias` string and a scalar `aliases`", () => {
+    expect(extractAliases({ alias: "Solo" })).toEqual(["Solo"]);
+    expect(extractAliases({ aliases: "Scalar" })).toEqual(["Scalar"]);
+  });
+  it("trims + drops empty and non-string entries", () => {
+    expect(extractAliases({ aliases: ["  Keep  ", "", 42, null, "Also"] })).toEqual(["Keep", "Also"]);
+  });
+  it("NEGATIVE control — no aliases key yields empty (no phantom aliases)", () => {
+    expect(extractAliases({ title: "x" })).toEqual([]);
+    expect(extractAliases(undefined)).toEqual([]);
+    expect(extractAliases(null)).toEqual([]);
+  });
+});
+
+describe("deriveFtsTitle (v3.11.6-rc.6)", () => {
+  it("strips the .md extension from the basename", () => {
+    expect(deriveFtsTitle("Projects/Apollo Program.md")).toBe("Apollo Program");
+  });
+  it("NEGATIVE control — a non-.md path keeps its basename verbatim", () => {
+    expect(deriveFtsTitle("Refs/paper.pdf")).toBe("paper.pdf");
+  });
+});
+
+describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
+  it("finds a note by its frontmatter ALIAS even when the body lacks the term", () => {
+    if (!canRunFts5) return;
+    return (async () => {
+      const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+      await idx.open();
+      try {
+        // body says nothing about "Striped Equine" — only the alias does.
+        idx.reindexFile("Zebra.md", 1000, "A large animal on the savanna.", [], [], "Zebra", ["Striped Equine"]);
+        idx.reindexFile("Unrelated.md", 1001, "Photosynthesis in plants.", [], [], "Unrelated", []);
+        const hits = idx.search("Striped Equine");
+        expect(hits.map((h) => h.rel_path)).toContain("Zebra.md");
+        // NEGATIVE control — a note with no such alias is NOT surfaced.
+        expect(hits.map((h) => h.rel_path)).not.toContain("Unrelated.md");
+      } finally {
+        idx.close();
+      }
+    })();
+  });
+
+  it("finds a note by its TITLE even when the body lacks the term", () => {
+    if (!canRunFts5) return;
+    return (async () => {
+      const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+      await idx.open();
+      try {
+        // title is "Photosynthesis"; body never says the word.
+        idx.reindexFile(
+          "Photosynthesis.md",
+          1000,
+          "Plants convert light into chemical energy.",
+          [],
+          [],
+          "Photosynthesis",
+          []
+        );
+        const hits = idx.search("Photosynthesis");
+        expect(hits[0]?.rel_path).toBe("Photosynthesis.md");
+      } finally {
+        idx.close();
+      }
+    })();
+  });
+
+  it("a TITLE match outranks a body-only mention (column weighting)", () => {
+    if (!canRunFts5) return;
+    return (async () => {
+      const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+      await idx.open();
+      try {
+        // A: term ONLY in title. B: term ONLY in body. Title is weighted 10× vs content 1×.
+        idx.reindexFile("Mitochondria.md", 1000, "The powerhouse of the cell lives here.", [], [], "Mitochondria", []);
+        idx.reindexFile(
+          "CellBiology.md",
+          1001,
+          "The mitochondria produces ATP for the cell.",
+          [],
+          [],
+          "CellBiology",
+          []
+        );
+        const hits = idx.search("mitochondria");
+        expect(hits.length).toBeGreaterThanOrEqual(2);
+        // The title-match note ranks first thanks to the 10× title weight.
+        expect(hits[0]?.rel_path).toBe("Mitochondria.md");
+      } finally {
+        idx.close();
+      }
+    })();
+  });
+
+  it("stores title on chunk 0 ONLY — a title match doesn't flood the candidate set (rc.6 re-sweep #2)", () => {
+    if (!canRunFts5) return;
+    return (async () => {
+      const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+      await idx.open();
+      try {
+        // Title "Widget"; body is 3 paragraphs (→3 chunks), NONE mention "widget".
+        idx.reindexFile(
+          "Widget.md",
+          1000,
+          "First paragraph about gears.\n\nSecond paragraph about cogs.\n\nThird paragraph about springs.",
+          [],
+          [],
+          "Widget",
+          []
+        );
+        const hits = idx.search("Widget");
+        const widgetRows = hits.filter((h) => h.rel_path === "Widget.md");
+        // Pre-fix: the title was in ALL 3 chunks → 3 rows flood the candidate set.
+        // Post-fix: only chunk 0 carries the title → exactly 1 candidate row.
+        expect(widgetRows.length).toBe(1);
+        expect(widgetRows[0]?.chunk_index).toBe(0);
+      } finally {
+        idx.close();
+      }
+    })();
+  });
+
+  it("extractAliases caps count + per-alias length (rc.6 re-sweep #3)", () => {
+    const many = extractAliases({ aliases: Array.from({ length: 200 }, (_, i) => `alias${i}`) });
+    expect(many.length).toBe(64); // MAX_ALIASES
+    const long = extractAliases({ aliases: ["x".repeat(1000)] });
+    expect(long[0]?.length).toBe(256); // MAX_ALIAS_LEN clamp
+  });
+
+  it("snippet still comes from the content column, not title/aliases (no snippet pollution)", () => {
+    if (!canRunFts5) return;
+    return (async () => {
+      const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/vault" });
+      await idx.open();
+      try {
+        idx.reindexFile("Note.md", 1000, "The body text discusses productivity systems.", [], [], "Note", ["MyAlias"]);
+        const hits = idx.search("productivity");
+        // snippet reflects the content passage, never the title/aliases columns.
+        expect(hits[0]?.snippet).toMatch(/productivity/i);
+        expect(hits[0]?.snippet).not.toContain("MyAlias");
+      } finally {
+        idx.close();
+      }
+    })();
   });
 });

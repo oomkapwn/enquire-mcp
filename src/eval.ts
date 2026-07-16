@@ -51,6 +51,13 @@ export interface EvalQuery {
   relevant: string[];
   /** Optional human-readable id for logging / reports. */
   id?: string;
+  /**
+   * v3.11.6-rc.5 — optional grouping key (e.g. `keyword` / `conceptual` /
+   * `temporal-reasoning` / `knowledge-update`). When present, `runEval` reports
+   * the same metrics per category in `EvalResult.by_category`, so a maintainer
+   * can see WHICH class of query is weak (the highest-value diagnostic slice).
+   */
+  category?: string;
 }
 
 /** Per-query scores. */
@@ -69,6 +76,22 @@ export interface EvalQueryScore {
   hits_total_relevant: number;
   /** Latency for this query in milliseconds. */
   latency_ms: number;
+  /**
+   * v3.11.6-rc.5 (eval overhaul) — additive diagnostics (all optional so
+   * hand-built `EvalQueryScore`s stay valid; `runEval` always populates them).
+   */
+  /** Grouping key echoed from the query (for `by_category`). */
+  category?: string;
+  /** A relevant doc is at rank 1. */
+  hit_at_1?: boolean;
+  /** At least one relevant doc is in the top-K (binary). */
+  hit_at_k?: boolean;
+  /** EVERY relevant doc is in the top-K — the stricter multi-evidence signal (AllRel). */
+  all_relevant_at_k?: boolean;
+  /** Relevant paths NOT retrieved in top-K — the first files to inspect on a low recall. */
+  missed_paths?: string[];
+  /** The top-K retrieved paths in rank order — what outranked the missed docs. */
+  top_paths?: string[];
   /**
    * v3.9.0-rc.16 — true if `searchHybrid` threw for this query (transient
    * infra failure, embedder OOM, etc.). The query's scores are all 0 and it
@@ -109,6 +132,18 @@ export interface EvalResult {
   mean_latency_ms: number;
   /** Total run wall time. */
   total_wall_ms: number;
+  /**
+   * v3.11.6-rc.5 (eval overhaul) — additive aggregate diagnostics (optional so
+   * hand-built results stay valid; `runEval` always populates them).
+   */
+  /** Fraction of queries with a relevant doc at rank 1 (Hit@1). */
+  mean_hit_at_1?: number;
+  /** Fraction of queries with any relevant doc in top-K (Hit@K). */
+  mean_hit_at_k?: number;
+  /** Fraction of queries where EVERY relevant doc is in top-K (AllRel@K). */
+  all_rel_at_k?: number;
+  /** Same metrics grouped by `EvalQuery.category` — the weak-slice diagnostic. */
+  by_category?: Record<string, CategoryScore>;
   /**
    * v3.10.0-rc.31 — aggregate retrieval-failure-bucket counts across all
    * queries (see {@link classifyFailureBucket}). Optional so externally
@@ -171,6 +206,143 @@ export function reciprocalRank(retrievedPaths: string[], relevant: ReadonlySet<s
     if (path && relevant.has(path)) return 1 / (i + 1);
   }
   return 0;
+}
+
+/**
+ * Hit@K — is ANY relevant doc in the top-K? Binary. `atRank` (default 1) lets
+ * you ask Hit@1 vs Hit@3 vs Hit@5 by capping the window. `false` when there is
+ * no ground truth (empty `relevant`). Pure. (v3.11.6-rc.5 eval overhaul.)
+ */
+export function hitAtK(retrievedPaths: string[], relevant: ReadonlySet<string>, k: number): boolean {
+  if (relevant.size === 0) return false;
+  for (let i = 0; i < Math.min(k, retrievedPaths.length); i++) {
+    const p = retrievedPaths[i];
+    if (p && relevant.has(p)) return true;
+  }
+  return false;
+}
+
+/**
+ * AllRel@K — is EVERY relevant doc present in the top-K? The stricter
+ * multi-evidence signal (a query needing 3 evidence notes only counts if all 3
+ * are retrieved). `false` when there is no ground truth. Pure. (rc.5.)
+ */
+export function allRelevantAtK(retrievedPaths: string[], relevant: ReadonlySet<string>, k: number): boolean {
+  if (relevant.size === 0) return false;
+  const found = new Set<string>();
+  for (let i = 0; i < Math.min(k, retrievedPaths.length); i++) {
+    const p = retrievedPaths[i];
+    if (p && relevant.has(p)) found.add(p);
+  }
+  return found.size === relevant.size;
+}
+
+/** The relevant paths NOT found in top-K — the first files to inspect on a low recall. Pure. (rc.5.) */
+export function missedPaths(retrievedPaths: string[], relevant: ReadonlySet<string>, k: number): string[] {
+  const top = new Set(retrievedPaths.slice(0, Math.max(0, k)));
+  const missed: string[] = [];
+  for (const r of relevant) if (!top.has(r)) missed.push(r);
+  return missed;
+}
+
+/** Per-category aggregate metrics (a slice of the whole-run aggregate). */
+export interface CategoryScore {
+  query_count: number;
+  mean_ndcg: number;
+  mean_recall: number;
+  mean_mrr: number;
+  mean_hit_at_1: number;
+  mean_hit_at_k: number;
+  all_rel_at_k: number;
+}
+
+/**
+ * Group scored per-query rows by their `category` and compute the same means
+ * per group. Rows with no category are grouped under `uncategorized`. Pure —
+ * derived entirely from the already-scored `per_query`, so it never re-runs a
+ * search. (v3.11.6-rc.5 — the highest-value OHS-inspired diagnostic.)
+ */
+export function groupByCategory(perQuery: readonly EvalQueryScore[]): Record<string, CategoryScore> {
+  const groups = new Map<string, EvalQueryScore[]>();
+  for (const p of perQuery) {
+    const key = p.category ?? "uncategorized";
+    const arr = groups.get(key);
+    if (arr) arr.push(p);
+    else groups.set(key, [p]);
+  }
+  const out: Record<string, CategoryScore> = {};
+  for (const [cat, rows] of groups) {
+    out[cat] = {
+      query_count: rows.length,
+      mean_ndcg: round(mean(rows.map((r) => r.ndcg_at_k))),
+      mean_recall: round(mean(rows.map((r) => r.recall_at_k))),
+      mean_mrr: round(mean(rows.map((r) => r.mrr))),
+      mean_hit_at_1: round(mean(rows.map((r) => (r.hit_at_1 ? 1 : 0)))),
+      mean_hit_at_k: round(mean(rows.map((r) => (r.hit_at_k ? 1 : 0)))),
+      all_rel_at_k: round(mean(rows.map((r) => (r.all_relevant_at_k ? 1 : 0))))
+    };
+  }
+  return out;
+}
+
+/** One metric's before/after delta in an A/B comparison. */
+export interface MetricDelta {
+  metric: string;
+  baseline: number;
+  after: number;
+  delta: number;
+  /** true iff `|delta| >= MEANINGFUL_DELTA` (statistically meaningful at ~50+ queries). */
+  meaningful: boolean;
+}
+
+/** Delta threshold below which a change is noise at ~50+ queries (OHS convention). */
+export const MEANINGFUL_DELTA = 0.01;
+
+export interface EvalComparison {
+  baseline_label: string;
+  after_label: string;
+  deltas: MetricDelta[];
+}
+
+/**
+ * Compare two EvalResults (baseline vs after) into a delta table. Compares the
+ * whole-run aggregate metrics; a `|delta| >= MEANINGFUL_DELTA` is flagged
+ * meaningful. Pure — the A/B tool that makes a retrieval change PROVABLE rather
+ * than asserted. (v3.11.6-rc.5.)
+ */
+export function compareEvalResults(baseline: EvalResult, after: EvalResult): EvalComparison {
+  const rows: Array<[string, number, number]> = [
+    ["nDCG@k", baseline.mean_ndcg, after.mean_ndcg],
+    ["Recall@k", baseline.mean_recall, after.mean_recall],
+    ["MRR", baseline.mean_mrr, after.mean_mrr],
+    ["Hit@1", baseline.mean_hit_at_1 ?? 0, after.mean_hit_at_1 ?? 0],
+    ["Hit@k", baseline.mean_hit_at_k ?? 0, after.mean_hit_at_k ?? 0],
+    ["AllRel@k", baseline.all_rel_at_k ?? 0, after.all_rel_at_k ?? 0]
+  ];
+  const deltas: MetricDelta[] = rows.map(([metric, b, a]) => {
+    const delta = round(a - b);
+    return { metric, baseline: round(b), after: round(a), delta, meaningful: Math.abs(delta) >= MEANINGFUL_DELTA };
+  });
+  return { baseline_label: baseline.label, after_label: after.label, deltas };
+}
+
+/** Render an EvalComparison as a delta table (used by `scripts/eval-compare.mjs`). */
+export function formatEvalComparison(cmp: EvalComparison): string {
+  const isTty = process.stdout.isTTY === true;
+  const bold = (s: string) => (isTty ? `\x1b[1m${s}\x1b[0m` : s);
+  const lines: string[] = [];
+  lines.push(bold(`eval compare — ${cmp.baseline_label} → ${cmp.after_label}`));
+  lines.push(`  ${"metric".padEnd(10)} ${"baseline".padEnd(9)} ${"after".padEnd(9)} ${"delta".padEnd(9)}`);
+  for (const d of cmp.deltas) {
+    const sign = d.delta > 0 ? "+" : "";
+    const mark = d.meaningful ? (d.delta > 0 ? " ✓" : " ✗ regression") : "";
+    lines.push(
+      `  ${d.metric.padEnd(10)} ${d.baseline.toFixed(4).padEnd(9)} ${d.after.toFixed(4).padEnd(9)} ${`${sign}${d.delta.toFixed(4)}`.padEnd(9)}${mark}`
+    );
+  }
+  lines.push("");
+  lines.push(`  (|Δ| ≥ ${MEANINGFUL_DELTA} marked meaningful; needs ~50+ queries for a confident conclusion)`);
+  return lines.join("\n");
 }
 
 /**
@@ -258,7 +430,8 @@ export async function readQueriesJsonl(file: string): Promise<EvalQuery[]> {
       queries.push({
         query: parsed.query,
         relevant: parsed.relevant,
-        ...(parsed.id ? { id: parsed.id } : {})
+        ...(parsed.id ? { id: parsed.id } : {}),
+        ...(typeof parsed.category === "string" && parsed.category.length > 0 ? { category: parsed.category } : {})
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -361,6 +534,13 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
       hits_total_relevant: relevantSet.size,
       latency_ms: latency,
       failure_bucket: classifyFailureBucket(retrievedPaths, relevantSet, k, errored),
+      // v3.11.6-rc.5 (eval overhaul) — additive diagnostics.
+      ...(q.category ? { category: q.category } : {}),
+      hit_at_1: hitAtK(retrievedPaths, relevantSet, 1),
+      hit_at_k: hitAtK(retrievedPaths, relevantSet, k),
+      all_relevant_at_k: allRelevantAtK(retrievedPaths, relevantSet, k),
+      missed_paths: missedPaths(retrievedPaths, relevantSet, k),
+      top_paths: retrievedPaths.slice(0, k),
       ...(errored ? { error: true } : {})
     });
   }
@@ -369,6 +549,9 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
   const meanRecall = mean(perQuery.map((p) => p.recall_at_k));
   const meanMrr = mean(perQuery.map((p) => p.mrr));
   const meanLatency = mean(perQuery.map((p) => p.latency_ms));
+  const meanHit1 = mean(perQuery.map((p) => (p.hit_at_1 ? 1 : 0)));
+  const meanHitK = mean(perQuery.map((p) => (p.hit_at_k ? 1 : 0)));
+  const allRelK = mean(perQuery.map((p) => (p.all_relevant_at_k ? 1 : 0)));
 
   return {
     label: opts.label ?? "default",
@@ -381,6 +564,10 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     mean_mrr: round(meanMrr),
     mean_latency_ms: Math.round(meanLatency),
     total_wall_ms: Date.now() - totalT0,
+    mean_hit_at_1: round(meanHit1),
+    mean_hit_at_k: round(meanHitK),
+    all_rel_at_k: round(allRelK),
+    by_category: groupByCategory(perQuery),
     diagnostics: { failure_buckets: tallyFailureBuckets(perQuery.map((p) => p.failure_bucket)) }
   };
 }
@@ -432,7 +619,29 @@ export function formatEvalResult(result: EvalResult, opts: { perQuery?: boolean 
   lines.push(`  mean NDCG@${result.k}   = ${result.mean_ndcg.toFixed(4)}`);
   lines.push(`  mean Recall@${result.k} = ${result.mean_recall.toFixed(4)}`);
   lines.push(`  mean MRR        = ${result.mean_mrr.toFixed(4)}`);
+  if (result.mean_hit_at_1 !== undefined) {
+    lines.push(
+      `  Hit@1 / Hit@${result.k}   = ${result.mean_hit_at_1.toFixed(4)} / ${(result.mean_hit_at_k ?? 0).toFixed(4)}  ${dim(`AllRel@${result.k}=${(result.all_rel_at_k ?? 0).toFixed(4)}`)}`
+    );
+  }
   lines.push(`  mean latency    = ${result.mean_latency_ms}ms ${dim("(per query)")}`);
+  // v3.11.6-rc.5 — by-category weak-slice table (the OHS-inspired diagnostic).
+  if (result.by_category) {
+    const cats = Object.entries(result.by_category).filter(
+      ([c]) => c !== "uncategorized" || Object.keys(result.by_category ?? {}).length === 1
+    );
+    if (cats.length > 1 || (cats.length === 1 && cats[0]?.[0] !== "uncategorized")) {
+      lines.push("");
+      lines.push(bold("by category (weakest nDCG first):"));
+      const catWidth = Math.max(8, ...cats.map(([c]) => c.length));
+      lines.push(`  ${"category".padEnd(catWidth)} n     nDCG    recall  mrr     AllRel@k`);
+      for (const [cat, cs] of cats.sort((a, b) => a[1].mean_ndcg - b[1].mean_ndcg)) {
+        lines.push(
+          `  ${cat.padEnd(catWidth)} ${String(cs.query_count).padEnd(5)} ${cs.mean_ndcg.toFixed(4)}  ${cs.mean_recall.toFixed(4)}  ${cs.mean_mrr.toFixed(4)}  ${cs.all_rel_at_k.toFixed(4)}`
+        );
+      }
+    }
+  }
   if (result.diagnostics) {
     const fb = result.diagnostics.failure_buckets;
     lines.push("");

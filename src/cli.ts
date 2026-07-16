@@ -1080,6 +1080,10 @@ export async function main(): Promise<void> {
     .option("--persistent-index", "Open the FTS5 index for BM25 retrieval (recommended)")
     .option("--per-query", "Print per-query scores in addition to aggregates (verbose)")
     .option("--json", "Emit machine-readable JSON instead of the pretty table")
+    .option(
+      "--output <file>",
+      "Also write the full result JSON to this file (for `npm run eval:compare` A/B analysis). Includes by_category + per-query missed_paths/top_paths diagnostics."
+    )
     .action(
       async (opts: {
         vault: string;
@@ -1092,6 +1096,7 @@ export async function main(): Promise<void> {
         persistentIndex?: boolean;
         perQuery?: boolean;
         json?: boolean;
+        output?: string;
       }) => {
         const { readQueriesJsonl, runEval, formatEvalResult, formatEvalMatrix } = await import("./eval.js");
         const k = parsePositiveInt(opts.k ?? "10", "--k");
@@ -1169,6 +1174,10 @@ export async function main(): Promise<void> {
               });
               results.push(r);
             }
+            if (opts.output) {
+              await fs.writeFile(opts.output, `${JSON.stringify(results, null, 2)}\n`);
+              process.stderr.write(`enquire eval: wrote ${results.length} results to ${opts.output}\n`);
+            }
             if (opts.json) {
               process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
             } else {
@@ -1191,6 +1200,10 @@ export async function main(): Promise<void> {
               label: reranker ? `with-reranker(${reranker.alias})` : "default",
               ...(reranker ? { reranker } : {})
             });
+            if (opts.output) {
+              await fs.writeFile(opts.output, `${JSON.stringify(result, null, 2)}\n`);
+              process.stderr.write(`enquire eval: wrote result to ${opts.output}\n`);
+            }
             if (opts.json) {
               process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
             } else {

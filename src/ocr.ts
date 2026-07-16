@@ -25,15 +25,22 @@
 //   • Total:                     ~2s per page cold; ~1.5s warm
 //
 // Multilingual: Tesseract supports 100+ language packs ('eng' default;
-// pass 'rus', 'jpn', 'chi_sim', 'eng+rus' for combined). First call per
-// language downloads the trained data file (~10MB) into the cache dir.
+// pass 'rus', 'jpn', 'chi_sim', 'eng+rus' for combined). Each `<lang>.traineddata`
+// pack (~10MB) must be PRE-INSTALLED out-of-band via `enquire-mcp install-ocr-lang
+// <code>` (the explicit, opt-in download). serve/OCR itself makes NO runtime
+// download: `assertOcrLangsInstalled` throws fail-closed BEFORE any optional dep
+// or worker loads if a pack is missing, and the worker is pinned to the local
+// cache (`langPath` + `cacheMethod: "readOnly"`) — see v3.9.0-rc.10 offline
+// enforcement, regression-proofed by OIA Check 4e.
 //
 // Server-side hardening:
-//   • renderViewport scale caps at 4 (prevents OOM on adversarial PDFs)
+//   • renderViewport scale caps at 4 + an absolute canvas-dimension clamp
+//     (MAX_OCR_CANVAS_DIM) — prevents OOM on adversarial PDFs
 //   • Tesseract worker terminated after each call (no persistent state)
 //   • All page extraction errors caught per-page (one bad page doesn't
 //     poison the whole document)
-//   • No outbound HTTP except the one-time language-data download
+//   • ZERO outbound HTTP in serve mode: no runtime CDN/trained-data fetch;
+//     a missing language pack fails closed with an install hint
 
 import type { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";

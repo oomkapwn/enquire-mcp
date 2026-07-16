@@ -23,10 +23,13 @@
 // called once in startHttpServer() and buildMcpServer() is called per
 // request: the heavy I/O happens once at boot.
 //
-// Stateful sessions (sessionId-keyed transports) are deferred to v2.7+
-// because they require persistence-aware shutdown handling and are only
-// needed for SSE long-running operations. Our tools are short-running
-// (search, read, frontmatter ops), so stateless is the right default.
+// Stateless is the DEFAULT (our tools are short-running — search, read,
+// frontmatter ops), and the right choice for most deployments. Stateful,
+// sessionId-keyed transports shipped in v2.14.0 as an opt-in (`stateful: true`):
+// a session registry keys requests by an assigned `Mcp-Session-Id`, evicts
+// sessions idle past a configurable TTL, tracks `pendingInits`/`inFlight`
+// refcounts to avoid mid-request teardown, and drains under a bounded graceful
+// shutdown. Enable it only when a client needs sticky per-session state.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";

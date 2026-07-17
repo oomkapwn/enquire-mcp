@@ -680,6 +680,14 @@ describe("extractAliases (v3.11.6-rc.6)", () => {
     expect(extractAliases(undefined)).toEqual([]);
     expect(extractAliases(null)).toEqual([]);
   });
+  // rc.12 (pre-promotion re-sweep) — Obsidian properties are case-insensitive; rc.6
+  // read the keys raw, so `Aliases:`/`Alias:` notes silently got NO alias indexing
+  // (a recursion of the v3.11.0-rc.13 AUD-03 frontmatter-key-PRODUCER fold class).
+  it("reads case-variant keys (`Aliases:` / `Alias:`) via the folded lookup", () => {
+    expect(extractAliases({ Aliases: ["Zeta"] })).toEqual(["Zeta"]);
+    expect(extractAliases({ Alias: "Solo" })).toEqual(["Solo"]);
+    expect(extractAliases({ ALIASES: ["Caps"] })).toEqual(["Caps"]);
+  });
 });
 
 describe("deriveFtsTitle (v3.11.6-rc.6)", () => {

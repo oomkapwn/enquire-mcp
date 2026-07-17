@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { lookupFoldedKey } from "./name-fold.js";
 import { optionalDepDetail } from "./optional-dep.js";
 import { iterateContentLines } from "./structure.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
@@ -56,7 +57,12 @@ export function extractAliases(frontmatter: Record<string, unknown> | undefined 
     }
   };
   for (const key of ["aliases", "alias"]) {
-    const raw = frontmatter[key];
+    // v3.11.6-rc.12 (re-sweep) — FOLDED key lookup. rc.6 read the keys raw
+    // (exact-string), a direct recursion of the v3.11.0-rc.13 AUD-03
+    // frontmatter-key-PRODUCER class: Obsidian properties are case-insensitive,
+    // so a note with `Aliases:` / `Alias:` silently got NO alias indexing —
+    // the rc.6 feature was dead for those notes.
+    const raw = lookupFoldedKey(frontmatter, key).value;
     if (Array.isArray(raw)) for (const v of raw) push(v);
     else push(raw);
   }

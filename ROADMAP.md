@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-05-29 after the pre-stable audit batches (rc.21 security · rc.25 ReDoS C-1 + fuzz · rc.26 test-infra + docs); the Tier-1 hardening sprint is complete and most Tier-1 items are checked below.
+> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-17 (v3.11.6-rc line: post-Codex-audit truth-reset + activation/eval/retrieval borrows shipped; earlier: the 2026-05 Tier-1 hardening sprint).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. Directly addresses the stale-fact-reuse frontier (Memora, arXiv:2604.20006) that conversation-memory stores ignore — the only Obsidian MCP with it.
-- **Process maturity** — 1561 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1566 tests, 9 required CI gates, semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 
@@ -56,7 +56,7 @@ Severity-ordered, phased per the project's "no big-bang" rule; audit checkpoint 
 
 The capability gap is won; this closes the *visibility* gap. (Several items below need an account/OAuth action and are listed under "Requires the maintainer".)
 
-- [ ] **rc.14 — AI-search + repo-page.** **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) — dark GitHub-native palette; deliberately count-agnostic (rc.29 dropped hardcoded stat-pills to avoid a numeric-drift surface).
+- [~] **rc.14 — AI-search + repo-page.** MOSTLY DONE (2026-07-17 audit): FAQPage+SoftwareSourceCode JSON-LD shipped v3.9.0-rc.17, glama.json rc.17, hero one-liner rc.27, social-preview rc.29. STILL OPEN: `llms-ctx.txt` companion · `server.json` categories/keywords (schema re-verify) · canonical-URL comments. Original scope: **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) — dark GitHub-native palette; deliberately count-agnostic (rc.29 dropped hardcoded stat-pills to avoid a numeric-drift surface).
 - [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [~] **Obsidian-MCP COMPARISON table** — MOSTLY DONE: `docs/COMPARISON.md` is already a head-to-head vs cyanheads / mcp-obsidian / stevens + plugins / mem0-class with an honest "when to pick which" guide. _(2026-07-16 audit: remaining work is a **currency refresh** — the doc's numbers are stamped "as of v3.8.x" — plus optionally adding the newer hybrid-search peer; schedule quarterly, not as a build task.)_
 

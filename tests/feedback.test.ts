@@ -348,3 +348,19 @@ describe("FeedbackStore vault_root keying + guard (v3.11.6-rc.8 — RFC latent-b
     }
   });
 });
+
+// ─── v3.11.6-rc.12 (pre-promotion re-sweep) — the rc.8 fix-site gate ─────────
+// The rc.8 fix was the ONE-LINE rekey in server.ts (`defaultFeedbackFile(vault.root)`
+// instead of the raw `opts.vault` arg). The leaf tests above prove the pieces, but a
+// revert of that line would pass every one of them (each fragmented sidecar carries a
+// self-consistent vault_root, so the guard can't fire). server.ts is un-importable
+// per the no-internal-imports invariant, so — mirroring the rc.1 CRL-1 source-order
+// precedent — pin the call site structurally in the source text.
+describe("server.ts feedback keying (rc.8 fix-site gate, rc.12)", () => {
+  it("prepareServerDeps keys the feedback sidecar off the CANONICAL vault.root", async () => {
+    const src = await fs.readFile(new URL("../src/server.ts", import.meta.url), "utf8");
+    expect(src).toContain("defaultFeedbackFile(vault.root)");
+    // NEGATIVE control — the buggy raw-arg spelling must be absent.
+    expect(src).not.toMatch(/defaultFeedbackFile\(\s*opts\.vault\s*\)/);
+  });
+});

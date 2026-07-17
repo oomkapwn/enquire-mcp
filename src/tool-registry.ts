@@ -996,7 +996,7 @@ export function registerReadTools(
           .max(MAX_FANOUT_QUERIES)
           .optional()
           .describe(
-            "v3.11.6-rc.7 — optional additional query PHRASINGS (multi-query fan-out). Each is searched and the result lists are RRF-merged with the main `query`, so a note that ranks well for ANY phrasing floats to the top. Use when the note may use different vocabulary than your first phrasing (e.g. `query: 'auth flow'`, `queries: ['login sequence', 'session handshake']`). Complements HyDE. Max 8; each runs the full hybrid pipeline so cost scales with the count."
+            "v3.11.6-rc.7 — optional additional query PHRASINGS (multi-query fan-out). Each is searched and the result lists are RRF-merged with the main `query`, so a note that ranks well for ANY phrasing floats to the top. Use when the note may use different vocabulary than your first phrasing (e.g. `query: 'auth flow'`, `queries: ['login sequence', 'session handshake']`). Complements HyDE. Max 8 extra phrasings (+ the main query = up to 9 full hybrid pipeline runs, so cost scales with the count). Note: the fan-out fuses by NOTE path, so `granularity: 'block'` degrades to one hit per note; use single-query mode for per-chunk hits."
           ),
         folder: z.string().optional().describe("Restrict to a subfolder (vault-relative)"),
         limit: z.number().int().positive().max(100).optional().describe("Max hits (default 10)"),

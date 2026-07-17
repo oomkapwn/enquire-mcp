@@ -36,7 +36,7 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 
 ### CLI flags
 
-Every flag accepted by `enquire-mcp serve` / `serve-http` / `index` / `build-embeddings` / `setup` / `eval` / `doctor` / `clear-cache` / `clear-index` / `clear-embeddings` / `gen-token` / `install-model` / `install-ocr-lang` is stable. New flags will be added in minor releases (additive); existing flag names + accepted values + defaults will not change without a major bump.
+Every flag accepted by `enquire-mcp serve` / `serve-http` / `index` / `build-embeddings` / `setup` / `eval` / `doctor` / `clear-cache` / `clear-index` / `clear-embeddings` / `gen-token` / `install-model` / `install-ocr-lang` / `query` / `prune` is stable. (`configure`, currently on the `@rc` channel, joins this list when v3.11.6 promotes.) New flags will be added in minor releases (additive); existing flag names + accepted values + defaults will not change without a major bump.
 
 Notable defaults that are part of the contract:
 - `serve` is read-only by default — `--enable-write` required for the write tools.

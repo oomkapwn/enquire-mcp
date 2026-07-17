@@ -1193,7 +1193,7 @@ export interface SearchHitExplain {
   graph_boost?: { in_degree: number; score_delta: number };
   /** Cross-encoder reranker (v2.9.0): the reranker score + rank before/after the rerank re-sort. Present only when a reranker ran and scored this hit. */
   reranker?: { score: number; rank_before: number; rank_after: number };
-  /** Opt-in recency re-rank (`--recency-weight`): the note's age + recency score + rank before/after. Present only when recency re-rank was active; `rank_before === rank_after` means recency did NOT move this hit. */
+  /** Opt-in recency re-rank (`--recency-weight`): the note's age + recency score + rank before/after. Present only when recency re-rank was active AND the note's mtime was stattable (a path deleted mid-flight contributes recency 0 and is omitted here); `rank_before === rank_after` means recency did NOT move this hit. */
   recency?: { age_days: number; recency_score: number; rank_before: number; rank_after: number };
   /** Opt-in closed-loop feedback re-rank (`--feedback-weight`): the note's feedback score + rank before/after. Present only when feedback re-rank was active; `rank_before === rank_after` means feedback did NOT move this hit. */
   feedback?: { feedback_score: number; rank_before: number; rank_after: number };
@@ -2061,11 +2061,12 @@ export async function searchHybrid(
           }
         })
       );
-      const exAgeRec = exRecency ? new Map<string, { age: number; rec: number }>() : undefined;
+      const exAgeRec = exRecency ? new Map<string, { age: number; rec: number; statted: boolean }>() : undefined;
       const blended = fused.map((f, pos) => {
         const age = ageByPath.get(pathOf(f.id));
         const rec = typeof age === "number" ? recencyScore(age, staleDays) : 0;
-        if (exAgeRec) exAgeRec.set(f.id, { age: typeof age === "number" ? age : 0, rec });
+        if (exAgeRec)
+          exAgeRec.set(f.id, { age: typeof age === "number" ? age : 0, rec, statted: typeof age === "number" });
         const relevance = 1 / (1 + pos);
         return { f, key: (1 - w) * relevance + w * rec };
       });
@@ -2080,6 +2081,10 @@ export async function searchHybrid(
         for (const f of fused) {
           const ar = exAgeRec.get(f.id);
           if (!ar) continue;
+          // rc.12 — omit the entry for an unstattable path (deleted mid-flight):
+          // it contributed recency 0, but reporting `age_days: 0` alongside
+          // `recency_score: 0` would be internally inconsistent (age 0 ⇒ score 1).
+          if (!ar.statted) continue;
           exRecency.set(f.id, {
             age_days: ar.age,
             recency_score: round5(ar.rec),
@@ -2307,7 +2312,9 @@ export async function searchHybrid(
   return response;
 }
 
-/** Max phrasings a single `obsidian_search` call may fan out over (rc.7). */
+/** Max EXTRA phrasings a single `obsidian_search` call may fan out over (rc.7).
+ *  The tool handler prepends the main `query`, so the worst case is
+ *  MAX_FANOUT_QUERIES + 1 = 9 full hybrid pipeline runs per call. */
 export const MAX_FANOUT_QUERIES = 8;
 
 type SearchHybridArgs = Parameters<typeof searchHybrid>[1];
@@ -2325,7 +2332,14 @@ type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
  *
  * Each sub-query runs the full hybrid pipeline (BM25 + TF-IDF + embeddings +
  * optional rerank/recency/feedback); cost scales linearly with the phrasing
- * count, which is why the caller-facing schema caps it at {@link MAX_FANOUT_QUERIES}.
+ * count, which is why the caller-facing schema caps it at {@link MAX_FANOUT_QUERIES}
+ * (the tool handler prepends the main `query`, so the worst case is
+ * MAX_FANOUT_QUERIES + 1 = 9 full pipeline runs).
+ *
+ * Granularity caveat (rc.12): the fan-out fuses BY NOTE PATH (`idOf: h.path`),
+ * so `granularity: "block"` degrades to note-level in the fused result — one
+ * hit per note, not per chunk (`chunk_index` reflects the best sub-hit and may
+ * be absent). Use single-query mode when per-chunk hits matter.
  */
 export async function searchHybridMulti(
   vault: Vault,
@@ -2361,7 +2375,9 @@ export async function searchHybridMulti(
   const matches: SearchHybridHit[] = fused
     .map((f) => {
       const h = bestHit.get(f.id);
-      return h ? { ...h, score: f.score } : null;
+      // rc.12 — round to 5dp, parity with the single-query path (which rounds
+      // at response build); pre-rc.12 the multi path emitted raw RRF floats.
+      return h ? { ...h, score: Math.round(f.score * 100000) / 100000 } : null;
     })
     .filter((h): h is SearchHybridHit => h !== null);
 
@@ -2373,12 +2389,29 @@ export async function searchHybridMulti(
     if (res.signal_errors) Object.assign(signalErrors, res.signal_errors);
   }
 
+  // rc.12 (re-sweep) — carry the v3.10.0-rc.13 Issue-9 reranker observability
+  // through the fan-out. Pre-rc.12 the multi response silently DROPPED the
+  // `reranked` field even though every sub-query ran the reranker, so a
+  // reranker-enabled `queries[]` caller couldn't distinguish "reranked" from
+  // "silently fell back" — the exact gap rc.13 closed for the single path.
+  // Union semantics: applied iff EVERY sub-query applied (pairs summed);
+  // otherwise not-applied with the first sub-query's reason.
+  const subReranked = perQuery.map((r) => r.reranked).filter((r): r is NonNullable<typeof r> => r !== undefined);
+  let reranked: SearchHybridResponse["reranked"];
+  if (subReranked.length > 0) {
+    const failed = subReranked.find((r) => !r.applied);
+    reranked = failed
+      ? { applied: false, reason: failed.reason ?? "a sub-query fell back to RRF" }
+      : { applied: true, pairs: subReranked.reduce((n, r) => n + (r.pairs ?? 0), 0) };
+  }
+
   return {
     query: queries.join(" | "),
     method: "rrf",
     k: RRF_K,
     signals_used: [...signalsUsed],
     ...(Object.keys(signalErrors).length > 0 ? { signal_errors: signalErrors } : {}),
+    ...(reranked !== undefined ? { reranked } : {}),
     total_candidates: bestHit.size,
     matches
   };

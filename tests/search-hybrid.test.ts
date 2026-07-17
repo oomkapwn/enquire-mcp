@@ -734,7 +734,41 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
 
   it("caps the fan-out count (MAX_FANOUT_QUERIES = 8) — DoS bound on an always-on tool", () => {
     // The schema enforces the cap at the boundary; the constant is the contract.
+    // (rc.12: the schema-side `.max()` pins are now ALSO in the
+    // parser-input-cap-invariant inventory — this pins the constant's value.)
     expect(MAX_FANOUT_QUERIES).toBe(8);
+  });
+
+  // rc.12 (pre-promotion re-sweep) — the multi path used to silently DROP the
+  // `reranked` response field even though every sub-query ran the reranker,
+  // reopening the v3.10.0-rc.13 Issue-9 observability gap for `queries[]` callers.
+  it("carries the reranker outcome through the fan-out (union of sub-query `reranked`)", async () => {
+    const v = new Vault(root);
+    const scored: number[][] = [];
+    const rerankerOverride = {
+      score: async (_q: string, passages: readonly string[]) => {
+        const s = passages.map((_, i) => 1 - i * 0.01);
+        scored.push(s);
+        return s;
+      }
+    };
+    const result = await searchHybridMulti(
+      v,
+      { queries: ["OAuth authentication", "refresh token rotation"], limit: 5 },
+      { ...noEmbed(), rerankerOverride }
+    );
+    expect(result.reranked?.applied).toBe(true);
+    // pairs = sum across sub-queries; the override really ran for each phrasing.
+    expect(scored.length).toBe(2);
+    expect(result.reranked && "pairs" in result.reranked ? result.reranked.pairs : 0).toBe(
+      scored.reduce((n, s) => n + s.length, 0)
+    );
+  });
+
+  it("NEGATIVE control — no reranker configured ⇒ no `reranked` field on the multi response", async () => {
+    const v = new Vault(root);
+    const result = await searchHybridMulti(v, { queries: ["OAuth authentication"], limit: 5 }, noEmbed());
+    expect("reranked" in result).toBe(false);
   });
 });
 
@@ -848,7 +882,10 @@ describe("searchHybrid — opt-in explain mode (v3.11.6 S-5)", () => {
       expect(hub?.explain?.graph_boost?.in_degree).toBe(2); // a.md + b.md both link it
       expect(hub?.explain?.graph_boost?.score_delta).toBeCloseTo(0.01, 5); // 2 × α(0.005)
       // The leaf notes received no in-links → no graph_boost sub-object.
+      // rc.12 — assert presence FIRST so the optional-chained absence check
+      // can't pass vacuously if a.md ever drops out of the matches.
       const a = result.matches.find((m) => m.path === "a.md");
+      expect(a).toBeDefined();
       expect(a?.explain?.graph_boost).toBeUndefined();
     } finally {
       await fs.rm(gRoot, { recursive: true, force: true });

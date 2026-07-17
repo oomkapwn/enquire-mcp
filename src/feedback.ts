@@ -128,7 +128,10 @@ export class FeedbackStore {
       // its entries (it belongs to a different vault — a hash collision or a
       // relocated cache dir). Return the empty, correctly-keyed store instead of
       // boosting one vault's search with another's feedback. A sidecar with no
-      // vault_root (pre-rc.8) is adopted as-is.
+      // vault_root (pre-rc.8) is adopted as-is. Note (rc.12): the empty store
+      // keeps the SAME file path, so the first record() OVERWRITES the foreign
+      // sidecar — acceptable: reachable only via a sha1-12 collision or a
+      // relocated vault, where the old entries are orphaned data anyway.
       const storedRoot =
         parsed && typeof parsed === "object" ? (parsed as { vault_root?: unknown }).vault_root : undefined;
       if (vaultRoot && typeof storedRoot === "string" && storedRoot.length > 0 && storedRoot !== vaultRoot) {

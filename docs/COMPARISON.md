@@ -1,6 +1,6 @@
 # enquire-mcp vs. other Obsidian MCP servers
 
-**enquire-mcp positions itself as a long-term memory layer for AI agents, built on an Obsidian vault** — open-source, MCP-native, vendor-neutral, with the strongest retrieval stack in the open-source Obsidian-MCP space (BM25 + TF-IDF + ML embeddings, RRF-fused, BGE cross-encoder reranked, HNSW + int8 quantized). Distinct from conversation-memory layers (mem0, Zep, Supermemory, Memobase), which *extract* facts from chat logs into a separate opaque store: enquire-mcp is **grounded** in the markdown you already wrote — recall is verbatim, cited, and editable in any text editor, never a lossy summary of a past conversation. (Equally distinct from multi-tenant *fleet*-memory platforms that store agent traffic server-side: enquire is single-user and local-first — one vault you own, with zero cloud calls during serve.) It is also **freshness-aware** (v3.10): every hit reports the note's age and an opt-in recency-weighting can prefer fresher knowledge — directly addressing the stale-fact-reuse gap (Memora benchmark, arXiv:2604.20006) that opaque memory stores leave unsolved. The alternatives below take different trade-offs — some are agent-first, some are Obsidian-plugin-first, some optimize for local-REST-API integration over hybrid retrieval. This document is a side-by-side feature matrix plus an honest "when to pick which" guide, written by the enquire-mcp maintainer. It is intentionally fair-not-sales: each alternative has scenarios where it is the better pick, and those scenarios are called out below. Numbers and feature claims for enquire-mcp are accurate as of v3.8.x stable (initial snapshot 2026-05-15 for v3.7.0; refreshed to v3.8.x in v3.8.2 docs patch); claims about the four alternatives are based on their public READMEs as of the same dates — please verify against their current state before deciding.
+**enquire-mcp positions itself as a long-term memory layer for AI agents, built on an Obsidian vault** — open-source, MCP-native, vendor-neutral, with the strongest retrieval stack in the open-source Obsidian-MCP space (BM25 + TF-IDF + ML embeddings, RRF-fused, BGE cross-encoder reranked, HNSW + int8 quantized). Distinct from conversation-memory layers (mem0, Zep, Supermemory, Memobase), which *extract* facts from chat logs into a separate opaque store: enquire-mcp is **grounded** in the markdown you already wrote — recall is verbatim, cited, and editable in any text editor, never a lossy summary of a past conversation. (Equally distinct from multi-tenant *fleet*-memory platforms that store agent traffic server-side: enquire is single-user and local-first — one vault you own, with zero cloud calls during serve.) It is also **freshness-aware** (v3.10): every hit reports the note's age and an opt-in recency-weighting can prefer fresher knowledge — directly addressing the stale-fact-reuse gap (Memora benchmark, arXiv:2604.20006) that opaque memory stores leave unsolved. The alternatives below take different trade-offs — some are agent-first, some are Obsidian-plugin-first, some optimize for local-REST-API integration over hybrid retrieval. This document is a side-by-side feature matrix plus an honest "when to pick which" guide, written by the enquire-mcp maintainer. It is intentionally fair-not-sales: each alternative has scenarios where it is the better pick, and those scenarios are called out below. Numbers and feature claims for enquire-mcp are CI-pinned against the current codebase (the tool/test counts in the matrix below are enforced by `tests/docs-consistency.test.ts`, so they track every release); claims about the four alternatives are based on their public READMEs (initial snapshot 2026-05-15, spot-refreshed since) — please verify against their current state before deciding.
 
 ## Servers compared
 
@@ -44,7 +44,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
 | Forgetting-aware freshness (`age_days` / recency re-rank) | Yes (v3.10)     | No               | No               | No               | No               |
-| Test count (public)                           | **1561**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **1566**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 46                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |
@@ -169,7 +169,7 @@ What enquire-mcp gives you, specifically:
 - TF-IDF over note bodies (also lexical, but different ranking surface).
 - Dense multilingual embeddings via ONNX (semantic, 50+ languages).
 - Reciprocal Rank Fusion across all three (Cormack et al, 2009).
-- Optional BGE cross-encoder reranking on top, 5 model sizes available.
+- Optional BGE cross-encoder reranking on top (`rerank-bge`, the verified default — measured +15.5 NDCG@10 / +24.7 MRR; other catalog aliases are experimental).
 
 ### 2. You don't want Obsidian running as a daemon
 
@@ -254,7 +254,7 @@ As of v3.6.0-rc.4, **enquire-mcp ships public, reproducible end-to-end retrieval
 
 ## Disclaimer
 
-This is a snapshot as of **2026-05-24** (v3.8.x stable; initial v3.7.0 snapshot from 2026-05-15). All five servers are actively developed (or in some cases archived) and the feature matrix will drift. Before making a decision:
+This document's enquire-mcp claims are CI-pinned to the current release; the ALTERNATIVES matrix is a snapshot (initial 2026-05-15, spot-refreshed since). All five servers are actively developed (or in some cases archived) and the feature matrix will drift. Before making a decision:
 
 1. Re-read each alternative's current `README.md` — features land between matrix updates.
 2. Run each candidate against a sample of your own vault for an hour. Retrieval quality, in particular, is vault-specific and unreliable to compare from feature lists alone.
@@ -262,4 +262,4 @@ This is a snapshot as of **2026-05-24** (v3.8.x stable; initial v3.7.0 snapshot 
 
 Corrections to this document are welcome — open an issue or PR on [`oomkapwn/enquire-mcp`](https://github.com/oomkapwn/enquire-mcp). Specifically: if a row above understates an alternative's capabilities, that's a bug in this doc and we'd like to fix it.
 
-— enquire-mcp maintainer, v3.8.x stable
+— enquire-mcp maintainer

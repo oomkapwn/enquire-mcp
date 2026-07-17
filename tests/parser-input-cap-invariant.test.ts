@@ -75,7 +75,14 @@ const PARSER_FED_TOOLS = [
   // value predicates (single-note YAML materialization). Both capped via the value-length form
   // (filter: `.max` on the string arms; set: a `.refine()`), recognized by the generalized detector.
   { tool: "obsidian_search", field: "filter_frontmatter", cap: "MAX_FRONTMATTER_VALUE_LEN" },
-  { tool: "obsidian_frontmatter_set", field: "set", cap: "MAX_FRONTMATTER_VALUE_LEN" }
+  { tool: "obsidian_frontmatter_set", field: "set", cap: "MAX_FRONTMATTER_VALUE_LEN" },
+  // v3.11.6-rc.12 (pre-promotion re-sweep) — the rc.7 multi-query fan-out array. The caps
+  // were LIVE since rc.7 (`.max(MAX_QUERY_LEN)` per phrasing × `.max(MAX_FANOUT_QUERIES)`
+  // on the array) but this inventory never pinned them — the rc.7 CHANGELOG's "verified by
+  // parser-input-cap-invariant" claim was false (its own stated failure mode). Each phrasing
+  // runs the FULL hybrid pipeline, so both bounds are the tool's load-bearing DoS guard.
+  { tool: "obsidian_search", field: "queries", cap: "MAX_QUERY_LEN" },
+  { tool: "obsidian_search", field: "queries", cap: "MAX_FANOUT_QUERIES" }
 ];
 
 /**

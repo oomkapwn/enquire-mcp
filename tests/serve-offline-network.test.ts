@@ -50,11 +50,24 @@ afterEach(async () => {
 });
 
 describe("serve-mode cache-miss zero-outbound (audit §E row 2 / T-11)", () => {
-  it("a real embedder cache-miss under serve-offline fails CLOSED with ZERO outbound network", async () => {
+  // rc.12 (re-sweep MED) — CI-GUARD: this file IS the promotion-gate probe that
+  // closed the audit's INCONCLUSIVE zero-outbound row, and @huggingface/
+  // transformers is an OPTIONAL dep whose install can flake without failing
+  // `npm ci` — so a silent skip here would green-wash the gate. Fail loud in CI
+  // if the probe's precondition vanishes. No-op outside CI. (rc.23/rc.26 rule:
+  // silent skips forbidden on security surfaces.)
+  it("CI GUARD — @huggingface/transformers loads in CI so the T-11 probe actually runs", async () => {
+    if (!process.env.CI) return;
+    const mod = await importTransformers();
+    expect(mod?.env, "@huggingface/transformers must import in CI so the zero-outbound gate executes").toBeTruthy();
+  });
+
+  it("a real embedder cache-miss under serve-offline fails CLOSED with ZERO outbound network", async (ctx) => {
     const mod = await importTransformers();
     if (!mod?.env) {
-      // optional dep not built — nothing to probe end-to-end here.
-      return;
+      // optional dep not built — visible skip (the CI-GUARD above fails CI if
+      // this ever happens in CI, so the skip is only reachable locally).
+      return ctx.skip();
     }
 
     // 1. Force a guaranteed cache MISS: an empty cacheDir no model can live in.

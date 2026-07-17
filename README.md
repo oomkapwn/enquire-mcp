@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1561%20passing-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1566%20passing-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 3. **Zero cloud calls during serve.** The embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~110 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**46 tools · 19 MCP prompts · 1561 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1566 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1561 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
+| **1566 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -115,7 +115,7 @@ Drop into any MCP client:
 
 📂 Drop-in configs in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus a sample query set for the eval harness.
 
-**Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing):
+**Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing). *New in the `@rc` channel (v3.11.6-rc.4) — install with `npm i -g @oomkapwn/enquire-mcp@rc` until v3.11.6 promotes to `@latest`:*
 
 ```bash
 enquire-mcp configure --vault <path>                 # prints config for every client
@@ -302,7 +302,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 **Will it write to my vault?** Not unless you pass `--enable-write`. All 7 write tools are gated; destructive ones support `dry_run`.
 
-**Data sent anywhere?** Only on `enquire-mcp install-model` (downloads ONNX weights from HuggingFace, one-time). Serve mode never makes outbound HTTP. Embeddings + reranker run on CPU locally.
+**Data sent anywhere?** Only on the two explicit install subcommands — `enquire-mcp install-model` (ONNX weights from HuggingFace, one-time) and `enquire-mcp install-ocr-lang` (Tesseract language pack, one-time, OCR only). Serve mode never makes outbound HTTP ([enforced](./SECURITY.md), not aspirational). Embeddings + reranker run on CPU locally.
 
 **Performance?** Cold-build FTS5: ~5s/1k notes, ~30s/50k. BM25 query: <100ms always. Embedding build: ~30ms/chunk on M1. **HNSW top-10: sub-10ms at any scale.** Serve cold-start: ~50ms with HNSW persistence.
 
@@ -327,7 +327,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1561 tests, ~12s)
+npm test       # full suite (1566 tests, ~12s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

@@ -46,10 +46,12 @@ describe("smoke default-vault target (audit G-1)", () => {
     expect(existsSync(path.join(vault, "01_Projects", "Apollo.md"))).toBe(true);
   });
 
-  it("NEGATIVE control — no-arg smoke never reads ~/Documents/Obsidian Vault", async () => {
+  it("NEGATIVE control — no-arg smoke never reads ~/Documents/Obsidian Vault", async (ctx) => {
     if (!existsSync(distEntry)) {
-      // dist not built (fresh checkout without `npm run build`) — skip, like e2e-handlers.
-      return;
+      // dist not built (fresh checkout without `npm run build`) — VISIBLE skip
+      // (rc.12; the e2e-handlers CI-GUARD already asserts dist exists in CI,
+      // so this skip is only reachable locally).
+      return ctx.skip();
     }
     // Controlled HOME with a sentinel "real" vault the OLD code would have targeted.
     const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "smoke-home-"));

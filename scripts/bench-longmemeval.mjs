@@ -258,8 +258,37 @@ async function main() {
 
   const { Vault } = await import(path.join(distDir, "vault.js"));
   const { FtsIndex } = await import(path.join(distDir, "fts5.js"));
-  const { syncFtsIndex } = await import(path.join(distDir, "server.js"));
+  const { syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js"));
   const { searchHybrid } = await import(path.join(distDir, "tools", "index.js"));
+
+  // v3.11.6-rc.12 (re-sweep MED) — `--embeddings` used to be a LABEL-ONLY flag:
+  // it drove the disclosure header + output JSON ("local-transformers.js") while
+  // no embed-db was ever built and searchHybrid got no embedFile — a published
+  // artifact would have claimed an embedding backend that never ran (the
+  // claimed-guarantee-vs-code-guard class). Now the flag is REAL: load the local
+  // embedder ONCE (fail-FAST if the optional dep / model cache is missing — a
+  // publishing harness must never silently degrade under a disclosure) and build
+  // a per-question embed-db over the scoped mini-vault.
+  let embedder = null;
+  let embedModel = null;
+  let EmbedDbCtor = null;
+  if (args.embeddings) {
+    try {
+      const emb = await import(path.join(distDir, "embeddings.js"));
+      ({ EmbedDb: EmbedDbCtor } = await import(path.join(distDir, "embed-db.js")));
+      embedModel = emb.resolveModel(undefined); // the default local alias
+      process.stderr.write(`loading local embedder '${embedModel.alias}' (one-time)…\n`);
+      embedder = await emb.loadEmbedder(embedModel.alias);
+    } catch (e) {
+      process.stderr.write(
+        `--embeddings requested but the local embedder failed to load (${(e?.message ?? e).toString().slice(0, 120)}).\n` +
+          "Install the optional dep + pre-cache the model first:\n" +
+          "  npm i @huggingface/transformers && node dist/index.js install-model multilingual\n" +
+          "Refusing to run WITHOUT embeddings under an embeddings disclosure (honest-publishing bar).\n"
+      );
+      process.exit(2);
+    }
+  }
   // v3.11.6-rc.10 (C-2) — the rc.5 OHS-comparable metric set.
   const { recallAtK, reciprocalRank, ndcgAtK, hitAtK, allRelevantAtK } = await import(path.join(distDir, "eval.js"));
 
@@ -298,6 +327,7 @@ async function main() {
 
     const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-vault-"));
     const idxDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-idx-"));
+    let ftsIndex = null;
     try {
       const sessIds = inst.haystack_session_ids ?? [];
       const dates = inst.haystack_dates ?? [];
@@ -308,11 +338,33 @@ async function main() {
         await fs.writeFile(path.join(vaultRoot, sessionNotePath(sid)), md, "utf8");
       }
       const vault = new Vault(vaultRoot);
-      const ftsIndex = new FtsIndex({ file: path.join(idxDir, "lme.fts5.db"), vaultRoot: vault.root });
+      ftsIndex = new FtsIndex({ file: path.join(idxDir, "lme.fts5.db"), vaultRoot: vault.root });
+      // rc.12 (re-sweep HIGH) — the index MUST be opened before syncFtsIndex;
+      // pre-rc.12 this line was missing, so every run crashed on question 1
+      // (`FtsIndex.open() must be called before use`) — the harness had never
+      // successfully executed end-to-end.
+      await ftsIndex.open();
       await syncFtsIndex(vault, ftsIndex);
+      // rc.12 — REAL embeddings arm (see the loader above): build the scoped
+      // mini-vault's embed-db so the hybrid search actually fuses the local
+      // embedding signal the disclosure claims.
+      let embedFile = "";
+      if (embedder && EmbedDbCtor && embedModel) {
+        embedFile = path.join(idxDir, "lme.embed.db");
+        const db = new EmbedDbCtor({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: embedModel.alias,
+          dim: embedModel.dim
+        });
+        await db.open();
+        await syncEmbedDb(vault, db, embedder);
+        db.close();
+      }
       const type = inst.question_type ?? "unknown";
       // scope-per-question: this vault IS the question's LongMemEval haystack.
-      const r0 = await searchHybrid(vault, { query: inst.question, limit: k }, { ftsIndex });
+      const searchCtx = { ftsIndex, embedFile };
+      const r0 = await searchHybrid(vault, { query: inst.question, limit: k }, searchCtx);
       base.push(
         scoreOhs(
           r0.matches.map((m) => m.path),
@@ -324,7 +376,7 @@ async function main() {
         const r1 = await searchHybrid(
           vault,
           { query: inst.question, limit: k },
-          { ftsIndex, recency: { weight: args.recencyWeight, staleDays: args.staleDays } }
+          { ...searchCtx, recency: { weight: args.recencyWeight, staleDays: args.staleDays } }
         );
         withRecency.push(
           scoreOhs(
@@ -334,10 +386,12 @@ async function main() {
           )
         );
       }
-      ftsIndex.close?.();
       processed += 1;
       if (processed % 25 === 0) process.stderr.write(`  …${processed}/${total}\n`);
     } finally {
+      // rc.12 — close in the FINALLY (pre-rc.12 the close sat mid-try and
+      // leaked the SQLite handle when a search threw).
+      ftsIndex?.close?.();
       await fs.rm(vaultRoot, { recursive: true, force: true });
       await fs.rm(idxDir, { recursive: true, force: true });
     }
@@ -349,7 +403,7 @@ async function main() {
   // ── Disclosure header (per the C-2 honest-publishing bar) ──
   process.stdout.write(`\n=== enquire LongMemEval-S RETRIEVAL (peer-protocol; scope-per-question, k=${k}) ===\n`);
   process.stdout.write(
-    `embedding backend: ${args.embeddings ? "LOCAL on-device (transformers.js)" : "OFF (BM25 + TF-IDF only)"} — ` +
+    `embedding backend: ${embedModel ? `LOCAL on-device (transformers.js · ${embedModel.alias})` : "OFF (BM25 + TF-IDF only)"} — ` +
       "NOT a cloud model; a cloud-embedding peer number (e.g. bge-m3) is a different measurement.\n"
   );
   process.stdout.write(`scored ${base.length} question(s) · ${abstentions} abstention(s) skipped\n\n`);
@@ -375,11 +429,11 @@ async function main() {
       `\n--- freshness differentiator: --recency-weight ${args.recencyWeight} ON vs OFF (Δ nDCG@5) ---\n`
     );
     // Highlight the categories freshness is designed to help.
+    // rc.12 — each metric carries its OWN sign (pre-rc.12 ΔMRR reused ΔnDCG@5's,
+    // printing "+-0.0123" when the deltas differed in direction).
+    const signed = (n) => `${n >= 0 ? "+" : ""}${n.toFixed(4)}`;
     for (const row of byCategoryRows(delta)) {
-      const sign = row.ndcg_5 >= 0 ? "+" : "";
-      process.stdout.write(
-        `  ${row.type.padEnd(26)} ΔnDCG@5=${sign}${row.ndcg_5.toFixed(4)}  ΔMRR=${sign}${row.mrr.toFixed(4)}\n`
-      );
+      process.stdout.write(`  ${row.type.padEnd(26)} ΔnDCG@5=${signed(row.ndcg_5)}  ΔMRR=${signed(row.mrr)}\n`);
     }
     process.stdout.write(
       "  (temporal-reasoning / knowledge-update / preference are where a static retriever is weakest)\n"
@@ -392,7 +446,10 @@ async function main() {
         protocol: "longmemeval-s-scope-per-question",
         k,
         embeddings: args.embeddings,
-        embedding_backend: args.embeddings ? "local-transformers.js" : "none-bm25-tfidf",
+        // rc.12 — derived from the embedder that ACTUALLY loaded (fail-fast
+        // above guarantees embedModel is set iff embeddings really ran), so the
+        // published artifact can never claim a backend that didn't execute.
+        embedding_backend: embedModel ? `local-transformers.js (${embedModel.alias})` : "none-bm25-tfidf",
         scored: base.length,
         abstentions_skipped: abstentions
       },

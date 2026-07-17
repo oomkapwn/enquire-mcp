@@ -307,26 +307,43 @@ describe("frontmatter-key PRODUCER fold guard (rc.13, rc.12-audit AUD-03 + embed
     "src/bases.ts",
     "src/tools/meta.ts",
     "src/tools/write.ts",
-    "src/embed-pipeline.ts"
+    "src/embed-pipeline.ts",
+    // v3.11.6-rc.13 — the rc.6 aliases producer (rc.12 folded it after the pre-promotion
+    // re-sweep caught `Aliases:` invisible; this file was outside the inventory, which is
+    // exactly HOW the class recursed — a producer the guard doesn't patrol can drift).
+    "src/fts5.ts"
   ];
-  // `fm.tags ?? fm.tag`, `fmData.tags ?? fmData.tag`, bare `fm.tags;`, `frontmatter?.title`
+  // `fm.tags ?? fm.tag`, `fmData.tags ?? fmData.tag`, bare `fm.tags;`, `frontmatter?.title`,
+  // and (rc.13) the raw bracket/dot alias shapes the rc.6→rc.12 recursion used.
   const RAW_TAG_OR = /\b[\w.]+\.tags\s*\?\?\s*[\w.]+\.tag\b/;
   const RAW_TITLE = /\bfrontmatter\?\.\s*title\b/;
+  const RAW_ALIASES = /\bfrontmatter\[(?:"|')alias(?:es)?(?:"|')\]|\b[\w.]+\.aliases\s*\?\?\s*[\w.]+\.alias\b/;
 
-  it("no producer reads the tags/tag/title KEY raw — all route through lookupFoldedAny (POSITIVE)", () => {
+  it("no producer reads the tags/tag/title/aliases KEY raw — all route through the folded lookups (POSITIVE)", () => {
     const offenders: string[] = [];
     for (const rel of PRODUCER_FILES) {
       const src = stripLineComments(readFileSync(path.join(repoRoot, rel), "utf8"));
       if (RAW_TAG_OR.test(src)) offenders.push(`${rel}: raw \`fm.tags ?? fm.tag\``);
       if (RAW_TITLE.test(src)) offenders.push(`${rel}: raw \`frontmatter?.title\``);
+      if (RAW_ALIASES.test(src)) offenders.push(`${rel}: raw \`frontmatter["aliases"]\` / \`.aliases ?? .alias\``);
     }
     expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+
+  it("extractAliases routes through lookupFoldedKey (rc.13 fix-site pin)", () => {
+    // Presence assertion (K-3 pattern): the aliases producer must keep the folded lookup.
+    const src = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
+    expect(src).toContain("lookupFoldedKey(frontmatter, key)");
   });
 
   it("the raw-producer detector actually fires on the pre-rc.13 shapes (NEGATIVE control)", () => {
     expect("const raw = fm.tags ?? fm.tag;").toMatch(RAW_TAG_OR);
     expect("const t = note.parsed.frontmatter?.title || base;").toMatch(RAW_TITLE);
-    // a folded read does NOT trip either detector
+    // rc.13 — the exact pre-rc.12 aliases shape fires the new detector.
+    expect('const raw = frontmatter["aliases"];').toMatch(RAW_ALIASES);
+    expect("const a = fm.aliases ?? fm.alias;").toMatch(RAW_ALIASES);
+    // a folded read does NOT trip any detector
     expect('const raw = lookupFoldedAny(fm, ["tags", "tag"]);').not.toMatch(RAW_TAG_OR);
+    expect("const raw = lookupFoldedKey(frontmatter, key).value;").not.toMatch(RAW_ALIASES);
   });
 });

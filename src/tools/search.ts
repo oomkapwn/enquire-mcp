@@ -1175,6 +1175,32 @@ export async function embeddingsSearch(
  * rank/score, which is critical for debugging recall regressions and for
  * explaining results to end users.
  */
+/**
+ * v3.11.6 (S-5) — per-hit ranking EXPLANATION, attached to a {@link SearchHybridHit}
+ * ONLY when the search was called with `explain: true`. It makes every re-rank
+ * stage's contribution — and the rank MOVEMENT it caused — visible, so you can
+ * see WHY a hit landed where it did and, crucially, whether the opt-in
+ * `--recency-weight` / `--feedback-weight` stages actually changed the order
+ * (both were previously evidence-poor: the response showed the final order but
+ * never which stage produced it). Every field is a score / rank / age only — no
+ * note content beyond what the hit already carries (privacy-safe). Ranks are
+ * 0-based positions in the fused candidate list at each stage boundary.
+ */
+export interface SearchHitExplain {
+  /** RRF-fused rank + score right after Reciprocal Rank Fusion, BEFORE any re-rank stage. The three ranker arms that fed it live in the hit's `per_signal`. */
+  rrf: { rank: number; score: number };
+  /** Wikilink graph-boost (v2.3.0): in-degree among the fused top-K + the score added (α × in_degree). Present only when graph-boost ran AND this hit received a boost. */
+  graph_boost?: { in_degree: number; score_delta: number };
+  /** Cross-encoder reranker (v2.9.0): the reranker score + rank before/after the rerank re-sort. Present only when a reranker ran and scored this hit. */
+  reranker?: { score: number; rank_before: number; rank_after: number };
+  /** Opt-in recency re-rank (`--recency-weight`): the note's age + recency score + rank before/after. Present only when recency re-rank was active; `rank_before === rank_after` means recency did NOT move this hit. */
+  recency?: { age_days: number; recency_score: number; rank_before: number; rank_after: number };
+  /** Opt-in closed-loop feedback re-rank (`--feedback-weight`): the note's feedback score + rank before/after. Present only when feedback re-rank was active; `rank_before === rank_after` means feedback did NOT move this hit. */
+  feedback?: { feedback_score: number; rank_before: number; rank_after: number };
+  /** Final 0-based rank of this hit in the returned `matches`. */
+  final_rank: number;
+}
+
 export interface SearchHybridHit {
   /** Vault-relative path of the matching note (or `path#chunk` for `granularity: "block"`). */
   path: string;
@@ -1224,6 +1250,11 @@ export interface SearchHybridHit {
    * does NOT reorder results (opt-in recency re-ranking is a separate flag).
    */
   stale?: boolean;
+  /**
+   * v3.11.6 (S-5) — per-stage ranking explanation. Present ONLY when the search
+   * was called with `explain: true`. See {@link SearchHitExplain}.
+   */
+  explain?: SearchHitExplain;
 }
 
 /**
@@ -1467,6 +1498,16 @@ export async function searchHybrid(
      * @example `{ status: "active", type: ["meeting", "decision"] }`
      */
     filter_frontmatter?: Record<string, FrontmatterFilterValue>;
+    /**
+     * v3.11.6 (S-5) — when true, attach a per-hit {@link SearchHitExplain}
+     * breakdown (RRF rank/score, graph-boost, reranker, and the opt-in recency /
+     * feedback rank movement) to every returned hit. Diagnostic — adds a small
+     * per-hit object and a few `Map`s while ranking. Absent/false ⇒ no `explain`
+     * field and zero extra allocation (byte-identical to pre-S-5). Meaningful
+     * only on the single-query path (`searchHybridMulti` re-fuses sub-query
+     * lists, so per-stage ranks wouldn't map to the final order — it drops it).
+     */
+    explain?: boolean;
   },
   ctx: {
     /** FTS5 index, if `--persistent-index` is enabled at server start. */
@@ -1533,6 +1574,29 @@ export async function searchHybrid(
   // Fan-out per-ranker top-K. Bigger than user's `limit` so RRF has room
   // to surface a doc that's mid-rank in one signal but top in another.
   const fanOutK = Math.max(50, limit * 5);
+
+  // v3.11.6 (S-5) — opt-in per-hit ranking explanation. Each map is populated
+  // only when `explain` is on; the default path allocates none of them and adds
+  // no per-stage work (every recording site is guarded by the map's presence).
+  const explain = args.explain === true;
+  const round5 = (n: number): number => Math.round(n * 100000) / 100000;
+  const posOf = (arr: readonly { id: string }[]): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < arr.length; i++) {
+      const el = arr[i];
+      if (el) m.set(el.id, i);
+    }
+    return m;
+  };
+  const exRrf = explain ? new Map<string, { rank: number; score: number }>() : undefined;
+  const exGraph = explain ? new Map<string, { in_degree: number; score_delta: number }>() : undefined;
+  const exRerank = explain ? new Map<string, { score: number; rank_before: number; rank_after: number }>() : undefined;
+  const exRecency = explain
+    ? new Map<string, { age_days: number; recency_score: number; rank_before: number; rank_after: number }>()
+    : undefined;
+  const exFeedback = explain
+    ? new Map<string, { feedback_score: number; rank_before: number; rank_after: number }>()
+    : undefined;
 
   const [{ reciprocalRankFusion, RRF_K }, { existsSync }] = await Promise.all([import("../rrf.js"), import("node:fs")]);
 
@@ -1767,6 +1831,13 @@ export async function searchHybrid(
   // prevent it), so an integration test of this layer would be vacuous.
   fused = pruneExcludedHits(fused, (p) => vault.isExcluded(p), granularity);
 
+  // S-5 — snapshot the pure-RRF order/score BEFORE any re-rank stage runs.
+  if (exRrf) {
+    fused.forEach((f, i) => {
+      exRrf.set(f.id, { rank: i, score: round5(f.score) });
+    });
+  }
+
   // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
   // Re-rank top-K by counting how many *other* top-K hits link to each one.
   // Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
@@ -1833,7 +1904,10 @@ export async function searchHybrid(
           inDegree += 1;
         }
       }
-      if (inDegree > 0) f.score += ALPHA * inDegree;
+      if (inDegree > 0) {
+        f.score += ALPHA * inDegree;
+        if (exGraph) exGraph.set(f.id, { in_degree: inDegree, score_delta: round5(ALPHA * inDegree) });
+      }
     }
     fused.sort((a, b) => b.score - a.score);
   }
@@ -1924,8 +1998,20 @@ export async function searchHybrid(
         const sb = rerankerScores?.get(b.id) ?? -Infinity;
         return sb - sa;
       });
+      const posBeforeRerank = exRerank ? posOf(fused) : undefined;
       for (let i = 0; i < reordered.length; i++) {
         fused[i] = reordered[i] as (typeof fused)[number];
+      }
+      if (exRerank && posBeforeRerank && rerankerScores) {
+        const posAfter = posOf(fused);
+        for (const [id, sc] of rerankerScores) {
+          if (!Number.isFinite(sc)) continue; // empty-snippet -Infinity sentinels omitted
+          exRerank.set(id, {
+            score: round5(sc),
+            rank_before: posBeforeRerank.get(id) ?? -1,
+            rank_after: posAfter.get(id) ?? -1
+          });
+        }
       }
       rerankedPairs = rerankBatch.length;
       if (!ctx.rerankerOverride) {
@@ -1975,16 +2061,32 @@ export async function searchHybrid(
           }
         })
       );
+      const exAgeRec = exRecency ? new Map<string, { age: number; rec: number }>() : undefined;
       const blended = fused.map((f, pos) => {
         const age = ageByPath.get(pathOf(f.id));
         const rec = typeof age === "number" ? recencyScore(age, staleDays) : 0;
+        if (exAgeRec) exAgeRec.set(f.id, { age: typeof age === "number" ? age : 0, rec });
         const relevance = 1 / (1 + pos);
         return { f, key: (1 - w) * relevance + w * rec };
       });
+      const posBeforeRecency = exRecency ? posOf(fused) : undefined;
       blended.sort((a, b) => b.key - a.key);
       for (let i = 0; i < blended.length; i++) {
         const b = blended[i];
         if (b) fused[i] = b.f;
+      }
+      if (exRecency && exAgeRec && posBeforeRecency) {
+        const posAfter = posOf(fused);
+        for (const f of fused) {
+          const ar = exAgeRec.get(f.id);
+          if (!ar) continue;
+          exRecency.set(f.id, {
+            age_days: ar.age,
+            recency_score: round5(ar.rec),
+            rank_before: posBeforeRecency.get(f.id) ?? -1,
+            rank_after: posAfter.get(f.id) ?? -1
+          });
+        }
       }
     } catch {
       // node:fs/promises import failed (should never happen) — keep relevance order.
@@ -2009,15 +2111,30 @@ export async function searchHybrid(
       const h = id.lastIndexOf("#");
       return h > 0 ? id.slice(0, h) : id;
     };
+    const exFbTmp = exFeedback ? new Map<string, number>() : undefined;
     const blended = fused.map((f, pos) => {
       const fb = fbScores.get(fbPathOf(f.id)) ?? 0;
+      if (exFbTmp) exFbTmp.set(f.id, fb);
       const relevance = 1 / (1 + pos);
       return { f, key: (1 - w) * relevance + w * fb };
     });
+    const posBeforeFb = exFeedback ? posOf(fused) : undefined;
     blended.sort((a, b) => b.key - a.key);
     for (let i = 0; i < blended.length; i++) {
       const b = blended[i];
       if (b) fused[i] = b.f;
+    }
+    if (exFeedback && exFbTmp && posBeforeFb) {
+      const posAfter = posOf(fused);
+      for (const f of fused) {
+        const fb = exFbTmp.get(f.id);
+        if (fb === undefined) continue;
+        exFeedback.set(f.id, {
+          feedback_score: round5(fb),
+          rank_before: posBeforeFb.get(f.id) ?? -1,
+          rank_after: posAfter.get(f.id) ?? -1
+        });
+      }
     }
   }
 
@@ -2096,7 +2213,7 @@ export async function searchHybrid(
     const baseName = path.basename(pathPart);
     const title = kind === "pdf" ? baseName.replace(/\.pdf$/i, "") : stripMd(baseName);
     const rerankerScore = rerankerScores?.get(f.id);
-    matches.push({
+    const hit: SearchHybridHit = {
       path: pathPart,
       title,
       score: Math.round(f.score * 100000) / 100000,
@@ -2109,7 +2226,25 @@ export async function searchHybrid(
       ...(typeof rerankerScore === "number" && Number.isFinite(rerankerScore)
         ? { reranker_score: Math.round(rerankerScore * 100000) / 100000 }
         : {})
-    });
+    };
+    // S-5 — assemble the per-stage explanation from the accumulators. `final_rank`
+    // is this hit's 0-based position in the returned matches (= current length).
+    if (explain) {
+      const ex: SearchHitExplain = {
+        rrf: exRrf?.get(f.id) ?? { rank: -1, score: round5(f.score) },
+        final_rank: matches.length
+      };
+      const g = exGraph?.get(f.id);
+      if (g) ex.graph_boost = g;
+      const r = exRerank?.get(f.id);
+      if (r) ex.reranker = r;
+      const rc = exRecency?.get(f.id);
+      if (rc) ex.recency = rc;
+      const fb = exFeedback?.get(f.id);
+      if (fb) ex.feedback = fb;
+      hit.explain = ex;
+    }
+    matches.push(hit);
     if (matches.length >= limit) break;
   }
 
@@ -2198,7 +2333,10 @@ export async function searchHybridMulti(
   ctx: SearchHybridCtx
 ): Promise<SearchHybridResponse> {
   const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
-  const { queries, ...rest } = args;
+  // S-5 — `explain` is a single-query diagnostic: each sub-query's per-stage
+  // ranks refer to ITS own fusion, not this outer re-fusion, so a per-hit
+  // explain here would be misleading. Drop it from the fan-out.
+  const { queries, explain: _dropExplain, ...rest } = args;
   const limit = args.limit ?? 10;
   // Over-fetch per sub-query so the fused top-`limit` has a deep enough pool.
   const perQueryLimit = Math.min(100, Math.max(limit * 3, 30));

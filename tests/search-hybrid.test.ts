@@ -737,3 +737,121 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     expect(MAX_FANOUT_QUERIES).toBe(8);
   });
 });
+
+// ─── v3.11.6 (S-5) — opt-in `explain` mode ──────────────────────────────────
+// The three ranker arms were already exposed via `per_signal` and the reranker
+// via `reranker_score`, but graph-boost / recency / feedback contributions —
+// and the RANK MOVEMENT any re-rank stage caused — were invisible, so you could
+// not tell whether the opt-in `--recency-weight` / `--feedback-weight` stages
+// actually changed the order (both were "evidence-poor" per the Codex audit).
+// `explain: true` attaches a per-hit breakdown; off ⇒ no field (byte-identical).
+describe("searchHybrid — opt-in explain mode (v3.11.6 S-5)", () => {
+  let eRoot: string;
+
+  beforeAll(async () => {
+    eRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-explain-"));
+    // apex: 3× the query term → most relevant (TF-IDF rank 0).
+    await fs.writeFile(path.join(eRoot, "apex.md"), "kubernetes kubernetes kubernetes ingress controller.\n");
+    // base: 1× the term → less relevant (rank 1).
+    await fs.writeFile(path.join(eRoot, "base.md"), "kubernetes ingress controller notes.\n");
+  });
+
+  afterAll(async () => {
+    await fs.rm(eRoot, { recursive: true, force: true });
+  });
+
+  const embedFile = () => path.join(eRoot, "nonexistent.embed.db");
+
+  it("attaches a per-hit explain (rrf rank/score + final_rank) when explain:true", async () => {
+    const v = new Vault(eRoot);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5, explain: true },
+      { ftsIndex: null, embedFile: embedFile() }
+    );
+    expect(result.matches.length).toBe(2);
+    result.matches.forEach((m, i) => {
+      expect(m.explain).toBeDefined();
+      expect(m.explain?.final_rank).toBe(i);
+      expect(typeof m.explain?.rrf.rank).toBe("number");
+      expect(typeof m.explain?.rrf.score).toBe("number");
+      // No reranker/recency/feedback stage ran → those sub-objects are absent.
+      expect(m.explain?.reranker).toBeUndefined();
+      expect(m.explain?.recency).toBeUndefined();
+      expect(m.explain?.feedback).toBeUndefined();
+    });
+    // The RRF rank the explain reports is the pre-re-rank order (apex first).
+    expect(result.matches[0]?.explain?.rrf.rank).toBe(0);
+  });
+
+  // NEGATIVE control — without explain, no hit carries the field, and the rest
+  // of the response is byte-identical (proving the mode is opt-in, zero-cost).
+  it("NEGATIVE control — no explain field when the flag is off (byte-identical default)", async () => {
+    const v = new Vault(eRoot);
+    const withoutFlag = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      { ftsIndex: null, embedFile: embedFile() }
+    );
+    const withFalse = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5, explain: false },
+      { ftsIndex: null, embedFile: embedFile() }
+    );
+    for (const m of [...withoutFlag.matches, ...withFalse.matches]) {
+      expect(m.explain).toBeUndefined();
+      expect("explain" in m).toBe(false);
+    }
+    // Order + scores identical with the flag off vs absent.
+    expect(withFalse.matches.map((m) => m.path)).toEqual(withoutFlag.matches.map((m) => m.path));
+  });
+
+  // The headline S-5 value: a feedback re-rank that actually MOVES a note is now
+  // VISIBLE. weight 1 → order is purely by feedback score, so the boosted note
+  // rises and explain records rank_before > rank_after (and the demoted note the
+  // reverse). This is what "validate that mark_useful actually helps" means.
+  it("makes feedback rank movement visible (rank_before → rank_after)", async () => {
+    const v = new Vault(eRoot);
+    const fbScores = new Map<string, number>([
+      ["base.md", 0.9], // the LESS-relevant note gets a strong human upvote
+      ["apex.md", 0.1]
+    ]);
+    const result = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5, explain: true },
+      { ftsIndex: null, embedFile: embedFile(), feedback: { weight: 1, scores: fbScores } }
+    );
+    // weight 1 → base (fb 0.9) beats apex (fb 0.1) → base is now rank 0.
+    expect(result.matches[0]?.path).toBe("base.md");
+    expect(result.matches[1]?.path).toBe("apex.md");
+    const base = result.matches.find((m) => m.path === "base.md");
+    const apex = result.matches.find((m) => m.path === "apex.md");
+    // base moved UP (1 → 0); apex moved DOWN (0 → 1) — the explain proves it.
+    expect(base?.explain?.feedback?.feedback_score).toBeCloseTo(0.9, 5);
+    expect(base?.explain?.feedback?.rank_before).toBeGreaterThan(base?.explain?.feedback?.rank_after ?? -1);
+    expect(apex?.explain?.feedback?.rank_after).toBeGreaterThan(apex?.explain?.feedback?.rank_before ?? -1);
+  });
+
+  it("exposes wikilink graph-boost in_degree for a hub note", async () => {
+    const gRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-explain-graph-"));
+    try {
+      await fs.writeFile(path.join(gRoot, "hub.md"), "central kubernetes topic.\n");
+      await fs.writeFile(path.join(gRoot, "a.md"), "kubernetes see [[hub]] for more.\n");
+      await fs.writeFile(path.join(gRoot, "b.md"), "kubernetes also [[hub]] here.\n");
+      const v = new Vault(gRoot);
+      const result = await searchHybrid(
+        v,
+        { query: "kubernetes", limit: 5, explain: true, graph_boost: true },
+        { ftsIndex: null, embedFile: path.join(gRoot, "none.embed.db") }
+      );
+      const hub = result.matches.find((m) => m.path === "hub.md");
+      expect(hub?.explain?.graph_boost?.in_degree).toBe(2); // a.md + b.md both link it
+      expect(hub?.explain?.graph_boost?.score_delta).toBeCloseTo(0.01, 5); // 2 × α(0.005)
+      // The leaf notes received no in-links → no graph_boost sub-object.
+      const a = result.matches.find((m) => m.path === "a.md");
+      expect(a?.explain?.graph_boost).toBeUndefined();
+    } finally {
+      await fs.rm(gRoot, { recursive: true, force: true });
+    }
+  });
+});

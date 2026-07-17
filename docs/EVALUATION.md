@@ -45,6 +45,18 @@ Blank lines and `//` comment lines are tolerated. Keep the golden set **committe
 
 Rules of thumb: nDCG@5 **0.9+ excellent, 0.7+ good, <0.5 poor**. A `|Δ| ≥ 0.01` between two runs is meaningful at ~50+ queries; below that is noise. Fewer than 50 queries → treat conclusions as directional.
 
+## Per-hit ranking explanation (`explain`)
+
+To debug a *single* result's ranking (not an aggregate), call `obsidian_search` with `explain: true`. Every hit then carries an `explain` object exposing each re-rank stage's contribution **and the rank movement it caused** — the thing the aggregate metrics can't show:
+
+- `rrf` — the fused rank/score right after RRF, **before** any re-rank stage (the three ranker arms are in the hit's `per_signal`).
+- `graph_boost` — wikilink `in_degree` among the top-K + the `score_delta` added (present only when a hit was boosted).
+- `reranker` — the cross-encoder score + `rank_before`/`rank_after` (present only with `--enable-reranker`).
+- `recency` / `feedback` — the note's age / recency score / feedback score + `rank_before`/`rank_after` (present only when `--recency-weight` / `--feedback-weight` are active).
+- `final_rank` — the hit's 0-based position in the returned results.
+
+This is the concrete way to **validate that the opt-in `--recency-weight` and `--feedback-weight` re-ranks actually change the order** (both are otherwise evidence-poor): if `rank_before === rank_after` for every hit, that stage did nothing for this query. Diagnostic-only, single-query, privacy-safe (scores/ranks/ages, no extra content); omit it (the default) and the response is byte-identical.
+
 ## How to interpret failures
 
 Start with `summary`, then `by_category` (weakest nDCG first), then the worst `per_query` rows (`missed_paths` + `top_paths`):

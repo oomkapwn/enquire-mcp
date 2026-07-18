@@ -605,20 +605,54 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
     }
   });
 
-  it("schema bump from v3 → v4 auto-rebuilds the index", async () => {
+  // v3.11.6-rc.15 (external rc.14 audit L-1) — a REAL legacy-schema rebuild test.
+  // The pre-rc.15 test titled "v3 → v4 auto-rebuilds" actually opened the CURRENT
+  // schema, closed, and reopened the SAME current schema — so it verified
+  // PRESERVATION on a match, never REBUILD on a mismatch (and its v3→v4 title was
+  // stale: production SCHEMA_VERSION is 5). This writes a genuine legacy
+  // `schema_version` into the meta table and asserts the mismatch triggers a
+  // rebuild that discards the old rows.
+  it("a LEGACY schema_version in meta triggers a rebuild that DISCARDS old rows", async () => {
     if (!canRunFts5) return;
-    // Open + populate with the current schema (v4), close, reopen — should
-    // be a no-op rebuild (schema_version matches).
+    // 1. Build a real current-schema (v5) index with a marker row.
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx.open();
-    idx.reindexFile("a.md", 1000, "test");
+    idx.reindexFile("legacy-marker.md", 1000, "uniquelegacymarker content");
+    expect(idx.totalChunks()).toBeGreaterThan(0);
+    expect(idx.search("uniquelegacymarker").length).toBe(1);
+    idx.close();
+
+    // 2. Downgrade its stored schema_version to a legacy value (4) out-of-band.
+    const { default: Database } = await import("better-sqlite3");
+    const raw = new Database(dbFile);
+    raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')").run();
+    expect(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({ value: "4" });
+    raw.close();
+
+    // 3. Reopen via FtsIndex — the 4 ≠ 5 mismatch must REBUILD (drop old rows).
+    const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx2.open();
+    expect(idx2.totalChunks(), "rebuild must discard the legacy-schema rows").toBe(0);
+    expect(idx2.search("uniquelegacymarker"), "the old marker must be gone after rebuild").toEqual([]);
+    // And the meta is bumped back to the current version.
+    const meta = await peekFtsMetaSafe(dbFile);
+    expect(meta?.schema_version).toBe(String(5));
+    idx2.close();
+  });
+
+  // Matching-version PRESERVATION control (the property the old test actually
+  // exercised): a reopen at the SAME schema_version keeps the data.
+  it("a matching schema_version reopen PRESERVES the index (no rebuild)", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await idx.open();
+    idx.reindexFile("keep.md", 1000, "preserved content");
     expect(idx.totalChunks()).toBeGreaterThan(0);
     idx.close();
 
-    // Reopen — should preserve data (no rebuild on matching schema).
     const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx2.open();
-    expect(idx2.totalChunks()).toBeGreaterThan(0);
+    expect(idx2.totalChunks(), "matching schema must preserve rows").toBeGreaterThan(0);
     idx2.close();
   });
 });

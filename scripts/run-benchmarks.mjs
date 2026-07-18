@@ -1358,7 +1358,47 @@ function renderTable(rows) {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+// v3.11.6-rc.15 (external rc.14 audit M-1) — STRICT by default. Pre-rc.15 the
+// script caught embedder/reranker load failures, converted them to `skipped`
+// rows, printed zeros, exited 0, AND overwrote the tracked canonical
+// `bench/benchmarks.json` — so `npm run bench:retrieval` (the advertised
+// reproduction command for the +15.5 NDCG@10 / +24.7 MRR reranker claim) did
+// not fail when it had failed to reproduce that measurement, and a partial run
+// could replace the canonical evidence artifact. Now: a required arm that skips
+// is a NON-ZERO exit and the canonical artifact is left byte-unchanged, unless
+// `--allow-partial` is passed (which must also target a non-canonical
+// `--output <path>`). The write is atomic (tmp + rename) so a mid-run failure
+// can't leave a truncated artifact.
+export function parseBenchArgs(argv) {
+  const args = { allowPartial: false, output: null };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--allow-partial") args.allowPartial = true;
+    else if (argv[i] === "--output") args.output = argv[++i];
+  }
+  return args;
+}
+
+/**
+ * Pure decision (rc.15 M-1) for whether/where the benchmark may write. Extracted
+ * so the strict-mode contract is unit-testable without a full model-loading run.
+ * @returns one of:
+ *   `{ mode: "strict-fail" }`   — a required arm skipped, not allowed → exit non-zero, do NOT write
+ *   `{ mode: "need-output" }`   — --allow-partial without --output → exit non-zero, do NOT write
+ *   `{ mode: "write", file }`   — OK to write `file` (canonical only on a full run or explicit --output)
+ */
+export function resolveBenchWrite({ embedReady, rerankerReady, allowPartial, output, canonicalFile }) {
+  const requiredArmsRan = embedReady && rerankerReady;
+  if (!requiredArmsRan && !allowPartial) return { mode: "strict-fail" };
+  const target = output ? path.resolve(output) : path.resolve(canonicalFile);
+  // A degraded run must target a NON-canonical --output — even an explicit
+  // `--output <canonical>` is refused, so the canonical evidence artifact can
+  // never be replaced by a partial measurement.
+  if (!requiredArmsRan && (!output || target === path.resolve(canonicalFile))) return { mode: "need-output" };
+  return { mode: "write", file: target, partial: !requiredArmsRan };
+}
+
 async function main() {
+  const benchArgs = parseBenchArgs(process.argv.slice(2));
   const queriesFile = path.join(projectRoot, "tests", "fixtures", "benchmark-queries.jsonl");
   const queries = await readQueriesJsonl(queriesFile);
   process.stderr.write(`bench: loaded ${queries.length} queries from ${queriesFile}\n`);
@@ -1618,20 +1658,60 @@ async function main() {
     return { ...rest, ndcg_by_category: cats };
   });
 
-  // Write JSON for downstream consumption.
-  const outDir = path.join(projectRoot, "bench");
-  await fs.mkdir(outDir, { recursive: true });
-  const outFile = path.join(outDir, "benchmarks.json");
-  await fs.writeFile(outFile, JSON.stringify({ meta, rows: rowsForJson }, null, 2));
-  process.stderr.write(`bench: wrote ${outFile}\n`);
-
-  // Cleanup.
+  // Cleanup the working vault/index before we decide whether to write/exit.
   ftsIndex.close();
   await fs.rm(vaultRoot, { recursive: true, force: true });
   await fs.rm(tmpIndexDir, { recursive: true, force: true });
+
+  // rc.15 (audit M-1) — strict write decision (pure {@link resolveBenchWrite}).
+  const canonicalFile = path.join(projectRoot, "bench", "benchmarks.json");
+  const decision = resolveBenchWrite({
+    embedReady,
+    rerankerReady,
+    allowPartial: benchArgs.allowPartial,
+    output: benchArgs.output,
+    canonicalFile
+  });
+
+  if (decision.mode === "strict-fail") {
+    const missing = [
+      !embedReady ? `embeddings (${embedSkipReason})` : null,
+      !rerankerReady ? `reranker (${rerankerSkipReason})` : null
+    ]
+      .filter(Boolean)
+      .join("; ");
+    process.stderr.write(
+      `\nbench: STRICT FAILURE — required arm(s) did not run: ${missing}\n` +
+        `bench: the +NDCG/+MRR reranker delta was NOT reproduced; canonical ${path.relative(projectRoot, canonicalFile)} left UNCHANGED.\n` +
+        "bench: preinstall the model cache (npm i @huggingface/transformers && node dist/index.js install-model rerank-bge), or\n" +
+        "bench: pass --allow-partial --output <path> to write a DEGRADED diagnostic elsewhere.\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (decision.mode === "need-output") {
+    process.stderr.write(
+      "bench: --allow-partial requires --output <path> so a degraded run cannot overwrite the canonical artifact.\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const outFile = decision.file;
+  await fs.mkdir(path.dirname(outFile), { recursive: true });
+  // Atomic write: tmp + rename, so a crash mid-write can't truncate the artifact.
+  const tmpFile = `${outFile}.tmp`;
+  await fs.writeFile(tmpFile, JSON.stringify({ meta, rows: rowsForJson }, null, 2));
+  await fs.rename(tmpFile, outFile);
+  process.stderr.write(`bench: wrote ${outFile}${decision.partial ? " (PARTIAL — degraded arms)" : ""}\n`);
 }
 
-main().catch((err) => {
-  process.stderr.write(`bench failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
-  process.exit(1);
-});
+// rc.15 (M-1) — guard the CLI entry so importing this module for unit tests
+// (resolveBenchWrite / parseBenchArgs) does NOT run the full benchmark.
+const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isEntrypoint) {
+  main().catch((err) => {
+    process.stderr.write(`bench failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    process.exit(1);
+  });
+}

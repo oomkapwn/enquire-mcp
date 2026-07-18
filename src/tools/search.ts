@@ -361,6 +361,16 @@ interface DocVector {
 }
 
 const tfidfCache = new WeakMap<Vault, { docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }>();
+// v3.11.6-rc.15 (audit H-1) — single-flight: a corpus build in flight for a given
+// Vault + corpus snapshot, so concurrent cold callers share ONE build instead of
+// each running the whole read+tokenize scan. Keyed by Vault (WeakMap → GC'd with it).
+const tfidfPending = new WeakMap<
+  Vault,
+  {
+    entriesRef: FileEntry[];
+    promise: Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }>;
+  }
+>();
 
 const STOP_WORDS = new Set([
   "a",
@@ -518,14 +528,57 @@ export async function buildTfidfIndex(
 ): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
   const entries = await vault.listMarkdown();
   const cached = tfidfCache.get(vault);
-  if (
-    cached &&
-    cached.entriesRef.length === entries.length &&
-    cached.entriesRef.every((e, i) => entries[i]?.relPath === e.relPath && entries[i]?.mtimeMs === e.mtimeMs)
-  ) {
+  if (cached && sameCorpus(cached.entriesRef, entries)) {
     return cached;
   }
 
+  // v3.11.6-rc.15 (external rc.14 audit H-1) — SINGLE-FLIGHT the corpus build.
+  // Pre-rc.15 the cache published ONLY the completed result, so N concurrent
+  // callers on a cold/invalidated cache each ran the full read+tokenize scan.
+  // The always-on multi-query fan-out (`obsidian_search` `queries[]`, up to 8
+  // extra phrasings + the main query = 9) starts every sub-query with
+  // `Promise.all`, so a single legal bearer-reachable request could trigger 9
+  // concurrent whole-vault corpus builds (measured ~10-12× reads / ~3.2s /
+  // +224MB RSS at 6.4k notes — a cold-start / event-loop DoS amplifier). Now a
+  // build-in-flight for THIS exact corpus snapshot is shared: concurrent callers
+  // await the one pending promise instead of racing their own scans.
+  const pending = tfidfPending.get(vault);
+  if (pending && sameCorpus(pending.entriesRef, entries)) {
+    return pending.promise;
+  }
+
+  // Publish the pending promise BEFORE the first `await` inside the build (the
+  // IIFE runs synchronously up to its first `readNote` await, then this set()
+  // runs — no await between, so a concurrent caller resuming from its own
+  // `listMarkdown` await observes this pending entry).
+  const promise = buildTfidfIndexUncached(vault, entries);
+  tfidfPending.set(vault, { entriesRef: entries, promise });
+  try {
+    return await promise;
+  } finally {
+    // Clear pending only if it's still OURS — a newer invalidating build may
+    // have replaced it while this one was in flight.
+    const cur = tfidfPending.get(vault);
+    if (cur && cur.promise === promise) tfidfPending.delete(vault);
+  }
+}
+
+/** Corpus-snapshot equality: same file set at the same mtimes, in order. Shared
+ *  by the completed-cache check and the single-flight pending check (rc.15). */
+function sameCorpus(ref: FileEntry[], entries: FileEntry[]): boolean {
+  return (
+    ref.length === entries.length &&
+    ref.every((e, i) => entries[i]?.relPath === e.relPath && entries[i]?.mtimeMs === e.mtimeMs)
+  );
+}
+
+/** The actual read+tokenize+weight corpus build (rc.15 — extracted from
+ *  {@link buildTfidfIndex} so the single-flight wrapper owns cache publication).
+ *  Sets the completed `tfidfCache` on success. */
+async function buildTfidfIndexUncached(
+  vault: Vault,
+  entries: FileEntry[]
+): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
   type RawDoc = { entry: FileEntry; tf: Map<string, number> };
   const rawDocs: RawDoc[] = [];
   const docFreq = new Map<string, number>();
@@ -2317,6 +2370,36 @@ export async function searchHybrid(
  *  MAX_FANOUT_QUERIES + 1 = 9 full hybrid pipeline runs per call. */
 export const MAX_FANOUT_QUERIES = 8;
 
+/** v3.11.6-rc.15 (audit H-1) — how many fan-out sub-queries run concurrently.
+ *  Bounds the simultaneous full pipelines (graph-boost / optional reranker /
+ *  embedding) so a legal 9-phrasing request can't start 9 heavy pipelines at
+ *  once on the event loop. Combined with the `buildTfidfIndex` single-flight
+ *  (which collapses the shared corpus build to ONE regardless), this makes the
+ *  worst-case cold fan-out cost bounded + independent of vault size. */
+export const MAX_FANOUT_CONCURRENCY = 4;
+
+/** Run `fn` over `items` with at most `limit` in flight at once, preserving
+ *  input order in the result. A bounded-pool replacement for `Promise.all` on
+ *  the fan-out path (rc.15). */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    // `const i = next++` is atomic (no await between read + increment), so no
+    // two workers claim the same index.
+    for (let i = next++; i < items.length; i = next++) {
+      results[i] = await fn(items[i] as T, i);
+    }
+  };
+  const n = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return results;
+}
+
 type SearchHybridArgs = Parameters<typeof searchHybrid>[1];
 type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
 
@@ -2355,8 +2438,11 @@ export async function searchHybridMulti(
   // Over-fetch per sub-query so the fused top-`limit` has a deep enough pool.
   const perQueryLimit = Math.min(100, Math.max(limit * 3, 30));
 
-  const perQuery = await Promise.all(
-    queries.map((q) => searchHybrid(vault, { ...rest, query: q, limit: perQueryLimit }, ctx))
+  // rc.15 (audit H-1) — bounded concurrency (was `Promise.all` = all 9 at once).
+  // The shared TF-IDF corpus still builds ONCE via the buildTfidfIndex single-
+  // flight; this additionally caps how many full pipelines run simultaneously.
+  const perQuery = await mapWithConcurrency(queries, MAX_FANOUT_CONCURRENCY, (q) =>
+    searchHybrid(vault, { ...rest, query: q, limit: perQueryLimit }, ctx)
   );
 
   // Keep, per path, the best-scoring hit object across sub-queries for display

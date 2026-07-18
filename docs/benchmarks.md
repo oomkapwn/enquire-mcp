@@ -337,6 +337,15 @@ npm run bench:retrieval
 Output: a markdown table on stdout + `bench/benchmarks.json` for machine-
 readable consumption (with per-query and per-category breakdowns).
 
+**Strict by default (v3.11.6-rc.15).** The embeddings + reranker arms back the
+headline reranker delta, so if either fails to load (e.g. the model cache isn't
+present), `bench:retrieval` **exits non-zero and leaves `bench/benchmarks.json`
+byte-unchanged** — a partial run can no longer silently overwrite the canonical
+artifact or report success without reproducing the measured arms. Pre-cache the
+model first (`npm i @huggingface/transformers && node dist/index.js install-model rerank-bge`).
+To capture a deliberately-degraded diagnostic (e.g. TF-IDF-only, no models),
+pass `--allow-partial --output <path>` to write it to a **non-canonical** file.
+
 ### Determinism
 
 Across multiple runs on the same hardware, **all aggregate metrics

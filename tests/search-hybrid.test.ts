@@ -739,6 +739,51 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     expect(MAX_FANOUT_QUERIES).toBe(8);
   });
 
+  // v3.11.6-rc.15 (external rc.14 audit H-1) — a cold 9-phrasing fan-out used to
+  // run one FULL TF-IDF corpus build PER sub-query (up to 9 concurrent whole-vault
+  // read+tokenize scans from one legal bearer-reachable request — measured ~10-12×
+  // reads / ~3.2s / +224MB RSS at 6.4k notes). The `buildTfidfIndex` single-flight
+  // collapses concurrent cold builds to ONE. This asserts that structural property.
+  it("cold 9-query fan-out builds the TF-IDF corpus ONCE, not per-phrasing (H-1)", async () => {
+    const N = 150;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-h1-fanout-"));
+    try {
+      // Notes share NO tokens with the queries → the ONLY note reads with a
+      // NUMERIC mtime arg are the corpus build's full scan (snippet/candidate
+      // reads happen on matches, of which there are none, and pass a single
+      // resolved-path arg). So `corpusReads` isolates the number of full builds×N.
+      for (let i = 0; i < N; i++) {
+        await fs.writeFile(
+          path.join(dir, `n${i}.md`),
+          `# Note ${i}\nuniquetoken${i} filler body prose paragraph ${i}.\n`
+        );
+      }
+      const v = new Vault(dir);
+      let corpusReads = 0;
+      const origReadNote = v.readNote.bind(v);
+      v.readNote = async (...args: Parameters<typeof v.readNote>) => {
+        if (typeof args[1] === "number") corpusReads += 1; // readNote(absPath, mtimeMs) = a corpus-build read
+        return origReadNote(...args);
+      };
+      const queries = Array.from({ length: 9 }, (_, i) => `zznomatch${i}`);
+      await searchHybridMulti(
+        v,
+        { queries, limit: 10 },
+        { ftsIndex: null, embedFile: path.join(dir, "none.embed.db") }
+      );
+      // Single-flight ⇒ ~N (one corpus pass). Pre-fix ⇒ up to 9×N; even with the
+      // bounded-concurrency cap alone it would be ~MAX_FANOUT_CONCURRENCY×N. The
+      // < 2×N budget catches any regression that lets the corpus build multiply.
+      expect(
+        corpusReads,
+        `cold 9-query did ${corpusReads} corpus reads over ${N} notes (expected ~1 pass, <${2 * N})`
+      ).toBeLessThan(2 * N);
+      expect(corpusReads, "the corpus WAS built (guards against a vacuous 0)").toBeGreaterThanOrEqual(N);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // rc.12 (pre-promotion re-sweep) — the multi path used to silently DROP the
   // `reranked` response field even though every sub-query ran the reranker,
   // reopening the v3.10.0-rc.13 Issue-9 observability gap for `queries[]` callers.

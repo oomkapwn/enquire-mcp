@@ -2373,9 +2373,9 @@ export const MAX_FANOUT_QUERIES = 8;
 /** v3.11.6-rc.15 (audit H-1) — how many fan-out sub-queries run concurrently.
  *  Bounds the simultaneous full pipelines (graph-boost / optional reranker /
  *  embedding) so a legal 9-phrasing request can't start 9 heavy pipelines at
- *  once on the event loop. Combined with the {@link buildTfidfIndex} single-
- *  flight (which collapses the shared corpus build to ONE regardless), this
- *  makes the worst-case cold fan-out cost bounded + independent of vault size. */
+ *  once on the event loop. Combined with the `buildTfidfIndex` single-flight
+ *  (which collapses the shared corpus build to ONE regardless), this makes the
+ *  worst-case cold fan-out cost bounded + independent of vault size. */
 export const MAX_FANOUT_CONCURRENCY = 4;
 
 /** Run `fn` over `items` with at most `limit` in flight at once, preserving

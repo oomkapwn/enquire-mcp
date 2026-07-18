@@ -111,27 +111,27 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     await fs.rm(tmpdir, { recursive: true, force: true });
   });
 
-  it("invokes main() when run via a symlink (e.g. npm bin shim)", async () => {
+  it("invokes main() when run via a symlink (e.g. npm bin shim)", async (ctx) => {
     const exists = await fs
       .stat(distEntry)
       .then(() => true)
       .catch(() => false);
-    if (!exists) return; // dist not built yet — skip in dev watch loops
+    if (!exists) return ctx.skip(); // dist not built (dev watch) — VISIBLE skip (rc.14); e2e-handlers CI-GUARD asserts dist in CI
     const link = path.join(tmpdir, "enquire-mcp");
     await fs.symlink(distEntry, link);
     const out = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
     expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
   });
 
-  it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async () => {
+  it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async (ctx) => {
     const exists = await fs
       .stat(distEntry)
       .then(() => true)
       .catch(() => false);
-    if (!exists) return;
+    if (!exists) return ctx.skip(); // rc.14 — visible skip
     // tmpdir already lives under /tmp on macOS — execFile via /tmp path
     // exercises the same realpath divergence.
-    if (process.platform !== "darwin") return; // only macOS has the /tmp symlink
+    if (process.platform !== "darwin") return ctx.skip(); // only macOS has the /tmp symlink (rc.14 — visible platform skip)
     const out = execFileSync(process.execPath, [distEntry, "--version"], {
       encoding: "utf8",
       cwd: tmpdir

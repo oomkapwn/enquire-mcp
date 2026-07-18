@@ -1126,7 +1126,22 @@ export function registerReadTools(
     },
     async (args) => {
       const embedFile = embedDbPath(vault.root);
-      return textResult(await contextPack(vault, args, { ftsIndex, embedFile }));
+      // rc.14 — pass the SAME full search context obsidian_search uses, so the
+      // pack's inner retrieval honors --enable-reranker / --use-hnsw /
+      // --recency-weight / --feedback-weight (pre-rc.14 it silently ranked
+      // plain-RRF while those were enabled — the "enabled but not wired" class).
+      return textResult(
+        await contextPack(vault, args, {
+          ftsIndex,
+          embedFile,
+          ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
+          ...(hnswContext ? { hnsw: hnswContext } : {}),
+          ...(recencyConfig ? { recency: recencyConfig } : {}),
+          ...(feedbackContext
+            ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }
+            : {})
+        })
+      );
     }
   );
 

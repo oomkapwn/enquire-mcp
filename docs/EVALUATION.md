@@ -7,16 +7,22 @@ enquire ships a **built-in retrieval-quality harness** so you can *measure* a ch
 ## Quick start
 
 ```bash
-# 1. build the indexes for your vault (once)
+# 0. (optional smoke) run the committed golden set against the repo's synthetic vault —
+#    examples/queries.jsonl targets THAT vault (CI-pinned), so this pair works out of the box:
+node -e 'import("./scripts/synthetic-vault.mjs").then(async m => console.log(await m.createSyntheticVault()))'
+enquire-mcp eval --vault <printed-path> --queries examples/queries.jsonl --per-query
+
+# 1. build the indexes for YOUR vault (once)
 enquire-mcp setup --vault <path>
 
-# 2. run the eval against a golden set (JSONL of {query, relevant, id?, category?})
-enquire-mcp eval --vault <path> --queries examples/queries.jsonl --persistent-index --per-query
+# 2. write a golden set FOR YOUR VAULT (JSONL of {query, relevant, id?, category?} —
+#    `relevant` paths must exist in YOUR vault; see examples/queries.jsonl for the format) and run:
+enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --per-query
 
 # 3. write a result JSON for A/B analysis
-enquire-mcp eval --vault <path> --queries <q>.jsonl --persistent-index --output before.json
+enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --output before.json
 #    …make a retrieval change, rebuild…
-enquire-mcp eval --vault <path> --queries <q>.jsonl --persistent-index --output after.json
+enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --output after.json
 npm run eval:compare -- before.json after.json     # delta table; exits 1 on a meaningful regression
 ```
 
@@ -114,4 +120,4 @@ The full LongMemEval-S vault is ~22k notes; indexing it (especially with a cloud
 - `src/eval.ts` — pure metrics (`ndcgAtK`/`recallAtK`/`reciprocalRank`/`hitAtK`/`allRelevantAtK`), `groupByCategory`, `compareEvalResults`, `runEval`, formatters.
 - `scripts/eval-compare.mjs` — A/B delta tool (`npm run eval:compare`).
 - `scripts/bench-longmemeval.mjs` — LongMemEval retrieval harness.
-- `examples/queries.jsonl` — a small categorized golden set for the synthetic/quick-start vault.
+- `examples/queries.jsonl` — a small categorized golden set targeting the repo's SYNTHETIC quick-start vault (`scripts/synthetic-vault.mjs`); every `relevant` path is CI-pinned to that vault by `tests/eval-goldenset-contract.test.ts`. For your own vault, write your own set in the same format.

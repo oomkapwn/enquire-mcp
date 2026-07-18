@@ -1,10 +1,9 @@
-{"id": "q01", "query": "Apollo program", "relevant": ["Reference/Apollo Program.md", "Reference/NASA history.md"], "category": "keyword"}
-{"id": "q02", "query": "obsidian plugin development", "relevant": ["Notes/Plugin Dev Notes.md", "Reference/Obsidian API.md"], "category": "keyword"}
-{"id": "q03", "query": "wikilink graph algorithms", "relevant": ["Reference/PageRank.md", "Notes/Graph Boost Retrieval.md"], "category": "conceptual"}
-{"id": "q04", "query": "BM25 ranking explained", "relevant": ["Reference/BM25.md", "Notes/IR Basics.md"], "category": "keyword"}
-{"id": "q05", "query": "cross-encoder reranking BGE", "relevant": ["Reference/Reranker Models.md", "Notes/RRF Pipeline.md"], "category": "conceptual"}
-{"id": "q06", "query": "HNSW approximate nearest neighbor", "relevant": ["Reference/HNSW Paper.md", "Notes/Vector Index Choices.md"], "category": "conceptual"}
-{"id": "q07", "query": "late chunking embeddings", "relevant": ["Reference/Late Chunking.md", "Notes/Context Windowing.md"], "category": "conceptual"}
-{"id": "q08", "query": "int8 vector quantization", "relevant": ["Reference/Scalar Quantization.md", "Notes/Storage Optimization.md"], "category": "keyword"}
-{"id": "q09", "query": "MCP stateful sessions", "relevant": ["Reference/MCP Spec.md", "Notes/Streamable HTTP.md"], "category": "keyword"}
-{"id": "q10", "query": "Reciprocal Rank Fusion", "relevant": ["Reference/RRF Cormack.md", "Notes/Hybrid Retrieval.md"], "category": "conceptual"}
+// Golden set for the SYNTHETIC quick-start vault (scripts/synthetic-vault.mjs · createSyntheticVault()).
+// Runnable end-to-end out of the box (see docs/EVALUATION.md "Quick start"); every `relevant` path is
+// pinned to that vault by tests/eval-goldenset-contract.test.ts — a phantom path fails CI.
+// For YOUR vault, write your own JSONL in this format ({query, relevant[], id?, category?}).
+{"id": "q01", "query": "Apollo project links Hermes", "relevant": ["01_Projects/Apollo.md"], "category": "keyword"}
+{"id": "q02", "query": "search-target-ABC", "relevant": ["01_Projects/Hermes.md"], "category": "keyword"}
+{"id": "q03", "query": "vault index projects hub", "relevant": ["INDEX.md"], "category": "conceptual"}
+{"id": "q04", "query": "worked on Apollo velocity idea", "relevant": ["99_Daily/2026-05-02.md", "01_Projects/Apollo.md"], "category": "conceptual"}
+{"id": "q05", "query": "Hermes paused project inline mention", "relevant": ["01_Projects/Hermes.md"], "category": "keyword"}

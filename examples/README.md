@@ -9,7 +9,7 @@ Drop-in configs and recipes for connecting `enquire-mcp` to common MCP clients.
 | [`cursor-mcp.json`](./cursor-mcp.json) | Cursor MCP stdio config |
 | [`chatgpt-actions.md`](./chatgpt-actions.md) | ChatGPT custom GPT — remote MCP over HTTP with bearer auth + tunnel |
 | [`tweetclaw-openclaw.md`](./tweetclaw-openclaw.md) | OpenClaw recipe for capturing public X/Twitter signals with TweetClaw, storing reviewed notes in an Obsidian vault, then retrieving them with enquire |
-| [`queries.jsonl`](./queries.jsonl) | Sample query set for the eval harness (`enquire-mcp eval --queries examples/queries.jsonl`) |
+| [`queries.jsonl`](./queries.jsonl) | Golden set for the repo's SYNTHETIC quick-start vault (CI-pinned; format reference for writing your own set) |
 
 ## Workflow
 
@@ -27,7 +27,8 @@ Most users want the hybrid stack — it's strictly better than TF-IDF alone (bet
 The [`queries.jsonl`](./queries.jsonl) file is a tiny synthetic example for the `enquire-mcp eval` retrieval-quality benchmark. Replace the paths with real notes from your vault, then:
 
 ```bash
-enquire-mcp eval --vault ~/Vault --queries examples/queries.jsonl --persistent-index --reranker
+# the committed set targets the repo synthetic vault; for YOUR vault write your own JSONL in the same format
+enquire-mcp eval --vault ~/Vault --queries my-queries.jsonl --persistent-index --reranker
 ```
 
 Output: a pretty table with NDCG@K, Recall@K, MRR, and per-query latency. Pass `--matrix` to A/B-test (graph_boost ± reranker) side by side.

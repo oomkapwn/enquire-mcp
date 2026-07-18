@@ -99,3 +99,39 @@ describe("contextPack (v3.8.0-rc.8 T-1)", () => {
     expect(Array.isArray(result.included_notes)).toBe(true);
   });
 });
+
+// ─── v3.11.6-rc.14 (root-cause audit) — full search-ctx flow-through ─────────
+// Pre-rc.14 contextPack accepted ONLY {ftsIndex, embedFile}, so a server with
+// --enable-reranker (etc.) silently packed context in plain RRF order while
+// obsidian_search ranked with the enhancements — the "enabled but not wired"
+// class (CRL-1/M5 siblings). This pins the flow-through behaviorally: an
+// injected reranker that inverts the order MUST change which note the pack
+// leads with.
+describe("contextPack forwards the full search ctx (rc.14)", () => {
+  it("an injected reranker reorders the packed notes (ctx flows to the inner searchHybrid)", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    // alpha: 3× the term → TF-IDF rank 0 without a reranker.
+    await fs.writeFile(path.join(root, "alpha.md"), "kubernetes kubernetes kubernetes ingress.\n");
+    await fs.writeFile(path.join(root, "beta.md"), "kubernetes ingress notes.\n");
+
+    const baseline = await contextPack(v, { query: "kubernetes", budget_tokens: 2000 }, noIndex(root));
+    expect(baseline.included_notes[0]).toBe("alpha.md");
+
+    // Reranker that INVERTS the order (last passage scores highest).
+    const inverted = await contextPack(
+      v,
+      { query: "kubernetes", budget_tokens: 2000 },
+      {
+        ...noIndex(root),
+        rerankerOverride: {
+          score: async (_q: string, passages: readonly string[]) => passages.map((_, i) => i)
+        }
+      }
+    );
+    // NEGATIVE control vs baseline: the pack's lead note flips — proving the
+    // reranker ctx reached the inner searchHybrid (pre-rc.14 this was
+    // impossible: the ctx type didn't even accept rerankerOverride).
+    expect(inverted.included_notes[0]).toBe("beta.md");
+  });
+});

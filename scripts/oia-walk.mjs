@@ -1037,6 +1037,44 @@ if (!SKIP_NETWORK) {
   }
 }
 
+// ─── Check 11b: npm @rc must not trail main's RC line (tag/publish-gap) ───
+// v3.11.6-rc.14 (NETWORK, advisory) — the root-cause audit found rc.3→rc.10
+// were squash-merged to main but NEVER tagged/published: npm @rc sat at
+// rc.2 for 8 merged RCs because the post-merge tag step is a PROCEDURE with
+// no structural check (same class as the pre-rc.32 registry drift, one channel
+// up). This advisory compares package.json's rc number against npm's `rc`
+// dist-tag: a lag ≥ 2 (normal in-flight state is exactly 1 ahead) means merged
+// RCs are going unpublished. ADVISORY (non-fatal): publishing is the
+// maintainer/agent release step, not something a PR can fix.
+if (!SKIP_NETWORK) {
+  try {
+    const { execSync } = await import("node:child_process");
+    const pkgVer = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
+    const rcMatch = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/.exec(pkgVer);
+    if (rcMatch) {
+      const npmRc = execSync(`npm view @oomkapwn/enquire-mcp dist-tags.rc 2>/dev/null`, {
+        encoding: "utf8",
+        timeout: 15000
+      }).trim();
+      const npmMatch = /^(\d+\.\d+\.\d+)-rc\.(\d+)$/.exec(npmRc);
+      if (npmMatch && npmMatch[1] === rcMatch[1]) {
+        const lag = Number.parseInt(rcMatch[2], 10) - Number.parseInt(npmMatch[2], 10);
+        if (lag >= 2) {
+          console.error(
+            `[oia-walk] ADVISORY — NPM-RC-TAG-LAG: package.json is ${pkgVer} but npm @rc = ${npmRc} (lag ${lag}). ` +
+              "Merged RCs are going unpublished — the post-merge procedure is: git tag vX.Y.Z-rc.N <squash-SHA on main> && git push origin <tag> " +
+              "(release.yml publishes @rc). Non-fatal (release-step remediation)."
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error(
+      `[oia-walk] NPM-RC-TAG-LAG network check skipped: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 // ─── Check 12: scripts must not import the pre-split `dist/tools.js` ──────
 // v3.9.0-rc.35 (external-audit L-3) — `tools.ts` was split into a `tools/`
 // directory; TypeScript now emits `dist/tools/index.js`, NOT `dist/tools.js`.

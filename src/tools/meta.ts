@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
-import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE, scanWikilinkInners, stripCodeAndInline } from "../parser.js";
 import { iterateBodyLines } from "../structure.js";
@@ -2060,8 +2059,14 @@ export interface ContextPackResult {
  *
  * @param vault - The vault.
  * @param args - {@link ContextPackArgs}. `query` required + non-empty.
- * @param ctx - Server-side context: `ftsIndex` (nullable) and `embedFile`
- *   (path may not exist) — same shape as {@link searchHybrid}.
+ * @param ctx - Server-side context — the SAME shape as {@link searchHybrid}'s
+ *   ctx, forwarded verbatim to the inner retrieval. v3.11.6-rc.14: pre-rc.14
+ *   only `ftsIndex`/`embedFile` were accepted, so a server started with
+ *   `--enable-reranker` / `--use-hnsw` / `--recency-weight` / `--feedback-weight`
+ *   silently packed context in PLAIN RRF order while `obsidian_search` ranked
+ *   with the enabled enhancements — an "enabled but not wired" divergence
+ *   (the CRL-1/M5 class). Now the full ctx flows through, so the pack's
+ *   top-10 is ranked exactly like `obsidian_search` would rank it.
  * @returns A {@link ContextPackResult} with the packed bundle + meta.
  * @throws {Error} If `query` is empty / whitespace-only.
  * @example
@@ -2082,7 +2087,7 @@ export interface ContextPackResult {
 export async function contextPack(
   vault: Vault,
   args: ContextPackArgs,
-  ctx: { ftsIndex: FtsIndex | null; embedFile: string }
+  ctx: Parameters<typeof searchHybrid>[2]
 ): Promise<ContextPackResult> {
   await vault.ensureExists();
   if (!args.query?.trim()) throw new Error("context_pack: `query` is required");
@@ -2091,12 +2096,9 @@ export async function contextPack(
   const includeBacklinks = args.include_backlinks !== false;
   const recentN = Math.max(0, args.recent_dailies ?? 0);
 
-  // 1) Hybrid retrieval — top-K notes
-  const search = await searchHybrid(
-    vault,
-    { query: args.query, folder: args.folder, limit: 10 },
-    { ftsIndex: ctx.ftsIndex, embedFile: ctx.embedFile }
-  );
+  // 1) Hybrid retrieval — top-K notes. rc.14: forward the FULL ctx (reranker/
+  // hnsw/recency/feedback included) so the pack ranks like obsidian_search.
+  const search = await searchHybrid(vault, { query: args.query, folder: args.folder, limit: 10 }, ctx);
 
   const sections: string[] = [`# Context for: ${args.query}\n`];
   const includedNotes: string[] = [];

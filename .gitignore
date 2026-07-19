@@ -19,6 +19,8 @@ bench/context-savings.json
 # `docs/benchmarks.md` references it as the canonical reproducible
 # artifact. MRR/NDCG/Recall are bit-identical across hardware (only
 # latency varies), so the committed values are a deterministic baseline.
+# rc.16 — but its atomic-write scratch file is transient; never commit an orphan.
+bench/*.tmp
 # Generated TypeDoc API reference — built fresh by `npm run docs:api` on
 # every push to main (see .github/workflows/publish-docs.yml) and
 # deployed to GH Pages from there. Never commit the generated HTML.

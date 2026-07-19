@@ -38,19 +38,44 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 
-// ─── Load enquire-mcp build artifacts ────────────────────────────────────────
+// ─── enquire-mcp build artifacts ─────────────────────────────────────────────
+// rc.16 (post-rc.15 re-sweep, RC15-TESTINFRA-1) — the dist preflight + these
+// dist imports are SIDE EFFECTS (a `process.exit(1)` + loading the whole app
+// graph). They used to run unconditionally at module load, so importing this
+// module for its two PURE exports (parseBenchArgs / resolveBenchWrite, tested by
+// tests/bench-strict.test.ts) hard-aborted the file if dist was missing and
+// eagerly pulled in tools/fts5/vault/rrf/eval/server. The rc.15 `isEntrypoint`
+// guard wrapped only `main()`, so the isolation it advertised was only half
+// done. Now the preflight + imports live in `loadDistBuildArtifacts()`, called
+// ONLY from the CLI entry — a plain import has zero side effects.
 const distDir = path.join(projectRoot, "dist");
-if (!existsSync(path.join(distDir, "tools", "index.js"))) {
-  process.stderr.write("dist/ not found — run `npm run build` first.\n");
-  process.exit(1);
-}
+let searchHybrid;
+let semanticSearch;
+let embeddingsSearch;
+let FtsIndex;
+let Vault;
+let reciprocalRankFusion;
+let ndcgAtK;
+let recallAtK;
+let reciprocalRank;
+let readQueriesJsonl;
+let syncFtsIndex;
+let syncEmbedDb;
 
-const { searchHybrid, semanticSearch, embeddingsSearch } = await import(path.join(distDir, "tools", "index.js"));
-const { FtsIndex } = await import(path.join(distDir, "fts5.js"));
-const { Vault } = await import(path.join(distDir, "vault.js"));
-const { reciprocalRankFusion } = await import(path.join(distDir, "rrf.js"));
-const { ndcgAtK, recallAtK, reciprocalRank, readQueriesJsonl } = await import(path.join(distDir, "eval.js"));
-const { syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js"));
+/** Preflight + load the compiled dist symbols the benchmark body uses. Called
+ *  only from the CLI entry (never on a bare `import` of this module). */
+async function loadDistBuildArtifacts() {
+  if (!existsSync(path.join(distDir, "tools", "index.js"))) {
+    process.stderr.write("dist/ not found — run `npm run build` first.\n");
+    process.exit(1);
+  }
+  ({ searchHybrid, semanticSearch, embeddingsSearch } = await import(path.join(distDir, "tools", "index.js")));
+  ({ FtsIndex } = await import(path.join(distDir, "fts5.js")));
+  ({ Vault } = await import(path.join(distDir, "vault.js")));
+  ({ reciprocalRankFusion } = await import(path.join(distDir, "rrf.js")));
+  ({ ndcgAtK, recallAtK, reciprocalRank, readQueriesJsonl } = await import(path.join(distDir, "eval.js")));
+  ({ syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js")));
+}
 
 // ─── Synthetic vault — deterministic content ─────────────────────────────────
 
@@ -1700,8 +1725,13 @@ async function main() {
   const outFile = decision.file;
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   // Atomic write: tmp + rename, so a crash mid-write can't truncate the artifact.
+  // rc.16 (post-rc.15 re-sweep, M1-TMP-HYGIENE-1) — clear any stale `.tmp` orphan
+  // from a prior crash, then create the tmp with `wx` (O_EXCL) so the write can't
+  // follow a pre-planted symlink at that path (the rc.13 AUD-01 shape; negligible
+  // here — repo-controlled path, no bearer surface — but closed for hygiene).
   const tmpFile = `${outFile}.tmp`;
-  await fs.writeFile(tmpFile, JSON.stringify({ meta, rows: rowsForJson }, null, 2));
+  await fs.rm(tmpFile, { force: true });
+  await fs.writeFile(tmpFile, JSON.stringify({ meta, rows: rowsForJson }, null, 2), { flag: "wx" });
   await fs.rename(tmpFile, outFile);
   process.stderr.write(`bench: wrote ${outFile}${decision.partial ? " (PARTIAL — degraded arms)" : ""}\n`);
 }
@@ -1710,8 +1740,12 @@ async function main() {
 // (resolveBenchWrite / parseBenchArgs) does NOT run the full benchmark.
 const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (isEntrypoint) {
-  main().catch((err) => {
-    process.stderr.write(`bench failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
-    process.exit(1);
-  });
+  // rc.16 — load the dist symbols HERE (CLI-only), then run. A bare import for
+  // the pure exports skips this entirely (no process.exit, no app-graph load).
+  loadDistBuildArtifacts()
+    .then(() => main())
+    .catch((err) => {
+      process.stderr.write(`bench failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+      process.exit(1);
+    });
 }

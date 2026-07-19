@@ -2374,8 +2374,13 @@ export const MAX_FANOUT_QUERIES = 8;
  *  Bounds the simultaneous full pipelines (graph-boost / optional reranker /
  *  embedding) so a legal 9-phrasing request can't start 9 heavy pipelines at
  *  once on the event loop. Combined with the `buildTfidfIndex` single-flight
- *  (which collapses the shared corpus build to ONE regardless), this makes the
- *  worst-case cold fan-out cost bounded + independent of vault size. */
+ *  (which collapses the shared corpus BUILD — the expensive read+tokenize scan,
+ *  the H-1 amplifier — to ONE regardless), this bounds the worst-case cold
+ *  fan-out cost. (rc.16 precision: the corpus *build* is now vault-size-
+ *  independent under fan-out; each sub-query still runs its own
+ *  `vault.listMarkdown()` directory walk to compute the corpus snapshot — cheap
+ *  threadpool readdir/stat metadata I/O, not the content read that made H-1
+ *  HIGH — so total cold cost is dominated by the single build, not the N walks.) */
 export const MAX_FANOUT_CONCURRENCY = 4;
 
 /** Run `fn` over `items` with at most `limit` in flight at once, preserving

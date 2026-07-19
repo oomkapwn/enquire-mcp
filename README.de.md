@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1581%20passing-brightgreen.svg)](#️-vertrauen)
+[![tests](https://img.shields.io/badge/tests-1582%20passing-brightgreen.svg)](#️-vertrauen)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 1581+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**46 Tools · 19 MCP-Prompts · 1582+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **GraphRAG-light** (Wikilink-Community-Erkennung via Louvain-Modularität) | ✅ **nur hier** | ❌ | ❌ |
 | **Eigenständige `.base`-Abfrageausführung** (funktioniert ohne laufendes Obsidian) | ✅ **nur hier** | ❌ | ❌ delegiert an Obsidian |
 | **HyDE-Retrieval** (Gao et al. 2023) + Teilfragen-Zerlegung | ✅ **nur hier** | ❌ | ❌ |
-| **1581 Unit-Tests · 9 erforderliche + 5 beratende CI-Gates pro PR** | ✅ | n. z. | selten |
+| **1582 Unit-Tests · 9 erforderliche + 5 beratende CI-Gates pro PR** | ✅ | n. z. | selten |
 | **Signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2) | ✅ | n. z. | ❌ |
 | **Semver-gebundene öffentliche Oberfläche** ([STABILITY.md](./STABILITY.md)) | ✅ | n. z. | ❌ |
 | Eigenständig (kein Obsidian-Plugin nötig) | ✅ | ❌ erfordert Obsidian | variiert |
@@ -322,7 +322,7 @@ Kanal: `npm install @oomkapwn/enquire-mcp` → neueste stabile Version (`@latest
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # vollständige Suite (1581 Tests, ~12 s)
+npm test       # vollständige Suite (1582 Tests, ~12 s)
 npm run lint   # null Warnungen
 npm run build  # tsc → dist/
 ```

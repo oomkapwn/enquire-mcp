@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1581%20passing-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-1582%20passing-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 중 클라우드 호출 0건.** 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 일회성 로컬 다운로드(~110 MB)입니다. 근거 기반 + 프라이버시는 공짜가 아니며, 우리는 그런 척하지 않습니다. 당신의 Vault 콘텐츠는 당신의 머신을 결코 떠나지 않으며, 기본적으로 에어갭(air-gap) 안전합니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1581+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1582+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain 모듈성을 통한 위키링크 커뮤니티 탐지) | ✅ **여기에만 있음** | ❌ | ❌ |
 | **독립 실행형 `.base` 쿼리 실행** (Obsidian 실행 없이 동작) | ✅ **여기에만 있음** | ❌ | ❌ Obsidian에 위임 |
 | **HyDE 검색** (Gao et al 2023) + 하위 질문 분해 | ✅ **여기에만 있음** | ❌ | ❌ |
-| **단위 테스트 1581개 · PR당 필수 9개 + 권고 5개 CI 게이트** | ✅ | 해당 없음 | 드묾 |
+| **단위 테스트 1582개 · PR당 필수 9개 + 권고 5개 CI 게이트** | ✅ | 해당 없음 | 드묾 |
 | **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2) | ✅ | 해당 없음 | ❌ |
 | **semver로 결속된 공개 표면** ([STABILITY.md](./STABILITY.md)) | ✅ | 해당 없음 | ❌ |
 | 독립 실행형 (Obsidian 플러그인 불필요) | ✅ | ❌ Obsidian 필요 | 제각각 |
@@ -322,7 +322,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (1581개 테스트, ~12초)
+npm test       # 전체 스위트 (1582개 테스트, ~12초)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```

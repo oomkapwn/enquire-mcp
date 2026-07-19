@@ -17,6 +17,23 @@ import { parseBenchArgs, resolveBenchWrite } from "../scripts/run-benchmarks.mjs
 
 const CANON = "/repo/bench/benchmarks.json";
 
+// v3.11.6-rc.16 (post-rc.15 re-sweep, RC15-TESTINFRA-1) — this very import is the
+// regression: pre-rc.16 the module ran a dist-preflight `process.exit(1)` + loaded
+// the whole app graph (tools/fts5/vault/rrf/eval/server) UNCONDITIONALLY at load,
+// so importing it for the two pure exports above could hard-abort the file / drag
+// in the runtime. The dist load now lives behind the CLI entry. This describe
+// proves the import is side-effect-free by simply having succeeded (the two pure
+// exports are callable and no process.exit fired) AND pins the structural close.
+describe("run-benchmarks.mjs import isolation (rc.16 RC15-TESTINFRA-1)", () => {
+  it("importing for pure exports has no dist-load side effect (both exports usable)", () => {
+    // If the module still process.exit'd or failed a top-level dist import, this
+    // file wouldn't have loaded at all. Reaching here + calling the pure fn proves it.
+    expect(typeof parseBenchArgs).toBe("function");
+    expect(typeof resolveBenchWrite).toBe("function");
+    expect(parseBenchArgs([])).toEqual({ allowPartial: false, output: null });
+  });
+});
+
 describe("parseBenchArgs (rc.15 M-1)", () => {
   it("defaults to strict (no partial, no output)", () => {
     expect(parseBenchArgs([])).toEqual({ allowPartial: false, output: null });

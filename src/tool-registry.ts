@@ -799,17 +799,38 @@ export function registerReadTools(
         // through to readPdf's silent fallback (range ignored, full doc
         // extracted) — actively worse than the OCR path because the
         // entire PDF still got iterated by pdfjs. Now rejected upfront.
+        // v3.11.6-rc.17 (issues #354 + #360) — a HOMOGENEOUS fixed-length array,
+        // NOT `z.tuple`. `z.tuple([A, B])` serialises to JSON Schema draft-4 tuple
+        // form (`items: [schemaA, schemaB]` — an ARRAY of schemas), which ChatGPT,
+        // Gemini, and Grok reject as an invalid MCP tool schema ("'items' must be
+        // a schema, not an array; use 'prefixItems'"). Because ALL tool schemas are
+        // sent to the provider up front, that one tuple broke the ENTIRE connector,
+        // not just PDF calls. `z.array(...).length(2)` serialises to the valid
+        // `items: {schema}` + minItems/maxItems 2 form every client accepts, with
+        // identical [from, to] semantics (see the mcp-schema-compat invariant).
         pages: z
-          .tuple([z.number().int().positive(), z.number().int().positive()])
-          .refine(([from, to]) => to >= from, {
-            message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)"
-          })
+          .array(z.number().int().positive())
+          .length(2)
+          .refine(
+            (p) => {
+              const [from, to] = p;
+              return from === undefined || to === undefined || to >= from;
+            },
+            { message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)" }
+          )
           .optional()
           .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] reads pages 2..5"),
         include_metadata: z.boolean().optional().describe("Include doc-level metadata in result (default true)")
       }
     },
-    async (args) => textResult(await readPdf(vault, args))
+    async (args) => {
+      // #354/#360 — coerce the validated 2-array back to the internal [from, to]
+      // tuple; `.length(2)` guarantees exactly two elements at runtime.
+      const { pages: rawPages, ...rest } = args;
+      const [p0, p1] = rawPages ?? [];
+      const pages = p0 !== undefined && p1 !== undefined ? ([p0, p1] as [number, number]) : undefined;
+      return textResult(await readPdf(vault, { ...rest, ...(pages ? { pages } : {}) }));
+    }
   );
 
   // v2.10.0 — OCR for image-only / scanned PDFs. Completes the v2.7-v2.8
@@ -850,11 +871,18 @@ export function registerReadTools(
         // a `pages: [10, 5]` request flowed through to `ocr.ts:166-170` where
         // `[from=10, to=5]` made the loop body never execute and returned an
         // empty "success" result. Now rejected at the boundary.
+        // v3.11.6-rc.17 (issues #354 + #360) — homogeneous 2-array, not `z.tuple`
+        // (see obsidian_read_pdf above: the tuple form breaks ChatGPT/Gemini/Grok).
         pages: z
-          .tuple([z.number().int().positive(), z.number().int().positive()])
-          .refine(([from, to]) => to >= from, {
-            message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)"
-          })
+          .array(z.number().int().positive())
+          .length(2)
+          .refine(
+            (p) => {
+              const [from, to] = p;
+              return from === undefined || to === undefined || to >= from;
+            },
+            { message: "pages: 'to' must be >= 'from' (1-indexed inclusive range)" }
+          )
           .optional()
           .describe("Optional 1-indexed inclusive page range, e.g. [2, 5] OCRs pages 2..5"),
         scale: z
@@ -867,7 +895,13 @@ export function registerReadTools(
           )
       }
     },
-    async (args) => textResult(await ocrPdf(vault, args))
+    async (args) => {
+      // #354/#360 — coerce the validated 2-array back to the internal [from, to] tuple.
+      const { pages: rawPages, ...rest } = args;
+      const [p0, p1] = rawPages ?? [];
+      const pages = p0 !== undefined && p1 !== undefined ? ([p0, p1] as [number, number]) : undefined;
+      return textResult(await ocrPdf(vault, { ...rest, ...(pages ? { pages } : {}) }));
+    }
   );
 
   // v2.0.0-beta.3: gated — see comment on obsidian_search_text above.

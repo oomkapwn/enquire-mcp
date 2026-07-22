@@ -27,6 +27,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
@@ -140,10 +141,7 @@ export function buildJsonLdGraph(pkg) {
 }
 
 // ─── CLI behavior (skipped when imported by tests) ──────────────────────────
-// `import.meta.url === pathToFileURL(process.argv[1])` is the standard
-// "is this module the entrypoint" guard; we compare resolved paths.
-const isEntrypoint = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-if (isEntrypoint) {
+if (isEntrypoint(import.meta.url)) {
   const target = resolve(repoRoot, process.argv[2] ?? "docs/api-reference/index.html");
   if (!existsSync(target)) {
     console.error(`[inject-jsonld] target not found: ${target}`);

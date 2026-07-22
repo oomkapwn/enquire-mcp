@@ -6,7 +6,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 /**
  * Create a throwaway synthetic vault under the OS temp dir and return its absolute path.
@@ -66,6 +66,6 @@ export async function createSyntheticVault() {
 }
 
 // CLI: print the path so CI can capture it (`path=$(node scripts/synthetic-vault.mjs)`).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntrypoint(import.meta.url)) {
   console.log(await createSyntheticVault());
 }

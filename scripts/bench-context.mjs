@@ -29,6 +29,7 @@ import { existsSync, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 // ── Pure, testable helpers (imported by tests/bench-context.test.ts) ─────────
 
@@ -51,7 +52,6 @@ export function savingsRatio(baselineTokens, packTokens) {
 // ── CLI entrypoint (skipped when imported by the test) ───────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
-const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === __filename;
 
 const QUESTIONS = [
   "how does hybrid retrieval combine BM25 and embeddings",
@@ -179,7 +179,7 @@ async function main() {
   }
 }
 
-if (isEntrypoint) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((e) => {
     process.stderr.write(`bench-context failed: ${e?.stack ?? e}\n`);
     process.exit(1);

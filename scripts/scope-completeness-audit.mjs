@@ -45,6 +45,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
@@ -429,9 +430,8 @@ function main() {
 }
 
 // Run via CLI; don't run when imported as a module (e.g. by tests).
-// v3.11.6-rc.20 (external audit L-1) — compare RESOLVED paths (a space in the
-// checkout path is `%20` in import.meta.url but literal in process.argv[1], so
-// the raw `file://…` compare silently skipped the gate in a path with spaces).
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+// rc.21 (F2): the shared realpath-both-sides guard — survives a space AND a
+// symlinked checkout path (a silent skip here is a false-green audit gate).
+if (isEntrypoint(import.meta.url)) {
   main();
 }

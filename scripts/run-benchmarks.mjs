@@ -33,6 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1738,8 +1739,7 @@ async function main() {
 
 // rc.15 (M-1) — guard the CLI entry so importing this module for unit tests
 // (resolveBenchWrite / parseBenchArgs) does NOT run the full benchmark.
-const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
-if (isEntrypoint) {
+if (isEntrypoint(import.meta.url)) {
   // rc.16 — load the dist symbols HERE (CLI-only), then run. A bare import for
   // the pure exports skips this entirely (no process.exit, no app-graph load).
   loadDistBuildArtifacts()

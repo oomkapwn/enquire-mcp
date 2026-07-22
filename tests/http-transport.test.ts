@@ -218,20 +218,21 @@ describe("SessionRegistry (v2.14.0)", () => {
   // v3.8.7 P2-11 — closeAll waits for in-flight handlers up to timeoutMs
   // then force-closes. We simulate a slow in-flight by counting down via
   // setTimeout (no real handler available in this unit test).
-  it("closeAll waits for in-flight to drain (bounded by timeoutMs)", async () => {
+  it("closeAll waits for in-flight CALLS to drain (bounded by timeoutMs)", async () => {
     const r = createSessionRegistry(60_000);
     const session = {
       transport: { close: async () => {} },
       server: { close: async () => {} },
       lastActivityMs: Date.now(),
       inFlight: 1,
+      inFlightCalls: 1, // an in-flight POST tool call — closeAll must wait for it
       closing: false
     } as unknown as Parameters<typeof r.sessions.set>[1];
     r.sessions.set("slow", session);
-    // Drop inFlight to 0 after a short delay → closeAll should return
-    // soon after that.
+    // Drop the call refcount to 0 after a short delay → closeAll should return
+    // soon after that (rc.21: closeAll drains `inFlightCalls`, not `inFlight`).
     setTimeout(() => {
-      (session as unknown as { inFlight: number }).inFlight = 0;
+      (session as unknown as { inFlightCalls: number }).inFlightCalls = 0;
     }, 50);
     const start = Date.now();
     const closed = await r.closeAll(1000);
@@ -240,6 +241,28 @@ describe("SessionRegistry (v2.14.0)", () => {
     // Finished close-to but not at the timeoutMs cap — confirms we
     // observed the drain instead of waiting the full 1s.
     expect(elapsed).toBeLessThan(500);
+  });
+
+  // v3.11.6-rc.21 (rc.20 re-sweep F1) — closeAll must NOT block on a long-lived
+  // GET SSE stream (inFlight>0 but inFlightCalls===0): shutdown terminates the
+  // stream, it doesn't wait for it. Pre-rc.21 closeAll drained `inFlight`, so a
+  // single open notification stream pinned every shutdown for the full bound.
+  it("closeAll does NOT wait for an open SSE stream (inFlight>0, no in-flight calls)", async () => {
+    const r = createSessionRegistry(60_000);
+    const session = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} },
+      lastActivityMs: Date.now(),
+      inFlight: 1, // an open SSE GET holds inFlight...
+      inFlightCalls: 0, // ...but it is NOT a drainable call
+      closing: false
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+    r.sessions.set("sse", session);
+    const start = Date.now();
+    const closed = await r.closeAll(1000);
+    const elapsed = Date.now() - start;
+    expect(closed).toBe(1);
+    expect(elapsed, "an open SSE must not pin shutdown for the full bound").toBeLessThan(200);
   });
 
   // v3.8.7 P2-10 — pendingInits counter exposed so the cap-check can

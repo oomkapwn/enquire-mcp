@@ -37,6 +37,13 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { buildMcpServer, formatReadyBanner, prepareServerDeps, type ServeOptions, type ServerDeps } from "./index.js";
 import { DEFAULT_MAX_FILE_BYTES } from "./vault.js";
 
+/** v3.11.6-rc.20 (audit H-2) — how long a `DELETE /mcp` waits for a session's
+ *  pre-existing in-flight requests to finish before terminating the shared SDK
+ *  transport. Matches `closeAll`'s default drain: long enough for a normal tool
+ *  call / batch write to complete + deliver its response, short enough that a
+ *  stuck client can't pin the McpServer + SQLite handles indefinitely. */
+const DELETE_DRAIN_MS = 5000;
+
 /**
  * Configuration for the HTTP transport. Extends ServeOptions so every
  * stdio-mode flag (--enable-write, --persistent-index, --watch, etc.) is
@@ -595,27 +602,37 @@ export function createHttpHandler(
           res.end();
           return;
         }
-        // v3.8.7 P2-10 — mark closing + remove from map BEFORE handleRequest.
-        // Concurrent gets that arrive during the SDK's protocol-level
-        // shutdown then 404 instead of joining a half-closed session.
-        // The DELETE itself is in-flight, so we increment the refcount;
-        // the actual close waits for that (and any pre-existing in-flight)
-        // to drain. (Snapshot the entry locally first — `delete` removes
-        // it from the map but the entry stays referenced by `session`.)
+        // v3.8.7 P2-10 — mark closing + remove from map so concurrent GETs/POSTs
+        // that arrive during teardown 404 instead of joining a half-closed session.
+        // (Snapshot the entry locally first — `delete` removes it from the map but
+        // the entry stays referenced by `session`.)
         session.closing = true;
         registry.sessions.delete(sessionId);
+        // v3.11.6-rc.20 (external audit H-2) — DRAIN pre-existing in-flight
+        // requests BEFORE routing the DELETE into the shared SDK transport.
+        // Pre-rc.20 `handleRequest(DELETE)` — which tears the transport down at
+        // the protocol level — ran FIRST, aborting the response channel of an
+        // ALREADY-running tool call on the same session: a read got an empty
+        // HTTP 200, and (worse) a multi-file write was interrupted mid-execution,
+        // leaving a PARTIAL mutation (measured ~321/1500 files) with no response
+        // boundary the client could reconcile. Marking `closing` + removing from
+        // the map already blocks NEW calls from joining; now we wait for the
+        // EXISTING ones to finish — delivering their complete responses and
+        // completing their mutations — before terminating. The DELETE's own
+        // refcount is not yet incremented here, so `inFlight` reflects ONLY the
+        // pre-existing requests. Bounded (`DELETE_DRAIN_MS`) so a stuck client
+        // (e.g. an idle SSE GET holding the refcount) can't pin the McpServer +
+        // SQLite handles forever; a mutation that runs longer than the bound is
+        // the documented residual (the durable fix — an abort signal threaded
+        // through rollback-safe batch writes — is a larger, separate change).
+        const drainDeadline = Date.now() + DELETE_DRAIN_MS;
+        while (session.inFlight > 0 && Date.now() < drainDeadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        }
         try {
           await runWithRefcount(session, () => session.transport.handleRequest(req, res));
         } catch {
           /* shutdown errors don't matter — we're killing the session anyway */
-        }
-        // Drain other in-flight (e.g. an SSE GET held the refcount up)
-        // up to a small bound, then close. The bound matches closeAll's
-        // default — long enough for normal completion, short enough that
-        // a stuck client doesn't pin the McpServer + SQLite handles.
-        const deadline = Date.now() + 5000;
-        while (session.inFlight > 0 && Date.now() < deadline) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 10));
         }
         await session.transport.close().catch(() => {});
         await session.server.close().catch(() => {});

@@ -429,6 +429,9 @@ function main() {
 }
 
 // Run via CLI; don't run when imported as a module (e.g. by tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// v3.11.6-rc.20 (external audit L-1) — compare RESOLVED paths (a space in the
+// checkout path is `%20` in import.meta.url but literal in process.argv[1], so
+// the raw `file://…` compare silently skipped the gate in a path with spaces).
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main();
 }

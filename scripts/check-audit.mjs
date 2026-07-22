@@ -13,6 +13,8 @@
 // weakening the gate.
 
 import { execSync } from "node:child_process";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Advisories accepted with reasoning. Keyed by GHSA id. Removing an entry re-arms the
@@ -67,7 +69,13 @@ function runAudit(scopeFlag) {
 }
 
 function isEntrypoint() {
-  return import.meta.url === `file://${process.argv[1]}`;
+  // v3.11.6-rc.20 (external audit L-1) — compare RESOLVED paths, not a raw
+  // `file://${process.argv[1]}` string. A space in the checkout path is
+  // percent-encoded in `import.meta.url` (`%20`) but literal in `process.argv[1]`,
+  // so the raw comparison was false and this gate SILENTLY no-op'd (exit 0, no
+  // audit) in any path containing a space (a common macOS shape). The 10 other
+  // scripts already use this `fileURLToPath` + `path.resolve` form.
+  return Boolean(process.argv[1]) && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 }
 
 if (isEntrypoint()) {

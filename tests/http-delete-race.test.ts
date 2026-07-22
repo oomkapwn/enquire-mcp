@@ -173,4 +173,35 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
     }
     expect(stillUnreplaced, "DELETE must not leave a PARTIAL write (H-2 data-integrity)").toBe(0);
   });
+
+  // v3.11.6-rc.21 (rc.20 re-sweep F1) — the H-2 drain must NOT wait on the
+  // long-lived GET SSE notification stream (the flagship stateful case). rc.20
+  // drained the shared `inFlight`, which the SSE pins for its whole lifetime, so
+  // every clean DELETE with an open SSE blocked the full DELETE_DRAIN_MS (~5s).
+  // Now the drain watches `inFlightCalls` (POST tool calls) only, and the DELETE
+  // tears the SSE down immediately.
+  it("a DELETE with an OPEN SSE stream returns promptly (not blocked the full drain bound)", async () => {
+    const sid = await initSession();
+    // Open a long-lived GET SSE and HOLD it (don't read the body → stays open).
+    const sseAbort = new AbortController();
+    const sseRes = await fetch(`${url}/mcp`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${TOKEN}`, Accept: "text/event-stream", "Mcp-Session-Id": sid },
+      signal: sseAbort.signal
+    });
+    expect(sseRes.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50)); // let the stream register (inFlight += 1)
+    const start = Date.now();
+    const delRes = await fetch(`${url}/mcp`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${TOKEN}`, "Mcp-Session-Id": sid }
+    });
+    const elapsed = Date.now() - start;
+    await delRes.text().catch(() => {});
+    sseAbort.abort();
+    await sseRes.body?.cancel().catch(() => {});
+    // Pre-rc.21: ~5000ms (drained `inFlight`, which the SSE pins forever). Fixed: prompt.
+    expect(delRes.status).toBe(200);
+    expect(elapsed, "DELETE with an open SSE must not block on DELETE_DRAIN_MS (F1)").toBeLessThan(1500);
+  });
 });

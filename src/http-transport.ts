@@ -317,11 +317,27 @@ interface StatefulSession {
   /** Epoch-ms of the last `handleRequest` for this session. */
   lastActivityMs: number;
   /**
-   * v3.8.7 — count of handlers currently inside `transport.handleRequest`
-   * for this session. Incremented by `runWithRefcount`. Sweep + closeAll
-   * wait for this to drop to 0 before tearing down the transport.
+   * v3.8.7 — count of ALL handlers currently inside `transport.handleRequest`
+   * for this session (POST tool calls, the initialize handler, AND the
+   * long-lived GET SSE stream). Incremented by `runWithRefcount`. `sweepIdle`
+   * waits for this to be 0 before evicting — so a session with an open SSE
+   * notification stream is never idle-evicted (it's an active client).
    */
   inFlight: number;
+  /**
+   * v3.11.6-rc.21 (rc.20 re-sweep F1) — count of DRAINABLE requests only: POST
+   * tool calls + the initialize handler, i.e. the requests whose responses /
+   * mutations must be allowed to COMPLETE before teardown. Deliberately EXCLUDES
+   * the long-lived GET SSE stream, which `handleRequest` keeps pending for the
+   * entire stream lifetime (it resolves only when the stream ends). DELETE +
+   * `closeAll` drain THIS counter, not `inFlight` — draining `inFlight` (rc.20)
+   * made every clean DELETE with an open SSE block the full `DELETE_DRAIN_MS`
+   * (the SSE never self-completes; the DELETE is precisely what terminates it),
+   * a 5s regression on the flagship stateful path. Draining `inFlightCalls`
+   * instead lets the DELETE tear the SSE down immediately while still waiting
+   * for a genuine in-flight tool call.
+   */
+  inFlightCalls: number;
   /**
    * v3.8.7 — once set, the session is being torn down. The entry has
    * already been removed from `registry.sessions`; new requests will
@@ -405,10 +421,13 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
       const snapshot = Array.from(sessions.values());
       for (const s of snapshot) s.closing = true;
       sessions.clear();
-      // Wait (bounded) for in-flight handlers to finish naturally.
+      // Wait (bounded) for in-flight CALLS to finish naturally (rc.21 F1 — drain
+      // POST tool calls / initialize; do NOT wait on a long-lived GET SSE stream,
+      // which teardown force-closes below — else shutdown always spun the full
+      // bound while any client had its notification stream open).
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        if (snapshot.every((s) => s.inFlight === 0)) break;
+        if (snapshot.every((s) => s.inFlightCalls === 0)) break;
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
       // Close everything regardless — best-effort. After timeoutMs an
@@ -430,13 +449,22 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
  * starting), so the idle sweep can never see `inFlight === 0` while a
  * handler is mid-flight. The decrement runs in a `finally` so it fires
  * on both success + rejection paths.
+ *
+ * v3.11.6-rc.21 (rc.20 re-sweep F1) — `isCall` distinguishes a DRAINABLE request
+ * (a POST tool call / initialize, which must be allowed to complete before
+ * teardown — the default) from the long-lived GET SSE stream (`isCall: false`),
+ * which teardown TERMINATES rather than waits for. Both bump `inFlight` (so
+ * idle-sweep sees the session as active); only calls bump `inFlightCalls` (what
+ * DELETE / closeAll drain on).
  */
-async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>): Promise<T> {
+async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>, isCall = true): Promise<T> {
   session.inFlight += 1;
+  if (isCall) session.inFlightCalls += 1;
   try {
     return await fn();
   } finally {
     session.inFlight -= 1;
+    if (isCall) session.inFlightCalls -= 1;
   }
 }
 
@@ -619,18 +647,27 @@ export function createHttpHandler(
         // the map already blocks NEW calls from joining; now we wait for the
         // EXISTING ones to finish — delivering their complete responses and
         // completing their mutations — before terminating. The DELETE's own
-        // refcount is not yet incremented here, so `inFlight` reflects ONLY the
-        // pre-existing requests. Bounded (`DELETE_DRAIN_MS`) so a stuck client
-        // (e.g. an idle SSE GET holding the refcount) can't pin the McpServer +
-        // SQLite handles forever; a mutation that runs longer than the bound is
-        // the documented residual (the durable fix — an abort signal threaded
-        // through rollback-safe batch writes — is a larger, separate change).
+        // refcount is not yet incremented here, so `inFlightCalls` reflects ONLY
+        // the pre-existing POST tool calls / initialize. Bounded (`DELETE_DRAIN_MS`)
+        // so a stuck tool call can't pin the McpServer + SQLite handles forever;
+        // a mutation that runs longer than the bound is the documented residual
+        // (the durable fix — an abort signal threaded through rollback-safe batch
+        // writes — is a larger, separate change).
+        //
+        // v3.11.6-rc.21 (rc.20 re-sweep F1) — drain `inFlightCalls`, NOT `inFlight`.
+        // `inFlight` also counts the long-lived GET SSE stream, which
+        // `handleRequest` keeps pending for the whole stream lifetime and which
+        // this very DELETE is meant to terminate — so draining `inFlight` (rc.20)
+        // spun the full 5s on every clean DELETE with an open notification
+        // stream. Draining `inFlightCalls` lets the DELETE close the SSE
+        // immediately while still waiting for a genuine in-flight tool call.
         const drainDeadline = Date.now() + DELETE_DRAIN_MS;
-        while (session.inFlight > 0 && Date.now() < drainDeadline) {
+        while (session.inFlightCalls > 0 && Date.now() < drainDeadline) {
           await new Promise<void>((resolve) => setTimeout(resolve, 10));
         }
         try {
-          await runWithRefcount(session, () => session.transport.handleRequest(req, res));
+          // The DELETE itself is a lifecycle op, not a drainable call.
+          await runWithRefcount(session, () => session.transport.handleRequest(req, res), false);
         } catch {
           /* shutdown errors don't matter — we're killing the session anyway */
         }
@@ -658,7 +695,12 @@ export function createHttpHandler(
         }
         session.lastActivityMs = Date.now();
         try {
-          await runWithRefcount(session, () => session.transport.handleRequest(req, res));
+          // v3.11.6-rc.21 (rc.20 re-sweep F1) — the SSE stream is `isCall: false`:
+          // `handleRequest` stays pending for the whole stream lifetime, so it
+          // must NOT be part of the DELETE/closeAll drain (which it would pin
+          // forever). It still bumps `inFlight` so idle-sweep treats the session
+          // as active; teardown TERMINATES this stream rather than waiting on it.
+          await runWithRefcount(session, () => session.transport.handleRequest(req, res), false);
         } catch (err) {
           process.stderr.write(`enquire http: SSE error — ${err instanceof Error ? err.message : String(err)}\n`);
         }
@@ -768,6 +810,7 @@ export function createHttpHandler(
             transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
             lastActivityMs: Date.now(),
             inFlight: 0,
+            inFlightCalls: 0,
             closing: false
           };
           const sess = session; // captured (definitely-assigned) for the SDK callbacks

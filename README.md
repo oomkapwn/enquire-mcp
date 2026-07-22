@@ -115,7 +115,7 @@ Drop into any MCP client:
 
 📂 Drop-in configs in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus a sample query set for the eval harness.
 
-**Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing). *New in the `@rc` channel (v3.11.6-rc.4) — install with `npm i -g @oomkapwn/enquire-mcp@rc` until v3.11.6 promotes to `@latest`:*
+**Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing). *Since v3.11.6:*
 
 ```bash
 enquire-mcp configure --vault <path>                 # prints config for every client

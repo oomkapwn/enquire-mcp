@@ -214,7 +214,7 @@
     "husky": "^9.1.7",
     "sharp": "^0.35.3",
     "typedoc": "^0.28.20",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   },
   "optionalDependencies": {

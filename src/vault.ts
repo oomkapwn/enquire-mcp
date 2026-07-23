@@ -9,29 +9,35 @@ import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
-// v3.11.7-rc.1 (whole-repo audit A10) — serialize append size-check + write
-// by canonical absolute file path across EVERY Vault instance in this process.
-// A per-instance queue is insufficient because the package exports Vault and
-// two instances can point at the same root. Entries self-evict after the final
-// waiter releases, so long-running servers do not retain one key per note ever
-// appended. External processes remain outside this in-process contract (and can
-// write the vault directly regardless of this library's maxFileBytes setting).
-const APPEND_PATH_TAILS = new Map<string, Promise<void>>();
+// v3.11.7-rc.2 (post-merge re-sweep A10-F1) — serialize append size-check
+// + write by physical file identity across EVERY Vault instance in this
+// process. rc.1 keyed the canonical absolute path, so two hardlink aliases
+// for the same inode acquired different queues and jointly exceeded the cap.
+// On filesystems exposing a stable inode, dev+ino closes both path-alias and
+// multi-instance forms. When Node reports ino=0, all appends share one
+// conservative fallback lane: correctness wins over parallelism because a
+// pathname fallback would knowingly reopen the hardlink-alias race. Entries
+// self-evict after the final waiter releases.
+const APPEND_IDENTITY_TAILS = new Map<string, Promise<void>>();
 
-async function withAppendPathLock<T>(absPath: string, fn: () => Promise<T>): Promise<T> {
-  const previous = APPEND_PATH_TAILS.get(absPath) ?? Promise.resolve();
+function appendIdentityKey(stat: import("node:fs").Stats): string {
+  return stat.ino !== 0 ? `inode:${stat.dev}:${stat.ino}` : "inode-unavailable";
+}
+
+async function withAppendIdentityLock<T>(identityKey: string, fn: () => Promise<T>): Promise<T> {
+  const previous = APPEND_IDENTITY_TAILS.get(identityKey) ?? Promise.resolve();
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   const tail = previous.catch(() => {}).then(() => gate);
-  APPEND_PATH_TAILS.set(absPath, tail);
+  APPEND_IDENTITY_TAILS.set(identityKey, tail);
   await previous.catch(() => {});
   try {
     return await fn();
   } finally {
     release?.();
-    if (APPEND_PATH_TAILS.get(absPath) === tail) APPEND_PATH_TAILS.delete(absPath);
+    if (APPEND_IDENTITY_TAILS.get(identityKey) === tail) APPEND_IDENTITY_TAILS.delete(identityKey);
   }
 }
 
@@ -1067,12 +1073,12 @@ export class Vault {
    * Append text to an existing note. Requires `enableWrite: true`.
    * Refuses if the resulting file would exceed the size cap.
    *
-   * v3.11.7-rc.1 — opens without `O_CREAT`, so append can never turn a
+   * v3.11.7-rc.2 — opens without `O_CREAT`, so append can never turn a
    * missing path into a new file, and serializes the descriptor
-   * size-check + write by canonical path across all `Vault` instances in
-   * this process. `O_APPEND` makes placement atomic; the queue makes the
-   * max-size decision atomic relative to other in-process append calls.
-   * Writers in other processes are outside the `Vault` API contract.
+   * size-check + write by physical file identity across all `Vault`
+   * instances in this process. `O_APPEND` makes placement atomic; the
+   * dev+ino queue also coordinates distinct hardlink paths for one file.
+   * Writers in other processes remain outside the `Vault` API contract.
    *
    * @param relOrAbs - Vault-relative or absolute target path.
    * @param addition - Text to append (UTF-8). Caller is responsible for
@@ -1089,13 +1095,18 @@ export class Vault {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note appends");
     }
-    const lockKey = await this.resolveSafePath(relOrAbs);
-    return withAppendPathLock(lockKey, async () => {
+    const initialAbs = await this.resolveSafePath(relOrAbs);
+    const initialStat = await this.statSafe(initialAbs);
+    if (!initialStat.isFile()) {
+      throw new Error(`Refusing to append — target is not a regular file: ${path.relative(this.root, initialAbs)}`);
+    }
+    const lockKey = appendIdentityKey(initialStat);
+    return withAppendIdentityLock(lockKey, async () => {
       // Re-resolve after waiting: a rename/symlink swap while queued must not
       // silently redirect the append to a different inode or escape the lock.
       const abs = await this.resolveSafePath(relOrAbs);
-      if (abs !== lockKey) {
-        throw new Error(`Refusing to append — target changed while waiting: ${path.relative(this.root, lockKey)}`);
+      if (abs !== initialAbs) {
+        throw new Error(`Refusing to append — target changed while waiting: ${path.relative(this.root, initialAbs)}`);
       }
       await this.assertParentInsideVault(abs);
       const relForFilter = await this.canonicalRelForPrivacyCheck(abs);
@@ -1119,6 +1130,9 @@ export class Vault {
         const before = await handle.stat();
         if (!before.isFile()) {
           throw new Error(`Refusing to append — target is not a regular file: ${path.relative(this.root, abs)}`);
+        }
+        if (appendIdentityKey(before) !== lockKey) {
+          throw new Error(`Refusing to append — target changed while waiting: ${relForFilter}`);
         }
 
         // Verify the descriptor still names the in-vault path we validated.

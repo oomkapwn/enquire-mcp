@@ -301,6 +301,63 @@ describe("appendToNote", () => {
     expect((await fs.stat(target)).size).toBe(12);
   });
 
+  // v3.11.7-rc.2 (post-merge re-sweep A10-F1) — realpath cannot collapse
+  // hardlinks, so the append queue must key the physical dev+ino identity.
+  it("hardlink aliases share one append cap lock across Vault instances (POSITIVE)", async (ctx) => {
+    const target = path.join(root, "Hardlink-cap.md");
+    const alias = path.join(root, "Hardlink-alias.md");
+    await fs.writeFile(target, "1234");
+    try {
+      await fs.link(target, alias);
+    } catch {
+      return ctx.skip();
+    }
+    const targetStat = await fs.stat(target);
+    const aliasStat = await fs.stat(alias);
+    if (targetStat.ino === 0 || aliasStat.ino === 0) return ctx.skip();
+    expect(aliasStat.ino).toBe(targetStat.ino);
+
+    const a = new Vault(root, { enableWrite: true, maxFileBytes: 10 });
+    const b = new Vault(root, { enableWrite: true, maxFileBytes: 10 });
+    await Promise.all([a.ensureExists(), b.ensureExists()]);
+    for (let trial = 0; trial < 12; trial++) {
+      await fs.writeFile(target, "1234");
+      const results = await Promise.allSettled([
+        a.appendNote("Hardlink-cap.md", "AAAA"),
+        b.appendNote("Hardlink-alias.md", "BBBB")
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+      expect((await fs.stat(target)).size).toBe(8);
+    }
+  });
+
+  it("NEGATIVE control — uncoordinated hardlink handles exceed the shared inode cap", async (ctx) => {
+    const target = path.join(root, "Raw-hardlink-cap.md");
+    const alias = path.join(root, "Raw-hardlink-alias.md");
+    await fs.writeFile(target, "1234");
+    try {
+      await fs.link(target, alias);
+    } catch {
+      return ctx.skip();
+    }
+    const targetStat = await fs.stat(target);
+    const aliasStat = await fs.stat(alias);
+    if (targetStat.ino === 0 || aliasStat.ino === 0) return ctx.skip();
+    expect(aliasStat.ino).toBe(targetStat.ino);
+
+    const [a, b] = await Promise.all([fs.open(target, "a"), fs.open(alias, "a")]);
+    try {
+      const [aBefore, bBefore] = await Promise.all([a.stat(), b.stat()]);
+      expect(aBefore.size + 4).toBeLessThanOrEqual(10);
+      expect(bBefore.size + 4).toBeLessThanOrEqual(10);
+      await Promise.all([a.writeFile("AAAA", "utf8"), b.writeFile("BBBB", "utf8")]);
+    } finally {
+      await Promise.all([a.close(), b.close()]);
+    }
+    expect((await fs.stat(target)).size).toBe(12);
+  });
+
   it("append never creates a missing note (NEGATIVE control for the old O_CREAT flag)", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

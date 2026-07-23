@@ -7,10 +7,11 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
 import {
+  buildTfidfIndex,
   filterExcludedEmbedHits,
   frontmatterMatches,
   MAX_FANOUT_QUERIES,
@@ -782,6 +783,62 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // v3.11.7-rc.1 (whole-repo audit A12) — two DIFFERENT snapshots may
+  // legitimately build at once. The older/slower promise must still resolve
+  // for its original caller, but it must not publish over the newer completed
+  // cache when it finishes last.
+  it("an older slow TF-IDF build cannot overwrite the newer completed snapshot cache", async () => {
+    let snapshot = 1;
+    let reads = 0;
+    let oldReadStarted = false;
+    let releaseOld: (() => void) | undefined;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const entry = (mtimeMs: number) => ({
+      absPath: "/synthetic/Note.md",
+      relPath: "Note.md",
+      basename: "Note.md",
+      mtimeMs
+    });
+    const fakeVault = {
+      listMarkdown: async () => [entry(snapshot)],
+      readNote: async (_absPath: string, mtimeMs?: number) => {
+        reads += 1;
+        if (mtimeMs === 1) {
+          oldReadStarted = true;
+          await oldGate;
+        }
+        return { parsed: { body: `snapshot ${mtimeMs ?? 0}` } };
+      }
+    } as unknown as Vault;
+
+    const oldBuild = buildTfidfIndex(fakeVault);
+    await vi.waitFor(() => expect(oldReadStarted).toBe(true));
+
+    snapshot = 2;
+    const newest = await buildTfidfIndex(fakeVault);
+    expect(newest.entriesRef[0]?.mtimeMs).toBe(2);
+    expect(reads).toBe(2);
+
+    releaseOld?.();
+    const oldResult = await oldBuild;
+    expect(oldResult.entriesRef[0]?.mtimeMs).toBe(1); // its original caller still gets its snapshot
+
+    const readsBeforeReuse = reads;
+    const reused = await buildTfidfIndex(fakeVault);
+    expect(reused).toBe(newest);
+    expect(reused.entriesRef[0]?.mtimeMs).toBe(2);
+    expect(reads, "newest cache must survive the older promise completing last").toBe(readsBeforeReuse);
+
+    // NEGATIVE control: a genuinely newer third snapshot must still invalidate
+    // and rebuild; the publication guard must not freeze snapshot 2 forever.
+    snapshot = 3;
+    const third = await buildTfidfIndex(fakeVault);
+    expect(third.entriesRef[0]?.mtimeMs).toBe(3);
+    expect(reads).toBe(readsBeforeReuse + 1);
   });
 
   // rc.12 (pre-promotion re-sweep) — the multi path used to silently DROP the

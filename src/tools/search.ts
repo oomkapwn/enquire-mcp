@@ -554,7 +554,19 @@ export async function buildTfidfIndex(
   const promise = buildTfidfIndexUncached(vault, entries);
   tfidfPending.set(vault, { entriesRef: entries, promise });
   try {
-    return await promise;
+    const result = await promise;
+    // v3.11.7-rc.1 (whole-repo audit A12) — publish only if this is still
+    // the newest in-flight snapshot. Two DIFFERENT corpus snapshots are
+    // intentionally allowed to overlap: callers that started against the
+    // old snapshot still receive its result, while a newer caller builds the
+    // invalidated snapshot. Pre-fix, each uncached builder published
+    // unconditionally, so the older/slower build could finish last and replace
+    // the completed cache with stale metadata. The next search detected the
+    // mismatch and rebuilt the whole corpus again (correct results, but a
+    // bearer-reachable full-vault CPU/I/O amplification).
+    const current = tfidfPending.get(vault);
+    if (current?.promise === promise) tfidfCache.set(vault, result);
+    return result;
   } finally {
     // Clear pending only if it's still OURS — a newer invalidating build may
     // have replaced it while this one was in flight.
@@ -574,7 +586,8 @@ function sameCorpus(ref: FileEntry[], entries: FileEntry[]): boolean {
 
 /** The actual read+tokenize+weight corpus build (rc.15 — extracted from
  *  {@link buildTfidfIndex} so the single-flight wrapper owns cache publication).
- *  Sets the completed `tfidfCache` on success. */
+ *  Returns an unpublished result; the wrapper publishes it only when this
+ *  promise is still the newest build for the vault. */
 async function buildTfidfIndexUncached(
   vault: Vault,
   entries: FileEntry[]
@@ -621,9 +634,7 @@ async function buildTfidfIndexUncached(
     });
   }
 
-  const result = { docs, idf, entriesRef: entries };
-  tfidfCache.set(vault, result);
-  return result;
+  return { docs, idf, entriesRef: entries };
 }
 
 /**

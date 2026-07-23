@@ -1585,8 +1585,9 @@ export async function searchHybrid(
      * for a 50-candidate set.
      *
      * `alias` resolves to a `RERANKER_MODELS` entry. `topN` defaults to 50.
-     * Lazy-loaded — first call downloads the model from HuggingFace
-     * (~25-110 MB depending on alias). Failures are swallowed and surface
+     * Lazy-loaded from the local transformers.js cache. Runtime callers are
+     * offline-enforced; pre-cache with `enquire-mcp install-model <alias>`.
+     * Failures are swallowed and surface
      * via `signal_errors.reranker` so the whole search doesn't break on a
      * model load issue.
      */
@@ -2002,17 +2003,15 @@ export async function searchHybrid(
       if (ctx.rerankerOverride) {
         reranker = ctx.rerankerOverride;
       } else {
-        // v3.10.0-rc.13 (bug-report Issue 9) — reranker lifecycle logging. The
-        // first --enable-reranker call lazily downloads a cross-encoder (~110 MB
-        // for the default rerank-bge); previously this was SILENT, so a long hang
-        // that exceeded the client's tool-call timeout looked like an unexplained
-        // RRF fallback. Announce the load (with size) BEFORE it blocks, and
-        // confirm AFTER — three distinguishable states (loading… / loaded /
-        // failed) on stderr. Pre-cache with `enquire-mcp install-model <alias>`.
+        // v3.10.0-rc.13 (bug-report Issue 9) — reranker lifecycle logging.
+        // Runtime paths load only from the local cache; a miss fails closed and
+        // preserves the RRF order. Announce the potentially slow ONNX session
+        // load before it blocks and confirm after — three distinguishable states
+        // (loading… / loaded / failed) on stderr.
         const emb = await import("../embeddings.js");
         const rmodel = emb.resolveRerankerModel(ctx.reranker?.alias);
         process.stderr.write(
-          `obsidian_search: reranker '${rmodel.alias}' loading (~${rmodel.approxSizeMB} MB; first call downloads from HuggingFace and can take 30-60s)…\n`
+          `obsidian_search: reranker '${rmodel.alias}' loading from local cache (~${rmodel.approxSizeMB} MB; pre-cache with 'enquire-mcp install-model ${rmodel.alias}')…\n`
         );
         reranker = await emb.loadReranker(ctx.reranker?.alias);
       }

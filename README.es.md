@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** El modelo de embeddings se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local única (~110 MB), no una clave de API en la nube. Estar anclado y ser privado no sale gratis, y no fingimos que sí: el contenido de tu bóveda nunca sale de tu máquina, seguro para entornos aislados por defecto ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1638+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1669+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -76,7 +76,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
 | **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ delega en Obsidian |
 | **Recuperación HyDE** (Gao et al. 2023) + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
-| **1638 pruebas unitarias · 9 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | ✅ | n/d | raro |
+| **1669 pruebas unitarias · 9 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | ✅ | n/d | raro |
 | **Procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2) | ✅ | n/d | ❌ |
 | **Superficie pública ligada a semver** ([STABILITY.md](./STABILITY.md)) | ✅ | n/d | ❌ |
 | Autónomo (sin necesidad de plugin de Obsidian) | ✅ | ❌ requiere Obsidian | varía |
@@ -110,12 +110,16 @@ Conéctalo a cualquier cliente MCP:
 
 📂 Configuraciones listas para usar en [`examples/`](./examples/) —— **Claude Desktop**, **Cursor**, **GPT personalizado de ChatGPT** (MCP remoto sobre HTTP), además de un conjunto de consultas de ejemplo para el arnés de evaluación.
 
-**¿Quieres toda la potencia híbrida?** Puesta en marcha sin fricción, en un comando:
+**¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-enquire-mcp setup --vault <path>     # descarga el modelo, construye FTS5 + embed-db
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # guarda el embedder y construye FTS5 + embed-db
+enquire-mcp install-model rerank-bge                      # guarda el reranker sin conexión
+enquire-mcp doctor --tier hybrid --vault <path>           # preparación estructural/runtime
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # chequeo de salud con código de color ✓/⚠/✗
 ```
 
 ---
@@ -141,7 +145,7 @@ Luego, en cualquier sesión de Claude Code:
 <details>
 <summary><b>Claude Desktop</b> — archivo de configuración + primer prompt</summary>
 
-Deposita [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) en la configuración MCP de Claude Desktop (edita primero la ruta de la bóveda). Reinicia Claude Desktop y luego:
+Prefiere la salida lista para pegar de `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>`. [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) es solo una plantilla; si la usas manualmente, sustituye tanto la ruta del ejecutable como la de la bóveda. Reinicia Claude Desktop y luego:
 
 > Tienes mi bóveda de Obsidian conectada como memoria consultable a través de las herramientas `obsidian_*`. Comprueba siempre `obsidian_search` primero cuando te pregunte por cualquier cosa de mis notas: contexto de reuniones, investigación, decisiones, entradas de diario. Cita la ruta de la nota fuente en cada hecho.
 
@@ -290,7 +294,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superficie de estabilidad:
 
 **¿Escribirá en mi bóveda?** No, a menos que pases `--enable-write`. Las 7 herramientas de escritura están restringidas; las destructivas admiten `dry_run`.
 
-**¿Se envían datos a algún sitio?** Solo al ejecutar `enquire-mcp install-model` (descarga los pesos ONNX desde HuggingFace, una sola vez). El modo serve nunca realiza HTTP saliente. Los embeddings y el reranker se ejecutan localmente en la CPU.
+**¿Se envían datos a algún sitio?** Las descargas salientes solo ocurren con comandos explícitos de adquisición: `enquire-mcp setup`, `enquire-mcp build-embeddings` y `enquire-mcp install-model` pueden descargar pesos ONNX de HuggingFace; `enquire-mcp install-ocr-lang` descarga un paquete de idioma Tesseract para OCR. El modo serve nunca realiza HTTP saliente. Los embeddings y el reranker se ejecutan localmente en la CPU.
 
 **¿Rendimiento?** Construcción en frío de FTS5: ~5s/1k notas, ~30s/50k. Consulta BM25: siempre <100ms. **HNSW top-10: menos de 10 ms a cualquier escala.** Arranque en frío de serve: ~50ms con persistencia HNSW.
 

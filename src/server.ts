@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
 import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
-import { type loadEmbedder, resolveModel } from "./embeddings.js";
+import { type loadEmbedder, resolveModel, setEmbeddingsOffline } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { defaultIndexFile, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -209,6 +209,11 @@ export interface ServerDeps {
  * each call this exactly once at startup.
  */
 export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps> {
+  // Programmatic stdio/HTTP consumers bypass src/cli.ts, so the privacy
+  // boundary belongs here as well: every server preparation is local-cache-only
+  // before any embedder/reranker can load. Explicit setup/install commands do
+  // not call prepareServerDeps and remain network-enabled.
+  setEmbeddingsOffline();
   // v3.11.5-rc.1 CRL-1 — fail fast on a bad --feedback-weight / --recency-weight /
   // --stale-days BEFORE acquiring any resource (vault cache, FTS5 handle, watcher,
   // embed-db, HNSW). These parsers throw on an out-of-range value; validating them
@@ -368,9 +373,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
           quantization
         });
         await watcherEmbedDb.open();
-        // Lazy-load the embedder. ~120MB multilingual model first call
-        // (~2-5s warm); subsequent calls reuse the cached transformers.js
-        // pipeline. Done synchronously here so any failure surfaces
+        // Load the already-cached embedder (~2-5s warm for the default
+        // multilingual model); subsequent calls reuse the transformers.js
+        // pipeline. Done synchronously here so a cache/load failure surfaces
         // BEFORE watcher events start arriving.
         const { loadEmbedder } = await import("./embeddings.js");
         const embedder = await loadEmbedder(model.alias);
@@ -670,6 +675,11 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
  * @returns A freshly registered MCP server.
  */
 export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracker?: WriteRequestTracker): McpServer {
+  // `buildMcpServer` is a public, semver-bound programmatic entrypoint and can
+  // be called with caller-constructed deps (without `prepareServerDeps`).
+  // Enforce the runtime privacy boundary here too, before any registered tool
+  // can lazily load an embedder or reranker.
+  setEmbeddingsOffline();
   const server = new McpServer({
     name: "enquire",
     version: VERSION

@@ -50,16 +50,18 @@ if (!existsSync(SUMMARY_PATH)) {
   process.exit(2);
 }
 
-// Per-file branch coverage floors (in percent). Each entry pins a single
-// file's branch coverage to a value ~2pp below the current measurement so
-// natural fluctuation doesn't trip the gate but a real regression does.
+// Per-file coverage floors (in percent). These are conservative regression
+// tripwires, not mirrors of the latest measurement; raise a floor only with a
+// deliberate, durable coverage uplift.
 //
 // embeddings.ts + ocr.ts are integration-dep heavy (transformers.js +
 // tesseract.js) and largely tested through other paths; their floors
 // reflect that explicitly so a refactor doesn't accidentally promise
 // coverage uplift that requires real model downloads in CI.
 const FLOORS = {
-  "src/embeddings.ts": { branches: 27 }, // current 43.13% (integration-dep; rc.12 L-2 exported applyOfflineEnv covered the offline-env arms; v3.11.6-rc.3 T-11 serve-offline-network test drove the REAL embedder cache-miss offline load → branch% rose 35.29→43.13; floor kept at 27 as margin — embedder/reranker warm load still needs a real model download to fully cover; synced after OIA Check 6 flagged the drift)
+  // The warm embedder/reranker paths still require real model artifacts, so
+  // this integration-heavy module keeps deliberately wider headroom.
+  "src/embeddings.ts": { branches: 27 },
   // v3.9.0-rc.23 (full-audit batch 3) — vault.ts is the single most
   // security-critical module (path-traversal / symlink-escape / privacy-glob
   // enforcement) and was the one critical module with NO per-file floor, so a
@@ -69,15 +71,15 @@ const FLOORS = {
   // rc.23 — ocr.ts gains a `lines` floor too: it's the #16 offline-enforcement
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.
-  "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 71.11% / lines 45.97% (rc.55 OPTDEP fix dropped the 3 import-catch `err.message` ternaries → branch% rose; floors kept as margin)
+  "src/ocr.ts": { branches: 60, lines: 40 },
   "src/http-transport.ts": { branches: 65 },
-  "src/doctor.ts": { branches: 64 }, // current 70.22% (rc.12 exported candidateModelCacheRoots + cache-path tests lifted it)
-  "src/tools/search.ts": { branches: 66 }, // current 68.63% (rc.11/rc.12 explain accumulators + multi-path union added guarded branches)
+  "src/doctor.ts": { branches: 64 },
+  "src/tools/search.ts": { branches: 66 },
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests
   // raised per-file branches from 67.66% → 73.85%.
-  "src/tools/meta.ts": { branches: 74 }, // current 78.51% (rc.25 added leadingAtomSet/branchIsNullable/bodyVariable detector branches)
-  "src/tools/media.ts": { branches: 65 }, // current 69.17%
-  "src/bases.ts": { branches: 71 }, // current 75.84% (rc.9 NFC foldTag/nfc tag+value tests lifted it)
+  "src/tools/meta.ts": { branches: 74 },
+  "src/tools/media.ts": { branches: 65 },
+  "src/bases.ts": { branches: 71 },
   // v3.8.0-rc.3 — lowered from 71% → 69% because rc.3 expanded watcher.ts
   // with a PDF embed-sync block (lines 240-288); the fail-soft error branches
   // (embedder throws) required dependency injection to test deterministically.
@@ -96,11 +98,11 @@ const FLOORS = {
   // → flushHnswToDisk → loadHnswFromDisk round-trip) lifted coverage
   // 55.05% → 59.58%; floor stays at 53% (kept the conservative margin
   // because OCR branches still need tesseract.js + canvas, absent from CI).
-  "src/watcher.ts": { branches: 53 }, // current 61.83% (v3.10.0-rc.24 unlink-gate refactor + excluded-unlink test lifted it)
+  "src/watcher.ts": { branches: 53 },
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
-  // rc.8 at floor 84% (2pp below current 86.84%).
-  "src/embed-pipeline.ts": { branches: 84 } // current 85.41% (v3.9.0-rc.28 MAX_EMBED_CHARS clamp branch; rc.13 AUD-03 added the lookupFoldedAny title-fold `|| basename` branch → 86.95→85.41, still > 84 floor)
+  // rc.8 set the floor at 84%; later behavior additions intentionally kept it.
+  "src/embed-pipeline.ts": { branches: 84 }
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

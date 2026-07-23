@@ -12,7 +12,9 @@
 // Both now flow through ONE resolver: `resolveTransformersCacheDir()`. These
 // tests pin the pure derivation (incl. the nested global-install layout that
 // caused Issue 1) with a discriminating NEGATIVE control, and assert the doctor
-// probe ranks the module-resolved cache first.
+// probe uses only the module-resolved runtime cache. Reporting a model from a
+// legacy HF path that this transformers.js install never reads would be a
+// false READY.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { candidateModelCacheRoots } from "../src/doctor.js";
@@ -73,18 +75,29 @@ describe("transformers cache-path resolution (rc.12 — Issues 1 + 2)", () => {
   });
 
   describe("candidateModelCacheRoots (doctor) — Issue 1 regression guard", () => {
-    it("ranks the module-resolved package cache as the FIRST candidate", () => {
+    it("uses exactly the module-resolved package cache", () => {
       const roots = candidateModelCacheRoots();
       const resolved = resolveTransformersCacheDir();
       expect(resolved).not.toBeNull();
-      // The path a global install actually loads from must be probed first.
-      expect(roots[0]).toBe(resolved);
+      expect(roots).toEqual(resolved ? [resolved] : []);
     });
 
-    it("still includes the HF-Hub convention fallbacks (didn't drop the old probes)", () => {
-      const roots = candidateModelCacheRoots();
-      // Fixing Issue 1 must not regress the legitimate fallback candidates.
-      expect(roots.some((r) => r.includes(path.join(".cache", "huggingface")))).toBe(true);
+    it("NEGATIVE control: legacy HF env paths cannot create false runtime readiness", () => {
+      const oldHfHome = process.env.HF_HOME;
+      const oldTransformersCache = process.env.TRANSFORMERS_CACHE;
+      process.env.HF_HOME = path.join("/tmp", "legacy-hf-home");
+      process.env.TRANSFORMERS_CACHE = path.join("/tmp", "legacy-transformers-cache");
+      try {
+        const roots = candidateModelCacheRoots();
+        expect(roots).toEqual(resolveTransformersCacheDir() ? [resolveTransformersCacheDir() as string] : []);
+        expect(roots).not.toContain(process.env.HF_HOME);
+        expect(roots).not.toContain(process.env.TRANSFORMERS_CACHE);
+      } finally {
+        if (oldHfHome === undefined) delete process.env.HF_HOME;
+        else process.env.HF_HOME = oldHfHome;
+        if (oldTransformersCache === undefined) delete process.env.TRANSFORMERS_CACHE;
+        else process.env.TRANSFORMERS_CACHE = oldTransformersCache;
+      }
     });
   });
 });

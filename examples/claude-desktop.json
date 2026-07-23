@@ -1,7 +1,7 @@
 {
-  "_comment_purpose": "Drop-in MCP server config for Claude Desktop. Edit the absolute paths to point at your enquire-mcp install + your Obsidian vault, then merge this into ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %AppData%\\Claude\\claude_desktop_config.json (Windows).",
-  "_comment_tier1": "Tier 1 — TF-IDF only, zero setup. Just point at the vault and go. Recall is fine for ~1k-note vaults; sub-200ms typical query latency.",
-  "_comment_tier3": "For the full hybrid stack (BM25 + TF-IDF + ML embeddings + HNSW + reranker), see `claude-desktop-hybrid.json` next to this file.",
+  "_comment_purpose": "Basic MCP server config template for Claude Desktop. Edit the Obsidian vault path, then merge this into ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %AppData%\\Claude\\claude_desktop_config.json (Windows). Prefer `enquire-mcp configure --tier basic --client claude-desktop --vault <path>` for generated output.",
+  "_comment_basic": "basic — TF-IDF only, zero setup. Just point at the vault and go. Recall is fine for ~1k-note vaults; sub-200ms typical query latency.",
+  "_comment_hybrid": "For the hybrid-live stack (BM25 + TF-IDF + ML embeddings + HNSW + reranker + PDFs/watch), see `claude-desktop-hybrid.json` next to this file.",
   "mcpServers": {
     "enquire": {
       "command": "npx",

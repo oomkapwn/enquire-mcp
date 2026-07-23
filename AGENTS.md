@@ -7,9 +7,9 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1638+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1669+ tests)
 - Build: `npm run build` (tsc → `dist/`)
-- Test: `npm test` (full suite ~12s)
+- Test: `npm test` (full suite)
 - Lint: `npm run lint` (biome — must exit 0)
 - Coverage: `npm run test:coverage` (11 per-file coverage floors enforced)
 - Audit: `npm run check:audit` (source + published-consumer dependency graphs)
@@ -22,7 +22,7 @@ All 9 release-required CI checks run on every PR. Branch protection currently en
 
 ```
 src/
-├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, configure, install-model, build-embeddings, index, doctor, eval, install-ocr-lang)
+├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, configure, install-model, build-embeddings, index, doctor, eval, eval-compare, install-ocr-lang, gen-token, clear-cache, clear-index, clear-embeddings, query, prune)
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── server.ts           — MCP server bootstrap + dependency wiring
 ├── tool-registry.ts    — tool registration manifest
@@ -109,7 +109,7 @@ npm ci                              # install (uses package-lock.json)
 npm run build                       # tsc → dist/
 
 # Test
-npm test                            # full suite (~12s)
+npm test                            # full suite
 npm test -- --reporter=verbose      # detailed output
 npm test -- tests/cli-parity        # run one file
 

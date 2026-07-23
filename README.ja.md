@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1638+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1669+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain モジュラリティによる wikilink コミュニティ検出） | ✅ **ここだけ** | ❌ | ❌ |
 | **スタンドアロンの `.base` クエリ実行**（Obsidian を起動せずに動作） | ✅ **ここだけ** | ❌ | ❌ Obsidian に委譲 |
 | **HyDE 検索**（Gao et al 2023）+ サブクエスチョン分解 | ✅ **ここだけ** | ❌ | ❌ |
-| **1638 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
+| **1669 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
 | **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2） | ✅ | 該当なし | ❌ |
 | **semver 準拠の公開サーフェス**（[STABILITY.md](./STABILITY.md)） | ✅ | 該当なし | ❌ |
 | スタンドアロン（Obsidian プラグイン不要） | ✅ | ❌ Obsidian が必要 | まちまち |
@@ -110,12 +110,16 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 📂 すぐに使える設定は [`examples/`](./examples/) にあります —— **Claude Desktop**、**Cursor**、**ChatGPT カスタム GPT**（HTTP 経由のリモート MCP）、さらに評価ハーネス用のサンプルクエリセットも。
 
-**完全なハイブリッドの威力が欲しい？** ワンコマンドでゼロタッチのオンボーディング：
+**完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-enquire-mcp setup --vault <path>     # モデルをダウンロードし、FTS5 + embed-db を構築
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # embedder をキャッシュし FTS5 + embed-db を構築
+enquire-mcp install-model rerank-bge                      # オフライン reranker をキャッシュ
+enquire-mcp doctor --tier hybrid --vault <path>           # 構造/runtime の準備状況
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # 色分けされた ✓/⚠/✗ のヘルスチェック
 ```
 
 ---
@@ -141,7 +145,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 <details>
 <summary><b>Claude Desktop</b> —— 設定ファイル + 最初のプロンプト</summary>
 
-[`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) を Claude Desktop の MCP 設定に置きます（先にボールトのパスを編集してください）。Claude Desktop を再起動してから：
+`enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>` の貼り付け可能な出力を推奨します。[`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) はテンプレートにすぎません。手動で使う場合は実行ファイルとボールトの両方のパスを置き換えてください。Claude Desktop を再起動してから：
 
 > あなたには、私の Obsidian ボールトが `obsidian_*` ツール経由で検索可能な記憶として接続されています。私がノートに関する何か——会議のコンテキスト、リサーチ、決定、日誌のエントリ——を尋ねたら、必ず最初に `obsidian_search` を確認してください。すべての事実について出典のノートパスを引用してください。
 
@@ -290,7 +294,7 @@ graph LR
 
 **私のボールトに書き込む？** `--enable-write` を渡さない限り、書き込みません。7 個の書き込みツールはすべてゲート付きで、破壊的なものは `dry_run` をサポートします。
 
-**データはどこかに送信される？** `enquire-mcp install-model`（HuggingFace から ONNX の重みを一度だけダウンロード）の時だけです。serve モードは外向きの HTTP を一切行いません。埋め込みとリランカーはローカルの CPU で実行されます。
+**データはどこかに送信される？** 外向きのダウンロードは明示的な取得コマンドだけです。`enquire-mcp setup`、`enquire-mcp build-embeddings`、`enquire-mcp install-model` は HuggingFace から ONNX の重みを取得する場合があり、`enquire-mcp install-ocr-lang` は OCR 用 Tesseract 言語パックを取得します。serve モードは外向きの HTTP を一切行いません。埋め込みとリランカーはローカルの CPU で実行されます。
 
 **パフォーマンスは？** FTS5 のコールドビルド：ノート 1k あたり約 5 秒、50k あたり約 30 秒。BM25 クエリ：常に 100ms 未満。**HNSW top-10：どんな規模でも 10ms 未満。** serve のコールドスタート：HNSW 永続化で約 50ms。
 
@@ -315,7 +319,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # フルスイート（1638 テスト、約 12 秒）
+npm test       # フルスイート（1669 テスト）
 npm run lint   # 警告ゼロ
 npm run build  # tsc → dist/
 ```

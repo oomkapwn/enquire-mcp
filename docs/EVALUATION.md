@@ -7,7 +7,8 @@ enquire ships a **built-in retrieval-quality harness** so you can *measure* a ch
 ## Quick start
 
 ```bash
-# 0. (optional smoke) run the committed golden set against the repo's synthetic vault —
+# 0. (repository-checkout-only smoke) run the committed golden set against the
+#    repo's synthetic-vault helper; this helper is not included in the npm package —
 #    examples/queries.jsonl targets THAT vault (CI-pinned), so this pair works out of the box:
 node -e 'import("./scripts/synthetic-vault.mjs").then(async m => console.log(await m.createSyntheticVault()))'
 enquire-mcp eval --vault <printed-path> --queries examples/queries.jsonl --per-query
@@ -23,7 +24,7 @@ enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --
 enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --output before.json
 #    …make a retrieval change, rebuild…
 enquire-mcp eval --vault <path> --queries <your-set>.jsonl --persistent-index --output after.json
-npm run eval:compare -- before.json after.json     # delta table; exits 1 on a meaningful regression
+enquire-mcp eval-compare before.json after.json    # same k/cohort only; nonzero on invalid input or material regression
 ```
 
 ## Golden-set format (JSONL, one query per line)
@@ -49,7 +50,7 @@ Blank lines and `//` comment lines are tolerated. Keep the golden set **committe
 | **Recall@k** (= `evidence_coverage_k`) | fraction of *all* relevant docs found in top-k | diagnosing retrieval vs ranking |
 | **AllRel@k** | fraction of queries where *every* relevant doc is in top-k | multi-evidence questions |
 
-Rules of thumb: nDCG@5 **0.9+ excellent, 0.7+ good, <0.5 poor**. A `|Δ| ≥ 0.01` between two runs is meaningful at ~50+ queries; below that is noise. Fewer than 50 queries → treat conclusions as directional.
+Rules of thumb: nDCG@5 **0.9+ excellent, 0.7+ good, <0.5 poor**. The compare tool uses `|Δ| ≥ 0.01` as a fixed **material-effect CI threshold**, not a significance test; smaller changes may still be real. Use 50+ queries for a more stable directional estimate, and use paired uncertainty analysis before making a statistical claim.
 
 ## Per-hit ranking explanation (`explain`)
 
@@ -71,11 +72,11 @@ Start with `summary`, then `by_category` (weakest nDCG first), then the worst `p
 - **Low `Recall@k`, many `missed_paths`** → the answer note isn't retrieved at all. Look at chunking, the embedding model, query expansion (HyDE / multi-query), and whether metadata (dates) should be indexed more explicitly.
 - **Weak `temporal-reasoning` / `knowledge-update`** → stale evidence outranks newer corrective notes. This is exactly what enquire's **freshness-aware recency ranking** (`--recency-weight` / `--stale-days`) targets — run the eval with it **on vs off** and compare.
 - **Weak `preference`** → short, stable preference statements get drowned out by longer context.
-- **A query in the `error` failure bucket** → `obsidian_search` threw (infra, not relevance); the means are deflated — re-run before publishing.
+- **A query in the `error` failure bucket** → `obsidian_search` threw or reported a requested retrieval signal failure (for example, a reranker/model error). This is infrastructure/configuration, not relevance; the query scores zero and the run is invalid for publication until re-run cleanly.
 
 ## Failure buckets
 
-Every query is classified (zero extra cost, derived from the scored top-k): `hit_rank_1`, `hit_top_k`, `miss`, `no_labels`, `error`. The aggregate counts appear under `diagnostics.failure_buckets`.
+Every query is classified (zero extra cost, derived from the scored top-k): `hit_rank_1`, `hit_top_k`, `miss`, `no_labels`, `error`. The aggregate counts appear under `diagnostics.failure_buckets`. Matrix rows with any query error are labeled `INVALID` and excluded from “best” selection; A/B comparison rejects either input when `query_errors > 0`, and also rejects different `k`, query counts, or canonical query-cohort fingerprints.
 
 ## Publishing a number responsibly
 
@@ -88,6 +89,8 @@ If you publish a headline number (e.g. against a peer's LongMemEval protocol), t
 5. If you can't match a peer's exact protocol, publish as **two independent measurements**, not a head-to-head.
 
 ## LongMemEval-S peer-protocol comparison (vs obsidian-hybrid-search)
+
+> **Repository checkout only:** the benchmark helper below is contributor tooling and is not included in the npm package.
 
 `scripts/bench-longmemeval.mjs` runs the **same public protocol** the closest peer (`flowing-abyss/obsidian-hybrid-search`, "OHS") publishes: **scope-per-question** (each question materializes its OWN LongMemEval haystack as a temp vault, so search is scoped to that mini-vault — NOT one global search over all ~22k notes) at **k=10**, reporting **nDCG@5, nDCG@10, MRR, Hit@1, Hit@5, Recall@10, AllRel@10** grouped by LongMemEval `question_type`.
 
@@ -115,9 +118,11 @@ node scripts/bench-longmemeval.mjs --dataset longmemeval_s.json --k 10 --embeddi
 
 The full LongMemEval-S vault is ~22k notes; indexing it (especially with a cloud embedding model) is slow and can cost API budget. **Run the full eval once, keep the JSON, and analyze it** — don't re-run just to inspect. Re-run only after an intentional model or retrieval-code change. `enquire-mcp eval` reuses the persistent per-vault index (incremental), so a re-run over an unchanged vault + model is fast.
 
-## Files
+## Repository source map
+
+The source paths below are useful in a repository checkout. The supported packaged comparison entrypoint is `enquire-mcp eval-compare`.
 
 - `src/eval.ts` — pure metrics (`ndcgAtK`/`recallAtK`/`reciprocalRank`/`hitAtK`/`allRelevantAtK`), `groupByCategory`, `compareEvalResults`, `runEval`, formatters.
-- `scripts/eval-compare.mjs` — A/B delta tool (`npm run eval:compare`).
-- `scripts/bench-longmemeval.mjs` — LongMemEval retrieval harness.
+- `enquire-mcp eval-compare` — packaged A/B delta command; `npm run eval:compare -- …` is its source-checkout alias.
+- `scripts/bench-longmemeval.mjs` — repository-checkout-only LongMemEval retrieval harness (not included in the npm package).
 - `examples/queries.jsonl` — a small categorized golden set targeting the repo's SYNTHETIC quick-start vault (`scripts/synthetic-vault.mjs`); every `relevant` path is CI-pinned to that vault by `tests/eval-goldenset-contract.test.ts`. For your own vault, write your own set in the same format.

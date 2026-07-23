@@ -5,6 +5,7 @@ import { Command } from "commander";
 import {
   CACHE_FILE_HELP,
   CACHE_SIZE_HELP,
+  CONFIG_TIER_HELP,
   DIAGNOSTIC_SEARCH_TOOLS_HELP,
   DISABLED_TOOLS_HELP,
   ENABLE_WRITE_HELP,
@@ -34,12 +35,16 @@ import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type Token
 import { VERSION } from "./index.js";
 import {
   CONFIG_CLIENTS,
+  CONFIG_TIERS,
   type ConfigClient,
   type ConfigInput,
-  type ConfigTier,
+  isConfigTier,
+  isValidServerName,
   preflightHint,
   renderAllClients,
-  renderClientConfig
+  renderClientConfig,
+  renderShellCommand,
+  shellQuote
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
@@ -104,7 +109,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--enable-reranker",
-      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; ≈+15.5 NDCG@10 / +24.7 MRR measured on our 60-query ablation. Off by default — opt-in because the cross-encoder model is downloaded from HuggingFace on first call (~25-110 MB depending on alias). Requires the `@huggingface/transformers` optionalDependency."
+      "v2.9.0 — enable BGE cross-encoder reranking on top of RRF in `obsidian_search`. After fusion, top-N candidates (default 50) are re-scored by a cross-encoder model and re-sorted. Adds ~30-50ms per query on M1 CPU; ≈+15.5 NDCG@10 / +24.7 MRR measured on our 60-query ablation. Off by default — opt-in and requires a locally cached model (~25-110 MB; run `enquire-mcp install-model rerank-bge` before serving) plus the `@huggingface/transformers` optionalDependency."
     )
     .option(
       "--reranker-model <alias>",
@@ -427,6 +432,10 @@ export async function main(): Promise<void> {
     .option("--index-file <path>", INDEX_FILE_HELP)
     .option("--json", "Emit the full JSON response instead of the pretty list")
     .action(async (text: string, opts: { vault: string; limit?: string; indexFile?: string; json?: boolean }) => {
+      // One-shot query is a read/runtime path, not an installation command.
+      // Match serve/serve-http: a missing model cache fails closed instead of
+      // turning an apparently local query into an implicit network download.
+      setEmbeddingsOffline();
       const v = new Vault(opts.vault);
       await v.ensureExists();
       const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
@@ -594,7 +603,7 @@ export async function main(): Promise<void> {
   program
     .command("install-model")
     .description(
-      `Pre-download an embedding OR reranker model so the first \`obsidian_embeddings_search\` / \`--enable-reranker\` call doesn't block on a HuggingFace download (the default cross-encoder \`${DEFAULT_RERANKER_ALIAS}\` is ~${RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.approxSizeMB}MB). Models are cached by transformers.js inside its own package directory (run \`enquire-mcp doctor\` to see the exact resolved path) and are reused across vaults.`
+      `Explicitly download and smoke-test an embedding OR reranker model for offline runtime use (the default cross-encoder \`${DEFAULT_RERANKER_ALIAS}\` is ~${RERANKER_MODELS[DEFAULT_RERANKER_ALIAS]?.approxSizeMB}MB). Runtime commands fail closed on a cache miss instead of downloading. Models are cached by transformers.js inside its own package directory (run \`enquire-mcp doctor\` to see the exact resolved path) and are reused across vaults.`
     )
     .argument(
       "[alias]",
@@ -603,10 +612,10 @@ export async function main(): Promise<void> {
     )
     .action(async (alias: string) => {
       // v3.10.0-rc.13 (bug-report Issue 3) — install-model now also pre-caches
-      // cross-encoder rerankers, so `serve --enable-reranker` doesn't block on a
-      // ~110 MB download at the FIRST query (which previously could exceed an MCP
-      // client's tool-call timeout → unexplained RRF fallback). Reranker aliases
-      // live in a separate catalog (RERANKER_MODELS); detect + route accordingly.
+      // cross-encoder rerankers. Runtime commands are offline-enforced, so this
+      // explicit network-enabled path prevents a cache-miss fallback instead of
+      // making the first query download weights. Reranker aliases live in a
+      // separate catalog (RERANKER_MODELS); detect + route accordingly.
       if (alias in RERANKER_MODELS) {
         const rmodel = resolveRerankerModel(alias);
         process.stderr.write(
@@ -825,39 +834,57 @@ export async function main(): Promise<void> {
       }
     });
 
-  // v2.11.0 — diagnostic + zero-touch onboarding. `doctor` is read-only and
-  // returns 0 if everything is ready, 1 if any critical setup is missing.
+  // v2.11.0 — diagnostic + onboarding. `doctor` preserves SQLite source state
+  // and returns 0 if the selected capability tier is structurally ready.
   // `setup` runs the install + build sequence in order, idempotent.
   program
     .command("doctor")
     .description(
-      "Run a read-only health check: verify the vault path, optional deps (better-sqlite3 / transformers / pdfjs / tesseract / canvas), embedding-model cache, FTS5 index, and embed-db. Returns 0 if everything is ready for full hybrid retrieval, 1 if any critical piece is missing. Color-coded ✓ / ⚠ / ✗ output. Use this when you're unsure what's set up vs not."
+      "Run a source-state-preserving health check for a capability tier: basic (live scan), hybrid (FTS5 + embeddings + reranker + HNSW), or hybrid-live (hybrid + PDFs/watch). SQLite indexes are inspected from in-memory snapshots: doctor does not write their contents/schema or create sidecars (ordinary reads may update OS access-time metadata). Structural/runtime READY does not certify index freshness or complete PDF coverage."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--tier <tier>", CONFIG_TIER_HELP)
     .option(
       "--exclude-glob <pattern...>",
-      "Privacy denylist (same semantics as `serve`) — counts + checks reflect the filter."
+      "Privacy denylist (same semantics as `serve`) — live vault content counts reflect the filter; this is not a retroactive index-membership or purge audit."
     )
     .option(
       "--read-paths <pattern...>",
-      "Privacy allowlist (same semantics as `serve`) — counts + checks reflect the filter."
+      "Privacy allowlist (same semantics as `serve`) — live vault content counts reflect the filter; this is not a retroactive index-membership or purge audit."
     )
     .option("--json", "Emit machine-readable JSON instead of the colored banner")
-    .action(async (opts: { vault: string; json?: boolean; excludeGlob?: string[]; readPaths?: string[] }) => {
-      const { runDoctor, formatDoctorResult } = await import("./doctor.js");
-      const result = await runDoctor({
-        vault: opts.vault,
-        modelEntry: EMBEDDING_MODELS[DEFAULT_MODEL_ALIAS],
-        ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
-        ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
-      });
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      } else {
-        process.stdout.write(`${formatDoctorResult(result)}\n`);
+    .action(
+      async (opts: { vault: string; tier?: string; json?: boolean; excludeGlob?: string[]; readPaths?: string[] }) => {
+        const tier = opts.tier ?? "hybrid";
+        if (!isConfigTier(tier)) {
+          process.stderr.write(`enquire doctor: invalid --tier '${tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
+          process.exit(1);
+        }
+        const { runDoctor, formatDoctorResult } = await import("./doctor.js");
+        const result = await runDoctor({
+          vault: opts.vault,
+          tier,
+          ...(process.argv[1]
+            ? {
+                repairCommandPrefix: renderShellCommand(
+                  process.execPath,
+                  [await fs.realpath(process.argv[1])],
+                  process.platform
+                ),
+                repairCommandPlatform: process.platform
+              }
+            : {}),
+          ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+          ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+        });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        } else {
+          process.stdout.write(`${formatDoctorResult(result)}\n`);
+        }
+        if (!result.ready) process.exitCode = 1;
       }
-      if (!result.ready) process.exit(1);
-    });
+    );
 
   program
     .command("configure")
@@ -866,17 +893,13 @@ export async function main(): Promise<void> {
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--client <name>", `Target client: ${CONFIG_CLIENTS.join(" | ")} (default: print all)`)
-    .option(
-      "--tier <tier>",
-      "Capability tier: basic (live scan, zero setup) | hybrid (FTS5 + reranker + HNSW, needs `setup`) | hybrid-live (hybrid + PDFs + --watch). Default: hybrid",
-      "hybrid"
-    )
+    .option("--tier <tier>", CONFIG_TIER_HELP)
     .option("--name <name>", "MCP server key/name in the generated config (default: obsidian)", "obsidian")
     .option("--http", "Emit the remote serve-http (Streamable HTTP + bearer) form instead of local stdio")
     .action(async (opts: { vault: string; client?: string; tier?: string; name?: string; http?: boolean }) => {
-      const tier = (opts.tier ?? "hybrid") as ConfigTier;
-      if (!["basic", "hybrid", "hybrid-live"].includes(tier)) {
-        process.stderr.write(`enquire configure: invalid --tier '${opts.tier}'. Use basic | hybrid | hybrid-live.\n`);
+      const tier = opts.tier ?? "hybrid";
+      if (!isConfigTier(tier)) {
+        process.stderr.write(`enquire configure: invalid --tier '${opts.tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
         process.exit(1);
       }
       if (opts.client && !CONFIG_CLIENTS.includes(opts.client as ConfigClient)) {
@@ -885,13 +908,30 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
+      const name = opts.name ?? "obsidian";
+      if (!isValidServerName(name)) {
+        process.stderr.write(
+          "enquire configure: invalid --name. Use only letters, digits, dot, underscore, or hyphen.\n"
+        );
+        process.exit(1);
+      }
       // Resolve to an absolute path so the emitted config is portable (a
       // relative --vault would be meaningless from the client's cwd).
       const input: ConfigInput = {
         vault: path.resolve(opts.vault),
         tier,
-        name: opts.name ?? "obsidian",
-        http: opts.http ?? false
+        name,
+        http: opts.http ?? false,
+        packageSpec: `@oomkapwn/enquire-mcp@${VERSION}`,
+        platform: process.platform,
+        ...(process.argv[1]
+          ? {
+              invocation: {
+                command: process.execPath,
+                argsPrefix: [await fs.realpath(process.argv[1])]
+              }
+            }
+          : {})
       };
       const body =
         opts.client && opts.client !== "http" && input.http
@@ -909,7 +949,7 @@ export async function main(): Promise<void> {
   program
     .command("setup")
     .description(
-      "Zero-touch onboarding: run `install-model` + `index` + `build-embeddings` in sequence so a fresh vault is fully indexed for hybrid retrieval (BM25 + TF-IDF + ML embeddings) in a single command. Idempotent — re-running on a fully set-up vault is a fast no-op pass that just reports the existing state."
+      "Prepare the embedder and core indexes: run embedding-model install + FTS5 index + build-embeddings in sequence. Idempotent. The exact hybrid tier additionally requires `install-model rerank-bge`; setup prints the tier-matched preflight and doctor commands when it finishes."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
@@ -1048,12 +1088,28 @@ export async function main(): Promise<void> {
           db.close();
         }
 
-        process.stdout.write("\n✓ Setup complete. Now run:\n");
-        process.stdout.write(`   enquire-mcp serve --vault ${opts.vault} --persistent-index`);
-        if (opts.includePdfs) process.stdout.write(" --include-pdfs");
+        const doctorTier = opts.includePdfs ? "hybrid-live" : "hybrid";
+        const quotedVault = shellQuote(v.root, process.platform);
+        // Keep follow-up commands on the exact package copy that performed
+        // setup. Model caches are package-local, so a bare global command or a
+        // fresh npx resolution could validate/start a different cache root.
+        const currentEntry = process.argv[1] ? await fs.realpath(process.argv[1]) : undefined;
+        const selfPrefix = currentEntry
+          ? renderShellCommand(process.execPath, [currentEntry], process.platform)
+          : renderShellCommand("npx", ["-y", `@oomkapwn/enquire-mcp@${VERSION}`], process.platform);
+        const shellLabel = process.platform === "win32" ? " (PowerShell)" : "";
+        process.stdout.write(`\n✓ Embedder + indexes ready. Complete the exact tier preflight${shellLabel}:\n`);
+        process.stdout.write(
+          `   ${selfPrefix} install-model ${DEFAULT_RERANKER_ALIAS}\n` +
+            `   ${selfPrefix} doctor --tier ${doctorTier} --vault ${quotedVault}\n`
+        );
+        process.stdout.write("Then run:\n");
+        process.stdout.write(
+          `   ${selfPrefix} serve --vault ${quotedVault} --persistent-index --enable-reranker --use-hnsw`
+        );
+        if (opts.includePdfs) process.stdout.write(" --include-pdfs --watch");
         if (quantization !== "f32") process.stdout.write(` --quantize-embeddings ${quantization}`);
         process.stdout.write("\n");
-        process.stdout.write(`Or check status: enquire-mcp doctor --vault ${opts.vault}\n`);
       }
     );
 
@@ -1082,7 +1138,7 @@ export async function main(): Promise<void> {
     .option("--json", "Emit machine-readable JSON instead of the pretty table")
     .option(
       "--output <file>",
-      "Also write the full result JSON to this file (for `npm run eval:compare` A/B analysis). Includes by_category + per-query missed_paths/top_paths diagnostics."
+      "Also write the full result JSON to this file (for `enquire-mcp eval-compare` A/B analysis). Includes by_category + per-query missed_paths/top_paths diagnostics."
     )
     .action(
       async (opts: {
@@ -1098,6 +1154,9 @@ export async function main(): Promise<void> {
         json?: boolean;
         output?: string;
       }) => {
+        // Eval is also a read/runtime path. Model acquisition stays explicit
+        // via install-model/build-embeddings/setup.
+        setEmbeddingsOffline();
         const { readQueriesJsonl, runEval, formatEvalResult, formatEvalMatrix } = await import("./eval.js");
         const k = parsePositiveInt(opts.k ?? "10", "--k");
         const queries = await readQueriesJsonl(opts.queries);
@@ -1118,7 +1177,7 @@ export async function main(): Promise<void> {
           // peek existing tokenize_mode before constructing. Without peek,
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.
-          // Same class as the doctor.ts:328 fix in v3.6.2.
+          // Same historical K-1 class; doctor now uses immutable byte snapshots.
           const peeked = await peekFtsMetaSafe(indexFile);
           const honoredTokenize: TokenizeMode = peeked?.tokenize_mode ?? "unicode61";
           ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
@@ -1215,6 +1274,34 @@ export async function main(): Promise<void> {
         }
       }
     );
+
+  program
+    .command("eval-compare")
+    .description(
+      "Compare two eval JSON outputs from the same query cohort. Returns nonzero for errored, malformed, or mismatched inputs and for a metric regression at the material-effect threshold."
+    )
+    .argument("<baseline>", "Baseline JSON file written by `enquire-mcp eval --output`")
+    .argument("<after>", "After JSON file written by `enquire-mcp eval --output`")
+    .option("--json", "Emit the comparison as machine-readable JSON")
+    .action(async (baselineFile: string, afterFile: string, opts: { json?: boolean }) => {
+      const { compareEvalResults, formatEvalComparison } = await import("./eval.js");
+      const readResult = async (file: string) => {
+        const raw = await fs.readFile(path.resolve(file), "utf8");
+        const parsed = JSON.parse(raw) as import("./eval.js").EvalResult | import("./eval.js").EvalResult[];
+        const result = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (!result || typeof result !== "object") {
+          throw new Error(`${file} does not contain an eval result`);
+        }
+        return result;
+      };
+      const comparison = compareEvalResults(await readResult(baselineFile), await readResult(afterFile));
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(comparison, null, 2)}\n` : `${formatEvalComparison(comparison)}\n`
+      );
+      if (comparison.deltas.some((delta) => delta.meaningful && delta.delta < 0)) {
+        process.exitCode = 1;
+      }
+    });
 
   await program.parseAsync(process.argv);
 }

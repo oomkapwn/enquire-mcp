@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1638%20passing-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-1669%20passing-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 중 클라우드 호출 0건.** 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 일회성 로컬 다운로드(~110 MB)입니다. 근거 기반 + 프라이버시는 공짜가 아니며, 우리는 그런 척하지 않습니다. 당신의 Vault 콘텐츠는 당신의 머신을 결코 떠나지 않으며, 기본적으로 에어갭(air-gap) 안전합니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1638+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1669+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain 모듈성을 통한 위키링크 커뮤니티 탐지) | ✅ **여기에만 있음** | ❌ | ❌ |
 | **독립 실행형 `.base` 쿼리 실행** (Obsidian 실행 없이 동작) | ✅ **여기에만 있음** | ❌ | ❌ Obsidian에 위임 |
 | **HyDE 검색** (Gao et al 2023) + 하위 질문 분해 | ✅ **여기에만 있음** | ❌ | ❌ |
-| **단위 테스트 1638개 · 릴리스 필수 CI 검사 9개 · 현재 브랜치 보호 7개** | ✅ | 해당 없음 | 드묾 |
+| **단위 테스트 1669개 · 릴리스 필수 CI 검사 9개 · 현재 브랜치 보호 7개** | ✅ | 해당 없음 | 드묾 |
 | **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2) | ✅ | 해당 없음 | ❌ |
 | **semver로 결속된 공개 표면** ([STABILITY.md](./STABILITY.md)) | ✅ | 해당 없음 | ❌ |
 | 독립 실행형 (Obsidian 플러그인 불필요) | ✅ | ❌ Obsidian 필요 | 제각각 |
@@ -117,12 +117,16 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 📂 바로 사용 가능한 설정이 [`examples/`](./examples/)에 있습니다 — **Claude Desktop**, **Cursor**, **ChatGPT 커스텀 GPT**(HTTP 기반 원격 MCP), 그리고 평가 하니스를 위한 샘플 쿼리 세트.
 
-**완전한 하이브리드 성능을 원하시나요?** 한 명령으로 손대지 않아도 되는 온보딩:
+**완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-enquire-mcp setup --vault <path>     # 모델 다운로드, FTS5 + 임베딩 DB 구축
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # embedder 캐시, FTS5 + 임베딩 DB 구축
+enquire-mcp install-model rerank-bge                      # 오프라인 reranker 캐시
+enquire-mcp doctor --tier hybrid --vault <path>           # 구조/runtime 준비 상태
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # 색상으로 구분된 ✓/⚠/✗ 헬스 체크
 ```
 
 ---
@@ -148,7 +152,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 <details>
 <summary><b>Claude Desktop</b> — 설정 파일 + 첫 프롬프트</summary>
 
-[`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json)을 Claude Desktop의 MCP 설정에 넣으세요(먼저 Vault 경로를 수정). Claude Desktop을 재시작한 뒤:
+바로 붙여 넣을 수 있는 `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>` 출력을 권장합니다. [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json)은 템플릿일 뿐이며, 수동으로 사용할 때는 실행 파일과 Vault 경로를 모두 바꾸세요. Claude Desktop을 재시작한 뒤:
 
 > 너는 `obsidian_*` 도구들을 통해 내 Obsidian Vault를 검색 가능한 기억으로 연결해 두었어. 내 노트에 있는 무엇이든 — 회의 맥락, 리서치, 결정, 일지 항목 — 물어볼 때면 항상 먼저 `obsidian_search`를 확인해. 모든 사실에 출처 노트 경로를 인용해.
 
@@ -297,7 +301,7 @@ graph LR
 
 **내 Vault에 쓰기를 하나요?** `--enable-write`를 전달하지 않는 한 안 합니다. 7개 쓰기 도구는 모두 게이트되어 있으며, 파괴적인 것들은 `dry_run`을 지원합니다.
 
-**데이터가 어딘가로 전송되나요?** `enquire-mcp install-model` 때만(HuggingFace에서 ONNX 가중치를 다운로드, 1회). serve 모드는 절대 외부로 나가는 HTTP를 만들지 않습니다. 임베딩 + 리랭커는 로컬 CPU에서 실행됩니다.
+**데이터가 어딘가로 전송되나요?** 외부 다운로드는 명시적 획득 명령에서만 발생합니다. `enquire-mcp setup`, `enquire-mcp build-embeddings`, `enquire-mcp install-model`은 HuggingFace의 ONNX 가중치를 받을 수 있고, `enquire-mcp install-ocr-lang`은 OCR용 Tesseract 언어 팩을 받습니다. serve 모드는 절대 외부로 나가는 HTTP를 만들지 않습니다. 임베딩 + 리랭커는 로컬 CPU에서 실행됩니다.
 
 **성능은요?** FTS5 콜드 빌드: 1k 노트당 ~5초, 50k당 ~30초. BM25 쿼리: 항상 <100ms. 임베딩 빌드: M1에서 청크당 ~30ms. **HNSW top-10: 어떤 규모에서도 10ms 미만.** serve 콜드 스타트: HNSW 영속화 시 ~50ms.
 
@@ -322,7 +326,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (1638개 테스트, ~12초)
+npm test       # 전체 스위트 (1669개 테스트)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```

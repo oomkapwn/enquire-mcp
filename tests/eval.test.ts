@@ -13,14 +13,16 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   allRelevantAtK,
+  type CategoryScore,
   classifyFailureBucket,
   compareEvalResults,
   type EvalQuery,
   type EvalQueryScore,
   type EvalResult,
+  evalQuerySetFingerprint,
   FAILURE_BUCKETS,
   type FailureBucket,
   formatEvalComparison,
@@ -142,6 +144,19 @@ describe("readQueriesJsonl (v2.12.0)", () => {
     expect(queries).toHaveLength(2);
     expect(queries[0]).toMatchObject({ id: "q1", query: "first query" });
     expect(queries[1]?.relevant).toEqual(["c.md"]);
+    expect(evalQuerySetFingerprint(queries)).toBe(evalQuerySetFingerprint([...queries].reverse()));
+
+    await fs.writeFile(
+      tmpFile,
+      '{"id":"duplicate","query":"first","relevant":["a.md"]}\n' +
+        '{"id":"duplicate","query":"second","relevant":["b.md"]}\n'
+    );
+    await expect(readQueriesJsonl(tmpFile)).rejects.toThrow(/duplicate query id 'duplicate'/);
+    await fs.writeFile(
+      tmpFile,
+      '{"query":"implicit q1","relevant":["a.md"]}\n' + '{"id":"q1","query":"explicit q1","relevant":["b.md"]}\n'
+    );
+    await expect(readQueriesJsonl(tmpFile)).rejects.toThrow(/duplicate effective query id 'q1'/);
     await fs.rm(tmpFile, { force: true });
   });
 
@@ -179,6 +194,16 @@ describe("readQueriesJsonl (v2.12.0)", () => {
     tmpFile = path.join(os.tmpdir(), `enquire-eval-${Date.now()}.jsonl`);
     await fs.writeFile(tmpFile, '{"relevant":["a.md"]}');
     await expect(readQueriesJsonl(tmpFile)).rejects.toThrow(/query/);
+
+    for (const invalid of [
+      '{"id":42,"query":"ok","relevant":["a.md"]}',
+      '{"category":false,"query":"ok","relevant":["a.md"]}',
+      '{"query":"   ","relevant":["a.md"]}',
+      '{"query":"ok","relevant":["   "]}'
+    ]) {
+      await fs.writeFile(tmpFile, invalid);
+      await expect(readQueriesJsonl(tmpFile), invalid).rejects.toThrow();
+    }
     await fs.rm(tmpFile, { force: true });
   });
 
@@ -241,6 +266,7 @@ describe("runEval (v2.12.0)", () => {
     // First hit should be relevant → MRR = 1.0
     expect(result.per_query[0]?.mrr).toBe(1);
     expect(result.label).toBe("test");
+    expect(result.query_set_fingerprint).toBe(evalQuerySetFingerprint(queries));
     // v3.10.0-rc.31 — Apollo is the rank-1 hit → failure_bucket "hit_rank_1",
     // and the aggregate diagnostics counter is populated by runEval.
     expect(result.per_query[0]?.failure_bucket).toBe("hit_rank_1");
@@ -265,11 +291,17 @@ describe("runEval (v2.12.0)", () => {
     expect(result.mean_ndcg).toBeGreaterThan(0);
   });
 
-  it("survives a query that throws — per-query isolation", async () => {
+  it("flags thrown and gracefully-degraded retrieval as eval errors — per-query isolation", async () => {
     const v = new Vault(root);
+    await v.ensureExists();
+    const realEnsureExists = v.ensureExists.bind(v);
+    const ensureExists = vi.spyOn(v, "ensureExists");
+    ensureExists
+      .mockRejectedValueOnce(new Error("synthetic per-query runtime failure"))
+      .mockImplementation(realEnsureExists);
     const queries: EvalQuery[] = [
-      { id: "ok", query: "Apollo", relevant: ["apollo.md"] },
-      { id: "blowup", query: "", relevant: ["apollo.md"] } // empty query throws inside searchHybrid
+      { id: "blowup", query: "carbonara", relevant: ["pasta.md"] },
+      { id: "ok", query: "Apollo", relevant: ["apollo.md"] }
     ];
     const result = await runEval({
       vault: v,
@@ -278,22 +310,48 @@ describe("runEval (v2.12.0)", () => {
       embedFile: path.join(root, "nonexistent.embed.db"),
       k: 10
     });
-    // Both queries scored; the second has 0 metrics across the board.
+    ensureExists.mockRestore();
+    // Both queries scored; the first has 0 metrics and the loop continues.
     expect(result.query_count).toBe(2);
-    expect(result.per_query[1]?.ndcg_at_k).toBe(0);
-    expect(result.per_query[1]?.recall_at_k).toBe(0);
+    expect(result.per_query[0]?.ndcg_at_k).toBe(0);
+    expect(result.per_query[0]?.recall_at_k).toBe(0);
     // v3.9.0-rc.16 — the errored query is COUNTED + FLAGGED, not silently
     // conflated with a genuine zero-relevance retrieval.
     expect(result.query_errors).toBe(1);
-    expect(result.per_query[1]?.error).toBe(true);
+    expect(result.per_query[0]?.error).toBe(true);
     // v3.10.0-rc.32 (audit LOW) — the errored query's bucket is "error" end-to-end
     // (runEval wires `errored` into classifyFailureBucket + the aggregate counter).
-    expect(result.per_query[1]?.failure_bucket).toBe("error");
+    expect(result.per_query[0]?.failure_bucket).toBe("error");
     expect(result.diagnostics?.failure_buckets.error).toBe(1);
     // NEGATIVE control: the successful query carries no error flag.
-    expect(result.per_query[0]?.error).toBeUndefined();
+    expect(result.per_query[1]?.error).toBeUndefined();
     // The human-readable banner surfaces the deflation warning.
     expect(formatEvalResult(result)).toContain("errored");
+
+    // NEGATIVE control for benchmark labels: searchHybrid normally degrades
+    // gracefully when a requested reranker fails. Eval must not publish those
+    // fallback hits as if the "+reranker" configuration actually ran.
+    const degraded = await runEval({
+      vault: v,
+      queries: [{ id: "reranker-failure", query: "Apollo", relevant: ["apollo.md"] }],
+      ftsIndex: idx,
+      embedFile: path.join(root, "nonexistent.embed.db"),
+      reranker: { alias: "rerank-bge" },
+      rerankerOverride: {
+        async score() {
+          throw new Error("synthetic reranker load failure");
+        }
+      },
+      k: 10
+    });
+    expect(degraded.query_errors).toBe(1);
+    expect(degraded.per_query[0]).toMatchObject({
+      error: true,
+      ndcg_at_k: 0,
+      recall_at_k: 0,
+      failure_bucket: "error"
+    });
+    expect(formatEvalResult(degraded)).toContain("errored");
   });
 
   it("query_errors is 0 + no banner warning when every query succeeds (v3.9.0-rc.16 NEGATIVE control)", async () => {
@@ -456,11 +514,15 @@ describe("formatEvalResult + formatEvalMatrix (v2.12.0)", () => {
   it("formatEvalMatrix highlights the best-NDCG config", () => {
     const a = makeResult({ label: "baseline", mean_ndcg: 0.5 });
     const b = makeResult({ label: "+reranker", mean_ndcg: 0.8 });
-    const out = formatEvalMatrix([a, b]);
+    const invalid = makeResult({ label: "broken-high-score", mean_ndcg: 0.99, query_errors: 1 });
+    const out = formatEvalMatrix([a, b, invalid]);
     expect(out).toContain("baseline");
     expect(out).toContain("+reranker");
+    expect(out).toMatch(/broken-high-score.*1 INVALID/);
     // The "best NDCG" line should call out the higher-scoring config.
     expect(out).toMatch(/best NDCG@10:.*\+reranker/);
+    expect(out).not.toMatch(/best NDCG@10:.*broken-high-score/);
+    expect(formatEvalMatrix([invalid])).toContain("all configurations are INVALID");
   });
 
   it("formatEvalMatrix handles empty input gracefully", () => {
@@ -530,12 +592,21 @@ describe("groupByCategory (v3.11.6-rc.5)", () => {
     const g = groupByCategory([
       row({ category: "keyword", ndcg_at_k: 1.0 }),
       row({ category: "keyword", ndcg_at_k: 0.5 }),
-      row({ category: "conceptual", ndcg_at_k: 0.2, hit_at_1: false })
+      row({ category: "conceptual", ndcg_at_k: 0.2, hit_at_1: false }),
+      row({ category: "__proto__", ndcg_at_k: 0.4 })
     ]);
     expect(g.keyword?.query_count).toBe(2);
     expect(g.keyword?.mean_ndcg).toBeCloseTo(0.75, 4);
     expect(g.conceptual?.mean_ndcg).toBeCloseTo(0.2, 4);
     expect(g.conceptual?.mean_hit_at_1).toBe(0); // the one conceptual row missed rank-1
+    expect(Object.hasOwn(g, "__proto__")).toBe(true);
+    const prototypeCategory = Object.getOwnPropertyDescriptor(g, "__proto__")?.value as CategoryScore | undefined;
+    expect(prototypeCategory?.mean_ndcg).toBeCloseTo(0.4, 4);
+    const serialized = JSON.parse(JSON.stringify(g)) as Record<string, CategoryScore>;
+    const serializedCategory = Object.getOwnPropertyDescriptor(serialized, "__proto__")?.value as
+      | CategoryScore
+      | undefined;
+    expect(serializedCategory?.query_count).toBe(1);
   });
   it("uncategorized bucket when no category is set (NEGATIVE control — no phantom categories)", () => {
     const g = groupByCategory([row({}), row({})]);
@@ -545,29 +616,130 @@ describe("groupByCategory (v3.11.6-rc.5)", () => {
 });
 
 describe("compareEvalResults + formatEvalComparison (v3.11.6-rc.5)", () => {
-  const res = (over: Partial<EvalResult>): EvalResult =>
-    ({
+  const cohort = `sha256:${"a".repeat(64)}`;
+  const row: EvalQueryScore = {
+    id: "q1",
+    query: "query",
+    ndcg_at_k: 0.6,
+    recall_at_k: 0.7,
+    mrr: 0.65,
+    hits_relevant: 1,
+    hits_total_relevant: 1,
+    latency_ms: 10,
+    failure_bucket: "hit_rank_1",
+    hit_at_1: true,
+    hit_at_k: true,
+    all_relevant_at_k: true
+  };
+  const res = (over: Partial<EvalResult>): EvalResult => {
+    const errorCount = over.query_errors ?? 0;
+    const derivedRow: EvalQueryScore =
+      errorCount > 0
+        ? {
+            ...row,
+            ndcg_at_k: 0,
+            recall_at_k: 0,
+            mrr: 0,
+            hits_relevant: 0,
+            hit_at_1: false,
+            hit_at_k: false,
+            all_relevant_at_k: false,
+            failure_bucket: "error",
+            error: true
+          }
+        : {
+            ...row,
+            ndcg_at_k: over.mean_ndcg ?? row.ndcg_at_k,
+            recall_at_k: over.mean_recall ?? row.recall_at_k,
+            mrr: over.mean_mrr ?? row.mrr
+          };
+    const selectedRows = over.per_query ?? [derivedRow];
+    const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+    return {
       label: "x",
       k: 10,
-      query_count: 60,
-      query_errors: 0,
-      per_query: [],
-      mean_ndcg: 0.6,
-      mean_recall: 0.7,
-      mean_mrr: 0.65,
-      mean_latency_ms: 10,
+      query_count: selectedRows.length,
+      query_errors: errorCount,
+      query_set_fingerprint: cohort,
+      per_query: selectedRows,
+      mean_ndcg: average(selectedRows.map((item) => item.ndcg_at_k)),
+      mean_recall: average(selectedRows.map((item) => item.recall_at_k)),
+      mean_mrr: average(selectedRows.map((item) => item.mrr)),
+      mean_latency_ms: Math.round(average(selectedRows.map((item) => item.latency_ms))),
       total_wall_ms: 1,
-      mean_hit_at_1: 0.5,
-      mean_hit_at_k: 0.8,
-      all_rel_at_k: 0.4,
+      mean_hit_at_1: average(selectedRows.map((item) => (item.hit_at_1 ? 1 : 0))),
+      mean_hit_at_k: average(selectedRows.map((item) => (item.hit_at_k ? 1 : 0))),
+      all_rel_at_k: average(selectedRows.map((item) => (item.all_relevant_at_k ? 1 : 0))),
       ...over
-    }) as EvalResult;
+    };
+  };
 
-  it("marks a delta ≥ MEANINGFUL_DELTA as meaningful, a smaller one as noise", () => {
+  it("marks a delta ≥ MEANINGFUL_DELTA as material and rejects invalid comparisons", () => {
     const cmp = compareEvalResults(res({ label: "before", mean_ndcg: 0.6 }), res({ label: "after", mean_ndcg: 0.65 }));
     const ndcg = cmp.deltas.find((d) => d.metric === "nDCG@k");
     expect(ndcg?.delta).toBeCloseTo(0.05, 4);
     expect(ndcg?.meaningful).toBe(true);
+    expect(() =>
+      compareEvalResults(res({ label: "broken", query_errors: 1 }), res({ label: "after", query_errors: 0 }))
+    ).toThrow(/Cannot compare eval results with retrieval errors/);
+    expect(() => compareEvalResults(res({ k: 5 }), res({ k: 10 }))).toThrow(/different k/);
+    expect(() =>
+      compareEvalResults(res({ query_count: 2, per_query: [row, { ...row, id: "q2" }] }), res({ query_count: 1 }))
+    ).toThrow(/different query counts/);
+    expect(() => compareEvalResults(res({ query_set_fingerprint: `sha256:${"b".repeat(64)}` }), res({}))).toThrow(
+      /different query cohorts/
+    );
+    expect(() => compareEvalResults(res({ query_set_fingerprint: undefined }), res({}))).toThrow(
+      /query_set_fingerprint/
+    );
+    expect(() => compareEvalResults(res({ mean_recall: Number.NaN, per_query: [row] }), res({}))).toThrow(
+      /mean_recall must be a finite number/
+    );
+    expect(() => compareEvalResults(res({ mean_ndcg: 2 }), res({}))).toThrow(/ndcg_at_k.*between 0 and 1/);
+    expect(() => compareEvalResults(res({ mean_ndcg: 0.61, per_query: [row] }), res({}))).toThrow(
+      /mean_ndcg=.*does not match per_query/
+    );
+    expect(() =>
+      compareEvalResults(
+        res({
+          query_count: 2,
+          per_query: [row, { ...row }]
+        }),
+        res({})
+      )
+    ).toThrow(/duplicate id/);
+    expect(() =>
+      compareEvalResults(
+        res({
+          query_errors: 0,
+          per_query: [
+            {
+              ...row,
+              ndcg_at_k: 0,
+              recall_at_k: 0,
+              mrr: 0,
+              hits_relevant: 0,
+              hit_at_1: false,
+              hit_at_k: false,
+              all_relevant_at_k: false,
+              failure_bucket: "error",
+              error: true
+            }
+          ]
+        }),
+        res({})
+      )
+    ).toThrow(/query_errors=0.*1 error row/);
+    expect(() =>
+      compareEvalResults(
+        res({
+          diagnostics: {
+            failure_buckets: { hit_rank_1: 0, hit_top_k: 0, miss: 0, no_labels: 0, error: 1 }
+          }
+        }),
+        res({})
+      )
+    ).toThrow(/failure_buckets.hit_rank_1=.*does not match/);
   });
   it("NEGATIVE control — a sub-threshold delta is NOT meaningful", () => {
     const cmp = compareEvalResults(res({ mean_ndcg: 0.6 }), res({ mean_ndcg: 0.6 + MEANINGFUL_DELTA / 2 }));

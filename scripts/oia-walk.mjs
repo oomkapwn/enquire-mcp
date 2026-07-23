@@ -41,9 +41,10 @@
 //       install-ocr-lang" must be backed by the real code guards in ocr.ts
 //       (assertOcrLangsInstalled + cacheMethod:"readOnly") + cli.ts
 //       (install-ocr-lang subcommand). [added rc.10 / overclaim #16]
-//   4f. EMBED OFFLINE-GUARD — docs claiming "zero cloud calls during serve" must
-//       be backed by src/embeddings.ts `allowRemoteModels=false` (offline flag) +
-//       setEmbeddingsOffline() called in cli.ts serve + serve-http. [added rc.42 / F1]
+//   4f. EMBED OFFLINE-GUARD — runtime model-network claims must be backed by
+//       src/embeddings.ts `allowRemoteModels=false` plus an exact
+//       setEmbeddingsOffline() call in serve, serve-http, query, and eval.
+//       [added rc.42 / F1; strengthened rc.8]
 //   4.  NPM SCRIPT EXISTENCE — backticked `npm run <script>` in docs +
 //       script comments must match `package.json#scripts`.
 //   5.  CURRENT-CLAIM vs TOMBSTONE — "default" value comments must agree
@@ -91,6 +92,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -139,6 +141,8 @@ function walk(dir, ext, callback) {
 //   - "current X.Y.Z" / "as of X.Y.Z"
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const currentVersion = pkg.version;
+const citation = readFileSync(join(repoRoot, "CITATION.cff"), "utf8");
+const stableVersion = /^version:\s*["']?(\d+\.\d+\.\d+)/m.exec(citation)?.[1];
 
 // Currency-claim patterns. Each pattern is a regex that captures a
 // version number AND demonstrates a currency claim (not a history note).
@@ -474,23 +478,51 @@ if (!SKIP_NETWORK) {
 // serve makes "zero cloud calls during serve" / "zero outbound network calls during
 // serve". That is only TRUE if (1) src/embeddings.ts sets transformers.js
 // `allowRemoteModels = false` under an offline flag (so a cache-miss fails closed
-// instead of CDN-fetching), and (2) src/cli.ts calls setEmbeddingsOffline() in BOTH
-// the serve and serve-http actions. If a doc makes the enforced claim but a guard is
+// instead of CDN-fetching), and (2) src/cli.ts calls setEmbeddingsOffline() in every
+// read/runtime action that can load a model: serve, serve-http, query, and eval.
+// The structural analyzer walks executable TypeScript nodes (comments cannot
+// satisfy it), requires an unconditional top-level runtime call, and proves
+// each guard precedes its model/query path. If a doc makes the enforced claim
+// but a guard is
 // missing, fail — the exact gap that shipped as the rc.41 overclaim before rc.42.
 {
   const embSrc = readLines("src/embeddings.ts").join("\n");
   const cliSrc = readLines("src/cli.ts").join("\n");
-  const remoteOff = /allowRemoteModels\s*=\s*false/.test(embSrc);
-  const setterExported = /export function setEmbeddingsOffline\b/.test(embSrc);
-  const serveCalls = (cliSrc.match(/setEmbeddingsOffline\s*\(/g) || []).length;
-  if (!(remoteOff && setterExported && serveCalls >= 2)) {
+  const serverSrc = readLines("src/server.ts").join("\n");
+  const {
+    remoteOff,
+    setterExported,
+    serverBoundary,
+    buildServerBoundary,
+    cachedPipelineGuard,
+    cachedRerankerGuard,
+    missingRuntimeActions
+  } = inspectEmbeddingsOfflineGuards({ embSrc, cliSrc, serverSrc });
+  if (
+    !(
+      remoteOff &&
+      setterExported &&
+      serverBoundary &&
+      buildServerBoundary &&
+      cachedPipelineGuard &&
+      cachedRerankerGuard &&
+      missingRuntimeActions.length === 0
+    )
+  ) {
     const missing = [
       !remoteOff && "src/embeddings.ts must set transformers `allowRemoteModels = false` under the offline flag",
       !setterExported && "src/embeddings.ts must export setEmbeddingsOffline()",
-      serveCalls < 2 && `src/cli.ts must call setEmbeddingsOffline() in BOTH serve + serve-http (found ${serveCalls})`
+      !serverBoundary &&
+        "src/server.ts prepareServerDeps() must enforce the programmatic offline boundary before model loading",
+      !buildServerBoundary &&
+        "src/server.ts buildMcpServer() must enforce the direct programmatic offline boundary before tool registration",
+      !cachedPipelineGuard && "the cached embedding-pipeline constructor must reapply the offline env before return",
+      !cachedRerankerGuard && "the cached reranker constructors must reapply the offline env before return",
+      missingRuntimeActions.length > 0 &&
+        `src/cli.ts must call setEmbeddingsOffline() before each runtime/query path; missing or late: ${missingRuntimeActions.join(", ")}`
     ].filter(Boolean);
     const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "llms.txt"];
-    const claimRe = /zero cloud calls during serve|zero outbound network calls during serve/i;
+    const claimRe = /zero cloud calls during serve|zero outbound network calls (?:during serve|in serve mode)/i;
     for (const file of claimFiles) {
       const lines = readLines(file);
       for (let i = 0; i < lines.length; i++) {
@@ -672,21 +704,37 @@ walk("src", ".ts", (file) => {
 //
 // Cf. v3.6.4 rule on tombstone vs current-claim semantics.
 const currentMajorMinor = currentVersion.replace(/^(\d+\.\d+).*$/, "$1");
+const stableMajorMinor = (stableVersion ?? currentVersion).replace(/^(\d+\.\d+).*$/, "$1");
 
 // Each tuple: [regex (must capture version in group 1), human-readable claim type]
 const DOC_CURRENT_STATE_PATTERNS = [
   // "stable v3.X.x" or "stable v3.X.0" — claim of stability for that line
-  [/\bstable\s+v?(\d+\.\d+)\.[\dx]/i, "stable version claim"],
+  [/\bstable\s+v?(\d+\.\d+)\.[\dx]/i, "stable version claim", "stable"],
+  // "· v3.X.x stable ·" — reverse-order current stat-line claim. Require
+  // stat delimiters so historical prose ("based on v3.8.x stable") in any
+  // language is not misclassified as live channel currency.
+  [/(?:^|·\s*)v?(\d+\.\d+)\.[\dx]\s+stable(?:\s*·|$)/i, "stable version claim", "stable"],
+  // Language-neutral stable-channel anchors shared by every localized README.
+  // The surrounding prose is translated, but both the badge slug and npm
+  // dist-tag syntax are invariant. These close the false-negative where adding
+  // all 11 README files to the walk was only nominal for translations whose
+  // word for "stable" is not the English literal.
+  [/\bbadge\/v?(\d+\.\d+)\.[\dx]-stable\b/i, "stable badge claim", "stable"],
+  [/@latest[^\n]{0,24}?\bv?(\d+\.\d+)\.[\dx]\b/i, "npm @latest claim", "stable"],
   // "@latest on npm ... v3.X.x" or "ships v3.X.x" — current npm channel claim
-  [/(?:@latest|ships)\s+v?(\d+\.\d+)\.[\dx]/i, "npm @latest claim"],
+  [/(?:@latest|ships)\s+v?(\d+\.\d+)\.[\dx]/i, "npm @latest claim", "stable"],
   // "covers the v3.X.x stable surface" — scope claim
-  [/covers\s+the\s+\*?\*?v?(\d+\.\d+)\.[\dx]/i, "coverage scope claim"],
+  [/covers\s+the\s+\*?\*?v?(\d+\.\d+)\.[\dx]/i, "coverage scope claim", "candidate"],
   // "exact for v3.X.x" — claim of current accuracy
-  [/exact\s+for\s+v?(\d+\.\d+)\.[\dx]/i, "exactness claim"],
+  [/exact\s+for\s+v?(\d+\.\d+)\.[\dx]/i, "exactness claim", "candidate"],
   // "(accurate|capabilities|claims|features|snapshot) as of v3.X.Y" — accuracy
   // timestamp claim. v3.8.4 broadened from just "accurate as of" after B-1
   // ("capabilities as of v3.7.0" in README.md) slipped past the narrower pattern.
-  [/\b(?:accurate|capabilities|claims|features|snapshot)\s+as\s+of\s+v?(\d+\.\d+\.\d+)/i, "as-of timestamp claim"]
+  [
+    /\b(?:accurate|capabilities|claims|features|snapshot)\s+as\s+of\s+v?(\d+\.\d+\.\d+)/i,
+    "as-of timestamp claim",
+    "candidate"
+  ]
 ];
 
 // "(wait for|coming in|planned for|will land in) v3.X.0" — forthcoming-feature
@@ -710,6 +758,9 @@ function cmpMajorMinor(a, b) {
 const HISTORY_CONTEXT_MARKERS = [
   /\binitial\b/i,
   /\bfrom\b.*\bv?\d+\.\d+/i, // "initial v3.7.0 from 2026-..."
+  /\bafter\b.*\bv?\d+\.\d+/i,
+  /\bbased\s+on\b.*\bv?\d+\.\d+/i,
+  /\bgates?\b.*\bv?\d+\.\d+/i,
   /\bsince\b/i,
   /\bPre-v?\d/i,
   /\b(history|legacy|tombstone|previously|was)\b/i,
@@ -724,7 +775,25 @@ const HISTORY_CONTEXT_MARKERS = [
 // stale "v3.7.0" claim in README.md:185 and "wait for v3.8.0" in
 // examples/chatgpt-actions.md:25 — both already-shipped versions, both
 // would have been caught if Check 7 walked these files.
-const DOCS_FILES_TO_SCAN = ["CLAUDE.md", "README.md", "AGENTS.md", "llms.txt"];
+const DOCS_FILES_TO_SCAN = [
+  "CLAUDE.md",
+  "README.md",
+  "README.zh.md",
+  "README.es.md",
+  "README.hi.md",
+  "README.ar.md",
+  "README.ru.md",
+  "README.pt.md",
+  "README.fr.md",
+  "README.ja.md",
+  "README.ko.md",
+  "README.de.md",
+  "AGENTS.md",
+  "ROADMAP.md",
+  "SECURITY.md",
+  "STABILITY.md",
+  "llms.txt"
+];
 // Walk docs/ for .md files — but skip docs/audits/ since those are by
 // definition historical snapshots (auditor reports timestamped at submission).
 // Stale version refs in audit reports are accurate history of what was current
@@ -746,14 +815,15 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const lines = readFileSync(fullPath, "utf8").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    for (const [pattern, claimType] of DOC_CURRENT_STATE_PATTERNS) {
+    for (const [pattern, claimType, channel] of DOC_CURRENT_STATE_PATTERNS) {
       const m = pattern.exec(line);
       if (!m) continue;
       const claimedVersion = m[1];
       // Normalize: "3.8" matches current "3.8". For 3-part like "3.8.0",
       // also extract major.minor.
       const claimedMajorMinor = claimedVersion.replace(/^(\d+\.\d+).*$/, "$1");
-      if (claimedMajorMinor === currentMajorMinor) continue; // current — OK
+      const expectedMajorMinor = channel === "stable" ? stableMajorMinor : currentMajorMinor;
+      if (claimedMajorMinor === expectedMajorMinor) continue; // current for the named channel — OK
       // Skip if line OR surrounding 2 lines have explicit history context.
       const context = lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 2)).join(" ");
       if (HISTORY_CONTEXT_MARKERS.some((rx) => rx.test(context))) continue;
@@ -762,7 +832,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         docFile,
         i + 1,
         line.trim().slice(0, 120) + (line.length > 120 ? "…" : ""),
-        `${claimType} for v${claimedVersion} but current major.minor is v${currentMajorMinor}. Either update the version, OR prefix with "Pre-vX.Y.Z" / "initial" / "from" / "since" to mark as legitimate historical reference.`
+        `${claimType} for v${claimedVersion} but the ${channel} channel major.minor is v${expectedMajorMinor}. Either update the version, OR prefix with "Pre-vX.Y.Z" / "initial" / "from" / "since" to mark as legitimate historical reference.`
       );
     }
     // Forthcoming-feature claim: "wait for v3.8.0 which adds X". If current

@@ -18,11 +18,26 @@
 //   • Codex CLI     — `~/.codex/config.toml` → `[mcp_servers.<name>]` command + args (stdio only)
 //   • HTTP / remote — `serve-http` + bearer token; streamable-HTTP URL form
 
-/** Package spec used in generated `npx` invocations. `@latest` pins nothing but
- *  always resolves the newest published — the right default for a copy-paste. */
+/** Fallback package spec for programmatic callers. The CLI supplies its exact
+ * running version so setup/doctor/runtime share one package-local model cache. */
 export const PKG_SPEC = "@oomkapwn/enquire-mcp@latest";
 
-export type ConfigTier = "basic" | "hybrid" | "hybrid-live";
+/** Supported capability tiers shared by configure and doctor. */
+export const CONFIG_TIERS = ["basic", "hybrid", "hybrid-live"] as const;
+
+/** Capability tier used by generated MCP configs and readiness diagnostics. */
+export type ConfigTier = (typeof CONFIG_TIERS)[number];
+
+/**
+ * Test whether an arbitrary CLI/programmatic value is a supported capability
+ * tier.
+ *
+ * @param value - Candidate tier string.
+ * @returns True when `value` is one of {@link CONFIG_TIERS}.
+ */
+export function isConfigTier(value: string): value is ConfigTier {
+  return CONFIG_TIERS.includes(value as ConfigTier);
+}
 
 export const CONFIG_CLIENTS = [
   "claude-code",
@@ -44,8 +59,57 @@ export interface ConfigInput {
   name: string;
   /** Emit the serve-http (remote) form instead of stdio. */
   http: boolean;
+  /**
+   * Exact npm package spec used by every generated setup/doctor/runtime
+   * invocation when no physical invocation is supplied.
+   */
+  packageSpec?: string;
+  /**
+   * Exact executable identity for CLI-generated configs. When present, every
+   * setup/doctor/runtime command uses this command + argument prefix instead of
+   * npx resolution, so package-local caches cannot drift with the caller's cwd.
+   */
+  invocation?: { command: string; argsPrefix: string[] };
+  /**
+   * Platform whose interactive shell will receive generated copy-paste
+   * commands. `win32` emits explicit PowerShell syntax; every other platform
+   * emits POSIX-shell syntax. JSON and TOML argument arrays are unaffected.
+   */
+  platform?: NodeJS.Platform;
   /** Bearer token to put in the serve-http example (http tier only). */
   token?: string;
+}
+
+/**
+ * Whether a server name is safe in shell, CLI positional, TOML-section, and
+ * JSON-key forms.
+ *
+ * @param name - Candidate MCP server name.
+ * @returns True when the name is safe on every generated config surface.
+ */
+export function isValidServerName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
+}
+
+function requireValidServerName(name: string): void {
+  if (!isValidServerName(name)) {
+    throw new Error(
+      "MCP server name must start with a letter or digit and contain only letters, digits, dot, underscore, or hyphen"
+    );
+  }
+}
+
+function packageSpec(input: ConfigInput): string {
+  return input.packageSpec ?? PKG_SPEC;
+}
+
+function npxShellPrefix(input: ConfigInput): string {
+  return renderShellCommand("npx", ["-y", packageSpec(input)], input.platform);
+}
+
+function invocationShellPrefix(input: ConfigInput): string {
+  if (!input.invocation) return npxShellPrefix(input);
+  return renderShellCommand(input.invocation.command, input.invocation.argsPrefix, input.platform);
 }
 
 /** The retrieval flags a tier adds to `serve`. `basic` = scan mode (no setup
@@ -70,12 +134,64 @@ export function buildServeArgs(input: ConfigInput): string[] {
 
 /** The full local-stdio command + args (`npx -y <pkg> serve …`). */
 export function npxCommandArgs(input: ConfigInput): { command: string; args: string[] } {
-  return { command: "npx", args: ["-y", PKG_SPEC, ...buildServeArgs(input)] };
+  return { command: "npx", args: ["-y", packageSpec(input), ...buildServeArgs(input)] };
 }
 
-/** Shell-quote a single argument if it contains whitespace (for CLI forms). */
-function shQuote(arg: string): string {
-  return /\s/.test(arg) ? `"${arg.replace(/(["\\$`])/g, "\\$1")}"` : arg;
+/**
+ * Build the runtime command and arguments, preferring a caller-supplied
+ * physical executable identity.
+ *
+ * @param input - Validated client-config input.
+ * @returns The executable command and argument vector for the selected tier.
+ */
+export function runtimeCommandArgs(input: ConfigInput): { command: string; args: string[] } {
+  if (!input.invocation) return npxCommandArgs(input);
+  return {
+    command: input.invocation.command,
+    args: [...input.invocation.argsPrefix, ...buildServeArgs(input)]
+  };
+}
+
+/**
+ * Quote one argument for a copy-paste command on the selected platform.
+ *
+ * Windows output deliberately targets PowerShell, whose single-quoted
+ * literals escape an apostrophe by doubling it. Other platforms use POSIX
+ * single-quote escaping.
+ *
+ * @param arg - Raw command argument.
+ * @param platform - Target platform; `win32` selects PowerShell syntax.
+ * @returns A shell-safe representation of the argument.
+ */
+export function shellQuote(arg: string, platform?: NodeJS.Platform): string {
+  if (platform === "win32") {
+    return /^[A-Za-z0-9_./\\:-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`;
+  }
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Render an executable and argument vector for an interactive shell.
+ *
+ * A quoted executable is data in PowerShell unless invoked with its call
+ * operator, so direct Windows commands receive `&`. Set `executable` to false
+ * when the vector is data for another command (notably everything after
+ * `claude mcp add … --`), where `&` would become an incorrect extra argument.
+ *
+ * @param command - Executable path or command name.
+ * @param args - Raw argument vector.
+ * @param platform - Target platform; `win32` selects PowerShell syntax.
+ * @param executable - Whether this vector is executed directly by the shell.
+ * @returns A shell-safe copy-paste command fragment.
+ */
+export function renderShellCommand(
+  command: string,
+  args: readonly string[],
+  platform?: NodeJS.Platform,
+  executable = true
+): string {
+  const rendered = [command, ...args].map((arg) => shellQuote(arg, platform)).join(" ");
+  return platform === "win32" && executable ? `& ${rendered}` : rendered;
 }
 
 /** TOML string literal (basic string, backslash + quote escaped). */
@@ -111,12 +227,13 @@ export function clientMeta(client: ConfigClient): { title: string; location: str
 
 /** Render the config body (no header) for one client. */
 export function renderClientBody(client: ConfigClient, input: ConfigInput): string {
-  const { command, args } = npxCommandArgs(input);
+  requireValidServerName(input.name);
+  const { command, args } = runtimeCommandArgs(input);
   const name = input.name;
 
   if (client === "claude-code") {
-    const argStr = buildServeArgs(input).map(shQuote).join(" ");
-    return `claude mcp add ${name} -- npx -y ${PKG_SPEC} ${argStr}`;
+    const argumentVector = renderShellCommand(command, args, input.platform, false);
+    return `claude mcp add ${name} -- ${argumentVector}`;
   }
 
   if (client === "claude-desktop" || client === "cursor" || client === "windsurf") {
@@ -129,12 +246,15 @@ export function renderClientBody(client: ConfigClient, input: ConfigInput): stri
 
   if (client === "codex") {
     const argsToml = `[${args.map(tomlStr).join(", ")}]`;
-    return `[mcp_servers.${name}]\ncommand = ${tomlStr(command)}\nargs = ${argsToml}`;
+    return `[mcp_servers.${tomlStr(name)}]\ncommand = ${tomlStr(command)}\nargs = ${argsToml}`;
   }
 
   // client === "http"
   const httpInput: ConfigInput = { ...input, http: true };
-  const serveHttpCmd = `enquire-mcp ${buildServeArgs(httpInput).map(shQuote).join(" ")} --bearer-token ${input.token ?? "<TOKEN>"} --port 3000`;
+  const prefix = invocationShellPrefix(httpInput);
+  const serveHttpCmd = `${prefix} ${buildServeArgs(httpInput)
+    .map((arg) => shellQuote(arg, input.platform))
+    .join(" ")} --bearer-token ${shellQuote(input.token ?? "<TOKEN>", input.platform)} --port 3000`;
   const url = "http://127.0.0.1:3000/mcp";
   const remoteJson = JSON.stringify(
     { mcpServers: { [name]: { url, headers: { Authorization: `Bearer ${input.token ?? "<TOKEN>"}` } } } },
@@ -142,7 +262,7 @@ export function renderClientBody(client: ConfigClient, input: ConfigInput): stri
     2
   );
   return (
-    `# 1. generate a bearer token:  enquire-mcp gen-token\n` +
+    `# 1. generate a bearer token:  ${prefix} gen-token\n` +
     `# 2. start the HTTP server:\n${serveHttpCmd}\n\n` +
     `# 3. point an HTTP-capable MCP client at it (URL form):\n${remoteJson}`
   );
@@ -151,7 +271,8 @@ export function renderClientBody(client: ConfigClient, input: ConfigInput): stri
 /** Render one client's full block (title + location + body), markdown-fenced. */
 export function renderClientConfig(client: ConfigClient, input: ConfigInput): string {
   const meta = clientMeta(client);
-  const fence = client === "codex" ? "toml" : client === "claude-code" || client === "http" ? "bash" : "json";
+  const shellFence = input.platform === "win32" ? "powershell" : "bash";
+  const fence = client === "codex" ? "toml" : client === "claude-code" || client === "http" ? shellFence : "json";
   return `## ${meta.title}\n${meta.location}\n\n\`\`\`${fence}\n${renderClientBody(client, input)}\n\`\`\``;
 }
 
@@ -162,13 +283,17 @@ export function renderAllClients(input: ConfigInput): string {
 
 /** A one-line "what to run first" preflight hint for the chosen tier. */
 export function preflightHint(input: ConfigInput): string {
+  const prefix = invocationShellPrefix(input);
+  const shellLabel = input.platform === "win32" ? " (PowerShell)" : "";
   if (input.tier === "basic") {
-    return `Basic tier needs no indexing — it scans the vault live. Verify anytime: enquire-mcp doctor --vault ${shQuote(input.vault)}`;
+    return `Basic tier needs no indexing — it scans the vault live. Verify anytime${shellLabel}: ${prefix} doctor --tier basic --vault ${shellQuote(input.vault, input.platform)}`;
   }
+  const pdfFlag = input.tier === "hybrid-live" ? " --include-pdfs" : "";
   return (
-    `Before this works, build the indexes once (downloads a ~110MB model, builds FTS5 + embed-db):\n` +
-    `  enquire-mcp setup --vault ${shQuote(input.vault)}\n` +
+    `Before this works, build the indexes and pre-cache both offline ML models (~120MB embedder + ~110MB reranker)${shellLabel}:\n` +
+    `  ${prefix} setup --vault ${shellQuote(input.vault, input.platform)}${pdfFlag}\n` +
+    `  ${prefix} install-model rerank-bge\n` +
     `Then verify readiness:\n` +
-    `  enquire-mcp doctor --vault ${shQuote(input.vault)}`
+    `  ${prefix} doctor --tier ${input.tier} --vault ${shellQuote(input.vault, input.platform)}`
   );
 }

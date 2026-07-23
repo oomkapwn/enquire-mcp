@@ -12,10 +12,9 @@
 //   2. file exists but no `meta` table yet (fresh db) → null
 //   3. file exists with populated meta → meta dict honored
 //
-// Plus a regression guarantee for the K-1b doctor case:
-// `doctor` running against an fts5 index built with `--tokenize trigram`
-// must NOT trigger DROP TABLE. We assert by reading the chunk count
-// before AND after the doctor probe — must be identical.
+// Doctor no longer uses these helpers: its stronger immutable-snapshot
+// preservation contract lives in doctor.test.ts, including a real
+// migration-primitive negative control.
 
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -134,10 +133,10 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
 // v3.6.3 caller-pattern coverage. The peek-meta unit tests above verify the
 // HELPERS work. But the actual K-1 bug class lives in CALLERS forgetting to
 // call peek before constructing EmbedDb/FtsIndex. These tests exercise the
-// full caller chain — "build with non-default config; invoke the caller
+// full writable caller chain — "build with non-default config; invoke the caller
 // without specifying that config; assert the existing config is preserved
 // (not silently rebuilt)" — so a regression in any caller (search.ts,
-// server.ts, doctor.ts, cli.ts) would fail here even if the helpers stay
+// server.ts and cli.ts) would fail here even if the helpers stay
 // correct.
 describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
   let tmpDir: string;
@@ -178,7 +177,7 @@ describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
     await idx1.open();
     idx1.close();
 
-    // Canonical caller pattern (server.ts:180, doctor.ts:331, cli.ts:514/638).
+    // Canonical writable caller pattern (server.ts and cli.ts).
     const peeked = await peekFtsMetaSafe(file);
     expect(peeked?.tokenize_mode).toBe("trigram");
     const honored = peeked?.tokenize_mode ?? "unicode61";

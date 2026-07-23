@@ -121,6 +121,19 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     await fs.symlink(distEntry, link);
     const out = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
     expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
+
+    const vault = path.join(tmpdir, "vault");
+    await fs.mkdir(vault);
+    const configured = execFileSync(
+      process.execPath,
+      [link, "configure", "--vault", vault, "--client", "claude-desktop", "--tier", "basic"],
+      { encoding: "utf8" }
+    );
+    const json = configured.slice(configured.indexOf("{"), configured.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { command: string; args: string[] }> };
+    expect(parsed.mcpServers.obsidian?.command).toBe(process.execPath);
+    expect(parsed.mcpServers.obsidian?.args[0]).toBe(await fs.realpath(distEntry));
+    expect(parsed.mcpServers.obsidian?.args[0]).not.toBe(link);
   });
 
   it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async (ctx) => {
@@ -215,6 +228,96 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("clear-index");
     expect(out).toContain("index");
     expect(out).toContain("configure"); // v3.11.6-rc.4 activation command
+    expect(out).toContain("eval-compare");
+  });
+
+  it("`eval-compare` accepts a matching improvement and rejects regression or cohort drift", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const result = (label: string, score: number, cohort = fingerprint) => ({
+      label,
+      k: 10,
+      query_count: 1,
+      query_errors: 0,
+      query_set_fingerprint: cohort,
+      per_query: [
+        {
+          id: "q1",
+          query: "Apollo",
+          ndcg_at_k: score,
+          recall_at_k: score,
+          mrr: score,
+          hits_relevant: 1,
+          hits_total_relevant: 1,
+          latency_ms: 1,
+          failure_bucket: "hit_rank_1",
+          hit_at_1: true,
+          hit_at_k: true,
+          all_relevant_at_k: true
+        }
+      ],
+      mean_ndcg: score,
+      mean_recall: score,
+      mean_mrr: score,
+      mean_latency_ms: 1,
+      total_wall_ms: 1,
+      mean_hit_at_1: 1,
+      mean_hit_at_k: 1,
+      all_rel_at_k: 1
+    });
+    const baselineFile = path.join(tmpdir, "baseline.json");
+    const betterFile = path.join(tmpdir, "better-matrix.json");
+    const worseFile = path.join(tmpdir, "worse.json");
+    const mismatchFile = path.join(tmpdir, "mismatch.json");
+    const malformedFile = path.join(tmpdir, "malformed.json");
+    const malformed = {
+      ...result("malformed", 0.6),
+      mean_ndcg: 2,
+      diagnostics: {
+        failure_buckets: { hit_rank_1: 0, hit_top_k: 0, miss: 0, no_labels: 0, error: 1 }
+      },
+      per_query: [
+        {
+          ...result("malformed", 0.6).per_query[0],
+          error: true,
+          failure_bucket: "error"
+        }
+      ]
+    };
+    await Promise.all([
+      fs.writeFile(baselineFile, JSON.stringify(result("baseline", 0.5))),
+      // Preserve the previous npm wrapper's matrix behavior: compare the
+      // first result when `eval --matrix --output` writes an array.
+      fs.writeFile(betterFile, JSON.stringify([result("better", 0.6)])),
+      fs.writeFile(worseFile, JSON.stringify(result("worse", 0.4))),
+      fs.writeFile(mismatchFile, JSON.stringify(result("mismatch", 0.6, `sha256:${"b".repeat(64)}`))),
+      fs.writeFile(malformedFile, JSON.stringify(malformed))
+    ]);
+
+    const improved = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, betterFile], {
+      encoding: "utf8"
+    });
+    expect(improved.status).toBe(0);
+    expect(improved.stdout).toContain("baseline → better");
+    expect(improved.stdout).toContain("+0.1000");
+
+    const regressed = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, worseFile], {
+      encoding: "utf8"
+    });
+    expect(regressed.status).toBe(1);
+    expect(regressed.stdout).toContain("regression");
+
+    const mismatched = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, mismatchFile], {
+      encoding: "utf8"
+    });
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toMatch(/different query cohorts/);
+
+    const invalid = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, malformedFile], {
+      encoding: "utf8"
+    });
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toMatch(/malformed after eval result/);
   });
 
   // v3.11.6-rc.4 (activation, audit P0) — `configure` prints a ready-to-paste
@@ -229,8 +332,11 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     const out = res.stdout ?? "";
     // extract the fenced JSON body and assert it parses with the vault wired in
     const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
-    const parsed = JSON.parse(json) as { mcpServers: Record<string, { args: string[] }> };
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { command: string; args: string[] }> };
     expect(parsed.mcpServers.obsidian?.args).toContain(vault);
+    expect(parsed.mcpServers.obsidian?.command).toBe(process.execPath);
+    expect(parsed.mcpServers.obsidian?.args[0]).toBe(distEntry);
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("@oomkapwn/enquire-mcp@latest");
   });
 
   it("`configure --tier bogus` fails fast (exit 1) with valid tiers listed", (ctx) => {
@@ -241,6 +347,72 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     });
     expect(res.status).toBe(1);
     expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/basic \| hybrid \| hybrid-live/);
+
+    const unsafeName = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--name", "safe;touch_BAD"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(unsafeName.status).toBe(1);
+    expect(`${unsafeName.stdout ?? ""}${unsafeName.stderr ?? ""}`).toMatch(/invalid --name/);
+    expect(unsafeName.stdout ?? "").not.toContain("touch_BAD -- npx");
+  });
+
+  it("`doctor --tier basic --json` reports basic READY on an unprepared accessible vault", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cache = path.join(tmpdir, "doctor-cache");
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--tier", "basic", "--json"], {
+      encoding: "utf8",
+      timeout: 30000,
+      env: { ...process.env, XDG_CACHE_HOME: cache }
+    });
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout ?? "{}") as { tier?: string; ready?: boolean };
+    expect(parsed).toMatchObject({ tier: "basic", ready: true });
+    expect(
+      await fs
+        .stat(cache)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
+  it("`doctor` defaults to hybrid and blocks the same unprepared vault", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--json"], {
+      encoding: "utf8",
+      timeout: 30000,
+      env: { ...process.env, XDG_CACHE_HOME: path.join(tmpdir, "doctor-default-cache") }
+    });
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout ?? "{}") as { tier?: string; ready?: boolean };
+    expect(parsed).toMatchObject({ tier: "hybrid", ready: false });
+  });
+
+  it("`doctor --tier bogus` fails before probes and creates no cache artifacts", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cache = path.join(tmpdir, "doctor-invalid-cache");
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--tier", "bogus", "--json"], {
+      encoding: "utf8",
+      timeout: 15000,
+      env: { ...process.env, XDG_CACHE_HOME: cache }
+    });
+    expect(res.status).toBe(1);
+    expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/basic \| hybrid \| hybrid-live/);
+    expect(
+      await fs
+        .stat(cache)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
+  it("`doctor --help` documents all tiers and the hybrid default", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const out = execFileSync(process.execPath, [distEntry, "doctor", "--help"], { encoding: "utf8" });
+    expect(out).toContain("basic (live scan, zero setup)");
+    expect(out).toContain("hybrid-live");
+    expect(out).toMatch(/Default:\s+hybrid/);
   });
 
   // v3.10.0-rc.13 (bug-report Issue 3) — install-model now resolves BOTH the

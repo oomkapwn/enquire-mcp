@@ -34,6 +34,7 @@
 // adjust graph_boost / reranker / min_signals based on real numbers
 // over their real corpus.
 
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { FtsIndex } from "./fts5.js";
 import { type SearchHybridHit, searchHybrid } from "./tools/index.js";
@@ -93,11 +94,12 @@ export interface EvalQueryScore {
   /** The top-K retrieved paths in rank order — what outranked the missed docs. */
   top_paths?: string[];
   /**
-   * v3.9.0-rc.16 — true if `searchHybrid` threw for this query (transient
-   * infra failure, embedder OOM, etc.). The query's scores are all 0 and it
-   * still counts toward the means — an errored query is NOT silently dropped,
-   * but it IS distinguishable from a genuine zero-relevance retrieval. Absent
-   * (undefined) on successful queries.
+   * True if `searchHybrid` threw or reported any degraded retrieval signal for
+   * this query (transient infra failure, embedder/reranker load failure, etc.).
+   * The query's scores are all 0 and it still counts toward the means — an
+   * errored query is NOT silently dropped or mislabeled as a requested
+   * configuration, but it IS distinguishable from a genuine retrieval miss.
+   * Absent (undefined) on fully successful queries.
    */
   error?: boolean;
   /**
@@ -115,11 +117,18 @@ export interface EvalResult {
   k: number;
   query_count: number;
   /**
-   * v3.9.0-rc.16 — number of queries that threw during retrieval (counted in
-   * `query_count` and in the means as zeros). > 0 means the means are deflated
-   * by infra failures, not retrieval quality — re-run before publishing.
+   * Number of queries that threw or reported a degraded retrieval signal
+   * (counted in `query_count` and in the means as zeros). > 0 means the means
+   * are deflated by infra failures, not retrieval quality — re-run before
+   * publishing.
    */
   query_errors: number;
+  /**
+   * SHA-256 of the canonical query cohort (id/query/category + sorted unique
+   * ground-truth paths). `runEval` always emits it; A/B comparison requires an
+   * exact match so different query sets cannot produce a misleading delta.
+   */
+  query_set_fingerprint?: string;
   /** Per-query scores. */
   per_query: EvalQueryScore[];
   /** Mean NDCG@K across all queries. */
@@ -270,7 +279,10 @@ export function groupByCategory(perQuery: readonly EvalQueryScore[]): Record<str
     if (arr) arr.push(p);
     else groups.set(key, [p]);
   }
-  const out: Record<string, CategoryScore> = {};
+  // A category is user-authored input. A null-prototype result keeps special
+  // keys such as "__proto__" as ordinary own properties instead of mutating
+  // or disappearing into Object.prototype.
+  const out = Object.create(null) as Record<string, CategoryScore>;
   for (const [cat, rows] of groups) {
     out[cat] = {
       query_count: rows.length,
@@ -291,11 +303,11 @@ export interface MetricDelta {
   baseline: number;
   after: number;
   delta: number;
-  /** true iff `|delta| >= MEANINGFUL_DELTA` (statistically meaningful at ~50+ queries). */
+  /** True iff `|delta| >= MEANINGFUL_DELTA`, a material-effect heuristic (not a significance test). */
   meaningful: boolean;
 }
 
-/** Delta threshold below which a change is noise at ~50+ queries (OHS convention). */
+/** Material-effect threshold used for CI gating; it does not estimate statistical significance. */
 export const MEANINGFUL_DELTA = 0.01;
 
 export interface EvalComparison {
@@ -306,18 +318,38 @@ export interface EvalComparison {
 
 /**
  * Compare two EvalResults (baseline vs after) into a delta table. Compares the
- * whole-run aggregate metrics; a `|delta| >= MEANINGFUL_DELTA` is flagged
- * meaningful. Pure — the A/B tool that makes a retrieval change PROVABLE rather
- * than asserted. (v3.11.6-rc.5.)
+ * whole-run aggregate metrics after proving that k and the canonical query
+ * cohort match. A `|delta| >= MEANINGFUL_DELTA` is flagged as materially large
+ * by a fixed heuristic; it is not a statistical-significance claim.
  */
 export function compareEvalResults(baseline: EvalResult, after: EvalResult): EvalComparison {
+  validateComparisonResult(baseline, "baseline");
+  validateComparisonResult(after, "after");
+  if (baseline.query_errors > 0 || after.query_errors > 0) {
+    throw new Error(
+      `Cannot compare eval results with retrieval errors (baseline=${baseline.query_errors}, after=${after.query_errors}); re-run before publishing`
+    );
+  }
+  if (baseline.k !== after.k) {
+    throw new Error(`Cannot compare eval results with different k (baseline=${baseline.k}, after=${after.k})`);
+  }
+  if (baseline.query_count !== after.query_count) {
+    throw new Error(
+      `Cannot compare eval results with different query counts (baseline=${baseline.query_count}, after=${after.query_count})`
+    );
+  }
+  if (baseline.query_set_fingerprint !== after.query_set_fingerprint) {
+    throw new Error(
+      `Cannot compare different query cohorts (baseline=${baseline.query_set_fingerprint}, after=${after.query_set_fingerprint})`
+    );
+  }
   const rows: Array<[string, number, number]> = [
     ["nDCG@k", baseline.mean_ndcg, after.mean_ndcg],
     ["Recall@k", baseline.mean_recall, after.mean_recall],
     ["MRR", baseline.mean_mrr, after.mean_mrr],
-    ["Hit@1", baseline.mean_hit_at_1 ?? 0, after.mean_hit_at_1 ?? 0],
-    ["Hit@k", baseline.mean_hit_at_k ?? 0, after.mean_hit_at_k ?? 0],
-    ["AllRel@k", baseline.all_rel_at_k ?? 0, after.all_rel_at_k ?? 0]
+    ["Hit@1", baseline.mean_hit_at_1 as number, after.mean_hit_at_1 as number],
+    ["Hit@k", baseline.mean_hit_at_k as number, after.mean_hit_at_k as number],
+    ["AllRel@k", baseline.all_rel_at_k as number, after.all_rel_at_k as number]
   ];
   const deltas: MetricDelta[] = rows.map(([metric, b, a]) => {
     const delta = round(a - b);
@@ -341,8 +373,205 @@ export function formatEvalComparison(cmp: EvalComparison): string {
     );
   }
   lines.push("");
-  lines.push(`  (|Δ| ≥ ${MEANINGFUL_DELTA} marked meaningful; needs ~50+ queries for a confident conclusion)`);
+  lines.push(`  (|Δ| ≥ ${MEANINGFUL_DELTA} is a material-effect heuristic, not statistical significance)`);
   return lines.join("\n");
+}
+
+function validateComparisonResult(result: EvalResult, label: "after" | "baseline"): void {
+  const malformed = (message: string): never => {
+    throw new Error(`Cannot compare malformed ${label} eval result: ${message}`);
+  };
+  const requireUnitInterval = (value: unknown, field: string): number => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+      return malformed(`${field} must be a finite number between 0 and 1`);
+    }
+    return value;
+  };
+  const requireNonNegativeFinite = (value: unknown, field: string): number => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return malformed(`${field} must be a finite non-negative number`);
+    }
+    return value;
+  };
+
+  if (typeof result.label !== "string" || result.label.length === 0) {
+    malformed("label must be a non-empty string");
+  }
+  if (!Number.isInteger(result.k) || result.k <= 0) {
+    malformed("k must be a positive integer");
+  }
+  if (!Number.isInteger(result.query_count) || result.query_count <= 0) {
+    malformed("query_count must be a positive integer");
+  }
+  if (!Number.isInteger(result.query_errors) || result.query_errors < 0 || result.query_errors > result.query_count) {
+    malformed("query_errors is invalid");
+  }
+  if (!Array.isArray(result.per_query) || result.per_query.length !== result.query_count) {
+    malformed("per_query length must equal query_count");
+  }
+  if (!/^sha256:[a-f0-9]{64}$/.test(result.query_set_fingerprint ?? "")) {
+    malformed("query_set_fingerprint is missing or invalid; re-run with the current version");
+  }
+
+  const seenIds = new Set<string>();
+  const validBuckets = new Set<string>(FAILURE_BUCKETS);
+  let errorRows = 0;
+  const rows: EvalQueryScore[] = [];
+  for (let index = 0; index < result.per_query.length; index++) {
+    const rawRow: unknown = result.per_query[index];
+    if (typeof rawRow !== "object" || rawRow === null || Array.isArray(rawRow)) {
+      malformed(`per_query[${index}] must be an object`);
+    }
+    const row = rawRow as Partial<EvalQueryScore>;
+    if (typeof row.id !== "string" || row.id.trim().length === 0) {
+      malformed(`per_query[${index}].id must be a non-empty string`);
+    }
+    const rowId = row.id as string;
+    if (seenIds.has(rowId)) malformed(`per_query contains duplicate id ${JSON.stringify(rowId)}`);
+    seenIds.add(rowId);
+    if (typeof row.query !== "string" || row.query.trim().length === 0) {
+      malformed(`per_query[${index}].query must be a non-empty string`);
+    }
+    const rowQuery = row.query as string;
+
+    const ndcg = requireUnitInterval(row.ndcg_at_k, `per_query[${index}].ndcg_at_k`);
+    const recall = requireUnitInterval(row.recall_at_k, `per_query[${index}].recall_at_k`);
+    const mrr = requireUnitInterval(row.mrr, `per_query[${index}].mrr`);
+    const latency = requireNonNegativeFinite(row.latency_ms, `per_query[${index}].latency_ms`);
+    if (!Number.isInteger(row.hits_relevant) || (row.hits_relevant ?? -1) < 0) {
+      malformed(`per_query[${index}].hits_relevant must be a non-negative integer`);
+    }
+    if (!Number.isInteger(row.hits_total_relevant) || (row.hits_total_relevant ?? -1) < 0) {
+      malformed(`per_query[${index}].hits_total_relevant must be a non-negative integer`);
+    }
+    const hitsRelevant = row.hits_relevant as number;
+    const hitsTotal = row.hits_total_relevant as number;
+    if (hitsRelevant > hitsTotal) {
+      malformed(`per_query[${index}].hits_relevant cannot exceed hits_total_relevant`);
+    }
+    if (typeof row.hit_at_1 !== "boolean" || typeof row.hit_at_k !== "boolean") {
+      malformed(`per_query[${index}] must contain boolean hit_at_1 and hit_at_k diagnostics`);
+    }
+    if (typeof row.all_relevant_at_k !== "boolean") {
+      malformed(`per_query[${index}].all_relevant_at_k must be boolean`);
+    }
+    if (row.error !== undefined && typeof row.error !== "boolean") {
+      malformed(`per_query[${index}].error must be boolean when present`);
+    }
+    if (typeof row.failure_bucket !== "string" || !validBuckets.has(row.failure_bucket)) {
+      malformed(`per_query[${index}].failure_bucket is invalid`);
+    }
+
+    const errored = row.error === true;
+    if (errored !== (row.failure_bucket === "error")) {
+      malformed(`per_query[${index}] error flag and failure_bucket disagree`);
+    }
+    if (errored) errorRows += 1;
+    if (row.hit_at_1 && !row.hit_at_k) {
+      malformed(`per_query[${index}] hit_at_1 cannot be true when hit_at_k is false`);
+    }
+    if (row.hit_at_k !== hitsRelevant > 0) {
+      malformed(`per_query[${index}] hit_at_k disagrees with hits_relevant`);
+    }
+    if (row.all_relevant_at_k !== (hitsTotal > 0 && hitsRelevant === hitsTotal)) {
+      malformed(`per_query[${index}] all_relevant_at_k disagrees with hit counts`);
+    }
+    const expectedBucket: FailureBucket = errored
+      ? "error"
+      : hitsTotal === 0
+        ? "no_labels"
+        : row.hit_at_1
+          ? "hit_rank_1"
+          : row.hit_at_k
+            ? "hit_top_k"
+            : "miss";
+    if (row.failure_bucket !== expectedBucket) {
+      malformed(`per_query[${index}].failure_bucket must be ${expectedBucket}`);
+    }
+    if (errored && (ndcg !== 0 || recall !== 0 || mrr !== 0 || hitsRelevant !== 0)) {
+      malformed(`per_query[${index}] errored rows must have zero scores and zero relevant hits`);
+    }
+
+    rows.push({
+      ...row,
+      id: rowId,
+      query: rowQuery,
+      ndcg_at_k: ndcg,
+      recall_at_k: recall,
+      mrr,
+      hits_relevant: hitsRelevant,
+      hits_total_relevant: hitsTotal,
+      latency_ms: latency,
+      hit_at_1: row.hit_at_1,
+      hit_at_k: row.hit_at_k,
+      all_relevant_at_k: row.all_relevant_at_k,
+      failure_bucket: row.failure_bucket as FailureBucket
+    });
+  }
+  if (errorRows !== result.query_errors) {
+    malformed(`query_errors=${result.query_errors} but per_query contains ${errorRows} error row(s)`);
+  }
+
+  const aggregateFields = [
+    "mean_ndcg",
+    "mean_recall",
+    "mean_mrr",
+    "mean_hit_at_1",
+    "mean_hit_at_k",
+    "all_rel_at_k"
+  ] as const;
+  for (const metric of aggregateFields) {
+    requireUnitInterval(result[metric], metric);
+  }
+  const expectedAggregates: Array<[(typeof aggregateFields)[number], number]> = [
+    ["mean_ndcg", round(mean(rows.map((row) => row.ndcg_at_k)))],
+    ["mean_recall", round(mean(rows.map((row) => row.recall_at_k)))],
+    ["mean_mrr", round(mean(rows.map((row) => row.mrr)))],
+    ["mean_hit_at_1", round(mean(rows.map((row) => (row.hit_at_1 ? 1 : 0))))],
+    ["mean_hit_at_k", round(mean(rows.map((row) => (row.hit_at_k ? 1 : 0))))],
+    ["all_rel_at_k", round(mean(rows.map((row) => (row.all_relevant_at_k ? 1 : 0))))]
+  ];
+  for (const [field, expected] of expectedAggregates) {
+    if (result[field] !== expected) {
+      malformed(`${field}=${result[field]} does not match per_query mean ${expected}`);
+    }
+  }
+
+  const meanLatency = requireNonNegativeFinite(result.mean_latency_ms, "mean_latency_ms");
+  requireNonNegativeFinite(result.total_wall_ms, "total_wall_ms");
+  const expectedMeanLatency = Math.round(mean(rows.map((row) => row.latency_ms)));
+  if (meanLatency !== expectedMeanLatency) {
+    malformed(`mean_latency_ms=${meanLatency} does not match per_query mean ${expectedMeanLatency}`);
+  }
+
+  if (result.diagnostics !== undefined) {
+    const rawDiagnostics: unknown = result.diagnostics;
+    if (typeof rawDiagnostics !== "object" || rawDiagnostics === null || Array.isArray(rawDiagnostics)) {
+      malformed("diagnostics must be an object when present");
+    }
+    const rawBuckets = (rawDiagnostics as { failure_buckets?: unknown }).failure_buckets;
+    if (typeof rawBuckets !== "object" || rawBuckets === null || Array.isArray(rawBuckets)) {
+      malformed("diagnostics.failure_buckets must be an object");
+    }
+    const actualBuckets = tallyFailureBuckets(rows.map((row) => row.failure_bucket));
+    for (const bucket of FAILURE_BUCKETS) {
+      const count = (rawBuckets as Record<string, unknown>)[bucket];
+      if (!Number.isInteger(count) || (count as number) < 0) {
+        malformed(`diagnostics.failure_buckets.${bucket} must be a non-negative integer`);
+      }
+      if (count !== actualBuckets[bucket]) {
+        malformed(
+          `diagnostics.failure_buckets.${bucket}=${String(count)} does not match per_query count ${actualBuckets[bucket]}`
+        );
+      }
+    }
+    const unknownBuckets = Object.keys(rawBuckets as Record<string, unknown>).filter(
+      (bucket) => !validBuckets.has(bucket)
+    );
+    if (unknownBuckets.length > 0) {
+      malformed(`diagnostics.failure_buckets contains unknown key ${JSON.stringify(unknownBuckets[0])}`);
+    }
+  }
 }
 
 /**
@@ -354,7 +583,8 @@ export function formatEvalComparison(cmp: EvalComparison): string {
  * eval already has), so adding them is a zero-behavior-change, zero-extra-cost
  * diagnostic — the metric numbers are untouched.
  *
- *  - `error`       — `searchHybrid` threw for this query (infra, not relevance).
+ *  - `error`       — `searchHybrid` threw or reported a degraded retrieval
+ *                    signal for this query (infra, not relevance).
  *  - `no_labels`   — the query has no ground-truth `relevant` paths to score.
  *  - `hit_rank_1`  — a relevant doc is at rank 1 (ideal).
  *  - `hit_top_k`   — a relevant doc is in the top-K but not at rank 1 (ranking
@@ -414,6 +644,7 @@ export function tallyFailureBuckets(buckets: readonly FailureBucket[]): Record<F
 export async function readQueriesJsonl(file: string): Promise<EvalQuery[]> {
   const raw = await fs.readFile(file, "utf8");
   const queries: EvalQuery[] = [];
+  const seenIds = new Set<string>();
   let lineNum = 0;
   for (const line of raw.split("\n")) {
     lineNum += 1;
@@ -421,24 +652,83 @@ export async function readQueriesJsonl(file: string): Promise<EvalQuery[]> {
     if (trimmed.length === 0 || trimmed.startsWith("//")) continue;
     try {
       const parsed = JSON.parse(trimmed) as Partial<EvalQuery>;
-      if (typeof parsed.query !== "string" || parsed.query.length === 0) {
+      if (typeof parsed.query !== "string" || parsed.query.trim().length === 0) {
         throw new Error(`line ${lineNum}: missing or empty 'query' field`);
       }
-      if (!Array.isArray(parsed.relevant) || parsed.relevant.some((p) => typeof p !== "string")) {
-        throw new Error(`line ${lineNum}: 'relevant' must be an array of vault-relative path strings`);
+      if (
+        !Array.isArray(parsed.relevant) ||
+        parsed.relevant.some((p) => typeof p !== "string" || p.trim().length === 0)
+      ) {
+        throw new Error(`line ${lineNum}: 'relevant' must be an array of non-empty vault-relative path strings`);
+      }
+      if (parsed.id !== undefined && (typeof parsed.id !== "string" || parsed.id.trim().length === 0)) {
+        throw new Error(`line ${lineNum}: optional 'id' must be a non-empty string`);
+      }
+      if (
+        parsed.category !== undefined &&
+        (typeof parsed.category !== "string" || parsed.category.trim().length === 0)
+      ) {
+        throw new Error(`line ${lineNum}: optional 'category' must be a non-empty string`);
+      }
+      if (parsed.id !== undefined) {
+        if (seenIds.has(parsed.id)) throw new Error(`line ${lineNum}: duplicate query id '${parsed.id}'`);
+        seenIds.add(parsed.id);
       }
       queries.push({
         query: parsed.query,
         relevant: parsed.relevant,
-        ...(parsed.id ? { id: parsed.id } : {}),
-        ...(typeof parsed.category === "string" && parsed.category.length > 0 ? { category: parsed.category } : {})
+        ...(parsed.id !== undefined ? { id: parsed.id } : {}),
+        ...(parsed.category !== undefined ? { category: parsed.category } : {})
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`enquire eval: failed to parse queries file at line ${lineNum} — ${msg}`);
     }
   }
+  validateEvalQueryCohort(queries);
   return queries;
+}
+
+/**
+ * Compute an order-independent identity for an evaluation cohort.
+ *
+ * @param queries - Queries and their complete ground-truth labels.
+ * @returns `sha256:<hex>` over canonical id/query/category/relevant tuples.
+ */
+export function evalQuerySetFingerprint(queries: readonly EvalQuery[]): string {
+  const rows = queries
+    .map((query) =>
+      JSON.stringify({
+        id: query.id ?? null,
+        query: query.query,
+        category: query.category ?? null,
+        relevant: [...new Set(query.relevant)].sort()
+      })
+    )
+    .sort();
+  return `sha256:${createHash("sha256").update(JSON.stringify(rows)).digest("hex")}`;
+}
+
+function validateEvalQueryCohort(queries: readonly EvalQuery[]): void {
+  const seenIds = new Set<string>();
+  for (let index = 0; index < queries.length; index++) {
+    const query = queries[index];
+    if (!query || query.query.trim().length === 0) {
+      throw new Error(`enquire eval: query ${index + 1} must contain non-whitespace text`);
+    }
+    if (query.relevant.some((entry) => entry.trim().length === 0)) {
+      throw new Error(`enquire eval: query ${index + 1} has an empty relevant path`);
+    }
+    if (query.id !== undefined && query.id.trim().length === 0) {
+      throw new Error(`enquire eval: query ${index + 1} has an empty id`);
+    }
+    const effectiveId = query.id ?? `q${index + 1}`;
+    if (seenIds.has(effectiveId)) throw new Error(`enquire eval: duplicate effective query id '${effectiveId}'`);
+    seenIds.add(effectiveId);
+    if (query.category !== undefined && query.category.trim().length === 0) {
+      throw new Error(`enquire eval: query ${index + 1} has an empty category`);
+    }
+  }
 }
 
 export interface RunEvalOptions {
@@ -470,6 +760,9 @@ export interface RunEvalOptions {
  */
 export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
   const k = opts.k ?? 10;
+  if (!Number.isInteger(k) || k <= 0) throw new Error("enquire eval: k must be a positive integer");
+  validateEvalQueryCohort(opts.queries);
+  const querySetFingerprint = evalQuerySetFingerprint(opts.queries);
   const totalT0 = Date.now();
   const perQuery: EvalQueryScore[] = [];
   let queryErrors = 0;
@@ -499,6 +792,10 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
           ...(opts.rerankerOverride ? { rerankerOverride: opts.rerankerOverride } : {})
         }
       );
+      const failedSignals = Object.keys(result.signal_errors ?? {});
+      if (failedSignals.length > 0) {
+        throw new Error(`retrieval signal failure(s): ${failedSignals.join(", ")}`);
+      }
       hits = result.matches;
     } catch (err) {
       // Per-query isolation — one bad query doesn't sink the whole eval.
@@ -558,6 +855,7 @@ export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
     k,
     query_count: perQuery.length,
     query_errors: queryErrors,
+    query_set_fingerprint: querySetFingerprint,
     per_query: perQuery,
     mean_ndcg: round(meanNdcg),
     mean_recall: round(meanRecall),
@@ -666,22 +964,28 @@ export function formatEvalMatrix(results: readonly EvalResult[]): string {
   lines.push("");
   // Column header.
   const labelWidth = Math.max(...results.map((r) => r.label.length), 8) + 2;
-  const header = `${"label".padEnd(labelWidth)}NDCG@${results[0]?.k ?? 10}  Recall@${results[0]?.k ?? 10}  MRR     latency`;
+  const header = `${"label".padEnd(labelWidth)}NDCG@${results[0]?.k ?? 10}  Recall@${results[0]?.k ?? 10}  MRR     latency  errors`;
   lines.push(bold(header));
   // Rows.
   for (const r of results) {
+    const errorStatus = r.query_errors > 0 ? `${r.query_errors} INVALID` : "0";
     lines.push(
-      `${r.label.padEnd(labelWidth)}${r.mean_ndcg.toFixed(4)}   ${r.mean_recall.toFixed(4)}     ${r.mean_mrr.toFixed(4)}  ${r.mean_latency_ms}ms`
+      `${r.label.padEnd(labelWidth)}${r.mean_ndcg.toFixed(4)}   ${r.mean_recall.toFixed(4)}     ${r.mean_mrr.toFixed(4)}  ${`${r.mean_latency_ms}ms`.padEnd(9)}${errorStatus}`
     );
   }
-  // Best-config callout.
-  let best = results[0];
+  // Best-config callout. A degraded configuration is not a valid benchmark
+  // candidate even when its remaining successful queries yield the highest mean.
+  const validResults = results.filter((result) => result.query_errors === 0);
+  let best = validResults[0];
   if (best) {
-    for (const r of results) {
+    for (const r of validResults) {
       if (r.mean_ndcg > best.mean_ndcg) best = r;
     }
     lines.push("");
     lines.push(`best NDCG@${best.k}: ${bold(best.label)} (${best.mean_ndcg.toFixed(4)})`);
+  } else {
+    lines.push("");
+    lines.push("best NDCG: none — all configurations are INVALID; re-run after fixing retrieval errors");
   }
   return lines.join("\n");
 }

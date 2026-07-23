@@ -21,9 +21,9 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
+import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
-const SCHEMA_VERSION = 3;
 // v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
 // embedding index as markdown — `obsidian_search` returns blended hits with
 // the kind flag exposed to agents. Schema bump auto-rebuilds.
@@ -348,7 +348,7 @@ export class EmbedDb {
     `);
 
     const meta = this.readMeta();
-    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(SCHEMA_VERSION);
+    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(EMBED_DB_SCHEMA_VERSION);
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
     const modelMatch = meta.model_alias === undefined || meta.model_alias === this.modelAlias;
     const dimMatch = meta.dim === undefined || meta.dim === String(this.dim);
@@ -363,7 +363,9 @@ export class EmbedDb {
     const txn = db.transaction(() => {
       if (!versionMatch || !rootMatch || !modelMatch || !dimMatch || !quantMatch) {
         const reason: string[] = [];
-        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
+        if (!versionMatch) {
+          reason.push(`schema_version ${meta.schema_version} → ${EMBED_DB_SCHEMA_VERSION}`);
+        }
         if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
         if (!modelMatch) reason.push(`model ${meta.model_alias} → ${this.modelAlias}`);
         if (!dimMatch) reason.push(`dim ${meta.dim} → ${this.dim}`);
@@ -395,7 +397,7 @@ export class EmbedDb {
       `);
 
       this.writeMeta({
-        schema_version: String(SCHEMA_VERSION),
+        schema_version: String(EMBED_DB_SCHEMA_VERSION),
         vault_root: this.vaultRoot,
         model_alias: this.modelAlias,
         dim: String(this.dim),

@@ -15,7 +15,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-All 9 required CI gates run on every PR. Local checks above must pass before pushing.
+All 9 release-required CI checks run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -97,7 +97,7 @@ Every flag that BOTH `serve` and `serve-http` accept **must** pull its help text
 
 - Title under 70 chars.
 - Body: ## Summary (bullets) + ## Test plan (markdown checklist).
-- Wait for all 9 required CI gates to pass green before merging.
+- Wait for all 9 release-required CI checks to pass green before merging.
 - Tag the **squash-merge SHA on main** (not the pre-merge branch HEAD) — rule since v3.7.15.
 
 ## Commands cheat sheet
@@ -136,9 +136,9 @@ node scripts/check-changelog-coverage.mjs
 node scripts/smoke.mjs
 ```
 
-## CI gates (9 required + 5 advisory)
+## CI checks (9 release-required; 7 branch-protected)
 
-Required (block merge if failed):
+Release-required (all run on PRs; `release.yml` blocks publication unless all 9 passed on the tagged SHA):
 1. `lint` — biome check
 2. `test (22)` — full suite on Node 22
 3. `test (24)` — full suite on Node 24
@@ -146,18 +146,22 @@ Required (block merge if failed):
 5. `audit` — `npm audit --audit-level=moderate`
 6. `coverage` — global + per-file branch floors
 7. `version-consistency` — 7-surface version sync
-8. `docs` — TypeDoc generation
-9. `oia` — state-driven drift scan
+8. `docs` — TypeDoc generation; release-required but not currently branch-protected
+9. `oia` — state-driven drift scan; release-required but not currently branch-protected
 
-Advisory (don't block, but tracked):
-- `test-macos`, `docker` (image build + tools/list smoke), `CodeQL`, `Analyze (actions)`, `Analyze (javascript-typescript)`
+Additional unprotected checks:
+- `test-macos` is the only `continue-on-error` advisory job.
+- `docker` (image build + `tools/list` smoke) is fail-capable and can make the CI workflow red, but is not branch-protected.
+- GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
+
+Live branch-protection snapshot (verified 2026-07-23): exactly the first 7 contexts above, `enforce_admins:false`, and 0 required approving reviews.
 
 ## Do NOT
 
 - **Do NOT modify shared CLI help strings inline.** Lift to `src/cli-help.ts` first. The `cli-parity.test.ts` invariant fails inline drift between serve and serve-http.
 - **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 7 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading, server.json version + packages[0]).
 - **Do NOT skip CI hooks** (`--no-verify`) without explicit user instruction. Investigate the hook failure root cause.
-- **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + 9 required gates.
+- **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + 9 release-required checks.
 - **Do NOT tag the pre-merge branch SHA.** Tag the squash-merge SHA on main after `gh pr merge --squash`. Rule since v3.7.15 (`Assert tag is on main` guard).
 - **Do NOT edit `docs/api-reference/`** — it's auto-generated TypeDoc output. Edit TSDoc in `src/` instead.
 - **Do NOT add `// current X%` inline comments without commitment to maintain.** OIA check 6 catches drift > 1pp against `coverage-summary.json`. Either keep current OR remove the annotation.

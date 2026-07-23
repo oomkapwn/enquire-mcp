@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1604%20passing-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-1605%20passing-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 중 클라우드 호출 0건.** 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 일회성 로컬 다운로드(~110 MB)입니다. 근거 기반 + 프라이버시는 공짜가 아니며, 우리는 그런 척하지 않습니다. 당신의 Vault 콘텐츠는 당신의 머신을 결코 떠나지 않으며, 기본적으로 에어갭(air-gap) 안전합니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1604+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1605+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain 모듈성을 통한 위키링크 커뮤니티 탐지) | ✅ **여기에만 있음** | ❌ | ❌ |
 | **독립 실행형 `.base` 쿼리 실행** (Obsidian 실행 없이 동작) | ✅ **여기에만 있음** | ❌ | ❌ Obsidian에 위임 |
 | **HyDE 검색** (Gao et al 2023) + 하위 질문 분해 | ✅ **여기에만 있음** | ❌ | ❌ |
-| **단위 테스트 1604개 · PR당 필수 9개 + 권고 5개 CI 게이트** | ✅ | 해당 없음 | 드묾 |
+| **단위 테스트 1605개 · 릴리스 필수 CI 검사 9개 · 현재 브랜치 보호 7개** | ✅ | 해당 없음 | 드묾 |
 | **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2) | ✅ | 해당 없음 | ❌ |
 | **semver로 결속된 공개 표면** ([STABILITY.md](./STABILITY.md)) | ✅ | 해당 없음 | ❌ |
 | 독립 실행형 (Obsidian 플러그인 불필요) | ✅ | ❌ Obsidian 필요 | 제각각 |
@@ -282,7 +282,7 @@ graph LR
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
 | **캐시 + 인덱스 파일** | chmod 0600, 부모 디렉터리 0700 |
-| **CI** | **9개 필수** 브랜치 보호 게이트: (1) `lint`, (2) Node 22의 `test`, (3) Node 24의 `test`, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5개 권고**: `.github/workflows/ci.yml`을 통한 `test-macos` + `docker`(Dockerfile 빌드 + `tools/list` 인트로스펙션 스모크); [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning)을 통한 CodeQL ×2 + Analyze 액션(워크플로 파일 아님). 릴리스 워크플로는 npm 게시 전 태깅된 SHA에서 9개 필수 게이트가 모두 통과했는지 재검증합니다. _v3.7.10 — `docs`(TypeDoc 생성 게이트)가 필수 세트에 추가됨. v3.7.13 — CI 매트릭스에 맞추기 위해 `engines.node` 하한이 `>=22.13.0`으로 상향됨. v3.8.0-rc.6 — `oia`(Outside-In Audit)가 권고에서 승격됨._ |
+| **CI** | 모든 PR에서 **릴리스 필수 검사 9개**(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`)를 실행합니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`와 `oia`는 릴리스 필수지만 보호되지 않습니다(2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 9개 모두를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |
 | **릴리스** | 태그별 npm + GitHub 릴리스 · semver · **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2; L3 생성기는 로드맵에) |
 | **안정성** | v3.0+ semver 결속 — 모든 CLI 플래그, 도구 이름, MCP 리소스, 프롬프트, 내보낸 심볼이 계약입니다 |
@@ -301,7 +301,7 @@ graph LR
 
 **성능은요?** FTS5 콜드 빌드: 1k 노트당 ~5초, 50k당 ~30초. BM25 쿼리: 항상 <100ms. 임베딩 빌드: M1에서 청크당 ~30ms. **HNSW top-10: 어떤 규모에서도 10ms 미만.** serve 콜드 스타트: HNSW 영속화 시 ~50ms.
 
-**언어는요?** 기본값 `paraphrase-multilingual-MiniLM-L12-v2` (50+ 개 언어). 다국어 크로스 인코더. 러시아어 + 영어 이중 언어 Vault에서 엔드 투 엔드 검증됨. CJK/태국어/크메르어 토큰화는 `Intl.Segmenter`를 통해.
+**언어는요?** 기본 embedder는 `paraphrase-multilingual-MiniLM-L12-v2`(50+개 언어)이며 러시아어 + 영어 이중 언어 Vault에서 엔드 투 엔드 검증되었습니다. 기본 cross-encoder reranker는 `rerank-bge`(English-only; 엔드 투 엔드 검증된 유일한 catalog alias)입니다. 다국어 reranker alias는 현재 transformers.js tokenizer 호환성 검사에 실패합니다. CJK/태국어/크메르어 토큰화에는 `Intl.Segmenter`를 사용합니다.
 
 **원격 실행이 되나요?** 예 — `serve-http`는 [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http)를 통해 동일한 서버를 노출합니다. HTTPS를 위해 앞단에 Tailscale Funnel이나 Cloudflare Tunnel을 두세요. claude.ai 웹, ChatGPT 커스텀 GPT, Cursor HTTP 모드, 모바일 MCP 클라이언트에서 작동합니다. **[docs/http-transport.md](./docs/http-transport.md)**를 보세요.
 
@@ -322,12 +322,12 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (1604개 테스트, ~12초)
+npm test       # 전체 스위트 (1605개 테스트, ~12초)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```
 
-이슈, PR, 아이디어를 환영합니다. 브랜치 보호는 `main`에서 PR 리뷰를 요구합니다.
+이슈, PR, 아이디어를 환영합니다.
 
 ---
 

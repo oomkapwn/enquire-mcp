@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve के दौरान शून्य क्लाउड कॉल।** embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक-बार का स्थानीय डाउनलोड (~110 MB) है, न कि कोई क्लाउड API key। मूल-आधारित + निजी होना मुफ़्त नहीं है, और हम इसका दिखावा नहीं करते: आपके vault की सामग्री कभी आपकी मशीन नहीं छोड़ती, डिफ़ॉल्ट रूप से एयर-गैप-सुरक्षित ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 1604+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 1605+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -78,7 +78,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain modularity wikilink समुदाय-पहचान) | ✅ **केवल यहीं** | ❌ | ❌ |
 | **स्वतंत्र `.base` क्वेरी निष्पादन** (Obsidian चले बिना काम करता है) | ✅ **केवल यहीं** | ❌ | ❌ Obsidian को सौंपता है |
 | **HyDE retrieval** (Gao et al 2023) + उप-प्रश्न विघटन | ✅ **केवल यहीं** | ❌ | ❌ |
-| **1604 यूनिट टेस्ट · प्रति PR 9 आवश्यक + 5 सलाहकारी CI गेट** | ✅ | लागू नहीं | विरल |
+| **1605 यूनिट टेस्ट · 9 release-required CI जाँच · वर्तमान में 7 branch-protected** | ✅ | लागू नहीं | विरल |
 | **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2) | ✅ | लागू नहीं | ❌ |
 | **semver-बाध्य सार्वजनिक सतह** ([STABILITY.md](./STABILITY.md)) | ✅ | लागू नहीं | ❌ |
 | स्वतंत्र (कोई Obsidian प्लगइन ज़रूरी नहीं) | ✅ | ❌ Obsidian ज़रूरी | भिन्न |
@@ -279,7 +279,7 @@ graph LR
 | **HTTP ट्रांसपोर्ट** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), प्रति-token rate-limit, सख़्त CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, डिफ़ॉल्ट रूप से सुरक्षित) — कोई कोड निष्पादन नहीं |
 | **कैश + इंडेक्स फ़ाइलें** | chmod 0600, पैरेंट डायरेक्टरी 0700 |
-| **CI** | **9 आवश्यक** branch-protection गेट: (1) `lint`, (2) `test` Node 22 पर, (3) `test` Node 24 पर, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`। **5 सलाहकारी**: `test-macos` + `docker` (Dockerfile बिल्ड + `tools/list` introspection smoke) `.github/workflows/ci.yml` के माध्यम से; CodeQL ×2 + Analyze actions [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के माध्यम से (workflow फ़ाइलें नहीं)। npm प्रकाशन से पहले रिलीज़ वर्कफ़्लो टैग्ड SHA पर सभी 9 आवश्यक गेट के पास होने की पुनः जाँच करता है। |
+| **CI** | हर PR पर **9 release-required जाँच** चलती हैं: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, और `oia`। Branch protection अभी इनमें से केवल **7** को लागू करता है; `docs` और `oia` release के लिए आवश्यक हैं, पर protected नहीं (2026-07-23 को live-verified)। `test-macos` `continue-on-error` वाला एकमात्र सलाहकारी job है। `docker` CI workflow को विफल कर सकता है, पर protected नहीं है; CodeQL [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के जरिए दो अलग unprotected analysis चलाता है। npm publish से पहले `release.yml` tagged SHA पर सभी 9 की फिर जाँच करता है। |
 | **कवरेज** | लाइनें ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **रिलीज़** | प्रति tag npm + GitHub release · semver · **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2; L3 जनरेटर रोडमैप पर) |
 | **स्थिरता** | v3.0+ semver-बाध्य — हर CLI flag, टूल नाम, MCP resource, prompt, निर्यातित symbol एक अनुबंध है |
@@ -298,7 +298,7 @@ graph LR
 
 **प्रदर्शन?** कोल्ड-बिल्ड FTS5: ~5s/1k नोट्स, ~30s/50k। BM25 क्वेरी: हमेशा <100ms। **HNSW top-10: किसी भी पैमाने पर sub-10ms।** HNSW persistence के साथ serve कोल्ड-स्टार्ट: ~50ms।
 
-**भाषाएँ?** डिफ़ॉल्ट `paraphrase-multilingual-MiniLM-L12-v2` (50+ भाषाएँ), बहुभाषी cross-encoder। CJK / थाई / खमेर tokenization `Intl.Segmenter` के माध्यम से।
+**भाषाएँ?** डिफ़ॉल्ट embedder `paraphrase-multilingual-MiniLM-L12-v2` (50+ भाषाएँ) है, जिसे रूसी + अंग्रेज़ी bilingual vaults पर end-to-end सत्यापित किया गया है। डिफ़ॉल्ट cross-encoder reranker `rerank-bge` (English-only; end-to-end सत्यापित एकमात्र catalog alias) है; multilingual reranker aliases अभी transformers.js tokenizer compatibility check में विफल होते हैं। CJK / थाई / खमेर tokenization के लिए `Intl.Segmenter` उपयोग होता है।
 
 **रिमोट चला सकते हैं?** हाँ — `serve-http` उसी सर्वर को [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) पर उजागर करता है। HTTPS के लिए Tailscale Funnel या Cloudflare Tunnel के पीछे रखें। claude.ai वेब, ChatGPT कस्टम GPT, Cursor HTTP मोड, मोबाइल MCP क्लाइंट के साथ काम करता है। देखें **[docs/http-transport.md](./docs/http-transport.md)**।
 
@@ -319,7 +319,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # पूर्ण सूट (1604 टेस्ट, ~12s)
+npm test       # पूर्ण सूट (1605 टेस्ट, ~12s)
 npm run lint   # ज़ीरो वॉर्निंग
 npm run build  # tsc → dist/
 ```

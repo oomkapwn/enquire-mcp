@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 期间零云端调用。** 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 110 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**46 个工具 · 19 个 MCP 提示词 · 1604+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**46 个工具 · 19 个 MCP 提示词 · 1605+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain 模块度社群检测） | ✅ **独有** | ❌ | ❌ |
 | **独立 `.base` 查询执行**（无需运行 Obsidian） | ✅ **独有** | ❌ | ❌ 委托给 Obsidian |
 | **HyDE 检索**（Gao et al. 2023）+ 子问题分解 | ✅ **独有** | ❌ | ❌ |
-| **1604 单元测试 · 每个 PR 9 项必需 + 5 项指导性 CI 门禁** | ✅ | 不适用 | 罕见 |
+| **1605 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | ✅ | 不适用 | 罕见 |
 | **签名构建溯源**（npm + Sigstore，SLSA Build L2） | ✅ | 不适用 | ❌ |
 | **语义化版本约束的公开接口**（[STABILITY.md](./STABILITY.md)） | ✅ | 不适用 | ❌ |
 | 独立运行（无需 Obsidian 插件） | ✅ | ❌ 需 Obsidian | 不一 |
@@ -275,7 +275,7 @@ graph LR
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
 | **缓存 + 索引文件** | chmod 0600，父目录 0700 |
-| **CI** | **9 项必需**分支保护门禁：(1) `lint`、(2) Node 22 上的 `test`、(3) Node 24 上的 `test`、(4) `smoke`、(5) `audit`、(6) `coverage`、(7) `version-consistency`、(8) `docs`、(9) `oia`。**5 项指导性**：`test-macos` + `docker`（Dockerfile 构建 + `tools/list` 自省 smoke），经 `.github/workflows/ci.yml`；CodeQL ×2 + Analyze actions 经 [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning)（非工作流文件）。发布工作流在 npm publish 前会在打了 tag 的 SHA 上重新核验全部 9 项必需门禁均已通过。_v3.7.10 —— `docs`（TypeDoc 生成门禁）加入必需集。v3.7.13 —— `engines.node` 下限提升到 `>=22.13.0` 以匹配 CI 矩阵。v3.8.0-rc.6 —— `oia`（Outside-In Audit）由指导性提升为必需。_ |
+| **CI** | 每个 PR 都运行 **9 项发布必需检查**：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs` 和 `oia`。当前分支保护仅强制其中 **7 项**；`docs` 与 `oia` 是发布必需项，但未受保护（在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验全部 9 项。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |
 | **构建发布** | 每个 tag 发布到 npm + GitHub Release · 语义化版本 · **签名构建溯源**（npm + Sigstore，SLSA Build L2；L3 生成器在路线图中） |
 | **稳定性** | v3.0+ 语义化版本约束——每个 CLI flag、工具名、MCP 资源、提示词、导出符号都是契约 |
@@ -294,7 +294,7 @@ graph LR
 
 **性能如何？** 冷构建 FTS5：约 5s/1k 笔记、约 30s/50k。BM25 查询：始终 <100ms。**HNSW top-10：任意规模 sub-10ms。** 启用 HNSW 持久化时 serve 冷启动约 50ms。
 
-**支持哪些语言？** 默认 `paraphrase-multilingual-MiniLM-L12-v2`（50+ 语言），多语言交叉编码器。已在俄文 + 英文双语仓库上做端到端验证。CJK / 泰文 / 高棉文分词通过 `Intl.Segmenter`。
+**支持哪些语言？** 默认嵌入模型是 `paraphrase-multilingual-MiniLM-L12-v2`（50+ 语言），已在俄文 + 英文双语仓库上完成端到端验证。默认交叉编码重排器是 `rerank-bge`（English-only；目前唯一经过端到端验证的目录别名）；多语言重排器别名目前会在 transformers.js tokenizer 兼容性检查中失败。CJK / 泰文 / 高棉文分词通过 `Intl.Segmenter`。
 
 **能远程运行吗？** 可以——`serve-http` 通过 [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) 暴露同一个服务。用 Tailscale Funnel 或 Cloudflare Tunnel 套 HTTPS。可配合 claude.ai 网页、ChatGPT 自定义 GPT、Cursor HTTP 模式、移动端 MCP 客户端。见 **[docs/http-transport.md](./docs/http-transport.md)**。
 
@@ -315,12 +315,12 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 完整套件（1604 个测试，约 12s）
+npm test       # 完整套件（1605 个测试，约 12s）
 npm run lint   # 零警告
 npm run build  # tsc → dist/
 ```
 
-欢迎 issue、PR 与各种想法。分支保护要求 `main` 上的 PR 需经评审。
+欢迎 issue、PR 与各种想法。
 
 ---
 

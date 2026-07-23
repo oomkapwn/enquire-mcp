@@ -67,6 +67,105 @@ function promptsMissingFrom(section: string, registered: Set<string>): string[] 
   return [...registered].filter((p) => !new RegExp(`\`${p}\``).test(section));
 }
 
+const PUBLIC_READMES = [
+  "README.md",
+  "README.zh.md",
+  "README.es.md",
+  "README.hi.md",
+  "README.ar.md",
+  "README.ru.md",
+  "README.pt.md",
+  "README.fr.md",
+  "README.ja.md",
+  "README.ko.md",
+  "README.de.md"
+] as const;
+
+/**
+ * Validate the two CI rows shared by every localized README.
+ *
+ * Numeric branch-protection state is a dated live snapshot; the release-required
+ * count and job semantics come from the tracked workflows. Language-neutral
+ * identifiers keep the check usable across all 11 translations.
+ */
+function publicCiPostureProblems(markdown: string, releaseRequired: number, branchProtected: number): string[] {
+  const rows = markdown.split("\n").filter((line) => line.startsWith("| **") && line.includes("CI"));
+  const detail = rows.find((line) => line.startsWith("| **CI** |")) ?? "";
+  const summary = rows.find((line) => line !== detail) ?? "";
+  const problems: string[] = [];
+  if (!detail) problems.push("missing detailed CI row");
+  if (!summary) problems.push("missing summary CI row");
+  for (const [label, row] of [
+    ["summary", summary],
+    ["detail", detail]
+  ] as const) {
+    if (!row.includes(String(releaseRequired))) problems.push(`${label} missing ${releaseRequired} release-required`);
+    if (!row.includes(String(branchProtected))) problems.push(`${label} missing ${branchProtected} branch-protected`);
+    if (/(?:^|\D)5(?:\D|$)/.test(row)) problems.push(`${label} still carries the stale five-advisory count`);
+  }
+  for (const marker of [
+    "docs",
+    "oia",
+    "test-macos",
+    "continue-on-error",
+    "docker",
+    "CodeQL",
+    "release.yml",
+    "2026-07-23"
+  ]) {
+    if (!detail.includes(marker)) problems.push(`detail missing ${marker}`);
+  }
+  return problems;
+}
+
+/** Validate that localized language FAQs separate the multilingual embedder from the English-only default reranker. */
+function rerankerLanguagePostureProblems(markdown: string, defaultAlias: string): string[] {
+  const faqLines = markdown.split("\n").filter((line) => line.includes("paraphrase-multilingual-MiniLM-L12-v2"));
+  const problems: string[] = [];
+  if (faqLines.length !== 1) problems.push(`expected one language FAQ line, found ${faqLines.length}`);
+  const line = faqLines[0] ?? "";
+  if (!line.includes(defaultAlias)) problems.push(`language FAQ missing default reranker ${defaultAlias}`);
+  if (!line.includes("English-only")) problems.push("language FAQ does not disclose English-only reranker");
+  if (line.includes("rerank-multilingual")) problems.push("language FAQ presents an unavailable multilingual alias");
+  return problems;
+}
+
+/** Validate the stateful-session lifecycle claims that previously contradicted the implementation. */
+function statefulSecurityPostureProblems(security: string, deleteDrainMs: number): string[] {
+  const start = security.indexOf("### Stateful sessions");
+  const rest = start < 0 ? "" : security.slice(start);
+  const end = rest.indexOf("\n### Observability");
+  const section = end < 0 ? rest : rest.slice(0, end);
+  const problems: string[] = [];
+  if (!section) return ["missing Stateful sessions section"];
+  const seconds = deleteDrainMs / 1000;
+  for (const marker of [
+    "lazy, not timer-driven",
+    "every authenticated stateful request",
+    "inFlightCalls",
+    `${seconds} seconds`,
+    "**204**",
+    "not evicted as idle",
+    "pending initializes"
+  ]) {
+    if (!section.includes(marker)) problems.push(`stateful posture missing ${marker}`);
+  }
+  for (const stale of ["A periodic sweep", "tears down the transport immediately", "returns 404, not 500"]) {
+    if (section.includes(stale)) problems.push(`stateful posture retains stale claim: ${stale}`);
+  }
+  return problems;
+}
+
+/** Stable API docs must not label already-stable capabilities with their prerelease build number. */
+function stableApiLabelProblems(apiMd: string): string[] {
+  const problems: string[] = [];
+  const prereleaseLabels = [...apiMd.matchAll(/\bv\d+\.\d+\.\d+-rc\.\d+\b/g)].map((m) => m[0]);
+  if (prereleaseLabels.length > 0) problems.push(`prerelease labels remain: ${prereleaseLabels.join(", ")}`);
+  if (apiMd.includes("@rc-only")) problems.push("stale @rc-only channel wording remains");
+  if (!apiMd.includes("first stable release")) problems.push("missing stable-version label contract");
+  return problems;
+}
+
 describe("docs/code consistency — README mirrors registered MCP surface", () => {
   it("every tool in TOOL_MANIFEST appears in README", async () => {
     const readme = await read("README.md");
@@ -696,7 +795,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // regex (the canonical authoritative source: it's what actually blocks an
   // npm publish) and asserts every "**N required** ... CI gates" claim in
   // README + CLAUDE.md matches.
-  it("'N required CI gates' claims match release.yml REQUIRED regex count", async () => {
+  it("'N release-required CI checks' claims match release.yml REQUIRED regex count", async () => {
     const releaseYml = await read(".github/workflows/release.yml");
     // Match the REQUIRED="lint|test \(22\)|...|docs" assignment. Count
     // pipe-delimited entries.
@@ -719,12 +818,11 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       ).toBe(actualCount);
     }
 
-    // Now assert every "**N required**" claim in README + CLAUDE.md matches
-    // the actual count. Pattern: bold-wrapped N + "required" + optional "branch-
-    // protection" or no qualifier + "gates" / "CI gates".
+    // Now assert every "**N required**" / "**N release-required**" claim in
+    // README + CLAUDE.md matches the actual count.
     for (const file of ["README.md", "CLAUDE.md"]) {
       const body = await read(file);
-      const claims = [...body.matchAll(/\*\*?(\d+)\*?\*?\s+required\b/g)];
+      const claims = [...body.matchAll(/\*\*?(\d+)\*?\*?\s+(?:release-)?required\b/g)];
       for (const m of claims) {
         const claimed = Number.parseInt(m[1] ?? "0", 10);
         expect(
@@ -732,6 +830,86 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
           `${file}: "${m[0]}" claims ${claimed} required gates but release.yml REQUIRED has ${actualCount}`
         ).toBe(actualCount);
       }
+    }
+  });
+
+  it("public-truth posture matches runtime/workflow evidence across every published surface (v3.11.7-rc.3)", async () => {
+    const releaseYml = await read(".github/workflows/release.yml");
+    const requiredMatch = /REQUIRED="([^"]+)"/.exec(releaseYml);
+    expect(requiredMatch, 'release.yml must declare REQUIRED="..."').not.toBeNull();
+    const releaseRequired = (requiredMatch?.[1] ?? "").split("|").filter(Boolean).length;
+    expect(releaseRequired).toBe(9);
+
+    // Live branch-protection snapshot re-derived with `gh api` on 2026-07-23.
+    // External settings are intentionally date-stamped; this invariant keeps
+    // every public translation on one snapshot instead of pretending the
+    // number can be derived from tracked workflow YAML.
+    const branchProtected = 7;
+    const embeddings = await read("src/embeddings.ts");
+    const aliasMatch = /DEFAULT_RERANKER_ALIAS\s*=\s*"([^"]+)"/.exec(embeddings);
+    expect(aliasMatch, "src/embeddings.ts must declare DEFAULT_RERANKER_ALIAS").not.toBeNull();
+    const defaultReranker = aliasMatch?.[1] ?? "";
+    expect(defaultReranker).toBe("rerank-bge");
+
+    for (const file of PUBLIC_READMES) {
+      const markdown = await read(file);
+      expect(publicCiPostureProblems(markdown, releaseRequired, branchProtected), `${file} CI posture drift`).toEqual(
+        []
+      );
+      expect(
+        rerankerLanguagePostureProblems(markdown, defaultReranker),
+        `${file} embedder/reranker language posture drift`
+      ).toEqual([]);
+    }
+
+    // Bug-discriminating negatives: the exact pre-fix classes must be rejected.
+    const staleCi =
+      "| **1604 unit tests · 9 required + 5 advisory CI gates per PR** |\n" +
+      "| **CI** | **9 required** branch-protection gates: (1) lint, (5) audit. **5 advisory**. |";
+    expect(publicCiPostureProblems(staleCi, 9, 7).length).toBeGreaterThan(0);
+    const staleReranker =
+      "**Languages?** Default `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages). Multilingual cross-encoder.";
+    expect(rerankerLanguagePostureProblems(staleReranker, defaultReranker).length).toBeGreaterThan(0);
+
+    const httpTransport = await read("src/http-transport.ts");
+    const drainMatch = /const DELETE_DRAIN_MS = (\d+);/.exec(httpTransport);
+    expect(drainMatch, "http-transport.ts must declare DELETE_DRAIN_MS").not.toBeNull();
+    const drainMs = Number.parseInt(drainMatch?.[1] ?? "0", 10);
+    const security = await read("SECURITY.md");
+    expect(statefulSecurityPostureProblems(security, drainMs)).toEqual([]);
+    const staleSecurity = [
+      "### Stateful sessions",
+      "- **Idle eviction.** A periodic sweep terminates idle transports.",
+      "- **Explicit termination.** DELETE tears down the transport immediately. Repeat DELETE returns 404, not 500.",
+      "### Observability"
+    ].join("\n");
+    expect(statefulSecurityPostureProblems(staleSecurity, drainMs).length).toBeGreaterThan(0);
+
+    const apiMd = await read("docs/api.md");
+    expect(stableApiLabelProblems(apiMd)).toEqual([]);
+    expect(
+      stableApiLabelProblems("This @rc-only feature shipped in v3.11.6-rc.7.").length,
+      "the stale API-label detector must fire on the pre-fix shape"
+    ).toBeGreaterThan(0);
+
+    const server = await read("src/server.ts");
+    const serverRerankerDoc = /\/\*\*[^*\n]*reranker model alias[^*\n]*\*\//.exec(server)?.[0] ?? "";
+    expect(serverRerankerDoc).toContain(`default "${defaultReranker}"`);
+    expect(serverRerankerDoc).toContain("English-only");
+    expect(serverRerankerDoc).not.toContain("rerank-multilingual");
+
+    const jsonLd = await read("scripts/inject-jsonld.mjs");
+    const jsonLdLanguageAnswer =
+      jsonLd.split("\n").find((line) => line.includes("default paraphrase-multilingual-MiniLM-L12-v2 embedder")) ?? "";
+    expect(jsonLdLanguageAnswer).toContain(defaultReranker);
+    expect(jsonLdLanguageAnswer).toContain("English-only");
+    expect(jsonLdLanguageAnswer).not.toContain("with a multilingual cross-encoder");
+
+    for (const file of ["AGENTS.md", "llms.txt", "ROADMAP.md"]) {
+      const body = await read(file);
+      expect(body, `${file} must carry the release-required count`).toContain("9 release-required");
+      expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
+      expect(body, `${file} must not retain the five-advisory fiction`).not.toMatch(/5 advisory/i);
     }
   });
 
@@ -933,10 +1111,10 @@ function checkLlmsPromptCount(llms: string, actual: number): string | null {
   return null;
 }
 
-/** Pure check: llms.txt 'N required + M advisory CI gates'. */
+/** Pure check: llms.txt 'N release-required CI checks'. */
 function checkLlmsCiGates(llms: string, actualRequired: number): string | null {
-  const m = /(\d+)\s+required\s*\+\s*\d+\s+advisory CI gates/.exec(llms);
-  if (!m) return "llms.txt must declare 'N required + M advisory CI gates'";
+  const m = /(\d+)\s+release-required CI checks/.exec(llms);
+  if (!m) return "llms.txt must declare 'N release-required CI checks'";
   const claimed = Number.parseInt(m[1] ?? "0", 10);
   if (claimed !== actualRequired)
     return `llms.txt says "${m[0]}" but release.yml REQUIRED has ${actualRequired} entries`;
@@ -967,10 +1145,10 @@ function checkAgentsPerFileFloors(agents: string, actualFloors: number): string 
   return null;
 }
 
-/** Pure check: AGENTS.md 'N required CI gates' (multiple mentions, all must agree). */
+/** Pure check: AGENTS.md 'N release-required CI checks' (multiple mentions, all must agree). */
 function checkAgentsCiGates(agents: string, actualRequired: number): string | null {
-  const mentions = [...agents.matchAll(/(\d+)\s+required\s+(?:CI\s+)?gates/g)];
-  if (mentions.length === 0) return "AGENTS.md must mention 'N required gates' at least once";
+  const mentions = [...agents.matchAll(/(\d+)\s+release-required CI checks/g)];
+  if (mentions.length === 0) return "AGENTS.md must mention 'N release-required CI checks' at least once";
   for (const m of mentions) {
     const claimed = Number.parseInt(m[1] ?? "0", 10);
     if (claimed !== actualRequired)
@@ -1306,7 +1484,7 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
     }
   });
 
-  it("AGENTS.md 'N required CI gates' matches release.yml REQUIRED count", async () => {
+  it("AGENTS.md 'N release-required CI checks' matches release.yml REQUIRED count", async () => {
     const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
     expect(err, err ?? "").toBeNull();
   });
@@ -1348,8 +1526,8 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
   });
 
   it("NEGATIVE: checkLlmsCiGates catches drift", () => {
-    expect(checkLlmsCiGates("9 required + 4 advisory CI gates", 9)).toBeNull();
-    expect(checkLlmsCiGates("10 required + 4 advisory CI gates", 9)).toMatch(/10.*9/);
+    expect(checkLlmsCiGates("9 release-required CI checks", 9)).toBeNull();
+    expect(checkLlmsCiGates("10 release-required CI checks", 9)).toMatch(/10.*9/);
     expect(checkLlmsCiGates("no gates claim", 9)).toMatch(/must declare/);
   });
 
@@ -1374,11 +1552,11 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
 
   it("NEGATIVE: checkAgentsCiGates catches ANY drifted mention", () => {
     // All match → pass
-    expect(checkAgentsCiGates("9 required gates, 9 required CI gates", 9)).toBeNull();
+    expect(checkAgentsCiGates("9 release-required CI checks, 9 release-required CI checks", 9)).toBeNull();
     // First mention drifts → fail
-    expect(checkAgentsCiGates("10 required gates, 9 required CI gates", 9)).toMatch(/10/);
+    expect(checkAgentsCiGates("10 release-required CI checks, 9 release-required CI checks", 9)).toMatch(/10/);
     // Last mention drifts → fail (multiple-mention coverage)
-    expect(checkAgentsCiGates("9 required gates, 10 required CI gates", 9)).toMatch(/10/);
+    expect(checkAgentsCiGates("9 release-required CI checks, 10 release-required CI checks", 9)).toMatch(/10/);
     // Zero mentions → fail
     expect(checkAgentsCiGates("no claim", 9)).toMatch(/at least once/);
   });

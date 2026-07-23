@@ -56,7 +56,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **صفر استدعاءات سحابية أثناء التشغيل.** نموذج التضمين يعمل **على جهازك** ويُفهرس markdown الذي كتبته **أنت** — ولهذا فهو تنزيل محلي لمرة واحدة (~110 ميغابايت)، لا مفتاح API سحابي. الرسوخ والخصوصية لهما ثمن، ولا ندّعي خلاف ذلك: محتوى مكتبتك لا يغادر جهازك أبداً، وهي آمنة للعمل المعزول (air-gap) افتراضياً ([مفروضة بالكود](./SECURITY.md)، لا مجرّد طموح).
 > 4. **استدعاء واعٍ بالحداثة.** تُبلّغ كل نتيجة عن عمر الملاحظة؛ وإعادة الترتيب الاختيارية بالحداثة تتيح للوكيل تفضيل المعرفة الحديثة ووسم الحقائق القديمة لإعادة التحقق — حدود "الوعي بالنسيان"، مبنيّة على `mtime` الذي تملكه ملفاتك أصلاً.
 
-**46 أداة · 19 موجِّه MCP · 1604+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
+**46 أداة · 19 موجِّه MCP · 1605+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
 
 </div>
 
@@ -90,7 +90,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (كشف مجتمعات Wikilink بمعامل Louvain) | ✅ **حصرياً هنا** | ❌ | ❌ |
 | **تنفيذ استعلام `.base` مستقل** (يعمل دون تشغيل Obsidian) | ✅ **حصرياً هنا** | ❌ | ❌ يفوّض إلى Obsidian |
 | **استرجاع HyDE** (Gao et al 2023) + تفكيك الأسئلة الفرعية | ✅ **حصرياً هنا** | ❌ | ❌ |
-| **1604 اختبار وحدة · 9 بوابات CI إلزامية + 5 إرشادية لكل PR** | ✅ | غير منطبق | نادر |
+| **1605 اختبار وحدة · 9 فحوص CI مطلوبة للإصدار · 7 محمية حالياً على الفرع** | ✅ | غير منطبق | نادر |
 | **إثبات بناء موقَّع** (npm + Sigstore، SLSA Build L2) | ✅ | غير منطبق | ❌ |
 | **سطح عام مُقيَّد بالـ semver** ([STABILITY.md](./STABILITY.md)) | ✅ | غير منطبق | ❌ |
 | تشغيل مستقل (لا حاجة لإضافة Obsidian) | ✅ | ❌ يتطلب Obsidian | متفاوت |
@@ -359,7 +359,7 @@ graph LR
 | **نقل HTTP** | مصادقة Bearer (SHA-256 بزمن ثابت + `timingSafeEqual`)، تحديد معدّل لكل token، وCORS صارم |
 | **Frontmatter** | `js-yaml@5` `load` (مخطط YAML 1.2 الأساسي، آمن افتراضياً) — لا تنفيذ للكود |
 | **ملفات الكاش + الفهرس** | chmod 0600، والمجلد الأب 0700 |
-| **CI** | **9 بوابات** حماية فرع **إلزامية**: (1) `lint`، (2) `test` على Node 22، (3) `test` على Node 24، (4) `smoke`، (5) `audit`، (6) `coverage`، (7) `version-consistency`، (8) `docs`، (9) `oia`. و**5 إرشادية**: `test-macos` + `docker` (بناء Dockerfile + استبطان `tools/list`) عبر `.github/workflows/ci.yml`؛ وCodeQL ×2 + إجراءات Analyze عبر [الإعداد الافتراضي لـ GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (لا ملفات workflow). يُعيد سير عمل الإصدار التحقق من اجتياز البوابات الإلزامية التسع على الـ SHA الموسوم قبل النشر على npm. |
+| **CI** | يعمل في كل PR **9 فحوص مطلوبة للإصدار**: `lint` و`test (22)` و`test (24)` و`smoke` و`audit` و`coverage` و`version-consistency` و`docs` و`oia`. تفرض حماية الفرع حالياً **7** منها فقط؛ `docs` و`oia` مطلوبان للإصدار لكنهما غير محميين (تحقق مباشر في 2026-07-23). ‏`test-macos` هو الـ job الإرشادي الوحيد الذي يحمل `continue-on-error`. يمكن لـ`docker` أن يُفشل CI workflow لكنه غير محمي؛ ويشغّل CodeQL تحليلين منفصلين غير محميين عبر [إعداد GitHub الافتراضي](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). قبل npm publish يعيد `release.yml` التحقق من الفحوص التسعة على SHA الموسوم. |
 | **التغطية** | الأسطر ≥86% · العبارات ≥82% · الدوال ≥75% · الفروع ≥74% (محكومة) |
 | **البناء والإصدار** | نشر على npm + GitHub Release لكل tag · semver · **إثبات بناء موقَّع** (npm + Sigstore، SLSA Build L2؛ مُولِّد L3 على خارطة الطريق) |
 | **الاستقرار** | الإصدار v3.0+ مُقيَّد بالـ semver — كل flag CLI واسم أداة ومورد MCP وموجِّه ورمز مُصدَّر هو عقد |
@@ -384,7 +384,7 @@ graph LR
 
 **ما الأداء؟** بناء FTS5 على البارد: نحو 5s/1k ملاحظة، ونحو 30s/50k. استعلام BM25: دائماً <100ms. **HNSW top-10: دون 10ms على أي نطاق.** بدء التشغيل على البارد مع استدامة HNSW: نحو 50ms.
 
-**أي اللغات؟** افتراضياً `paraphrase-multilingual-MiniLM-L12-v2` (50+ لغة)، ومُرمِّز متقاطع متعدد اللغات. تجزئة CJK / التايلندية / الخميرية عبر `Intl.Segmenter`.
+**أي اللغات؟** نموذج الـembedder الافتراضي هو `paraphrase-multilingual-MiniLM-L12-v2` (أكثر من 50 لغة)، وقد تم التحقق منه من البداية إلى النهاية على خزائن ثنائية الروسية + الإنجليزية. أما reranker ذو الـcross-encoder الافتراضي فهو `rerank-bge` (English-only؛ الاسم الوحيد في الكتالوج الذي تم التحقق منه من البداية إلى النهاية)؛ وتفشل أسماء reranker متعددة اللغات حالياً في فحص توافق tokenizer الخاص بـtransformers.js. تستخدم تجزئة CJK / التايلندية / الخميرية `Intl.Segmenter`.
 
 **هل يمكن تشغيلها عن بُعد؟** نعم — يكشف `serve-http` الخادم نفسه عبر [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). ضَع أمامه Tailscale Funnel أو Cloudflare Tunnel من أجل HTTPS. يعمل مع ويب claude.ai، وChatGPT custom GPT، ووضع Cursor HTTP، وعملاء MCP على الجوال. راجع **[docs/http-transport.md](./docs/http-transport.md)**.
 
@@ -409,7 +409,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1604 tests, ~12s)
+npm test       # full suite (1605 tests, ~12s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

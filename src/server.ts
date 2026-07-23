@@ -88,7 +88,7 @@ export interface ServeOptions {
   /** v2.9.0 — enable BGE cross-encoder reranking on top of RRF in
    *  obsidian_search. Off by default; adds ~30-50ms per query at top-50. */
   enableReranker?: boolean;
-  /** v2.9.0 — reranker model alias (default "rerank-multilingual"). */
+  /** v2.9.0 — reranker model alias (default "rerank-bge", English-only). */
   rerankerModel?: string;
   /** v2.9.0 — how many top fused candidates to rerank (default 50). */
   rerankerTopN?: string;

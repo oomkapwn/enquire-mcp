@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1604%20passing-brightgreen.svg)](#️-confiança)
+[![tests](https://img.shields.io/badge/tests-1605%20passing-brightgreen.svg)](#️-confiança)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 > 3. **Zero chamadas à nuvem durante o serve.** Modelos em cache local (download único do HuggingFace). O conteúdo do seu vault nunca sai da sua máquina. Seguro para ambientes isolados (air-gap) por padrão.
 > 4. **Recuperação consciente da atualidade.** Cada resultado informa quão antiga é a nota; o reranqueamento por recência opcional permite que um agente prefira conhecimento recente e sinalize fatos desatualizados para reverificação — a fronteira consciente do esquecimento, construída sobre o `mtime` que seus arquivos já têm.
 
-**46 ferramentas · 19 prompts MCP · 1604+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
+**46 ferramentas · 19 prompts MCP · 1605+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 | **GraphRAG-light** (detecção de comunidades de wikilinks via modularidade de Louvain) | ✅ **só aqui** | ❌ | ❌ |
 | **Execução autônoma de consultas `.base`** (funciona sem o Obsidian em execução) | ✅ **só aqui** | ❌ | ❌ delega ao Obsidian |
 | **Recuperação HyDE** (Gao et al. 2023) + decomposição em sub-perguntas | ✅ **só aqui** | ❌ | ❌ |
-| **1604 testes unitários · 9 gates obrigatórios + 5 consultivos de CI por PR** | ✅ | n/d | raro |
+| **1605 testes unitários · 9 checks de CI exigidos para release · 7 atualmente protegidos** | ✅ | n/d | raro |
 | **Proveniência de build assinada** (npm + Sigstore, SLSA Build L2) | ✅ | n/d | ❌ |
 | **Superfície pública vinculada a semver** ([STABILITY.md](./STABILITY.md)) | ✅ | n/d | ❌ |
 | Autônomo (sem necessidade de plugin do Obsidian) | ✅ | ❌ exige Obsidian | varia |
@@ -280,7 +280,7 @@ Mais 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidia
 | **Transporte HTTP** | Autenticação por bearer (SHA-256 de tempo constante + `timingSafeEqual`), rate-limit por token, CORS estrito |
 | **Frontmatter** | `js-yaml@5` `load` (schema core YAML 1.2, seguro por padrão) — sem execução de código |
 | **Arquivos de cache + índice** | chmod 0600, diretório pai 0700 |
-| **CI** | **9 gates obrigatórios** de branch-protection: (1) `lint`, (2) `test` no Node 22, (3) `test` no Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 consultivos**: `test-macos` + `docker` (build do Dockerfile + smoke de introspecção `tools/list`) via `.github/workflows/ci.yml`; CodeQL ×2 + ações Analyze via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (não em arquivos de workflow). O workflow de release reverifica que todos os 9 obrigatórios passaram no SHA marcado antes da publicação no npm. _v3.7.10 — `docs` (gate de geração TypeDoc) adicionado ao conjunto obrigatório. v3.7.13 — piso de `engines.node` elevado para `>=22.13.0` para casar com a matriz de CI. v3.8.0-rc.6 — `oia` (Outside-In Audit) promovido de consultivo._ |
+| **CI** | Cada PR executa **9 checks exigidos para release**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` e `oia`. A branch protection atualmente exige apenas **7**; `docs` e `oia` são necessários para publicar, mas não estão protegidos (verificado ao vivo em 2026-07-23). `test-macos` é o único job consultivo com `continue-on-error`. `docker` pode fazer o workflow de CI falhar, mas não está protegido; o CodeQL executa duas análises separadas e não protegidas via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes do npm publish, `release.yml` reverifica os 9 no SHA marcado. |
 | **Cobertura** | Linhas ≥86% · statements ≥82% · funções ≥75% · branches ≥74% (com gate) |
 | **Releases** | npm + GitHub release por tag · semver · **proveniência de build assinada** (npm + Sigstore, SLSA Build L2; gerador L3 no roadmap) |
 | **Estabilidade** | v3.0+ vinculado a semver — cada flag de CLI, nome de ferramenta, recurso MCP, prompt e símbolo exportado é contrato |
@@ -299,7 +299,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superfície de estabilidad
 
 **Desempenho?** Build a frio do FTS5: ~5s/1k notas, ~30s/50k. Consulta BM25: <100ms sempre. Build de embedding: ~30ms/chunk no M1. **HNSW top-10: menos de 10 ms em qualquer escala.** Cold-start do serve: ~50ms com persistência do HNSW.
 
-**Idiomas?** Padrão `paraphrase-multilingual-MiniLM-L12-v2` (50+ idiomas). Cross-encoder multilíngue. Validado ponta a ponta em vaults bilíngues russo + inglês. Tokenização CJK/tailandês/khmer via `Intl.Segmenter`.
+**Idiomas?** O embedder padrão é `paraphrase-multilingual-MiniLM-L12-v2` (50+ idiomas), validado ponta a ponta em vaults bilíngues russo + inglês. O reranker cross-encoder padrão é `rerank-bge` (English-only; o único alias do catálogo validado ponta a ponta); os aliases multilíngues de reranker atualmente falham na verificação de compatibilidade do tokenizer do transformers.js. A tokenização CJK/tailandês/khmer usa `Intl.Segmenter`.
 
 **Rodar remotamente?** Sim — `serve-http` expõe o mesmo servidor sobre [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). Coloque na frente um Tailscale Funnel ou Cloudflare Tunnel para HTTPS. Funciona com claude.ai web, GPT personalizado do ChatGPT, modo HTTP do Cursor, clientes MCP móveis. Veja **[docs/http-transport.md](./docs/http-transport.md)**.
 
@@ -320,12 +320,12 @@ Canal: `npm install @oomkapwn/enquire-mcp` → último estável (`@latest` = v3.
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suíte completa (1604 testes, ~12s)
+npm test       # suíte completa (1605 testes, ~12s)
 npm run lint   # zero avisos
 npm run build  # tsc → dist/
 ```
 
-Issues, PRs e ideias são bem-vindos. A branch protection exige revisão de PR em `main`.
+Issues, PRs e ideias são bem-vindos.
 
 ---
 

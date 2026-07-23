@@ -20,7 +20,7 @@ import { searchHybrid } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 describe("RERANKER_MODELS catalog (v2.9.0)", () => {
-  it("exposes rerank-multilingual as the multilingual default", () => {
+  it("exposes rerank-multilingual as a multilingual catalog entry", () => {
     const m = resolveRerankerModel("rerank-multilingual");
     expect(m.alias).toBe("rerank-multilingual");
     expect(m.multilingual).toBe(true);

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.7-rc.3] — 2026-07-23
+
+> **TL;DR:** **Post-promotion public-truth audit; no runtime defect found.** The audit closed three documentation-drift classes against current implementation and live repository settings. **Stateful HTTP lifecycle:** `SECURITY.md` no longer claims a periodic idle timer, immediate DELETE teardown, repeat DELETE = 404, or idle eviction of an open SSE stream. It now documents the request-driven lazy sweep, the bounded 5-second `inFlightCalls` drain, idempotent 204, active-SSE semantics, and bounded shutdown ordering implemented since v3.11.6-rc.20/rc.21. **CI governance:** all 11 README languages, `AGENTS.md`, `llms.txt`, and `ROADMAP.md` now distinguish 9 release-required checks from the 7 contexts actually enforced by branch protection; `docs`/`oia` are release-required but unprotected, `test-macos` is the only `continue-on-error` advisory job, `docker` is fail-capable but unprotected, and CodeQL contributes two separate unprotected analyses. Stale claims that branch protection requires a PR approval were removed (live setting: 0 required approvals). **Retrieval/API truth:** every localized FAQ and published JSON-LD now separates the multilingual embedder from the English-only default `rerank-bge`; the stale `ServeOptions` TSDoc and test title were corrected; `docs/api.md` now describes already-stable v3.9/v3.10/v3.11 capabilities by their first stable release instead of their old RC build. **1604 → 1605 source tests.**
+>
+> **Method note:** claims were re-derived from `src/http-transport.ts` + lifecycle tests, `src/embeddings.ts` + CLI compatibility disclosure, `.github/workflows/ci.yml` / `release.yml`, and a live `gh api` read of `main` protection on 2026-07-23 (7 contexts, `enforce_admins:false`, 0 approving reviews). A full-surface grep expanded the originally named README/API instances to all 11 translations, `AGENTS.md`, `llms.txt`, `ROADMAP.md`, JSON-LD, exported TSDoc, and contribution copy. One structural docs-consistency test covers the corrected surfaces and includes bug-discriminating fixtures for the exact pre-fix CI, reranker, stateful-session, and RC-label shapes.
+
+### Corrected
+
+- **Stateful-session security posture.** The public policy now matches lazy idle collection, real-call draining, SSE activity, repeat DELETE, and shutdown behavior. The >`DELETE_DRAIN_MS` mutation residual remains explicit rather than being hidden by “graceful” prose.
+- **CI / branch-protection posture in every public agent and language surface.** “Release-required,” “branch-protected,” “advisory,” and merely “unprotected” are no longer collapsed into one invented 9+5 gate count.
+- **Multilingual retrieval and stable-channel wording.** Multilingual embeddings remain the default; the verified default cross-encoder is disclosed as English-only. Stable features no longer read as if users need `@rc`.
+
+### Tests (1605)
+
+- +1 source test: public-truth invariant over every README language, SECURITY lifecycle claims, stable API labels, JSON-LD, exported reranker TSDoc, and the agent/discovery docs, with synthetic pre-fix negative controls.
+
 ## [3.11.7-rc.2] — 2026-07-23
 
 > **TL;DR:** **Mandatory post-merge re-sweep of the unpublished rc.1 audit fixes found and closed A10-F1 [MED]: distinct hardlink paths bypassed the append cap lock.** rc.1 keyed its process-wide queue by canonical absolute path, but realpath does not collapse hardlinks. Two `Vault` instances appending through different names for the same inode therefore acquired different locks, both accepted a stale 4-byte size under `maxFileBytes=10`, and both wrote — 12 bytes total. rc.1 was deliberately never tagged or published. rc.2 keys the critical section by physical `dev+ino` where the filesystem exposes it, uses one conservative process-wide lane when Node reports `ino=0`, and rejects an opened descriptor whose identity changed after reservation. **1602 → 1604 source tests.**

@@ -109,9 +109,10 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(
       invalidAllowlistEntries({
         "GHSA-no-removal": "https://github.com/upstream/issues/1",
-        "GHSA-no-url": "Remove when upstream fixes it"
+        "GHSA-no-url": "Remove when upstream fixes it",
+        "GHSA-spoofed-host": "Remove when https://evil.example/?next=https://github.com/org/repo/issues/1"
       })
-    ).toEqual(["GHSA-no-removal", "GHSA-no-url"]);
+    ).toEqual(["GHSA-no-removal", "GHSA-no-url", "GHSA-spoofed-host"]);
 
     const published = packedConsumerManifest("@oomkapwn/enquire-mcp", "file:///tmp/enquire-mcp.tgz");
     expect(published).toEqual({

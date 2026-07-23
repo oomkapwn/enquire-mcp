@@ -246,7 +246,26 @@ export function staleAllowlistEntries(advisories, allowlist) {
  */
 export function invalidAllowlistEntries(allowlist) {
   return Object.entries(allowlist)
-    .filter(([, reason]) => !reason.includes("Remove") || !reason.includes("https://github.com/"))
+    .filter(([, reason]) => {
+      const hasRemovalInstruction = /\bRemove\b/.test(reason);
+      const hasGitHubIssue = (reason.match(/https:\/\/\S+/g) ?? []).some((candidate) => {
+        try {
+          const tracker = new URL(candidate.replace(/[),.;]+$/, ""));
+          const segments = tracker.pathname.split("/").filter(Boolean);
+          return (
+            tracker.origin === "https://github.com" &&
+            tracker.username === "" &&
+            tracker.password === "" &&
+            segments.length === 4 &&
+            segments[2] === "issues" &&
+            /^\d+$/.test(segments[3] ?? "")
+          );
+        } catch {
+          return false;
+        }
+      });
+      return !hasRemovalInstruction || !hasGitHubIssue;
+    })
     .map(([id]) => id);
 }
 

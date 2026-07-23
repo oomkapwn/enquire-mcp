@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.7-rc.5] — 2026-07-23
+
+> **TL;DR:** **A8 closes the tuple-schema incident as a class without inventing a universal client lowest common denominator.** The maximally-enabled built server now produces a deterministic, committed inventory of all 46 `tools/list` input schemas; CI fails on any unreviewed tool addition, removal, or schema-node change and names the affected tool. A separate project policy pins explicit JSON Schema dialects, object roots, and generous resource ceilings (16 KiB/tool, 128 KiB total, depth 16). Five revisioned client profiles keep provider restrictions evidence-scoped: the reported array-valued-`items` rejection is enforced for ChatGPT (#354), Gemini and Grok (#360), while Claude Desktop and Cursor remain explicitly unverified pending credentialed smoke. Generic MCP/function-calling documentation is recorded as non-binding evidence, so `anyOf`, `$ref`, `definitions`, and `additionalProperties` are not blanket-banned. Runtime behavior and the 46-tool wire surface are unchanged. **1617 → 1624 source tests.**
+>
+> **Method note:** the gate was derived from the exact rc.19 external-audit inventory, current MCP tools specification, the two repository incident reports, and current vendor documentation. The emitted rc.5 baseline is 25,977 canonical schema bytes (`sha256:57dc697b…`), with `obsidian_search` largest at 3,562 bytes and deepest at 9 — well below the intentional review thresholds. Detection power was challenged in both directions: reintroducing the rc.17 `items: [schema, schema]` shape fails exactly the three reported profiles while still passing the draft-07/project baseline; a one-property mutation names the changed tool; missing evidence, unknown rules, undeclared dialects, non-object roots, excess size/depth, and an attempt to turn generic documentation into a binding restriction all fail closed; a schema using `anyOf` + local `$ref` + `additionalProperties` remains accepted. Periodic real-client smoke remains maintainer-gated because it requires those clients and credentials; the static emitted-contract half is complete and runs on every built test suite.
+
+### Added
+
+- **Deterministic emitted-schema inventory.** `npm run schema:inventory` captures the actual maximally-enabled `dist` server against a synthetic vault and compares it with `tests/fixtures/mcp-schema-inventory.v1.json`; `--write` is the explicit regeneration path for reviewed schema changes.
+- **Versioned per-client profiles.** `mcp-client-profiles.v1.json` carries client/profile revisions, observed surface, evidence URLs/dates, enforced restrictions, five real-client smoke targets, and explicit unverified states rather than inferred compatibility claims.
+- **Layered conformance policy.** Protocol/project shape and resource limits, exact inventory drift, and client-specific restrictions are independent checks. Valid draft-07 tuple syntax is not mislabeled as protocol-invalid merely because named hosted clients reject it.
+
+### Tests (1624)
+
+- +2 emitted-contract positives: exact inventory/digest and five-profile validation/evaluation.
+- +5 negative controls: client-specific tuple rejection, named inventory mutation diff, dialect/root/size/depth policy mutations, malformed/overreaching profile rejection, and the anti-LCD `anyOf`/`$ref`/`additionalProperties` acceptance case.
+
 ## [3.11.7-rc.4] — 2026-07-23
 
 > **TL;DR:** **Model-agnostic transfer of the useful T-Search research pattern, without bundling its 36B checkpoint or server-side LLM orchestration.** `obsidian_context_pack` now accepts an opt-in, hard-capped `subqueries[]` list (≤5 extras): it executes at most 6 hybrid-search pipelines sequentially, preserves the original query's top-1, reserves the best available unique candidate per atomic sub-question, and RRF-fills the remaining note slots. Exact normalized duplicates stay on the byte-identical legacy path. The returned `research` trace exposes bounded candidate/selection paths and zero-hit queries but deliberately does **not** label retrieved text as semantically “covered.” `vault_research` now gives the host agent a bounded two-round evidence protocol: query history, saved evidence with reasons, covered/unresolved ledger, compact next-goal state, ranked evidence handoff, and an explicit no-write/no-parametric-gap-fill contract. **1605 → 1617 source tests.**

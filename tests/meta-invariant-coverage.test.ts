@@ -45,6 +45,7 @@ const EXTRA_STRUCTURAL_FILES = [
   "lint.test.ts",
   "no-internal-imports.test.ts",
   "meta-invariant-coverage.test.ts",
+  "mcp-schema-compat.test.ts",
   // v3.9.0-rc.26 (rc.25-audit LOW-1) — two more invariant-SHAPED tests that
   // assert source/state against a canonical value but aren't named
   // `*-invariant.test.ts`, so they escaped the glob. Both already carry a real

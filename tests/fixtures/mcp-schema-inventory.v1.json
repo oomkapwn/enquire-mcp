@@ -1,0 +1,1634 @@
+{
+  "formatVersion": 1,
+  "metrics": {
+    "keywordCounts": {
+      "$defs": 0,
+      "$ref": 0,
+      "additionalProperties": 3,
+      "allOf": 0,
+      "anyOf": 2,
+      "const": 0,
+      "definitions": 0,
+      "enum": 5,
+      "format": 1,
+      "items": 6,
+      "maxItems": 5,
+      "maxLength": 26,
+      "maximum": 42,
+      "minItems": 3,
+      "minLength": 18,
+      "minimum": 8,
+      "not": 0,
+      "oneOf": 0,
+      "patternProperties": 0,
+      "prefixItems": 0,
+      "required": 25
+    },
+    "maxSchemaBytes": {
+      "bytes": 3562,
+      "name": "obsidian_search"
+    },
+    "maxSchemaDepth": {
+      "depth": 9,
+      "name": "obsidian_search"
+    },
+    "perTool": [
+      {
+        "bytes": 458,
+        "depth": 3,
+        "name": "obsidian_append_to_note"
+      },
+      {
+        "bytes": 560,
+        "depth": 3,
+        "name": "obsidian_archive_note"
+      },
+      {
+        "bytes": 558,
+        "depth": 4,
+        "name": "obsidian_chat_thread_append"
+      },
+      {
+        "bytes": 220,
+        "depth": 3,
+        "name": "obsidian_chat_thread_read"
+      },
+      {
+        "bytes": 1143,
+        "depth": 4,
+        "name": "obsidian_context_pack"
+      },
+      {
+        "bytes": 610,
+        "depth": 4,
+        "name": "obsidian_create_note"
+      },
+      {
+        "bytes": 206,
+        "depth": 3,
+        "name": "obsidian_dataview_query"
+      },
+      {
+        "bytes": 606,
+        "depth": 3,
+        "name": "obsidian_embeddings_search"
+      },
+      {
+        "bytes": 788,
+        "depth": 3,
+        "name": "obsidian_find_path"
+      },
+      {
+        "bytes": 477,
+        "depth": 3,
+        "name": "obsidian_find_similar"
+      },
+      {
+        "bytes": 349,
+        "depth": 3,
+        "name": "obsidian_frontmatter_get"
+      },
+      {
+        "bytes": 606,
+        "depth": 3,
+        "name": "obsidian_frontmatter_search"
+      },
+      {
+        "bytes": 542,
+        "depth": 4,
+        "name": "obsidian_frontmatter_set"
+      },
+      {
+        "bytes": 772,
+        "depth": 3,
+        "name": "obsidian_full_text_search"
+      },
+      {
+        "bytes": 442,
+        "depth": 3,
+        "name": "obsidian_get_backlinks"
+      },
+      {
+        "bytes": 422,
+        "depth": 3,
+        "name": "obsidian_get_communities"
+      },
+      {
+        "bytes": 394,
+        "depth": 3,
+        "name": "obsidian_get_note_neighbors"
+      },
+      {
+        "bytes": 443,
+        "depth": 3,
+        "name": "obsidian_get_outbound_links"
+      },
+      {
+        "bytes": 396,
+        "depth": 3,
+        "name": "obsidian_get_recent_edits"
+      },
+      {
+        "bytes": 356,
+        "depth": 3,
+        "name": "obsidian_get_unresolved_wikilinks"
+      },
+      {
+        "bytes": 919,
+        "depth": 3,
+        "name": "obsidian_hyde_search"
+      },
+      {
+        "bytes": 844,
+        "depth": 3,
+        "name": "obsidian_lint_wiki"
+      },
+      {
+        "bytes": 275,
+        "depth": 3,
+        "name": "obsidian_list_bases"
+      },
+      {
+        "bytes": 278,
+        "depth": 3,
+        "name": "obsidian_list_canvases"
+      },
+      {
+        "bytes": 461,
+        "depth": 3,
+        "name": "obsidian_list_notes"
+      },
+      {
+        "bytes": 274,
+        "depth": 3,
+        "name": "obsidian_list_pdfs"
+      },
+      {
+        "bytes": 405,
+        "depth": 3,
+        "name": "obsidian_list_tags"
+      },
+      {
+        "bytes": 452,
+        "depth": 4,
+        "name": "obsidian_mark_useful"
+      },
+      {
+        "bytes": 868,
+        "depth": 4,
+        "name": "obsidian_ocr_pdf"
+      },
+      {
+        "bytes": 341,
+        "depth": 3,
+        "name": "obsidian_open_in_ui"
+      },
+      {
+        "bytes": 558,
+        "depth": 3,
+        "name": "obsidian_open_questions"
+      },
+      {
+        "bytes": 403,
+        "depth": 3,
+        "name": "obsidian_paper_audit"
+      },
+      {
+        "bytes": 588,
+        "depth": 3,
+        "name": "obsidian_query_base"
+      },
+      {
+        "bytes": 207,
+        "depth": 3,
+        "name": "obsidian_read_base"
+      },
+      {
+        "bytes": 211,
+        "depth": 3,
+        "name": "obsidian_read_canvas"
+      },
+      {
+        "bytes": 460,
+        "depth": 4,
+        "name": "obsidian_read_note"
+      },
+      {
+        "bytes": 523,
+        "depth": 4,
+        "name": "obsidian_read_pdf"
+      },
+      {
+        "bytes": 565,
+        "depth": 3,
+        "name": "obsidian_rename_note"
+      },
+      {
+        "bytes": 731,
+        "depth": 3,
+        "name": "obsidian_replace_in_notes"
+      },
+      {
+        "bytes": 436,
+        "depth": 3,
+        "name": "obsidian_resolve_wikilink"
+      },
+      {
+        "bytes": 3562,
+        "depth": 9,
+        "name": "obsidian_search"
+      },
+      {
+        "bytes": 605,
+        "depth": 4,
+        "name": "obsidian_search_text"
+      },
+      {
+        "bytes": 560,
+        "depth": 3,
+        "name": "obsidian_semantic_search"
+      },
+      {
+        "bytes": 375,
+        "depth": 3,
+        "name": "obsidian_stale_notes"
+      },
+      {
+        "bytes": 205,
+        "depth": 3,
+        "name": "obsidian_stats"
+      },
+      {
+        "bytes": 523,
+        "depth": 4,
+        "name": "obsidian_validate_note_proposal"
+      }
+    ],
+    "totalSchemaBytes": 25977
+  },
+  "schemaDigest": "sha256:57dc697bd654627babbcafcbf91c614b00f0109335b4305a4317971308791c5b",
+  "toolCount": 46,
+  "tools": [
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "content": {
+            "description": "Markdown to append",
+            "type": "string"
+          },
+          "path": {
+            "description": "Vault-relative path of the target note",
+            "type": "string"
+          },
+          "separator": {
+            "description": "String inserted between existing body and the new content (default \"\\n\\n\")",
+            "type": "string"
+          },
+          "title": {
+            "description": "Target note title (filename without .md)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_append_to_note"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "archive_folder": {
+            "description": "Destination folder. Default `Archive`. Trailing slash optional.",
+            "type": "string"
+          },
+          "dry_run": {
+            "description": "Preview the rewrite plan without touching disk (default false)",
+            "type": "boolean"
+          },
+          "overwrite": {
+            "description": "Allow overwriting an existing file at the archive destination (default false)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Vault-relative path of the note to archive (with or without `.md`)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_archive_note"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "content": {
+            "description": "Message body (markdown allowed)",
+            "minLength": 1,
+            "type": "string"
+          },
+          "note_path": {
+            "description": "Vault-relative path to the note hosting the thread",
+            "minLength": 1,
+            "type": "string"
+          },
+          "role": {
+            "description": "Role of the message being appended",
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ],
+            "type": "string"
+          },
+          "thread_title": {
+            "description": "Optional thread title — used when the note is created from scratch",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note_path",
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_chat_thread_append"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "note_path": {
+            "description": "Vault-relative path to the note hosting the thread",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "note_path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_chat_thread_read"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "budget_tokens": {
+            "description": "Approximate token budget (default 4000, ~4 chars/token)",
+            "exclusiveMinimum": 0,
+            "maximum": 32000,
+            "type": "integer"
+          },
+          "folder": {
+            "description": "Restrict retrieval to this folder (vault-relative)",
+            "type": "string"
+          },
+          "include_backlinks": {
+            "description": "Include 1-line backlink summaries for top-3 notes (default true)",
+            "type": "boolean"
+          },
+          "query": {
+            "description": "Topic or question to gather context for",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recent_dailies": {
+            "description": "Include the last N daily-format notes (YYYY-MM-DD basenames). Default 0 (off).",
+            "maximum": 30,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subqueries": {
+            "description": "Optional atomic sub-questions for coverage-aware retrieval. Each is searched sequentially; the best available unique candidate per non-empty sub-question is reserved before RRF fills the remaining pack. Exact duplicates are ignored. Max 5 extras (+ the main query = at most 6 search pipelines).",
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "type": "array"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_context_pack"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "content": {
+            "description": "Markdown body (frontmatter is supplied separately)",
+            "type": "string"
+          },
+          "frontmatter": {
+            "additionalProperties": {},
+            "description": "Optional YAML frontmatter as a flat object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "overwrite": {
+            "description": "Allow overwriting an existing note (default false)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Vault-relative path (e.g. 'Inbox/My Note' or 'Inbox/My Note.md'). Must not be empty or dot-only.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_create_note"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "query": {
+            "description": "Dataview-style query string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_dataview_query"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max hits (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "min_score": {
+            "description": "Drop hits below this cosine score (default 0.3). Cosine ranges -1 to 1; embeddings cluster ~0.4-0.9.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "query": {
+            "description": "Free-form query — multi-word, natural language, any supported language",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_embeddings_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "follow_embeds": {
+            "description": "Treat ![[embeds]] as graph edges (default true)",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "Vault-relative path of the source note",
+            "type": "string"
+          },
+          "from_title": {
+            "description": "Source note title (alternative to `from`)",
+            "type": "string"
+          },
+          "include_alternatives": {
+            "description": "Return up to 10 same-length alternative paths (default false)",
+            "type": "boolean"
+          },
+          "max_depth": {
+            "description": "Maximum BFS depth (default 5). Each hop is one wikilink edge.",
+            "exclusiveMinimum": 0,
+            "maximum": 10,
+            "type": "integer"
+          },
+          "to": {
+            "description": "Vault-relative path of the destination note",
+            "type": "string"
+          },
+          "to_title": {
+            "description": "Destination note title (alternative to `to`)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_find_path"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "limit": {
+            "description": "Max similar notes to return (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 50,
+            "type": "integer"
+          },
+          "min_score": {
+            "description": "Drop hits below this score (default 0.05)",
+            "maximum": 10,
+            "minimum": 0,
+            "type": "number"
+          },
+          "path": {
+            "description": "Vault-relative path to the source note",
+            "type": "string"
+          },
+          "title": {
+            "description": "Source note title (alternative to path)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_find_similar"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "key": {
+            "description": "Single key to read; omit for full frontmatter",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "path": {
+            "description": "Vault-relative path",
+            "type": "string"
+          },
+          "title": {
+            "description": "Note title (filename without .md, accepts periodic aliases)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_frontmatter_get"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "contains": {
+            "description": "For array values, value must be a member"
+          },
+          "equals": {
+            "description": "Strict equality predicate (JSON.stringify comparison)"
+          },
+          "exists": {
+            "description": "Predicate: key must exist (any value)",
+            "type": "boolean"
+          },
+          "folder": {
+            "description": "Restrict search to a folder",
+            "type": "string"
+          },
+          "key": {
+            "description": "Frontmatter key to test",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max matches (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_frontmatter_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "dry_run": {
+            "description": "Preview the diff without writing (default false)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Vault-relative path",
+            "type": "string"
+          },
+          "set": {
+            "additionalProperties": {},
+            "description": "Keys to set. Pass `null` as value to delete a key (e.g. {status: 'published', draft: null})",
+            "propertyNames": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": {
+            "description": "Note title (filename without .md)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "set"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_frontmatter_set"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative)",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max hits (default 25)",
+            "exclusiveMinimum": 0,
+            "maximum": 200,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query. Whitespace-tokenized; FTS5 BM25 matching with `unicode61` (default) or `trigram` tokenizer.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "since": {
+            "description": "ISO 8601 date or timestamp — restrict to chunks from notes modified on/after this.",
+            "maxLength": 256,
+            "type": "string"
+          },
+          "tag": {
+            "description": "Exact tag membership (e.g. 'project'). Matches frontmatter + inline tags. No leading #.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_full_text_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "include_embeds": {
+            "description": "Include ![[…]] embeds (default true)",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Max results (default 50)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Target note path relative to vault root",
+            "type": "string"
+          },
+          "title": {
+            "description": "Target note title (filename without .md)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_backlinks"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "limit": {
+            "description": "Max communities to return (default 50, sorted by size descending)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "min_size": {
+            "description": "Drop communities with fewer than N members from the response (default 1 — keep singletons). Useful for filtering dust.",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_communities"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "max_per_bucket": {
+            "description": "Cap each bucket (outbound/inbound/tag_siblings). Default 20.",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Vault-relative path to the center note",
+            "type": "string"
+          },
+          "title": {
+            "description": "Center note title (alternative to path)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_note_neighbors"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "include_embeds": {
+            "description": "Include ![[…]] embeds (default true)",
+            "type": "boolean"
+          },
+          "include_unresolved": {
+            "description": "Include links that don't resolve (default true)",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Source note path relative to vault root",
+            "type": "string"
+          },
+          "title": {
+            "description": "Source note title (filename without .md)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_outbound_links"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 20)",
+            "exclusiveMinimum": 0,
+            "maximum": 200,
+            "type": "integer"
+          },
+          "since_minutes": {
+            "description": "Only notes edited within this many minutes",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_recent_edits"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the scan to a subfolder",
+            "type": "string"
+          },
+          "include_embeds": {
+            "description": "Include ![[…]] embeds (default true)",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Max results (default 200)",
+            "exclusiveMinimum": 0,
+            "maximum": 2000,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_get_unresolved_wikilinks"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative)",
+            "type": "string"
+          },
+          "hypothetical_answer": {
+            "description": "A 1-3 sentence synthetic answer the agent generates to its own query (without vault access). This is what gets embedded. Make it topically dense + match the register/style of your vault notes.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max hits (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "min_score": {
+            "description": "Drop hits below this cosine score (default 0.3).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "query": {
+            "description": "The original user question. Echoed in the response for audit-trail; does NOT influence retrieval when hypothetical_answer is non-empty.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "hypothetical_answer"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_hyde_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "concept_min_mentions": {
+            "description": "A capitalised phrase mentioned by ≥ N distinct notes without a page is a concept candidate (default 3)",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "folder": {
+            "description": "Restrict the lint to a subfolder (default: whole vault)",
+            "type": "string"
+          },
+          "max_per_bucket": {
+            "description": "Cap per finding bucket so the response stays bounded (default 50)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "stale_days": {
+            "description": "Notes not touched for this many days are flagged as stale (default 365)",
+            "exclusiveMinimum": 0,
+            "maximum": 36500,
+            "type": "integer"
+          },
+          "stub_word_threshold": {
+            "description": "Notes shorter than this are flagged as stubs (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 10000,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_lint_wiki"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the listing to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max bases to return (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_list_bases"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the listing to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max canvases to return (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_list_canvases"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder (relative to vault root)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 50)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "since_date": {
+            "description": "ISO 8601 date (YYYY-MM-DD); only notes mtime >= this",
+            "type": "string"
+          },
+          "tag": {
+            "description": "Filter by tag (with or without leading #)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_list_notes"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the listing to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max PDFs to return (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_list_pdfs"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 200)",
+            "exclusiveMinimum": 0,
+            "maximum": 2000,
+            "type": "integer"
+          },
+          "min_count": {
+            "description": "Drop tags used fewer than this many times (default 1)",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_list_tags"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "paths": {
+            "description": "Relative vault paths of the notes that were useful (the `path` field from search hits). 1–50.",
+            "items": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array"
+          },
+          "useful": {
+            "description": "true (default) = the notes helped; false = they looked relevant but did not help.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_mark_useful"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "lang": {
+            "description": "Tesseract language pack(s). Default 'eng'. Multi-lang via '+': 'eng+rus' for English+Russian mixed scans (max 8 packs per call). Common: 'eng', 'rus', 'jpn', 'chi_sim', 'fra', 'deu'.",
+            "pattern": "^[a-z]{3}(_[a-z]+)?(\\+[a-z]{3}(_[a-z]+)?){0,7}$",
+            "type": "string"
+          },
+          "pages": {
+            "description": "Optional 1-indexed inclusive page range, e.g. [2, 5] OCRs pages 2..5",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "path": {
+            "description": "Vault-relative path of the .pdf file (with or without .pdf)",
+            "type": "string"
+          },
+          "scale": {
+            "description": "Render scale (DPI multiplier). Default 2 (~150 DPI). Higher = better OCR on small text but slower.",
+            "maximum": 4,
+            "minimum": 0.5,
+            "type": "number"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_ocr_pdf"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "new_pane": {
+            "description": "Append `&newpane=true` so Obsidian opens the note in a split",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "Vault-relative path of the note",
+            "type": "string"
+          },
+          "title": {
+            "description": "Note title (alternative to `path`)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_open_in_ui"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the scan to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max questions to return (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "pattern": {
+            "description": "Override the regex (case-insensitive). Default matches Open question:/Q:/TODO?/?? at line start with optional list/quote/heading prefix. Capped length; patterns with nested unbounded quantifiers (ReDoS risk) are rejected.",
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_open_questions"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict the audit to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max flagged notes (default 100)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "tag": {
+            "description": "Tag identifying paper notes — with or without leading # (default 'paper')",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_paper_audit"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Extra folder scope on top of the base's filters",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max matches to return (default 50)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Vault-relative path of the .base file",
+            "type": "string"
+          },
+          "view": {
+            "description": "Optional view name. When set, the view's filters are concat'd with the global filter via AND (matching Obsidian semantics). Defaults to the global filter only.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_query_base"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "path": {
+            "description": "Vault-relative path of the .base file (with or without .base)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_read_base"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "path": {
+            "description": "Vault-relative path of the .canvas file (with or without .canvas)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_read_canvas"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "format": {
+            "description": "\"full\" (default) returns body + parsed metadata. \"map\" returns just headings + counts.",
+            "enum": [
+              "full",
+              "map"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Path relative to vault root, with or without .md",
+            "type": "string"
+          },
+          "title": {
+            "description": "Note title (filename without .md). Aliases: \"today\"/\"daily\"/\"weekly\"/\"monthly\".",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_read_note"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "include_metadata": {
+            "description": "Include doc-level metadata in result (default true)",
+            "type": "boolean"
+          },
+          "pages": {
+            "description": "Optional 1-indexed inclusive page range, e.g. [2, 5] reads pages 2..5",
+            "items": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "path": {
+            "description": "Vault-relative path of the .pdf file (with or without .pdf)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_read_pdf"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "dry_run": {
+            "description": "Preview the rewrite plan without writing anything to disk (default false)",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "Vault-relative path of the existing note (with or without .md)",
+            "type": "string"
+          },
+          "overwrite": {
+            "description": "Allow overwriting an existing note at `to` (default false)",
+            "type": "boolean"
+          },
+          "to": {
+            "description": "Vault-relative path of the new location (with or without .md). Different folder = move.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_rename_note"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "case_sensitive": {
+            "description": "Default true. Set false for case-insensitive substring match (replace text inserted verbatim).",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "description": "Preview the plan without writing anything to disk (default false)",
+            "type": "boolean"
+          },
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative). Default: whole vault.",
+            "type": "string"
+          },
+          "replace": {
+            "description": "Replacement text. Empty string means delete every occurrence.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "search": {
+            "description": "Literal substring to find. Empty string is rejected.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "search",
+          "replace"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_replace_in_notes"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "from_note": {
+            "description": "Calling note's relative path (used to disambiguate same-name files)",
+            "type": "string"
+          },
+          "include_content": {
+            "description": "Include resolved file's body (default true)",
+            "type": "boolean"
+          },
+          "wikilink": {
+            "description": "Wikilink target (e.g. 'Note Name', 'Note#Heading', 'Folder/Note|alias')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wikilink"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_resolve_wikilink"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "embedding_model": {
+            "description": "Override the embedding model alias (default 'multilingual'). Only consulted if a .embed.db exists.",
+            "type": "string"
+          },
+          "explain": {
+            "description": "v3.11.6 (S-5): when true, attach a per-hit `explain` object showing WHY each hit ranked where it did — the RRF rank/score, wikilink graph-boost (in_degree + score_delta), reranker score, and (when the server enables them) the `--recency-weight` / `--feedback-weight` rank movement (rank_before→rank_after). Diagnostic: use it to verify the opt-in recency/feedback re-ranks actually change the order. Single-query only (dropped when `queries[]` fan-out is used).",
+            "type": "boolean"
+          },
+          "filter_frontmatter": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "maxLength": 8192,
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "description": "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits.",
+            "propertyNames": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative)",
+            "type": "string"
+          },
+          "granularity": {
+            "description": "v2.2.0: 'note' (default) returns one hit per note (best chunk wins). 'block' keeps each chunk as a distinct hit — useful when one note covers a topic in multiple paragraphs and you want the LLM to see all of them.",
+            "enum": [
+              "note",
+              "block"
+            ],
+            "type": "string"
+          },
+          "graph_boost": {
+            "description": "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. The 'only enquire-mcp does this' feature: generic vector stores can't do this without an Obsidian-aware layer.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Max hits (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "min_signals": {
+            "description": "Filter: only return hits that appeared in at least this many ranker signals. Default 1 (any). Set to 2+ for high-precision multi-ranker consensus.",
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queries": {
+            "description": "v3.11.6-rc.7 — optional additional query PHRASINGS (multi-query fan-out). Each is searched and the result lists are RRF-merged with the main `query`, so a note that ranks well for ANY phrasing floats to the top. Use when the note may use different vocabulary than your first phrasing (e.g. `query: 'auth flow'`, `queries: ['login sequence', 'session handshake']`). Complements HyDE. Max 8 extra phrasings (+ the main query = up to 9 full hybrid pipeline runs, so cost scales with the count). Note: the fan-out fuses by NOTE path, so `granularity: 'block'` degrades to one hit per note; use single-query mode for per-chunk hits.",
+            "items": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "query": {
+            "description": "Free-form query — multi-word natural language is the sweet spot",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 25)",
+            "exclusiveMinimum": 0,
+            "maximum": 200,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "\"all\" (default, AND), \"any\" (OR), or \"phrase\" (literal substring — pre-v0.9 behavior)",
+            "enum": [
+              "all",
+              "any",
+              "phrase"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "description": "Search string. With mode=all/any, whitespace tokenizes (\"foo bar\" → [\"foo\",\"bar\"]).",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_search_text"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder (vault-relative)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max hits (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "integer"
+          },
+          "min_score": {
+            "description": "Drop hits below this cosine score (default 0.05). Cosine ranges 0–1.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "query": {
+            "description": "Free-form query — multi-word, natural language is fine",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_semantic_search"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 50)",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "type": "integer"
+          },
+          "stale_days": {
+            "description": "Age threshold in days (default 365)",
+            "exclusiveMinimum": 0,
+            "maximum": 36500,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_stale_notes"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "top_tags": {
+            "description": "How many top tags to return (default 10)",
+            "exclusiveMinimum": 0,
+            "maximum": 50,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_stats"
+    },
+    {
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "content": {
+            "description": "Full proposed markdown content including any frontmatter block",
+            "maxLength": 1000000,
+            "type": "string"
+          },
+          "mode": {
+            "description": "\"create\" (default) errors if path exists. \"overwrite\"/\"append\" allow existing path.",
+            "enum": [
+              "create",
+              "overwrite",
+              "append"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Vault-relative path the LLM intends to write to (e.g. 'Inbox/idea.md')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "obsidian_validate_note_proposal"
+    }
+  ]
+}

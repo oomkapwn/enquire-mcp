@@ -55,6 +55,47 @@ interface UnguardedSite {
   reason: string;
 }
 
+interface ToolchainPackage {
+  scripts?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}
+
+const CLASSIC_TYPESCRIPT_RANGE = "^6.0.3";
+const NATIVE_TYPESCRIPT_ALIAS = "npm:typescript@7.0.2";
+const NATIVE_TSC_COMMAND = "node node_modules/typescript-native/bin/tsc";
+const NATIVE_EMIT_SCRIPTS = {
+  build: `rm -rf dist && ${NATIVE_TSC_COMMAND} && chmod +x dist/index.js`,
+  dev: `${NATIVE_TSC_COMMAND} --watch`,
+  prepare: `rm -rf dist && ${NATIVE_TSC_COMMAND} && chmod +x dist/index.js && (husky 2>/dev/null || true)`
+} as const;
+
+/**
+ * Report product-emit scripts that can silently fall back to the classic
+ * TypeScript 6 binary. TypeScript 6 remains the root package deliberately:
+ * K-1 and TypeDoc 0.28 need its classic Compiler API. Product emit must use
+ * the explicit TypeScript 7 alias because both packages expose a `tsc` bin.
+ */
+function toolchainProblems(pkg: ToolchainPackage): string[] {
+  const problems: string[] = [];
+  const classic = pkg.devDependencies?.typescript ?? "";
+  const native = pkg.devDependencies?.["typescript-native"] ?? "";
+  if (classic !== CLASSIC_TYPESCRIPT_RANGE) {
+    problems.push(
+      `typescript must remain exactly ${CLASSIC_TYPESCRIPT_RANGE} for the classic API (found ${classic || "<missing>"})`
+    );
+  }
+  if (native !== NATIVE_TYPESCRIPT_ALIAS) {
+    problems.push(`typescript-native must pin ${NATIVE_TYPESCRIPT_ALIAS} (found ${native || "<missing>"})`);
+  }
+  for (const [name, expected] of Object.entries(NATIVE_EMIT_SCRIPTS)) {
+    const script = pkg.scripts?.[name] ?? "";
+    if (script !== expected) {
+      problems.push(`${name} must be exactly "${expected}" (found "${script || "<missing>"}")`);
+    }
+  }
+  return problems;
+}
+
 /**
  * Find the nearest enclosing function-like scope for `node`. Returns the
  * function body node (Block) or the source file itself if at top level.
@@ -273,7 +314,11 @@ async function collectTs(root: string): Promise<string[]> {
 describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)", () => {
   const FIXTURE_DIR = path.join(process.cwd(), "tests", "fixtures", "k1-invariant");
 
-  it("POSITIVE: fixtures/k1-invariant/good.ts has 0 unguarded sites", async () => {
+  it("POSITIVE: classic AST guard + native emit split is live; good.ts has 0 unguarded sites", async () => {
+    expect(ts.versionMajorMinor, "K-1 and TypeDoc require the classic Compiler API").toBe("6.0");
+    const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8")) as ToolchainPackage;
+    expect(toolchainProblems(pkg)).toEqual([]);
+
     const unguarded = await analyzeFile(path.join(FIXTURE_DIR, "good.ts"));
     if (unguarded.length > 0) {
       const detail = unguarded.map((u) => `  ${u.className}@${u.line}: ${u.reason}`).join("\n");
@@ -282,7 +327,35 @@ describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)
     expect(unguarded.length).toBe(0);
   });
 
-  it("NEGATIVE: fixtures/k1-invariant/bad-ignored-peek.ts has ≥1 unguarded site (peek result discarded)", async () => {
+  it("NEGATIVE: toolchain regressions and bad-ignored-peek.ts are rejected", async () => {
+    const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8")) as ToolchainPackage;
+    const classicRegressed = structuredClone(pkg);
+    classicRegressed.devDependencies = {
+      ...classicRegressed.devDependencies,
+      typescript: `${CLASSIC_TYPESCRIPT_RANGE} || ^7.0.2`
+    };
+    expect(toolchainProblems(classicRegressed)[0]).toMatch(/^typescript must remain exactly /);
+
+    const nativeRegressed = structuredClone(pkg);
+    nativeRegressed.devDependencies = {
+      ...nativeRegressed.devDependencies,
+      "typescript-native": "npm:typescript@7.0.3"
+    };
+    expect(toolchainProblems(nativeRegressed)[0]).toMatch(/^typescript-native must pin /);
+
+    // NEGATIVE controls for every emit path: merely mentioning the native
+    // binary before a bare `tsc` emit must not satisfy the exact-script gate.
+    for (const name of Object.keys(NATIVE_EMIT_SCRIPTS)) {
+      const scriptRegressed = structuredClone(pkg);
+      scriptRegressed.scripts = {
+        ...scriptRegressed.scripts,
+        [name]: `${NATIVE_TSC_COMMAND} --version && tsc`
+      };
+      expect(toolchainProblems(scriptRegressed).some((problem) => problem.startsWith(`${name} must be exactly `))).toBe(
+        true
+      );
+    }
+
     const unguarded = await analyzeFile(path.join(FIXTURE_DIR, "bad-ignored-peek.ts"));
     expect(unguarded.length).toBeGreaterThanOrEqual(1);
     // The specific failure mode: K-1 args present but peek not consumed.

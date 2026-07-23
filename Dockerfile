@@ -29,14 +29,15 @@
 # deps compile for your platform:
 #   npm install -g @oomkapwn/enquire-mcp && enquire-mcp setup --vault /abs/vault
 
-# ---- build stage: compile TypeScript -> dist (no native deps) ----
+# ---- build stage: compile TypeScript -> dist (no locally compiled native app deps) ----
 FROM node:22-slim AS build
 WORKDIR /app
-# Install ALL deps (incl. optional) but skip lifecycle scripts. `tsc` needs the
-# optional packages' TYPE DECLARATIONS to resolve their typed dynamic imports
-# (hnswlib-node, pdfjs-dist, tesseract.js, @napi-rs/canvas) — but it does NOT
-# need them natively compiled, so --ignore-scripts keeps the build pure-JS and
-# toolchain-free. After building, prune dev AND optional so the runtime is slim.
+# Install ALL deps (incl. optional) but skip lifecycle scripts. The build uses
+# a prebuilt platform-native TypeScript 7 compiler; optional app packages also
+# provide the TYPE DECLARATIONS needed for typed dynamic imports (hnswlib-node,
+# pdfjs-dist, tesseract.js, @napi-rs/canvas). `--ignore-scripts` avoids locally
+# compiling native app deps. After building, prune dev AND optional packages so
+# neither the compiler nor those optional packages enter the runtime image.
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY . .

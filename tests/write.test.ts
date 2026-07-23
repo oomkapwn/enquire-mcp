@@ -266,6 +266,39 @@ describe("appendToNote", () => {
     await fs.writeFile(path.join(root, "Read.md"), "x");
     await expect(appendToNote(v, { path: "Read.md", content: "y" })).rejects.toThrow(/read-only/);
   });
+
+  it("append never creates a missing note (NEGATIVE control for the old O_CREAT flag)", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await expect(v.appendNote("Missing.md", "must not be created")).rejects.toThrow();
+    expect(await fs.stat(path.join(root, "Missing.md")).catch(() => null)).toBeNull();
+  });
+
+  it("append cannot create a missing leaf through an out-of-vault parent symlink", async (ctx) => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-append-escape-"));
+    const link = path.join(root, "Public");
+    try {
+      await fs.symlink(outside, link);
+      if (!(await fs.lstat(link).catch(() => null))) return ctx.skip();
+      const v = new Vault(root, { enableWrite: true, readPaths: ["Public/**"] });
+      await v.ensureExists();
+      await expect(v.appendNote("Public/escaped.md", "outside-write")).rejects.toThrow(
+        /outside vault|does not exist|ENOENT|no such file/i
+      );
+      expect(await fs.stat(path.join(outside, "escaped.md")).catch(() => null)).toBeNull();
+
+      // NEGATIVE control: the old string flag "a" itself follows the parent
+      // symlink and creates the missing external leaf. This proves the setup
+      // reaches the exact sink instead of passing vacuously.
+      const raw = await fs.open(path.join(link, "raw-control.md"), "a");
+      await raw.writeFile("outside-write", "utf8");
+      await raw.close();
+      expect(await fs.readFile(path.join(outside, "raw-control.md"), "utf8")).toBe("outside-write");
+    } finally {
+      await fs.unlink(link).catch(() => {});
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("renameNote (v1.1)", () => {

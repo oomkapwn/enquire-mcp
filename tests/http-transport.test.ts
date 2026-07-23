@@ -27,6 +27,7 @@ import {
   generateBearerToken,
   type HttpServeOptions,
   isInitializeRequest,
+  isPersistentWriteRequest,
   makeHttpShutdownHandler,
   parseMaxFileBytes,
   RateLimiter,
@@ -37,6 +38,7 @@ import {
   verifyBearer
 } from "../src/http-transport.js";
 import { DEFAULT_MAX_FILE_BYTES, Vault } from "../src/vault.js";
+import { WriteRequestTracker } from "../src/write-lifecycle.js";
 
 let root: string;
 
@@ -189,7 +191,7 @@ describe("SessionRegistry (v2.14.0)", () => {
 
   // v3.8.7 P2-11 — closeAll drains the registry, closing every transport
   // + server pair. Returns the count.
-  it("closeAll drains all sessions + invokes transport.close + server.close", async () => {
+  it("closeAll drains sessions, waits the write-integrity tail, then closes transports + servers", async () => {
     const r = createSessionRegistry(60_000);
     let transportClosed = 0;
     let serverClosed = 0;
@@ -206,10 +208,40 @@ describe("SessionRegistry (v2.14.0)", () => {
           }
         }
       }) as unknown as Parameters<typeof r.sessions.set>[1];
-    r.sessions.set("a", { ...makeStub(), lastActivityMs: Date.now(), inFlight: 0, closing: false });
+    const writeTracker = new WriteRequestTracker();
+    const finishGate = (() => {
+      let release: (() => void) | undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release: () => release?.() };
+    })();
+    const finishWrite = writeTracker.run(1, new AbortController().signal, "finish", async () => {
+      await finishGate.promise;
+    });
+    await Promise.resolve();
+    r.sessions.set("a", {
+      ...makeStub(),
+      lastActivityMs: Date.now(),
+      inFlight: 1,
+      inFlightCalls: 1,
+      inFlightWrites: 1,
+      writeTracker,
+      closing: false
+    });
     r.sessions.set("b", { ...makeStub(), lastActivityMs: Date.now(), inFlight: 0, closing: false });
     expect(r.size()).toBe(2);
-    const closed = await r.closeAll(1000);
+    let closeSettled = false;
+    const closing = r.closeAll(0).then((count) => {
+      closeSettled = true;
+      return count;
+    });
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    expect(transportClosed).toBe(0);
+    finishGate.release();
+    await finishWrite;
+    const closed = await closing;
     expect(closed).toBe(2);
     expect(transportClosed).toBe(2);
     expect(serverClosed).toBe(2);
@@ -620,6 +652,64 @@ describe("isInitializeRequest (v3.7.13 H2)", () => {
         { jsonrpc: "2.0", method: "tools/list", id: 1 },
         { jsonrpc: "2.0", method: "tools/call", id: 2, params: {} }
       ])
+    ).toBe(false);
+  });
+});
+
+describe("isPersistentWriteRequest (H-2 durable lifecycle)", () => {
+  it("detects vault writes, feedback-sidecar writes, and a write inside a JSON-RPC batch", () => {
+    expect(
+      isPersistentWriteRequest({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "obsidian_replace_in_notes", arguments: {} }
+      })
+    ).toBe(true);
+    expect(
+      isPersistentWriteRequest({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 2,
+        params: { name: "obsidian_mark_useful", arguments: {} }
+      })
+    ).toBe(true);
+    expect(
+      isPersistentWriteRequest([
+        { jsonrpc: "2.0", method: "tools/list", id: 3 },
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: 4,
+          params: { name: "obsidian_frontmatter_set", arguments: {} }
+        }
+      ])
+    ).toBe(true);
+  });
+
+  it("(negative-control) rejects read tools, unknown tools, and misleading non-call payloads", () => {
+    expect(
+      isPersistentWriteRequest({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 1,
+        params: { name: "obsidian_read_note", arguments: {} }
+      })
+    ).toBe(false);
+    expect(
+      isPersistentWriteRequest({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        id: 2,
+        params: { name: "obsidian_not_real", arguments: {} }
+      })
+    ).toBe(false);
+    expect(
+      isPersistentWriteRequest({
+        jsonrpc: "2.0",
+        method: "notifications/progress",
+        params: { name: "obsidian_replace_in_notes" }
+      })
     ).toBe(false);
   });
 });

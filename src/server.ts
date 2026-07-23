@@ -21,6 +21,7 @@ import {
 } from "./tool-registry.js";
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
+import type { WriteRequestTracker } from "./write-lifecycle.js";
 
 /**
  * Configuration for {@link startServer} / {@link prepareServerDeps}.
@@ -660,8 +661,15 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
  * Build a fresh `McpServer` over already-prepared deps. Cheap (just
  * registers tool handlers — no I/O, no SQLite open). Stdio calls this once;
  * HTTP calls it per session.
+ *
+ * @param deps - Shared prepared vault/index/model dependencies.
+ * @param opts - Tool and retrieval configuration.
+ * @param writeTracker - Optional per-session mutation lifecycle used by
+ *   stateful HTTP DELETE/shutdown. Stdio and stateless HTTP rely directly on
+ *   the MCP SDK request signal.
+ * @returns A freshly registered MCP server.
  */
-export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer {
+export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracker?: WriteRequestTracker): McpServer {
   const server = new McpServer({
     name: "enquire",
     version: VERSION
@@ -745,8 +753,8 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions): McpServer 
     recencyConfig,
     feedbackContext
   );
-  if (deps.feedbackStore) registerFeedbackTool(server, deps.feedbackStore);
-  if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault);
+  if (deps.feedbackStore) registerFeedbackTool(server, deps.feedbackStore, writeTracker);
+  if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault, writeTracker);
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
   registerResources(server, deps.vault);
   if (deps.ftsIndex) registerChunkResource(server, deps.ftsIndex, deps.vault);

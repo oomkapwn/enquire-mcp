@@ -5,7 +5,43 @@ import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { foldForMatch, splitLinesWithEnds, stripTrailingSlashes } from "../wildcard-match.js";
+import { throwIfWriteAborted, WriteRequestAbortedError } from "../write-lifecycle.js";
 import { findBestMatch, stripMd } from "./meta.js";
+
+/**
+ * Request-lifecycle options accepted by rollback-capable batch write tools.
+ */
+export interface WriteOperationOptions {
+  /** MCP request cancellation signal. Aborted batch effects are rolled back. */
+  signal?: AbortSignal;
+}
+
+interface NoteSnapshot {
+  path: string;
+  before: string;
+}
+
+async function restoreNoteSnapshots(vault: Vault, snapshots: readonly NoteSnapshot[]): Promise<string[]> {
+  const failures: string[] = [];
+  for (const snapshot of [...snapshots].reverse()) {
+    try {
+      await vault.writeNote(snapshot.path, snapshot.before, { overwrite: true });
+    } catch (err) {
+      failures.push(`${snapshot.path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return failures;
+}
+
+function throwCancelledAfterRollback(operation: string, signal: AbortSignal | undefined, failures: string[]): never {
+  if (failures.length > 0) {
+    throw new Error(
+      `${operation}: request cancelled, but rollback failed for ${failures.length} file(s): ${failures.join("; ")}`,
+      { cause: signal?.reason }
+    );
+  }
+  throw new WriteRequestAbortedError(`${operation}: request cancelled; committed changes rolled back`, signal?.reason);
+}
 
 /**
  * Create a new note (or overwrite an existing one) with optional YAML
@@ -163,6 +199,9 @@ export interface RenameNoteResult {
  *   `.md`). `dry_run` defaults to false — when true, returns the plan
  *   without writing. `overwrite` defaults to false — when true, allows
  *   replacing an existing destination.
+ * @param options - Optional MCP cancellation signal. Cancellation during the
+ *   apply phase restores rewritten backlinks, the source path/content, and an
+ *   overwritten destination before rejecting.
  * @returns A {@link RenameNoteResult} with per-file rewrites and totals.
  * @throws {Error} If source doesn't exist, destination exists and `overwrite`
  *   is false, source equals destination, or destination is privacy-excluded.
@@ -183,7 +222,8 @@ export interface RenameNoteResult {
  */
 export async function renameNote(
   vault: Vault,
-  args: { from: string; to: string; dry_run?: boolean; overwrite?: boolean }
+  args: { from: string; to: string; dry_run?: boolean; overwrite?: boolean },
+  options: WriteOperationOptions = {}
 ): Promise<RenameNoteResult> {
   await vault.ensureExists();
   const dryRun = args.dry_run === true;
@@ -234,6 +274,16 @@ export async function renameNote(
   const newBasename = stripMd(path.basename(toRelNorm));
   const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
   const entries = await vault.listMarkdown();
+  const isDestinationEntry = (entry: FileEntry): boolean =>
+    entry.absPath === toAbsCheck || vault.toRel(entry.absPath) === canonicalToRel;
+  let destinationBefore: NoteSnapshot | null = null;
+  if (args.overwrite && !caseOnlyRename) {
+    const destinationEntry = entries.find((entry) => entry.absPath !== fromAbs && isDestinationEntry(entry));
+    if (destinationEntry) {
+      const destination = await vault.readNote(destinationEntry.absPath, destinationEntry.mtimeMs);
+      destinationBefore = { path: destinationEntry.relPath, before: destination.content };
+    }
+  }
 
   // Build the rewrite plan. INCLUDES the source file itself so that any
   // self-references (e.g. `[[Foo]]` inside `Foo.md`) are also rewritten —
@@ -244,6 +294,7 @@ export async function renameNote(
   let totalRewrites = 0;
   let sourcePlan: RenameProposal | null = null;
   for (const e of entries) {
+    throwIfWriteAborted(options.signal);
     const isSource = e.absPath === fromAbs;
     // v3.10.0-rc.60 (WRITE-1, data-loss) — the DESTINATION must be excluded from the
     // backlink-rewrite plan: under overwrite=true, `renameFile` moves the SOURCE content
@@ -257,7 +308,7 @@ export async function renameNote(
     // case from readdir, so on a case-insensitive FS (macOS/Windows) a case-variant `to`
     // (e.g. `Posts/Existing.md` for on-disk `posts/existing.md`) slipped the bare `===`
     // and reopened the rc.60 WRITE-1 data-loss for that destination.
-    const isDest = e.absPath === toAbsCheck || vault.toRel(e.absPath) === canonicalToRel;
+    const isDest = isDestinationEntry(e);
     if (isDest) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 
@@ -335,18 +386,51 @@ export async function renameNote(
     //     resumes cleanly.
     //
     // Net: every failure mode is recoverable by re-running the same call.
-    if (sourcePlan) {
-      await vault.writeNote(sourcePlan.path, sourcePlan.after, { overwrite: true });
-    }
-    // Atomic file move + cache invalidation. Most likely to fail (cross-fs
-    // rename, race on destination, permission issue). Run FIRST so failure
-    // here doesn't leave updated backlinks pointing at a phantom target.
-    await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
-    // Backlink rewrites — destination already exists on disk, so even a
-    // partial failure leaves the cluster in a consistent (if half-renamed)
-    // state that's resumable by re-running the same call.
-    for (const p of plan) {
-      await vault.writeNote(p.path, p.after, { overwrite: true });
+    const committedBacklinks: NoteSnapshot[] = [];
+    let sourceCommitted = false;
+    let renamed = false;
+    try {
+      throwIfWriteAborted(options.signal);
+      if (sourcePlan) {
+        await vault.writeNote(sourcePlan.path, sourcePlan.after, { overwrite: true });
+        sourceCommitted = true;
+        throwIfWriteAborted(options.signal);
+      }
+      // Atomic file move + cache invalidation. Most likely to fail (cross-fs
+      // rename, race on destination, permission issue). Run FIRST so failure
+      // here doesn't leave updated backlinks pointing at a phantom target.
+      await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
+      renamed = true;
+      throwIfWriteAborted(options.signal);
+      // Backlink rewrites — destination already exists on disk, so even a
+      // partial ordinary failure leaves the cluster in a consistent (if
+      // half-renamed) state that's resumable by re-running the same call.
+      // Request cancellation is stronger: every committed step rolls back.
+      for (const p of plan) {
+        throwIfWriteAborted(options.signal);
+        await vault.writeNote(p.path, p.after, { overwrite: true });
+        committedBacklinks.push({ path: p.path, before: p.before });
+        throwIfWriteAborted(options.signal);
+      }
+    } catch (err) {
+      if (!options.signal?.aborted) throw err;
+      const failures = await restoreNoteSnapshots(vault, committedBacklinks);
+      if (renamed) {
+        try {
+          await vault.renameFile(toRelNorm, fromRelNorm, { overwrite: true });
+        } catch (rollbackErr) {
+          failures.push(
+            `${toRelCheck} → ${fromRel}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`
+          );
+        }
+      }
+      if (sourcePlan && sourceCommitted) {
+        failures.push(...(await restoreNoteSnapshots(vault, [{ path: sourcePlan.path, before: sourcePlan.before }])));
+      }
+      if (destinationBefore && renamed) {
+        failures.push(...(await restoreNoteSnapshots(vault, [destinationBefore])));
+      }
+      throwCancelledAfterRollback("rename_note", options.signal, failures);
     }
   }
 
@@ -540,6 +624,8 @@ export async function frontmatterSet(
  *
  * @param vault - The vault. Must allow writes.
  * @param args - {@link ArchiveNoteArgs}. `path` is required.
+ * @param options - Optional MCP cancellation signal forwarded to the
+ *   rollback-capable rename operation.
  * @returns The same shape as {@link renameNote}.
  * @throws {Error} If `path` is missing, the vault is read-only, or
  *   rename fails (e.g., destination exists without `overwrite`).
@@ -551,7 +637,11 @@ export async function frontmatterSet(
  * });
  * ```
  */
-export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<RenameNoteResult> {
+export async function archiveNote(
+  vault: Vault,
+  args: ArchiveNoteArgs,
+  options: WriteOperationOptions = {}
+): Promise<RenameNoteResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("archive_note: `path` is required");
   const folder = stripTrailingSlashes(args.archive_folder ?? "Archive");
@@ -566,7 +656,7 @@ export async function archiveNote(vault: Vault, args: ArchiveNoteArgs): Promise<
   };
   if (args.dry_run !== undefined) renameArgs.dry_run = args.dry_run;
   if (args.overwrite !== undefined) renameArgs.overwrite = args.overwrite;
-  return renameNote(vault, renameArgs);
+  return renameNote(vault, renameArgs, options);
 }
 
 // ─── obsidian_replace_in_notes (v1.9 bulk find/replace) ─────────────────────
@@ -621,10 +711,11 @@ export interface ReplaceInNotesResult {
   files_scanned: number;
   files_updated: ReplaceInNotesFileResult[];
   total_replacements: number;
-  /** v2.0.0-beta.2 P1: when true, the apply pass aborted partway through.
+  /** v2.0.0-beta.2 P1: when true, an ordinary per-file apply failed.
    *  `files_updated` only contains files that DID write successfully. Files
    *  in `errors` (if present) failed mid-write — caller should retry just
-   *  those and verify state. Always false on dry_run. */
+   *  those and verify state. MCP request cancellation instead rolls every
+   *  committed file back and rejects. Always false on dry_run. */
   partial: boolean;
   /** v2.0.0-beta.2 P1: per-file write errors collected during apply. Only
    *  populated when the apply phase encountered errors (so happy-path
@@ -647,6 +738,8 @@ export interface ReplaceInNotesResult {
  * @param vault - The vault. Must allow writes (for non-dry-run apply).
  * @param args - {@link ReplaceInNotesArgs}. `search` must be non-empty
  *   and not equal to `replace`.
+ * @param options - Optional MCP cancellation signal. Cancellation restores
+ *   every file committed by this invocation before the promise rejects.
  * @returns A {@link ReplaceInNotesResult} with per-file counts, totals,
  *   and partial-write observability.
  * @throws {Error} On invalid args (empty `search`, `search === replace`),
@@ -670,7 +763,11 @@ export interface ReplaceInNotesResult {
  * });
  * ```
  */
-export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Promise<ReplaceInNotesResult> {
+export async function replaceInNotes(
+  vault: Vault,
+  args: ReplaceInNotesArgs,
+  options: WriteOperationOptions = {}
+): Promise<ReplaceInNotesResult> {
   await vault.ensureExists();
   const dryRun = args.dry_run === true;
   const caseSensitive = args.case_sensitive !== false;
@@ -698,15 +795,17 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
 
   const entries = await vault.listMarkdown(args.folder);
   // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-replace-in-notes-expansion):
-  // refuse an over-limit projected rewrite per note BEFORE storing it — in BOTH apply and
+  // refuse an over-limit projected rewrite per note BEFORE planning it — in BOTH apply and
   // dry_run (which previously never reached `writeNote`'s cap and reported a phantom success
   // for a 5 KB note projecting to tens of MB). The O(n) `replaceLineOnce` builder already
-  // removed the CPU blow-up; this bounds the in-memory `plan`. (`before` dropped from the
-  // plan — it was unused and doubled the retained content held across all matched notes.)
-  const plan: Array<{ path: string; after: string; count: number }> = [];
+  // removed the CPU blow-up; this bounds the in-memory `plan`. Only the original
+  // content is retained; apply recomputes the rewrite, so rollback is possible
+  // without holding both whole-vault versions in memory.
+  const plan: Array<{ path: string; before: string; count: number }> = [];
   const oversized: Array<{ path: string; message: string }> = [];
   let total = 0;
   for (const e of entries) {
+    throwIfWriteAborted(options.signal);
     const { content } = await vault.readNote(e.absPath, e.mtimeMs);
     const { content: rewritten, count } = replaceStringOutsideCodeFences(
       content,
@@ -723,7 +822,10 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
       });
       continue;
     }
-    plan.push({ path: e.relPath, after: rewritten, count });
+    // Retain the original rather than both versions: apply recomputes the
+    // deterministic rewrite, while cancellation can restore committed files
+    // without doubling the whole-vault plan's retained content.
+    plan.push({ path: e.relPath, before: content, count });
     total += count;
   }
 
@@ -739,15 +841,29 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
   // that's a config problem, not a per-file failure.
   const updated: ReplaceInNotesFileResult[] = [];
   const errors: Array<{ path: string; message: string }> = [...oversized]; // over-limit refusals surface in both modes
+  const committed: NoteSnapshot[] = [];
   if (!dryRun) {
     if (!vault.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
     }
     for (const p of plan) {
       try {
-        await vault.writeNote(p.path, p.after, { overwrite: true });
+        throwIfWriteAborted(options.signal);
+        const { content: rewritten } = replaceStringOutsideCodeFences(
+          p.before,
+          args.search,
+          args.replace,
+          caseSensitive
+        );
+        await vault.writeNote(p.path, rewritten, { overwrite: true });
+        committed.push({ path: p.path, before: p.before });
+        throwIfWriteAborted(options.signal);
         updated.push({ path: p.path, occurrences: p.count });
       } catch (err) {
+        if (options.signal?.aborted) {
+          const failures = await restoreNoteSnapshots(vault, committed);
+          throwCancelledAfterRollback("replace_in_notes", options.signal, failures);
+        }
         errors.push({ path: p.path, message: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -755,6 +871,11 @@ export async function replaceInNotes(vault: Vault, args: ReplaceInNotesArgs): Pr
     for (const p of plan) updated.push({ path: p.path, occurrences: p.count });
   }
 
+  if (options.signal?.aborted && !dryRun) {
+    const failures = await restoreNoteSnapshots(vault, committed);
+    throwCancelledAfterRollback("replace_in_notes", options.signal, failures);
+  }
+  throwIfWriteAborted(options.signal);
   const result: ReplaceInNotesResult = {
     search: args.search,
     replace: args.replace,

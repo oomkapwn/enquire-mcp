@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1624+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1638+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain モジュラリティによる wikilink コミュニティ検出） | ✅ **ここだけ** | ❌ | ❌ |
 | **スタンドアロンの `.base` クエリ実行**（Obsidian を起動せずに動作） | ✅ **ここだけ** | ❌ | ❌ Obsidian に委譲 |
 | **HyDE 検索**（Gao et al 2023）+ サブクエスチョン分解 | ✅ **ここだけ** | ❌ | ❌ |
-| **1624 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
+| **1638 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
 | **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2） | ✅ | 該当なし | ❌ |
 | **semver 準拠の公開サーフェス**（[STABILITY.md](./STABILITY.md)） | ✅ | 該当なし | ❌ |
 | スタンドアロン（Obsidian プラグイン不要） | ✅ | ❌ Obsidian が必要 | まちまち |
@@ -315,7 +315,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # フルスイート（1624 テスト、約 12 秒）
+npm test       # フルスイート（1638 テスト、約 12 秒）
 npm run lint   # 警告ゼロ
 npm run build  # tsc → dist/
 ```

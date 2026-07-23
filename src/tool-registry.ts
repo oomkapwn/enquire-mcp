@@ -51,6 +51,23 @@ import {
   validateNoteProposal
 } from "./tools/index.js";
 import type { Vault } from "./vault.js";
+import { runSerializedWrite, type WriteCancellationMode, type WriteRequestTracker } from "./write-lifecycle.js";
+
+interface WriteRequestExtra {
+  requestId: unknown;
+  signal: AbortSignal;
+}
+
+function runTrackedWrite<T>(
+  owner: object,
+  tracker: WriteRequestTracker | undefined,
+  extra: WriteRequestExtra,
+  mode: WriteCancellationMode,
+  operation: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const serialized = (signal: AbortSignal) => runSerializedWrite(owner, signal, () => operation(signal));
+  return tracker ? tracker.run(extra.requestId, extra.signal, mode, serialized) : serialized(extra.signal);
+}
 
 /**
  * v3.11.0-rc.11 (rc.9-audit L1, defense-in-depth) — upper bound on a free-form
@@ -1253,7 +1270,11 @@ export function registerReadTools(
  * gate it; it never touches note files. The store holds only relative paths +
  * counts (no content), is erased by `prune`, and the boost is opt-in.
  */
-export function registerFeedbackTool(server: McpServer, store: import("./feedback.js").FeedbackStore): void {
+export function registerFeedbackTool(
+  server: McpServer,
+  store: import("./feedback.js").FeedbackStore,
+  writeTracker?: WriteRequestTracker
+): void {
   // K-3 invariant: `obsidian_mark_useful` is NOT read-only (it mutates the feedback
   // store), so it carries the WRITE annotation — consistent with how the additive
   // `obsidian_append_to_note` is annotated WRITE. It does NOT mutate the VAULT, so
@@ -1280,7 +1301,8 @@ export function registerFeedbackTool(server: McpServer, store: import("./feedbac
           .describe("true (default) = the notes helped; false = they looked relevant but did not help.")
       }
     },
-    async (args) => textResult(await markUseful(store, args))
+    async (args, extra) =>
+      textResult(await runTrackedWrite(store, writeTracker, extra, "finish", () => markUseful(store, args)))
   );
 }
 
@@ -1304,7 +1326,7 @@ async function markUseful(
   };
 }
 
-export function registerWriteTools(server: McpServer, vault: Vault): void {
+export function registerWriteTools(server: McpServer, vault: Vault, writeTracker?: WriteRequestTracker): void {
   // destructiveHint=true: `obsidian_create_note` with overwrite=true replaces a
   // file irreversibly; `obsidian_append_to_note` mutates persistent state with
   // no built-in undo. Per MCP spec, both qualify as destructive.
@@ -1330,7 +1352,8 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         overwrite: z.boolean().optional().describe("Allow overwriting an existing note (default false)")
       }
     },
-    async (args) => textResult(await createNote(vault, args))
+    async (args, extra) =>
+      textResult(await runTrackedWrite(vault, writeTracker, extra, "finish", () => createNote(vault, args)))
   );
 
   server.registerTool(
@@ -1350,7 +1373,8 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
           .describe('String inserted between existing body and the new content (default "\\n\\n")')
       }
     },
-    async (args) => textResult(await appendToNote(vault, args))
+    async (args, extra) =>
+      textResult(await runTrackedWrite(vault, writeTracker, extra, "finish", () => appendToNote(vault, args)))
   );
 
   server.registerTool(
@@ -1372,7 +1396,10 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         overwrite: z.boolean().optional().describe("Allow overwriting an existing note at `to` (default false)")
       }
     },
-    async (args) => textResult(await renameNote(vault, args))
+    async (args, extra) =>
+      textResult(
+        await runTrackedWrite(vault, writeTracker, extra, "rollback", (signal) => renameNote(vault, args, { signal }))
+      )
   );
 
   server.registerTool(
@@ -1396,7 +1423,12 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
           .describe("Default true. Set false for case-insensitive substring match (replace text inserted verbatim).")
       }
     },
-    async (args) => textResult(await replaceInNotes(vault, args))
+    async (args, extra) =>
+      textResult(
+        await runTrackedWrite(vault, writeTracker, extra, "rollback", (signal) =>
+          replaceInNotes(vault, args, { signal })
+        )
+      )
   );
 
   server.registerTool(
@@ -1419,7 +1451,10 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
           .describe("Allow overwriting an existing file at the archive destination (default false)")
       }
     },
-    async (args) => textResult(await archiveNote(vault, args))
+    async (args, extra) =>
+      textResult(
+        await runTrackedWrite(vault, writeTracker, extra, "rollback", (signal) => archiveNote(vault, args, { signal }))
+      )
   );
 
   // v2.2.0: append message to a note's chat thread.
@@ -1440,7 +1475,8 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
           .describe("Optional thread title — used when the note is created from scratch")
       }
     },
-    async (args) => textResult(await chatThreadAppend(vault, args))
+    async (args, extra) =>
+      textResult(await runTrackedWrite(vault, writeTracker, extra, "finish", () => chatThreadAppend(vault, args)))
   );
 
   // v2.3.0: surgical frontmatter writes (set / unset / bulk).
@@ -1468,7 +1504,8 @@ export function registerWriteTools(server: McpServer, vault: Vault): void {
         dry_run: z.boolean().optional().describe("Preview the diff without writing (default false)")
       }
     },
-    async (args) => textResult(await frontmatterSet(vault, args))
+    async (args, extra) =>
+      textResult(await runTrackedWrite(vault, writeTracker, extra, "finish", () => frontmatterSet(vault, args)))
   );
 }
 

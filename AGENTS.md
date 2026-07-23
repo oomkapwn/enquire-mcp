@@ -12,6 +12,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - Test: `npm test` (full suite ~12s)
 - Lint: `npm run lint` (biome — must exit 0)
 - Coverage: `npm run test:coverage` (11 per-file coverage floors enforced)
+- Audit: `npm run check:audit` (source + published-consumer dependency graphs)
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
@@ -129,6 +130,9 @@ node scripts/oia-walk.mjs --allow   # always exit 0 (override for documented def
 # Version consistency
 node scripts/check-version-consistency.mjs  # checks 7 surfaces
 
+# Supply-chain audit (root lockfile + registry-consumer resolution)
+npm run check:audit
+
 # CHANGELOG coverage gate
 node scripts/check-changelog-coverage.mjs
 
@@ -143,7 +147,7 @@ Release-required (all run on PRs; `release.yml` blocks publication unless all 9 
 2. `test (22)` — full suite on Node 22
 3. `test (24)` — full suite on Node 24
 4. `smoke` — JSON-RPC smoke against synthetic vault
-5. `audit` — `npm audit --audit-level=moderate`
+5. `audit` — source + published-consumer dependency audit (prod moderate+, dev high+)
 6. `coverage` — global + per-file branch floors
 7. `version-consistency` — 7-surface version sync
 8. `docs` — TypeDoc generation; release-required but not currently branch-protected

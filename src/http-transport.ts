@@ -61,6 +61,8 @@ const PERSISTENT_WRITE_TOOLS = new Set(
 export interface HttpTransportInternals {
   /** Override the stateful DELETE call-drain deadline in tests. */
   deleteDrainMs?: number;
+  /** Pause after a DELETE owns session admission; used only by lifecycle tests. */
+  afterDeleteMarkedClosing?: (sessionId: string) => void | Promise<void>;
 }
 
 /**
@@ -786,6 +788,8 @@ export function createHttpHandler(
         // DELETE return a false idempotent 204 if this request later retained
         // the session after rollback.
         session.closing = true;
+        const afterDeleteMarkedClosing = internals.afterDeleteMarkedClosing;
+        if (afterDeleteMarkedClosing) await afterDeleteMarkedClosing(sessionId);
         // v3.11.6-rc.20 (external audit H-2) — DRAIN pre-existing in-flight
         // requests BEFORE routing the DELETE into the shared SDK transport.
         // Pre-rc.20 `handleRequest(DELETE)` — which tears the transport down at

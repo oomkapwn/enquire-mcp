@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1604+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1605+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain モジュラリティによる wikilink コミュニティ検出） | ✅ **ここだけ** | ❌ | ❌ |
 | **スタンドアロンの `.base` クエリ実行**（Obsidian を起動せずに動作） | ✅ **ここだけ** | ❌ | ❌ Obsidian に委譲 |
 | **HyDE 検索**（Gao et al 2023）+ サブクエスチョン分解 | ✅ **ここだけ** | ❌ | ❌ |
-| **1604 ユニットテスト · PR ごとに 9 個の必須 + 5 個のアドバイザリ CI ゲート** | ✅ | 該当なし | まれ |
+| **1605 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
 | **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2） | ✅ | 該当なし | ❌ |
 | **semver 準拠の公開サーフェス**（[STABILITY.md](./STABILITY.md)） | ✅ | 該当なし | ❌ |
 | スタンドアロン（Obsidian プラグイン不要） | ✅ | ❌ Obsidian が必要 | まちまち |
@@ -275,7 +275,7 @@ graph LR
 | **HTTP トランスポート** | Bearer 認証（定数時間 SHA-256 + `timingSafeEqual`）、トークン別レート制限、厳格な CORS |
 | **Frontmatter** | `js-yaml@5` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
 | **キャッシュ + インデックスファイル** | chmod 0600、親ディレクトリ 0700 |
-| **CI** | **9 個の必須**ブランチ保護ゲート：(1) `lint`、(2) Node 22 での `test`、(3) Node 24 での `test`、(4) `smoke`、(5) `audit`、(6) `coverage`、(7) `version-consistency`、(8) `docs`、(9) `oia`。**5 個のアドバイザリ**：`test-macos` + `docker`（Dockerfile ビルド + `tools/list` イントロスペクションスモーク）を `.github/workflows/ci.yml` 経由で；CodeQL ×2 + Analyze アクションを [GitHub の default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 経由で（ワークフローファイルではありません）。リリースワークフローは、npm 公開の前に、タグ付き SHA で 9 個の必須すべてが通過したことを再検証します。_v3.7.10 —— `docs`（TypeDoc 生成ゲート）を必須セットに追加。v3.7.13 —— CI マトリクスに合わせて `engines.node` の下限を `>=22.13.0` に引き上げ。v3.8.0-rc.6 —— `oia`（Outside-In Audit）をアドバイザリから昇格。_ |
+| **CI** | 各 PR で **9 個のリリース必須チェック**（`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`）を実行します。ブランチ保護が現在強制するのは **7 個**だけで、`docs` と `oia` はリリース必須ですが未保護です（2026-07-23 にライブ確認）。`test-macos` は `continue-on-error` を持つ唯一のアドバイザリ job です。`docker` は CI workflow を失敗させ得ますが未保護で、CodeQL は [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) により 2 つの独立した未保護分析を実行します。npm publish 前に `release.yml` がタグ付き SHA 上の 9 個すべてを再検証します。 |
 | **カバレッジ** | 行 ≥86% · ステートメント ≥82% · 関数 ≥75% · 分岐 ≥74%（ゲート付き） |
 | **リリース** | タグごとに npm + GitHub リリース · semver · **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2；L3 ジェネレータはロードマップ上） |
 | **安定性** | v3.0+ semver 準拠 —— すべての CLI フラグ、ツール名、MCP リソース、プロンプト、エクスポートシンボルが契約 |
@@ -294,7 +294,7 @@ graph LR
 
 **パフォーマンスは？** FTS5 のコールドビルド：ノート 1k あたり約 5 秒、50k あたり約 30 秒。BM25 クエリ：常に 100ms 未満。**HNSW top-10：どんな規模でも 10ms 未満。** serve のコールドスタート：HNSW 永続化で約 50ms。
 
-**言語は？** デフォルトは `paraphrase-multilingual-MiniLM-L12-v2`（50+ 言語）。多言語クロスエンコーダ。ロシア語 + 英語のバイリンガルボールトでエンドツーエンドに検証済み。CJK / タイ語 / クメール語のトークン化は `Intl.Segmenter` 経由。
+**言語は？** デフォルトの embedder は `paraphrase-multilingual-MiniLM-L12-v2`（50+ 言語）で、ロシア語 + 英語のバイリンガルボールトでエンドツーエンド検証済みです。デフォルトの cross-encoder reranker は `rerank-bge`（English-only；エンドツーエンド検証済みの唯一のカタログ alias）です。多言語 reranker alias は現在、transformers.js tokenizer の互換性チェックに失敗します。CJK / タイ語 / クメール語のトークン化には `Intl.Segmenter` を使います。
 
 **リモートで実行できる？** はい —— `serve-http` は同じサーバーを [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) 経由で公開します。HTTPS には Tailscale Funnel または Cloudflare Tunnel を前段に置いてください。claude.ai ウェブ、ChatGPT カスタム GPT、Cursor の HTTP モード、モバイルの MCP クライアントで動作します。**[docs/http-transport.md](./docs/http-transport.md)** を参照してください。
 
@@ -315,12 +315,12 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # フルスイート（1604 テスト、約 12 秒）
+npm test       # フルスイート（1605 テスト、約 12 秒）
 npm run lint   # 警告ゼロ
 npm run build  # tsc → dist/
 ```
 
-Issue、PR、アイデアを歓迎します。ブランチ保護により `main` への PR レビューが必須です。
+Issue、PR、アイデアを歓迎します。
 
 ---
 

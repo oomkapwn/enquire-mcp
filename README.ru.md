@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1604%20passing-brightgreen.svg)](#️-доверие)
+[![tests](https://img.shields.io/badge/tests-1605%20passing-brightgreen.svg)](#️-доверие)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **Ноль обращений в облако в режиме serve.** Модели кешируются локально (однократная загрузка с HuggingFace). Содержимое вашего хранилища никогда не покидает вашу машину. По умолчанию безопасно для изолированных сред.
 > 4. **Поиск с учётом свежести.** Каждый результат сообщает, насколько стара заметка; опциональное переранжирование по давности позволяет агенту предпочитать свежие знания и помечать устаревшие факты для повторной проверки — рубеж «осознания забывания», построенный на `mtime`, который ваши файлы уже имеют.
 
-**46 инструментов · 19 MCP-промптов · 1604+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
+**46 инструментов · 19 MCP-промптов · 1605+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (детекция сообществ по wikilink-графу через модулярность Лувена) | ✅ **только здесь** | ❌ | ❌ |
 | **Автономное выполнение `.base`-запросов** (работает без запущенного Obsidian) | ✅ **только здесь** | ❌ | ❌ делегирует Obsidian |
 | **HyDE-поиск** (Gao et al 2023) + декомпозиция на подвопросы | ✅ **только здесь** | ❌ | ❌ |
-| **1604 модульных тестов · 9 обязательных + 5 совещательных CI-гейтов на каждый PR** | ✅ | н/д | редко |
+| **1605 модульных тестов · 9 обязательных для релиза CI-проверок · 7 сейчас защищают ветку** | ✅ | н/д | редко |
 | **Подтверждённое происхождение сборки** (npm + Sigstore, SLSA Build L2) | ✅ | н/д | ❌ |
 | **Публичная поверхность с гарантиями semver** ([STABILITY.md](./STABILITY.md)) | ✅ | н/д | ❌ |
 | Автономность (плагин Obsidian не нужен) | ✅ | ❌ требует Obsidian | по-разному |
@@ -280,7 +280,7 @@ graph LR
 | **HTTP-транспорт** | Bearer-аутентификация (SHA-256 с постоянным временем + `timingSafeEqual`), ограничение частоты по токену, строгий CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, безопасно по умолчанию) — без выполнения кода |
 | **Файлы кеша + индекса** | chmod 0600, родительская директория 0700 |
-| **CI** | **9 обязательных** гейтов защиты ветки: (1) `lint`, (2) `test` на Node 22, (3) `test` на Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 совещательных**: `test-macos` + `docker` (сборка Dockerfile + smoke-интроспекция `tools/list`) через `.github/workflows/ci.yml`; CodeQL ×2 + Analyze actions через [настройку по умолчанию в GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (не файлы workflow). Release-workflow повторно проверяет, что все 9 обязательных прошли на помеченном SHA, перед публикацией в npm. _v3.7.10 — `docs` (гейт генерации TypeDoc) добавлен в обязательный набор. v3.7.13 — нижняя граница `engines.node` поднята до `>=22.13.0`, чтобы соответствовать CI-матрице. v3.8.0-rc.6 — `oia` (Outside-In Audit) повышен с совещательного._ |
+| **CI** | На каждом PR запускаются **9 обязательных для релиза проверок**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` и `oia`. Защита ветки сейчас требует только **7** из них; `docs` и `oia` обязательны для релиза, но не защищены (проверено онлайн 2026-07-23). `test-macos` — единственный совещательный job с `continue-on-error`. `docker` способен сделать CI-workflow красным, но не защищён; CodeQL запускает две отдельные незащищённые проверки через [настройку GitHub по умолчанию](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Перед npm publish `release.yml` повторно проверяет все 9 на помеченном SHA. |
 | **Покрытие** | Строки ≥86% · выражения ≥82% · функции ≥75% · ветви ≥74% (контролируется гейтом) |
 | **Релизы** | npm + релиз на GitHub на каждый тег · semver · **подтверждённое происхождение сборки** (npm + Sigstore, SLSA Build L2; генератор L3 в дорожной карте) |
 | **Стабильность** | v3.0+ с гарантиями semver — каждый CLI-флаг, имя инструмента, MCP-ресурс, промпт, экспортируемый символ является контрактом |
@@ -299,7 +299,7 @@ graph LR
 
 **Производительность?** Холодная сборка FTS5: ~5с/1k заметок, ~30с/50k. BM25-запрос: <100 мс всегда. Сборка эмбеддингов: ~30 мс/чанк на M1. **HNSW top-10: менее 10 мс на любом масштабе.** Холодный старт serve: ~50 мс при персистентности HNSW.
 
-**Языки?** По умолчанию `paraphrase-multilingual-MiniLM-L12-v2` (50+ языков). Многоязычный кросс-энкодер. Проверено сквозным образом на двуязычных русско-английских хранилищах. Токенизация CJK/тайского/кхмерского через `Intl.Segmenter`.
+**Языки?** Эмбеддер по умолчанию — `paraphrase-multilingual-MiniLM-L12-v2` (50+ языков), сквозным образом проверенный на двуязычных русско-английских хранилищах. Кросс-энкодер по умолчанию — `rerank-bge` (English-only; единственный вариант каталога, проверенный сквозным образом); многоязычные варианты reranker сейчас не проходят проверку совместимости tokenizer в transformers.js. Токенизация CJK/тайского/кхмерского выполняется через `Intl.Segmenter`.
 
 **Запуск удалённо?** Да — `serve-http` открывает тот же сервер по [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). Поставьте впереди Tailscale Funnel или Cloudflare Tunnel для HTTPS. Работает с вебом claude.ai, кастомным GPT в ChatGPT, режимом HTTP в Cursor, мобильными MCP-клиентами. См. **[docs/http-transport.md](./docs/http-transport.md)**.
 
@@ -320,12 +320,12 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # полный набор (1604 тестов, ~12с)
+npm test       # полный набор (1605 тестов, ~12с)
 npm run lint   # ноль предупреждений
 npm run build  # tsc → dist/
 ```
 
-Issue, PR и идеи приветствуются. Защита ветки требует ревью PR в `main`.
+Issue, PR и идеи приветствуются.
 
 ---
 

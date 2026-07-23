@@ -57,7 +57,7 @@ export const FAQ_ENTRIES = [
   },
   {
     q: "What languages are supported?",
-    a: "The default paraphrase-multilingual-MiniLM-L12-v2 model covers 50+ languages with a multilingual cross-encoder, validated end-to-end on bilingual Russian + English vaults. CJK/Thai/Khmer tokenization uses Intl.Segmenter."
+    a: "The default paraphrase-multilingual-MiniLM-L12-v2 embedder covers 50+ languages and was validated end-to-end on bilingual Russian + English vaults. The default cross-encoder reranker is rerank-bge (English-only; the only catalog alias verified end-to-end); multilingual reranker aliases currently fail their transformers.js tokenizer compatibility check. CJK/Thai/Khmer tokenization uses Intl.Segmenter."
   },
   {
     q: "Can I run it remotely?",

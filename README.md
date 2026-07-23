@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1604%20passing-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1605%20passing-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 3. **Zero cloud calls during serve.** The embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~110 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**46 tools · 19 MCP prompts · 1604 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1605 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1604 unit tests · 9 required + 5 advisory CI gates per PR** | ✅ | n/a | rare |
+| **1605 unit tests · 9 release-required CI checks · 7 currently branch-protected** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -287,7 +287,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **CI** | **9 required** branch-protection gates: (1) `lint`, (2) `test` on Node 22, (3) `test` on Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 advisory**: `test-macos` + `docker` (Dockerfile build + `tools/list` introspection smoke) via `.github/workflows/ci.yml`; CodeQL ×2 + Analyze actions via [GitHub default-setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (not workflow files). Release workflow re-verifies all 9 required passed on tagged SHA before npm publish. _v3.7.10 — `docs` (TypeDoc generation gate) added to required set. v3.7.13 — `engines.node` floor bumped to `>=22.13.0` to match the CI matrix. v3.8.0-rc.6 — `oia` (Outside-In Audit) promoted from advisory._ |
+| **CI** | **9 release-required checks** run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, and `oia`. Branch protection currently enforces **7** of them; `docs` and `oia` are release-required but unprotected (live-verified 2026-07-23). `test-macos` is the only `continue-on-error` advisory job. `docker` can fail the CI workflow but is unprotected; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 9 on the tagged SHA. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
@@ -306,7 +306,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 **Performance?** Cold-build FTS5: ~5s/1k notes, ~30s/50k. BM25 query: <100ms always. Embedding build: ~30ms/chunk on M1. **HNSW top-10: sub-10ms at any scale.** Serve cold-start: ~50ms with HNSW persistence.
 
-**Languages?** Default `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages). Multilingual cross-encoder. Validated end-to-end on Russian + English bilingual vaults. CJK/Thai/Khmer tokenization via `Intl.Segmenter`.
+**Languages?** The default embedder is `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages), validated end-to-end on Russian + English bilingual vaults. The default cross-encoder reranker is `rerank-bge` (English-only; the only catalog alias verified end-to-end); multilingual reranker aliases currently fail their transformers.js tokenizer compatibility check. CJK/Thai/Khmer tokenization uses `Intl.Segmenter`.
 
 **Run remotely?** Yes — `serve-http` exposes the same server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). Front with Tailscale Funnel or Cloudflare Tunnel for HTTPS. Works with claude.ai web, ChatGPT custom GPT, Cursor HTTP mode, mobile MCP clients. See **[docs/http-transport.md](./docs/http-transport.md)**.
 
@@ -327,12 +327,12 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1604 tests, ~12s)
+npm test       # full suite (1605 tests, ~12s)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```
 
-Issues, PRs, ideas welcome. Branch protection requires PR review on `main`.
+Issues, PRs, ideas welcome.
 
 ---
 

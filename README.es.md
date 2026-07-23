@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** El modelo de embeddings se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local única (~110 MB), no una clave de API en la nube. Estar anclado y ser privado no sale gratis, y no fingimos que sí: el contenido de tu bóveda nunca sale de tu máquina, seguro para entornos aislados por defecto ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1604+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1605+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -76,7 +76,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
 | **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ delega en Obsidian |
 | **Recuperación HyDE** (Gao et al. 2023) + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
-| **1604 pruebas unitarias · 9 puertas de CI requeridas + 5 indicativas por PR** | ✅ | n/d | raro |
+| **1605 pruebas unitarias · 9 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | ✅ | n/d | raro |
 | **Procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2) | ✅ | n/d | ❌ |
 | **Superficie pública ligada a semver** ([STABILITY.md](./STABILITY.md)) | ✅ | n/d | ❌ |
 | Autónomo (sin necesidad de plugin de Obsidian) | ✅ | ❌ requiere Obsidian | varía |
@@ -275,7 +275,7 @@ Además 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsi
 | **Transporte HTTP** | Autenticación bearer (SHA-256 de tiempo constante + `timingSafeEqual`), límite de tasa por token, CORS estricto |
 | **Frontmatter** | `js-yaml@5` `load` (esquema núcleo YAML 1.2, seguro por defecto) — sin ejecución de código |
 | **Archivos de caché + índice** | chmod 0600, directorio padre 0700 |
-| **CI** | **9 puertas** de protección de rama **requeridas**: (1) `lint`, (2) `test` en Node 22, (3) `test` en Node 24, (4) `smoke`, (5) `audit`, (6) `coverage`, (7) `version-consistency`, (8) `docs`, (9) `oia`. **5 indicativas**: `test-macos` + `docker` (build del Dockerfile + smoke de introspección `tools/list`) vía `.github/workflows/ci.yml`; CodeQL ×2 + acciones Analyze vía el [default-setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) (no archivos de workflow). El workflow de release reverifica que las 9 puertas requeridas pasaron sobre el SHA etiquetado antes de la publicación en npm. _v3.7.10 — `docs` (puerta de generación de TypeDoc) añadida al conjunto requerido. v3.7.13 — piso de `engines.node` elevado a `>=22.13.0` para coincidir con la matriz de CI. v3.8.0-rc.6 — `oia` (Outside-In Audit) promovida desde el conjunto indicativo._ |
+| **CI** | En cada PR se ejecutan **9 comprobaciones requeridas para release**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` y `oia`. La protección de rama exige actualmente solo **7**; `docs` y `oia` son necesarias para publicar, pero no están protegidas (verificado en vivo el 2026-07-23). `test-macos` es el único job indicativo con `continue-on-error`. `docker` puede hacer fallar el workflow de CI, pero no está protegido; CodeQL ejecuta dos análisis separados no protegidos mediante el [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes de npm publish, `release.yml` reverifica las 9 en el SHA etiquetado. |
 | **Cobertura** | Líneas ≥86 % · sentencias ≥82 % · funciones ≥75 % · ramas ≥74 % (con guarda) |
 | **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2; generador L3 en la hoja de ruta) |
 | **Estabilidad** | v3.0+ ligada a semver — cada flag de CLI, nombre de herramienta, recurso MCP, prompt y símbolo exportado es un contrato |
@@ -294,7 +294,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superficie de estabilidad:
 
 **¿Rendimiento?** Construcción en frío de FTS5: ~5s/1k notas, ~30s/50k. Consulta BM25: siempre <100ms. **HNSW top-10: menos de 10 ms a cualquier escala.** Arranque en frío de serve: ~50ms con persistencia HNSW.
 
-**¿Idiomas?** Por defecto `paraphrase-multilingual-MiniLM-L12-v2` (50+ idiomas), cross-encoder multilingüe. Tokenización CJK / tailandés / jemer mediante `Intl.Segmenter`.
+**¿Idiomas?** El embedder por defecto es `paraphrase-multilingual-MiniLM-L12-v2` (50+ idiomas), validado de extremo a extremo en vaults bilingües ruso + inglés. El reranker cross-encoder por defecto es `rerank-bge` (English-only; el único alias del catálogo validado de extremo a extremo); los alias multilingües del reranker fallan actualmente la comprobación de compatibilidad del tokenizer de transformers.js. La tokenización CJK / tailandés / jemer usa `Intl.Segmenter`.
 
 **¿Ejecución remota?** Sí —— `serve-http` expone el mismo servidor a través de [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). Ponle delante Tailscale Funnel o Cloudflare Tunnel para HTTPS. Funciona con la web de claude.ai, el GPT personalizado de ChatGPT, el modo HTTP de Cursor y clientes MCP móviles. Consulta **[docs/http-transport.md](./docs/http-transport.md)**.
 

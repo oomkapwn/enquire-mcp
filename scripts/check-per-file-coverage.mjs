@@ -70,7 +70,7 @@ const FLOORS = {
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.
   "src/ocr.ts": { branches: 60, lines: 40 }, // current branches 71.11% / lines 45.97% (rc.55 OPTDEP fix dropped the 3 import-catch `err.message` ternaries → branch% rose; floors kept as margin)
-  "src/http-transport.ts": { branches: 65 }, // current 75.23% (v3.10.0-rc.19 M3 removed 4 redundant signal handlers — fewer uncovered branches)
+  "src/http-transport.ts": { branches: 65 },
   "src/doctor.ts": { branches: 64 }, // current 70.22% (rc.12 exported candidateModelCacheRoots + cache-path tests lifted it)
   "src/tools/search.ts": { branches: 66 }, // current 68.63% (rc.11/rc.12 explain accumulators + multi-path union added guarded branches)
   // v3.8.0-rc.8 — lifted from 65% → 71% after T-1 contextPack tests

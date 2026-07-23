@@ -9,6 +9,32 @@ import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 
+// v3.11.7-rc.1 (whole-repo audit A10) — serialize append size-check + write
+// by canonical absolute file path across EVERY Vault instance in this process.
+// A per-instance queue is insufficient because the package exports Vault and
+// two instances can point at the same root. Entries self-evict after the final
+// waiter releases, so long-running servers do not retain one key per note ever
+// appended. External processes remain outside this in-process contract (and can
+// write the vault directly regardless of this library's maxFileBytes setting).
+const APPEND_PATH_TAILS = new Map<string, Promise<void>>();
+
+async function withAppendPathLock<T>(absPath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = APPEND_PATH_TAILS.get(absPath) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => {}).then(() => gate);
+  APPEND_PATH_TAILS.set(absPath, tail);
+  await previous.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release?.();
+    if (APPEND_PATH_TAILS.get(absPath) === tail) APPEND_PATH_TAILS.delete(absPath);
+  }
+}
+
 /** Maximum file size {@link Vault.readNote} / {@link Vault.writeNote} will
  *  process by default. 5 MB — large enough for any realistic note, small
  *  enough that a runaway file (e.g. a multi-GB log mistakenly placed in
@@ -577,7 +603,11 @@ export class Vault {
       throw this.sanitizeFsError(err);
     }
   }
-  private async openSafe(p: string, flags: string, mode?: number): Promise<import("node:fs/promises").FileHandle> {
+  private async openSafe(
+    p: string,
+    flags: string | number,
+    mode?: number
+  ): Promise<import("node:fs/promises").FileHandle> {
     try {
       return mode === undefined ? await fs.open(p, flags) : await fs.open(p, flags, mode);
     } catch (err) {
@@ -1037,21 +1067,20 @@ export class Vault {
    * Append text to an existing note. Requires `enableWrite: true`.
    * Refuses if the resulting file would exceed the size cap.
    *
-   * v3.7.14 F3 — the size-cap check is performed against the OPEN file
-   * descriptor's `fstat`, not a separate `fs.stat(abs)` call before
-   * `fs.appendFile`. Pre-3.7.14 the two-call pattern let parallel
-   * writers race the cap: stat says `before.size + addition <= max`,
-   * another process appends size Y between stat and our append, our
-   * append takes the file past `max`. The post-3.7.14 single-fd pattern
-   * keeps stat→write inside one kernel handle that another process
-   * can't reposition.
+   * v3.11.7-rc.1 — opens without `O_CREAT`, so append can never turn a
+   * missing path into a new file, and serializes the descriptor
+   * size-check + write by canonical path across all `Vault` instances in
+   * this process. `O_APPEND` makes placement atomic; the queue makes the
+   * max-size decision atomic relative to other in-process append calls.
+   * Writers in other processes are outside the `Vault` API contract.
    *
    * @param relOrAbs - Vault-relative or absolute target path.
    * @param addition - Text to append (UTF-8). Caller is responsible for
    *   including any leading newline.
    * @returns Metadata about the file after the append.
-   * @throws {Error} If the vault is read-only or the appended file
-   *   would exceed `maxFileBytes`.
+   * @throws {Error} If the vault is read-only, the target does not exist
+   *   as a regular in-vault file, is privacy-excluded, changes identity
+   *   during validation, or the append would exceed `maxFileBytes`.
    */
   async appendNote(
     relOrAbs: string,
@@ -1060,38 +1089,66 @@ export class Vault {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note appends");
     }
-    const abs = await this.resolveSafePath(relOrAbs);
-    // v3.7.14 F3 — close the stat-then-append size-cap race. Pre-3.7.14
-    // we did `stat(abs)` → check `before.size + addition <= maxFileBytes` →
-    // `appendFile(abs, addition)`. Under parallel writes, the stat could
-    // report size X, another process appended size Y between stat and our
-    // appendFile, and our append took the file to X+Y+addition, possibly
-    // past `maxFileBytes`. Now we open with `O_APPEND` ourselves, fstat
-    // the open handle to get the current size, check the cap, write, and
-    // close — keeping the stat→write window inside a single kernel-held
-    // fd that another process can't reposition. fs.appendFile + open with
-    // O_APPEND means subsequent writes are always atomic at the end of
-    // file (POSIX append guarantee).
-    const handle = await this.openSafe(abs, "a");
-    let beforeSize = 0;
-    try {
-      const before = await handle.stat();
-      beforeSize = before.size;
-      if (before.size + Buffer.byteLength(addition, "utf8") > this.maxFileBytes) {
-        throw new Error(`Refusing to grow ${path.relative(this.root, abs)} past ${this.maxFileBytes} bytes`);
+    const lockKey = await this.resolveSafePath(relOrAbs);
+    return withAppendPathLock(lockKey, async () => {
+      // Re-resolve after waiting: a rename/symlink swap while queued must not
+      // silently redirect the append to a different inode or escape the lock.
+      const abs = await this.resolveSafePath(relOrAbs);
+      if (abs !== lockKey) {
+        throw new Error(`Refusing to append — target changed while waiting: ${path.relative(this.root, lockKey)}`);
       }
-      await handle.write(addition, null, "utf8");
-    } finally {
-      await handle.close();
-    }
-    this.cache.delete(abs);
-    const after = await this.statSafe(abs);
-    return {
-      absPath: abs,
-      relPath: path.relative(this.root, abs),
-      mtimeMs: after.mtimeMs,
-      appended_bytes: after.size - beforeSize
-    };
+      await this.assertParentInsideVault(abs);
+      const relForFilter = await this.canonicalRelForPrivacyCheck(abs);
+      if (this.isExcluded(relForFilter)) {
+        const reason =
+          this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(relForFilter))
+            ? "--read-paths allowlist (path doesn't match any allow-glob)"
+            : "--exclude-glob denylist";
+        throw new Error(`Refusing to append — target is excluded by ${reason}: ${relForFilter}`);
+      }
+
+      // Deliberately omit O_CREAT: append is an existing-note operation.
+      // The pre-fix string flag "a" included O_CREAT, so resolveSafePath's
+      // ENOENT fallback plus an out-of-vault parent symlink created and wrote
+      // an arbitrary missing leaf outside the vault.
+      const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW;
+      const handle = await this.openSafe(abs, fsConstants.O_WRONLY | fsConstants.O_APPEND | noFollow);
+      const additionBytes = Buffer.byteLength(addition, "utf8");
+      let after: import("node:fs").Stats;
+      try {
+        const before = await handle.stat();
+        if (!before.isFile()) {
+          throw new Error(`Refusing to append — target is not a regular file: ${path.relative(this.root, abs)}`);
+        }
+
+        // Verify the descriptor still names the in-vault path we validated.
+        // O_NOFOLLOW closes a leaf-symlink swap on POSIX; this dev/ino check
+        // also catches a parent/leaf rename between resolution and open.
+        const realAfterOpen = await this.realpathSafe(abs);
+        const relAfterOpen = path.relative(this.root, realAfterOpen);
+        if (relAfterOpen.startsWith("..") || path.isAbsolute(relAfterOpen)) {
+          throw new Error(`Resolved path escapes vault root: ${relOrAbs}`);
+        }
+        const pathStat = await this.statSafe(realAfterOpen);
+        if (before.ino !== 0 && pathStat.ino !== 0 && (before.dev !== pathStat.dev || before.ino !== pathStat.ino)) {
+          throw new Error(`Refusing to append — target changed during validation: ${relForFilter}`);
+        }
+        if (before.size + additionBytes > this.maxFileBytes) {
+          throw new Error(`Refusing to grow ${path.relative(this.root, abs)} past ${this.maxFileBytes} bytes`);
+        }
+        await handle.writeFile(addition, "utf8");
+        after = await handle.stat();
+      } finally {
+        await handle.close();
+      }
+      this.cache.delete(abs);
+      return {
+        absPath: abs,
+        relPath: path.relative(this.root, abs),
+        mtimeMs: after.mtimeMs,
+        appended_bytes: additionBytes
+      };
+    });
   }
 
   /** Drop every entry from the in-memory parse cache. Used after bulk

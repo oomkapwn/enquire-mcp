@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeServerBounded,
+  createHttpHandler,
   createSessionRegistry,
   deriveHttpBodyCap,
   generateBearerToken,
@@ -35,7 +36,7 @@ import {
   startHttpServer,
   verifyBearer
 } from "../src/http-transport.js";
-import { DEFAULT_MAX_FILE_BYTES } from "../src/vault.js";
+import { DEFAULT_MAX_FILE_BYTES, Vault } from "../src/vault.js";
 
 let root: string;
 
@@ -270,6 +271,174 @@ describe("SessionRegistry (v2.14.0)", () => {
   it("pendingInits starts at 0", () => {
     const r = createSessionRegistry(60_000);
     expect(r.pendingInits).toBe(0);
+  });
+
+  // v3.11.7-rc.1 (whole-repo audit A11) — closeAll must include an
+  // initialize body already reserved when shutdown begins. Pre-fix it could
+  // return while this body was still live.
+  it("closeAll waits for an already-reserved initialize already present in its snapshot", async () => {
+    const r = createSessionRegistry(60_000);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let transportClosed = 0;
+    const session = {
+      transport: {
+        close: async () => {
+          transportClosed += 1;
+        }
+      },
+      server: { close: async () => {} },
+      lastActivityMs: Date.now(),
+      inFlight: 0,
+      inFlightCalls: 0,
+      closing: false
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+
+    const init = runWithPendingInit(r, async () => {
+      expect(r.registerSession("reserved", session)).toBe(true);
+      await gate;
+    });
+    expect(r.pendingInits).toBe(1);
+
+    let closeSettled = false;
+    const closing = r.closeAll(1000).then((count) => {
+      closeSettled = true;
+      return count;
+    });
+    expect(r.size(), "already-live sessions must become unreachable synchronously").toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closeSettled, "shutdown must not finish ahead of the reserved init body").toBe(false);
+
+    release?.();
+    await init;
+    expect(await closing).toBe(1);
+    expect(transportClosed).toBe(1);
+    expect(r.size()).toBe(0);
+    expect(r.pendingInits).toBe(0);
+  });
+
+  it("a late initialize cannot publish a session after closeAll closes the gate", async () => {
+    const r = createSessionRegistry(60_000);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let registered: boolean | undefined;
+    const session = {
+      transport: { close: async () => {} },
+      server: { close: async () => {} },
+      lastActivityMs: Date.now(),
+      inFlight: 0,
+      inFlightCalls: 0,
+      closing: false
+    } as unknown as Parameters<typeof r.sessions.set>[1];
+
+    const init = runWithPendingInit(r, async () => {
+      await gate;
+      registered = r.registerSession("too-late", session);
+    });
+    expect(r.pendingInits).toBe(1);
+    const closing = r.closeAll(1000);
+    expect(r.acceptingInits).toBe(false);
+    expect(r.size(), "live sessions must become unreachable synchronously at shutdown").toBe(0);
+    release?.();
+    await init;
+    expect(await closing).toBe(0);
+    expect(registered).toBe(false);
+    expect(session.closing).toBe(true);
+    expect(r.size()).toBe(0);
+
+    // NEGATIVE control: shutdown is terminal; a new reservation cannot
+    // re-open the registry or run its body after closeAll.
+    let bodyRan = false;
+    await expect(
+      runWithPendingInit(r, async () => {
+        bodyRan = true;
+      })
+    ).rejects.toThrow(/shutting down/);
+    expect(bodyRan).toBe(false);
+    expect(r.pendingInits).toBe(0);
+  });
+
+  it("the real stateful HTTP handler routes late publication through the terminal gate", async () => {
+    const vault = new Vault(root);
+    await vault.ensureExists();
+    const deps: Parameters<typeof createHttpHandler>[0] = {
+      vault,
+      ftsIndex: null,
+      watcher: null,
+      watcherEmbedDb: null,
+      feedbackStore: null,
+      disabledTools: new Set(),
+      enabledTools: new Set(),
+      warningTracker: { printed: false },
+      hnswContext: null
+    };
+    const out: { registry: ReturnType<typeof createSessionRegistry> | null } = { registry: null };
+    const handler = createHttpHandler(
+      deps,
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: "late-registration-test-token-1234567890",
+        stateful: true,
+        rateLimitPerMinute: 0,
+        installSignalHandlers: false
+      },
+      out
+    );
+    const httpServer = createServer((req, res) => void handler(req, res));
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const registry = out.registry;
+    if (!registry) throw new Error("stateful handler did not expose its registry");
+
+    // Trigger shutdown at the exact SDK publication callback. This is a
+    // handler-level mutation guard: replacing registerSession with the old
+    // `sessions.set` bypass would leave registerCalls=0 and fail this test even
+    // though the lower-level registry unit tests still passed.
+    const originalRegister = registry.registerSession.bind(registry);
+    let registerCalls = 0;
+    let closing: Promise<number> | undefined;
+    registry.registerSession = (sid, session) => {
+      registerCalls += 1;
+      closing ??= registry.closeAll(1000);
+      return originalRegister(sid, session);
+    };
+
+    try {
+      const addr = httpServer.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: "Bearer late-registration-test-token-1234567890"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "late-registration-test", version: "0" }
+          }
+        })
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(registerCalls).toBe(1);
+      if (!closing) throw new Error("registration callback did not trigger shutdown");
+      expect(await closing).toBe(0);
+      expect(registry.size()).toBe(0);
+      expect(registry.pendingInits).toBe(0);
+      expect(registry.acceptingInits).toBe(false);
+    } finally {
+      await closeServerBounded(httpServer);
+    }
   });
 });
 

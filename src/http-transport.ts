@@ -358,6 +358,11 @@ interface StatefulSession {
  *     increments before allocating server+transport and decrements in a
  *     finally. Without this, N concurrent inits could all pass the
  *     plain `size()` check and create N+ sessions.
+ *   - v3.11.7-rc.1: `acceptingInits` closes synchronously before shutdown
+ *     drains `pendingInits`, and `registerSession` refuses a session that
+ *     completes after the bound. Without the gate, `closeAll` could snapshot
+ *     an empty map and return while an already-reserved initialize inserted a
+ *     brand-new live session afterwards.
  *   - `closeAll(timeoutMs)` is the graceful-shutdown drain: waits for
  *     in-flight requests up to `timeoutMs`, then closes every transport
  *     + McpServer pair. Used by `shutdownHttpServer` so tests +
@@ -377,7 +382,15 @@ export interface SessionRegistry {
    * see `size() < maxSessions` and overshoot. Public so tests can
    * assert it stays balanced (always returns to 0 after init resolves).
    */
-  pendingInits: number;
+  readonly pendingInits: number;
+  /** False once graceful shutdown starts; never becomes true again. */
+  readonly acceptingInits: boolean;
+  /** Atomically reserve an initialize slot unless shutdown has closed the gate. */
+  tryReserveInit(): boolean;
+  /** Release one successful `tryReserveInit` reservation. */
+  releaseInit(): void;
+  /** Publish a completed session only while the initialize gate is open. */
+  registerSession(sid: string, session: StatefulSession): boolean;
   /**
    * v3.8.7 — graceful drain: mark all sessions as `closing`, wait up to
    * `timeoutMs` for in-flight requests to finish, then close every
@@ -389,9 +402,35 @@ export interface SessionRegistry {
 
 export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
   const sessions = new Map<string, StatefulSession>();
+  let pendingInits = 0;
+  let acceptingInits = true;
   const registry: SessionRegistry = {
     sessions,
-    pendingInits: 0,
+    get pendingInits(): number {
+      return pendingInits;
+    },
+    get acceptingInits(): boolean {
+      return acceptingInits;
+    },
+    tryReserveInit(): boolean {
+      if (!acceptingInits) return false;
+      pendingInits += 1;
+      return true;
+    },
+    releaseInit(): void {
+      if (pendingInits <= 0) {
+        throw new Error("SessionRegistry invariant violated: releaseInit without a reservation");
+      }
+      pendingInits -= 1;
+    },
+    registerSession(sid, session): boolean {
+      if (!acceptingInits) {
+        session.closing = true;
+        return false;
+      }
+      sessions.set(sid, session);
+      return true;
+    },
     sweepIdle(nowMs = Date.now()): number {
       const cutoff = nowMs - idleTimeoutMs;
       let evicted = 0;
@@ -416,18 +455,22 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
     },
     size: () => sessions.size,
     async closeAll(timeoutMs = 5000): Promise<number> {
-      // Snapshot the sessions we're closing; mark `closing` synchronously
-      // so new requests bounce with 404 while we drain in-flight.
+      // v3.11.7-rc.1 (A11) — close the initialize gate AND remove every
+      // already-live session synchronously. Existing-session requests now
+      // bounce with 404 while already-reserved init bodies + in-flight calls
+      // drain. Any init that had not registered before this point is refused
+      // by registerSession and self-closes in the handler; it can never appear
+      // after our snapshot.
+      acceptingInits = false;
       const snapshot = Array.from(sessions.values());
       for (const s of snapshot) s.closing = true;
       sessions.clear();
-      // Wait (bounded) for in-flight CALLS to finish naturally (rc.21 F1 — drain
-      // POST tool calls / initialize; do NOT wait on a long-lived GET SSE stream,
-      // which teardown force-closes below — else shutdown always spun the full
-      // bound while any client had its notification stream open).
-      const deadline = Date.now() + timeoutMs;
+      const deadline = Date.now() + Math.max(0, timeoutMs);
+      // One shared bound covers both pending initialize bodies and in-flight
+      // calls. Do NOT wait on long-lived GET SSE streams: teardown terminates
+      // them, while pending init + POST calls need a chance to complete.
       while (Date.now() < deadline) {
-        if (snapshot.every((s) => s.inFlightCalls === 0)) break;
+        if (pendingInits === 0 && snapshot.every((s) => s.inFlightCalls === 0)) break;
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
       // Close everything regardless — best-effort. After timeoutMs an
@@ -441,6 +484,13 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
     }
   };
   return registry;
+}
+
+class SessionRegistryClosingError extends Error {
+  constructor() {
+    super("Stateful session registry is shutting down");
+    this.name = "SessionRegistryClosingError";
+  }
 }
 
 /**
@@ -480,11 +530,11 @@ async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>
  * with an injected throwing `fn` (NEGATIVE control).
  */
 export async function runWithPendingInit<T>(registry: SessionRegistry, fn: () => Promise<T>): Promise<T> {
-  registry.pendingInits += 1;
+  if (!registry.tryReserveInit()) throw new SessionRegistryClosingError();
   try {
     return await fn();
   } finally {
-    registry.pendingInits -= 1;
+    registry.releaseInit();
   }
 }
 
@@ -751,6 +801,13 @@ export function createHttpHandler(
       // have passed this check but not yet inserted into `sessions`
       // count toward the cap. Without this, the check is a TOCTOU race
       // (N concurrent inits all see `size() < maxSessions` and overshoot).
+      if (!registry.acceptingInits) {
+        res.statusCode = 503;
+        res.setHeader("Retry-After", "60");
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "server is shutting down" }));
+        return;
+      }
       if (registry.size() + registry.pendingInits >= maxSessions) {
         res.statusCode = 503;
         res.setHeader("Retry-After", "60");
@@ -794,68 +851,91 @@ export function createHttpHandler(
       // so a constructor throw leaked `pendingInits` permanently → eventual 503). Between the
       // reservation and the `onsessioninitialized` callback the cap-check above can see it via
       // `pendingInits` and reject concurrent inits that would overshoot the cap.
-      await runWithPendingInit(registry, async () => {
-        // The session object is constructed up-front so `onsessioninitialized` can insert it
-        // atomically and the refcount wrapper can use it during the initialize POST itself.
-        // Declared `let` + undefined so the catch can clean up PARTIAL state if a constructor
-        // throws (rc.65 — the constructors are now inside the try, not before it).
-        let server: ReturnType<typeof buildMcpServer> | undefined;
-        let session: StatefulSession | undefined;
-        let transport: InstanceType<typeof StreamableHTTPServerTransport> | undefined;
-        try {
-          server = buildMcpServer(deps, opts);
-          session = {
-            server,
-            // Filled in below once `transport` is constructed.
-            transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
-            lastActivityMs: Date.now(),
-            inFlight: 0,
-            inFlightCalls: 0,
-            closing: false
-          };
-          const sess = session; // captured (definitely-assigned) for the SDK callbacks
-          transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomBytes(16).toString("hex"),
-            onsessioninitialized: (sid: string) => {
-              // The SDK guarantees this fires before initialize's response
-              // ships, so the entry exists when subsequent requests arrive.
-              registry.sessions.set(sid, sess);
-            }
-          });
-          session.transport = transport;
-          const tr = transport; // captured (definitely-assigned) for the onclose closure
-          // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
-          tr.onclose = () => {
-            const sid = tr.sessionId;
-            if (sid) {
-              const tracked = registry.sessions.get(sid);
-              // v3.8.7 P2-10 — only mark + delete if WE inserted this entry.
-              // (Defensive — onclose can fire after closeAll already removed it.)
-              if (tracked) {
-                tracked.closing = true;
-                registry.sessions.delete(sid);
+      try {
+        await runWithPendingInit(registry, async () => {
+          // The session object is constructed up-front so `onsessioninitialized` can insert it
+          // atomically and the refcount wrapper can use it during the initialize POST itself.
+          // Declared `let` + undefined so the catch can clean up PARTIAL state if a constructor
+          // throws (rc.65 — the constructors are now inside the try, not before it).
+          let server: ReturnType<typeof buildMcpServer> | undefined;
+          let session: StatefulSession | undefined;
+          let transport: InstanceType<typeof StreamableHTTPServerTransport> | undefined;
+          try {
+            server = buildMcpServer(deps, opts);
+            session = {
+              server,
+              // Filled in below once `transport` is constructed.
+              transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
+              lastActivityMs: Date.now(),
+              inFlight: 0,
+              inFlightCalls: 0,
+              closing: false
+            };
+            const sess = session; // captured (definitely-assigned) for the SDK callbacks
+            transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: () => randomBytes(16).toString("hex"),
+              onsessioninitialized: (sid: string) => {
+                // The SDK guarantees this fires before initialize's response
+                // ships, so the entry exists when subsequent requests arrive.
+                // v3.11.7-rc.1 (A11) — shutdown may have closed the init
+                // gate while this reserved body was building/connecting.
+                // Refuse late publication; the post-handle cleanup below
+                // closes the untracked server+transport pair.
+                registry.registerSession(sid, sess);
               }
+            });
+            session.transport = transport;
+            const tr = transport; // captured (definitely-assigned) for the onclose closure
+            // Wire up cleanup on transport close (e.g. client disconnect mid-stream).
+            tr.onclose = () => {
+              const sid = tr.sessionId;
+              if (sid) {
+                const tracked = registry.sessions.get(sid);
+                // v3.8.7 P2-10 — only mark + delete if WE inserted this entry.
+                // (Defensive — onclose can fire after closeAll already removed it.)
+                if (tracked) {
+                  tracked.closing = true;
+                  registry.sessions.delete(sid);
+                }
+              }
+            };
+            await server.connect(tr);
+            await runWithRefcount(session, () => tr.handleRequest(req, res, body));
+            if (session.closing) {
+              await tr.close().catch(() => {});
+              await server.close().catch(() => {});
             }
-          };
-          await server.connect(tr);
-          await runWithRefcount(session, () => tr.handleRequest(req, res, body));
-        } catch (err) {
-          process.stderr.write(
-            `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
-          );
-          // Best-effort: free whatever we allocated (each guarded — a constructor may have
-          // thrown before the later ones ran). If the session was already registered, mark it
-          // closing + drop from map so concurrent requests don't grab a half-dead entry.
-          if (session) session.closing = true;
-          const sid = transport?.sessionId;
-          if (sid) registry.sessions.delete(sid);
-          if (transport) void transport.close().catch(() => {});
-          if (server) void server.close().catch(() => {});
-          if (!res.headersSent) {
-            sendJsonRpcError(res, 500, -32603, "Internal server error");
+          } catch (err) {
+            process.stderr.write(
+              `enquire http: stateful initialize error — ${err instanceof Error ? err.message : String(err)}\n`
+            );
+            // Best-effort: free whatever we allocated (each guarded — a constructor may have
+            // thrown before the later ones ran). If the session was already registered, mark it
+            // closing + drop from map so concurrent requests don't grab a half-dead entry.
+            if (session) session.closing = true;
+            const sid = transport?.sessionId;
+            if (sid) registry.sessions.delete(sid);
+            if (transport) void transport.close().catch(() => {});
+            if (server) void server.close().catch(() => {});
+            if (!res.headersSent) {
+              sendJsonRpcError(res, 500, -32603, "Internal server error");
+            }
           }
+        });
+      } catch (err) {
+        // The pre-check and reservation are intentionally both present:
+        // closeAll can close the gate between them only at an await boundary,
+        // and tryReserveInit is the atomic authority. Surface that race as a
+        // retryable shutdown response, not an internal 500.
+        if (err instanceof SessionRegistryClosingError) {
+          res.statusCode = 503;
+          res.setHeader("Retry-After", "60");
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "server is shutting down" }));
+          return;
         }
-      });
+        throw err;
+      }
     } catch (err) {
       // Final safety net — if anything in the outer block throws (URL
       // parse, header read), don't leave the connection hung.

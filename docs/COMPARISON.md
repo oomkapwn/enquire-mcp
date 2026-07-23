@@ -44,7 +44,7 @@ The four axes the external audit (#3, 2026-05) called out as decisive — **REST
 | Zero outbound network calls in serve mode     | **Yes** (default)   | Local-only (REST)| Local-only (REST)| Yes              | Yes              |
 | Signed build provenance on releases (SLSA L2) | **Yes**             | No               | No               | No               | No               |
 | Forgetting-aware freshness (`age_days` / recency re-rank) | Yes (v3.10)     | No               | No               | No               | No               |
-| Test count (public)                           | **1602**             | (varies)         | (varies)         | (varies)         | (varies)         |
+| Test count (public)                           | **1604**             | (varies)         | (varies)         | (varies)         | (varies)         |
 | Tool count                                    | 46                  | ~25              | ~8               | ~10              | 3–5              |
 | MCP prompt count                              | 19                  | 0                | 0                | 0                | 0                |
 | License                                       | MIT                 | Apache-2.0       | MIT              | MIT              | (varies)         |

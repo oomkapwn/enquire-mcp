@@ -82,7 +82,13 @@ const PARSER_FED_TOOLS = [
   // parser-input-cap-invariant" claim was false (its own stated failure mode). Each phrasing
   // runs the FULL hybrid pipeline, so both bounds are the tool's load-bearing DoS guard.
   { tool: "obsidian_search", field: "queries", cap: "MAX_QUERY_LEN" },
-  { tool: "obsidian_search", field: "queries", cap: "MAX_FANOUT_QUERIES" }
+  { tool: "obsidian_search", field: "queries", cap: "MAX_FANOUT_QUERIES" },
+  // v3.11.7-rc.4 — coverage-aware context packs run one full hybrid pipeline
+  // per atomic sub-question. Pin both dimensions: each query's length and the
+  // array fan-out count. The implementation additionally executes them
+  // sequentially, but these schema caps are the bearer-reachable hard bound.
+  { tool: "obsidian_context_pack", field: "subqueries", cap: "MAX_QUERY_LEN" },
+  { tool: "obsidian_context_pack", field: "subqueries", cap: "MAX_RESEARCH_SUBQUERIES" }
 ];
 
 /**

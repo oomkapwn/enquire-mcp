@@ -4,6 +4,7 @@ import { z } from "zod";
 import { MAX_DQL_QUERY_LEN } from "./dql.js";
 import { defaultIndexFile, type FtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
+import { MAX_RESEARCH_SUBQUERIES } from "./research-protocol.js";
 import type { ServerDeps } from "./server.js";
 import {
   appendToNote,
@@ -1133,10 +1134,17 @@ export function registerReadTools(
     {
       title: "Pack vault context for an AI question (token-budgeted)",
       description:
-        "Given a question, retrieve the top relevant notes (via hybrid search), gather backlinks summaries + optionally recent dailies, deduplicate, pack to a token budget, return a single ready-to-paste markdown bundle. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.",
+        "Given a question, retrieve the top relevant notes (via hybrid search), gather backlinks summaries + optionally recent dailies, deduplicate, pack to a token budget, return a single ready-to-paste markdown bundle. Optional `subqueries[]` adds bounded coverage-aware retrieval: reserve the best available unique candidate per atomic sub-question, then RRF-fill the remaining slots. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.",
       annotations: { ...READ_ONLY, title: "Context pack" },
       inputSchema: {
         query: z.string().min(1).max(MAX_QUERY_LEN).describe("Topic or question to gather context for"),
+        subqueries: z
+          .array(z.string().min(1).max(MAX_QUERY_LEN))
+          .max(MAX_RESEARCH_SUBQUERIES)
+          .optional()
+          .describe(
+            "Optional atomic sub-questions for coverage-aware retrieval. Each is searched sequentially; the best available unique candidate per non-empty sub-question is reserved before RRF fills the remaining pack. Exact duplicates are ignored. Max 5 extras (+ the main query = at most 6 search pipelines)."
+          ),
         budget_tokens: z
           .number()
           .int()

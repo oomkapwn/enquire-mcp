@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.11.7-rc.6",
+  "version": "3.11.7-rc.7",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
   "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1638 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
@@ -76,8 +76,8 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "rm -rf dist && tsc && chmod +x dist/index.js",
-    "dev": "tsc --watch",
+    "build": "rm -rf dist && node node_modules/typescript-native/bin/tsc && chmod +x dist/index.js",
+    "dev": "node node_modules/typescript-native/bin/tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -99,7 +99,7 @@
     "bench:context": "npm run build && node scripts/bench-context.mjs",
     "docs:api": "typedoc",
     "check:audit": "node scripts/check-audit.mjs",
-    "prepare": "rm -rf dist && tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
+    "prepare": "rm -rf dist && node node_modules/typescript-native/bin/tsc && chmod +x dist/index.js && (husky 2>/dev/null || true)",
     "prepublishOnly": "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && node scripts/check-audit.mjs && npm run test:coverage --silent && node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs",
     "version": "node scripts/sync-version.mjs && git add package.json package-lock.json src/index.ts CHANGELOG.md",
     "eval": "node dist/index.js eval",
@@ -216,6 +216,7 @@
     "sharp": "^0.35.3",
     "typedoc": "^0.28.20",
     "typescript": "^6.0.3",
+    "typescript-native": "npm:typescript@7.0.2",
     "vitest": "^4.1.9"
   },
   "optionalDependencies": {

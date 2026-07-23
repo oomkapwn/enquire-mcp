@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.7-rc.4] — 2026-07-23
+
+> **TL;DR:** **Model-agnostic transfer of the useful T-Search research pattern, without bundling its 36B checkpoint or server-side LLM orchestration.** `obsidian_context_pack` now accepts an opt-in, hard-capped `subqueries[]` list (≤5 extras): it executes at most 6 hybrid-search pipelines sequentially, preserves the original query's top-1, reserves the best available unique candidate per atomic sub-question, and RRF-fills the remaining note slots. Exact normalized duplicates stay on the byte-identical legacy path. The returned `research` trace exposes bounded candidate/selection paths and zero-hit queries but deliberately does **not** label retrieved text as semantically “covered.” `vault_research` now gives the host agent a bounded two-round evidence protocol: query history, saved evidence with reasons, covered/unresolved ledger, compact next-goal state, ranked evidence handoff, and an explicit no-write/no-parametric-gap-fill contract. **1605 → 1617 source tests.**
+>
+> **Method note:** the design was derived independently after auditing the official T-Search model card and pinned `t-search-harness` commit `997a0ba1685d24ad840e3e2542b59952ff3fb362`, then challenged with direct harness probes and a small pinned public SynthComp-English retrieval slice. That experiment was directional only: coverage-slot retrieval improved the sampled lexical baseline, but complete multi-document evidence recall remained unsolved, so this release makes no T-Search-equivalence or product-benchmark claim. Literal harness behavior was not copied where it weakened enquire's contracts: failed searches consuming budget, pre-call rather than post-call budget locking, synchronous “parallel” calls, model self-declared coverage, raw transcript carryover, and cross-query raw-score sorting remain rejected.
+
+### Added
+
+- **Bounded coverage-aware context packs.** `subqueries[]` is optional, schema-capped, normalized/deduplicated, and run sequentially to avoid the cold fan-out amplifier class. Coverage slots prevent a dominant wording cluster from crowding every atomic concept out before the existing RRF ranking fills the pack.
+- **Inspectable research state.** The opt-in response adds `strategy`, exact `search_calls`, a top-3 candidate/selected-path trace per query, and `zero_hit_queries`. Query text lives once in this bounded trace rather than being repeated before every note body, preserving the bundle budget for evidence. These are retrieval facts only; the host must inspect evidence before updating its covered/unresolved ledger.
+- **Evidence-first `vault_research` protocol.** At most two rounds, five sub-questions per round, twelve search pipelines total, eight saved evidence notes, four optional full-note reads, and one ranked evidence handoff. Vault writes require a separate user request.
+
+### Corrected
+
+- **`docs/api.md` context-pack return contract.** The pre-existing prose advertised `{ included_notes: [{ path, title, reason }], markdown }`, while the implementation has long returned `{ bundle, estimated_tokens, sections, included_notes: string[] }`. The documented shape now matches runtime and includes the conditional `research` field.
+
+### Tests (1617)
+
+- +8 source tests for normalization/caps, coverage-slot + RRF selection, zero-hit/mismatch controls, bounded prompt state, and the no-write contract.
+- +3 context-pack integration tests for legacy-path identity, distinct-query selection/trace, and explicit zero-hit behavior. The selection-order regression was mutation-verified by removing the reservation pass and observing the focused suite fail.
+- +1 compiled `tools/list` contract test proving the real MCP schema exposes the five-subquery fan-out cap and per-query length cap.
+
 ## [3.11.7-rc.3] — 2026-07-23
 
 > **TL;DR:** **Post-promotion public-truth audit; no runtime defect found.** The audit closed three documentation-drift classes against current implementation and live repository settings. **Stateful HTTP lifecycle:** `SECURITY.md` no longer claims a periodic idle timer, immediate DELETE teardown, repeat DELETE = 404, or idle eviction of an open SSE stream. It now documents the request-driven lazy sweep, the bounded 5-second `inFlightCalls` drain, idempotent 204, active-SSE semantics, and bounded shutdown ordering implemented since v3.11.6-rc.20/rc.21. **CI governance:** all 11 README languages, `AGENTS.md`, `llms.txt`, and `ROADMAP.md` now distinguish 9 release-required checks from the 7 contexts actually enforced by branch protection; `docs`/`oia` are release-required but unprotected, `test-macos` is the only `continue-on-error` advisory job, `docker` is fail-capable but unprotected, and CodeQL contributes two separate unprotected analyses. Stale claims that branch protection requires a PR approval were removed (live setting: 0 required approvals). **Retrieval/API truth:** every localized FAQ and published JSON-LD now separates the multilingual embedder from the English-only default `rerank-bge`; the stale `ServeOptions` TSDoc and test title were corrected; `docs/api.md` now describes already-stable v3.9/v3.10/v3.11 capabilities by their first stable release instead of their old RC build. **1604 → 1605 source tests.**

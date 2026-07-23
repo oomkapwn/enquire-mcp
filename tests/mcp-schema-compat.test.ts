@@ -20,6 +20,7 @@ import { existsSync, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MAX_RESEARCH_SUBQUERIES } from "../src/research-protocol.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const distEntry = path.join(repoRoot, "dist", "index.js");
@@ -140,5 +141,19 @@ describe("MCP tool-schema client compatibility (rc.17 #354/#360)", () => {
       expect(Array.isArray(pages?.items), `${name}.pages.items must NOT be an array`).toBe(false);
       expect(typeof pages?.items, `${name}.pages.items must be a schema object`).toBe("object");
     }
+  });
+
+  it("context_pack exposes the bearer-reachable subquery fan-out cap in its real MCP schema", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const tool = tools.find((entry) => entry.name === "obsidian_context_pack");
+    expect(tool, "obsidian_context_pack must be registered").toBeDefined();
+    const subqueries = (
+      tool?.inputSchema as {
+        properties?: Record<string, { items?: { maxLength?: number }; maxItems?: number; type?: string }>;
+      }
+    )?.properties?.subqueries;
+    expect(subqueries?.type).toBe("array");
+    expect(subqueries?.maxItems).toBe(MAX_RESEARCH_SUBQUERIES);
+    expect(subqueries?.items?.maxLength).toBe(4096);
   });
 });

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderVaultResearchProtocol } from "./research-protocol.js";
 
 /**
  * Register all enquire-mcp prompt templates on the given MCP server.
@@ -953,9 +954,10 @@ This is the Khoj automation pattern translated to MCP: research that comes to yo
    * chunks that answer the sub-parts. Decomposition surfaces them all
    * and forces evidence-grounded synthesis.
    *
-   * Workflow: decompose → per-sub `obsidian_search` (or `obsidian_hyde_search`
-   * if available) → extract atomic evidence → compose answer with citations
-   * → flag any sub-question the vault didn't answer as an "open question".
+   * Workflow: decompose → bounded coverage-aware `obsidian_context_pack`
+   * rounds → explicit saved evidence + covered/unresolved ledger → ranked
+   * evidence handoff → cited synthesis. The host model does the reasoning;
+   * enquire stays deterministic and makes no server-side LLM call.
    *
    * Args: `question` (string, required — the complex / multi-hop question),
    * `max_sub_questions` (string, optional, default `"3-5"`).
@@ -966,7 +968,7 @@ This is the Khoj automation pattern translated to MCP: research that comes to yo
     {
       title: "Research a complex vault question via sub-question decomposition",
       description:
-        "Multi-hop research workflow: break a complex question into 3-5 atomic sub-questions, retrieve per sub-question, synthesize a final answer with cited claims. Closes the gap to agentic-RAG patterns (sub-question decomposition + ReAct) without forcing the server to make LLM calls — the agent handles the decomposition.",
+        "Bounded multi-hop research workflow: decompose into atomic sub-questions, retrieve a token-capped coverage-aware evidence pack, carry only saved evidence + covered/unresolved state across at most two rounds, then rank evidence before cited synthesis. No server-side LLM calls.",
       argsSchema: {
         question: z.string().describe("The complex / multi-hop question to research"),
         max_sub_questions: z
@@ -981,34 +983,7 @@ This is the Khoj automation pattern translated to MCP: research that comes to yo
           role: "user",
           content: {
             type: "text",
-            text: `Research this question against my Obsidian vault using **sub-question decomposition**:
-
-> ${question}
-
-Steps:
-
-1. **Decompose.** Break the question into ${max_sub_questions ?? "3-5"} atomic sub-questions, each independently searchable. Format:
-   \`\`\`
-   sub_q1: <single-fact / single-relationship question>
-   sub_q2: <...>
-   ...
-   \`\`\`
-   Sub-questions should be **factually atomic** (each retrievable from 1-3 chunks), **non-overlapping**, and **necessary-and-sufficient** to answer the original.
-
-2. **Per-sub retrieval.** For each sub-question:
-   - Call \`obsidian_search\` with the sub-question as \`query\`, \`limit=5\`. Use \`graph_boost=true\` (default).
-   - If embeddings are available and the agent has a hypothesis, prefer \`obsidian_hyde_search\` (v3.1.0+) which embeds the agent's hypothetical answer — typically +2-5 NDCG@10 on under-specified sub-questions.
-   - Read the top 1-2 hits via \`obsidian_read_note\`.
-   - Extract the single bullet of evidence that answers the sub-question. Cite path + line range.
-
-3. **Synthesize.** Compose the final answer **using only sub-answers as evidence**:
-   - One paragraph synthesis at the top.
-   - Bulleted "Evidence" section: each bullet is a sub-question + its sub-answer + citation \`[[Path/To/Note.md#L23-L27]]\`.
-   - "Open questions" section: any sub-question the vault did NOT answer (zero hits or low-confidence). These are the gaps for future ingest.
-
-4. **(Optional) Persist.** Ask the user if they want this filed as a research note. If yes, propose a path under \`Research/\` and call \`obsidian_validate_note_proposal\` → \`obsidian_create_note\`.
-
-Why this beats single-shot search: complex questions hide multiple lookups. Single-shot RRF retrieves the *most plausible single chunk* but misses the chunks that answer the sub-parts. Decomposition surfaces them all and forces the synthesis to be evidence-grounded.`
+            text: renderVaultResearchProtocol(question, max_sub_questions ?? "3-5")
           }
         }
       ]

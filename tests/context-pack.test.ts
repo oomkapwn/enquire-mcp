@@ -135,3 +135,74 @@ describe("contextPack forwards the full search ctx (rc.14)", () => {
     expect(inverted.included_notes[0]).toBe("beta.md");
   });
 });
+
+// ─── v3.11.7-rc.4 — bounded coverage-aware research packs ──────────────────
+describe("contextPack subquery coverage mode (v3.11.7-rc.4)", () => {
+  it("keeps absent, empty, and duplicate-only subqueries byte-identical on the legacy path", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "note.md"), "# Auth\n\nAccess token rotation notes.\n");
+
+    const absent = await contextPack(v, { query: "access token", budget_tokens: 1000 }, noIndex(root));
+    const empty = await contextPack(v, { query: "access token", subqueries: [], budget_tokens: 1000 }, noIndex(root));
+    const duplicateOnly = await contextPack(
+      v,
+      { query: "access token", subqueries: ["  ACCESS   token  "], budget_tokens: 1000 },
+      noIndex(root)
+    );
+
+    expect(empty).toEqual(absent);
+    expect(duplicateOnly).toEqual(absent);
+    expect("research" in empty).toBe(false);
+    expect("research" in duplicateOnly).toBe(false);
+  });
+
+  it("reserves candidates for distinct subqueries and exposes a non-semantic retrieval trace", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "overview.md"), "Platform recovery overview and operating owners.\n");
+    await fs.writeFile(path.join(root, "auth.md"), "Authentication uses access token rotation before promotion.\n");
+    await fs.writeFile(path.join(root, "rollback.md"), "Rollback snapshot restore returns the prior artifact.\n");
+    await fs.writeFile(path.join(root, "unrelated.md"), "Pasta recipe and kitchen notes.\n");
+
+    const baseline = await contextPack(v, { query: "platform recovery", budget_tokens: 2000 }, noIndex(root));
+    const result = await contextPack(
+      v,
+      {
+        query: "platform recovery",
+        subqueries: ["access token rotation", "rollback snapshot restore", "  PLATFORM   recovery  "],
+        budget_tokens: 2000
+      },
+      noIndex(root)
+    );
+
+    expect(result.included_notes.slice(0, 3)).toEqual(["overview.md", "auth.md", "rollback.md"]);
+    expect(result.included_notes[0]).toBe(baseline.included_notes[0]);
+    expect(result.bundle).toContain("Authentication uses access token rotation");
+    expect(result.research?.strategy).toBe("coverage_slots_then_rrf");
+    expect(result.research?.search_calls).toBe(3);
+    expect(result.research?.queries.map((entry) => entry.query)).toEqual([
+      "platform recovery",
+      "access token rotation",
+      "rollback snapshot restore"
+    ]);
+    expect(result.research?.queries[1]?.selected_paths).toContain("auth.md");
+    expect(result.research?.queries[2]?.selected_paths).toContain("rollback.md");
+    expect(JSON.stringify(result.research)).not.toContain('"covered"');
+  });
+
+  it("NEGATIVE control — a zero-hit subquery remains explicitly unresolved at retrieval level", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "overview.md"), "Platform recovery overview.\n");
+
+    const result = await contextPack(
+      v,
+      { query: "platform recovery", subqueries: ["zz-no-such-evidence-token"], budget_tokens: 1000 },
+      noIndex(root)
+    );
+
+    expect(result.research?.zero_hit_queries).toEqual(["zz-no-such-evidence-token"]);
+    expect(result.research?.queries[1]?.top_paths).toEqual([]);
+  });
+});

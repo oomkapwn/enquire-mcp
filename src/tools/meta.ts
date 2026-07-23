@@ -3,12 +3,18 @@ import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE, scanWikilinkInners, stripCodeAndInline } from "../parser.js";
+import {
+  MAX_RESEARCH_SUBQUERIES,
+  normalizeResearchQueries,
+  type ResearchQueryTrace,
+  selectResearchEvidence
+} from "../research-protocol.js";
 import { iterateBodyLines } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { stripTrailingLineEnds } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
-import { searchHybrid } from "./search.js";
+import { type SearchHybridHit, searchHybrid } from "./search.js";
 import { resolveTarget, suggestSimilar } from "./write.js";
 
 // ─── obsidian_validate_note_proposal (v0.12 anti-slop validator) ─────────────
@@ -2001,6 +2007,12 @@ export async function openInUi(
 export interface ContextPackArgs {
   /** Topic / question to gather context for. */
   query: string;
+  /**
+   * Atomic sub-questions for opt-in coverage-aware retrieval. Each is searched
+   * independently; the best available unique candidate per non-empty
+   * sub-question is reserved before RRF fills the remaining note slots.
+   */
+  subqueries?: string[];
   /** Approximate token budget for the bundle. ~4 chars/token assumption. Default 4000. */
   budget_tokens?: number;
   /** Restrict retrieval to this folder. */
@@ -2038,12 +2050,29 @@ export interface ContextPackResult {
   };
   /** Top-K hit paths included in the bundle. */
   included_notes: string[];
+  /**
+   * Present only when at least one distinct `subqueries[]` entry was searched.
+   * This is a candidate trace, not a claim that a concept is proven.
+   */
+  research?: {
+    /** Coverage-first selection followed by RRF fill. */
+    strategy: "coverage_slots_then_rrf";
+    /** Number of full hybrid-search pipelines executed for this pack. */
+    search_calls: number;
+    /** Bounded candidate/selection trace per normalized query. */
+    queries: ResearchQueryTrace[];
+    /** Queries whose search returned no candidates. */
+    zero_hit_queries: string[];
+  };
 }
 
 /**
- * Token-budgeted vault context export — runs hybrid retrieval, gathers
- * note bodies + backlinks + recent dailies, packs to a token budget,
- * returns one ready-to-paste markdown blob.
+ * Token-budgeted vault context export — runs hybrid retrieval, gathers note
+ * bodies + backlinks + recent dailies, packs to a token budget, and returns one
+ * ready-to-paste markdown blob. With `subqueries[]`, it executes at most
+ * `MAX_RESEARCH_SUBQUERIES` extra searches sequentially, reserves the best
+ * available unique evidence candidate per atomic sub-question, then fills
+ * remaining slots with RRF. The default single-query path is unchanged.
  *
  * The MCP-native answer to Smart Connections' "Send to Smart Context"
  * pattern, but works in any chat (Claude / Cursor / Codex / web UI) by
@@ -2075,6 +2104,7 @@ export interface ContextPackResult {
  *   vault,
  *   {
  *     query: "How do I tune the hybrid retrieval?",
+ *     subqueries: ["Which rankers contribute?", "How is the final order fused?"],
  *     budget_tokens: 3000,
  *     include_backlinks: true,
  *     recent_dailies: 3
@@ -2098,7 +2128,38 @@ export async function contextPack(
 
   // 1) Hybrid retrieval — top-K notes. rc.14: forward the FULL ctx (reranker/
   // hnsw/recency/feedback included) so the pack ranks like obsidian_search.
-  const search = await searchHybrid(vault, { query: args.query, folder: args.folder, limit: 10 }, ctx);
+  //
+  // v3.11.7-rc.4 research protocol: a distinct subqueries[] request takes the opt-in
+  // coverage path. Pipelines are deliberately sequential (max 6 including the
+  // original query), avoiding the cold-start fan-out amplifier fixed in rc.15.
+  // The original query keeps the legacy limit=10 so its top-1 contract remains
+  // directly comparable; sub-questions over-fetch to 30 so RRF has room after
+  // the reserved concept slots. Absent/empty/duplicate-only subqueries stay on
+  // the exact legacy call.
+  const researchQueries = normalizeResearchQueries(args.query, args.subqueries ?? []);
+  if (researchQueries.length > MAX_RESEARCH_SUBQUERIES + 1) {
+    throw new Error("context_pack: internal subquery cap exceeded");
+  }
+  let searchMatches: SearchHybridHit[];
+  let research: ContextPackResult["research"];
+  if (researchQueries.length <= 1) {
+    const search = await searchHybrid(vault, { query: args.query, folder: args.folder, limit: 10 }, ctx);
+    searchMatches = search.matches;
+  } else {
+    const perQuery: SearchHybridHit[][] = [];
+    for (const [index, query] of researchQueries.entries()) {
+      const result = await searchHybrid(vault, { query, folder: args.folder, limit: index === 0 ? 10 : 30 }, ctx);
+      perQuery.push(result.matches);
+    }
+    const selected = selectResearchEvidence(researchQueries, perQuery, 10);
+    searchMatches = selected.ranked;
+    research = {
+      strategy: "coverage_slots_then_rrf",
+      search_calls: researchQueries.length,
+      queries: selected.queries,
+      zero_hit_queries: selected.zero_hit_queries
+    };
+  }
 
   const sections: string[] = [`# Context for: ${args.query}\n`];
   const includedNotes: string[] = [];
@@ -2109,7 +2170,7 @@ export async function contextPack(
 
   // 2) Pack note bodies until budget exhausted
   sections.push("## Top notes");
-  for (const m of search.matches) {
+  for (const m of searchMatches) {
     if (charsUsed >= charBudget) break;
     try {
       const note = await vault.readNote(vault.resolveInside(m.path), undefined);
@@ -2120,6 +2181,10 @@ export async function contextPack(
       // so we leave room for backlinks + dailies).
       const noteCap = Math.min(body.length, Math.max(500, Math.floor(remaining * 0.5)));
       const trimmed = body.length <= noteCap ? body : `${body.slice(0, noteCap)}\n\n[…truncated…]`;
+      // Keep query-to-path provenance in the bounded `research` trace rather
+      // than repeating potentially long query text before every note body.
+      // This preserves the token budget for evidence and avoids a query-length
+      // × selected-note response amplifier.
       const block = `### ${m.path}\n\n${trimmed}\n`;
       sections.push(block);
       charsUsed += block.length + headerLen;
@@ -2185,7 +2250,8 @@ export async function contextPack(
     estimated_tokens: Math.ceil(bundle.length / 4),
     budget_tokens: budget,
     sections: { notes: notesBytes, backlinks: backlinksBytes, dailies: dailiesBytes },
-    included_notes: includedNotes
+    included_notes: includedNotes,
+    ...(research ? { research } : {})
   };
 }
 

@@ -579,17 +579,18 @@ HyDE retrieval (Gao et al 2023). The caller agent generates a 1–3 sentence syn
 
 ## `obsidian_context_pack`
 
-Given a question, retrieves top-relevant notes (via `obsidian_search`), gathers backlink summaries + optional recent dailies, deduplicates, packs to a token budget, and returns a single ready-to-paste markdown bundle. Saves ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.
+Given a question, retrieves top-relevant notes (via `obsidian_search`), gathers backlink summaries + optional recent dailies, deduplicates, packs to a token budget, and returns a single ready-to-paste markdown bundle. Optional `subqueries[]` runs bounded, sequential coverage-aware retrieval: the original top-1 is preserved, the best available unique candidate is reserved per atomic sub-question, and RRF fills the remaining slots. The default single-query path is unchanged.
 
-| Argument            | Type              | Notes                                                                  |
-|---------------------|-------------------|------------------------------------------------------------------------|
-| `query`             | `string`          | Required. Topic or question to gather context for.                     |
-| `budget_tokens`     | `number?` (≤ 32000)| Approximate token budget. Default 4000 (~4 chars/token).              |
-| `folder`            | `string?`         | Restrict retrieval to a folder.                                        |
-| `include_backlinks` | `boolean?`        | Include 1-line backlink summaries for top-3 notes. Default `true`.     |
-| `recent_dailies`    | `number?` (0–30)  | Include the last N daily-format notes (`YYYY-MM-DD` basenames). Default 0. |
+| Argument            | Type               | Notes                                                                  |
+|---------------------|--------------------|------------------------------------------------------------------------|
+| `query`             | `string`           | Required. Topic or question to gather context for.                     |
+| `subqueries`        | `string[]?` (≤ 5)  | Atomic sub-questions. Exact normalized duplicates are ignored; at most 6 sequential search pipelines including `query`. |
+| `budget_tokens`     | `number?` (≤ 32000)| Approximate token budget. Default 4000 (~4 chars/token).                |
+| `folder`            | `string?`          | Restrict retrieval to a folder.                                        |
+| `include_backlinks` | `boolean?`         | Include 1-line backlink summaries for top-3 notes. Default `true`.      |
+| `recent_dailies`    | `number?` (0–30)   | Include the last N daily-format notes (`YYYY-MM-DD` basenames). Default 0. |
 
-**Returns:** `{ query, budget_tokens, included_notes: [{ path, title, reason }], markdown }`. `markdown` is the packed bundle, ready to paste.
+**Returns:** `{ query, bundle, estimated_tokens, budget_tokens, sections: { notes, backlinks, dailies }, included_notes: string[], research? }`. `research` is present only when a distinct subquery was searched and contains `{ strategy, search_calls, queries: [{ query, top_paths, selected_paths }], zero_hit_queries }`. It is a candidate trace, not a claim that a concept is covered.
 
 ## `obsidian_chat_thread_read`
 
@@ -843,7 +844,7 @@ The note template implements `list`, so MCP clients with a resource browser will
 | `vault_capture`         | `text`, `target_hint?`     | Capture a quick thought into the vault (write, don't organize). |
 | `vault_persona_search`  | `folder`, `query`          | Search the vault as a named persona — folder-scoped + tuned retrieval. |
 | `vault_automation_setup`| `intent`                   | Set up a scheduled vault query (Khoj-style automations) from a free-form intent. |
-| `vault_research`        | `question`                 | Research a complex / multi-hop question via sub-question decomposition. |
+| `vault_research`        | `question`, `max_sub_questions?` | Bounded evidence-first research: atomic decomposition, coverage-aware context packs, covered/unresolved ledger, ranked evidence handoff, then cited synthesis. |
 | `vault_synthesis_page`  | `topic`, `target_path?`    | Synthesize an existing-knowledge topic page from vault content (Karpathy LLM-Wiki synthesis loop). |
 
 ## Path safety

@@ -267,6 +267,40 @@ describe("appendToNote", () => {
     await expect(appendToNote(v, { path: "Read.md", content: "y" })).rejects.toThrow(/read-only/);
   });
 
+  // v3.11.7-rc.1 (whole-repo audit A10) — the descriptor fstat and append
+  // must be one in-process critical section. Exercise TWO Vault instances
+  // because a per-instance queue would still let the exported API race.
+  it("parallel appends across Vault instances cannot jointly exceed maxFileBytes (POSITIVE)", async () => {
+    const target = path.join(root, "Cap.md");
+    for (let trial = 0; trial < 12; trial++) {
+      await fs.writeFile(target, "1234"); // 4 bytes; only one 4-byte append fits under cap=10
+      const a = new Vault(root, { enableWrite: true, maxFileBytes: 10 });
+      const b = new Vault(root, { enableWrite: true, maxFileBytes: 10 });
+      await Promise.all([a.ensureExists(), b.ensureExists()]);
+      const results = await Promise.allSettled([a.appendNote("Cap.md", "AAAA"), b.appendNote("Cap.md", "BBBB")]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+      expect((await fs.stat(target)).size).toBe(8);
+    }
+  });
+
+  it("NEGATIVE control — two uncoordinated O_APPEND handles both pass a stale cap check", async () => {
+    const target = path.join(root, "Raw-cap-race.md");
+    await fs.writeFile(target, "1234");
+    const [a, b] = await Promise.all([fs.open(target, "a"), fs.open(target, "a")]);
+    try {
+      // This is the pre-fix Vault shape: both descriptors observe 4 before
+      // either writes, so both independently conclude 4+4 <= 10.
+      const [aBefore, bBefore] = await Promise.all([a.stat(), b.stat()]);
+      expect(aBefore.size + 4).toBeLessThanOrEqual(10);
+      expect(bBefore.size + 4).toBeLessThanOrEqual(10);
+      await Promise.all([a.writeFile("AAAA", "utf8"), b.writeFile("BBBB", "utf8")]);
+    } finally {
+      await Promise.all([a.close(), b.close()]);
+    }
+    expect((await fs.stat(target)).size).toBe(12);
+  });
+
   it("append never creates a missing note (NEGATIVE control for the old O_CREAT flag)", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();

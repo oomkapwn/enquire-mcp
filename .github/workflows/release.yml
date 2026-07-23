@@ -120,12 +120,11 @@ jobs:
       - name: Version consistency
         run: node scripts/check-version-consistency.mjs
       # v3.7.19 ι class — align audit-level with PR CI (release-time blind-spot fix).
-      # v3.10.0-rc.50 — both steps unified into the scoped wrapper (same thresholds:
-      # prod ≥ moderate, dev ≥ high) so release.yml + ci.yml + prepublishOnly share ONE
-      # gate. It fails on every advisory EXCEPT documented ones in the
-      # scripts/check-audit.mjs ALLOWLIST (each with a rationale + resolution path).
-      - name: npm audit (scoped — prod moderate+, dev high+, documented allowlist)
-        run: node scripts/check-audit.mjs
+      # v3.11.7-rc.8 — the shared wrapper audits both the root lockfile and the graph a
+      # registry consumer resolves without root-only overrides. New and stale advisories
+      # fail closed; any scope-specific exception needs a rationale + removal tracker.
+      - name: Audit source and published-consumer dependency graphs
+        run: npm run check:audit
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"
@@ -133,21 +132,23 @@ jobs:
           node scripts/smoke.mjs "$VAULT" --with-fts
       - name: Resolve npm dist-tag from version
         id: dist_tag
-        # v2.0.0-beta.2 P0 fix: use Node's semver parser instead of a hand-
-        # rolled regex. The previous regex `-([a-z]+)\.[0-9]+$` misrouted
+        # v2.0.0-beta.2 P0 fix: resolve the complete prerelease shape instead
+        # of the old suffix regex `-([a-z]+)\.[0-9]+$`, which misrouted
         # several valid SemVer prereleases to `latest`:
         #   - `2.0.0-rc` (no .N suffix)        → previously latest, now `rc`
         #   - `2.0.0-rc.0+build.1` (build meta) → previously latest, now `rc`
         #   - `2.0.0-alpha-3` (dash separator)  → previously latest, now `alpha-3`
-        # Stable releases (no prerelease segment) still publish under `latest`.
+        # v3.11.7-rc.8: import the audit gate's strict resolver so exception
+        # policy and routing cannot disagree. Stable releases publish under
+        # `latest`; a prerelease identifier named `latest` fails closed.
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          CHANNEL=$(node -e "
-            const v = require('./package.json').version;
-            const m = v.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)/);
-            console.log(m ? m[1].replace(/\..*$/, '') : 'latest');
+          CHANNEL=$(node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            import { releaseChannelForVersion } from './scripts/check-audit.mjs';
+            const v = JSON.parse(readFileSync('./package.json', 'utf8')).version;
+            console.log(releaseChannelForVersion(v));
           ")
-          if [ -z "$CHANNEL" ]; then CHANNEL="latest"; fi
           echo "tag=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Publishing $VERSION under dist-tag '$CHANNEL'"
       - name: Publish with provenance

@@ -4,16 +4,42 @@
 //
 // WHY: a bare `npm audit --audit-level=moderate` cannot allow a single, documented,
 // can't-fix-yet advisory without lowering the bar for EVERYTHING. This wrapper keeps the
-// exact same thresholds (prod ≥ moderate, dev ≥ high) but fails on every advisory EXCEPT
-// the ones in ALLOWLIST below — each of which carries a written rationale + a tracking
-// note. A NEW advisory (not in the allowlist) still fails CI, unchanged.
+// exact same thresholds (prod ≥ moderate, dev ≥ high), audits both the source checkout
+// and the graph a registry consumer resolves, and fails on every advisory EXCEPT the
+// ones in the scope-specific allowlists below. A NEW advisory still fails CI.
 //
 // This is the project's documented-rejection pattern (CHANGELOG, since v3.5.14) applied
 // to supply-chain: accept with reasoning, in a visible, reviewable place, not by
 // weakening the gate.
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
+
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * Resolve a cross-platform executable spec for npm. Prefer the npm CLI
+ * JavaScript entrypoint exposed to npm lifecycle scripts so paths containing
+ * Windows shell metacharacters never pass through `cmd.exe`.
+ *
+ * @param {NodeJS.Platform} platform - Target platform.
+ * @param {NodeJS.ProcessEnv} env - Process environment.
+ * @param {string} execPath - Current Node executable.
+ * @returns {{command:string,argsPrefix:string[]}} Executable and fixed argv prefix.
+ */
+export function npmProcessSpec(platform = process.platform, env = process.env, execPath = process.execPath) {
+  if (typeof env.npm_execpath === "string" && env.npm_execpath.length > 0) {
+    return { command: execPath, argsPrefix: [env.npm_execpath] };
+  }
+  if (platform === "win32") {
+    throw new Error("npm CLI path unavailable on Windows; run this gate through `npm run check:audit`");
+  }
+  return { command: "npm", argsPrefix: [] };
+}
 
 /**
  * Advisories accepted with reasoning. Keyed by GHSA id. Removing an entry re-arms the
@@ -27,7 +53,46 @@ export const ALLOWLIST = {
   // Empty = the strictest posture; add a GHSA here ONLY with a rationale + resolution path.
 };
 
+/**
+ * Temporary exceptions that apply only to the dependency graph a registry
+ * consumer resolves. npm ignores an installed package's `overrides`, so this
+ * list is intentionally separate from the empty source-tree allowlist above.
+ * Every entry must name the unreachable surface and an upstream removal trigger.
+ */
+export const CONSUMER_ALLOWLIST = {
+  "GHSA-frvp-7c67-39w9":
+    "MCP SDK 1.29.0 pins @hono/node-server ^1.19.9, below the first patched 2.0.5; enquire never uses the affected serveStatic API. Remove when https://github.com/modelcontextprotocol/typescript-sdk/issues/2531 ships.",
+  "GHSA-xcpc-8h2w-3j85":
+    "transformers 4.2.0 pins onnxruntime-node 1.24.3, whose adm-zip ^0.5.16 cannot admit patched 0.6.0; enquire never accepts or extracts caller-supplied ZIP archives. Remove when https://github.com/huggingface/transformers.js/issues/1727 resolves upstream.",
+  "GHSA-f88m-g3jw-g9cj":
+    "transformers 4.2.0 pins sharp ^0.34.5, below patched 0.35.0; enquire uses text-only embedding/reranking and never invokes sharp's image/libvips path. Remove with the next transformers release tracked by https://github.com/huggingface/transformers.js/issues/1729."
+};
+
 const SEV_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
+  if (visiting.has(packageName)) return undefined;
+  const vulnerability = vulnerabilities[packageName];
+  if (!isRecord(vulnerability) || !Array.isArray(vulnerability.via) || vulnerability.via.length === 0) {
+    return undefined;
+  }
+  const nextVisiting = new Set(visiting).add(packageName);
+  let maximum = -1;
+  for (const via of vulnerability.via) {
+    const rank = isRecord(via)
+      ? SEV_RANK[via.severity]
+      : typeof via === "string" && Object.hasOwn(vulnerabilities, via)
+        ? advisoryTraceRank(via, vulnerabilities, nextVisiting)
+        : undefined;
+    if (rank === undefined) return undefined;
+    maximum = Math.max(maximum, rank);
+  }
+  return maximum >= 0 ? maximum : undefined;
+}
 
 /**
  * Pure core — given an `npm audit --json` payload, return the distinct advisories at or
@@ -42,45 +107,295 @@ export function offendingAdvisories(auditJson, { minSeverity, allowlist }) {
   const found = new Map();
   for (const [pkg, v] of Object.entries(auditJson?.vulnerabilities ?? {})) {
     for (const via of v?.via ?? []) {
-      if (via && typeof via === "object" && typeof via.url === "string") {
-        const m = /GHSA-[\w-]+/.exec(via.url);
-        if (!m) continue;
-        const sev = via.severity ?? v.severity ?? "low";
-        if ((SEV_RANK[sev] ?? 0) < floor) continue;
-        found.set(m[0], { id: m[0], severity: sev, title: via.title ?? "", module: via.name ?? pkg });
+      if (via && typeof via === "object") {
+        const url = typeof via.url === "string" ? via.url : "";
+        const ghsa = /GHSA-[\w-]+/.exec(url)?.[0];
+        const source =
+          typeof via.source === "number" || typeof via.source === "string" ? `npm:${via.source}` : undefined;
+        // GHSA is the stable allowlist key when present. A future non-GHSA npm
+        // advisory must still fail closed instead of disappearing from the gate.
+        const id = ghsa ?? source ?? (url ? `url:${url}` : `unidentified:${pkg}:${via.title ?? "advisory"}`);
+        const sev = typeof (via.severity ?? v.severity) === "string" ? (via.severity ?? v.severity) : "unknown";
+        const rank = SEV_RANK[sev];
+        // Unknown future severities fail closed. Known severities below the
+        // configured floor retain the existing scoped behavior.
+        if (rank !== undefined && rank < floor) continue;
+        found.set(id, { id, severity: sev, title: via.title ?? "", module: via.name ?? pkg });
       }
     }
   }
   return [...found.values()].filter((a) => !allowlist[a.id]);
 }
 
-function runAudit(scopeFlag) {
+/**
+ * Reject npm error payloads and malformed/truncated output before advisory
+ * extraction. npm may exit non-zero with JSON for either real findings or a
+ * registry/network failure; only an audit report is safe to inspect.
+ *
+ * @param {unknown} value - Parsed npm JSON output.
+ * @returns {object} Valid npm audit report.
+ */
+export function validateAuditReport(value) {
+  if (
+    !isRecord(value) ||
+    value.auditReportVersion !== 2 ||
+    value.error ||
+    !isRecord(value.vulnerabilities) ||
+    !isRecord(value.metadata) ||
+    !isRecord(value.metadata.vulnerabilities)
+  ) {
+    throw new Error("npm audit returned an error or malformed report; refusing to treat it as clean");
+  }
+  const vulnerabilityNames = Object.keys(value.vulnerabilities);
+  const severityCounts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
+  let traceIsValid = true;
+  for (const name of vulnerabilityNames) {
+    const vulnerability = value.vulnerabilities[name];
+    const declaredRank = isRecord(vulnerability) ? SEV_RANK[vulnerability.severity] : undefined;
+    if (declaredRank === undefined || advisoryTraceRank(name, value.vulnerabilities) !== declaredRank) {
+      traceIsValid = false;
+      break;
+    }
+    severityCounts[vulnerability.severity] += 1;
+  }
+  const metadataMatches =
+    Number.isInteger(value.metadata.vulnerabilities.total) &&
+    value.metadata.vulnerabilities.total === vulnerabilityNames.length &&
+    Object.entries(severityCounts).every(([severity, count]) => value.metadata.vulnerabilities[severity] === count);
+  if (!traceIsValid || !metadataMatches) {
+    throw new Error("npm audit returned an incomplete advisory trace; refusing to treat it as clean");
+  }
+  return value;
+}
+
+/**
+ * Build a clean consumer manifest that installs the actual packed artifact.
+ * All resolution-affecting fields come from that tarball's package.json;
+ * the consumer root contributes no overrides.
+ *
+ * @param {string} packageName - Name reported by `npm pack --json`.
+ * @param {string} tarballSpec - Absolute file: URL for the tarball.
+ * @returns {object} A private clean-consumer manifest.
+ */
+export function packedConsumerManifest(packageName, tarballSpec) {
+  return {
+    name: "enquire-mcp-published-consumer-audit",
+    version: "0.0.0",
+    private: true,
+    dependencies: { [packageName]: tarballSpec }
+  };
+}
+
+const SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+/**
+ * Resolve the npm dist-tag from a strict SemVer package version.
+ *
+ * A prerelease identifier named `latest` is rejected rather than allowed to
+ * alias npm's stable channel. The release workflow imports this same resolver,
+ * keeping publication routing and consumer-exception policy in one semantic
+ * space.
+ *
+ * @param {string} version - Packed or source package version.
+ * @returns {string} `latest` for stable versions, otherwise the first prerelease identifier.
+ */
+export function releaseChannelForVersion(version) {
+  const match = SEMVER_PATTERN.exec(version);
+  if (!match) throw new Error(`invalid package version in packed artifact: ${version}`);
+  const prerelease = match[4];
+  if (!prerelease) return "latest";
+  const channel = prerelease.split(".")[0];
+  if (channel === "latest") {
+    throw new Error(`prerelease version cannot target the stable npm channel: ${version}`);
+  }
+  return channel;
+}
+
+/**
+ * Consumer exceptions are permitted only on the explicit `rc` prerelease
+ * channel. Stable versions and other prerelease channels receive an empty
+ * effective allowlist, so neither a version bump nor a dist-tag-shaped
+ * prerelease can promote a known advisory to npm `latest`.
+ *
+ * @param {string} version - Packed package version.
+ * @param {Record<string,string>} allowlist - Configured RC-only exceptions.
+ * @returns {Record<string,string>} Effective allowlist for this release channel.
+ */
+export function consumerAllowlistForVersion(version, allowlist) {
+  return releaseChannelForVersion(version) === "rc" ? allowlist : {};
+}
+
+/**
+ * Find exceptions whose advisory has disappeared from the resolved graph.
+ *
+ * @param {Array<{id:string}>} advisories - Current thresholded advisories.
+ * @param {Record<string,string>} allowlist - Expected temporary exceptions.
+ * @returns {string[]} Stale GHSA ids that must be removed.
+ */
+export function staleAllowlistEntries(advisories, allowlist) {
+  const observed = new Set(advisories.map((advisory) => advisory.id));
+  return Object.keys(allowlist).filter((id) => !observed.has(id));
+}
+
+/**
+ * Find exceptions missing either a removal instruction or upstream tracker URL.
+ *
+ * @param {Record<string,string>} allowlist - Temporary exception policy.
+ * @returns {string[]} Invalid GHSA ids.
+ */
+export function invalidAllowlistEntries(allowlist) {
+  return Object.entries(allowlist)
+    .filter(([, reason]) => {
+      const hasRemovalInstruction = /\bRemove\b/.test(reason);
+      const hasGitHubIssue = (reason.match(/https:\/\/\S+/g) ?? []).some((candidate) => {
+        try {
+          const tracker = new URL(candidate.replace(/[),.;]+$/, ""));
+          const segments = tracker.pathname.split("/").filter(Boolean);
+          return (
+            tracker.origin === "https://github.com" &&
+            tracker.username === "" &&
+            tracker.password === "" &&
+            segments.length === 4 &&
+            segments[2] === "issues" &&
+            /^\d+$/.test(segments[3] ?? "")
+          );
+        } catch {
+          return false;
+        }
+      });
+      return !hasRemovalInstruction || !hasGitHubIssue;
+    })
+    .map(([id]) => id);
+}
+
+function runNpm(args, options) {
+  const { command, argsPrefix } = npmProcessSpec();
+  return execFileSync(command, [...argsPrefix, ...args], {
+    ...options,
+    // `npm publish --dry-run` exports npm_config_dry_run=true to child
+    // processes. The audit's throwaway pack/install must still materialize.
+    env: { ...process.env, ...options?.env, npm_config_dry_run: "false" }
+  });
+}
+
+function runAudit(scopeFlag, cwd = REPO_ROOT) {
+  let output;
   try {
-    return JSON.parse(
-      execSync(`npm audit ${scopeFlag} --json`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-    );
+    output = runNpm(["audit", scopeFlag, "--json"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
   } catch (err) {
     // npm audit exits non-zero when vulns exist; the JSON is still on stdout.
-    const out = err?.stdout?.toString() ?? "";
-    if (!out.trim()) throw new Error(`npm audit produced no JSON: ${err?.message ?? err}`);
-    return JSON.parse(out);
+    output = err?.stdout?.toString() ?? "";
+    if (!output.trim()) throw new Error(`npm audit produced no JSON: ${err?.message ?? err}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch (err) {
+    throw new Error(`npm audit produced invalid JSON: ${err?.message ?? err}`);
+  }
+  return validateAuditReport(parsed);
+}
+
+function runPublishedConsumerAudit() {
+  const dir = mkdtempSync(path.join(tmpdir(), "enquire-consumer-audit-"));
+  try {
+    const packed = JSON.parse(
+      runNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"]
+      })
+    )?.[0];
+    if (
+      !packed ||
+      typeof packed.name !== "string" ||
+      typeof packed.version !== "string" ||
+      typeof packed.filename !== "string" ||
+      path.basename(packed.filename) !== packed.filename ||
+      !packed.filename.endsWith(".tgz")
+    ) {
+      throw new Error("npm pack returned an invalid artifact description");
+    }
+    const tarballPath = path.join(dir, packed.filename);
+    const consumerDir = path.join(dir, "consumer");
+    mkdirSync(consumerDir);
+    writeFileSync(
+      path.join(consumerDir, "package.json"),
+      `${JSON.stringify(packedConsumerManifest(packed.name, pathToFileURL(tarballPath).href), null, 2)}\n`
+    );
+    runNpm(["install", "--package-lock-only", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"], {
+      cwd: consumerDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    return { audit: runAudit("--omit=dev", consumerDir), version: packed.version };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
 if (isEntrypoint(import.meta.url)) {
   // Same thresholds as the bare gate this replaces: prod ≥ moderate, dev ≥ high.
-  const prod = offendingAdvisories(runAudit("--omit=dev"), { minSeverity: "moderate", allowlist: ALLOWLIST });
-  const dev = offendingAdvisories(runAudit("--include=dev"), { minSeverity: "high", allowlist: ALLOWLIST });
-  const offenders = [...new Map([...prod, ...dev].map((a) => [a.id, a])).values()];
-  const allowed = Object.keys(ALLOWLIST);
+  const prodAudit = runAudit("--omit=dev");
+  const devAudit = runAudit("--include=dev");
+  const prodAll = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: {} });
+  const devAll = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: {} });
+  const prod = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: ALLOWLIST });
+  const dev = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: ALLOWLIST });
+  const { audit: consumerAudit, version: consumerVersion } = runPublishedConsumerAudit();
+  const consumerAll = offendingAdvisories(consumerAudit, { minSeverity: "moderate", allowlist: {} });
+  const effectiveConsumerAllowlist = consumerAllowlistForVersion(consumerVersion, CONSUMER_ALLOWLIST);
+  const consumer = offendingAdvisories(consumerAudit, {
+    minSeverity: "moderate",
+    allowlist: effectiveConsumerAllowlist
+  });
+  const offenders = [...new Map([...prod, ...dev, ...consumer].map((a) => [a.id, a])).values()];
+  const allowed = Object.keys(effectiveConsumerAllowlist);
+  const sourceAll = [...new Map([...prodAll, ...devAll].map((a) => [a.id, a])).values()];
+  const staleSourceAllowlist = staleAllowlistEntries(sourceAll, ALLOWLIST);
+  const staleConsumerAllowlist = staleAllowlistEntries(consumerAll, CONSUMER_ALLOWLIST);
+  const invalidSourceAllowlist = invalidAllowlistEntries(ALLOWLIST);
+  const invalidConsumerAllowlist = invalidAllowlistEntries(CONSUMER_ALLOWLIST);
   if (offenders.length > 0) {
     console.error("[check-audit] FAIL — advisories not in the documented allowlist:");
     for (const a of offenders) console.error(`  ${a.id} (${a.severity}) ${a.module} — ${a.title}`);
-    console.error("\nFix the dependency, or add the GHSA to scripts/check-audit.mjs ALLOWLIST with a rationale.");
+    console.error(
+      "\nFix the dependency, or add the advisory ID to the source allowlist or RC-only consumer allowlist."
+    );
+    process.exit(1);
+  }
+  if (staleSourceAllowlist.length > 0 || staleConsumerAllowlist.length > 0) {
+    console.error(
+      `[check-audit] FAIL — stale allowlist entries (upstream is now clean): ` +
+        [
+          staleSourceAllowlist.length ? `source=${staleSourceAllowlist.join(",")}` : "",
+          staleConsumerAllowlist.length ? `consumer=${staleConsumerAllowlist.join(",")}` : ""
+        ]
+          .filter(Boolean)
+          .join(" ")
+    );
+    console.error("Remove the resolved exception instead of carrying a silent permanent waiver.");
+    process.exit(1);
+  }
+  if (invalidSourceAllowlist.length > 0 || invalidConsumerAllowlist.length > 0) {
+    console.error(
+      `[check-audit] FAIL — exceptions lack a removal instruction or upstream URL: ` +
+        [
+          invalidSourceAllowlist.length ? `source=${invalidSourceAllowlist.join(",")}` : "",
+          invalidConsumerAllowlist.length ? `consumer=${invalidConsumerAllowlist.join(",")}` : ""
+        ]
+          .filter(Boolean)
+          .join(" ")
+    );
     process.exit(1);
   }
   console.log(
-    `[check-audit] OK — no un-allowlisted advisories (prod ≥ moderate, dev ≥ high).` +
-      (allowed.length ? ` Allowlisted (documented): ${allowed.join(", ")}.` : "")
+    `[check-audit] OK — source tree and published-consumer resolution have no un-allowlisted advisories ` +
+      `(prod ≥ moderate, dev ≥ high). Temporary consumer-only upstream exceptions: ${allowed.join(", ")}.`
   );
 }

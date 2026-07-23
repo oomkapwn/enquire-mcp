@@ -205,10 +205,13 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
     expect(elapsed, "DELETE with an open SSE must not block on DELETE_DRAIN_MS (F1)").toBeLessThan(1500);
   });
 
-  it("an expired drain cancels + rolls back a batch write, returns retryable 409, and preserves the session", async () => {
+  it("rolls back an expired write drain and rejects a genuinely overlapping DELETE", async () => {
     const shortRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-delrace-timeout-"));
     const shortToken = "delete-timeout-token-1234567890abcdef";
     let shortServer: import("node:http").Server | undefined;
+    let blockNextDelete = false;
+    let deleteEntered: (() => void) | undefined;
+    let deleteBarrier: Promise<void> | undefined;
     try {
       await Promise.all(
         Array.from({ length: 250 }, (_, i) =>
@@ -226,7 +229,15 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
           stateful: true,
           enableWrite: true
         },
-        { deleteDrainMs: 0 }
+        {
+          deleteDrainMs: 0,
+          afterDeleteMarkedClosing: async () => {
+            if (!blockNextDelete) return;
+            blockNextDelete = false;
+            deleteEntered?.();
+            await deleteBarrier;
+          }
+        }
       );
       const shortUrl = `http://127.0.0.1:${(shortServer.address() as AddressInfo).port}`;
       const shortPost = (body: unknown, sessionId?: string) =>
@@ -269,24 +280,20 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
         sid
       );
       await new Promise((resolve) => setTimeout(resolve, 10));
-      const deleteRequest = () =>
+      const deleteRequest = (sessionId: string) =>
         fetch(`${shortUrl}/mcp`, {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${shortToken}`, "Mcp-Session-Id": sid }
+          headers: { Authorization: `Bearer ${shortToken}`, "Mcp-Session-Id": sessionId }
         });
-      const [deleteRes, concurrentDeleteRes] = await Promise.all([deleteRequest(), deleteRequest()]);
+      const deleteRes = await deleteRequest(sid);
       const deleteBody = await deleteRes.text();
-      const concurrentDeleteBody = await concurrentDeleteRes.text();
       const writeRes = await writeP;
       const writeBody = await writeRes.text();
 
       expect(deleteRes.status).toBe(409);
       expect(deleteRes.headers.get("Retry-After")).toBe("1");
-      expect(concurrentDeleteRes.status).toBe(409);
-      expect(concurrentDeleteRes.headers.get("Retry-After")).toBe("1");
-      expect([deleteBody, concurrentDeleteBody].some((body) => body.includes("rolled back"))).toBe(true);
+      expect(deleteBody).toContain("rolled back");
       expect(deleteBody).toContain("retry DELETE");
-      expect(concurrentDeleteBody).toContain("retry DELETE");
       expect(writeRes.status).toBe(200);
       expect(writeBody).toContain("request cancelled");
       for (const name of await fs.readdir(shortRoot)) {
@@ -297,12 +304,59 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
       // The timeout path deliberately restored the session instead of
       // terminating its shared transport. Once the cancelled response has
       // drained, the client's retry performs the ordinary clean DELETE.
-      const retry = await fetch(`${shortUrl}/mcp`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${shortToken}`, "Mcp-Session-Id": sid }
-      });
+      const retry = await deleteRequest(sid);
       expect(retry.status).toBe(200);
       await retry.text();
+
+      // Client-side Promise.all does not prove that two HTTP handlers overlap:
+      // the second request can arrive after rollback re-opens the session and
+      // then legitimately return 200. Hold the owner immediately after it
+      // marks the session closing so this phase exercises the actual server
+      // admission race deterministically.
+      const idleInit = await shortPost({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "delete-overlap", version: "1" }
+        }
+      });
+      const idleSid = idleInit.headers.get("Mcp-Session-Id");
+      await idleInit.text();
+      expect(idleSid).toBeTruthy();
+      if (!idleSid) throw new Error("missing overlap session id");
+      await shortPost({ jsonrpc: "2.0", method: "notifications/initialized" }, idleSid);
+
+      let releaseDelete = (): void => {};
+      const ownerEntered = new Promise<void>((resolve) => {
+        deleteEntered = resolve;
+      });
+      deleteBarrier = new Promise<void>((resolve) => {
+        releaseDelete = resolve;
+      });
+      blockNextDelete = true;
+      const ownerDeleteP = deleteRequest(idleSid);
+      await ownerEntered;
+
+      let concurrentDeleteRes: Response;
+      let concurrentDeleteBody: string;
+      try {
+        concurrentDeleteRes = await deleteRequest(idleSid);
+        concurrentDeleteBody = await concurrentDeleteRes.text();
+      } finally {
+        releaseDelete();
+      }
+      const ownerDeleteRes = await ownerDeleteP;
+      const ownerDeleteBody = await ownerDeleteRes.text();
+
+      expect(concurrentDeleteRes.status).toBe(409);
+      expect(concurrentDeleteRes.headers.get("Retry-After")).toBe("1");
+      expect(concurrentDeleteBody).toContain("already in progress");
+      expect(concurrentDeleteBody).toContain("retry DELETE");
+      expect(ownerDeleteRes.status).toBe(200);
+      expect(ownerDeleteBody).toBe("");
     } finally {
       if (shortServer) await shutdownHttpServer(shortServer);
       await fs.rm(shortRoot, { recursive: true, force: true }).catch(() => {});

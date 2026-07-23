@@ -289,11 +289,11 @@ jobs:
             echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
             sleep 15
           done
-      # v3.10.0-rc.50 — scoped audit gate (same thresholds: prod ≥ moderate, dev ≥ high)
-      # that fails on every advisory EXCEPT documented, can't-fix-yet ones in
-      # scripts/check-audit.mjs ALLOWLIST (each with a written rationale). Replaces the
-      # bare `npm audit` calls so a single accepted advisory doesn't force lowering the bar.
-      - run: node scripts/check-audit.mjs
+      # v3.11.7-rc.8 — audit both this root lockfile and the dependency graph a registry
+      # consumer resolves without our root-only overrides. Scope-specific exceptions must
+      # carry a rationale + removal tracker; new or stale advisories fail closed.
+      - name: Audit source and published-consumer dependency graphs
+        run: npm run check:audit
 
   version-consistency:
     runs-on: ubuntu-latest

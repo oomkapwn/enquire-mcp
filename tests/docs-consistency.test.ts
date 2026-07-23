@@ -143,14 +143,24 @@ function statefulSecurityPostureProblems(security: string, deleteDrainMs: number
     "lazy, not timer-driven",
     "every authenticated stateful request",
     "inFlightCalls",
+    "inFlightWrites",
     `${seconds} seconds`,
+    "**409**",
+    "Retry-After",
+    "rollback-safe",
+    "concurrent DELETE",
     "**204**",
     "not evicted as idle",
     "pending initializes"
   ]) {
     if (!section.includes(marker)) problems.push(`stateful posture missing ${marker}`);
   }
-  for (const stale of ["A periodic sweep", "tears down the transport immediately", "returns 404, not 500"]) {
+  for (const stale of [
+    "A periodic sweep",
+    "tears down the transport immediately",
+    "returns 404, not 500",
+    "mutation that exceeds the bound remains"
+  ]) {
     if (section.includes(stale)) problems.push(`stateful posture retains stale claim: ${stale}`);
   }
   return problems;

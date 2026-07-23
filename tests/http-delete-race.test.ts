@@ -21,7 +21,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHttpServer } from "../src/http-transport.js";
+import { shutdownHttpServer, startHttpServer } from "../src/http-transport.js";
 
 const TOKEN = "delete-race-token-1234567890abcdef";
 const N_NOTES = 500;
@@ -203,5 +203,109 @@ describe("DELETE /mcp must not abort an in-flight call (audit H-2, rc.20)", () =
     // Pre-rc.21: ~5000ms (drained `inFlight`, which the SSE pins forever). Fixed: prompt.
     expect(delRes.status).toBe(200);
     expect(elapsed, "DELETE with an open SSE must not block on DELETE_DRAIN_MS (F1)").toBeLessThan(1500);
+  });
+
+  it("an expired drain cancels + rolls back a batch write, returns retryable 409, and preserves the session", async () => {
+    const shortRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-delrace-timeout-"));
+    const shortToken = "delete-timeout-token-1234567890abcdef";
+    let shortServer: import("node:http").Server | undefined;
+    try {
+      await Promise.all(
+        Array.from({ length: 250 }, (_, i) =>
+          fs.writeFile(path.join(shortRoot, `n${i}.md`), `# ${i}\n\nREPLACEME cancellation fixture ${i}\n`)
+        )
+      );
+      shortServer = await startHttpServer(
+        {
+          vault: shortRoot,
+          port: 0,
+          host: "127.0.0.1",
+          bearerToken: shortToken,
+          rateLimitPerMinute: 0,
+          installSignalHandlers: false,
+          stateful: true,
+          enableWrite: true
+        },
+        { deleteDrainMs: 0 }
+      );
+      const shortUrl = `http://127.0.0.1:${(shortServer.address() as AddressInfo).port}`;
+      const shortPost = (body: unknown, sessionId?: string) =>
+        fetch(`${shortUrl}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            Authorization: `Bearer ${shortToken}`,
+            ...(sessionId ? { "Mcp-Session-Id": sessionId } : {})
+          },
+          body: JSON.stringify(body)
+        });
+      const init = await shortPost({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "delete-timeout", version: "1" }
+        }
+      });
+      const sid = init.headers.get("Mcp-Session-Id");
+      await init.text();
+      expect(sid).toBeTruthy();
+      if (!sid) throw new Error("missing short-drain session id");
+      await shortPost({ jsonrpc: "2.0", method: "notifications/initialized" }, sid);
+
+      const writeP = shortPost(
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "obsidian_replace_in_notes",
+            arguments: { search: "REPLACEME", replace: "REPLACED" }
+          }
+        },
+        sid
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const deleteRequest = () =>
+        fetch(`${shortUrl}/mcp`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${shortToken}`, "Mcp-Session-Id": sid }
+        });
+      const [deleteRes, concurrentDeleteRes] = await Promise.all([deleteRequest(), deleteRequest()]);
+      const deleteBody = await deleteRes.text();
+      const concurrentDeleteBody = await concurrentDeleteRes.text();
+      const writeRes = await writeP;
+      const writeBody = await writeRes.text();
+
+      expect(deleteRes.status).toBe(409);
+      expect(deleteRes.headers.get("Retry-After")).toBe("1");
+      expect(concurrentDeleteRes.status).toBe(409);
+      expect(concurrentDeleteRes.headers.get("Retry-After")).toBe("1");
+      expect([deleteBody, concurrentDeleteBody].some((body) => body.includes("rolled back"))).toBe(true);
+      expect(deleteBody).toContain("retry DELETE");
+      expect(concurrentDeleteBody).toContain("retry DELETE");
+      expect(writeRes.status).toBe(200);
+      expect(writeBody).toContain("request cancelled");
+      for (const name of await fs.readdir(shortRoot)) {
+        if (!name.endsWith(".md")) continue;
+        expect(await fs.readFile(path.join(shortRoot, name), "utf8")).toContain("REPLACEME");
+      }
+
+      // The timeout path deliberately restored the session instead of
+      // terminating its shared transport. Once the cancelled response has
+      // drained, the client's retry performs the ordinary clean DELETE.
+      const retry = await fetch(`${shortUrl}/mcp`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${shortToken}`, "Mcp-Session-Id": sid }
+      });
+      expect(retry.status).toBe(200);
+      await retry.text();
+    } finally {
+      if (shortServer) await shutdownHttpServer(shortServer);
+      await fs.rm(shortRoot, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });

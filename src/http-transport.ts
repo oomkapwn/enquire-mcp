@@ -35,14 +35,33 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildMcpServer, formatReadyBanner, prepareServerDeps, type ServeOptions, type ServerDeps } from "./index.js";
+import { TOOL_MANIFEST } from "./tool-manifest.js";
 import { DEFAULT_MAX_FILE_BYTES } from "./vault.js";
+import { WriteRequestTracker } from "./write-lifecycle.js";
 
-/** v3.11.6-rc.20 (audit H-2) — how long a `DELETE /mcp` waits for a session's
- *  pre-existing in-flight requests to finish before terminating the shared SDK
- *  transport. Matches `closeAll`'s default drain: long enough for a normal tool
- *  call / batch write to complete + deliver its response, short enough that a
- *  stuck client can't pin the McpServer + SQLite handles indefinitely. */
+/** v3.11.6-rc.20 (audit H-2) — ordinary `DELETE /mcp` request-drain bound.
+ *  Reads that exceed it may be cut off; persistent writes are never cut:
+ *  rc.6 cancels + rolls back safe batches or lets atomic effects finish, keeps
+ *  the session alive, and returns retryable 409. Process shutdown uses the
+ *  same ordinary bound, followed by an integrity tail for persistent writes. */
 const DELETE_DRAIN_MS = 5000;
+const PERSISTENT_WRITE_TOOLS = new Set(
+  TOOL_MANIFEST.filter((tool) => tool.kind === "write" || tool.kind === "feedback").map((tool) => tool.name)
+);
+
+/**
+ * Internal timing controls for deterministic lifecycle tests.
+ *
+ * Production callers should omit this object. It is intentionally separate
+ * from {@link HttpServeOptions} so no CLI/config surface can weaken the normal
+ * five-second drain.
+ *
+ * @internal
+ */
+export interface HttpTransportInternals {
+  /** Override the stateful DELETE call-drain deadline in tests. */
+  deleteDrainMs?: number;
+}
 
 /**
  * Configuration for the HTTP transport. Extends ServeOptions so every
@@ -211,6 +230,29 @@ export function isInitializeRequest(body: unknown): boolean {
   return method === "initialize";
 }
 
+/**
+ * Return true when a JSON-RPC body contains at least one persistent MCP tool
+ * mutation. Handles both single messages and protocol batches.
+ *
+ * Derived from {@link TOOL_MANIFEST}, so a newly registered vault-write or
+ * feedback tool joins the lifecycle counter without a second hand-maintained
+ * name list.
+ *
+ * @param body - Parsed JSON-RPC request body.
+ * @returns Whether the request can mutate vault or feedback persistence.
+ * @internal
+ */
+export function isPersistentWriteRequest(body: unknown): boolean {
+  if (Array.isArray(body)) return body.some(isPersistentWriteRequest);
+  if (!body || typeof body !== "object") return false;
+  const message = body as { method?: unknown; params?: { name?: unknown } };
+  return (
+    message.method === "tools/call" &&
+    typeof message.params?.name === "string" &&
+    PERSISTENT_WRITE_TOOLS.has(message.params.name)
+  );
+}
+
 /** Send a JSON-RPC error response with the given HTTP + RPC status. */
 function sendJsonRpcError(res: ServerResponse, httpStatus: number, code: number, message: string): void {
   if (res.headersSent) return;
@@ -339,6 +381,22 @@ interface StatefulSession {
    */
   inFlightCalls: number;
   /**
+   * POST requests whose response belongs to a persistent mutation. This stays
+   * positive through SDK response delivery, covering the interval after the
+   * write callback settles but before `transport.handleRequest` returns.
+   */
+  inFlightWrites?: number;
+  /**
+   * Per-session persistent-mutation registry. Real stateful sessions always
+   * provide it; optional keeps direct registry fixtures backwards compatible.
+   */
+  writeTracker?: WriteRequestTracker;
+  /**
+   * DELETE timed out on a persistent request. Keep the session unavailable
+   * until every such HTTP response drains, then atomically re-open it.
+   */
+  resumeAfterWrites?: boolean;
+  /**
    * v3.8.7 — once set, the session is being torn down. The entry has
    * already been removed from `registry.sessions`; new requests will
    * 404. Existing in-flight requests are allowed to finish.
@@ -364,10 +422,11 @@ interface StatefulSession {
  *     an empty map and return while an already-reserved initialize inserted a
  *     brand-new live session afterwards.
  *   - `closeAll(timeoutMs)` is the graceful-shutdown drain: waits for
- *     in-flight requests up to `timeoutMs`, then closes every transport
- *     + McpServer pair. Used by `shutdownHttpServer` so tests +
- *     production both leave a clean process state (no leaked SQLite
- *     handles via the per-session embedder + watcher hooks).
+ *     ordinary in-flight requests up to `timeoutMs`, then cancels + rolls back
+ *     safe batch writes and waits for every remaining persistent mutation
+ *     before closing each transport + McpServer pair. Used by
+ *     `shutdownHttpServer` so tests + production both leave a clean process
+ *     state (no leaked SQLite handles via per-session hooks).
  */
 export interface SessionRegistry {
   readonly sessions: Map<string, StatefulSession>;
@@ -392,10 +451,10 @@ export interface SessionRegistry {
   /** Publish a completed session only while the initialize gate is open. */
   registerSession(sid: string, session: StatefulSession): boolean;
   /**
-   * v3.8.7 — graceful drain: mark all sessions as `closing`, wait up to
-   * `timeoutMs` for in-flight requests to finish, then close every
-   * transport + McpServer pair and clear the map. Returns the number of
-   * sessions actually closed. Idempotent (second call is a no-op).
+   * Graceful drain: mark all sessions as `closing`, wait up to `timeoutMs`
+   * for ordinary in-flight requests, then preserve persistent-write integrity
+   * through rollback/finish before closing every transport + McpServer pair.
+   * Returns the number of sessions closed. Idempotent.
    */
   closeAll(timeoutMs?: number): Promise<number>;
 }
@@ -463,7 +522,11 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
       // after our snapshot.
       acceptingInits = false;
       const snapshot = Array.from(sessions.values());
-      for (const s of snapshot) s.closing = true;
+      for (const s of snapshot) {
+        s.closing = true;
+        s.resumeAfterWrites = false;
+        s.writeTracker?.closeAdmission();
+      }
       sessions.clear();
       const deadline = Date.now() + Math.max(0, timeoutMs);
       // One shared bound covers both pending initialize bodies and in-flight
@@ -473,9 +536,19 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
         if (pendingInits === 0 && snapshot.every((s) => s.inFlightCalls === 0)) break;
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
+      // A bounded ordinary drain may expire while a persistent mutation is
+      // still active. Rollback-capable batches receive explicit cancellation;
+      // atomic/single-effect writes finish under the shared write lane. This
+      // integrity tail may extend shutdown beyond `timeoutMs`, but teardown
+      // never closes a response channel while a tool can still mutate disk.
+      for (const s of snapshot) {
+        if (!s.writeTracker) continue;
+        await s.writeTracker.abortRollbackSafe("Server shutdown exceeded the request-drain deadline");
+        await s.writeTracker.waitForAll();
+      }
       // Close everything regardless — best-effort. After timeoutMs an
-      // in-flight handler is "stuck" and we'd rather hand back the port
-      // than wait forever.
+      // in-flight READ handler may be stuck and we'd rather hand back the port
+      // than wait forever. Persistent mutations have completed or rolled back.
       for (const s of snapshot) {
         await s.transport.close().catch(() => {});
         await s.server.close().catch(() => {});
@@ -498,7 +571,9 @@ class SessionRegistryClosingError extends Error {
  * The increment is synchronous (no `await` between increment + the work
  * starting), so the idle sweep can never see `inFlight === 0` while a
  * handler is mid-flight. The decrement runs in a `finally` so it fires
- * on both success + rejection paths.
+ * on both success + rejection paths. `isWrite` additionally holds
+ * `inFlightWrites` through SDK response delivery, so DELETE cannot miss a
+ * write whose callback settled just before `handleRequest` returns.
  *
  * v3.11.6-rc.21 (rc.20 re-sweep F1) — `isCall` distinguishes a DRAINABLE request
  * (a POST tool call / initialize, which must be allowed to complete before
@@ -507,14 +582,30 @@ class SessionRegistryClosingError extends Error {
  * idle-sweep sees the session as active); only calls bump `inFlightCalls` (what
  * DELETE / closeAll drain on).
  */
-async function runWithRefcount<T>(session: StatefulSession, fn: () => Promise<T>, isCall = true): Promise<T> {
+async function runWithRefcount<T>(
+  session: StatefulSession,
+  fn: () => Promise<T>,
+  isCall = true,
+  isWrite = false
+): Promise<T> {
   session.inFlight += 1;
   if (isCall) session.inFlightCalls += 1;
+  if (isWrite) session.inFlightWrites = (session.inFlightWrites ?? 0) + 1;
   try {
     return await fn();
   } finally {
     session.inFlight -= 1;
     if (isCall) session.inFlightCalls -= 1;
+    if (isWrite) {
+      session.inFlightWrites = Math.max(0, (session.inFlightWrites ?? 1) - 1);
+      if (session.inFlightWrites === 0) {
+        session.writeTracker?.clearRollbackAbort();
+        if (session.resumeAfterWrites) {
+          session.resumeAfterWrites = false;
+          session.closing = false;
+        }
+      }
+    }
   }
 }
 
@@ -577,7 +668,8 @@ export function createHttpHandler(
    * `httpServerExtras` WeakMap. Existing call sites that don't pass
    * `out` are unaffected (backwards compatible).
    */
-  out?: { registry: SessionRegistry | null }
+  out?: { registry: SessionRegistry | null },
+  internals: HttpTransportInternals = {}
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const mcpPath = opts.mcpPath ?? "/mcp";
   const healthPath = opts.healthPath ?? "/health";
@@ -593,6 +685,7 @@ export function createHttpHandler(
   const stateful = opts.stateful === true;
   const idleTimeoutMs = opts.sessionIdleTimeoutMs ?? 30 * 60 * 1000; // 30 min default
   const maxSessions = opts.maxSessions ?? 100;
+  const deleteDrainMs = Math.max(0, internals.deleteDrainMs ?? DELETE_DRAIN_MS);
   const registry = stateful ? createSessionRegistry(idleTimeoutMs) : null;
   if (out) out.registry = registry;
 
@@ -673,19 +766,26 @@ export function createHttpHandler(
           return;
         }
         const session = registry.sessions.get(sessionId);
-        if (!session || session.closing) {
-          // Idempotent — if the session is already gone (or being torn
-          // down), treat as success.
+        if (!session) {
+          // Idempotent only once the session is genuinely absent.
           res.statusCode = 204;
           res.end();
           return;
         }
-        // v3.8.7 P2-10 — mark closing + remove from map so concurrent GETs/POSTs
-        // that arrive during teardown 404 instead of joining a half-closed session.
-        // (Snapshot the entry locally first — `delete` removes it from the map but
-        // the entry stays referenced by `session`.)
+        if (session.closing) {
+          // Another DELETE owns this lifecycle transition. A false 204 here
+          // would be unsafe: the owner may retain the session with 409 after
+          // cancelling a batch write. Tell the caller to retry instead.
+          res.setHeader("Retry-After", "1");
+          sendJsonRpcError(res, 409, -32001, "Session termination is already in progress; retry DELETE");
+          return;
+        }
+        // Mark closing but retain the entry while draining. Concurrent GET/POST
+        // sees `closing` and rejects; a concurrent DELETE sees the explicit
+        // retryable state above. Removing the entry here would make that second
+        // DELETE return a false idempotent 204 if this request later retained
+        // the session after rollback.
         session.closing = true;
-        registry.sessions.delete(sessionId);
         // v3.11.6-rc.20 (external audit H-2) — DRAIN pre-existing in-flight
         // requests BEFORE routing the DELETE into the shared SDK transport.
         // Pre-rc.20 `handleRequest(DELETE)` — which tears the transport down at
@@ -698,11 +798,12 @@ export function createHttpHandler(
         // EXISTING ones to finish — delivering their complete responses and
         // completing their mutations — before terminating. The DELETE's own
         // refcount is not yet incremented here, so `inFlightCalls` reflects ONLY
-        // the pre-existing POST tool calls / initialize. Bounded (`DELETE_DRAIN_MS`)
-        // so a stuck tool call can't pin the McpServer + SQLite handles forever;
-        // a mutation that runs longer than the bound is the documented residual
-        // (the durable fix — an abort signal threaded through rollback-safe batch
-        // writes — is a larger, separate change).
+        // the pre-existing POST tool calls / initialize. The ordinary wait is
+        // bounded (`DELETE_DRAIN_MS`) so a stuck read cannot pin the McpServer
+        // forever. Persistent writes have a stronger tail below: rollback-safe
+        // batches are cancelled + restored, finish-only effects complete, and
+        // DELETE retains the session with retryable 409 instead of cutting the
+        // transport or losing the original tool response.
         //
         // v3.11.6-rc.21 (rc.20 re-sweep F1) — drain `inFlightCalls`, NOT `inFlight`.
         // `inFlight` also counts the long-lived GET SSE stream, which
@@ -711,10 +812,46 @@ export function createHttpHandler(
         // spun the full 5s on every clean DELETE with an open notification
         // stream. Draining `inFlightCalls` lets the DELETE close the SSE
         // immediately while still waiting for a genuine in-flight tool call.
-        const drainDeadline = Date.now() + DELETE_DRAIN_MS;
+        const drainDeadline = Date.now() + deleteDrainMs;
         while (session.inFlightCalls > 0 && Date.now() < drainDeadline) {
           await new Promise<void>((resolve) => setTimeout(resolve, 10));
         }
+        if (session.inFlightCalls > 0 && (session.inFlightWrites ?? 0) > 0 && session.writeTracker) {
+          // The normal drain expired while a persistent mutation was still
+          // active. Abort only the batch operations that promise rollback;
+          // atomic/single-effect writes are allowed to finish. In either case
+          // KEEP the transport alive and return retryable 409 so the original
+          // tool response can be delivered. A later DELETE can terminate the
+          // now-drained session without ambiguity.
+          const cancellation = await session.writeTracker.abortRollbackSafe();
+          if (registry.acceptingInits && registry.sessions.get(sessionId) === session) {
+            // Keep GET/POST/other DELETE requests out until the original write
+            // response drains. `runWithRefcount` then clears the cancellation
+            // admission latch and re-opens this exact session.
+            session.resumeAfterWrites = true;
+            if ((session.inFlightWrites ?? 0) === 0) {
+              session.resumeAfterWrites = false;
+              session.writeTracker.clearRollbackAbort();
+              session.closing = false;
+            }
+            res.setHeader("Retry-After", "1");
+            const message =
+              cancellation.finishOnly > 0
+                ? "Session busy: a persistent write is finishing; retry DELETE"
+                : cancellation.aborted > 0
+                  ? "Session busy: a batch write was cancelled and rolled back; retry DELETE"
+                  : "Session busy: a persistent write response is still draining; retry DELETE";
+            sendJsonRpcError(res, 409, -32001, message);
+            return;
+          }
+          session.closing = true;
+          await session.writeTracker.waitForAll();
+          await session.transport.close().catch(() => {});
+          await session.server.close().catch(() => {});
+          sendJsonRpcError(res, 503, -32000, "Server is shutting down");
+          return;
+        }
+        registry.sessions.delete(sessionId);
         try {
           // The DELETE itself is a lifecycle op, not a drainable call.
           await runWithRefcount(session, () => session.transport.handleRequest(req, res), false);
@@ -784,7 +921,12 @@ export function createHttpHandler(
         }
         session.lastActivityMs = Date.now();
         try {
-          await runWithRefcount(session, () => session.transport.handleRequest(req, res, body));
+          await runWithRefcount(
+            session,
+            () => session.transport.handleRequest(req, res, body),
+            true,
+            isPersistentWriteRequest(body)
+          );
         } catch (err) {
           process.stderr.write(
             `enquire http: stateful transport error — ${err instanceof Error ? err.message : String(err)}\n`
@@ -861,7 +1003,8 @@ export function createHttpHandler(
           let session: StatefulSession | undefined;
           let transport: InstanceType<typeof StreamableHTTPServerTransport> | undefined;
           try {
-            server = buildMcpServer(deps, opts);
+            const writeTracker = new WriteRequestTracker();
+            server = buildMcpServer(deps, opts, writeTracker);
             session = {
               server,
               // Filled in below once `transport` is constructed.
@@ -869,6 +1012,9 @@ export function createHttpHandler(
               lastActivityMs: Date.now(),
               inFlight: 0,
               inFlightCalls: 0,
+              inFlightWrites: 0,
+              writeTracker,
+              resumeAfterWrites: false,
               closing: false
             };
             const sess = session; // captured (definitely-assigned) for the SDK callbacks
@@ -1087,8 +1233,9 @@ export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CL
  * `prepareServerDeps` opens once at boot.
  *
  * Order matters:
- *   1. `registry.closeAll()` — bounded wait for in-flight requests to
- *      finish, then close every transport + McpServer in stateful mode.
+ *   1. `registry.closeAll()` — bounded ordinary request drain, followed by
+ *      cancellation/rollback or completion of persistent writes, then close
+ *      every transport + McpServer in stateful mode.
  *   2. `httpServer.close()` — stop accepting new connections + wait for
  *      existing ones to drain. Node's http.Server doesn't actively
  *      terminate keep-alive sockets unless we ask it to.
@@ -1155,9 +1302,9 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
 /**
  * v3.10.0-rc.19 (audit M3) — single SIGINT/SIGTERM orchestrator for the HTTP
  * transport. Returns a handler that awaits the FULL graceful teardown
- * ({@link shutdownHttpServer}: drain in-flight stateful sessions up to
- * `closeAll`'s bound → close the TCP listener → flush the persistent cache →
- * close fts/watcher/embed-db) and only THEN calls `exit`.
+ * ({@link shutdownHttpServer}: bounded ordinary stateful drain → persistent
+ * write integrity tail → close the TCP listener → flush the persistent cache
+ * → close fts/watcher/embed-db) and only THEN calls `exit`.
  *
  * Before rc.19, SIGINT/SIGTERM had FOUR separate listeners registered on the
  * same signal: a cache-`flush` handler, a `closeWatcher` handler, a `closeFts`
@@ -1190,10 +1337,16 @@ export function makeHttpShutdownHandler(
 }
 
 /**
- * Bind and start the HTTP transport. Returns the underlying http.Server
- * so callers (tests + CLI) can listen for `listening` / close it.
+ * Bind and start the HTTP transport.
+ *
+ * @param opts - HTTP serve configuration.
+ * @param internals - Test-only timing controls; production callers omit it.
+ * @returns The underlying server for lifecycle control and inspection.
  */
-export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServer> {
+export async function startHttpServer(
+  opts: HttpServeOptions,
+  internals: HttpTransportInternals = {}
+): Promise<HttpServer> {
   if (!opts.bearerToken || opts.bearerToken.length < 16) {
     throw new Error(
       "enquire serve-http: --bearer-token is required and must be ≥16 chars. " +
@@ -1204,7 +1357,7 @@ export async function startHttpServer(opts: HttpServeOptions): Promise<HttpServe
   // v3.8.7 P2-11 — capture the stateful registry via the out-param so
   // we can wire it into `shutdownHttpServer` via the WeakMap below.
   const handlerOut: { registry: SessionRegistry | null } = { registry: null };
-  const handler = createHttpHandler(deps, opts, handlerOut);
+  const handler = createHttpHandler(deps, opts, handlerOut, internals);
   const httpServer = createServer((req, res) => {
     void handler(req, res);
   });

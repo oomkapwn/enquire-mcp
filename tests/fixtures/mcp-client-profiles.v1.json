@@ -1,0 +1,138 @@
+{
+  "formatVersion": 1,
+  "policy": {
+    "mode": "per-client-evidence",
+    "universalLowestCommonDenominator": false,
+    "realClientSmokeTargetIds": [
+      "chatgpt-hosted-mcp",
+      "claude-desktop-mcp",
+      "cursor-mcp",
+      "gemini-hosted-mcp",
+      "grok-hosted-mcp"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "chatgpt-hosted-mcp",
+      "client": "ChatGPT",
+      "profileRevision": 1,
+      "clientVersion": "not-recorded-in-report",
+      "verification": {
+        "status": "reported",
+        "surface": "hosted MCP connector",
+        "lastObserved": "2026-07-18"
+      },
+      "restrictions": [
+        {
+          "id": "array-valued-items",
+          "rule": "forbid-array-items",
+          "scope": "tools/list.inputSchema",
+          "evidence": [
+            {
+              "kind": "user-reported-reproduction",
+              "observedAt": "2026-07-18",
+              "url": "https://github.com/oomkapwn/enquire-mcp/issues/354"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claude-desktop-mcp",
+      "client": "Claude Desktop",
+      "profileRevision": 1,
+      "clientVersion": "unverified",
+      "verification": {
+        "status": "unverified",
+        "surface": "desktop MCP client",
+        "reason": "periodic real-client smoke requires maintainer access"
+      },
+      "restrictions": []
+    },
+    {
+      "id": "cursor-mcp",
+      "client": "Cursor",
+      "profileRevision": 1,
+      "clientVersion": "unverified",
+      "verification": {
+        "status": "unverified",
+        "surface": "desktop MCP client",
+        "reason": "periodic real-client smoke requires maintainer access"
+      },
+      "restrictions": []
+    },
+    {
+      "id": "gemini-hosted-mcp",
+      "client": "Gemini",
+      "profileRevision": 1,
+      "clientVersion": "not-recorded-in-report",
+      "verification": {
+        "status": "reported",
+        "surface": "hosted MCP import",
+        "lastObserved": "2026-07-21"
+      },
+      "restrictions": [
+        {
+          "id": "array-valued-items",
+          "rule": "forbid-array-items",
+          "scope": "tools/list.inputSchema",
+          "evidence": [
+            {
+              "kind": "user-reported-reproduction",
+              "observedAt": "2026-07-21",
+              "url": "https://github.com/oomkapwn/enquire-mcp/issues/360"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "grok-hosted-mcp",
+      "client": "Grok",
+      "profileRevision": 1,
+      "clientVersion": "not-recorded-in-report",
+      "verification": {
+        "status": "reported",
+        "surface": "hosted MCP import",
+        "lastObserved": "2026-07-21"
+      },
+      "restrictions": [
+        {
+          "id": "array-valued-items",
+          "rule": "forbid-array-items",
+          "scope": "tools/list.inputSchema",
+          "evidence": [
+            {
+              "kind": "user-reported-reproduction",
+              "observedAt": "2026-07-21",
+              "url": "https://github.com/oomkapwn/enquire-mcp/issues/360"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "nonBindingEvidence": [
+    {
+      "id": "mcp-json-schema-dialects",
+      "enforced": false,
+      "scope": "MCP protocol baseline, not a provider rejection matrix",
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
+      "note": "MCP defaults to JSON Schema 2020-12 and permits explicit alternative dialects such as draft-07."
+    },
+    {
+      "id": "xai-structured-output-schema-support",
+      "enforced": false,
+      "scope": "xAI structured outputs, not hosted MCP import",
+      "url": "https://docs.x.ai/developers/model-capabilities/text/structured-outputs",
+      "note": "Documents anyOf, oneOf, non-circular refs, defs, and additionalProperties; prevents an unsupported blanket ban."
+    },
+    {
+      "id": "gemini-function-calling-subset",
+      "enforced": false,
+      "scope": "Gemini function calling, not a complete hosted MCP rejection matrix",
+      "url": "https://ai.google.dev/gemini-api/docs/function-calling",
+      "note": "Documents a subset of OpenAPI schema without establishing a universal MCP lowest common denominator."
+    }
+  ]
+}

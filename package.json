@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.11.7-rc.4",
+  "version": "3.11.7-rc.5",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1617 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1624 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -86,6 +86,7 @@
     "check:per-file-coverage": "node scripts/check-per-file-coverage.mjs",
     "check:oia": "node scripts/oia-walk.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
+    "schema:inventory": "node scripts/mcp-schema-inventory.mjs",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write",
     "format": "biome format --write",

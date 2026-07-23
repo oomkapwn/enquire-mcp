@@ -1,159 +1,264 @@
-// v3.11.6-rc.17 (issues #354 + #360) — MCP tool-schema compatibility invariant.
+// v3.11.7-rc.5 — generalized emitted MCP schema-conformance gate.
 //
-// Two independent users reported that `obsidian_read_pdf` / `obsidian_ocr_pdf`
-// broke the ChatGPT / Gemini / Grok connectors ENTIRELY (not just PDF calls —
-// all tool schemas are sent to the provider up front). Root cause: the `pages`
-// parameter used `z.tuple([A, B])`, which serialises to JSON Schema draft-4
-// TUPLE form — `items: [schemaA, schemaB]`, an ARRAY of schemas. Those clients
-// reject it ("'items' must be a schema, not an array; for tuple validation use
-// 'prefixItems'"). The fix is a homogeneous `z.array(...).length(2)` →
-// `items: {schema}` + minItems/maxItems, which every MCP client accepts.
+// The rc.17 fix for issues #354/#360 rejected one known-bad shape
+// (`items: [...]`) but did not pin the rest of the tools/list contract. This
+// gate now captures the maximally-enabled built server and checks:
+//   1. exact deterministic schema inventory (every tool, every schema node),
+//   2. project-owned dialect/root/size/depth policy, and
+//   3. versioned, evidence-backed per-client rules.
 //
-// This is the DURABLE class gate: it spawns the real server, reads the exact
-// JSON Schema every client sees (`tools/list`), and asserts NO tool property
-// (recursively) ships `items` as an array. It catches any future `z.tuple` in
-// any registered tool, however introduced — a behavioral MCP-contract invariant,
-// not a source grep. (mutation-verified: reverting `pages` to `z.tuple` fails it.)
+// Client constraints are intentionally NOT promoted to a universal lowest
+// common denominator. Negative controls below prove both directions: known
+// array-items regressions fail the three reported clients, while anyOf/$ref/
+// additionalProperties remain allowed absent evidence for a specific client.
 
-import { spawn } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+// @ts-expect-error — .mjs audit helper, no type declarations (CLI guarded by isEntrypoint).
+import {
+  buildSchemaInventory,
+  captureEmittedSchemaInventory,
+  compareSchemaInventories,
+  evaluateClientProfiles,
+  findArrayItems,
+  SCHEMA_LIMITS,
+  validateClientProfileDocument,
+  validateProjectSchemaPolicy
+} from "../scripts/lib/mcp-schema-conformance.mjs";
 import { MAX_RESEARCH_SUBQUERIES } from "../src/research-protocol.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const distEntry = path.join(repoRoot, "dist", "index.js");
+const inventoryFixture = path.join(repoRoot, "tests", "fixtures", "mcp-schema-inventory.v1.json");
+const profilesFixture = path.join(repoRoot, "tests", "fixtures", "mcp-client-profiles.v1.json");
 const distExists = (): boolean => existsSync(distEntry);
 
-interface Tool {
+interface SchemaObject extends Record<string, unknown> {
+  $schema?: string;
+  type?: string;
+  properties?: Record<string, SchemaObject>;
+  items?: unknown;
+}
+
+interface SchemaTool {
   name: string;
-  inputSchema?: unknown;
+  inputSchema: SchemaObject;
+  outputSchema?: SchemaObject;
 }
 
-let tools: Tool[] = [];
-let vaultDir: string | null = null;
+interface SchemaInventory {
+  formatVersion: number;
+  schemaDigest: string;
+  toolCount: number;
+  tools: SchemaTool[];
+}
 
-/** Spawn `serve --include-pdfs` (so the PDF tools register), handshake, and
- *  return the tools/list array. Minimal self-contained JSON-RPC over stdio. */
-async function fetchTools(vaultPath: string): Promise<Tool[]> {
-  const proc = spawn(
-    "node",
-    [distEntry, "serve", "--vault", vaultPath, "--include-pdfs", "--diagnostic-search-tools"],
-    { stdio: ["pipe", "pipe", "pipe"] }
-  );
-  let buf = "";
-  const pending = new Map<number, (m: { result?: unknown }) => void>();
-  proc.stdout.on("data", (d) => {
-    buf += d.toString();
-    for (let nl = buf.indexOf("\n"); nl !== -1; nl = buf.indexOf("\n")) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      try {
-        const msg = JSON.parse(line);
-        if (typeof msg.id === "number" && pending.has(msg.id)) {
-          pending.get(msg.id)?.(msg);
-          pending.delete(msg.id);
-        }
-      } catch {
-        // banner / non-JSON — ignore
-      }
-    }
-  });
-  let nextId = 1;
-  const rpc = (method: string, params?: unknown): Promise<{ result?: unknown }> => {
-    const id = nextId++;
-    return new Promise((resolve, reject) => {
-      pending.set(id, resolve);
-      proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-      setTimeout(() => {
-        if (pending.has(id)) {
-          pending.delete(id);
-          reject(new Error(`Timeout on ${method}`));
-        }
-      }, 20000);
-    });
+interface ClientRestriction {
+  rule: string;
+  evidence: unknown[];
+}
+
+interface ClientProfile {
+  id: string;
+  restrictions: ClientRestriction[];
+}
+
+interface ClientProfileDocument {
+  formatVersion: number;
+  policy: {
+    mode: string;
+    universalLowestCommonDenominator: boolean;
+    realClientSmokeTargetIds: string[];
   };
-  try {
-    await rpc("initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "schema-compat-test", version: "0.0.1" }
-    });
-    proc.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
-    const list = await rpc("tools/list", {});
-    return ((list.result as { tools?: Tool[] })?.tools ?? []) as Tool[];
-  } finally {
-    proc.kill();
-  }
+  profiles: ClientProfile[];
+  nonBindingEvidence: Array<{ enforced: boolean }>;
 }
 
-/** Recursively collect every JSON-Schema node whose `items` is an ARRAY (the
- *  draft-4 tuple form MCP clients reject). Returns `where` paths for diagnosis. */
-function findArrayItems(node: unknown, at: string, out: string[]): void {
-  if (!node || typeof node !== "object") return;
-  const obj = node as Record<string, unknown>;
-  if (Array.isArray(obj.items)) out.push(`${at}.items (array of ${obj.items.length} schemas)`);
-  for (const [k, v] of Object.entries(obj)) {
-    if (v && typeof v === "object") findArrayItems(v, `${at}.${k}`, out);
-  }
+let inventory: SchemaInventory | null = null;
+let profiles: ClientProfileDocument;
+
+async function readJson<T>(filename: string): Promise<T> {
+  return JSON.parse(await fs.readFile(filename, "utf8")) as T;
 }
 
-describe("MCP tool-schema client compatibility (rc.17 #354/#360)", () => {
+function clonedTools(): SchemaTool[] {
+  if (!inventory) throw new Error("schema inventory was not captured");
+  return structuredClone(inventory.tools);
+}
+
+describe("emitted MCP schema conformance (v3.11.7-rc.5)", () => {
   beforeAll(async () => {
-    if (!distExists()) return;
-    vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-schema-compat-"));
-    await fs.writeFile(path.join(vaultDir, "a.md"), "# a\nhi\n");
-    tools = await fetchTools(vaultDir);
-  }, 60000);
+    profiles = await readJson<ClientProfileDocument>(profilesFixture);
+    if (distExists()) {
+      inventory = (await captureEmittedSchemaInventory(distEntry)) as SchemaInventory;
+    }
+  }, 60_000);
 
-  afterAll(async () => {
-    if (vaultDir) await fs.rm(vaultDir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  // CI-GUARD (rc.23 convention): dist is always built before `npm test` in CI, so
-  // this behavioral gate MUST run there — fail loud if the precondition vanishes.
-  it("CI GUARD — dist is built in CI so the schema-compat gate actually runs", () => {
+  // CI-GUARD: dist is always built before `npm test` in CI, so this behavioral
+  // gate MUST run there — fail loud if the precondition vanishes.
+  it("CI GUARD — dist is built in CI so the emitted-schema gate actually runs", () => {
     if (!process.env.CI) return;
     expect(distExists(), "dist must be built in CI so tools/list is inspectable").toBe(true);
   });
 
-  it("NO tool ships `items` as an ARRAY (the draft-4 tuple form ChatGPT/Gemini/Grok reject)", (ctx) => {
-    if (!distExists()) return ctx.skip();
-    expect(tools.length).toBeGreaterThan(30); // sanity: the server registered its tools
-    const offenders: string[] = [];
-    for (const t of tools) findArrayItems(t.inputSchema, t.name, offenders);
-    expect(offenders, `tuple-form array-items schemas (use z.array(...).length(N)):\n${offenders.join("\n")}`).toEqual(
-      []
-    );
+  it("the maximally-enabled tools/list exactly matches the committed deterministic inventory", async (ctx) => {
+    if (!inventory) return ctx.skip();
+    const expected = await readJson<SchemaInventory>(inventoryFixture);
+    const comparison = compareSchemaInventories(inventory, expected);
+    expect(comparison.matches, comparison.summary).toBe(true);
+    expect(inventory).toEqual(expected);
+    expect(inventory.toolCount).toBeGreaterThan(30);
+    expect(buildSchemaInventory([...inventory.tools].reverse())).toEqual(inventory);
   });
 
-  it("the PDF tools' `pages` is a homogeneous 2-array (items is an object, not an array)", (ctx) => {
-    if (!distExists()) return ctx.skip();
+  it("every emitted schema satisfies the declared-dialect, object-root, size, and depth policy", (ctx) => {
+    if (!inventory) return ctx.skip();
+    expect(validateProjectSchemaPolicy(inventory.tools)).toEqual([]);
+  });
+
+  it("the five versioned client profiles are valid and the emitted inventory passes their evidenced rules", (ctx) => {
+    if (!inventory) return ctx.skip();
+    expect(validateClientProfileDocument(profiles)).toEqual([]);
+    expect(profiles.policy.mode).toBe("per-client-evidence");
+    expect(profiles.policy.universalLowestCommonDenominator).toBe(false);
+    expect([...profiles.policy.realClientSmokeTargetIds].sort()).toEqual(
+      ["chatgpt-hosted-mcp", "claude-desktop-mcp", "cursor-mcp", "gemini-hosted-mcp", "grok-hosted-mcp"].sort()
+    );
+    expect(evaluateClientProfiles(inventory.tools, profiles)).toEqual([]);
+  });
+
+  it("the PDF tools' pages is a homogeneous 2-array in the real emitted schema", (ctx) => {
+    if (!inventory) return ctx.skip();
     for (const name of ["obsidian_read_pdf", "obsidian_ocr_pdf"]) {
-      const tool = tools.find((t) => t.name === name);
+      const tool = inventory.tools.find((entry) => entry.name === name);
       expect(tool, `${name} must be registered`).toBeDefined();
-      const pages = (tool?.inputSchema as { properties?: Record<string, { items?: unknown; type?: string }> })
-        ?.properties?.pages;
+      const pages = tool?.inputSchema.properties?.pages;
       expect(pages?.type, `${name}.pages type`).toBe("array");
-      // The fix: items is a SINGLE schema object, not an array of schemas.
       expect(Array.isArray(pages?.items), `${name}.pages.items must NOT be an array`).toBe(false);
       expect(typeof pages?.items, `${name}.pages.items must be a schema object`).toBe("object");
     }
   });
 
-  it("context_pack exposes the bearer-reachable subquery fan-out cap in its real MCP schema", (ctx) => {
-    if (!distExists()) return ctx.skip();
-    const tool = tools.find((entry) => entry.name === "obsidian_context_pack");
+  it("context_pack exposes the bearer-reachable subquery fan-out cap in its real emitted schema", (ctx) => {
+    if (!inventory) return ctx.skip();
+    const tool = inventory.tools.find((entry) => entry.name === "obsidian_context_pack");
     expect(tool, "obsidian_context_pack must be registered").toBeDefined();
-    const subqueries = (
-      tool?.inputSchema as {
-        properties?: Record<string, { items?: { maxLength?: number }; maxItems?: number; type?: string }>;
-      }
-    )?.properties?.subqueries;
+    const subqueries = tool?.inputSchema.properties?.subqueries;
     expect(subqueries?.type).toBe("array");
     expect(subqueries?.maxItems).toBe(MAX_RESEARCH_SUBQUERIES);
-    expect(subqueries?.items?.maxLength).toBe(4096);
+    expect((subqueries?.items as SchemaObject | undefined)?.maxLength).toBe(4096);
+  });
+
+  it("NEGATIVE: an array-valued items mutation is rejected by the three reported clients", (ctx) => {
+    if (!inventory) return ctx.skip();
+    const mutant = clonedTools();
+    const pdf = mutant.find((entry) => entry.name === "obsidian_read_pdf");
+    const pages = pdf?.inputSchema.properties?.pages;
+    expect(pages).toBeDefined();
+    if (pages) pages.items = [{ type: "integer" }, { type: "integer" }];
+
+    // Important boundary: draft-07 tuple items is valid JSON Schema and remains
+    // within project resource bounds. The rejection belongs to named profiles.
+    expect(validateProjectSchemaPolicy(mutant)).toEqual([]);
+    expect(findArrayItems(mutant)).toHaveLength(1);
+    const violations = evaluateClientProfiles(mutant, profiles);
+    expect(violations.map((entry: { profileId: string }) => entry.profileId).sort()).toEqual(
+      ["chatgpt-hosted-mcp", "gemini-hosted-mcp", "grok-hosted-mcp"].sort()
+    );
+  });
+
+  it("NEGATIVE: any single emitted-schema mutation produces a named inventory diff", (ctx) => {
+    if (!inventory) return ctx.skip();
+    const mutant = clonedTools();
+    const listNotes = mutant.find((entry) => entry.name === "obsidian_list_notes");
+    expect(listNotes).toBeDefined();
+    if (listNotes) {
+      listNotes.inputSchema.properties = {
+        ...listNotes.inputSchema.properties,
+        _inventory_negative_control: { type: "string" }
+      };
+    }
+    const changed = buildSchemaInventory(mutant) as SchemaInventory;
+    const comparison = compareSchemaInventories(changed, inventory);
+    expect(comparison.matches).toBe(false);
+    expect(comparison.changed).toEqual(["obsidian_list_notes"]);
+    expect(comparison.summary).toContain("obsidian_list_notes");
+  });
+
+  it("NEGATIVE: missing dialect, non-object root, and resource-bound mutations trip project policy", (ctx) => {
+    if (!inventory) return ctx.skip();
+    const malformed = clonedTools();
+    const malformedTarget = malformed[0];
+    expect(malformedTarget).toBeDefined();
+    if (malformedTarget) {
+      delete malformedTarget.inputSchema.$schema;
+      malformedTarget.inputSchema.type = "string";
+    }
+    const malformedErrors = validateProjectSchemaPolicy(malformed).join("\n");
+    expect(malformedErrors).toMatch(/must declare its JSON Schema dialect/);
+    expect(malformedErrors).toMatch(/root type must be object/);
+
+    const oversized = clonedTools();
+    const first = oversized[0];
+    expect(first).toBeDefined();
+    if (first) first.inputSchema.description = "x".repeat(SCHEMA_LIMITS.maxToolBytes);
+    expect(validateProjectSchemaPolicy(oversized).join("\n")).toMatch(/schema bytes .* exceed/);
+
+    const overDeep = clonedTools();
+    const deepTarget = overDeep[0];
+    expect(deepTarget).toBeDefined();
+    let nested: SchemaObject = { type: "string" };
+    for (let index = 0; index <= SCHEMA_LIMITS.maxDepth; index++) nested = { anyOf: [nested] };
+    if (deepTarget) {
+      deepTarget.inputSchema.properties = {
+        ...deepTarget.inputSchema.properties,
+        _depth_negative_control: nested
+      };
+    }
+    expect(validateProjectSchemaPolicy(overDeep).join("\n")).toMatch(/schema depth .* exceeds/);
+  });
+
+  it("NEGATIVE: missing evidence, unknown rules, and binding generic docs fail closed", () => {
+    const noEvidence = structuredClone(profiles);
+    const firstRestriction = noEvidence.profiles[0]?.restrictions[0];
+    expect(firstRestriction).toBeDefined();
+    if (firstRestriction) firstRestriction.evidence = [];
+    expect(() => evaluateClientProfiles([], noEvidence)).toThrow(/evidence must contain at least one source/);
+
+    const unknownRule = structuredClone(profiles);
+    const unknownRestriction = unknownRule.profiles[0]?.restrictions[0];
+    expect(unknownRestriction).toBeDefined();
+    if (unknownRestriction) unknownRestriction.rule = "ban-everything-unverified";
+    expect(() => evaluateClientProfiles([], unknownRule)).toThrow(/rule is unsupported/);
+
+    const bindingGenericDocs = structuredClone(profiles);
+    const genericEvidence = bindingGenericDocs.nonBindingEvidence[0];
+    expect(genericEvidence).toBeDefined();
+    if (genericEvidence) genericEvidence.enforced = true;
+    expect(() => evaluateClientProfiles([], bindingGenericDocs)).toThrow(/enforced must be false/);
+  });
+
+  it("NEGATIVE: client profiles do not blanket-ban anyOf, refs, or additionalProperties", () => {
+    const supportedConstructs: SchemaTool[] = [
+      {
+        name: "schema_feature_negative_control",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          definitions: {
+            scalar: {
+              anyOf: [{ type: "string" }, { type: "number" }]
+            }
+          },
+          properties: {
+            value: { $ref: "#/definitions/scalar" },
+            labels: { type: "object", additionalProperties: { type: "string" } }
+          }
+        }
+      }
+    ];
+    expect(validateProjectSchemaPolicy(supportedConstructs)).toEqual([]);
+    expect(evaluateClientProfiles(supportedConstructs, profiles)).toEqual([]);
   });
 });

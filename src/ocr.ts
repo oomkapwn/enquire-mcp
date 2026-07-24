@@ -36,6 +36,9 @@
 // Server-side hardening:
 //   • renderViewport scale caps at 4 + an absolute canvas-dimension clamp
 //     (MAX_OCR_CANVAS_DIM) — prevents OOM on adversarial PDFs
+//   • one process-wide OCR pipeline at a time + a bounded wait queue + a
+//     finite wall-clock budget (including queue wait) — prevents
+//     concurrent worker/canvas exhaustion and retained-buffer queue growth
 //   • Tesseract worker terminated after each call (no persistent state)
 //   • All page extraction errors caught per-page (one bad page doesn't
 //     poison the whole document)
@@ -46,6 +49,12 @@ import type { Buffer } from "node:buffer";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+  DEFAULT_OCR_TIMEOUT_MS,
+  MAX_CONCURRENT_OCR_CALLS,
+  OcrAdmissionController,
+  throwIfOcrAborted
+} from "./ocr-admission.js";
 import { optionalDepDetail } from "./optional-dep.js";
 
 /** Per-page OCR result. Shape mirrors `PdfPage` from src/pdf.ts. */
@@ -173,6 +182,17 @@ export interface ExtractPdfWithOcrOptions {
    * long-running OCR jobs surface progress to stderr / agents.
    */
   onProgress?: (page: number, total: number) => void;
+  /**
+   * Wall-clock budget for the complete OCR call, including queue wait.
+   * Defaults to `DEFAULT_OCR_TIMEOUT_MS`, sized to the documented upper
+   * estimate for the default 200-page cap. Must be finite and positive.
+   */
+  timeoutMs?: number;
+  /**
+   * Optional caller cancellation signal. MCP tool requests pass the SDK
+   * signal so client cancellation tears down the active render/worker path.
+   */
+  signal?: AbortSignal;
 }
 
 /** v3.7.16 P1-2 — default safety cap on per-call OCR work. See
@@ -187,6 +207,8 @@ export const DEFAULT_OCR_MAX_PAGES = 200;
  * lowers the per-page scale so the larger rendered side never exceeds this.
  */
 export const MAX_OCR_CANVAS_DIM = 5000;
+
+const OCR_ADMISSION = new OcrAdmissionController(MAX_CONCURRENT_OCR_CALLS);
 
 /**
  * v3.9.0-rc.10 — compute the effective render scale so the LARGER rendered page
@@ -323,16 +345,41 @@ export function assertOcrLangsInstalled(langs: string, dir: string = resolveTess
  * dimensions to {@link MAX_OCR_CANVAS_DIM} (the `scale` clamp alone doesn't
  * bound a giant-MediaBox OOM) and rejects an inverted/empty page range.
  *
+ * v3.12.0-rc.8 — every invocation enters one process-wide FIFO admission
+ * lane with a bounded waiting queue and has a finite wall-clock budget that
+ * includes queue wait. Timeout/client cancellation is surfaced immediately,
+ * while the occupied slot remains leased until active render/PDF/Tesseract
+ * cleanup actually settles; a stalled worker can never make the concurrency
+ * cap lie.
+ *
  * Throws on encrypted PDFs, hard-corrupt files, missing optional deps, an
  * uninstalled language pack, an invalid page range, or when the requested page
- * span exceeds `maxPages`. Returns empty pages (`isEmpty: true`) where
- * Tesseract found nothing.
+ * span exceeds `maxPages`, times out, or is cancelled. Returns empty pages
+ * (`isEmpty: true`) where Tesseract found nothing.
+ *
+ * @param buffer - Complete PDF bytes.
+ * @param opts - OCR language, range, rendering, progress, timeout, and cancellation options.
+ * @returns Per-page OCR text and aggregate confidence.
  */
 export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrOptions = {}): Promise<OcrPdfResult> {
+  return OCR_ADMISSION.run(
+    (signal) => extractPdfWithOcrAdmitted(buffer, opts, signal),
+    opts.timeoutMs ?? DEFAULT_OCR_TIMEOUT_MS,
+    opts.signal
+  );
+}
+
+async function extractPdfWithOcrAdmitted(
+  buffer: Buffer,
+  opts: ExtractPdfWithOcrOptions,
+  signal: AbortSignal
+): Promise<OcrPdfResult> {
   const langs = opts.langs ?? "eng";
   const scale = Math.max(0.5, Math.min(opts.scale ?? 2, 4)); // clamp to [0.5, 4]
   const maxPages = opts.maxPages ?? DEFAULT_OCR_MAX_PAGES;
   const langPath = opts.langPath ?? resolveTessdataDir();
+
+  throwIfOcrAborted(signal);
 
   // v3.9.0-rc.10 (overclaim #16, ENFORCED) — offline pre-flight. Verify every
   // requested language pack is cached LOCALLY before doing anything else.
@@ -346,6 +393,7 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
 
   // Load all three lazy deps in parallel — they're independent.
   const [pdfjs, canvasMod, tesseract] = await Promise.all([loadPdfjs(), loadCanvas(), loadTesseract()]);
+  throwIfOcrAborted(signal);
   const { createCanvas } = canvasMod;
 
   // Initialize the PDF document.
@@ -356,34 +404,65 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
     useSystemFonts: false,
     verbosity: 0
   });
-  const doc = await loadingTask.promise;
-  const pageCount = doc.numPages;
-  // v3.10.0-rc.74 (post-rc.70 re-sweep, reserve-before-try sibling of the rc.70 SQLite class):
-  // doc/loadingTask are acquired ABOVE; resolveOcrPageRange + the maxPages guard below throw
-  // post-acquisition but BEFORE the worker exists, and pre-rc.74 they sat OUTSIDE the try, so a
-  // throw leaked the pdfjs document + worker port. Open the try here so the finally always
-  // releases doc/loadingTask (and terminates the worker IF it was created) on every path.
+  let doc: Awaited<typeof loadingTask.promise> | undefined;
   let worker: Awaited<ReturnType<typeof tesseract.createWorker>> | undefined;
+  let activeRenderCancel: (() => void) | undefined;
+  let workerTermination: Promise<void> | undefined;
+  let loadingTaskDestruction: Promise<void> | undefined;
+  let pageCount = 0;
   const pages: OcrPdfPage[] = [];
+
+  const terminateWorker = (): Promise<void> => {
+    if (!worker) return Promise.resolve();
+    if (!workerTermination) {
+      workerTermination = worker.terminate().then(
+        () => {},
+        () => {}
+      );
+    }
+    return workerTermination;
+  };
+  const destroyLoadingTask = (): Promise<void> => {
+    if (!loadingTaskDestruction) loadingTaskDestruction = loadingTask.destroy().catch(() => {});
+    return loadingTaskDestruction;
+  };
+  const abortActiveResources = (): void => {
+    try {
+      activeRenderCancel?.();
+    } catch {
+      // Cleanup is best-effort here; the awaited finally below is authoritative.
+    }
+    void terminateWorker();
+    void destroyLoadingTask();
+  };
+  signal.addEventListener("abort", abortActiveResources, { once: true });
+
   try {
+    // The try starts BEFORE document acquisition. Pre-rc.8 an invalid/cancelled
+    // loadingTask rejected outside the cleanup scope and could retain its pdfjs
+    // worker port; every acquisition path is now paired with destroy().
+    doc = await loadingTask.promise;
+    throwIfOcrAborted(signal);
+    pageCount = doc.numPages;
+
     // Page range (1-indexed inclusive). v3.9.0-rc.10 — resolveOcrPageRange clamps
     // to [1, pageCount] and throws on an inverted/empty range rather than
     // silently returning zero pages.
     const [from, to] = resolveOcrPageRange(opts.pages, pageCount);
 
     // v3.7.16 P1-2 — refuse to OCR more than `maxPages` in a single call.
-    // The explicit `pages` slice can request any size (caller opted in),
-    // but the default "all pages" path must not run unbounded on
-    // adversarial PDFs (a 10000-page file would peg CPU for hours).
+    // The cap applies to both default-all and explicit ranges; otherwise a
+    // bearer client could bypass it with `pages:[1,10000]`.
     // Throws BEFORE the Tesseract worker spins up, so no resources allocated.
     const requestedSpan = to - from + 1;
     if (requestedSpan > maxPages) {
       throw new Error(
         `enquire OCR: refusing to process ${requestedSpan} pages in a single call ` +
           `(maxPages=${maxPages}). Pass an explicit narrower 'pages: [from, to]' range ` +
-          `or raise maxPages via the tool args.`
+          `or let a trusted host integration raise maxPages explicitly.`
       );
     }
+    throwIfOcrAborted(signal);
 
     // Spin up a Tesseract worker for the requested languages. We create one
     // worker per call rather than reusing across calls — the per-request
@@ -402,68 +481,88 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
       // Quiet — Tesseract is chatty by default. Real errors still throw.
       logger: () => {}
     });
+    throwIfOcrAborted(signal);
 
     const totalToProcess = to - from + 1;
     let processed = 0;
     for (let pageNum = from; pageNum <= to; pageNum++) {
+      throwIfOcrAborted(signal);
       try {
         const page = await doc.getPage(pageNum);
-        // v3.9.0-rc.10 — clamp ABSOLUTE canvas dimensions (OOM DoS guard). The
-        // `scale` clamp bounds the multiplier, not the pixel count; a giant
-        // MediaBox (the PDF spec allows up to 14400×14400 pt) would OOM the
-        // process at any scale. Lower the effective scale so the larger
-        // rendered side never exceeds MAX_OCR_CANVAS_DIM.
-        const baseVp = page.getViewport({ scale: 1 });
-        const effScale = clampOcrScale(baseVp.width, baseVp.height, scale);
-        const viewport = page.getViewport({ scale: effScale });
-        // rc.44 M2 — hard-cap the final canvas pixels at MAX_OCR_CANVAS_DIM (defense-in-
-        // depth vs any clampOcrScale rounding edge): a huge MediaBox can NEVER allocate an
-        // OOM canvas. A normal page is unaffected (its dims are far below the cap).
-        const canvas = createCanvas(
-          Math.min(Math.ceil(viewport.width), MAX_OCR_CANVAS_DIM),
-          Math.min(Math.ceil(viewport.height), MAX_OCR_CANVAS_DIM)
-        );
-        // pdfjs's render() expects a CanvasRenderingContext2D-like object.
-        // @napi-rs/canvas's getContext('2d') returns SKRSContext2D which is
-        // structurally compatible (canvas property + drawing methods).
-        const context = canvas.getContext("2d");
-        // Fill white background — PDFs without a background show through
-        // as transparent in the rendered canvas, which Tesseract handles
-        // poorly. Painting white first matches what a scanner would produce.
-        context.fillStyle = "white";
-        context.fillRect(0, 0, canvas.width, canvas.height);
+        try {
+          throwIfOcrAborted(signal);
+          // v3.9.0-rc.10 — clamp ABSOLUTE canvas dimensions (OOM DoS guard). The
+          // `scale` clamp bounds the multiplier, not the pixel count; a giant
+          // MediaBox (the PDF spec allows up to 14400×14400 pt) would OOM the
+          // process at any scale. Lower the effective scale so the larger
+          // rendered side never exceeds MAX_OCR_CANVAS_DIM.
+          const baseVp = page.getViewport({ scale: 1 });
+          const effScale = clampOcrScale(baseVp.width, baseVp.height, scale);
+          const viewport = page.getViewport({ scale: effScale });
+          // rc.44 M2 — hard-cap the final canvas pixels at MAX_OCR_CANVAS_DIM (defense-in-
+          // depth vs any clampOcrScale rounding edge): a huge MediaBox can NEVER allocate an
+          // OOM canvas. A normal page is unaffected (its dims are far below the cap).
+          const canvas = createCanvas(
+            Math.min(Math.ceil(viewport.width), MAX_OCR_CANVAS_DIM),
+            Math.min(Math.ceil(viewport.height), MAX_OCR_CANVAS_DIM)
+          );
+          // pdfjs's render() expects a CanvasRenderingContext2D-like object.
+          // @napi-rs/canvas's getContext('2d') returns SKRSContext2D which is
+          // structurally compatible (canvas property + drawing methods).
+          const context = canvas.getContext("2d");
+          // Fill white background — PDFs without a background show through
+          // as transparent in the rendered canvas, which Tesseract handles
+          // poorly. Painting white first matches what a scanner would produce.
+          context.fillStyle = "white";
+          context.fillRect(0, 0, canvas.width, canvas.height);
 
-        // pdfjs v5 made `canvas` the primary render target; `canvasContext`
-        // is now optional and only used for backwards compat. We pass both:
-        // the @napi-rs/canvas instance via `canvas` (cast for the
-        // HTMLCanvasElement-typed slot) AND the context as a hint for the
-        // legacy code path. v5 docs: "canvasContext: 2D context of a DOM
-        // Canvas object for backwards compatibility; it is recommended to
-        // use the `canvas` parameter instead."
-        await page.render({
-          canvas: canvas as unknown as HTMLCanvasElement,
-          canvasContext: context as unknown as CanvasRenderingContext2D,
-          viewport
-        }).promise;
+          // pdfjs v5 made `canvas` the primary render target; `canvasContext`
+          // is now optional and only used for backwards compat. We pass both:
+          // the @napi-rs/canvas instance via `canvas` (cast for the
+          // HTMLCanvasElement-typed slot) AND the context as a hint for the
+          // legacy code path.
+          const renderTask = page.render({
+            canvas: canvas as unknown as HTMLCanvasElement,
+            canvasContext: context as unknown as CanvasRenderingContext2D,
+            viewport
+          });
+          activeRenderCancel = () => renderTask.cancel();
+          try {
+            await renderTask.promise;
+          } finally {
+            activeRenderCancel = undefined;
+          }
+          throwIfOcrAborted(signal);
 
-        // Encode to PNG buffer for Tesseract consumption. encode() is
-        // async — encodeSync() exists but blocks the event loop on
-        // larger canvases (a 300DPI A4 page is ~5MB PNG, ~30ms encode).
-        const png = await canvas.encode("png");
+          // Encode to PNG buffer for Tesseract consumption. encode() is
+          // async — encodeSync() exists but blocks the event loop on
+          // larger canvases (a 300DPI A4 page is ~5MB PNG, ~30ms encode).
+          const png = await canvas.encode("png");
+          throwIfOcrAborted(signal);
 
-        const { data: ocrData } = await worker.recognize(png);
-        const text = (ocrData.text ?? "").replace(/\s+/g, " ").trim();
-        const confidence = typeof ocrData.confidence === "number" ? ocrData.confidence : 0;
-        pages.push({
-          pageNumber: pageNum,
-          text,
-          isEmpty: text.length === 0,
-          charCount: text.length,
-          confidence
-        });
-
-        page.cleanup();
+          const { data: ocrData } = await worker.recognize(png);
+          throwIfOcrAborted(signal);
+          const text = (ocrData.text ?? "").replace(/\s+/g, " ").trim();
+          const confidence = typeof ocrData.confidence === "number" ? ocrData.confidence : 0;
+          pages.push({
+            pageNumber: pageNum,
+            text,
+            isEmpty: text.length === 0,
+            charCount: text.length,
+            confidence
+          });
+        } finally {
+          try {
+            page.cleanup();
+          } catch {
+            // Page cleanup is best-effort and must not duplicate or erase an
+            // otherwise successful OCR result. Document/loading-task cleanup
+            // below remains the authoritative lifecycle boundary.
+          }
+        }
       } catch {
+        // Cancellation/timeout is a call-level outcome, never a blank page.
+        throwIfOcrAborted(signal);
         // Per-page failure isolation — one bad page doesn't sink the doc.
         pages.push({
           pageNumber: pageNum,
@@ -474,14 +573,19 @@ export async function extractPdfWithOcr(buffer: Buffer, opts: ExtractPdfWithOcrO
         });
       }
       processed += 1;
+      throwIfOcrAborted(signal);
       if (opts.onProgress) opts.onProgress(processed, totalToProcess);
     }
   } finally {
-    // Always terminate the worker even if we threw above, otherwise
-    // the WebAssembly state leaks and tests/CI hang.
-    if (worker) await worker.terminate().catch(() => {});
-    await doc.cleanup().catch(() => {});
-    await loadingTask.destroy().catch(() => {});
+    signal.removeEventListener("abort", abortActiveResources);
+    try {
+      activeRenderCancel?.();
+    } catch {
+      // The render promise already owns the authoritative error.
+    }
+    await terminateWorker();
+    if (doc) await doc.cleanup().catch(() => {});
+    await destroyLoadingTask();
   }
 
   const fullText = pages

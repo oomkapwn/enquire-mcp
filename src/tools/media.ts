@@ -641,6 +641,12 @@ export interface OcrPdfArgs {
   scale?: number;
 }
 
+/** Request-lifecycle options for {@link ocrPdf}. */
+export interface OcrPdfOptions {
+  /** MCP/client cancellation signal propagated into render and worker cleanup. */
+  signal?: AbortSignal;
+}
+
 /**
  * One OCR'd page of a PDF.
  *
@@ -693,9 +699,12 @@ export interface OcrPdfResult {
  * over the bitmap. Tesseract.js + @napi-rs/canvas are `optionalDependencies`
  * — without them the function surfaces a clean install-hint error rather
  * than crashing. Costs ~1-3s/page on a modern laptop at default scale.
+ * Calls share one process-wide OCR slot, a bounded waiting queue, and a finite
+ * wall-clock budget; client cancellation is propagated through `options.signal`.
  *
  * @param vault - The vault.
  * @param args - {@link OcrPdfArgs}. `path` required.
+ * @param options - Request cancellation lifecycle.
  * @returns An {@link OcrPdfResult} with per-page text, confidence scores,
  *   and aggregate statistics.
  * @throws {Error} If `path` is empty / missing / excluded, or the OCR
@@ -712,7 +721,7 @@ export interface OcrPdfResult {
  * console.log(`OCR confidence: ${r.mean_confidence}/100`);
  * ```
  */
-export async function ocrPdf(vault: Vault, args: OcrPdfArgs): Promise<OcrPdfResult> {
+export async function ocrPdf(vault: Vault, args: OcrPdfArgs, options: OcrPdfOptions = {}): Promise<OcrPdfResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");
   const normalized = args.path.toLowerCase().endsWith(".pdf") ? args.path : `${args.path}.pdf`;
@@ -727,7 +736,8 @@ export async function ocrPdf(vault: Vault, args: OcrPdfArgs): Promise<OcrPdfResu
   const result = await extractPdfWithOcr(buf, {
     ...(args.lang ? { langs: args.lang } : {}),
     ...(args.pages ? { pages: args.pages } : {}),
-    ...(typeof args.scale === "number" ? { scale: args.scale } : {})
+    ...(typeof args.scale === "number" ? { scale: args.scale } : {}),
+    ...(options.signal ? { signal: options.signal } : {})
   });
 
   return {

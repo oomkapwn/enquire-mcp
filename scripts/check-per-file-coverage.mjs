@@ -72,6 +72,10 @@ const FLOORS = {
   // security surface, and a branches-only floor let line coverage rot toward 0
   // (actual lines 44.44%) without tripping any gate.
   "src/ocr.ts": { branches: 60, lines: 40 },
+  // v3.12.0-rc.8 — the admission controller is the timeout/concurrency
+  // security boundary for every OCR ingress. Initial measured coverage:
+  // 72.22% branches / 92.42% lines; keep ~2pp environment headroom.
+  "src/ocr-admission.ts": { branches: 70, lines: 90 },
   "src/http-transport.ts": { branches: 65 },
   "src/doctor.ts": { branches: 64 },
   "src/tools/search.ts": { branches: 66 },

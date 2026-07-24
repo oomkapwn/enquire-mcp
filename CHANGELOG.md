@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.2] — 2026-07-24
+
+> **TL;DR:** **The remaining first-run activation gap is now one explicit, package-coherent command instead of a four-command checklist.** `enquire-mcp first-run --tier hybrid --client <client> --vault <path>` defaults to a non-destructive preview: it validates the vault through the existing `configure` contract, prints the ready-to-paste client configuration, and shows every exact command that would follow without creating indexes or downloading models. `--apply` is the explicit consent boundary that runs the existing idempotent `setup` → verified `rerank-bge` acquisition → tier-aware `doctor` chain. Basic tier never schedules index/model work; hybrid-live carries PDF preparation. Every child is invoked as a raw argument vector against the exact physical package entrypoint (or the exact versioned npx fallback), never through a shell, and privacy/client/model/quantization choices survive the whole flow. The executor stops at the first failure and prints an exact idempotent resume command. **1681 → 1690 source tests.**
+>
+> **Method note:** the orchestration logic lives in a dependency-light leaf and composes the already-tested commands rather than cloning their indexing/model/diagnostic implementations. Pure tests pin the four-step argument vectors, basic-tier exclusion, preview gating, ordered apply, nonzero stop behavior and launch-error normalization. Dist-level tests run a hybrid-live preview against a real temporary vault with a shell-shaped privacy literal and a redirected nonexistent cache, proving no command interpolation, sentinel creation, cache directory, or vault artifact; a basic `--apply` then proves configure + doctor complete without index/model-cache writes. Invalid model input is rejected before configure or local-state access.
+
+### Added
+
+- **`enquire-mcp first-run`.** One resumable onboarding orchestrator over `configure`, `setup`, `install-model rerank-bge`, and `doctor`. It preserves the selected `basic | hybrid | hybrid-live` tier, client/name/HTTP form, privacy allow-/deny-lists, and explicit embedding-model/quantization overrides.
+- **Preview-first consent boundary.** With no `--apply`, only non-destructive `configure` executes. The remaining steps are rendered with per-step read/write effects and shell-safe copy-paste commands. `--apply` is required before any FTS5/embed-db/model-cache preparation.
+- **Stop/resume ledger.** A failed child stops later work, retains the completed-step ledger, and prints the exact preview or apply command appropriate to the current mode. Completed stateful steps are safe to repeat because setup/model acquisition are idempotent.
+
+### Changed
+
+- **Shared activation help strings.** `configure` and `first-run` now consume one `--client`, `--name`, `--http`, and tier vocabulary, removing another multi-subcommand drift surface.
+- **Onboarding documentation.** All 11 READMEs carry the preview → explicit-apply path alongside the manual equivalent; the canonical quickstart, API catalog, stability contract, agent guide, roadmap and `llms.txt` describe the same consent, package-identity and recovery boundaries.
+
+### Tests (1690)
+
+- Added nine source tests: six pure planner/executor cases and three compiled CLI cases. Positive/negative controls prove exact hybrid-live propagation, basic-tier exclusion, preview-only execution, full apply order, stop-on-failure, launch-error containment, no-state preview, state-free basic apply and pre-access invalid-option rejection.
+
 ## [3.12.0-rc.1] — 2026-07-24
 
 > **TL;DR:** **`enquire-mcp doctor` is now a tier-aware, source-state-preserving preflight instead of a best-effort inventory that could mutate the index it was diagnosing.** An empirical legacy-schema fixture proved the previous `FtsIndex.open()` path rewrote the database and dropped its indexed row; even a nominally readonly path-backed SQLite open can create adjacent WAL/SHM files. Doctor now reads a stable main-database snapshot, rejects active WAL/journal state, deserializes a private copy into readonly/query-only memory, and validates the exact current FTS5/embed contracts without opening the source path through SQLite. `basic`, `hybrid`, and `hybrid-live` expose exact required checks and a machine-readable `required` bit; the default CLI tier is `hybrid`. Hybrid onboarding pins preparation, repair and runtime to one physical package copy without dropping privacy filters, while every runtime/programmatic server boundary keeps model loading local-cache-only. Evaluation now rejects empty, degraded or incomparable cohorts and ships a packaged `enquire-mcp eval-compare` command. These new public capabilities require a minor candidate rather than another 3.11.7 patch RC. **1638 → 1681 source tests.**

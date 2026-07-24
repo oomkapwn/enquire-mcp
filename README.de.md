@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1681%20passing-brightgreen.svg)](#️-vertrauen)
+[![tests](https://img.shields.io/badge/tests-1690%20passing-brightgreen.svg)](#️-vertrauen)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 1681+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**46 Tools · 19 MCP-Prompts · 1690+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **GraphRAG-light** (Wikilink-Community-Erkennung via Louvain-Modularität) | ✅ **nur hier** | ❌ | ❌ |
 | **Eigenständige `.base`-Abfrageausführung** (funktioniert ohne laufendes Obsidian) | ✅ **nur hier** | ❌ | ❌ delegiert an Obsidian |
 | **HyDE-Retrieval** (Gao et al. 2023) + Teilfragen-Zerlegung | ✅ **nur hier** | ❌ | ❌ |
-| **1681 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | ✅ | n. z. | selten |
+| **1690 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | ✅ | n. z. | selten |
 | **Signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2) | ✅ | n. z. | ❌ |
 | **Semver-gebundene öffentliche Oberfläche** ([STABILITY.md](./STABILITY.md)) | ✅ | n. z. | ❌ |
 | Eigenständig (kein Obsidian-Plugin nötig) | ✅ | ❌ erfordert Obsidian | variiert |
@@ -120,8 +120,12 @@ In jeden MCP-Client einklinken:
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2      # exact prerelease package
 enquire-mcp --version
+# recommended: preview first, then explicitly apply the same package-coherent plan
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
+# manual equivalent below: choose this instead of first-run --apply, not in addition
 enquire-mcp setup --vault <path>                          # cached den Embedder und baut FTS5 + embed-db
 enquire-mcp install-model rerank-bge                      # cached den Offline-Reranker
 enquire-mcp doctor --tier hybrid --vault <path>           # strukturelle/runtime Bereitschaft
@@ -326,7 +330,7 @@ Kanal: `npm install @oomkapwn/enquire-mcp` → neueste stabile Version (`@latest
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # vollständige Suite (1681 Tests)
+npm test       # vollständige Suite (1690 Tests)
 npm run lint   # null Warnungen
 npm run build  # tsc → dist/
 ```

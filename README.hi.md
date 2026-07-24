@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve के दौरान शून्य क्लाउड कॉल।** embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक-बार का स्थानीय डाउनलोड (~110 MB) है, न कि कोई क्लाउड API key। मूल-आधारित + निजी होना मुफ़्त नहीं है, और हम इसका दिखावा नहीं करते: आपके vault की सामग्री कभी आपकी मशीन नहीं छोड़ती, डिफ़ॉल्ट रूप से एयर-गैप-सुरक्षित ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 1681+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 1690+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -78,7 +78,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain modularity wikilink समुदाय-पहचान) | ✅ **केवल यहीं** | ❌ | ❌ |
 | **स्वतंत्र `.base` क्वेरी निष्पादन** (Obsidian चले बिना काम करता है) | ✅ **केवल यहीं** | ❌ | ❌ Obsidian को सौंपता है |
 | **HyDE retrieval** (Gao et al 2023) + उप-प्रश्न विघटन | ✅ **केवल यहीं** | ❌ | ❌ |
-| **1681 यूनिट टेस्ट · 9 release-required CI जाँच · वर्तमान में 7 branch-protected** | ✅ | लागू नहीं | विरल |
+| **1690 यूनिट टेस्ट · 9 release-required CI जाँच · वर्तमान में 7 branch-protected** | ✅ | लागू नहीं | विरल |
 | **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2) | ✅ | लागू नहीं | ❌ |
 | **semver-बाध्य सार्वजनिक सतह** ([STABILITY.md](./STABILITY.md)) | ✅ | लागू नहीं | ❌ |
 | स्वतंत्र (कोई Obsidian प्लगइन ज़रूरी नहीं) | ✅ | ❌ Obsidian ज़रूरी | भिन्न |
@@ -115,8 +115,12 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2      # exact prerelease package
 enquire-mcp --version
+# recommended: preview first, then explicitly apply the same package-coherent plan
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
+# manual equivalent below: choose this instead of first-run --apply, not in addition
 enquire-mcp setup --vault <path>                          # embedder कैश और FTS5 + embed-db बनाता है
 enquire-mcp install-model rerank-bge                      # ऑफ़लाइन reranker कैश करता है
 enquire-mcp doctor --tier hybrid --vault <path>           # संरचनात्मक/runtime तैयारी
@@ -323,7 +327,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # पूर्ण सूट (1681 टेस्ट)
+npm test       # पूर्ण सूट (1690 टेस्ट)
 npm run lint   # ज़ीरो वॉर्निंग
 npm run build  # tsc → dist/
 ```

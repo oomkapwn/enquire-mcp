@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1681+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1690+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full suite)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -22,8 +22,9 @@ All 9 release-required CI checks run on every PR. Branch protection currently en
 
 ```
 src/
-├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, setup, configure, install-model, build-embeddings, index, doctor, eval, eval-compare, install-ocr-lang, gen-token, clear-cache, clear-index, clear-embeddings, query, prune)
+├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, first-run, setup, configure, install-model, build-embeddings, index, doctor, eval, eval-compare, install-ocr-lang, gen-token, clear-cache, clear-index, clear-embeddings, query, prune)
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
+├── first-run.ts        — deterministic preview/apply onboarding plan + stop/resume executor
 ├── server.ts           — MCP server bootstrap + dependency wiring
 ├── tool-registry.ts    — tool registration manifest
 ├── tool-manifest.ts    — tool metadata (names, schemas, readOnlyHint)

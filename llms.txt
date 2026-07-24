@@ -5,6 +5,7 @@
 ## Quick start
 
 - [Quick install (30 seconds)](https://github.com/oomkapwn/enquire-mcp#-quick-start): `npm install -g @oomkapwn/enquire-mcp && enquire-mcp serve --vault <path>`
+- [Preview-first activation](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md): `enquire-mcp first-run --tier hybrid --client <client> --vault <path>` prints the config and exact plan without index/model writes; append `--apply` only after reviewing it
 - [MCP client config templates and recipes](https://github.com/oomkapwn/enquire-mcp/tree/main/examples): prefer `enquire-mcp configure`; manual templates require every executable and vault placeholder to be replaced
 - [Recommended hybrid setup](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/claude-desktop-hybrid.json): full BM25 + TF-IDF + ML embeddings + BGE reranker + HNSW
 
@@ -65,7 +66,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1681 unit tests passing on every PR
+- 1690 unit tests passing on every PR
 - 9 release-required CI checks per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
@@ -84,7 +85,7 @@ How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON 
 
 ### Common failure modes
 
-- **Embedding/reranker cache miss** → runtime commands are offline-enforced and do not download implicitly. Tiered doctor is a v3.12 preview. Run `enquire-mcp configure --tier hybrid --vault PATH` from the same installed executable used for setup; follow its preflight and use its physically pinned runtime config. An equal npx package spec from another cwd can still resolve to a different installation/cache. Until repaired, `obsidian_search` preserves its available-signal/RRF fallback.
+- **Embedding/reranker cache miss** → runtime commands are offline-enforced and do not download implicitly. Tiered doctor and preview-first `first-run` are v3.12 previews. Run `enquire-mcp first-run --tier hybrid --vault PATH` from the installed executable, review the non-destructive plan, then append `--apply`; it preserves that physical package/cache identity through setup, reranker acquisition and doctor. An equal npx package spec from another cwd can still resolve to a different installation/cache. Until repaired, `obsidian_search` preserves its available-signal/RRF fallback.
 - **Empty results on a fresh vault** → no ML index yet; TF-IDF + substring search still work. Run the complete hybrid preflight above. Doctor READY verifies structural/runtime prerequisites, not index freshness or complete corpus coverage.
 - **Very large vault** → whole-vault scanners apply a built-in safety cap; partial results are flagged in the response, never returned silently.
 - **Remote (`serve-http`)** → requires a bearer token of at least 16 chars; HTTP 401 means the token is missing or too short (`enquire-mcp gen-token` mints a valid one).

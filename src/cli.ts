@@ -1,10 +1,14 @@
 import { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
 import {
   CACHE_FILE_HELP,
   CACHE_SIZE_HELP,
+  CONFIG_CLIENT_HELP,
+  CONFIG_HTTP_HELP,
+  CONFIG_NAME_HELP,
   CONFIG_TIER_HELP,
   DIAGNOSTIC_SEARCH_TOOLS_HELP,
   DISABLED_TOOLS_HELP,
@@ -32,6 +36,7 @@ import {
   resolveTransformersCacheDir,
   setEmbeddingsOffline
 } from "./embeddings.js";
+import { buildFirstRunPlan, executeFirstRunPlan, type FirstRunStep, renderFirstRunStep } from "./first-run.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import {
@@ -76,6 +81,23 @@ interface HttpServeCli extends ServeOptions {
   stateful?: boolean;
   sessionIdleTimeoutMs?: string;
   maxSessions?: string;
+}
+
+async function resolveConfiguredVault(
+  vaultPath: string,
+  privacy: { excludeGlobs?: string[]; readPaths?: string[] }
+): Promise<Vault> {
+  const vault = new Vault(path.resolve(vaultPath), privacy);
+  await vault.ensureExists();
+  if (
+    [...vault.root].some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || codePoint === 0x7f;
+    })
+  ) {
+    throw new Error("Vault paths containing control characters cannot be rendered safely");
+  }
+  return vault;
 }
 
 /**
@@ -905,10 +927,10 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       "Print a ready-to-paste MCP client config for THIS vault. Non-destructive — it writes nothing; it prints the exact snippet (and where it goes) for Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Codex, or a remote HTTP client. Pick a `--tier` (basic = live scan, no setup; hybrid = full retrieval, needs `setup`) and optionally a `--client`. Run this right after install to skip hand-assembling config."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
-    .option("--client <name>", `Target client: ${CONFIG_CLIENTS.join(" | ")} (default: print all)`)
+    .option("--client <name>", CONFIG_CLIENT_HELP)
     .option("--tier <tier>", CONFIG_TIER_HELP)
-    .option("--name <name>", "MCP server key/name in the generated config (default: obsidian)", "obsidian")
-    .option("--http", "Emit the remote serve-http (Streamable HTTP + bearer) form instead of local stdio")
+    .option("--name <name>", CONFIG_NAME_HELP, "obsidian")
+    .option("--http", CONFIG_HTTP_HELP)
     .option("--exclude-glob <pattern...>", "Privacy denylist propagated to setup, doctor, and runtime.")
     .option("--read-paths <pattern...>", "Privacy allowlist propagated to setup, doctor, and runtime.")
     .action(
@@ -949,19 +971,10 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         // for a missing/file vault would fail only after a client installs it.
         let configuredVault: Vault;
         try {
-          configuredVault = new Vault(path.resolve(opts.vault), {
+          configuredVault = await resolveConfiguredVault(opts.vault, {
             ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
             ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
           });
-          await configuredVault.ensureExists();
-          if (
-            [...configuredVault.root].some((character) => {
-              const codePoint = character.codePointAt(0) ?? 0;
-              return codePoint <= 0x1f || codePoint === 0x7f;
-            })
-          ) {
-            throw new Error("Vault paths containing control characters cannot be rendered safely");
-          }
         } catch (error) {
           process.stderr.write(
             `enquire configure: invalid vault/privacy configuration: ${
@@ -992,6 +1005,190 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         process.stdout.write(`# enquire-mcp configure — ${input.name} → ${input.vault} (${tier})\n\n`);
         process.stdout.write(`${body}\n\n`);
         process.stdout.write(`---\n${preflightHint(input)}\n`);
+      }
+    );
+
+  program
+    .command("first-run")
+    .description(
+      "Preview or apply one package-coherent onboarding flow: validate the vault and print its client config, then (with explicit --apply) prepare the selected tier and verify it with doctor. Preview is the default and never builds indexes or downloads models."
+    )
+    .requiredOption("--vault <path>", "Path to the Obsidian vault root")
+    .option("--client <name>", CONFIG_CLIENT_HELP)
+    .option("--tier <tier>", CONFIG_TIER_HELP)
+    .option("--name <name>", CONFIG_NAME_HELP, "obsidian")
+    .option("--http", CONFIG_HTTP_HELP)
+    .option(
+      "--embedding-model <alias>",
+      `Explicit embedding alias for setup (otherwise setup honors an existing index or defaults to ${DEFAULT_MODEL_ALIAS})`
+    )
+    .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
+    .option(
+      "--exclude-glob <pattern...>",
+      "Privacy denylist preserved across generated config, setup, readiness verification, and runtime."
+    )
+    .option(
+      "--read-paths <pattern...>",
+      "Privacy allowlist preserved across generated config, setup, readiness verification, and runtime."
+    )
+    .option(
+      "--apply",
+      "Explicitly authorize local index/model-cache preparation and run the full flow. Without this flag, only non-destructive configure runs."
+    )
+    .action(
+      async (opts: {
+        vault: string;
+        client?: string;
+        tier?: string;
+        name?: string;
+        http?: boolean;
+        embeddingModel?: string;
+        quantizeEmbeddings?: string;
+        excludeGlob?: string[];
+        readPaths?: string[];
+        apply?: boolean;
+      }) => {
+        const tier = opts.tier ?? "hybrid";
+        if (!isConfigTier(tier)) {
+          process.stderr.write(`enquire first-run: invalid --tier '${tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
+          process.exitCode = 1;
+          return;
+        }
+        let client: ConfigClient | undefined;
+        if (opts.client) {
+          if (!CONFIG_CLIENTS.includes(opts.client as ConfigClient)) {
+            process.stderr.write(
+              `enquire first-run: invalid --client '${opts.client}'. Use one of: ${CONFIG_CLIENTS.join(", ")} (or omit for all).\n`
+            );
+            process.exitCode = 1;
+            return;
+          }
+          client = opts.client as ConfigClient;
+        }
+        if (opts.http && client && client !== "http") {
+          process.stderr.write(
+            `enquire first-run: --http is incompatible with --client ${client}; use --client http or omit --client.\n`
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const name = opts.name ?? "obsidian";
+        if (!isValidServerName(name)) {
+          process.stderr.write(
+            "enquire first-run: invalid --name. Use only letters, digits, dot, underscore, or hyphen.\n"
+          );
+          process.exitCode = 1;
+          return;
+        }
+        try {
+          if (opts.embeddingModel) resolveModel(opts.embeddingModel);
+          if (opts.quantizeEmbeddings !== undefined) parseQuantizationMode(opts.quantizeEmbeddings);
+        } catch (error) {
+          process.stderr.write(
+            `enquire first-run: invalid setup option: ${error instanceof Error ? error.message : String(error)}\n`
+          );
+          process.exitCode = 1;
+          return;
+        }
+        if (tier === "basic" && (opts.embeddingModel || opts.quantizeEmbeddings !== undefined)) {
+          process.stderr.write(
+            "enquire first-run: --embedding-model and --quantize-embeddings apply only to hybrid tiers.\n"
+          );
+          process.exitCode = 1;
+          return;
+        }
+
+        let firstRunVault: Vault;
+        try {
+          firstRunVault = await resolveConfiguredVault(opts.vault, {
+            ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+            ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+          });
+        } catch (error) {
+          process.stderr.write(
+            `enquire first-run: invalid vault/privacy configuration: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`
+          );
+          process.exitCode = 1;
+          return;
+        }
+
+        const plan = buildFirstRunPlan({
+          // Pin the real vault path before spawning any child step. Reusing a
+          // caller-supplied symlink here would allow it to be retargeted
+          // between configure and setup, splitting one approved plan across
+          // two physical vaults.
+          vault: firstRunVault.root,
+          tier,
+          ...(client ? { client } : {}),
+          name,
+          http: opts.http ?? false,
+          ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+          ...(opts.readPaths ? { readPaths: opts.readPaths } : {}),
+          ...(opts.embeddingModel ? { embeddingModel: opts.embeddingModel } : {}),
+          ...(opts.quantizeEmbeddings ? { quantizeEmbeddings: opts.quantizeEmbeddings } : {}),
+          invocation: invocation ?? {
+            command: process.platform === "win32" ? "npx.cmd" : "npx",
+            argsPrefix: ["-y", exactPackageSpec]
+          }
+        });
+        const apply = opts.apply ?? false;
+        process.stdout.write(`# enquire-mcp first-run — ${apply ? "apply" : "preview"} (${tier})\n`);
+        if (!apply) {
+          process.stdout.write(
+            "Preview mode runs only non-destructive configure. Index/model-cache preparation and doctor remain planned until --apply.\n"
+          );
+        }
+
+        const runner = (step: FirstRunStep) =>
+          new Promise<number>((resolve, reject) => {
+            const child = spawn(step.command, step.args, { stdio: "inherit" });
+            child.once("error", reject);
+            child.once("close", (code, signal) => {
+              if (signal) {
+                process.stderr.write(`enquire first-run: ${step.id} terminated by ${signal}\n`);
+                resolve(signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1);
+                return;
+              }
+              resolve(code ?? 1);
+            });
+          });
+        const result = await executeFirstRunPlan(plan, apply, runner, (step, index, total) => {
+          process.stdout.write(`\n>> Step ${index + 1}/${total}: ${step.label}\n`);
+          process.stdout.write(`   ${renderFirstRunStep(step, process.platform)}\n\n`);
+        });
+
+        if (!result.ok) {
+          const detail = result.error ? ` (${result.error})` : "";
+          const resumeCommand = apply ? plan.applyCommand : plan.previewCommand;
+          process.stderr.write(
+            `\n✗ first-run stopped at ${result.failedStep.id}; exit ${result.exitCode}${detail}.\n` +
+              "Completed steps are idempotent. After fixing the reported cause, resume safely with:\n" +
+              `   ${renderFirstRunStep(resumeCommand, process.platform)}\n`
+          );
+          process.exitCode = result.exitCode || 1;
+          return;
+        }
+
+        if (!apply) {
+          process.stdout.write("\nPlanned after explicit --apply:\n");
+          for (const [index, step] of plan.steps.entries()) {
+            if (!step.requiresApply) continue;
+            const effect = step.mutatesLocalState ? "creates/updates local state" : "read-only verification";
+            process.stdout.write(
+              `  ${index + 1}. ${step.label} [${effect}]\n     ${renderFirstRunStep(step, process.platform)}\n`
+            );
+          }
+          process.stdout.write(
+            "\nPreview complete: first-run requested no index or model-cache writes.\n" +
+              "Apply this exact, resumable plan with:\n" +
+              `   ${renderFirstRunStep(plan.applyCommand, process.platform)}\n`
+          );
+          return;
+        }
+
+        process.stdout.write("\n✓ first-run complete. The generated client configuration now targets a READY tier.\n");
       }
     );
 

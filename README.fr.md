@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1681%20passing-brightgreen.svg)](#️-confiance)
+[![tests](https://img.shields.io/badge/tests-1690%20passing-brightgreen.svg)](#️-confiance)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > 3. **Zéro appel au cloud pendant le service.** Modèles mis en cache localement (téléchargement unique depuis HuggingFace). Le contenu de votre coffre ne quitte jamais votre machine. Sûr en environnement isolé par défaut.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
-**46 outils · 19 prompts MCP · 1681+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
+**46 outils · 19 prompts MCP · 1690+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 | **GraphRAG-light** (détection de communautés de wikilinks par modularité de Louvain) | ✅ **uniquement ici** | ❌ | ❌ |
 | **Exécution autonome de requêtes `.base`** (fonctionne sans Obsidian ouvert) | ✅ **uniquement ici** | ❌ | ❌ délègue à Obsidian |
 | **Récupération HyDE** (Gao et al. 2023) + décomposition en sous-questions | ✅ **uniquement ici** | ❌ | ❌ |
-| **1681 tests unitaires · 9 contrôles CI requis pour la release · 7 actuellement protégés** | ✅ | s.o. | rare |
+| **1690 tests unitaires · 9 contrôles CI requis pour la release · 7 actuellement protégés** | ✅ | s.o. | rare |
 | **Provenance de build signée** (npm + Sigstore, SLSA Build L2) | ✅ | s.o. | ❌ |
 | **Surface publique liée au semver** ([STABILITY.md](./STABILITY.md)) | ✅ | s.o. | ❌ |
 | Autonome (aucun plugin Obsidian requis) | ✅ | ❌ requiert Obsidian | variable |
@@ -118,8 +118,12 @@ Connectez-le à n'importe quel client MCP :
 **Vous voulez toute la puissance hybride ?** Exécutez le preflight hybride, puis démarrez le serveur :
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2      # exact prerelease package
 enquire-mcp --version
+# recommended: preview first, then explicitly apply the same package-coherent plan
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
+# manual equivalent below: choose this instead of first-run --apply, not in addition
 enquire-mcp setup --vault <path>                          # met l'embedder en cache et construit FTS5 + embed-db
 enquire-mcp install-model rerank-bge                      # met le reranker hors ligne en cache
 enquire-mcp doctor --tier hybrid --vault <path>           # préparation structurelle/runtime
@@ -324,7 +328,7 @@ Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@late
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suite complète (1681 tests)
+npm test       # suite complète (1690 tests)
 npm run lint   # zéro avertissement
 npm run build  # tsc → dist/
 ```

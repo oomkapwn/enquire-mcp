@@ -10,6 +10,7 @@
 //
 // Domain modules:
 //   - cli.ts            : `main()` + commander program definition (CLI parsing).
+//   - first-run.ts      : deterministic preview/apply onboarding plan + executor.
 //   - server.ts         : ServeOptions / ServerDeps / prepareServerDeps / buildMcpServer /
 //                         startServer / formatReadyBanner / buildEmbedText / sync* fns.
 //   - tool-registry.ts  : registerReadTools / registerWriteTools / registerFtsTools /
@@ -42,7 +43,7 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.12.0-rc.1";
+export const VERSION = "3.12.0-rc.2";
 
 // Re-exports — preserve the v3.5.x public surface so http-transport.ts and
 // tests don't need to know about the new module layout. The set below

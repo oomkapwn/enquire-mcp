@@ -192,17 +192,24 @@ Packs are cached under `$ENQUIRE_TESSDATA_DIR` → `$XDG_CACHE_HOME/enquire-mcp/
 
 **Other mitigations:**
 - The OCR tool is only registered when the optional deps (`tesseract.js`, `@napi-rs/canvas`) are installed — `npm install --omit=optional` leaves OCR unavailable, the strictest posture.
-- Each rendered page's absolute pixel dimensions are clamped (`MAX_OCR_CANVAS_DIM`) so an adversarially huge PDF MediaBox can't OOM the process; per-call page count is capped (`--ocr-max-pages`, default 200).
+- Each rendered page's absolute pixel dimensions are clamped (`MAX_OCR_CANVAS_DIM`) so an adversarially huge PDF MediaBox can't OOM the process; per-call page count is capped (`DEFAULT_OCR_MAX_PAGES`, default 200; `--ocr-max-pages` configures watcher runs).
+- All OCR entry points share one process-wide FIFO slot, a bounded waiting queue, and a finite default wall-clock budget. Client cancellation and timeout trigger render/worker/PDF cleanup; the slot remains leased until that cleanup settles.
 
-Tracked in CHANGELOG under v3.7.16 P1-1 (original disclosure) → v3.9.0-rc.10 (offline enforcement shipped: pre-flight guard + `install-ocr-lang` + read-only cache + OIA Check 4e).
+Tracked in CHANGELOG under v3.7.16 P1-1 (original disclosure) → v3.9.0-rc.10 (offline enforcement shipped: pre-flight guard + `install-ocr-lang` + read-only cache + OIA Check 4e) → v3.12.0-rc.8 (timeout, admission and cancellation cleanup).
 
-### OCR resource limits (v3.7.16 P1-2)
+### OCR resource limits (v3.7.16 P1-2; completed v3.12.0-rc.8)
 
-OCR is the slowest path in the project — ~1-2s per page on M1 CPU at default scale. Pre-3.7.16 a single bearer-authenticated HTTP request could trigger unbounded OCR work (the entire PDF, no timeout, no concurrency cap, no per-call budget). A 10000-page PDF would peg the CPU for hours.
+OCR is the slowest path in the project — ~1-2s per page on M1 CPU at default scale. Before the resource-control sequence, a single bearer-authenticated HTTP request could trigger unbounded OCR work and concurrent callers could multiply its canvas/WASM memory pressure.
 
-v3.7.16 adds a default **200-page cap per call** (`DEFAULT_OCR_MAX_PAGES`), bypassable via an explicit `pages: [from, to]` range or via the `maxPages` option. The cap is checked BEFORE the Tesseract worker spins up, so no resources allocate on adversarial inputs.
+The current controls are cumulative:
 
-Roadmap (v3.8.0): per-call timeout, concurrent-request cap, HTTP-transport operation budget.
+- **Page work:** `DEFAULT_OCR_MAX_PAGES=200` applies to both whole-document and explicit `pages: [from, to]` requests. A trusted host integration may set a different `maxPages`; the MCP tool does not expose that override. The guard runs before Tesseract starts.
+- **Pixel work:** `MAX_OCR_CANVAS_DIM=5000` bounds the largest rendered side even for a hostile PDF MediaBox.
+- **Concurrent work:** `MAX_CONCURRENT_OCR_CALLS=1` serializes MCP-tool and watcher OCR in one fair FIFO process-wide lane. `MAX_QUEUED_OCR_CALLS=4` bounds waiting requests because each retains its PDF buffer; overflow fails fast with a retryable busy error. At the maximum canvas dimension, one RGBA canvas alone is roughly 100 MiB before PNG/Tesseract buffers, so one slot is the safe cross-platform default.
+- **Elapsed work:** `DEFAULT_OCR_TIMEOUT_MS=600000` bounds the complete call, including queue wait. Narrow the page range when the budget is exceeded.
+- **Cancellation/cleanup:** the MCP SDK signal is propagated into OCR. Timeout or client cancellation cancels the active pdfjs render, terminates Tesseract, destroys the loading task, and surfaces a stable client-safe error. The caller is released immediately, but the concurrency lease is held until the underlying operation settles its cleanup, preventing a timed-out native/WASM task from overlapping a newly admitted one.
+
+These controls live in the shared OCR core rather than only in `serve-http`, so stdio, HTTP, and watcher ingress have the same resource bound without imposing a blanket timeout on unrelated MCP operations.
 
 ## Persistent FTS5 index: privacy posture
 

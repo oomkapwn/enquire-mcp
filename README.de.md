@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1692%20passing-brightgreen.svg)](#️-vertrauen)
+[![tests](https://img.shields.io/badge/tests-1703%20passing-brightgreen.svg)](#️-vertrauen)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 1692+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**46 Tools · 19 MCP-Prompts · 1703+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -74,7 +74,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **Die gesamte Obsidian-Wissensoberfläche** | ✅ Markdown, Wikilinks, Frontmatter, Canvas, Bases, PDF und OCR |
 | **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 Workflow-Prompts |
 | **Skalierung ohne Kontrollverlust** | ✅ HNSW-Live-Updates, Persistenz, adaptives Refill und int8-Quantisierung |
-| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1692 Tests, 9 Release-Gates und SLSA-L2-Provenienz |
+| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1703 Tests, 9 Release-Gates und SLSA-L2-Provenienz |
 
 **Ein Vault. Alle Agenten. Der vollständige Stack. Kein Cloud-Lock-in.**
 
@@ -107,7 +107,7 @@ In jeden MCP-Client einklinken:
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.7      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.8      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -279,7 +279,7 @@ Plus 3 MCP-Ressourcen (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **HTTP-Transport** | Bearer-Auth (konstantzeitiges SHA-256 + `timingSafeEqual`), Rate-Limit pro Token, striktes CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML-1.2-Core-Schema, standardmäßig sicher) — keine Code-Ausführung |
 | **Cache- + Indexdateien** | chmod 0600, übergeordnetes Verzeichnis 0700 |
-| **1692 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
+| **1703 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
 | **CI** | Auf jedem PR laufen **9 release-erforderliche Checks**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` und `oia`. Die Branch-Protection erzwingt derzeit nur **7** davon; `docs` und `oia` sind für Releases erforderlich, aber ungeschützt (live verifiziert am 2026-07-23). `test-macos` ist der einzige beratende Job mit `continue-on-error`. `docker` kann den CI-Workflow fehlschlagen lassen, ist aber ungeschützt; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` alle 9 auf dem getaggten SHA erneut. |
 | **Coverage** | Zeilen ≥86 % · Statements ≥82 % · Funktionen ≥75 % · Branches ≥74 % (abgesichert) |
 | **Releases** | npm + GitHub-Release pro Tag · semver · **signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2; L3-Generator auf der Roadmap) |
@@ -320,7 +320,7 @@ Kanal: `npm install @oomkapwn/enquire-mcp` → neueste stabile Version (`@latest
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # vollständige Suite (1692 Tests)
+npm test       # vollständige Suite (1703 Tests)
 npm run lint   # null Warnungen
 npm run build  # tsc → dist/
 ```

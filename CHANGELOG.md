@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.8] — 2026-07-24
+
+> **TL;DR:** **Expensive scanned-PDF OCR can no longer fan out into concurrent Tesseract/canvas pipelines, accumulate an unbounded queue of retained PDF buffers, or run without a wall-clock bound.** Every MCP-tool and watcher invocation now shares one FIFO process-wide slot, a four-call waiting cap, and a ten-minute default budget that includes queue wait. Timeout or SDK client cancellation returns a stable error immediately, cancels the active pdfjs render, terminates Tesseract, destroys the PDF task, and keeps the slot leased until that cleanup has actually settled—so a timed-out worker cannot make the concurrency limit lie. The risk-triggered audit also found and closed a pre-existing `loadingTask` leak when PDF acquisition itself rejects. **1692 → 1703 source tests.**
+>
+> **Method note:** this item was re-derived from the current `extractPdfWithOcr` orchestration and both live call sites (`obsidian_ocr_pdf` and watcher OCR), not implemented as an HTTP-only wrapper. The admission controller is dependency-free and behavior-tested for FIFO order, overlap detection, queued expiry, SDK cancellation, and the crucial timeout-before-cleanup race. Separate mocked-runtime tests exercise the real pdfjs/Tesseract cleanup hooks, including a deliberately hung render and a document-load rejection. A whole-surface OCR sweep then reconciled the public resource-limit claims: explicit `pages` ranges do not bypass the existing 200-page cap, and a transport-wide blanket timeout is unnecessary because the shared core lane covers stdio, HTTP, and watcher ingress while preserving their distinct lifecycle semantics.
+
+### Added
+
+- **Shared OCR admission controller.** `src/ocr-admission.ts` enforces FIFO admission with `MAX_CONCURRENT_OCR_CALLS=1`, `MAX_QUEUED_OCR_CALLS=4`, and `DEFAULT_OCR_TIMEOUT_MS=600000`. The timeout starts before queue admission; expired queued work is removed without consuming a slot, and overflow fails fast rather than retaining another PDF buffer.
+- **Request cancellation propagation.** The `obsidian_ocr_pdf` handler passes the MCP SDK `AbortSignal` through `ocrPdf` into the OCR core. Watcher calls use the same finite default budget automatically.
+
+### Security
+
+- **No early lease release.** A caller observes timeout/cancellation immediately, but an admitted operation releases its slot only from the operation promise's `finally`. If native/WASM work is slow to stop, later OCR remains queued rather than silently exceeding the cap.
+- **Active resource teardown.** Abort cancels the current pdfjs render task, terminates the Tesseract worker, and destroys the pdfjs loading task through idempotent cleanup promises. Per-page isolation now rethrows call-level timeout/cancellation instead of converting it into a misleading blank-page success.
+
+### Fixed
+
+- **PDF acquisition cleanup gap.** The cleanup scope now begins before `loadingTask.promise` is awaited. Invalid/cancelled PDF acquisition therefore destroys the loading task even when no `PDFDocumentProxy` or Tesseract worker was created.
+- **Page cleanup on intermediate failure.** Each acquired page runs `page.cleanup()` from a nested `finally`, including render, PNG-encode, and recognition failures.
+- **Resource-limit documentation truth.** `SECURITY.md` no longer says the current OCR path has no timeout/concurrency cap or that an explicit page range bypasses `maxPages`.
+
+### Tests (1703)
+
+- Added 11 behavior-discriminating tests covering production one-slot FIFO admission, a two-slot overlap negative control, timeout lease retention through cleanup, queued-expiry removal, bounded-queue overflow, external cancellation redaction, invalid bounds, MCP signal wiring with a dropped-signal mutation, real cleanup hooks under a hung render, PDF-load rejection cleanup, and a successful no-cancel control.
+
+### Stats
+
+- Runtime/API compatibility: additive internal lifecycle options; 46 tools and 19 prompts unchanged.
+- Network posture: unchanged—OCR language data remains local and read-only during serve.
+
 ## [3.12.0-rc.7] — 2026-07-24
 
 > **TL;DR:** **Bearer-token setup commands no longer fail on a clean machine because shell redirection targets a directory the instructions never created.** All three token-saving snippets in the HTTP transport guide and ChatGPT example now create their exact parent first. An order-sensitive docs invariant patrols every `enquire-mcp gen-token > ~/…/token` redirect on those canonical surfaces, so a missing or late `mkdir` fails CI. Runtime behavior is unchanged; **1692 → 1692 source tests.**

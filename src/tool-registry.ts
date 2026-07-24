@@ -4,6 +4,7 @@ import { z } from "zod";
 import { MAX_DQL_QUERY_LEN } from "./dql.js";
 import { defaultIndexFile, type FtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
+import { DEFAULT_OCR_TIMEOUT_MS } from "./ocr-admission.js";
 import { MAX_RESEARCH_SUBQUERIES } from "./research-protocol.js";
 import type { ServerDeps } from "./server.js";
 import {
@@ -862,8 +863,7 @@ export function registerReadTools(
     "obsidian_ocr_pdf",
     {
       title: "OCR a scanned/image-only PDF (Tesseract.js)",
-      description:
-        "Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as `obsidian_read_pdf`. Use this when `obsidian_read_pdf` returns `has_text: false` (typical for scans, photographed paper, image-only PDFs). Multilingual via `lang` (default `'eng'`; multi-lang via `'+'`, e.g. `'eng+rus'`). Optional `pages` range and `scale` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU. Read-only. Powered by Tesseract.js (Apache-2.0; language trained-data must be pre-installed via `enquire-mcp install-ocr-lang <code>` — serve mode makes zero outbound network calls, so a language missing from the local cache fails closed with an install hint rather than downloading at runtime) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to `optionalDependencies` so the markdown-only path stays zero-cost.",
+      description: `Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as \`obsidian_read_pdf\`. Use this when \`obsidian_read_pdf\` returns \`has_text: false\` (typical for scans, photographed paper, image-only PDFs). Multilingual via \`lang\` (default \`'eng'\`; multi-lang via \`'+'\`, e.g. \`'eng+rus'\`). Optional \`pages\` range and \`scale\` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU; OCR is serialized process-wide behind a bounded queue and limited to ${DEFAULT_OCR_TIMEOUT_MS / 60_000} minutes per request (including queue wait), with client cancellation propagated to cleanup. Read-only. Powered by Tesseract.js (Apache-2.0; language trained-data must be pre-installed via \`enquire-mcp install-ocr-lang <code>\` — serve mode makes zero outbound network calls, so a language missing from the local cache fails closed with an install hint rather than downloading at runtime) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to \`optionalDependencies\` so the markdown-only path stays zero-cost.`,
       annotations: { ...READ_ONLY, title: "OCR PDF" },
       inputSchema: {
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
@@ -915,12 +915,12 @@ export function registerReadTools(
           )
       }
     },
-    async (args) => {
+    async (args, extra) => {
       // #354/#360 — coerce the validated 2-array back to the internal [from, to] tuple.
       const { pages: rawPages, ...rest } = args;
       const [p0, p1] = rawPages ?? [];
       const pages = p0 !== undefined && p1 !== undefined ? ([p0, p1] as [number, number]) : undefined;
-      return textResult(await ocrPdf(vault, { ...rest, ...(pages ? { pages } : {}) }));
+      return textResult(await ocrPdf(vault, { ...rest, ...(pages ? { pages } : {}) }, { signal: extra.signal }));
     }
   );
 

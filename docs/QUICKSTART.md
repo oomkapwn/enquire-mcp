@@ -162,7 +162,7 @@ After vault content changes, rerun `setup` or use `--watch`; a doctor READY resu
 
 ## Help and links
 
-- **Not sure if enquire-mcp is right for you?** See [`docs/COMPARISON.md`](./COMPARISON.md) — a source-pinned decision guide covering the direct hybrid peer OHS, live-Obsidian servers, model-free filesystem servers and the adjacent Basic Memory workflow.
+- **Want proof before adoption?** Run the built-in eval harness on your own vault, inspect the published [`benchmarks`](./benchmarks.md), and verify the enforced local-first guarantees in [`SECURITY.md`](../SECURITY.md).
 - **Issues / bug reports:** [github.com/oomkapwn/enquire-mcp/issues](https://github.com/oomkapwn/enquire-mcp/issues)
 - **Security disclosures:** `oomkapwn@gmail.com`
 - **Full tool reference:** [`docs/api.md`](./api.md)

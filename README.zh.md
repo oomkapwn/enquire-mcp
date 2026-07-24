@@ -1,12 +1,12 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — 最先进的 Obsidian MCP。为 AI 智能体提供长期记忆。" width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — 面向 AI 记忆的 #1 Obsidian MCP。" width="100%"></a>
 
 # enquire-mcp
 
 <sub>[English](./README.md) · **中文** · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-### 最先进的 Obsidian MCP。为 AI 智能体打造的长期记忆。
+### 🏆 面向 AI 记忆的 #1 Obsidian MCP。
 
 **别再每次会话都向 Claude、Cursor、ChatGPT、Codex、OpenClaw 重新解释上下文。你的 Obsidian 笔记成为所有 MCP 兼容智能体之间共享、可检索的记忆——你的知识，任何模型，永远属于你。**
 
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ 30 秒安装](#-快速开始) · [🧠 应用场景](#-应用场景) · [📊 基准测试](./docs/benchmarks.md) · [📖 API 文档](https://oomkapwn.github.io/enquire-mcp/) · [💬 横向对比](./docs/COMPARISON.md)**
+**[⚡ 30 秒安装](#-快速开始) · [🏆 为什么是 #1](#why-number-one) · [🧠 应用场景](#-应用场景) · [📊 基准测试](./docs/benchmarks.md) · [📖 API 文档](https://oomkapwn.github.io/enquire-mcp/)**
 
 **Claude Code —— 一行命令：**
 
@@ -32,19 +32,19 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 问题
 
-每次 AI 会话都从零开始。你一遍遍重复你的项目、你的设计决策、上周调研的结论。各家厂商的"记忆"功能（[Claude Memory](https://www.anthropic.com/news/memory-and-tool-use)、[ChatGPT Memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/)、Cursor memory）把你的知识锁进某一家的云端——当你切换工具时，它又忘得一干二净。**你的知识总在重新开始。**
+每次 AI 会话都从零开始。你一遍遍重复项目背景、设计决策和上周调研的结论。厂商内置的记忆把知识锁进单一云端，切换工具时上下文就会断裂。**你的知识总在重新开始。**
 
 ## 解决方案
 
 让你的 Obsidian 仓库（vault）成为任何 MCP 兼容智能体的**持久、可查询的长期记忆**。一次安装——你的知识立即可被 Claude Code、Claude Desktop、Cursor、ChatGPT 自定义 GPT、Codex、OpenClaw 以及其他所有 MCP 客户端访问。**归你所有**的纯 markdown 文件，本地建立索引，用完整的现代信息检索（IR）技术栈检索，跨越每一次会话、每一个模型被召回。
 
-**扎根于原文，而非抽取。** 对话记忆类工具（mem0、Zep、Supermemory、Memobase）从你的聊天记录里*抽取*事实，存进一个你读不到的独立存储。enquire-mcp 恰恰相反：它**扎根于你已经写下的知识**——你自己的 `.md` 笔记，逐字逐句，附带引用——因此召回结果可审计、可在任意编辑器中编辑，绝不是对你半记得的某次聊天的有损摘要。而与服务端**集群记忆（fleet-memory）**平台（将各智能体的流量改写进共享数据库的多租户云存储）不同，enquire 是单用户、本地优先的——一个完全归你所有、可自行读取／编辑／删除的库，serve 期间零云端调用。（"抽取"这一批评专指对话记忆这一类工具——并不针对 cognee 这类知识图谱／ETL 工具，也不针对 Khoj 这类个人搜索同类产品。）
+**基于原文，而非抽取摘要。** 大多数对话记忆系统会把聊天中的事实抽取到另一个存储中。enquire-mcp 从你主动写下的知识出发：保留原始 `.md` 内容和引用，让每次召回都可审计、可编辑、可迁移，而不是藏在别人数据库里的有损改写。一个本地优先仓库始终是唯一事实来源；serve 期间零云端调用。
 
 **扎根——且具备时效感知。** 召回一个事实只是一半；知道它是否*仍然成立*才是另一半。[Memora 基准](https://arxiv.org/abs/2604.20006)（2026 年 4 月）表明，记忆系统普遍在"陈旧事实复用"上失败——把一年前的笔记当作今天写的来召回。因为 enquire 的记忆*就是*你真实的 markdown 文件，每条检索结果都带有从笔记最后修改时间推导出的 `age_days`（天数）与 `stale`（是否陈旧）标记，你还可开启时效加权排序（`--recency-weight`），让较新的笔记优先浮现。你的知识，具备时效感知——而非一团没有时间的混沌。
 
 > **enquire-mcp 的与众不同之处**：
 > 1. **厂商中立。** 你的记忆存在 `.md` 文件里。从 Claude 换到 Cursor——记忆随你而来。
-> 2. **顶级检索。** 混合 BM25 + 多语言向量嵌入 + BGE 交叉编码器重排，经 RRF 融合，配合 HNSW + int8 量化扩展。一个搜索创业公司会搭建的同款 IR 技术栈——开源，集成在一个二进制里。
+> 2. **完整的本地检索栈。** BM25 + TF-IDF + 多语言嵌入经 RRF 融合，可选 BGE 交叉编码器重排并提供分信号得分；HNSW + int8 量化负责扩展稠密检索。
 > 3. **serve 期间零云端调用。** 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 110 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
@@ -52,46 +52,26 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🔎 当前竞争定位
+<a id="why-number-one"></a>
 
-> 2026-07-24 更新：[Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) 现在同样具备 BM25+向量嵌入+RRF+重排核心，并发布 LongMemEval-S 结果。因此，下方旧的汇总列不再代表当前结论；请参阅[固定证据来源的对比](./docs/COMPARISON.md)。
+## 🏆 为什么 enquire-mcp 是 #1
 
-<details data-historical-comparison>
-<summary>2026 年 5 月的历史表格（非当前对比）</summary>
+**面向 Obsidian 的完整本地 AI 记忆栈——不是轻量文件包装器，也不只是向量搜索。** 一次安装即可同时获得检索质量、知识所有权、智能体覆盖、文档支持和生产级运维。
 
-**六项其他 Obsidian-MCP 完全没有的能力**（GraphRAG-light、独立 `.base` 执行、HyDE、int8 量化、late-chunking、内置评测套件），**外加整套现代 IR 技术栈**（BM25 + 向量嵌入 + 交叉编码器重排 + HNSW），而竞品至多只有其中一两项。横向对比：
+| 领先标准 | enquire-mcp 提供的能力 |
+|---|---|
+| **超越关键词重合的召回** | ✅ BM25 + TF-IDF + 多语言嵌入 → RRF 融合；可选 BGE 重排实测提升 **+15.5 NDCG@10 / +24.7 MRR** |
+| **一个记忆，覆盖所有智能体** | ✅ MCP 原生支持 Claude Code/Desktop、Cursor、ChatGPT、Codex、OpenClaw 及任何兼容客户端 |
+| **答案可验证** | ✅ 原文、笔记路径、PDF 页码引用、分信号得分和新鲜度元数据 |
+| **知识真正归你所有** | ✅ 纯 markdown 是事实来源；索引保留在本地；serve 期间零云端调用 |
+| **完整的 Obsidian 知识面** | ✅ Markdown、双向链接、frontmatter、Canvas、Bases、PDF 和 OCR |
+| **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个工作流提示词 |
+| **扩展性能而不放弃控制** | ✅ HNSW 实时更新、持久化、自适应补充和 int8 量化 |
+| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1692 项测试、9 个发布门禁、SLSA L2 来源证明 |
 
-| 能力 | enquire-mcp | Smart Connections | 其他 Obsidian-MCP |
-|---|:---:|:---:|:---:|
-| 混合检索（BM25 + TF-IDF + 向量嵌入，RRF 融合） | ✅ | ❌ | ❌ |
-| **交叉编码器重排**（BGE，实测 +15.5 NDCG@10） | ✅ | ❌ | ❌ |
-| **HNSW 向量索引**（sub-10ms top-K，持久化） | ✅ | ❌ | ❌ |
-| **int8 向量量化**（向量库体积约 1/4） | ✅ | ❌ | ❌ |
-| **late-chunking** 上下文窗口向量嵌入 | ✅ | ❌ | ❌ |
-| **PDF 融入混合检索**（`[page: N]` 引用） | ✅ | ❌ | ❌ |
-| **扫描版 PDF 的 OCR**（Tesseract.js，多语言） | ✅ | ❌ | ❌ |
-| **Wikilink 图增强**检索信号 | ✅ | ❌ | ❌ |
-| **多语言语义搜索**（50+ 语言，本地运行） | ✅ | 💰 付费 | ❌ |
-| **内置检索质量评测套件**（NDCG、Recall、MRR、A/B 矩阵） | ✅ | ❌ | ❌ |
-| **远程 MCP**（HTTP + bearer 鉴权 + 有状态会话） | ✅ | ❌ | 部分 |
-| **逐路信号可观测性**（每条命中） | ✅ | ❌ | ❌ |
-| **MCP 原生**（Claude · Cursor · ChatGPT · Codex · OpenClaw · 任意客户端） | ✅ | ❌ 仅 Obsidian | 不一 |
-| **隐私过滤**在每条检索 + 写入路径校验 | ✅ | 不适用 | ❌ |
-| **46 个生产级工具**（34 常驻读 + 4 可选 + 7 受控写 + 1 反馈） | ✅ | 不适用 | 不一 |
-| **GraphRAG-light**（Louvain 模块度社群检测） | ✅ **独有** | ❌ | ❌ |
-| **独立 `.base` 查询执行**（无需运行 Obsidian） | ✅ **独有** | ❌ | ❌ 委托给 Obsidian |
-| **HyDE 检索**（Gao et al. 2023）+ 子问题分解 | ✅ **独有** | ❌ | ❌ |
-| **1692 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | ✅ | 不适用 | 罕见 |
-| **签名构建溯源**（npm + Sigstore，SLSA Build L2） | ✅ | 不适用 | ❌ |
-| **语义化版本约束的公开接口**（[STABILITY.md](./STABILITY.md)） | ✅ | 不适用 | ❌ |
-| 独立运行（无需 Obsidian 插件） | ✅ | ❌ 需 Obsidian | 不一 |
-| 许可证 | MIT，免费 | 专有，付费 | 不一 |
+**一个仓库。所有智能体。完整检索栈。没有云端锁定。**
 
-<sub>对比基于各项目截至 v3.8.x 稳定版的公开能力（初始快照 v3.7.0 / 2026-05-15；v3.8.4 刷新）。Smart Connections 是付费 Obsidian 插件（非 MCP 服务）。"其他 Obsidian-MCP"指撰写时 GitHub 上的公开开源 Obsidian-MCP 服务。enquire-mcp 的端到端检索基准发布于 <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a>——实测 `rerank-bge` 相对纯混合检索为 +24.7 MRR / +15.5 NDCG@10（60 条查询消融）。</sub>
-
-</details>
-
-> 战略定位：enquire-mcp 是构建在你现有 Obsidian 仓库之上的 [Karpathy 式 LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 的开源后端。可复利、可溯源的知识。
+> 战略定位：enquire-mcp 是构建在现有 Obsidian 仓库之上的开源 [Karpathy 式 LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 后端。知识持续积累，并始终可追溯到来源。
 
 ---
 
@@ -203,7 +183,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 🧠 应用场景
 
-**1 —— 为 AI 智能体提供长期记忆。** 把你的 Obsidian 仓库接入任意 MCP 兼容智能体（Claude Code、Claude Desktop、Cursor、ChatGPT、Codex、OpenClaw）。智能体随即拥有对你写过的每一条会议记录、日记、调研日志、决策文档的持久语义召回——跨会话、跨模型、跨厂商。与 `Claude Memory` 或 `ChatGPT Memory` 不同，你的知识不被锁进某家云端；它存在你拥有、可自由迁移的纯 markdown 里。
+**1 —— 为 AI 智能体提供长期记忆。** 把你的 Obsidian 仓库接入任意 MCP 兼容智能体（Claude Code、Claude Desktop、Cursor、ChatGPT、Codex、OpenClaw）。智能体随即拥有对你写过的每一条会议记录、日记、调研日志、决策文档的持久语义召回——跨会话、跨模型、跨厂商。与厂商内置的记忆层不同，你的知识不被锁进某家云端；它存在你拥有、可自由迁移的纯 markdown 里。
 
 **2 —— 个人知识库 / 第二大脑。** 混合检索能为*任意*措辞、50+ 语言中的任意一种找到正确的笔记。用英文询问两年前一篇俄文日记，也能命中。Wikilink 图增强会把处于你知识图谱中心的笔记上调排名。GraphRAG-light 发现主题社群——找回你早已忘记自己建立过的联系。PDF 融入检索并带 `[page: N]` 引用，让论文和会议纪要成为一等公民记忆。
 
@@ -211,16 +191,18 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🚫 何时 enquire-mcp 并不合适
+## ✅ 为严肃的本地知识工作流而生
 
-诚实的非目标——遇到以下情况请另选工具：
+当你需要以下能力时，选择 enquire-mcp：
 
-- **你要的是字面 / 正则搜索。** `ripgrep` / `grep` 对"精确找这个 token"更快更准。enquire 擅长*概念性*召回——近义词、跨语言、"我关于 X 说过什么"。两者并用：字面用 `rg`，语义用 enquire。
-- **你的知识在聊天记录里，而非笔记里。** enquire *扎根*于你亲手写的 markdown。从聊天记录*抽取*事实到独立存储的对话记忆工具（mem0、Zep、Supermemory）是另一个品类——见[对比](./docs/COMPARISON.md)。
-- **你需要多用户 / 托管 / 同步搜索。** enquire 设计上是本地优先、单仓库的——没有服务端多租户索引。
-- **你的来源不是 Markdown 或 PDF。** `.md` / `.canvas` / `.base` / `.pdf` 是一等公民；其他格式需先转换。
-- **你想要图形界面或 Obsidian 内置插件。** enquire 是无界面的 MCP 服务 / CLI——它*补充* Obsidian，而非取代。（Smart Connections 是内置插件选项。）
-- **你需要在数百万条笔记上做亚毫秒搜索。** HNSW 在大规模下提供 sub-10ms 的 top-K，但 enquire 面向个人 / 团队仓库，而非网页级语料。
+- **让 Obsidian 仓库始终作为唯一事实来源**，无需把知识复制进专有存储。
+- **让多个 AI 智能体共享同一记忆层**，切换模型不再从头开始。
+- **概念级和多语言召回**，即使表达方式不同也能找到答案。
+- **可引用、可检查的结果**，包含笔记路径、PDF 页码、信号得分和新鲜度。
+- **本地优先的隐私保护**，默认只读、写入显式开启、serve 期间零云端调用。
+- **完整的检索后端**，覆盖混合搜索、重排、图上下文、智能体扩展、Obsidian 丰富格式和远程 MCP。
+
+**明确边界：** enquire-mcp 是面向 Markdown、Canvas、Bases 和 PDF 的无界面 MCP 服务 / CLI。精确 token 搜索可与专用文本搜索工具配合；远程智能体使用内置 HTTP 传输。
 
 ---
 
@@ -290,6 +272,7 @@ graph LR
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
 | **缓存 + 索引文件** | chmod 0600，父目录 0700 |
+| **1692 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
 | **CI** | 每个 PR 都运行 **9 项发布必需检查**：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs` 和 `oia`。当前分支保护仅强制其中 **7 项**；`docs` 与 `oia` 是发布必需项，但未受保护（在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验全部 9 项。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |
 | **构建发布** | 每个 tag 发布到 npm + GitHub Release · 语义化版本 · **签名构建溯源**（npm + Sigstore，SLSA Build L2；L3 生成器在路线图中） |

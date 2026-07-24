@@ -1104,16 +1104,15 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
-  // v3.12.0-rc.4 extends the original v3.7.15 reranker-framing pin into a
-  // class guard. The 2026-07-24 competitor refresh found the same stale
-  // factual "only / no other" claim class in README, HTTP docs, benchmarks,
-  // ROADMAP and source descriptions. The deliberately promotional "most
-  // advanced" hero is a positioning line, not an empirical matrix claim,
-  // and is separately pinned by github-metadata-invariant.test.ts. Translated
-  // READMEs retain their old tables only inside an explicitly historical
-  // details block; current positioning above that block must point readers
-  // to OHS and the dated canonical comparison.
-  it("current comparison surfaces avoid unbounded factual category claims (v3.12.0-rc.4)", async () => {
+  // v3.12.0-rc.5 keeps the evidence-bound factual guard from rc.4 while
+  // separating the conversion surface from the evidence archive. The broad
+  // "#1 Obsidian MCP for AI memory" line is deliberate positioning, not an
+  // empirical cross-project metric. Concrete retrieval wins, exclusivity
+  // claims and competitor capabilities remain bounded by current evidence.
+  // Public READMEs now prove enquire's own value instead of linking out to
+  // alternatives; docs/COMPARISON.md remains available as the dated audit
+  // record without occupying the front-page funnel.
+  it("TOP-1 positioning stays promotional while factual claims stay bounded (v3.12.0-rc.5)", async () => {
     const comparisonMd = await read("docs/COMPARISON.md");
     // Find any "reranker (BGE, N models)" form — should be ZERO matches post-3.7.15.
     const flatCount = /reranker\s*\(BGE\s*,?\s*\d+\s*models?\)/i.exec(comparisonMd);
@@ -1131,8 +1130,6 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       /\btop-1 by retrieval quality\b/i,
       /\bthe only local memory layer\b/i
     ] as const;
-    const stripHistoricalComparison = (markdown: string): string =>
-      markdown.replace(/<details data-historical-comparison>[\s\S]*?<\/details>/g, "");
     const findUnboundedClaim = (text: string): string | null => {
       for (const pattern of unboundedPatterns) {
         const match = pattern.exec(text);
@@ -1140,6 +1137,22 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
       return null;
     };
+    const competitorPromotionMarkers = [
+      "./docs/COMPARISON.md",
+      "flowing-abyss/obsidian-hybrid-search",
+      "cyanheads/obsidian-mcp-server",
+      "bitbonsai/mcpvault",
+      "basicmachines-co/basic-memory",
+      "Smart Connections",
+      "mem0",
+      "Zep",
+      "Supermemory",
+      "Memobase",
+      "cognee",
+      "Khoj"
+    ] as const;
+    const findCompetitorPromotion = (text: string): string | null =>
+      competitorPromotionMarkers.find((marker) => text.includes(marker)) ?? null;
 
     const currentSurfaces = [
       ...PUBLIC_READMES,
@@ -1159,25 +1172,33 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "src/tools/search.ts"
     ] as const;
     for (const surface of currentSurfaces) {
-      const current = stripHistoricalComparison(await read(surface));
+      const current = await read(surface);
       expect(
         findUnboundedClaim(current),
         `${surface} carries an unbounded comparative claim; use a dated/pinned evidence boundary`
       ).toBeNull();
     }
 
-    for (const localized of PUBLIC_READMES.filter((surface) => surface !== "README.md")) {
-      const markdown = await read(localized);
-      const current = stripHistoricalComparison(markdown);
-      expect(current.length, `${localized} must wrap its legacy table as historical`).toBeLessThan(markdown.length);
-      expect(current, `${localized} current note must name the direct OHS peer`).toContain(
-        "flowing-abyss/obsidian-hybrid-search"
+    for (const readme of PUBLIC_READMES) {
+      const markdown = await read(readme);
+      expect(markdown, `${readme} must expose the stable TOP-1 proof anchor`).toContain('<a id="why-number-one"></a>');
+      expect(
+        findCompetitorPromotion(markdown),
+        `${readme} promotes an alternative from the product-page funnel`
+      ).toBeNull();
+      expect(markdown, `${readme} must not retain the rc.4 historical competitor matrix`).not.toContain(
+        "data-historical-comparison"
       );
-      expect(current, `${localized} current note must link the canonical comparison`).toContain("./docs/COMPARISON.md");
     }
 
     // NEGATIVE control: the analyzer must catch the exact stale claim class.
     expect(findUnboundedClaim("No other Obsidian-MCP currently ships remote HTTP.")).toBe("No other Obsidian-MCP");
+    // NEGATIVE control: the front-page analyzer must catch a competitor CTA.
+    expect(findCompetitorPromotion("Compare with flowing-abyss/obsidian-hybrid-search")).toBe(
+      "flowing-abyss/obsidian-hybrid-search"
+    );
+    // POSITIVE control: the broad product credential is intentionally allowed.
+    expect(findUnboundedClaim("The #1 Obsidian MCP for AI memory.")).toBeNull();
     // POSITIVE control: bounded point-in-time language is intentionally allowed.
     expect(
       findUnboundedClaim(

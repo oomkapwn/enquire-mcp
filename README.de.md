@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — das fortschrittlichste Obsidian-MCP. Langzeitgedächtnis für KI-Agenten. Aufgebaut auf Ihrem Obsidian-Vault. Open Source, MCP-nativ, anbieterneutral. Hybrid-Retrieval, BGE-Reranker, HNSW, PDFs mit OCR. Für Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — Das #1 Obsidian-MCP für KI-Gedächtnis." width="100%"></a>
 
 # enquire-mcp
 
@@ -8,7 +8,7 @@
 
 <sub>**TL;DR für KI-Agenten** — MCP-Server, der einen lokalen Obsidian-Markdown-Vault für Claude Code, Claude Desktop, Cursor, ChatGPT, Codex und OpenClaw als persistentes, durchsuchbares Gedächtnis bereitstellt. Hybrid-Retrieval (BM25 + ML-Embeddings + BGE-Reranker, per RRF fusioniert), HNSW + int8-Quantisierung, agentisches RAG (HyDE + Teilfragen), GraphRAG-light, PDFs + OCR, eigenständige Bases. Anbieterneutral, MIT, null Cloud-Aufrufe während des Servings. Installation: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 
-### Das fortschrittlichste Obsidian-MCP. Langzeitgedächtnis für KI-Agenten.
+### 🏆 Das #1 Obsidian-MCP für KI-Gedächtnis.
 
 **Hören Sie auf, Claude, Cursor, ChatGPT, Codex und OpenClaw in jeder Sitzung den Kontext neu zu erklären. Ihre Obsidian-Notizen werden zu einem gemeinsamen, durchsuchbaren Gedächtnis über jeden MCP-kompatiblen Agenten hinweg — Ihr Wissen, jedes Modell, für immer Ihnen gehörend.**
 
@@ -23,7 +23,7 @@
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ Installation in 30 Sekunden](#-schnellstart) · [🧠 Anwendungsfälle](#-anwendungsfälle) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 API-Referenz](https://oomkapwn.github.io/enquire-mcp/) · [💬 Alternativen vergleichen](./docs/COMPARISON.md)**
+**[⚡ Installation in 30 Sekunden](#-schnellstart) · [🏆 Warum #1](#why-number-one) · [🧠 Anwendungsfälle](#-anwendungsfälle) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 API-Referenz](https://oomkapwn.github.io/enquire-mcp/)**
 
 **Claude Code — eine einzige Zeile:**
 
@@ -39,19 +39,19 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## Das Problem
 
-Jede KI-Sitzung beginnt bei null. Sie erklären Ihr Projekt, Ihre Design-Entscheidungen, die Schlussfolgerungen der Recherche der letzten Woche immer wieder neu. Die „Gedächtnis"-Funktionen der Anbieter ([Claude Memory](https://www.anthropic.com/news/memory-and-tool-use), [ChatGPT Memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), Cursor-Gedächtnis) sperren Ihr Wissen in die Cloud eines einzigen Anbieters ein — und vergessen es wieder, sobald Sie das Tool wechseln. **Ihr Wissen fängt immer wieder von vorne an.**
+Jede KI-Sitzung beginnt bei null. Sie erklären Projekt, Designentscheidungen und frühere Forschungsergebnisse immer wieder neu. Eingebaute Anbieter-Memory sperrt Wissen in eine Cloud und unterbricht die Kontinuität beim Toolwechsel. **Ihr Wissen fängt immer wieder von vorne an.**
 
 ## Die Lösung
 
 Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** für jeden MCP-kompatiblen Agenten. Eine Installation — Ihr Wissen ist sofort aus Claude Code, Claude Desktop, Cursor, dem benutzerdefinierten GPT von ChatGPT, Codex, OpenClaw und jedem anderen MCP-Client zugänglich. Reine Markdown-Dateien, **die Ihnen gehören**, lokal indexiert, durchsucht mit dem vollständigen modernen IR-Stack, über jede Sitzung und jedes Modell hinweg abrufbar.
 
-**Verankert, nicht extrahiert.** Konversationsgedächtnis-Tools (mem0, Zep, Supermemory, Memobase) *extrahieren* Fakten aus Ihren Chat-Protokollen in einen separaten Speicher, den Sie nicht lesen können. enquire-mcp macht das Gegenteil: Es ist **im Wissen verankert, das Sie bereits geschrieben haben** — Ihren eigenen `.md`-Notizen, wortgetreu, mit Zitaten — sodass der Abruf nachvollziehbar, in jedem Editor editierbar und niemals eine verlustbehaftete Zusammenfassung eines Chats ist, an den Sie sich nur halb erinnern. Und anders als serverseitige ***Flotten*-Gedächtnis**-Plattformen — mandantenfähige Cloud-Speicher, die Agenten-Traffic in eine gemeinsame Datenbank paraphrasieren — ist enquire **Einzelnutzer- und Local-First**: ein Vault, der Ihnen vollständig gehört und den Sie selbst lesen, bearbeiten und löschen können, mit null Cloud-Aufrufen während des Servings. (Diese „Extraktions"-Kritik gilt speziell der Chat-Gedächtnis-Kohorte — nicht Knowledge-Graph- / ETL-Tools wie cognee, ebenso wenig persönlichen Such-Pendants wie Khoj.)
+**In Ihren Originaltexten verankert, nicht extrahiert.** Die meisten Gesprächs-Memory-Systeme extrahieren Fakten aus Chats in einen separaten Speicher. enquire-mcp beginnt mit dem Wissen, das Sie bewusst aufgeschrieben haben: wörtliche `.md`-Notizen und Quellen bleiben prüfbar, editierbar und portabel, statt als verlustbehaftete Paraphrase in einer fremden Datenbank zu verschwinden. Ein lokaler Vault bleibt die Quelle der Wahrheit, ohne Cloud-Aufrufe während des Servings.
 
 **Verankert — und frischebewusst.** Einen Fakt abzurufen ist nur die halbe Aufgabe; zu wissen, ob er noch *wahr* ist, ist die andere Hälfte. Der [Memora-Benchmark](https://arxiv.org/abs/2604.20006) (Apr. 2026) zeigte, dass Gedächtnissysteme systematisch an der Wiederverwendung veralteter Fakten scheitern — eine ein Jahr alte Notiz so abzurufen, als wäre sie heute geschrieben worden. Weil enquires Gedächtnis Ihre echten Markdown-Dateien *ist*, trägt jeder Suchtreffer `age_days` + ein `stale`-Flag, das aus der echten Zeit der letzten Änderung der Notiz abgeleitet wird, und Sie können sich für ein nach Aktualität gewichtetes Ranking (`--recency-weight`) entscheiden, sodass frischere Notizen zuerst erscheinen. Ihr Wissen, frischebewusst — kein zeitloser Klumpen.
 
 > **Was enquire-mcp anders macht**:
 > 1. **Anbieterneutral.** Ihr Gedächtnis lebt in `.md`-Dateien. Wechseln Sie von Claude zu Cursor — Ihr Gedächtnis kommt mit.
-> 2. **Retrieval der Spitzenklasse.** Hybrides BM25 + mehrsprachige Embeddings + BGE-Cross-Encoder-Reranker, per RRF fusioniert, skaliert mit HNSW + int8-Quantisierung. Derselbe IR-Stack, den ein Such-Startup bauen würde — als Open Source, in einer einzigen Binärdatei.
+> 2. **Vollständiger lokaler Retrieval-Stack.** BM25 + TF-IDF + mehrsprachige Embeddings werden per RRF fusioniert, mit optionalem BGE-Cross-Encoder-Reranker und Signal-Scores; HNSW + int8-Quantisierung skalieren den dichten Pfad.
 > 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
@@ -59,46 +59,26 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 
 ---
 
-## 🔎 Aktuelle Wettbewerbsposition
+<a id="why-number-one"></a>
 
-> Stand 2026-07-24: [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) teilt inzwischen den BM25+Embedding+RRF+Reranker-Kern und veröffentlicht LongMemEval-S-Ergebnisse. Die alte Sammelspalte unten ist daher keine aktuelle Aussage; siehe den [quellengebundenen Vergleich](./docs/COMPARISON.md).
+## 🏆 Warum enquire-mcp #1 ist
 
-<details data-historical-comparison>
-<summary>Historische Tabelle vom Mai 2026 (kein aktueller Vergleich)</summary>
+**Der vollständige lokale KI-Memory-Stack für Obsidian — kein dünner Datei-Wrapper und nicht nur Vektorsuche.** Eine Installation vereint Abrufqualität, Wissenseigentum, Agentenreichweite, Dokumentabdeckung und produktionsreife Abläufe.
 
-**Sechs Funktionen, die kein anderes Obsidian-MCP überhaupt hat** (GraphRAG-light, eigenständige `.base`-Ausführung, HyDE, int8-Quantisierung, Late-Chunking, integriertes Eval-Harness). **Plus der gesamte moderne IR-Stack** (BM25 + ML-Embeddings + Cross-Encoder-Reranking + HNSW), von dem Konkurrenten höchstens ein oder zwei Bestandteile mitbringen. Im direkten Vergleich:
+| Führungsstandard | Was enquire-mcp liefert |
+|---|---|
+| **Abruf jenseits exakter Wörter** | ✅ BM25 + TF-IDF + mehrsprachige Embeddings → RRF-Fusion; optionales BGE-Reranking liefert gemessene **+15.5 NDCG@10 / +24.7 MRR** |
+| **Ein Gedächtnis für alle Agenten** | ✅ MCP-nativer Zugriff für Claude Code/Desktop, Cursor, ChatGPT, Codex, OpenClaw und jeden kompatiblen Client |
+| **Prüfbare Antworten** | ✅ Wörtlicher Text, Notizpfade, PDF-Seitenzitate, Signal-Scores und Frische-Metadaten |
+| **Wissen, das Ihnen wirklich gehört** | ✅ Plain Markdown als Quelle der Wahrheit, lokale Indizes und null Cloud-Aufrufe während des Servings |
+| **Die gesamte Obsidian-Wissensoberfläche** | ✅ Markdown, Wikilinks, Frontmatter, Canvas, Bases, PDF und OCR |
+| **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 Workflow-Prompts |
+| **Skalierung ohne Kontrollverlust** | ✅ HNSW-Live-Updates, Persistenz, adaptives Refill und int8-Quantisierung |
+| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1692 Tests, 9 Release-Gates und SLSA-L2-Provenienz |
 
-| Fähigkeit | enquire-mcp | Smart Connections | Andere Obsidian-MCPs |
-|---|:---:|:---:|:---:|
-| Hybrid-Retrieval (BM25 + TF-IDF + ML-Embeddings, per RRF fusioniert) | ✅ | ❌ | ❌ |
-| **Cross-Encoder-Reranking** (BGE, +15.5 NDCG@10 gemessen) | ✅ | ❌ | ❌ |
-| **HNSW-Vektorindex** (Top-K in unter 10 ms, persistiert) | ✅ | ❌ | ❌ |
-| **int8-Vektorquantisierung** (~4× kleinere embed-db) | ✅ | ❌ | ❌ |
-| **Late-Chunking** (kontextfenstergestützte Embeddings) | ✅ | ❌ | ❌ |
-| **PDFs in die Hybrid-Suche eingemischt** (`[page: N]`-Zitate) | ✅ | ❌ | ❌ |
-| **OCR für gescannte PDFs** (Tesseract.js, mehrsprachig) | ✅ | ❌ | ❌ |
-| **Wikilink-Graph-Boost** als Retrieval-Signal | ✅ | ❌ | ❌ |
-| **Mehrsprachige semantische Suche** (50+ Sprachen, on-device) | ✅ | 💰 kostenpflichtig | ❌ |
-| **Integriertes Eval-Harness für die Retrieval-Qualität** (NDCG, Recall, MRR, A/B-Matrix) | ✅ | ❌ | ❌ |
-| **Remote-MCP** über HTTP + Bearer-Auth + zustandsbehaftete Sitzungen | ✅ | ❌ | teilweise |
-| **Pro-Signal-Observability** je Treffer | ✅ | ❌ | ❌ |
-| **MCP-nativ** (Claude · Cursor · ChatGPT · Codex · OpenClaw · jeder Client) | ✅ | ❌ nur Obsidian | variiert |
-| **Privatsphäre-Filter** an jedem Such- + Schreibpfad verifiziert | ✅ | n. z. | ❌ |
-| **46 Produktions-Tools** (34 stets aktive Lese-Tools + 4 optionale + 7 abgesicherte Schreib-Tools + 1 Feedback-Tool) | ✅ | n. z. | variiert |
-| **GraphRAG-light** (Wikilink-Community-Erkennung via Louvain-Modularität) | ✅ **nur hier** | ❌ | ❌ |
-| **Eigenständige `.base`-Abfrageausführung** (funktioniert ohne laufendes Obsidian) | ✅ **nur hier** | ❌ | ❌ delegiert an Obsidian |
-| **HyDE-Retrieval** (Gao et al. 2023) + Teilfragen-Zerlegung | ✅ **nur hier** | ❌ | ❌ |
-| **1692 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | ✅ | n. z. | selten |
-| **Signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2) | ✅ | n. z. | ❌ |
-| **Semver-gebundene öffentliche Oberfläche** ([STABILITY.md](./STABILITY.md)) | ✅ | n. z. | ❌ |
-| Eigenständig (kein Obsidian-Plugin nötig) | ✅ | ❌ erfordert Obsidian | variiert |
-| Lizenz | MIT, kostenlos | proprietär, kostenpflichtig | variiert |
+**Ein Vault. Alle Agenten. Der vollständige Stack. Kein Cloud-Lock-in.**
 
-<sub>Vergleich basierend auf den öffentlichen Fähigkeiten jedes Projekts zum Stand der stabilen Version v3.8.x (initiale Momentaufnahme v3.7.0 / 2026-05-15; aktualisiert in v3.8.4). Smart Connections ist ein kostenpflichtiges Obsidian-Plugin (kein MCP-Server). „Andere Obsidian-MCPs" bezeichnet die öffentlichen Open-Source-Obsidian-MCP-Server auf GitHub zum Zeitpunkt der Erstellung. Öffentliche End-to-End-Retrieval-Benchmarks für enquire-mcp sind in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> veröffentlicht — das gemessene `rerank-bge`-Delta beträgt +24.7 MRR / +15.5 NDCG@10 gegenüber reinem Hybrid auf einer 60-Abfragen-Ablation.</sub>
-
-</details>
-
-> Strategische Behauptung: enquire-mcp ist das Open-Source-Backend für [LLM-Wikis im Karpathy-Stil](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) auf Basis Ihres bestehenden Obsidian-Vaults. Wissen, das sich kumuliert, bis zu den Quellen nachverfolgbar.
+> Strategische Positionierung: enquire-mcp ist das Open-Source-Backend für [LLM-Wikis im Karpathy-Stil](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) auf Ihrem bestehenden Obsidian-Vault. Wissen, das wächst und bis zur Quelle nachvollziehbar bleibt.
 
 ---
 
@@ -210,7 +190,7 @@ Derselbe Befehl `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funktioniert
 
 ## 🧠 Anwendungsfälle
 
-**1 — Langzeitgedächtnis für KI-Agenten.** Klinken Sie Ihren Obsidian-Vault in jeden MCP-kompatiblen Agenten ein (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). Der Agent verfügt nun über dauerhaften, semantischen Abruf über jede Besprechungsnotiz, jeden Journaleintrag, jedes Recherche-Log und jedes Entscheidungsdokument, das Sie je geschrieben haben — über Sitzungen, Modelle und Anbieter hinweg. Anders als `Claude Memory` oder `ChatGPT Memory` ist Ihr Wissen nicht in die Cloud eines einzigen Anbieters gesperrt; es lebt in reinem Markdown, das Ihnen gehört und das Sie frei migrieren können.
+**1 — Langzeitgedächtnis für KI-Agenten.** Klinken Sie Ihren Obsidian-Vault in jeden MCP-kompatiblen Agenten ein (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). Der Agent verfügt nun über dauerhaften, semantischen Abruf über jede Besprechungsnotiz, jeden Journaleintrag, jedes Recherche-Log und jedes Entscheidungsdokument, das Sie je geschrieben haben — über Sitzungen, Modelle und Anbieter hinweg. Anders als die eingebaute Memory eines Anbieters ist Ihr Wissen nicht in die Cloud eines einzigen Anbieters gesperrt; es lebt in reinem Markdown, das Ihnen gehört und das Sie frei migrieren können.
 
 **2 — Persönliche Wissensdatenbank / zweites Gehirn.** Das Hybrid-Retrieval holt die richtige Notiz für *jede* Formulierung nach oben, in jeder der 50+ Sprachen. Fragen Sie auf Englisch nach einem russischsprachigen Journaleintrag von vor zwei Jahren, und Sie erhalten den richtigen Treffer. Der Wikilink-Graph-Boost stuft Notizen höher ein, die im Zentrum Ihres Wissensgraphen stehen. GraphRAG-light bringt thematische Communities zum Vorschein — entdecken Sie Verbindungen, an die Sie sich nicht mehr erinnert haben. PDFs fließen mit `[page: N]`-Zitaten in die Suche ein, sodass Forschungsarbeiten und Besprechungsprotokolle zu erstklassigem Gedächtnis werden.
 
@@ -218,16 +198,18 @@ Derselbe Befehl `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funktioniert
 
 ---
 
-## 🚫 Wann enquire-mcp *nicht* das richtige Tool ist
+## ✅ Für anspruchsvolle lokale Wissens-Workflows gebaut
 
-Ehrliche Nicht-Ziele — greifen Sie zu etwas anderem, wenn:
+Wählen Sie enquire-mcp, wenn Sie Folgendes wollen:
 
-- **Sie eine wörtliche String-/Regex-Suche wollen.** `ripgrep` / `grep` ist schneller und exakt für „finde genau dieses Token". enquire glänzt beim *konzeptuellen* Abruf — Synonyme, sprachübergreifend, „Was habe ich über X gesagt". Nutzen Sie beides: `rg` fürs Wörtliche, enquire fürs Bedeutungsmäßige.
-- **Ihr Wissen in Chat-Protokollen lebt, nicht in Notizen.** enquire ist im Markdown *verankert*, das Sie verfasst haben. Konversationsgedächtnis-Tools (mem0, Zep, Supermemory), die Fakten aus Chat-Transkripten in einen separaten Speicher *extrahieren*, sind eine andere Kategorie — siehe den [Vergleich](./docs/COMPARISON.md).
-- **Sie eine Mehrbenutzer- / gehostete / synchronisierte Suche brauchen.** enquire ist von Grund auf Local-First und Single-Vault — kein serverseitiger mandantenfähiger Index.
-- **Ihre Quellen weder Markdown noch PDF sind.** `.md` / `.canvas` / `.base` / `.pdf` sind erstklassig; andere Formate müssen zuerst konvertiert werden.
-- **Sie eine GUI oder ein In-App-Obsidian-Plugin wollen.** enquire ist ein Headless-MCP-Server / CLI — es *ergänzt* Obsidian, es ist keines. (Smart Connections ist die In-App-Plugin-Option.)
-- **Sie eine Suche im Submillisekundenbereich über Millionen von Notizen brauchen.** HNSW liefert Top-K in unter 10 ms bei großem Maßstab, aber enquire zielt auf persönliche / Team-Vaults ab, nicht auf Korpora im Web-Maßstab.
+- **Den Obsidian-Vault als Quelle der Wahrheit behalten**, ohne Wissen in einen proprietären Speicher zu kopieren.
+- **Ein Gedächtnis über mehrere KI-Agenten hinweg**, ohne beim Modellwechsel neu zu beginnen.
+- **Konzeptuellen und mehrsprachigen Abruf**, der Umformulierungen übersteht.
+- **Zitierte, prüfbare Ergebnisse** mit Pfaden, PDF-Seiten, Signalen und Frische.
+- **Local-first-Datenschutz** mit read-only als Standard, expliziter Schreibfreigabe und null Cloud-Aufrufen während des Servings.
+- **Ein vollständiges Retrieval-Backend** mit Hybrid-Suche, Reranking, Graphkontext, agentischer Erweiterung, Obsidian-Formaten und Remote-MCP.
+
+**Klarer Umfang:** enquire-mcp ist ein headless MCP-Server / CLI für Markdown, Canvas, Bases und PDF. Nutzen Sie für exakte Tokens zusätzlich Literal-Suche und für entfernte Agenten den integrierten HTTP-Transport.
 
 ---
 
@@ -297,6 +279,7 @@ Plus 3 MCP-Ressourcen (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **HTTP-Transport** | Bearer-Auth (konstantzeitiges SHA-256 + `timingSafeEqual`), Rate-Limit pro Token, striktes CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML-1.2-Core-Schema, standardmäßig sicher) — keine Code-Ausführung |
 | **Cache- + Indexdateien** | chmod 0600, übergeordnetes Verzeichnis 0700 |
+| **1692 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
 | **CI** | Auf jedem PR laufen **9 release-erforderliche Checks**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` und `oia`. Die Branch-Protection erzwingt derzeit nur **7** davon; `docs` und `oia` sind für Releases erforderlich, aber ungeschützt (live verifiziert am 2026-07-23). `test-macos` ist der einzige beratende Job mit `continue-on-error`. `docker` kann den CI-Workflow fehlschlagen lassen, ist aber ungeschützt; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` alle 9 auf dem getaggten SHA erneut. |
 | **Coverage** | Zeilen ≥86 % · Statements ≥82 % · Funktionen ≥75 % · Branches ≥74 % (abgesichert) |
 | **Releases** | npm + GitHub-Release pro Tag · semver · **signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2; L3-Generator auf der Roadmap) |

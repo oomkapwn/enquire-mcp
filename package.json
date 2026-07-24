@@ -3,7 +3,7 @@
   "name": "@oomkapwn/enquire-mcp",
   "version": "3.12.0-rc.5",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "MCP server giving AI agents (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) persistent long-term memory backed by your local Obsidian markdown vault. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. Vendor-neutral memory layer for any MCP-compatible agent. 46 tools, 19 MCP prompts, 1692 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "The #1 Obsidian MCP for AI memory: one local markdown vault becomes persistent, cited memory for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. 46 tools, 19 MCP prompts, 1692 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -204,7 +204,7 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
-    "js-yaml": "^5.2.1",
+    "js-yaml": "^5.2.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

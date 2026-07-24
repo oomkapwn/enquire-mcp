@@ -54,7 +54,12 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🏆 यह सर्वश्रेष्ठ क्यों है
+## 🔎 वर्तमान प्रतिस्पर्धी स्थिति
+
+> 2026-07-24 अपडेट: [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) अब BM25+embeddings+RRF+reranker कोर साझा करता है और LongMemEval-S परिणाम प्रकाशित करता है। इसलिए नीचे का पुराना सामान्य कॉलम वर्तमान दावा नहीं है; [स्रोत-पिन की गई तुलना](./docs/COMPARISON.md) देखें।
+
+<details data-historical-comparison>
+<summary>मई 2026 की ऐतिहासिक तालिका (वर्तमान तुलना नहीं)</summary>
 
 **छह क्षमताएँ जो किसी अन्य Obsidian-MCP में बिल्कुल नहीं हैं** (GraphRAG-light, स्वतंत्र `.base` निष्पादन, HyDE, int8 quantization, late-chunking, अंतर्निहित eval harness), **साथ ही पूरा आधुनिक IR स्टैक** (BM25 + ML embeddings + cross-encoder reranking + HNSW), जबकि प्रतिस्पर्धी अधिक-से-अधिक एक-दो ही देते हैं। साथ-साथ तुलना:
 
@@ -86,6 +91,8 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 <sub>तुलना प्रत्येक परियोजना की v3.8.x स्थिर तक की सार्वजनिक क्षमताओं पर आधारित है (प्रारंभिक स्नैपशॉट v3.7.0 / 2026-05-15; v3.8.4 में अद्यतन)। Smart Connections एक भुगतान वाला Obsidian प्लगइन है (MCP सर्वर नहीं)। "अन्य Obsidian-MCP" से तात्पर्य लेखन के समय GitHub पर मौजूद सार्वजनिक ओपन-सोर्स Obsidian-MCP सर्वरों से है। enquire-mcp के एंड-टू-एंड retrieval बेंचमार्क <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> में प्रकाशित हैं — मापा गया `rerank-bge` अंतर 60-क्वेरी ablation पर सादे हाइब्रिड की तुलना में +24.7 MRR / +15.5 NDCG@10 है।</sub>
 
+</details>
+
 > रणनीतिक दावा: enquire-mcp आपके मौजूदा Obsidian vault के ऊपर [Karpathy-शैली LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) के लिए ओपन-सोर्स बैकएंड है। ऐसा ज्ञान जो चक्रवृद्धि होता है, स्रोतों तक खोज-योग्य।
 
 ---
@@ -115,7 +122,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

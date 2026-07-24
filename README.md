@@ -49,7 +49,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 
 > **What makes enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
-> 2. **Best-in-class retrieval.** Hybrid BM25 + multilingual embeddings + BGE cross-encoder reranker fused via RRF, scaled with HNSW + int8 quantization. The same IR stack a search startup would build — open-sourced, in one binary.
+> 2. **Broad, inspectable retrieval.** Hybrid BM25 + TF-IDF + multilingual embeddings fused via RRF, with an optional BGE cross-encoder reranker and per-signal scores; HNSW + int8 quantization scale the dense path.
 > 3. **Zero cloud calls during serve.** The embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~110 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
@@ -57,37 +57,19 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 
 ---
 
-## 🏆 Why it's the best
+## 🔎 Where it differs
 
-**Six features no other Obsidian-MCP has at all** (GraphRAG-light, standalone `.base` execution, HyDE, int8 quantization, late-chunking, built-in eval harness). **Plus the entire modern IR stack** (BM25 + ML embeddings + cross-encoder reranking + HNSW) that competitors ship at most one or two of. Side-by-side:
+The Obsidian-MCP landscape is no longer "hybrid search versus CRUD." `flowing-abyss/obsidian-hybrid-search` now shares the BM25+dense+RRF+reranker core and has stronger public external-dataset evidence; `cyanheads` has the deeper live-Obsidian and OAuth surface. The useful decision is therefore workflow fit:
 
-| Capability | enquire-mcp | Smart Connections | Other Obsidian-MCPs |
-|---|:---:|:---:|:---:|
-| Hybrid retrieval (BM25 + TF-IDF + ML embeddings, RRF-fused) | ✅ | ❌ | ❌ |
-| **Cross-encoder reranking** (BGE, +15.5 NDCG@10 measured) | ✅ | ❌ | ❌ |
-| **HNSW vector index** (sub-10ms top-K, persisted) | ✅ | ❌ | ❌ |
-| **int8 vector quantization** (~4× smaller embed-db) | ✅ | ❌ | ❌ |
-| **Late-chunking** context-windowed embeddings | ✅ | ❌ | ❌ |
-| **PDFs blended into hybrid search** (`[page: N]` citations) | ✅ | ❌ | ❌ |
-| **OCR for scanned PDFs** (Tesseract.js, multilingual) | ✅ | ❌ | ❌ |
-| **Wikilink graph-boost** retrieval signal | ✅ | ❌ | ❌ |
-| **Multilingual semantic search** (50+ languages, on-device) | ✅ | 💰 paid | ❌ |
-| **Built-in retrieval-quality eval harness** (NDCG, Recall, MRR, A/B matrix) | ✅ | ❌ | ❌ |
-| **Remote MCP** over HTTP + bearer auth + stateful sessions | ✅ | ❌ | partial |
-| **Per-signal observability** per hit | ✅ | ❌ | ❌ |
-| **MCP-native** (Claude · Cursor · ChatGPT · Codex · OpenClaw · any client) | ✅ | ❌ Obsidian-only | varies |
-| **Privacy filter** verified at every search + write path | ✅ | n/a | ❌ |
-| **46 production tools** (34 always-on read tools + 4 opt-in + 7 gated writes + 1 feedback tool) | ✅ | n/a | varies |
-| **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
-| **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
-| **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1690 unit tests · 9 release-required CI checks · 7 currently branch-protected** | ✅ | n/a | rare |
-| **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
-| **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
-| Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
-| License | MIT, free | proprietary, paid | varies |
+| Your priority | Better starting point | Why |
+|---|---|---|
+| Focused hybrid search in a CLI, MCP server **and** native Obsidian plugin; published LongMemEval-S evidence today | [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) | Same engine across three surfaces, compact MCP contract, public result JSON |
+| Palette commands, active-file reads, open-in-UI, section edits, JWT/OAuth | [cyanheads/obsidian-mcp-server](https://github.com/cyanheads/obsidian-mcp-server) | Built around a running Obsidian + Local REST API |
+| Model-free filesystem CRUD and lexical/BM25 search | [mcpvault](https://github.com/bitbonsai/mcpvault) | Smaller dependency/operations footprint; no vector index lifecycle |
+| Two-way agent-authored memory with optional cloud sync, mobile and team workspace | [Basic Memory](https://github.com/basicmachines-co/basic-memory) | Co-authored structured Markdown is the primary product loop |
+| Read-first retrieval across existing Markdown + Bases + PDFs, with freshness controls, agentic prompts and documented stateful HTTP guardrails | **enquire-mcp** | Broad document/retrieval surface while the vault remains the source of truth |
 
-<sub>Comparison based on each project's public capabilities as of v3.8.x stable (initial snapshot v3.7.0 / 2026-05-15; refreshed in v3.8.4). Smart Connections is a paid Obsidian plugin (not an MCP server). "Other Obsidian-MCPs" refers to public open-source Obsidian-MCP servers on GitHub at time of writing. Public end-to-end retrieval benchmarks for enquire-mcp are published in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — measured `rerank-bge` delta is +24.7 MRR / +15.5 NDCG@10 over plain hybrid on a 60-query ablation.</sub>
+The [evidence-linked comparison](./docs/COMPARISON.md) records the exact source commits, honest competitor strengths and benchmark boundary. enquire's own measured result remains the reproducible [`rerank-bge` +24.7 MRR / +15.5 NDCG@10 ablation](./docs/benchmarks.md); it is **not** presented as an apples-to-apples win over OHS until the shared-protocol run is published.
 
 > Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
 
@@ -125,7 +107,7 @@ enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cur
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -267,7 +249,7 @@ graph LR
 
 ## 🛠️ All 46 tools
 
-46 tools total: 34 always-on read (incl. the umbrella `obsidian_search`) + 4 opt-in read + 7 gated writes + 1 closed-loop feedback. Full reference: **[docs/api.md](./docs/api.md)**.
+46 production tools total: 34 always-on read tools (incl. the umbrella `obsidian_search`) + 4 opt-in read + 7 gated writes + 1 closed-loop feedback. Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|
@@ -295,6 +277,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
+| **1690 tests · 9 release-required CI checks · 7 branch-protected** | Current verified release posture; the operational breakdown is pinned below. |
 | **CI** | **9 release-required checks** run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, and `oia`. Branch protection currently enforces **7** of them; `docs` and `oia` are release-required but unprotected (live-verified 2026-07-23). `test-macos` is the only `continue-on-error` advisory job. `docker` can fail the CI workflow but is unprotected; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 9 on the tagged SHA. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |

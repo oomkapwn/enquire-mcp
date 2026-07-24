@@ -52,7 +52,12 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🏆 为什么它是最好的
+## 🔎 当前竞争定位
+
+> 2026-07-24 更新：[Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) 现在同样具备 BM25+向量嵌入+RRF+重排核心，并发布 LongMemEval-S 结果。因此，下方旧的汇总列不再代表当前结论；请参阅[固定证据来源的对比](./docs/COMPARISON.md)。
+
+<details data-historical-comparison>
+<summary>2026 年 5 月的历史表格（非当前对比）</summary>
 
 **六项其他 Obsidian-MCP 完全没有的能力**（GraphRAG-light、独立 `.base` 执行、HyDE、int8 量化、late-chunking、内置评测套件），**外加整套现代 IR 技术栈**（BM25 + 向量嵌入 + 交叉编码器重排 + HNSW），而竞品至多只有其中一两项。横向对比：
 
@@ -84,6 +89,8 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 <sub>对比基于各项目截至 v3.8.x 稳定版的公开能力（初始快照 v3.7.0 / 2026-05-15；v3.8.4 刷新）。Smart Connections 是付费 Obsidian 插件（非 MCP 服务）。"其他 Obsidian-MCP"指撰写时 GitHub 上的公开开源 Obsidian-MCP 服务。enquire-mcp 的端到端检索基准发布于 <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a>——实测 `rerank-bge` 相对纯混合检索为 +24.7 MRR / +15.5 NDCG@10（60 条查询消融）。</sub>
 
+</details>
+
 > 战略定位：enquire-mcp 是构建在你现有 Obsidian 仓库之上的 [Karpathy 式 LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 的开源后端。可复利、可溯源的知识。
 
 ---
@@ -113,7 +120,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

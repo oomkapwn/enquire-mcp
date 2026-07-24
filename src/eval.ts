@@ -28,11 +28,11 @@
 // sum(rel_i / log2(i + 1)) where rel_i ∈ {0, 1}. NDCG normalizes by the
 // ideal DCG = sum(1 / log2(i + 1)) for i in [1, |relevant|].
 //
-// "Only enquire-mcp has this": no other Obsidian-MCP ships a built-in
-// retrieval evaluation harness. This makes Karpathy-style LLM Wiki users
-// systematically tune their hybrid retrieval — measure first, then
-// adjust graph_boost / reranker / min_signals based on real numbers
-// over their real corpus.
+// This built-in command lets Karpathy-style LLM Wiki users tune their
+// own retrieval — measure first, then adjust graph_boost / reranker /
+// min_signals over their real corpus. Peer projects may ship separate
+// benchmark suites (OHS does); that is distinct from this user-facing
+// per-vault CLI workflow and avoids an unbounded uniqueness claim.
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";

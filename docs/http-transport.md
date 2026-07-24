@@ -294,7 +294,13 @@ curl -sX POST "$URL" \
 
 ## Comparison vs other Obsidian-MCPs
 
-No other Obsidian-MCP currently ships a remote-HTTP transport. With v2.6.0, enquire-mcp is the only one you can wire up to claude.ai web, ChatGPT, or a phone — same vault, same tools, same hybrid retrieval, just over HTTPS instead of stdio.
+Remote HTTP is no longer unique in this category. The 2026-07-24 evidence snapshot found three distinct shapes:
+
+- enquire-mcp: stateful or stateless Streamable HTTP, bearer auth, CORS, rate/session/connection bounds, readiness;
+- `flowing-abyss/obsidian-hybrid-search`: one shared long-lived search/index process with Host-header protection;
+- `cyanheads/obsidian-mcp-server`: stateless Streamable HTTP with JWT/OAuth, backed by a running Obsidian Local REST API.
+
+Choose on lifecycle and trust boundary, not the presence of HTTP alone. enquire is the fit when its stateful session semantics and explicit resource limits matter; OHS is the focused shared-search service; cyanheads is the live-Obsidian/OAuth option. See the dated, source-pinned [`COMPARISON.md`](./COMPARISON.md).
 
 ## Troubleshooting
 

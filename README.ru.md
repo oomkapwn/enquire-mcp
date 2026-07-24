@@ -57,7 +57,12 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🏆 Почему он лучший
+## 🔎 Текущая конкурентная позиция
+
+> Обновление 2026-07-24: [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) теперь использует сопоставимое ядро BM25+эмбеддинги+RRF+реранкер и публикует результаты LongMemEval-S. Поэтому старая сводная колонка ниже не является текущим утверждением; см. [сравнение с зафиксированными источниками](./docs/COMPARISON.md).
+
+<details data-historical-comparison>
+<summary>Историческая таблица мая 2026 года (не текущее сравнение)</summary>
 
 **Шесть возможностей, которых нет вообще ни у одного другого Obsidian-MCP** (GraphRAG-light, автономное выполнение `.base`, HyDE, int8-квантизация, late-chunking, встроенный фреймворк оценки). **Плюс весь современный IR-стек** (BM25 + ML-эмбеддинги + кросс-энкодер-реранкинг + HNSW), из которого конкуренты предлагают в лучшем случае один-два компонента. Сравнение бок о бок:
 
@@ -89,6 +94,8 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 <sub>Сравнение основано на публично заявленных возможностях каждого проекта по состоянию на стабильную ветку v3.8.x (первоначальный срез v3.7.0 / 2026-05-15; обновлено в v3.8.4). Smart Connections — это платный плагин Obsidian (не MCP-сервер). «Другие Obsidian-MCP» — это публичные открытые Obsidian-MCP-серверы на GitHub на момент написания. Публичные сквозные бенчмарки поиска для enquire-mcp опубликованы в <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — измеренная дельта `rerank-bge` составляет +24.7 MRR / +15.5 NDCG@10 относительно чистого гибрида на абляции из 60 запросов.</sub>
 
+</details>
+
 > Стратегическое утверждение: enquire-mcp — это открытый бэкенд для [LLM-вики в стиле Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) поверх вашего существующего хранилища Obsidian. Знания, которые накапливаются и прослеживаются до источников.
 
 ---
@@ -118,7 +125,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

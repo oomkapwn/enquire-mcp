@@ -62,7 +62,12 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🏆 لماذا هي الأفضل
+## 🔎 المشهد التنافسي الحالي
+
+> تحديث 2026-07-24: يشارك [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) الآن بنية BM25 + التضمينات + RRF + مُعيد الترتيب، وينشر نتائج LongMemEval-S. لذلك لا يُعدّ جدول «كل البدائل» القديم أدناه ادعاءً حالياً؛ راجع [المقارنة المرتبطة بالأدلة](./docs/COMPARISON.md).
+
+<details data-historical-comparison>
+<summary>جدول تاريخي من مايو 2026 (ليس مقارنة حالية)</summary>
 
 <div dir="rtl" align="right">
 
@@ -97,6 +102,8 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | الترخيص | MIT، مجاني | احتكاري، مدفوع | متفاوت |
 
 <sub>تستند المقارنة إلى القدرات العلنية لكل مشروع حتى الإصدار المستقر v3.8.x (اللقطة الأولية v3.7.0 / 2026-05-15؛ مُحدَّثة في v3.8.4). ‏Smart Connections إضافة Obsidian مدفوعة (لا خادم MCP). ويُقصد بـ"Obsidian-MCP أخرى" خوادم Obsidian-MCP مفتوحة المصدر العلنية على GitHub وقت الكتابة. وتُنشر قياسات الاسترجاع الشاملة لـ enquire-mcp في <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> — فارق `rerank-bge` المقاس هو ‎+24.7 MRR / +15.5 NDCG@10 مقارنةً بالهجين الصِّرف على استئصال من 60 استعلاماً.</sub>
+
+</details>
 
 <div dir="rtl" align="right">
 
@@ -139,7 +146,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 </div>
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -52,7 +52,12 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🏆 なぜこれが最高なのか
+## 🔎 現在の競争上の位置づけ
+
+> 2026-07-24 更新：[Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) は現在 BM25+埋め込み+RRF+リランカーの中核を共有し、LongMemEval-S の結果も公開しています。そのため、下の古い包括列は現状の主張ではありません。[根拠を固定した比較](./docs/COMPARISON.md)を参照してください。
+
+<details data-historical-comparison>
+<summary>2026年5月の歴史的な表（現在の比較ではありません）</summary>
 
 **他のどの Obsidian-MCP にもまったく存在しない 6 つの機能**（GraphRAG-light、スタンドアロンの `.base` 実行、HyDE、int8 量子化、late-chunking、組み込みの評価ハーネス）。**さらに、最新の IR スタック全体**（BM25 + ML 埋め込み + クロスエンコーダ・リランキング + HNSW）——競合が多くても 1 つか 2 つしか搭載していないものを丸ごと。横並びで比較：
 
@@ -84,6 +89,8 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 <sub>比較は各プロジェクトの v3.8.x 安定版時点での公開機能に基づきます（初回スナップショット v3.7.0 / 2026-05-15；v3.8.4 で更新）。Smart Connections は有料の Obsidian プラグイン（MCP サーバーではありません）。「他の Obsidian-MCP」とは、執筆時点で GitHub 上にある公開オープンソースの Obsidian-MCP サーバーを指します。enquire-mcp のエンドツーエンド検索ベンチマークは <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> で公開されています——実測の `rerank-bge` のデルタは、60 クエリのアブレーションにおいて、プレーンなハイブリッドに対して +24.7 MRR / +15.5 NDCG@10 です。</sub>
 
+</details>
+
 > 戦略的主張：enquire-mcp は、既存の Obsidian ボールトの上に構築する [Karpathy スタイルの LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) のためのオープンソースバックエンドです。複利的に積み上がり、ソースまで追跡できる知識。
 
 ---
@@ -113,7 +120,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

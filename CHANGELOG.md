@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.4] — 2026-07-24
+
+> **TL;DR:** **The competitive surface is current, source-pinned and honest without giving up the project's deliberate TOP-1 positioning.** `flowing-abyss/obsidian-hybrid-search` is now treated as the direct hybrid/RRF/BGE peer and credited with the stronger public external-dataset evidence; cyanheads is credited with its current Streamable HTTP, JWT/OAuth and live-Obsidian surface; mcpvault's source/README tool-count drift and Basic Memory's evolved co-authored/sync product are explicit. The promotional “most advanced Obsidian MCP” hero remains intentional. Measurable claims no longer pretend that HTTP, hybrid retrieval, PDF integration or benchmark tooling are category-unique, and no cross-project retrieval winner is asserted before a shared-protocol run. Runtime retrieval behavior is unchanged; **1690 → 1690 source tests.**
+>
+> **Method note:** every alternative claim was re-derived on 2026-07-24 from immutable commit permalinks, then the finding class was swept across README, translated READMEs, API/HTTP/benchmark/quickstart docs, ROADMAP, CLI help, tool-schema descriptions and source comments. Ten translated legacy matrices remain available only inside an explicitly historical disclosure preceded by a current OHS note. The existing docs-consistency test was extended without adding a test declaration: its positive control accepts dated/pinned language, its negative control proves the old “No other Obsidian-MCP” claim is detected, and every localized current section must name OHS and link the canonical comparison.
+
+### Changed
+
+- **Evidence-pinned decision guide.** Rebuilt `docs/COMPARISON.md` around deployment, retrieval, document coverage, agent workflow and operational-trust outcomes. It now records exact peer commits, uses `Not documented` instead of converting missing documentation into a permanent `No`, and gives concrete cases where OHS, cyanheads, Markus, mcpvault or Basic Memory is the better fit.
+- **Benchmark boundary.** OHS's published Evergreen and 470-query LongMemEval-S artifacts are acknowledged as stronger external evidence today. enquire's reproducible 60-query ablation remains useful for within-stack attribution, not an apples-to-apples category ranking; the shared OHS-protocol run remains the credibility backlog item.
+- **Factual-claim class fix.** Removed stale uniqueness assertions from the English workflow table, HTTP guide, benchmark interpretation, eval/PDF/Canvas/graph-boost comments, CLI copy and emitted MCP tool description. The bold TOP-1 hero, translations, social preview and GitHub About remain as intentional promotional positioning rather than empirical feature-matrix claims.
+- **Roadmap truth reset.** Closed the quarterly comparison-refresh item, retired unstable star-count snapshots and reframed differentiation around inspectable workflow boundaries. LongMemEval-S remains open and now has a concrete peer protocol.
+
+### Tests (1690)
+
+- Extended the existing comparison invariant with a behavior-discriminating positive/negative pair, current-vs-historical translation handling and cross-surface claim scanning; source-test count unchanged.
+- Regenerated the deterministic emitted MCP schema inventory after narrowing the graph-boost description; no tool, prompt, resource, option or runtime contract was added or removed.
+
 ## [3.12.0-rc.3] — 2026-07-24
 
 > **TL;DR:** **The H-1 TF-IDF single-flight guarantee is now executable at the incident scale instead of inferred from one small cold-start case.** The compiled retrieval matrix covers cold and warm caches, one query and the maximum legal nine-query fan-out, and both 100-note and 6,400-note corpora. Every cold cell must perform exactly one whole-corpus read pass, every warm cell must add zero corpus reads, and a changed corpus snapshot must perform exactly one new pass. Runtime behavior is unchanged; **1690 → 1690 source tests.**

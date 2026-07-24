@@ -1372,10 +1372,10 @@ export interface SearchHybridResponse {
  * - No embeddings (no `build-embeddings`) → BM25 + TF-IDF
  * - Only TF-IDF → fall back to TF-IDF-only ranking
  *
- * Two unique signal layers ride on top of RRF:
+ * Two Obsidian-specific signal layers ride on top of RRF:
  * - **Wikilink graph-boost** (v2.3.0): re-rank fused top-K by counting how
- *   many other top-K hits link to each one. Only enquire-mcp does this —
- *   wikilinks are the differentiating Obsidian primitive.
+ *   many other top-K hits link to each one. Wikilinks are the differentiating
+ *   Obsidian primitive; no cross-project uniqueness is implied.
  * - **Cross-encoder reranker** (v2.9.0, opt-in): re-score top-N candidates
  *   with a BGE-style cross-encoder. ~30-50ms / query overhead on M1 CPU.
  *
@@ -1909,9 +1909,9 @@ export async function searchHybrid(
   // Boost is small (α=0.005) — enough to break ties but won't override
   // strong single-ranker signals. Requires no new index — uses already-
   // cached parsed wikilinks per note.
-  // This is the "only enquire-mcp does this" feature: generic vector stores
-  // can't do this without an Obsidian-aware layer; Smart Connections doesn't
-  // do it either. Wikilinks ARE the differentiating Obsidian primitive.
+  // This requires an Obsidian-aware layer over the retrieval engine:
+  // wikilinks are the domain primitive used for the bounded post-fusion
+  // signal. No cross-project uniqueness is assumed here.
   const graphBoost = args.graph_boost !== false; // default ON
   if (graphBoost && fused.length > 1) {
     // v3.7.16 P2-16 — strip the `#chunk-N` suffix ONLY when it's a chunk

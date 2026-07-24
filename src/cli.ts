@@ -1383,7 +1383,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("eval")
     .description(
-      "Built-in retrieval-quality benchmark harness. Reads a JSONL file of queries with known-relevant doc paths, runs `obsidian_search` for each, computes NDCG@K + Recall@K + MRR + per-query latency. Pretty table output by default; `--json` for machine-readable output. `--matrix` runs all combinations of (graph_boost on/off × reranker on/off) side-by-side for systematic tuning. The only Obsidian-MCP with built-in retrieval evaluation."
+      "Built-in per-vault retrieval-quality harness. Reads a JSONL file of queries with known-relevant doc paths, runs `obsidian_search` for each, computes NDCG@K + Recall@K + MRR + per-query latency. Pretty table output by default; `--json` for machine-readable output. `--matrix` runs all combinations of (graph_boost on/off × reranker on/off) side-by-side for systematic tuning."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .requiredOption("--queries <file>", "JSONL file with {query, relevant: ['path1', ...], id?} per line")

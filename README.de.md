@@ -59,7 +59,12 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 
 ---
 
-## 🏆 Warum es das Beste ist
+## 🔎 Aktuelle Wettbewerbsposition
+
+> Stand 2026-07-24: [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) teilt inzwischen den BM25+Embedding+RRF+Reranker-Kern und veröffentlicht LongMemEval-S-Ergebnisse. Die alte Sammelspalte unten ist daher keine aktuelle Aussage; siehe den [quellengebundenen Vergleich](./docs/COMPARISON.md).
+
+<details data-historical-comparison>
+<summary>Historische Tabelle vom Mai 2026 (kein aktueller Vergleich)</summary>
 
 **Sechs Funktionen, die kein anderes Obsidian-MCP überhaupt hat** (GraphRAG-light, eigenständige `.base`-Ausführung, HyDE, int8-Quantisierung, Late-Chunking, integriertes Eval-Harness). **Plus der gesamte moderne IR-Stack** (BM25 + ML-Embeddings + Cross-Encoder-Reranking + HNSW), von dem Konkurrenten höchstens ein oder zwei Bestandteile mitbringen. Im direkten Vergleich:
 
@@ -91,6 +96,8 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 
 <sub>Vergleich basierend auf den öffentlichen Fähigkeiten jedes Projekts zum Stand der stabilen Version v3.8.x (initiale Momentaufnahme v3.7.0 / 2026-05-15; aktualisiert in v3.8.4). Smart Connections ist ein kostenpflichtiges Obsidian-Plugin (kein MCP-Server). „Andere Obsidian-MCPs" bezeichnet die öffentlichen Open-Source-Obsidian-MCP-Server auf GitHub zum Zeitpunkt der Erstellung. Öffentliche End-to-End-Retrieval-Benchmarks für enquire-mcp sind in <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> veröffentlicht — das gemessene `rerank-bge`-Delta beträgt +24.7 MRR / +15.5 NDCG@10 gegenüber reinem Hybrid auf einer 60-Abfragen-Ablation.</sub>
 
+</details>
+
 > Strategische Behauptung: enquire-mcp ist das Open-Source-Backend für [LLM-Wikis im Karpathy-Stil](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) auf Basis Ihres bestehenden Obsidian-Vaults. Wissen, das sich kumuliert, bis zu den Quellen nachverfolgbar.
 
 ---
@@ -120,7 +127,7 @@ In jeden MCP-Client einklinken:
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -42,7 +42,7 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.11.7-rc.8";
+export const VERSION = "3.12.0-rc.1";
 
 // Re-exports — preserve the v3.5.x public surface so http-transport.ts and
 // tests don't need to know about the new module layout. The set below
@@ -69,6 +69,7 @@ export { parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
 // keeps passing. Resolves the import.meta.url and process.argv[1] paths
 // through realpathSync so the symlink shim (`node_modules/.bin/enquire-mcp`)
 // and the /tmp → /private/tmp macOS quirk both match.
+let cliInvocation: { command: string; argsPrefix: string[] } | undefined;
 const isCliEntry = (() => {
   if (!process.argv[1]) return false;
   try {
@@ -78,14 +79,19 @@ const isCliEntry = (() => {
     // main() never runs (silent exit 0). Regression test in tests/cli.test.ts.
     const meta = realpathSync(fileURLToPath(import.meta.url));
     const argv = realpathSync(process.argv[1]);
-    return meta === argv;
+    if (meta !== argv) return false;
+    // Capture the resolved entry exactly once. Re-resolving process.argv[1]
+    // inside a later command action would reintroduce a symlink-retarget race
+    // between the entry guard and generated setup/doctor/runtime commands.
+    cliInvocation = { command: process.execPath, argsPrefix: [argv] };
+    return true;
   } catch {
     return false;
   }
 })();
 
 if (isCliEntry) {
-  main().catch((err: unknown) => {
+  main(cliInvocation).catch((err: unknown) => {
     process.stderr.write(`enquire fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });

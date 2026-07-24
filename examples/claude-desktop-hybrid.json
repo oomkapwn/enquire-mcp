@@ -1,13 +1,11 @@
 {
-  "_comment_purpose": "Full hybrid retrieval config for Claude Desktop — BM25 (FTS5) + TF-IDF + ML embeddings (multilingual MiniLM) fused via RRF, plus BGE cross-encoder reranking and HNSW vector index for sub-10ms top-K queries at million-chunk scale.",
-  "_comment_setup": "Before this works you must run setup once: `enquire-mcp setup --vault /ABS/PATH/TO/Obsidian Vault` (downloads ~120MB embedding model + builds FTS5 + embed-db). Idempotent — re-running on a fully indexed vault is a fast no-op.",
-  "_comment_flags": "Flags explained: --persistent-index = BM25 via SQLite FTS5; --enable-reranker = BGE cross-encoder on top of RRF (+5-10 NDCG@10, ~30-50ms latency); --use-hnsw = sub-10ms semantic top-K, persisted to disk after first build (v2.16+); --include-pdfs = blend PDF chunks into hybrid search with [page: N] citation markers (requires pdfjs-dist optionalDependency); --watch = incremental rebuild on .md changes so you don't restart after editing in Obsidian.",
+  "_comment_purpose": "hybrid-live retrieval config for Claude Desktop — BM25 (FTS5) + TF-IDF + ML embeddings fused via RRF, BGE reranking, HNSW, PDFs, and live watch.",
+  "_comment_setup": "Template only: prefer `enquire-mcp configure --tier hybrid-live --client claude-desktop`, which pins the current Node + enquire entry paths automatically. If editing this file manually, replace `/ABSOLUTE/PATH/TO/enquire-mcp` with the same durable executable path used for all preflight commands: `/ABSOLUTE/PATH/TO/enquire-mcp setup --vault '/ABS/PATH/TO/Obsidian Vault' --include-pdfs`; `/ABSOLUTE/PATH/TO/enquire-mcp install-model rerank-bge`; `/ABSOLUTE/PATH/TO/enquire-mcp doctor --tier hybrid-live --vault '/ABS/PATH/TO/Obsidian Vault'`. A package spec alone is insufficient because npx resolution can vary by working directory.",
+  "_comment_flags": "Flags explained: --persistent-index = BM25 via SQLite FTS5; --enable-reranker = BGE cross-encoder on top of RRF (+15.5 NDCG@10 / +24.7 MRR measured on the reproducible 60-query ablation, ~30-50ms latency); --use-hnsw = sub-10ms semantic top-K, persisted to disk after first build (v2.16+); --include-pdfs = blend PDF chunks into hybrid search with [page: N] citation markers (requires pdfjs-dist optionalDependency); --watch = incremental rebuild on .md changes so you don't restart after editing in Obsidian.",
   "mcpServers": {
     "enquire": {
-      "command": "npx",
+      "command": "/ABSOLUTE/PATH/TO/enquire-mcp",
       "args": [
-        "-y",
-        "@oomkapwn/enquire-mcp@latest",
         "serve",
         "--vault", "/ABSOLUTE/PATH/TO/YOUR/Obsidian Vault",
         "--persistent-index",

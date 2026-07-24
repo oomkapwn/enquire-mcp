@@ -121,6 +121,33 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     await fs.symlink(distEntry, link);
     const out = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
     expect(out.trim()).toMatch(/^\d+\.\d+\.\d+(-[a-z0-9.]+)?$/);
+
+    const vault = path.join(tmpdir, "vault");
+    await fs.mkdir(vault);
+    const configured = execFileSync(
+      process.execPath,
+      [link, "configure", "--vault", vault, "--client", "claude-desktop", "--tier", "basic"],
+      { encoding: "utf8" }
+    );
+    const json = configured.slice(configured.indexOf("{"), configured.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { command: string; args: string[] }> };
+    expect(parsed.mcpServers.obsidian?.command).toBe(process.execPath);
+    expect(parsed.mcpServers.obsidian?.args[0]).toBe(await fs.realpath(distEntry));
+    expect(parsed.mcpServers.obsidian?.args[0]).not.toBe(link);
+  });
+
+  it("captures the physical CLI entry once and forbids later argv symlink re-resolution", async () => {
+    const indexSource = await fs.readFile(path.resolve(__dirname, "../src/index.ts"), "utf8");
+    const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
+    const repeatedArgvRealpath = /(?:fs\.)?realpath(?:Sync)?\(\s*process\.argv\[1\]\s*\)/;
+
+    expect(indexSource).toContain("cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
+    expect(indexSource).toContain("main(cliInvocation)");
+    expect(repeatedArgvRealpath.test(cliSource)).toBe(false);
+
+    // NEGATIVE control: the detector catches the former action-time
+    // re-resolution that allowed a symlink retarget after the entry guard.
+    expect(repeatedArgvRealpath.test("const entry = await fs.realpath(process.argv[1]);")).toBe(true);
   });
 
   it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async (ctx) => {
@@ -215,11 +242,101 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("clear-index");
     expect(out).toContain("index");
     expect(out).toContain("configure"); // v3.11.6-rc.4 activation command
+    expect(out).toContain("eval-compare");
+  });
+
+  it("`eval-compare` accepts a matching improvement and rejects regression or cohort drift", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const result = (label: string, score: number, cohort = fingerprint) => ({
+      label,
+      k: 10,
+      query_count: 1,
+      query_errors: 0,
+      query_set_fingerprint: cohort,
+      per_query: [
+        {
+          id: "q1",
+          query: "Apollo",
+          ndcg_at_k: score,
+          recall_at_k: score,
+          mrr: score,
+          hits_relevant: 1,
+          hits_total_relevant: 1,
+          latency_ms: 1,
+          failure_bucket: "hit_rank_1",
+          hit_at_1: true,
+          hit_at_k: true,
+          all_relevant_at_k: true
+        }
+      ],
+      mean_ndcg: score,
+      mean_recall: score,
+      mean_mrr: score,
+      mean_latency_ms: 1,
+      total_wall_ms: 1,
+      mean_hit_at_1: 1,
+      mean_hit_at_k: 1,
+      all_rel_at_k: 1
+    });
+    const baselineFile = path.join(tmpdir, "baseline.json");
+    const betterFile = path.join(tmpdir, "better-matrix.json");
+    const worseFile = path.join(tmpdir, "worse.json");
+    const mismatchFile = path.join(tmpdir, "mismatch.json");
+    const malformedFile = path.join(tmpdir, "malformed.json");
+    const malformed = {
+      ...result("malformed", 0.6),
+      mean_ndcg: 2,
+      diagnostics: {
+        failure_buckets: { hit_rank_1: 0, hit_top_k: 0, miss: 0, no_labels: 0, error: 1 }
+      },
+      per_query: [
+        {
+          ...result("malformed", 0.6).per_query[0],
+          error: true,
+          failure_bucket: "error"
+        }
+      ]
+    };
+    await Promise.all([
+      fs.writeFile(baselineFile, JSON.stringify(result("baseline", 0.5))),
+      // Preserve the previous npm wrapper's matrix behavior: compare the
+      // first result when `eval --matrix --output` writes an array.
+      fs.writeFile(betterFile, JSON.stringify([result("better", 0.6)])),
+      fs.writeFile(worseFile, JSON.stringify(result("worse", 0.4))),
+      fs.writeFile(mismatchFile, JSON.stringify(result("mismatch", 0.6, `sha256:${"b".repeat(64)}`))),
+      fs.writeFile(malformedFile, JSON.stringify(malformed))
+    ]);
+
+    const improved = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, betterFile], {
+      encoding: "utf8"
+    });
+    expect(improved.status).toBe(0);
+    expect(improved.stdout).toContain("baseline → better");
+    expect(improved.stdout).toContain("+0.1000");
+
+    const regressed = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, worseFile], {
+      encoding: "utf8"
+    });
+    expect(regressed.status).toBe(1);
+    expect(regressed.stdout).toContain("regression");
+
+    const mismatched = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, mismatchFile], {
+      encoding: "utf8"
+    });
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toMatch(/different query cohorts/);
+
+    const invalid = spawnSync(process.execPath, [distEntry, "eval-compare", baselineFile, malformedFile], {
+      encoding: "utf8"
+    });
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toMatch(/malformed after eval result/);
   });
 
   // v3.11.6-rc.4 (activation, audit P0) — `configure` prints a ready-to-paste
   // MCP client config for the given vault. Non-destructive (writes nothing).
-  it("`configure --vault <v> --client cursor` prints parseable mcpServers JSON, exit 0", (ctx) => {
+  it("`configure --vault <v> --client cursor` prints parseable mcpServers JSON, exit 0", async (ctx) => {
     if (!distExists()) return ctx.skip();
     const res = spawnSync(process.execPath, [distEntry, "configure", "--vault", vault, "--client", "cursor"], {
       encoding: "utf8",
@@ -229,8 +346,42 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     const out = res.stdout ?? "";
     // extract the fenced JSON body and assert it parses with the vault wired in
     const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { command: string; args: string[] }> };
+    expect(parsed.mcpServers.obsidian?.args).toContain(await fs.realpath(vault));
+    expect(parsed.mcpServers.obsidian?.command).toBe(process.execPath);
+    expect(parsed.mcpServers.obsidian?.args[0]).toBe(distEntry);
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("@oomkapwn/enquire-mcp@latest");
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("--exclude-glob");
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("--read-paths");
+  });
+
+  it("`configure` preserves privacy policy in runtime, setup, and doctor commands", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "configure",
+        "--vault",
+        vault,
+        "--client",
+        "cursor",
+        "--exclude-glob",
+        "Private/**",
+        "semi;colon/**",
+        "--read-paths",
+        "Projects/**"
+      ],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(res.status).toBe(0);
+    const out = res.stdout ?? "";
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
     const parsed = JSON.parse(json) as { mcpServers: Record<string, { args: string[] }> };
-    expect(parsed.mcpServers.obsidian?.args).toContain(vault);
+    const args = parsed.mcpServers.obsidian?.args ?? [];
+    expect(args.slice(-5)).toEqual(["--exclude-glob", "Private/**", "semi;colon/**", "--read-paths", "Projects/**"]);
+    expect(out.match(/--exclude-glob/g)).toHaveLength(3);
+    expect(out.match(/--read-paths/g)).toHaveLength(3);
   });
 
   it("`configure --tier bogus` fails fast (exit 1) with valid tiers listed", (ctx) => {
@@ -241,6 +392,123 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     });
     expect(res.status).toBe(1);
     expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/basic \| hybrid \| hybrid-live/);
+
+    const unsafeName = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--name", "safe;touch_BAD"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(unsafeName.status).toBe(1);
+    expect(`${unsafeName.stdout ?? ""}${unsafeName.stderr ?? ""}`).toMatch(/invalid --name/);
+    expect(unsafeName.stdout ?? "").not.toContain("touch_BAD -- npx");
+  });
+
+  it("`configure` rejects invalid vaults/privacy and incompatible HTTP clients before output", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const missing = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", path.join(tmpdir, "missing"), "--client", "cursor"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stderr ?? "").toMatch(/Vault not found/);
+    expect(missing.stdout ?? "").not.toContain("# enquire-mcp configure");
+
+    const fileVault = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", path.join(vault, "Apollo.md"), "--client", "cursor"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(fileVault.status).toBe(1);
+    expect(fileVault.stderr ?? "").toMatch(/not a directory/);
+
+    const invalidPrivacy = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--client", "cursor", "--exclude-glob", "   "],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(invalidPrivacy.status).toBe(1);
+    expect(invalidPrivacy.stderr ?? "").toMatch(/whitespace-only patterns/);
+    expect(invalidPrivacy.stdout ?? "").not.toContain("serve --vault");
+
+    if (process.platform !== "win32") {
+      const controlVault = path.join(tmpdir, "line\nbreak");
+      await fs.mkdir(controlVault);
+      const controlPath = spawnSync(
+        process.execPath,
+        [distEntry, "configure", "--vault", controlVault, "--client", "cursor"],
+        { encoding: "utf8", timeout: 15000 }
+      );
+      expect(controlPath.status).toBe(1);
+      expect(controlPath.stderr ?? "").toMatch(/control characters/);
+      expect(controlPath.stdout ?? "").not.toContain("# enquire-mcp configure");
+    }
+
+    const codexHttp = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--client", "codex", "--http"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(codexHttp.status).toBe(1);
+    expect(codexHttp.stderr ?? "").toMatch(/--http is incompatible with --client codex/);
+    expect(codexHttp.stdout ?? "").not.toContain("[mcp_servers.");
+  });
+
+  it("`doctor --tier basic --json` reports basic READY on an unprepared accessible vault", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cache = path.join(tmpdir, "doctor-cache");
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--tier", "basic", "--json"], {
+      encoding: "utf8",
+      timeout: 30000,
+      env: { ...process.env, XDG_CACHE_HOME: cache }
+    });
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout ?? "{}") as { tier?: string; ready?: boolean };
+    expect(parsed).toMatchObject({ tier: "basic", ready: true });
+    expect(
+      await fs
+        .stat(cache)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
+  it("`doctor` defaults to hybrid and blocks the same unprepared vault", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--json"], {
+      encoding: "utf8",
+      timeout: 30000,
+      env: { ...process.env, XDG_CACHE_HOME: path.join(tmpdir, "doctor-default-cache") }
+    });
+    expect(res.status).toBe(1);
+    const parsed = JSON.parse(res.stdout ?? "{}") as { tier?: string; ready?: boolean };
+    expect(parsed).toMatchObject({ tier: "hybrid", ready: false });
+  });
+
+  it("`doctor --tier bogus` fails before probes and creates no cache artifacts", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cache = path.join(tmpdir, "doctor-invalid-cache");
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", vault, "--tier", "bogus", "--json"], {
+      encoding: "utf8",
+      timeout: 15000,
+      env: { ...process.env, XDG_CACHE_HOME: cache }
+    });
+    expect(res.status).toBe(1);
+    expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/basic \| hybrid \| hybrid-live/);
+    expect(
+      await fs
+        .stat(cache)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
+  it("`doctor --help` documents all tiers and the hybrid default", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const out = execFileSync(process.execPath, [distEntry, "doctor", "--help"], { encoding: "utf8" });
+    expect(out).toContain("basic (live scan, zero setup)");
+    expect(out).toContain("hybrid-live");
+    expect(out).toMatch(/Default:\s+hybrid/);
   });
 
   // v3.10.0-rc.13 (bug-report Issue 3) — install-model now resolves BOTH the
@@ -466,13 +734,28 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(metaBefore?.tokenize_mode).toBe("trigram");
     // Re-run `setup --skip-embeddings`. Pre-v3.6.4 this would silently
     // destroy trigram and rebuild as unicode61. Post-v3.6.4: preservation.
-    const setupResult = spawnSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
-      encoding: "utf8"
-    });
+    const setupResult = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "setup",
+        "--vault",
+        vault,
+        "--skip-embeddings",
+        "--exclude-glob",
+        "Private/**",
+        "--read-paths",
+        "*.md"
+      ],
+      { encoding: "utf8" }
+    );
     // v3.6.4 setup emits an info line when honoring trigram. Assert via
     // combined stdout/stderr.
     const combined = (setupResult.stdout ?? "") + (setupResult.stderr ?? "");
     expect(combined).toMatch(/honoring existing tokenize_mode=trigram/);
+    expect(combined.match(/--exclude-glob 'Private\/\*\*'/g)).toHaveLength(1);
+    expect(combined.match(/--read-paths '\*\.md'/g)).toHaveLength(1);
+    expect(combined).toMatch(/setup --vault .* --exclude-glob 'Private\/\*\*' --read-paths '\*\.md'/);
     // The on-disk meta must still be trigram after setup.
     const metaAfter = await peekFtsMetaSafe(indexFile);
     expect(metaAfter?.tokenize_mode).toBe("trigram");

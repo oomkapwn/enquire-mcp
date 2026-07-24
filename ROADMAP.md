@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-17 (v3.11.6-rc line: post-Codex-audit truth-reset + activation/eval/retrieval borrows shipped; earlier: the 2026-05 Tier-1 hardening sprint).
+> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-24 (v3.12.0-rc.1 candidate: source-preserving doctor, package-coherent activation and hardened evaluation; earlier: the 2026-05 Tier-1 hardening sprint).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. Directly addresses the stale-fact-reuse frontier (Memora, arXiv:2604.20006) that conversation-memory stores ignore — the only Obsidian MCP with it.
-- **Process maturity** — 1638 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1681 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 ## Competitive read (why the roadmap is shaped the way it is)
 

@@ -1,6 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
+import { tierServeFlags } from "../src/mcp-config.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
 
 // Static-analysis tests: every MCP surface declared in src/tool-manifest.ts
@@ -81,6 +85,10 @@ const PUBLIC_READMES = [
   "README.de.md"
 ] as const;
 
+function containsExactInteger(text: string, value: number): boolean {
+  return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`).test(text);
+}
+
 /**
  * Validate the two CI rows shared by every localized README.
  *
@@ -88,19 +96,29 @@ const PUBLIC_READMES = [
  * count and job semantics come from the tracked workflows. Language-neutral
  * identifiers keep the check usable across all 11 translations.
  */
-function publicCiPostureProblems(markdown: string, releaseRequired: number, branchProtected: number): string[] {
+function publicCiPostureProblems(
+  markdown: string,
+  releaseRequired: number,
+  branchProtected: number,
+  actualTests: number
+): string[] {
   const rows = markdown.split("\n").filter((line) => line.startsWith("| **") && line.includes("CI"));
   const detail = rows.find((line) => line.startsWith("| **CI** |")) ?? "";
   const summary = rows.find((line) => line !== detail) ?? "";
   const problems: string[] = [];
   if (!detail) problems.push("missing detailed CI row");
   if (!summary) problems.push("missing summary CI row");
+  if (!containsExactInteger(summary, actualTests)) problems.push(`summary missing exact test count ${actualTests}`);
   for (const [label, row] of [
     ["summary", summary],
     ["detail", detail]
   ] as const) {
-    if (!row.includes(String(releaseRequired))) problems.push(`${label} missing ${releaseRequired} release-required`);
-    if (!row.includes(String(branchProtected))) problems.push(`${label} missing ${branchProtected} branch-protected`);
+    if (!containsExactInteger(row, releaseRequired)) {
+      problems.push(`${label} missing ${releaseRequired} release-required`);
+    }
+    if (!containsExactInteger(row, branchProtected)) {
+      problems.push(`${label} missing ${branchProtected} branch-protected`);
+    }
     if (/(?:^|\D)5(?:\D|$)/.test(row)) problems.push(`${label} still carries the stale five-advisory count`);
   }
   for (const marker of [
@@ -118,6 +136,216 @@ function publicCiPostureProblems(markdown: string, releaseRequired: number, bran
   return problems;
 }
 
+function publicTestCommandProblems(markdown: string, actualTests: number): string[] {
+  const line = markdown.split("\n").find((candidate) => candidate.trimStart().startsWith("npm test")) ?? "";
+  if (!line) return [];
+  const numbers = [...line.matchAll(/\d+/g)].map((match) => Number.parseInt(match[0], 10));
+  const problems: string[] = [];
+  if (!numbers.includes(actualTests)) problems.push(`npm test line missing exact test count ${actualTests}`);
+  for (const value of numbers) {
+    if (value !== actualTests) problems.push(`npm test line carries unverified numeric duration/count ${value}`);
+  }
+  return problems;
+}
+
+function hybridOnboardingProblems(
+  markdown: string,
+  defaultReranker: string,
+  requiredServeFlags: readonly string[],
+  previewVersion: string
+): string[] {
+  const problems: string[] = [];
+  const install = markdown.indexOf(`npm install -g @oomkapwn/enquire-mcp@${previewVersion}`);
+  const version = markdown.indexOf("enquire-mcp --version", Math.max(0, install));
+  const setup = markdown.indexOf("enquire-mcp setup --vault <path>");
+  const reranker = markdown.indexOf(`enquire-mcp install-model ${defaultReranker}`, Math.max(0, setup));
+  const doctor = markdown.indexOf("enquire-mcp doctor --tier hybrid --vault <path>", Math.max(0, reranker));
+  const configure = markdown.indexOf(
+    "enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>",
+    Math.max(0, doctor)
+  );
+  const serve = markdown.indexOf("enquire-mcp serve --vault <path>", Math.max(0, configure));
+  if (install < 0) problems.push("missing exact prerelease package");
+  if (version < 0) problems.push("missing version verification");
+  if (setup < 0) problems.push("missing setup");
+  if (reranker < 0) problems.push("missing reranker cache");
+  if (doctor < 0) problems.push("missing tiered doctor");
+  if (configure < 0) problems.push("missing physical configure step");
+  if (serve < 0) problems.push("missing serve");
+  if (
+    !(
+      install >= 0 &&
+      install < version &&
+      version < setup &&
+      setup < reranker &&
+      reranker < doctor &&
+      doctor < configure &&
+      configure < serve
+    )
+  ) {
+    problems.push("hybrid commands out of order");
+  }
+  const serveLine = serve < 0 ? "" : (markdown.slice(serve).split("\n")[0] ?? "");
+  for (const flag of requiredServeFlags) {
+    if (!serveLine.includes(flag)) problems.push(`serve missing ${flag}`);
+  }
+  if (markdown.includes(`npx -y @oomkapwn/enquire-mcp@${previewVersion} setup`)) {
+    problems.push("npx-only preflight can drift physical cache roots");
+  }
+  return problems;
+}
+
+function hybridTemplateInstructionProblems(markdown: string): string[] {
+  const line =
+    markdown.split("\n").find((candidate) => candidate.includes("[`examples/claude-desktop-hybrid.json`]")) ?? "";
+  const problems: string[] = [];
+  if (!line) problems.push("missing hybrid template instruction");
+  if (!line.includes("enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>")) {
+    problems.push("hybrid template instruction does not prefer generated physical config");
+  }
+  return problems;
+}
+
+function llmsEmbeddingCatalogProblems(llms: string): string[] {
+  const line = llms.split("\n").find((candidate) => candidate.includes("catalogued embedding aliases")) ?? "";
+  const problems: string[] = [];
+  for (const model of Object.values(EMBEDDING_MODELS)) {
+    if (!line.includes(`\`${model.alias}\``)) problems.push(`missing embedding alias ${model.alias}`);
+    if (!line.includes(model.hfId.split("/").at(-1) ?? model.hfId))
+      problems.push(`missing embedding model ${model.hfId}`);
+  }
+  if (/any compatible|BGE-base|BGE-multilingual/i.test(line)) problems.push("unsupported arbitrary-model claim");
+  return problems;
+}
+
+function doctorApiContractProblems(markdown: string): string[] {
+  const row = markdown.split("\n").find((line) => line.startsWith("| `doctor`")) ?? "";
+  const problems: string[] = [];
+  for (const marker of [
+    "--tier",
+    "basic",
+    "hybrid",
+    "hybrid-live",
+    "default `hybrid`",
+    "unverified",
+    "`required`",
+    "structural/runtime",
+    "256 MB",
+    "privacy"
+  ]) {
+    if (!row.includes(marker)) problems.push(`doctor row missing ${marker}`);
+  }
+  if (/ready for full hybrid/i.test(row)) problems.push("doctor row carries untiered full-hybrid claim");
+  return problems;
+}
+
+/** The committed hybrid example must keep acquisition, preflight, and runtime on one package identity. */
+function hybridExamplePackageIdentityProblems(raw: string, _previewVersion: string): string[] {
+  const problems: string[] = [];
+  let parsed: {
+    _comment_setup?: string;
+    mcpServers?: Record<string, { command?: string; args?: string[] }>;
+  };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    return ["hybrid example is not valid JSON"];
+  }
+  const setup = parsed._comment_setup ?? "";
+  const server = parsed.mcpServers?.enquire;
+  const executable = "/ABSOLUTE/PATH/TO/enquire-mcp";
+  for (const subcommand of ["setup", "install-model", "doctor"]) {
+    if (!setup.includes(`${executable} ${subcommand}`)) problems.push(`setup comment missing physical ${subcommand}`);
+  }
+  if (!setup.includes("configure --tier hybrid-live --client claude-desktop")) {
+    problems.push("setup does not prefer generated physical config");
+  }
+  if (server?.command !== executable) problems.push("runtime does not use the documented physical executable");
+  const args = server?.args;
+  const requiredFlags = tierServeFlags("hybrid-live");
+  if (args?.[0] !== "serve") problems.push("runtime args do not begin with serve");
+  if (
+    args?.[1] !== "--vault" ||
+    typeof args[2] !== "string" ||
+    args[2].length === 0 ||
+    args.length !== 3 + requiredFlags.length ||
+    requiredFlags.some((flag, index) => args[index + 3] !== flag)
+  ) {
+    problems.push("runtime args do not exactly match the hybrid-live tier");
+  }
+  if (server?.command === "npx" || server?.args?.some((arg) => /@oomkapwn\/enquire-mcp@/.test(arg))) {
+    problems.push("hybrid example relies on cwd-sensitive npx resolution");
+  }
+  return problems;
+}
+
+/** Setup completion must invoke the exact entry identity captured once by the CLI guard. */
+function setupCompletionIdentityProblems(cliSource: string, indexSource: string): string[] {
+  const marker = "✓ Embedder + indexes ready.";
+  const start = cliSource.indexOf(marker);
+  const section = start < 0 ? "" : cliSource.slice(Math.max(0, start - 900), start + 1800);
+  const problems: string[] = [];
+  if (!section) return ["missing setup completion section"];
+  const invocationPrefixInterpolation = "$" + "{invocationPrefix}";
+  for (const markerText of [
+    "process.platform",
+    `${invocationPrefixInterpolation} install-model`,
+    `${invocationPrefixInterpolation} doctor`,
+    `${invocationPrefixInterpolation} serve`
+  ]) {
+    if (!section.includes(markerText)) problems.push(`setup completion missing ${markerText}`);
+  }
+  for (const markerText of [
+    "const invocationPrefix = invocation",
+    "renderShellCommand(invocation.command, invocation.argsPrefix, process.platform)",
+    'renderShellCommand("npx", ["-y", exactPackageSpec], process.platform)'
+  ]) {
+    if (!cliSource.includes(markerText)) problems.push(`CLI invocation renderer missing ${markerText}`);
+  }
+  for (const markerText of [
+    "const argv = realpathSync(process.argv[1])",
+    "cliInvocation = { command: process.execPath, argsPrefix: [argv] }",
+    "main(cliInvocation)"
+  ]) {
+    if (!indexSource.includes(markerText)) problems.push(`CLI entry guard missing ${markerText}`);
+  }
+  if (cliSource.includes("await fs.realpath(process.argv[1])")) {
+    problems.push("setup completion re-resolves process.argv[1] after entry capture");
+  }
+  if (/`\s+enquire-mcp (?:install-model|doctor|serve)/.test(section)) {
+    problems.push("setup completion retains a bare cross-install command");
+  }
+  return problems;
+}
+
+function quickstartToolCountProblems(markdown: string, actual: number): string[] {
+  const claims = [...markdown.matchAll(/Full (\d+)-tool surface/g)];
+  if (claims.length !== 1) return [`expected one full-tool claim, found ${claims.length}`];
+  const claimed = Number.parseInt(claims[0]?.[1] ?? "0", 10);
+  return claimed === actual ? [] : [`quick-start claims ${claimed} tools; actual is ${actual}`];
+}
+
+function measuredRerankerClaimProblems(markdown: string): string[] {
+  const problems: string[] = [];
+  if (/\+5[–-]10 NDCG@10/i.test(markdown)) problems.push("stale +5-10 NDCG estimate");
+  if (!markdown.includes("+15.5 NDCG@10")) problems.push("missing measured +15.5 NDCG@10");
+  if (!markdown.includes("+24.7 MRR")) problems.push("missing measured +24.7 MRR");
+  return problems;
+}
+
+function packagedMarkdownLinkProblems(markdown: string, source: string, packageFiles: readonly string[]): string[] {
+  const packaged = new Set(packageFiles);
+  const sourceDir = path.posix.dirname(source);
+  const problems: string[] = [];
+  for (const match of markdown.matchAll(/\]\(([^)#?]+\.md)(?:#[^)]*)?\)/g)) {
+    const target = match[1] ?? "";
+    if (/^(?:https?:)?\/\//.test(target)) continue;
+    const resolved = path.posix.normalize(path.posix.join(sourceDir, target));
+    if (!packaged.has(resolved)) problems.push(`${source} links to unpackaged ${resolved}`);
+  }
+  return problems;
+}
+
 /** Validate that localized language FAQs separate the multilingual embedder from the English-only default reranker. */
 function rerankerLanguagePostureProblems(markdown: string, defaultAlias: string): string[] {
   const faqLines = markdown.split("\n").filter((line) => line.includes("paraphrase-multilingual-MiniLM-L12-v2"));
@@ -127,6 +355,20 @@ function rerankerLanguagePostureProblems(markdown: string, defaultAlias: string)
   if (!line.includes(defaultAlias)) problems.push(`language FAQ missing default reranker ${defaultAlias}`);
   if (!line.includes("English-only")) problems.push("language FAQ does not disclose English-only reranker");
   if (line.includes("rerank-multilingual")) problems.push("language FAQ presents an unavailable multilingual alias");
+  return problems;
+}
+
+/** Every localized network FAQ must disclose both explicit downloader commands. */
+function networkFaqPostureProblems(markdown: string): string[] {
+  const lines = markdown
+    .split("\n")
+    .filter((line) => line.includes("enquire-mcp install-model") && /\bserve\b/i.test(line));
+  const problems: string[] = [];
+  if (lines.length !== 1) problems.push(`expected one install/network FAQ line, found ${lines.length}`);
+  const line = lines[0] ?? "";
+  for (const command of ["setup", "build-embeddings", "install-model", "install-ocr-lang"]) {
+    if (!line.includes(`enquire-mcp ${command}`)) problems.push(`network FAQ omits ${command}`);
+  }
   return problems;
 }
 
@@ -167,10 +409,24 @@ function statefulSecurityPostureProblems(security: string, deleteDrainMs: number
 }
 
 /** Stable API docs must not label already-stable capabilities with their prerelease build number. */
-function stableApiLabelProblems(apiMd: string): string[] {
+function stableApiLabelProblems(apiMd: string, previewVersion: string): string[] {
   const problems: string[] = [];
   const prereleaseLabels = [...apiMd.matchAll(/\bv\d+\.\d+\.\d+-rc\.\d+\b/g)].map((m) => m[0]);
-  if (prereleaseLabels.length > 0) problems.push(`prerelease labels remain: ${prereleaseLabels.join(", ")}`);
+  const allowed = `v${previewVersion}`;
+  const unexpected = prereleaseLabels.filter((label) => label !== allowed);
+  if (unexpected.length > 0) problems.push(`unexpected prerelease labels remain: ${unexpected.join(", ")}`);
+  const rows = apiMd.split("\n").filter((line) => line.startsWith("| `"));
+  const previewRows = rows.filter((line) => line.includes(allowed));
+  if (previewRows.length === 0) problems.push(`missing explicit ${allowed} preview rows`);
+  for (const row of previewRows) {
+    if (!row.includes("`@rc` preview")) problems.push(`candidate row lacks @rc preview marker: ${row.slice(0, 80)}`);
+  }
+  for (const command of ["doctor", "setup", "configure", "eval", "eval-compare", "install-model"]) {
+    const row = rows.find((line) => line.startsWith(`| \`${command}\``)) ?? "";
+    if (!row.includes(allowed) || !row.includes("`@rc` preview")) {
+      problems.push(`${command} row is missing its explicit ${allowed} @rc preview contract`);
+    }
+  }
   if (apiMd.includes("@rc-only")) problems.push("stale @rc-only channel wording remains");
   if (!apiMd.includes("first stable release")) problems.push("missing stable-version label contract");
   return problems;
@@ -275,6 +531,15 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     );
     const missingFromDocs = [...registered].filter((s) => !documented.has(s));
     expect(missingFromDocs, "subcommands missing from docs/api.md").toEqual([]);
+
+    expect(doctorApiContractProblems(apiMd), "docs/api.md doctor contract drift").toEqual([]);
+    const staleDoctor =
+      "| `doctor` | `--vault <path>` `[--json]` | Read-only. Returns 0 when ready for full hybrid retrieval. |";
+    const staleProblems = doctorApiContractProblems(staleDoctor);
+    expect(staleProblems).toContain("doctor row missing --tier");
+    expect(staleProblems).toContain("doctor row missing unverified");
+    expect(staleProblems).toContain("doctor row missing `required`");
+    expect(staleProblems).toContain("doctor row carries untiered full-hybrid claim");
   });
 });
 
@@ -599,6 +864,43 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     return count;
   }
 
+  function currentReleaseTestCountProblems(
+    changelog: string,
+    claude: string,
+    version: string,
+    actual: number
+  ): string[] {
+    const problems: string[] = [];
+    const firstHeading = changelog.indexOf("\n## [");
+    const nextHeading = changelog.indexOf("\n## [", firstHeading + 1);
+    const latest = firstHeading < 0 ? "" : changelog.slice(firstHeading, nextHeading < 0 ? undefined : nextHeading);
+    const releaseArrowClaims = [...latest.matchAll(/→\s*(\d+)\s+source tests/g)].map((match) => match[1]);
+    const releaseHeadingClaims = [...latest.matchAll(/### Tests \((\d+)\)/g)].map((match) => match[1]);
+    const releaseClaims = [
+      ...(releaseArrowClaims.length > 0 ? releaseArrowClaims : [undefined]),
+      ...(releaseHeadingClaims.length > 0 ? releaseHeadingClaims : [undefined])
+    ];
+    const currentState = claude.split("\n").find((line) => line.startsWith("**Current state")) ?? "";
+    const currentBullet = claude.split("\n").find((line) => line.startsWith(`- **v${version} `)) ?? "";
+    const currentBulletClaims = [...currentBullet.matchAll(/→\s*(\d+)\s+source tests/g)].map((match) => match[1]);
+    const claudeClaims = [
+      /·\s*(\d+)\s+tests\s*·\s*11 languages/.exec(currentState)?.[1],
+      ...(currentBulletClaims.length > 0 ? currentBulletClaims : [undefined])
+    ];
+    for (const [surface, claims] of [
+      ["latest CHANGELOG", releaseClaims],
+      ["CLAUDE current markers", claudeClaims]
+    ] as const) {
+      if (claims.some((claim) => claim === undefined)) problems.push(`${surface} is missing a current total`);
+      for (const claim of claims) {
+        if (claim !== undefined && Number.parseInt(claim, 10) !== actual) {
+          problems.push(`${surface} claims ${claim}; actual is ${actual}`);
+        }
+      }
+    }
+    return problems;
+  }
+
   it("README test-count claims match actual it() count across tests/*.test.ts", async () => {
     const readme = await read("README.md");
     const actual = await countActualTests();
@@ -613,6 +915,28 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       const claimed = Number.parseInt(m[1] ?? "0", 10);
       expect(claimed, `README mentions "${m[0]}" but actual test count is ${actual}`).toBe(actual);
     }
+    const pkg = JSON.parse(await read("package.json")) as { version?: string };
+    expect(
+      currentReleaseTestCountProblems(await read("CHANGELOG.md"), await read("CLAUDE.md"), pkg.version ?? "", actual)
+    ).toEqual([]);
+    const staleTotals = currentReleaseTestCountProblems(
+      "# Changelog\n\n## [0.0.0]\n**1 → 2 source tests.**\n### Tests (2)",
+      "**Current state:** **46 tools · 19 prompts · 2 tests · 11 languages.**\n- **v0.0.0 candidate:** **1 → 2 source tests.**",
+      "0.0.0",
+      actual
+    );
+    expect(staleTotals).toContain(`latest CHANGELOG claims 2; actual is ${actual}`);
+    expect(staleTotals).toContain(`CLAUDE current markers claims 2; actual is ${actual}`);
+    const conflicting = actual + 1;
+    const conflictingTotals = currentReleaseTestCountProblems(
+      `# Changelog\n\n## [0.0.0]\n**1 → ${actual} source tests.**\n**2 → ${conflicting} source tests.**\n### Tests (${actual})`,
+      `**Current state:** **46 tools · 19 prompts · ${actual} tests · 11 languages.**\n` +
+        `- **v0.0.0 candidate:** **1 → ${actual} source tests.** **2 → ${conflicting} source tests.**`,
+      "0.0.0",
+      actual
+    );
+    expect(conflictingTotals).toContain(`latest CHANGELOG claims ${conflicting}; actual is ${actual}`);
+    expect(conflictingTotals).toContain(`CLAUDE current markers claims ${conflicting}; actual is ${actual}`);
   });
 
   it("package.json description test count matches actual", async () => {
@@ -855,6 +1179,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     // every public translation on one snapshot instead of pretending the
     // number can be derived from tracked workflow YAML.
     const branchProtected = 7;
+    const actualTests = await countActualTests();
     const embeddings = await read("src/embeddings.ts");
     const aliasMatch = /DEFAULT_RERANKER_ALIAS\s*=\s*"([^"]+)"/.exec(embeddings);
     expect(aliasMatch, "src/embeddings.ts must declare DEFAULT_RERANKER_ALIAS").not.toBeNull();
@@ -863,23 +1188,54 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     for (const file of PUBLIC_READMES) {
       const markdown = await read(file);
-      expect(publicCiPostureProblems(markdown, releaseRequired, branchProtected), `${file} CI posture drift`).toEqual(
-        []
-      );
+      expect(
+        publicCiPostureProblems(markdown, releaseRequired, branchProtected, actualTests),
+        `${file} CI posture drift`
+      ).toEqual([]);
+      expect(publicTestCommandProblems(markdown, actualTests), `${file} npm test command drift`).toEqual([]);
+      expect(hybridTemplateInstructionProblems(markdown), `${file} hybrid template instruction drift`).toEqual([]);
       expect(
         rerankerLanguagePostureProblems(markdown, defaultReranker),
         `${file} embedder/reranker language posture drift`
       ).toEqual([]);
+      expect(networkFaqPostureProblems(markdown), `${file} network-download posture drift`).toEqual([]);
+
+      const inflatedCiCounts = markdown
+        .split("\n")
+        .map((line) =>
+          line.startsWith("| **") && line.includes("CI")
+            ? line
+                .replace(new RegExp(`(?<!\\d)${actualTests}(?!\\d)`, "g"), `1${actualTests}`)
+                .replace(new RegExp(`(?<!\\d)${releaseRequired}(?!\\d)`, "g"), `1${releaseRequired}`)
+                .replace(new RegExp(`(?<!\\d)${branchProtected}(?!\\d)`, "g"), `1${branchProtected}`)
+            : line
+        )
+        .join("\n");
+      expect(
+        publicCiPostureProblems(inflatedCiCounts, releaseRequired, branchProtected, actualTests).length,
+        `${file} exact-count detector must reject digit-prefixed lookalikes`
+      ).toBeGreaterThan(0);
     }
 
     // Bug-discriminating negatives: the exact pre-fix classes must be rejected.
     const staleCi =
       "| **1604 unit tests · 9 required + 5 advisory CI gates per PR** |\n" +
       "| **CI** | **9 required** branch-protection gates: (1) lint, (5) audit. **5 advisory**. |";
-    expect(publicCiPostureProblems(staleCi, 9, 7).length).toBeGreaterThan(0);
+    expect(publicCiPostureProblems(staleCi, 9, 7, actualTests).length).toBeGreaterThan(0);
+    expect(publicTestCommandProblems("npm test # 1604 tests, ~12s", actualTests).length).toBeGreaterThan(0);
+    expect(
+      hybridTemplateInstructionProblems(
+        "Drop [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) into the config; edit the vault path."
+      ).length
+    ).toBeGreaterThan(0);
     const staleReranker =
       "**Languages?** Default `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages). Multilingual cross-encoder.";
     expect(rerankerLanguagePostureProblems(staleReranker, defaultReranker).length).toBeGreaterThan(0);
+    expect(
+      networkFaqPostureProblems(
+        "**Data sent anywhere?** Only on `enquire-mcp install-model`. serve mode never makes outbound HTTP."
+      ).length
+    ).toBeGreaterThan(0);
 
     const httpTransport = await read("src/http-transport.ts");
     const drainMatch = /const DELETE_DRAIN_MS = (\d+);/.exec(httpTransport);
@@ -896,11 +1252,63 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(statefulSecurityPostureProblems(staleSecurity, drainMs).length).toBeGreaterThan(0);
 
     const apiMd = await read("docs/api.md");
-    expect(stableApiLabelProblems(apiMd)).toEqual([]);
+    const pkg = JSON.parse(await read("package.json")) as { version?: string; files?: string[] };
+    const previewVersion = pkg.version ?? "";
+    expect(stableApiLabelProblems(apiMd, previewVersion)).toEqual([]);
+    const allowedPreviewLabel = `v${previewVersion}`;
+    const stalePreviewLabel = "v0.0.0-rc.9";
+    const otherwiseValidApiFixture = [
+      "Version labels below identify the first stable release.",
+      ...["doctor", "setup", "configure", "eval", "eval-compare", "install-model"].map(
+        (command, index) =>
+          `| \`${command}\` | ${allowedPreviewLabel} \`@rc\` preview${index === 0 ? `; ${stalePreviewLabel}` : ""} |`
+      )
+    ].join("\n");
+    expect(stableApiLabelProblems(otherwiseValidApiFixture, previewVersion)).toEqual([
+      `unexpected prerelease labels remain: ${stalePreviewLabel}`
+    ]);
+    expect(packagedMarkdownLinkProblems(apiMd, "docs/api.md", pkg.files ?? [])).toEqual([]);
     expect(
-      stableApiLabelProblems("This @rc-only feature shipped in v3.11.6-rc.7.").length,
-      "the stale API-label detector must fire on the pre-fix shape"
+      packagedMarkdownLinkProblems("[eval](EVALUATION.md)", "docs/api.md", ["docs/api.md"]).length,
+      "the packaged-link detector must reject an omitted relative target"
     ).toBeGreaterThan(0);
+
+    for (const file of ["docs/QUICKSTART.md", "examples/claude-desktop-hybrid.json"]) {
+      expect(measuredRerankerClaimProblems(await read(file)), `${file} measured reranker claim drift`).toEqual([]);
+    }
+    expect(measuredRerankerClaimProblems("+24.7 MRR")).toContain("missing measured +15.5 NDCG@10");
+    expect(measuredRerankerClaimProblems("+15.5 NDCG@10")).toContain("missing measured +24.7 MRR");
+    expect(measuredRerankerClaimProblems("+5-10 NDCG@10 typical; +15.5 NDCG@10; +24.7 MRR")).toContain(
+      "stale +5-10 NDCG estimate"
+    );
+    const hybridExample = await read("examples/claude-desktop-hybrid.json");
+    expect(hybridExamplePackageIdentityProblems(hybridExample, previewVersion)).toEqual([]);
+    expect(
+      hybridExamplePackageIdentityProblems(hybridExample.replace('"--watch"', '"--wrong-flag"'), previewVersion)
+    ).toContain("runtime args do not exactly match the hybrid-live tier");
+    expect(
+      hybridExamplePackageIdentityProblems(
+        '{"_comment_setup":"enquire-mcp setup; enquire-mcp install-model; enquire-mcp doctor","mcpServers":{"enquire":{"command":"npx","args":["-y","@oomkapwn/enquire-mcp@rc","serve"]}}}',
+        previewVersion
+      ).length,
+      "the package-identity detector must reject the former global-preflight/npx-runtime split"
+    ).toBeGreaterThan(0);
+    const cliSource = await read("src/cli.ts");
+    const indexSource = await read("src/index.ts");
+    expect(setupCompletionIdentityProblems(cliSource, indexSource)).toEqual([]);
+    expect(
+      setupCompletionIdentityProblems(
+        'process.stdout.write("\\n✓ Embedder + indexes ready."); `   enquire-mcp install-model rerank-bge`;',
+        indexSource
+      ).length,
+      "the setup-completion detector must reject bare follow-up commands"
+    ).toBeGreaterThan(0);
+    expect(
+      setupCompletionIdentityProblems(
+        cliSource,
+        indexSource.replace("cliInvocation = { command: process.execPath, argsPrefix: [argv] };", "")
+      )
+    ).toContain("CLI entry guard missing cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
 
     const server = await read("src/server.ts");
     const serverRerankerDoc = /\/\*\*[^*\n]*reranker model alias[^*\n]*\*\//.exec(server)?.[0] ?? "";
@@ -914,6 +1322,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(jsonLdLanguageAnswer).toContain(defaultReranker);
     expect(jsonLdLanguageAnswer).toContain("English-only");
     expect(jsonLdLanguageAnswer).not.toContain("with a multilingual cross-encoder");
+    expect(llmsEmbeddingCatalogProblems(await read("llms.txt"))).toEqual([]);
+    expect(
+      llmsEmbeddingCatalogProblems(
+        "- Indexes content with catalogued embedding aliases: BGE-base, BGE-multilingual, or any compatible Hugging Face model"
+      ).length
+    ).toBeGreaterThan(0);
 
     for (const file of ["AGENTS.md", "llms.txt", "ROADMAP.md"]) {
       const body = await read(file);
@@ -921,6 +1335,94 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
       expect(body, `${file} must not retain the five-advisory fiction`).not.toMatch(/5 advisory/i);
     }
+
+    // Behavior-discriminating negative for OIA Check 7: mutate the stable
+    // major.minor on EVERY localized README inside an isolated repo copy, then
+    // run the real detector. English-only "stable" regexes previously left
+    // seven translations nominally in scope but completely undetected.
+    const citation = await read("CITATION.cff");
+    const stableMatch = /^version:\s*["']?(\d+\.\d+)\.\d+/m.exec(citation);
+    expect(stableMatch, "CITATION.cff must declare the stable version").not.toBeNull();
+    const stableMajorMinor = stableMatch?.[1] ?? "";
+    const staleMajorMinor = stableMajorMinor === "0.0" ? "9.9" : "0.0";
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-oia-currency-"));
+    const fixtureRoot = path.join(tempRoot, "repo");
+    try {
+      const excludedRoots = new Set([".git", "coverage", "dist", "node_modules"]);
+      await fs.cp(repoRoot, fixtureRoot, {
+        recursive: true,
+        filter(source) {
+          const relative = path.relative(repoRoot, source);
+          const topLevel = relative.split(path.sep)[0] ?? "";
+          return relative === "" || !excludedRoots.has(topLevel);
+        }
+      });
+      // OIA Check 4f parses executable TypeScript via the installed compiler.
+      // Keep the fixture copy small, but expose the checkout's read-only
+      // dependency tree so the real isolated script resolves that parser.
+      await fs.symlink(path.join(repoRoot, "node_modules"), path.join(fixtureRoot, "node_modules"), "dir");
+      for (const file of PUBLIC_READMES) {
+        const fixtureFile = path.join(fixtureRoot, file);
+        const current = await fs.readFile(fixtureFile, "utf8");
+        const stableToken = `v${stableMajorMinor}.x`;
+        expect(current, `${file} must carry the current stable token`).toContain(stableToken);
+        await fs.writeFile(fixtureFile, current.replaceAll(stableToken, `v${staleMajorMinor}.x`));
+      }
+      // A neighboring line that merely says "after", "based on", or "gates"
+      // is not sufficient tombstone evidence for a current-state claim. The
+      // former broad history markers let this stale line pass.
+      const roadmapFixture = path.join(fixtureRoot, "ROADMAP.md");
+      const roadmap = await fs.readFile(roadmapFixture, "utf8");
+      await fs.writeFile(
+        roadmapFixture,
+        `After v1.0.0, an unrelated report based on v1.0 gates v1.0.\n` +
+          `stable v${staleMajorMinor}.x is the current release.\n${roadmap}`
+      );
+      const oia = spawnSync(process.execPath, [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network"], {
+        cwd: fixtureRoot,
+        encoding: "utf8",
+        timeout: 30_000,
+        maxBuffer: 2 * 1024 * 1024
+      });
+      const output = `${oia.stdout ?? ""}${oia.stderr ?? ""}`;
+      expect(oia.status, output).toBe(1);
+      for (const file of PUBLIC_READMES) {
+        expect(output, `OIA must reject a stale stable-channel claim in ${file}`).toContain(
+          `[STALE-DOC-CURRENCY-CLAIM] ${file}:`
+        );
+      }
+      expect(output, "adjacent weak history wording must not mask a stale current claim").toContain(
+        "[STALE-DOC-CURRENCY-CLAIM] ROADMAP.md:2"
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("all public READMEs carry the complete tier-matched hybrid onboarding sequence", async () => {
+    const hybridFlags = tierServeFlags("hybrid");
+    const pkg = JSON.parse(await read("package.json")) as { version?: string };
+    const previewVersion = pkg.version ?? "";
+    for (const file of PUBLIC_READMES) {
+      expect(
+        hybridOnboardingProblems(await read(file), DEFAULT_RERANKER_ALIAS, hybridFlags, previewVersion),
+        `${file} hybrid onboarding drift`
+      ).toEqual([]);
+    }
+
+    const stale =
+      "enquire-mcp setup --vault <path>\n" +
+      "enquire-mcp serve --vault <path> --persistent-index\n" +
+      "enquire-mcp doctor --vault <path>\n";
+    const problems = hybridOnboardingProblems(stale, DEFAULT_RERANKER_ALIAS, hybridFlags, previewVersion);
+    expect(problems).toContain("missing reranker cache");
+    expect(problems).toContain("missing tiered doctor");
+    expect(problems).toContain("missing exact prerelease package");
+    expect(problems).toContain("missing version verification");
+    expect(problems).toContain("missing physical configure step");
+    expect(problems).toContain("hybrid commands out of order");
+    expect(problems).toContain("serve missing --enable-reranker");
+    expect(problems).toContain("serve missing --use-hnsw");
   });
 
   it("package.json description reranker-model count matches RERANKER_MODELS catalog", async () => {
@@ -991,6 +1493,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(Number.parseInt(m[1] ?? "0", 10)).toBe(counts.allTools);
       expect(Number.parseInt(m[2] ?? "0", 10)).toBe(counts.alwaysOn);
     }
+    const quickstart = await read("docs/QUICKSTART.md");
+    expect(quickstartToolCountProblems(quickstart, counts.allTools)).toEqual([]);
+    expect(quickstartToolCountProblems("Full 45-tool surface", counts.allTools).length).toBeGreaterThan(0);
   });
 
   it("docs/api.md write-tool count word matches actual", async () => {

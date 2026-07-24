@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1638%20passing-brightgreen.svg)](#️-vertrauen)
+[![tests](https://img.shields.io/badge/tests-1681%20passing-brightgreen.svg)](#️-vertrauen)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 1638+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**46 Tools · 19 MCP-Prompts · 1681+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -83,7 +83,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **GraphRAG-light** (Wikilink-Community-Erkennung via Louvain-Modularität) | ✅ **nur hier** | ❌ | ❌ |
 | **Eigenständige `.base`-Abfrageausführung** (funktioniert ohne laufendes Obsidian) | ✅ **nur hier** | ❌ | ❌ delegiert an Obsidian |
 | **HyDE-Retrieval** (Gao et al. 2023) + Teilfragen-Zerlegung | ✅ **nur hier** | ❌ | ❌ |
-| **1638 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | ✅ | n. z. | selten |
+| **1681 Unit-Tests · 9 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | ✅ | n. z. | selten |
 | **Signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2) | ✅ | n. z. | ❌ |
 | **Semver-gebundene öffentliche Oberfläche** ([STABILITY.md](./STABILITY.md)) | ✅ | n. z. | ❌ |
 | Eigenständig (kein Obsidian-Plugin nötig) | ✅ | ❌ erfordert Obsidian | variiert |
@@ -117,12 +117,16 @@ In jeden MCP-Client einklinken:
 
 📂 Sofort einsetzbare Konfigurationen in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **benutzerdefiniertes GPT von ChatGPT** (Remote-MCP über HTTP), plus ein Beispiel-Abfragesatz für das Eval-Harness.
 
-**Möchten Sie die volle Hybrid-Power?** Reibungsloses Onboarding ohne manuelle Schritte, mit einem Befehl:
+**Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-enquire-mcp setup --vault <path>     # lädt das Modell herunter, baut FTS5 + embed-db
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # cached den Embedder und baut FTS5 + embed-db
+enquire-mcp install-model rerank-bge                      # cached den Offline-Reranker
+enquire-mcp doctor --tier hybrid --vault <path>           # strukturelle/runtime Bereitschaft
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # farblich codierter ✓/⚠/✗-Gesundheitscheck
 ```
 
 ---
@@ -148,7 +152,7 @@ Dann in jeder Claude-Code-Sitzung:
 <details>
 <summary><b>Claude Desktop</b> — Konfigurationsdatei + erster Prompt</summary>
 
-Legen Sie [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) in die MCP-Konfiguration von Claude Desktop (bearbeiten Sie zuerst den Vault-Pfad). Starten Sie Claude Desktop neu, dann:
+Bevorzugen Sie die direkt einsetzbare Ausgabe von `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>`. [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) ist nur eine Vorlage; ersetzen Sie bei manueller Nutzung sowohl den Pfad zur ausführbaren Datei als auch den Vault-Pfad. Starten Sie Claude Desktop neu, dann:
 
 > Du hast meinen Obsidian-Vault als durchsuchbares Gedächtnis über die `obsidian_*`-Tools angebunden. Prüfe immer zuerst `obsidian_search`, wenn ich dich nach etwas in meinen Notizen frage — Besprechungskontext, Recherche, Entscheidungen, Journaleinträge. Zitiere bei jedem Fakt den Pfad der Quellnotiz.
 
@@ -297,7 +301,7 @@ Vollständige Haltung: **[SECURITY.md](./SECURITY.md)** · Stabilitätsoberfläc
 
 **Schreibt es in meinen Vault?** Nur wenn Sie `--enable-write` übergeben. Alle 7 Schreib-Tools sind abgesichert; destruktive unterstützen `dry_run`.
 
-**Werden Daten irgendwohin gesendet?** Nur bei `enquire-mcp install-model` (lädt ONNX-Gewichte einmalig von HuggingFace herunter). Der Serve-Modus stellt niemals ausgehende HTTP-Anfragen. Embeddings + Reranker laufen lokal auf der CPU.
+**Werden Daten irgendwohin gesendet?** Ausgehende Downloads erfolgen nur durch explizite Beschaffungsbefehle: `enquire-mcp setup`, `enquire-mcp build-embeddings` und `enquire-mcp install-model` können ONNX-Gewichte von HuggingFace laden; `enquire-mcp install-ocr-lang` lädt ein Tesseract-Sprachpaket für OCR. Der Serve-Modus stellt niemals ausgehende HTTP-Anfragen. Embeddings + Reranker laufen lokal auf der CPU.
 
 **Performance?** Kalter FTS5-Build: ~5 s/1k Notizen, ~30 s/50k. BM25-Abfrage: immer <100 ms. Embedding-Build: ~30 ms/Chunk auf M1. **HNSW Top-10: unter 10 ms bei jedem Maßstab.** Serve-Kaltstart: ~50 ms mit HNSW-Persistenz.
 
@@ -322,7 +326,7 @@ Kanal: `npm install @oomkapwn/enquire-mcp` → neueste stabile Version (`@latest
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # vollständige Suite (1638 Tests, ~12 s)
+npm test       # vollständige Suite (1681 Tests)
 npm run lint   # null Warnungen
 npm run build  # tsc → dist/
 ```

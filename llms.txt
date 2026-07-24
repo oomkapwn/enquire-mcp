@@ -5,7 +5,7 @@
 ## Quick start
 
 - [Quick install (30 seconds)](https://github.com/oomkapwn/enquire-mcp#-quick-start): `npm install -g @oomkapwn/enquire-mcp && enquire-mcp serve --vault <path>`
-- [Drop-in MCP client configs](https://github.com/oomkapwn/enquire-mcp/tree/main/examples): Claude Desktop, Cursor, ChatGPT custom GPT
+- [MCP client config templates and recipes](https://github.com/oomkapwn/enquire-mcp/tree/main/examples): prefer `enquire-mcp configure`; manual templates require every executable and vault placeholder to be replaced
 - [Recommended hybrid setup](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/claude-desktop-hybrid.json): full BM25 + TF-IDF + ML embeddings + BGE reranker + HNSW
 
 ## Documentation
@@ -29,7 +29,7 @@
 ## What enquire-mcp does
 
 - Reads `.md` files from an Obsidian vault and exposes them via 46 MCP tools (search, read, list, write, frontmatter, canvas, bases, PDFs, wikilink graph)
-- Indexes content with FTS5 (BM25), TF-IDF, and multilingual ML embeddings (BGE-base, BGE-multilingual, or any compatible Hugging Face model)
+- Indexes content with FTS5 (BM25), TF-IDF, and one of the two catalogued embedding aliases: `multilingual` (paraphrase-multilingual-MiniLM-L12-v2) or `bge` (bge-small-en-v1.5)
 - Fuses multiple retrieval signals via Reciprocal Rank Fusion (RRF, k=60 per Cormack et al)
 - Optional BGE cross-encoder reranking (+15.5 NDCG@10 / +24.7 MRR measured on a 60-query ablation)
 - HNSW vector index for sub-10ms top-K queries at million-chunk scale
@@ -65,7 +65,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1638 unit tests passing on every PR
+- 1681 unit tests passing on every PR
 - 9 release-required CI checks per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
@@ -84,8 +84,8 @@ How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON 
 
 ### Common failure modes
 
-- **`obsidian_embeddings_search` / `obsidian_hyde_search` error or stall on first call** → the embedding model isn't downloaded. Run `enquire-mcp setup --vault PATH` (or `install-model`) once. Until then the umbrella `obsidian_search` degrades gracefully to pure-JS TF-IDF.
-- **Empty results on a fresh vault** → no ML index yet; TF-IDF + substring search still work. Run `setup` for the full hybrid stack.
+- **Embedding/reranker cache miss** → runtime commands are offline-enforced and do not download implicitly. Tiered doctor is a v3.12 preview. Run `enquire-mcp configure --tier hybrid --vault PATH` from the same installed executable used for setup; follow its preflight and use its physically pinned runtime config. An equal npx package spec from another cwd can still resolve to a different installation/cache. Until repaired, `obsidian_search` preserves its available-signal/RRF fallback.
+- **Empty results on a fresh vault** → no ML index yet; TF-IDF + substring search still work. Run the complete hybrid preflight above. Doctor READY verifies structural/runtime prerequisites, not index freshness or complete corpus coverage.
 - **Very large vault** → whole-vault scanners apply a built-in safety cap; partial results are flagged in the response, never returned silently.
 - **Remote (`serve-http`)** → requires a bearer token of at least 16 chars; HTTP 401 means the token is missing or too short (`enquire-mcp gen-token` mints a valid one).
 

@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1638%20passing-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1681%20passing-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 > 3. **Zero cloud calls during serve.** The embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~110 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**46 tools · 19 MCP prompts · 1638 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1681 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 | **GraphRAG-light** (wikilink community detection via Louvain modularity) | ✅ **only here** | ❌ | ❌ |
 | **Standalone `.base` query execution** (works without Obsidian running) | ✅ **only here** | ❌ | ❌ delegates to Obsidian |
 | **HyDE retrieval** (Gao et al 2023) + sub-question decomposition | ✅ **only here** | ❌ | ❌ |
-| **1638 unit tests · 9 release-required CI checks · 7 currently branch-protected** | ✅ | n/a | rare |
+| **1681 unit tests · 9 release-required CI checks · 7 currently branch-protected** | ✅ | n/a | rare |
 | **Signed build provenance** (npm + Sigstore, SLSA Build L2) | ✅ | n/a | ❌ |
 | **Semver-bound public surface** ([STABILITY.md](./STABILITY.md)) | ✅ | n/a | ❌ |
 | Standalone (no Obsidian plugin needed) | ✅ | ❌ requires Obsidian | varies |
@@ -113,7 +113,7 @@ Drop into any MCP client:
 }
 ```
 
-📂 Drop-in configs in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus a sample query set for the eval harness.
+📂 Config templates and recipes in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus a sample query set for the eval harness.
 
 **Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing). *Since v3.11.6:*
 
@@ -122,12 +122,16 @@ enquire-mcp configure --vault <path>                 # prints config for every c
 enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cursor|vscode|codex|windsurf|claude-desktop|http)
 ```
 
-**Want full hybrid power?** One-command zero-touch onboarding:
+**Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-enquire-mcp setup --vault <path>     # downloads model, builds FTS5 + embed-db
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # caches embedder; builds FTS5 + embed-db
+enquire-mcp install-model rerank-bge                      # caches the offline reranker
+enquire-mcp doctor --tier hybrid --vault <path>           # structural/runtime readiness
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 ```
 
 ---
@@ -153,7 +157,7 @@ Then in any Claude Code session:
 <details>
 <summary><b>Claude Desktop</b> — config file + first prompt</summary>
 
-Drop [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) into Claude Desktop's MCP config (edit the vault path first). Restart Claude Desktop, then:
+Prefer the ready-to-paste output of `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>`. [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) is only a template; if used manually, replace both the executable and vault placeholders. Restart Claude Desktop, then:
 
 > You have my Obsidian vault wired up as searchable memory via `obsidian_*` tools. Always check `obsidian_search` first when I ask about anything in my notes — meeting context, research, decisions, journal entries. Quote the source note path on every fact.
 
@@ -302,7 +306,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 **Will it write to my vault?** Not unless you pass `--enable-write`. All 7 write tools are gated; destructive ones support `dry_run`.
 
-**Data sent anywhere?** Only on the two explicit install subcommands — `enquire-mcp install-model` (ONNX weights from HuggingFace, one-time) and `enquire-mcp install-ocr-lang` (Tesseract language pack, one-time, OCR only). Serve mode never makes outbound HTTP ([enforced](./SECURITY.md), not aspirational). Embeddings + reranker run on CPU locally.
+**Data sent anywhere?** Outbound downloads occur only on explicit acquisition commands: `enquire-mcp setup`, `enquire-mcp build-embeddings`, and `enquire-mcp install-model` may fetch ONNX weights from HuggingFace; `enquire-mcp install-ocr-lang` fetches a Tesseract language pack. Serve mode never makes outbound HTTP ([enforced](./SECURITY.md), not aspirational). Embeddings + reranker run on CPU locally.
 
 **Performance?** Cold-build FTS5: ~5s/1k notes, ~30s/50k. BM25 query: <100ms always. Embedding build: ~30ms/chunk on M1. **HNSW top-10: sub-10ms at any scale.** Serve cold-start: ~50ms with HNSW persistence.
 
@@ -327,7 +331,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1638 tests, ~12s)
+npm test       # full suite (1681 tests)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

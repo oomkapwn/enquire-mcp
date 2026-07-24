@@ -6,7 +6,8 @@
 // Architecture:
 //   - We expose two catalog'd models: `multilingual` (default; 50+ languages,
 //     384-dim, ~120 MB) and `bge` (English-tuned, 384-dim, ~33 MB).
-//   - Models are pulled from HuggingFace Hub on first use, cached by
+//   - Network-enabled install/build commands pull models from HuggingFace Hub
+//     on first use; serve/query/eval only load an existing local cache. Files are cached by
 //     transformers.js under its OWN package dir — `<install>/node_modules/
 //     @huggingface/transformers/.cache/Xenova/…`. Resolve it at runtime via
 //     `resolveTransformersCacheDir()`; do NOT hardcode `~/.cache/huggingface`
@@ -149,19 +150,28 @@ export interface Embedder {
 let pipelineCtor: ((task: string, model: string) => Promise<unknown>) | null = null;
 let autoTokenizerCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 let autoModelForSeqClsCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
+let transformersModule: unknown | null = null;
+const offlineEnvOriginals = new WeakMap<
+  object,
+  { allowLocalModels: boolean | undefined; allowRemoteModels: boolean | undefined }
+>();
 
 // v3.10.0-rc.42 (audit F1, HIGH) — serve-mode offline ENFORCEMENT for the embedder +
 // reranker model load. README/llms.txt/SECURITY.md claim "zero cloud calls during serve";
 // pre-rc.42 that was ASPIRATIONAL — a missing local cache let transformers.js silently
 // CDN-fetch (~120MB) on a serve-time query. This makes the claim a real CODE GUARD,
-// mirroring OCR's `assertOcrLangsInstalled` (overclaim #16). serve/serve-http call
-// setEmbeddingsOffline() at startup → transformers.js `env.allowRemoteModels=false` →
-// a model absent from the LOCAL cache fails CLOSED with an install hint instead of
-// fetching. build-embeddings / install-model never call the setter, so the one-time
-// online download path is unchanged.
+// mirroring OCR's `assertOcrLangsInstalled` (overclaim #16). Every runtime
+// boundary (CLI plus prepareServerDeps for programmatic stdio/HTTP consumers)
+// calls setEmbeddingsOffline() before model load; cached constructor paths
+// reapply the env guard. build-embeddings/install-model remain explicit online
+// acquisition paths.
 let embeddingsOffline = false;
 export function setEmbeddingsOffline(on = true): void {
   embeddingsOffline = on;
+  if (transformersModule) {
+    if (on) applyOfflineEnv(transformersModule);
+    else restoreOnlineEnv(transformersModule);
+  }
 }
 export function isEmbeddingsOffline(): boolean {
   return embeddingsOffline;
@@ -175,28 +185,51 @@ export function applyOfflineEnv(mod: unknown): void {
   if (!embeddingsOffline) return;
   const env = (mod as { env?: { allowRemoteModels?: boolean; allowLocalModels?: boolean } }).env;
   if (env) {
+    if (!offlineEnvOriginals.has(env)) {
+      offlineEnvOriginals.set(env, {
+        allowRemoteModels: env.allowRemoteModels,
+        allowLocalModels: env.allowLocalModels
+      });
+    }
     env.allowRemoteModels = false; // local cache only — no outbound CDN fetch during serve
     env.allowLocalModels = true;
   }
 }
-/** v3.10.0-rc.42 (F1) — translate a serve-offline model-load failure (with
- *  allowRemoteModels=false the CDN fallback is blocked, so a failure is almost always a
- *  cache miss) into an actionable fail-closed error. Pure → unit-testable without a model. */
+
+function restoreOnlineEnv(mod: unknown): void {
+  const env = (mod as { env?: { allowRemoteModels?: boolean; allowLocalModels?: boolean } }).env;
+  if (!env) return;
+  const original = offlineEnvOriginals.get(env);
+  if (!original) return;
+  if (original.allowRemoteModels === undefined) delete env.allowRemoteModels;
+  else env.allowRemoteModels = original.allowRemoteModels;
+  if (original.allowLocalModels === undefined) delete env.allowLocalModels;
+  else env.allowLocalModels = original.allowLocalModels;
+  offlineEnvOriginals.delete(env);
+}
+/** Translate an offline runtime model-load failure into an actionable,
+ *  path-redacted error. A failure can mean a missing, incomplete, incompatible,
+ *  or corrupt cache; it is not safe to relabel every loader error as a miss. */
 export function offlineModelLoadError(alias: string, hfId: string, _original: unknown): Error {
   // rc.45 (abs-path-leak class) — do NOT interpolate the raw transformers.js cause into
-  // the client-facing message: an offline cache-miss error embeds the ABSOLUTE model-cache
-  // path (host home dir). The install hint is the actionable part; `_original` is kept in
+  // the client-facing message: a loader error can embed the ABSOLUTE model-cache path
+  // (host home dir). The repair hint is actionable; `_original` is kept in
   // the signature for call-site stability but deliberately not surfaced to the client.
   return new Error(
-    `Model "${alias}" (${hfId}) is not in the local model cache, and serve mode makes zero outbound ` +
-      `network calls (privacy — your vault never reaches the network). Pre-download the model in an ` +
-      `online context (e.g. \`enquire build-embeddings\` for the embedder, or one reranker query) ` +
-      `before serving, then restart.`
+    `Model "${alias}" (${hfId}) could not be loaded from the local model cache; the cache may be missing, incomplete, ` +
+      `incompatible, or corrupt. Runtime mode (serve/query/eval) makes zero outbound network calls (privacy — your vault ` +
+      `never reaches the network). Use the same package invocation for doctor, install-model, and runtime. Run doctor to ` +
+      `locate that package's cache, repeat that exact command prefix with \`install-model ${alias}\` online, and restart. If the loader still ` +
+      `reuses a corrupt artifact, remove only the affected ${hfId} model directory under the reported cache root before ` +
+      `running install-model again.`
   );
 }
 
 async function loadPipeline(): Promise<(task: string, model: string) => Promise<unknown>> {
-  if (pipelineCtor) return pipelineCtor;
+  if (pipelineCtor) {
+    if (transformersModule) applyOfflineEnv(transformersModule);
+    return pipelineCtor;
+  }
   try {
     // Dynamic import keeps the heavy module out of cold-start cost.
     const mod = (await import("@huggingface/transformers")) as {
@@ -204,6 +237,7 @@ async function loadPipeline(): Promise<(task: string, model: string) => Promise<
     };
     if (!mod.pipeline) throw new Error("@huggingface/transformers has no `pipeline` export");
     applyOfflineEnv(mod); // rc.42 F1 — serve sets local-cache-only before any model load
+    transformersModule = mod;
     pipelineCtor = mod.pipeline;
     return pipelineCtor;
   } catch (err) {
@@ -239,6 +273,7 @@ async function loadTransformersForRerank(): Promise<{
   AutoModelForSequenceClassification: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> };
 }> {
   if (autoTokenizerCtor && autoModelForSeqClsCtor) {
+    if (transformersModule) applyOfflineEnv(transformersModule);
     return { AutoTokenizer: autoTokenizerCtor, AutoModelForSequenceClassification: autoModelForSeqClsCtor };
   }
   try {
@@ -252,6 +287,7 @@ async function loadTransformersForRerank(): Promise<{
       );
     }
     applyOfflineEnv(mod); // rc.42 F1 — serve sets local-cache-only before any reranker load
+    transformersModule = mod;
     autoTokenizerCtor = mod.AutoTokenizer;
     autoModelForSeqClsCtor = mod.AutoModelForSequenceClassification;
     return { AutoTokenizer: autoTokenizerCtor, AutoModelForSequenceClassification: autoModelForSeqClsCtor };
@@ -300,7 +336,7 @@ async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
   try {
     extractor = (await pipeline("feature-extraction", model.hfId)) as typeof extractor;
   } catch (err) {
-    // rc.42 F1 — under serve-offline, a load failure is a cache miss (CDN blocked); fail closed with a hint.
+    // Offline runtime blocks CDN fallback; redact the loader cause and fail closed with a repair hint.
     throw embeddingsOffline ? offlineModelLoadError(model.alias, model.hfId, err) : err;
   }
 
@@ -495,8 +531,8 @@ export interface Reranker {
 /**
  * Load a BGE-style cross-encoder reranker. Lazy-imports
  * `@huggingface/transformers` on first call (same lazy-load pattern as
- * `loadEmbedder`). Cold-start downloads the model from HuggingFace
- * (~25-110 MB depending on alias) into the transformers.js package cache
+ * `loadEmbedder`). Network-enabled callers download the model from HuggingFace
+ * (~25-110 MB depending on alias); runtime/read callers require it in the transformers.js package cache
  * (resolve the exact path via `resolveTransformersCacheDir()`).
  *
  * **v3.6.0-rc.4 P0 fix.** Previously used the high-level
@@ -541,7 +577,7 @@ async function buildReranker(model: RerankerModel): Promise<Reranker> {
     tokenizer = (await AutoTokenizer.from_pretrained(model.hfId)) as typeof tokenizer;
     seqCls = (await AutoModelForSequenceClassification.from_pretrained(model.hfId, { dtype })) as typeof seqCls;
   } catch (err) {
-    // rc.42 F1 — under serve-offline, a load failure is a cache miss (CDN blocked); fail closed with a hint.
+    // Offline runtime blocks CDN fallback; redact the loader cause and fail closed with a repair hint.
     throw embeddingsOffline ? offlineModelLoadError(model.alias, model.hfId, err) : err;
   }
 

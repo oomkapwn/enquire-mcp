@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt name, and exported TypeScript symbol below is **semver-bound**. Breaking changes require a major bump. Additive minor releases (`v3.x.0`) and patches (`v3.x.y`) keep these contracts intact.
+On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resource URI, MCP prompt name, and exported TypeScript symbol below is **semver-bound**. Breaking changes require a major bump. Minor releases add backward-compatible functionality; patch releases fix defects without adding a new public capability. Explicit `@rc` previews remain prerelease surfaces until stable promotion.
 
 ## v3.x stable surfaces
 
@@ -36,7 +36,9 @@ After **v3.0.0** every CLI flag, MCP tool name, MCP resource URI, MCP prompt nam
 
 ### CLI flags
 
-Every flag accepted by `enquire-mcp serve` / `serve-http` / `index` / `build-embeddings` / `setup` / `eval` / `doctor` / `clear-cache` / `clear-index` / `clear-embeddings` / `gen-token` / `install-model` / `install-ocr-lang` / `query` / `prune` is stable. (`configure`, currently on the `@rc` channel, joins this list when v3.11.6 promotes.) New flags will be added in minor releases (additive); existing flag names + accepted values + defaults will not change without a major bump.
+Every flag available from stable `@latest` on `enquire-mcp serve` / `serve-http` / `index` / `build-embeddings` / `setup` / `eval` / `doctor` / `configure` / `clear-cache` / `clear-index` / `clear-embeddings` / `gen-token` / `install-model` / `install-ocr-lang` / `query` / `prune` is stable. New flags arrive in minor releases; existing flag names, accepted values, and defaults do not change without a major bump.
+
+`eval-compare` is a v3.12.0 `@rc` preview. It joins this stability promise when the minor release is promoted to `@latest`; until then its prerelease contract may still be refined.
 
 Notable defaults that are part of the contract:
 - `serve` is read-only by default — `--enable-write` required for the write tools.

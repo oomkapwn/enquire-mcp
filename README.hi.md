@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve के दौरान शून्य क्लाउड कॉल।** embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक-बार का स्थानीय डाउनलोड (~110 MB) है, न कि कोई क्लाउड API key। मूल-आधारित + निजी होना मुफ़्त नहीं है, और हम इसका दिखावा नहीं करते: आपके vault की सामग्री कभी आपकी मशीन नहीं छोड़ती, डिफ़ॉल्ट रूप से एयर-गैप-सुरक्षित ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 1638+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 1681+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -78,7 +78,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (Louvain modularity wikilink समुदाय-पहचान) | ✅ **केवल यहीं** | ❌ | ❌ |
 | **स्वतंत्र `.base` क्वेरी निष्पादन** (Obsidian चले बिना काम करता है) | ✅ **केवल यहीं** | ❌ | ❌ Obsidian को सौंपता है |
 | **HyDE retrieval** (Gao et al 2023) + उप-प्रश्न विघटन | ✅ **केवल यहीं** | ❌ | ❌ |
-| **1638 यूनिट टेस्ट · 9 release-required CI जाँच · वर्तमान में 7 branch-protected** | ✅ | लागू नहीं | विरल |
+| **1681 यूनिट टेस्ट · 9 release-required CI जाँच · वर्तमान में 7 branch-protected** | ✅ | लागू नहीं | विरल |
 | **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2) | ✅ | लागू नहीं | ❌ |
 | **semver-बाध्य सार्वजनिक सतह** ([STABILITY.md](./STABILITY.md)) | ✅ | लागू नहीं | ❌ |
 | स्वतंत्र (कोई Obsidian प्लगइन ज़रूरी नहीं) | ✅ | ❌ Obsidian ज़रूरी | भिन्न |
@@ -112,12 +112,16 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 📂 तैयार कॉन्फ़िग [`examples/`](./examples/) में — **Claude Desktop**, **Cursor**, **ChatGPT कस्टम GPT** (HTTP पर रिमोट MCP), साथ ही eval harness के लिए एक नमूना क्वेरी सेट।
 
-**पूरी हाइब्रिड शक्ति चाहिए?** एक कमांड, ज़ीरो-टच ऑनबोर्डिंग:
+**पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-enquire-mcp setup --vault <path>     # मॉडल डाउनलोड करता है, FTS5 + embed-db बनाता है
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # embedder कैश और FTS5 + embed-db बनाता है
+enquire-mcp install-model rerank-bge                      # ऑफ़लाइन reranker कैश करता है
+enquire-mcp doctor --tier hybrid --vault <path>           # संरचनात्मक/runtime तैयारी
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # रंग-कोडित ✓/⚠/✗ स्वास्थ्य जाँच
 ```
 
 ---
@@ -143,7 +147,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 <details>
 <summary><b>Claude Desktop</b> — कॉन्फ़िग फ़ाइल + पहला प्रॉम्प्ट</summary>
 
-[`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) को Claude Desktop के MCP कॉन्फ़िग में डालें (पहले vault पथ संपादित करें)। Claude Desktop को पुनः आरंभ करें, फिर:
+`enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>` के सीधे पेस्ट किए जा सकने वाले आउटपुट को प्राथमिकता दें। [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) केवल टेम्पलेट है; मैन्युअल उपयोग में executable और vault दोनों पथ बदलें। Claude Desktop को पुनः आरंभ करें, फिर:
 
 > आपके पास मेरा Obsidian vault `obsidian_*` टूल के माध्यम से खोजने-योग्य स्मृति के रूप में जुड़ा हुआ है। जब भी मैं अपने नोट्स में किसी भी चीज़ के बारे में पूछूँ — मीटिंग संदर्भ, शोध, निर्णय, जर्नल प्रविष्टियाँ — हमेशा पहले `obsidian_search` जाँचें। हर तथ्य पर स्रोत नोट का पथ उद्धृत करें।
 
@@ -294,7 +298,7 @@ graph LR
 
 **क्या यह मेरे vault में लिखेगा?** नहीं, जब तक आप `--enable-write` न दें। सभी 7 लेखन टूल gated हैं; विनाशकारी टूल `dry_run` का समर्थन करते हैं।
 
-**डेटा कहीं भेजा जाता है?** केवल `enquire-mcp install-model` पर (HuggingFace से ONNX weights डाउनलोड करता है, एक-बार)। serve मोड कभी बाहरी HTTP नहीं करता। Embeddings + reranker स्थानीय CPU पर चलते हैं।
+**डेटा कहीं भेजा जाता है?** बाहरी डाउनलोड केवल स्पष्ट acquisition कमांड पर होते हैं: `enquire-mcp setup`, `enquire-mcp build-embeddings` और `enquire-mcp install-model` HuggingFace से ONNX weights ला सकते हैं; `enquire-mcp install-ocr-lang` OCR के लिए Tesseract भाषा पैक लाता है। serve मोड कभी बाहरी HTTP नहीं करता। Embeddings + reranker स्थानीय CPU पर चलते हैं।
 
 **प्रदर्शन?** कोल्ड-बिल्ड FTS5: ~5s/1k नोट्स, ~30s/50k। BM25 क्वेरी: हमेशा <100ms। **HNSW top-10: किसी भी पैमाने पर sub-10ms।** HNSW persistence के साथ serve कोल्ड-स्टार्ट: ~50ms।
 
@@ -319,7 +323,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # पूर्ण सूट (1638 टेस्ट, ~12s)
+npm test       # पूर्ण सूट (1681 टेस्ट)
 npm run lint   # ज़ीरो वॉर्निंग
 npm run build  # tsc → dist/
 ```

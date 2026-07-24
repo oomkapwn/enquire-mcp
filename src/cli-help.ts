@@ -115,6 +115,12 @@ export const CACHE_FILE_HELP = "Override the persistent-cache file location";
 export const INDEX_FILE_HELP = "Override the FTS5 index file location";
 
 /**
+ * `--embed-file` flag help. Shared across every command that reads, builds,
+ * diagnoses or removes the persistent embedding index.
+ */
+export const EMBED_FILE_HELP = "Override the embedding-index (.embed.db) file location";
+
+/**
  * `--quantize-embeddings` flag help (v3.8.0-rc.11 M-1 root-class fix; caught
  * by the new cli-parity invariant). Pre-rc.11 serve had a 355-char detailed
  * description with v2.16 history + recall numbers + accepted aliases; serve-http
@@ -124,3 +130,11 @@ export const INDEX_FILE_HELP = "Override the FTS5 index file location";
  */
 export const QUANTIZE_EMBEDDINGS_HELP =
   "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`.";
+
+/**
+ * Shared `--tier` help for configure and doctor. Both commands consume the
+ * same capability vocabulary, so keeping the wording in one constant prevents
+ * a generated-config tier from drifting away from its readiness definition.
+ */
+export const CONFIG_TIER_HELP =
+  "Capability tier: basic (live scan, zero setup) | hybrid (FTS5 + embeddings + reranker + HNSW) | hybrid-live (hybrid + PDFs + --watch). Default: hybrid";

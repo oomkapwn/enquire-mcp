@@ -1,11 +1,11 @@
 # Examples
 
-Drop-in configs and recipes for connecting `enquire-mcp` to common MCP clients.
+Config templates and recipes for connecting `enquire-mcp` to common MCP clients. Prefer `enquire-mcp configure` for a ready-to-paste config pinned to the physical package copy you are running.
 
 | File | Use case |
 |---|---|
-| [`claude-desktop.json`](./claude-desktop.json) | Tier-1 Claude Desktop config (TF-IDF only, zero setup) |
-| [`claude-desktop-hybrid.json`](./claude-desktop-hybrid.json) | Full hybrid stack — BM25 + TF-IDF + ML embeddings + reranker + HNSW |
+| [`claude-desktop.json`](./claude-desktop.json) | `basic` Claude Desktop config (TF-IDF only, zero setup) |
+| [`claude-desktop-hybrid.json`](./claude-desktop-hybrid.json) | `hybrid-live` stack — BM25 + TF-IDF + ML embeddings + reranker + HNSW + PDFs/watch |
 | [`cursor-mcp.json`](./cursor-mcp.json) | Cursor MCP stdio config |
 | [`chatgpt-actions.md`](./chatgpt-actions.md) | ChatGPT custom GPT — remote MCP over HTTP with bearer auth + tunnel |
 | [`tweetclaw-openclaw.md`](./tweetclaw-openclaw.md) | OpenClaw recipe for capturing public X/Twitter signals with TweetClaw, storing reviewed notes in an Obsidian vault, then retrieving them with enquire |
@@ -13,14 +13,13 @@ Drop-in configs and recipes for connecting `enquire-mcp` to common MCP clients.
 
 ## Workflow
 
-1. **Edit the absolute path** in the JSON config to point at your vault and (for Claude Desktop / Cursor) drop the file at the client's MCP config location.
-2. **Restart the client** so it picks up the new server.
-3. (Optional, hybrid only) Run `enquire-mcp setup --vault <path>` once to download the embedding model and build the FTS5 + embed-db indexes.
-4. (Optional) Run `enquire-mcp doctor --vault <path>` to confirm everything is wired up — color-coded ✓/⚠/✗ output.
+1. **Prefer `enquire-mcp configure`** for generated configs. If you use a committed JSON template manually, replace every placeholder before putting it at the client's MCP config location; the hybrid template has absolute executable and vault paths, while the basic template has a vault path.
+2. The `basic` config runs current `@latest` and needs no preflight. For `hybrid-live`, prefer `enquire-mcp configure --tier hybrid-live --client claude-desktop`: it emits preflight and runtime commands pinned to the current physical Node + enquire entry paths. The committed hybrid JSON is therefore a template, not a literal drop-in: replace `/ABSOLUTE/PATH/TO/enquire-mcp` and use that same selected executable for `setup`, `install-model`, `doctor`, and runtime. An exact npx package spec alone is insufficient because npm may resolve it from different physical installations in different working directories. The pin is intentionally exact rather than self-updating: regenerate it after a Node/package move or upgrade, installation-method change, or npx-cache cleanup.
+3. **Restart the client** so it picks up the new server.
 
 ## Recommended starting config
 
-Most users want the hybrid stack — it's strictly better than TF-IDF alone (better paraphrase / synonym / cross-language matching) at the cost of one `setup` command and ~120 MB of disk for the embedding model. Start with [`claude-desktop-hybrid.json`](./claude-desktop-hybrid.json) unless you specifically want the zero-setup tier.
+Most users want the hybrid stack — it improves paraphrase / synonym / cross-language matching at the cost of building two indexes and caching roughly 230 MB of default embedder + reranker weights. Start with [`claude-desktop-hybrid.json`](./claude-desktop-hybrid.json) unless you specifically want the zero-setup `basic` tier. Doctor READY is structural/runtime-only; rerun setup after content changes or keep `--watch` enabled.
 
 ## Eval harness
 

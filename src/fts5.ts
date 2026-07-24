@@ -17,10 +17,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { lookupFoldedKey } from "./name-fold.js";
 import { optionalDepDetail } from "./optional-dep.js";
+import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { iterateContentLines } from "./structure.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
-
-const SCHEMA_VERSION = 5;
 
 // v3.11.6-rc.6 (competitive-study C-3) — FTS5 column weights for BM25. The
 // chunks table indexes `content` (col 0), `title` (col 1), `aliases` (col 2);
@@ -318,7 +317,7 @@ export class FtsIndex {
     const meta = this.readMeta();
     const tokenizeMatch = meta.tokenize_mode === undefined || meta.tokenize_mode === this.tokenize;
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
-    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(SCHEMA_VERSION);
+    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(FTS_SCHEMA_VERSION);
     // v3.7.19 γ3 / R-6 from round-20 — wrap the DROP+CREATE+writeMeta
     // sequence in a single db.transaction(). Pre-3.7.19 the steps ran
     // independently; while the existing code IS self-healing on next open
@@ -333,7 +332,7 @@ export class FtsIndex {
         const reason: string[] = [];
         if (!tokenizeMatch) reason.push(`tokenize ${meta.tokenize_mode} → ${this.tokenize}`);
         if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
-        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${SCHEMA_VERSION}`);
+        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${FTS_SCHEMA_VERSION}`);
         process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
         // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
         // the `tags` column). DROP IF EXISTS handles a fresh DB too.
@@ -367,7 +366,7 @@ export class FtsIndex {
       // atomically in sync. (writeMeta opens its own nested transaction,
       // but better-sqlite3 handles nesting via savepoints.)
       this.writeMeta({
-        schema_version: String(SCHEMA_VERSION),
+        schema_version: String(FTS_SCHEMA_VERSION),
         vault_root: this.vaultRoot,
         tokenize_mode: this.tokenize
       });
@@ -677,7 +676,7 @@ export class FtsIndex {
       line_start: r.line_start,
       line_end: r.line_end,
       // v2.8.0: kind defaults to "md" for chunks indexed before the schema
-      // bump (legacy DBs auto-rebuild via SCHEMA_VERSION mismatch, but the
+      // bump (legacy DBs auto-rebuild via a schema-version mismatch, but the
       // null fallback is defense-in-depth).
       kind: (r.kind === "pdf" ? "pdf" : "md") as ChunkKind,
       snippet: r.snippet,

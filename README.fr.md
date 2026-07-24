@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1638%20passing-brightgreen.svg)](#️-confiance)
+[![tests](https://img.shields.io/badge/tests-1681%20passing-brightgreen.svg)](#️-confiance)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > 3. **Zéro appel au cloud pendant le service.** Modèles mis en cache localement (téléchargement unique depuis HuggingFace). Le contenu de votre coffre ne quitte jamais votre machine. Sûr en environnement isolé par défaut.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
-**46 outils · 19 prompts MCP · 1638+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
+**46 outils · 19 prompts MCP · 1681+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
 
 ---
 
@@ -81,7 +81,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 | **GraphRAG-light** (détection de communautés de wikilinks par modularité de Louvain) | ✅ **uniquement ici** | ❌ | ❌ |
 | **Exécution autonome de requêtes `.base`** (fonctionne sans Obsidian ouvert) | ✅ **uniquement ici** | ❌ | ❌ délègue à Obsidian |
 | **Récupération HyDE** (Gao et al. 2023) + décomposition en sous-questions | ✅ **uniquement ici** | ❌ | ❌ |
-| **1638 tests unitaires · 9 contrôles CI requis pour la release · 7 actuellement protégés** | ✅ | s.o. | rare |
+| **1681 tests unitaires · 9 contrôles CI requis pour la release · 7 actuellement protégés** | ✅ | s.o. | rare |
 | **Provenance de build signée** (npm + Sigstore, SLSA Build L2) | ✅ | s.o. | ❌ |
 | **Surface publique liée au semver** ([STABILITY.md](./STABILITY.md)) | ✅ | s.o. | ❌ |
 | Autonome (aucun plugin Obsidian requis) | ✅ | ❌ requiert Obsidian | variable |
@@ -115,12 +115,16 @@ Connectez-le à n'importe quel client MCP :
 
 📂 Configurations prêtes à l'emploi dans [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **GPT personnalisé de ChatGPT** (MCP distant sur HTTP), plus un jeu de requêtes d'exemple pour le harnais d'évaluation.
 
-**Vous voulez toute la puissance hybride ?** Mise en route sans friction, en une commande :
+**Vous voulez toute la puissance hybride ?** Exécutez le preflight hybride, puis démarrez le serveur :
 
 ```bash
-enquire-mcp setup --vault <path>     # télécharge le modèle, construit FTS5 + embed-db
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # met l'embedder en cache et construit FTS5 + embed-db
+enquire-mcp install-model rerank-bge                      # met le reranker hors ligne en cache
+enquire-mcp doctor --tier hybrid --vault <path>           # préparation structurelle/runtime
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # contrôle de santé codé par couleur ✓/⚠/✗
 ```
 
 ---
@@ -146,7 +150,7 @@ Ensuite, dans n'importe quelle session Claude Code :
 <details>
 <summary><b>Claude Desktop</b> — fichier de configuration + premier prompt</summary>
 
-Déposez [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) dans la configuration MCP de Claude Desktop (modifiez d'abord le chemin du coffre). Redémarrez Claude Desktop, puis :
+Préférez la sortie prête à coller de `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>`. [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) n'est qu'un modèle ; en cas d'utilisation manuelle, remplacez les chemins de l'exécutable et du coffre. Redémarrez Claude Desktop, puis :
 
 > Tu as mon coffre Obsidian branché comme mémoire interrogeable via les outils `obsidian_*`. Vérifie toujours `obsidian_search` en premier quand je te demande quoi que ce soit dans mes notes — contexte de réunion, recherche, décisions, entrées de journal. Cite le chemin de la note source pour chaque fait.
 
@@ -295,7 +299,7 @@ Posture complète : **[SECURITY.md](./SECURITY.md)** · Surface de stabilité : 
 
 **Va-t-il écrire dans mon coffre ?** Pas sauf si vous passez `--enable-write`. Les 7 outils d'écriture sont restreints ; les outils destructifs prennent en charge `dry_run`.
 
-**Des données envoyées quelque part ?** Uniquement lors de `enquire-mcp install-model` (télécharge les poids ONNX depuis HuggingFace, une seule fois). Le mode serve ne fait jamais d'HTTP sortant. Les embeddings + le reranker s'exécutent localement sur le CPU.
+**Des données envoyées quelque part ?** Les téléchargements sortants n'ont lieu qu'avec des commandes d'acquisition explicites : `enquire-mcp setup`, `enquire-mcp build-embeddings` et `enquire-mcp install-model` peuvent télécharger les poids ONNX depuis HuggingFace ; `enquire-mcp install-ocr-lang` télécharge un pack de langue Tesseract pour l'OCR. Le mode serve ne fait jamais d'HTTP sortant. Les embeddings + le reranker s'exécutent localement sur le CPU.
 
 **Performances ?** Build à froid FTS5 : ~5 s/1k notes, ~30 s/50k. Requête BM25 : <100 ms toujours. Build d'embeddings : ~30 ms/chunk sur M1. **HNSW top-10 : moins de 10 ms à toute échelle.** Démarrage à froid de serve : ~50 ms avec persistance HNSW.
 
@@ -320,7 +324,7 @@ Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@late
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suite complète (1638 tests, ~12 s)
+npm test       # suite complète (1681 tests)
 npm run lint   # zéro avertissement
 npm run build  # tsc → dist/
 ```

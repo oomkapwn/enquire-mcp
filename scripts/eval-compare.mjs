@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // v3.11.6-rc.5 (eval overhaul) — A/B compare two `enquire eval --output` result JSONs.
 //
-// Makes a retrieval change PROVABLE rather than asserted: run the eval before a
-// change, run it after, and diff the aggregate metrics with a meaningfulness
-// threshold (|Δ| >= 0.01 at ~50+ queries). Inspired by OHS's `eval:compare`.
+// Makes a retrieval change measurable rather than asserted: run the eval before
+// a change, run it after, and diff the aggregate metrics only when k + the exact
+// query cohort match. |Δ| >= 0.01 is a material-effect CI heuristic, not a
+// statistical-significance test. Inspired by OHS's `eval:compare`.
 //
 //   npm run eval -- --vault <v> --queries <q> --output before.json
 //   # ...make a retrieval change, rebuild...
@@ -39,12 +40,14 @@ const after = await loadResult(afterPath);
 const cmp = compareEvalResults(before, after);
 process.stdout.write(`${formatEvalComparison(cmp)}\n`);
 
-// Exit 1 if any tracked metric REGRESSED meaningfully — so CI / a pre-commit
-// hook can gate a retrieval change on "no meaningful regression".
+// Exit 1 if any tracked metric crosses the material regression threshold — so
+// CI / a pre-commit hook can gate a retrieval change on the configured effect size.
 const regressed = cmp.deltas.filter((d) => d.meaningful && d.delta < 0);
 if (regressed.length > 0) {
   process.stderr.write(
-    `\n${regressed.length} metric(s) regressed meaningfully: ${regressed.map((d) => d.metric).join(", ")}\n`
+    `\n${regressed.length} metric(s) crossed the material regression threshold: ${regressed
+      .map((d) => d.metric)
+      .join(", ")}\n`
   );
   process.exit(1);
 }

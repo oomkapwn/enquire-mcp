@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 期间零云端调用。** 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 110 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**46 个工具 · 19 个 MCP 提示词 · 1638+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**46 个工具 · 19 个 MCP 提示词 · 1681+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -76,7 +76,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light**（Louvain 模块度社群检测） | ✅ **独有** | ❌ | ❌ |
 | **独立 `.base` 查询执行**（无需运行 Obsidian） | ✅ **独有** | ❌ | ❌ 委托给 Obsidian |
 | **HyDE 检索**（Gao et al. 2023）+ 子问题分解 | ✅ **独有** | ❌ | ❌ |
-| **1638 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | ✅ | 不适用 | 罕见 |
+| **1681 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | ✅ | 不适用 | 罕见 |
 | **签名构建溯源**（npm + Sigstore，SLSA Build L2） | ✅ | 不适用 | ❌ |
 | **语义化版本约束的公开接口**（[STABILITY.md](./STABILITY.md)） | ✅ | 不适用 | ❌ |
 | 独立运行（无需 Obsidian 插件） | ✅ | ❌ 需 Obsidian | 不一 |
@@ -110,12 +110,16 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 📂 开箱即用的配置见 [`examples/`](./examples/) —— **Claude Desktop**、**Cursor**、**ChatGPT 自定义 GPT**（通过 HTTP 的远程 MCP），以及一份评测用的示例查询集。
 
-**想要完整的混合检索能力？** 一条命令，零配置上手：
+**想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-enquire-mcp setup --vault <path>     # 下载模型，构建 FTS5 + 向量库
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # 缓存嵌入模型，构建 FTS5 + 向量库
+enquire-mcp install-model rerank-bge                      # 缓存离线重排序模型
+enquire-mcp doctor --tier hybrid --vault <path>           # 结构与运行时就绪检查
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # 彩色 ✓/⚠/✗ 健康检查
 ```
 
 ---
@@ -141,7 +145,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 <details>
 <summary><b>Claude Desktop</b> —— 配置文件 + 首条提示词</summary>
 
-把 [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) 放进 Claude Desktop 的 MCP 配置（先改好仓库路径）。重启 Claude Desktop，然后：
+建议使用 `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>` 生成的可直接粘贴配置。[`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) 只是模板；手动使用时必须同时替换可执行文件和仓库路径。重启 Claude Desktop，然后：
 
 > 你已通过 `obsidian_*` 工具接好了我的 Obsidian 仓库作为可检索记忆。每当我问到笔记里的任何内容——会议上下文、调研、决策、日记条目——都先查 `obsidian_search`。每条事实都引用来源笔记路径。
 
@@ -290,7 +294,7 @@ graph LR
 
 **会写入我的仓库吗？** 除非你传 `--enable-write`，否则不会。全部 7 个写工具受控；破坏性操作支持 `dry_run`。
 
-**会把数据发到哪里吗？** 仅在 `enquire-mcp install-model` 时（一次性从 HuggingFace 下载 ONNX 权重）。serve 模式从不发起对外 HTTP。向量嵌入与重排都在本地 CPU 运行。
+**会把数据发到哪里吗？** 只有显式获取命令会对外下载：`enquire-mcp setup`、`enquire-mcp build-embeddings` 和 `enquire-mcp install-model` 可能从 HuggingFace 下载 ONNX 权重；`enquire-mcp install-ocr-lang` 下载用于 OCR 的 Tesseract 语言包。serve 模式从不发起对外 HTTP。向量嵌入与重排都在本地 CPU 运行。
 
 **性能如何？** 冷构建 FTS5：约 5s/1k 笔记、约 30s/50k。BM25 查询：始终 <100ms。**HNSW top-10：任意规模 sub-10ms。** 启用 HNSW 持久化时 serve 冷启动约 50ms。
 
@@ -315,7 +319,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 完整套件（1638 个测试，约 12s）
+npm test       # 完整套件（1681 个测试）
 npm run lint   # 零警告
 npm run build  # tsc → dist/
 ```

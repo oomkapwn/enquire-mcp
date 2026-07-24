@@ -56,7 +56,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **صفر استدعاءات سحابية أثناء التشغيل.** نموذج التضمين يعمل **على جهازك** ويُفهرس markdown الذي كتبته **أنت** — ولهذا فهو تنزيل محلي لمرة واحدة (~110 ميغابايت)، لا مفتاح API سحابي. الرسوخ والخصوصية لهما ثمن، ولا ندّعي خلاف ذلك: محتوى مكتبتك لا يغادر جهازك أبداً، وهي آمنة للعمل المعزول (air-gap) افتراضياً ([مفروضة بالكود](./SECURITY.md)، لا مجرّد طموح).
 > 4. **استدعاء واعٍ بالحداثة.** تُبلّغ كل نتيجة عن عمر الملاحظة؛ وإعادة الترتيب الاختيارية بالحداثة تتيح للوكيل تفضيل المعرفة الحديثة ووسم الحقائق القديمة لإعادة التحقق — حدود "الوعي بالنسيان"، مبنيّة على `mtime` الذي تملكه ملفاتك أصلاً.
 
-**46 أداة · 19 موجِّه MCP · 1638+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
+**46 أداة · 19 موجِّه MCP · 1681+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
 
 </div>
 
@@ -90,7 +90,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (كشف مجتمعات Wikilink بمعامل Louvain) | ✅ **حصرياً هنا** | ❌ | ❌ |
 | **تنفيذ استعلام `.base` مستقل** (يعمل دون تشغيل Obsidian) | ✅ **حصرياً هنا** | ❌ | ❌ يفوّض إلى Obsidian |
 | **استرجاع HyDE** (Gao et al 2023) + تفكيك الأسئلة الفرعية | ✅ **حصرياً هنا** | ❌ | ❌ |
-| **1638 اختبار وحدة · 9 فحوص CI مطلوبة للإصدار · 7 محمية حالياً على الفرع** | ✅ | غير منطبق | نادر |
+| **1681 اختبار وحدة · 9 فحوص CI مطلوبة للإصدار · 7 محمية حالياً على الفرع** | ✅ | غير منطبق | نادر |
 | **إثبات بناء موقَّع** (npm + Sigstore، SLSA Build L2) | ✅ | غير منطبق | ❌ |
 | **سطح عام مُقيَّد بالـ semver** ([STABILITY.md](./STABILITY.md)) | ✅ | غير منطبق | ❌ |
 | تشغيل مستقل (لا حاجة لإضافة Obsidian) | ✅ | ❌ يتطلب Obsidian | متفاوت |
@@ -134,14 +134,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 📂 إعدادات جاهزة للاستخدام في [`examples/`](./examples/) — **Claude Desktop** و**Cursor** و**ChatGPT custom GPT** (MCP بعيد عبر HTTP)، إضافةً إلى مجموعة استعلامات نموذجية لأداة التقييم.
 
-**تريد القوة الكاملة للاسترجاع الهجين؟** انطلاقة بأمر واحد ودون أي إعداد يدوي:
+**تريد القوة الكاملة للاسترجاع الهجين؟** أكمل فحص الإعداد الهجين ثم شغّل الخادم:
 
 </div>
 
 ```bash
-enquire-mcp setup --vault <path>     # downloads model, builds FTS5 + embed-db
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+enquire-mcp --version
+enquire-mcp setup --vault <path>                          # caches embedder; builds FTS5 + embed-db
+enquire-mcp install-model rerank-bge                      # caches the offline reranker
+enquire-mcp doctor --tier hybrid --vault <path>           # structural/runtime readiness
+enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp serve --vault <path> --persistent-index --enable-reranker --use-hnsw
-enquire-mcp doctor --vault <path>    # color-coded ✓/⚠/✗ health check
 ```
 
 ---
@@ -177,7 +181,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 <div dir="rtl" align="right">
 
-ضَع [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) في إعداد MCP لـ Claude Desktop (عدّل مسار المكتبة أولاً). أعد تشغيل Claude Desktop، ثم:
+يُفضّل استخدام خرج `enquire-mcp configure --tier hybrid --client claude-desktop --vault <path>` الجاهز للصق. ملف [`examples/claude-desktop-hybrid.json`](./examples/claude-desktop-hybrid.json) مجرد قالب؛ عند استخدامه يدوياً استبدل مساري الملف التنفيذي والمكتبة معاً. أعد تشغيل Claude Desktop، ثم:
 
 > لديك مكتبة Obsidian الخاصة بي موصولةً كذاكرة قابلة للبحث عبر أدوات `obsidian_*`. تحقّق دائماً من `obsidian_search` أولاً حين أسألك عن أي شيء في ملاحظاتي — سياق اجتماع، أو بحث، أو قرارات، أو مُدخلات يوميات. اقتبس مسار الملاحظة المصدر في كل حقيقة.
 
@@ -380,7 +384,7 @@ graph LR
 
 **هل سيكتب في مكتبتي؟** لا، إلا إذا مرّرت `--enable-write`. أدوات الكتابة السبع كلها محكومة؛ والعمليات الإتلافية تدعم `dry_run`.
 
-**هل تُرسَل بياناتي إلى أي مكان؟** فقط عند `enquire-mcp install-model` (تنزيل أوزان ONNX من HuggingFace لمرة واحدة). وضع التشغيل (serve) لا يجري أبداً أي اتصال HTTP خارجي. التضمينات وإعادة الترتيب تعمل محلياً على وحدة المعالجة المركزية.
+**هل تُرسَل بياناتي إلى أي مكان؟** لا تحدث التنزيلات الخارجية إلا عبر أوامر الحصول الصريحة: قد تنزّل `enquire-mcp setup` و`enquire-mcp build-embeddings` و`enquire-mcp install-model` أوزان ONNX من HuggingFace، وينزّل `enquire-mcp install-ocr-lang` حزمة لغة Tesseract الخاصة بـ OCR. وضع التشغيل (serve) لا يجري أبداً أي اتصال HTTP خارجي. التضمينات وإعادة الترتيب تعمل محلياً على وحدة المعالجة المركزية.
 
 **ما الأداء؟** بناء FTS5 على البارد: نحو 5s/1k ملاحظة، ونحو 30s/50k. استعلام BM25: دائماً <100ms. **HNSW top-10: دون 10ms على أي نطاق.** بدء التشغيل على البارد مع استدامة HNSW: نحو 50ms.
 
@@ -409,7 +413,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1638 tests, ~12s)
+npm test       # full suite (1681 tests)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

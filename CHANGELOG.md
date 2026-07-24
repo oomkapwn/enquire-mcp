@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.3] — 2026-07-24
+
+> **TL;DR:** **The H-1 TF-IDF single-flight guarantee is now executable at the incident scale instead of inferred from one small cold-start case.** The compiled retrieval matrix covers cold and warm caches, one query and the maximum legal nine-query fan-out, and both 100-note and 6,400-note corpora. Every cold cell must perform exactly one whole-corpus read pass, every warm cell must add zero corpus reads, and a changed corpus snapshot must perform exactly one new pass. Runtime behavior is unchanged; **1690 → 1690 source tests.**
+>
+> **Method note:** the previous regression used 150 temporary files and asserted only that one cold nine-query request stayed below two corpus passes. The replacement uses deterministic synthetic `Vault` snapshots and deliberately non-matching queries, so numeric-mtime `readNote` calls isolate corpus construction from result-snippet reads. Each of the eight cold/warm/query-count/scale cells asserts an exact read count; the negative control increments every entry's snapshot mtime and proves the harness observes one rebuild rather than passing with a frozen or vacuous cache.
+
+### Tests (1690)
+
+- Replaced the cold-only 150-note H-1 regression with the eight-cell `cold/warm × 1/9 queries × 100/6400 notes` matrix.
+- Added a behavior-discriminating invalidation control to every matrix cell: an unchanged snapshot reuses the completed index, while a changed mtime snapshot adds exactly one corpus pass.
+
 ## [3.12.0-rc.2] — 2026-07-24
 
 > **TL;DR:** **The remaining first-run activation gap is now one explicit, package-coherent command instead of a four-command checklist.** `enquire-mcp first-run --tier hybrid --client <client> --vault <path>` defaults to a non-destructive preview: it validates the vault through the existing `configure` contract, prints the ready-to-paste client configuration, and shows every exact command that would follow without creating indexes or downloading models. `--apply` is the explicit consent boundary that runs the existing idempotent `setup` → verified `rerank-bge` acquisition → tier-aware `doctor` chain. Basic tier never schedules index/model work; hybrid-live carries PDF preparation. Every child is invoked as a raw argument vector against the exact physical package entrypoint (or the exact versioned npx fallback), never through a shell, and privacy/client/model/quantization choices survive the whole flow. The executor stops at the first failure and prints an exact idempotent resume command. **1681 → 1690 source tests.**

@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-24 (v3.12.0-rc.2 candidate: source-preserving doctor, package-coherent activation and hardened evaluation; earlier: the 2026-05 Tier-1 hardening sprint).
+> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-24 (v3.12.0-rc.3 candidate: incident-scale compiled retrieval matrix over the rc.2 source-preserving doctor, package-coherent activation and hardened evaluation baseline; earlier: the 2026-05 Tier-1 hardening sprint).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.6` preview: tier-aware source-preserving doctor plus the preview-first `first-run` orchestrator, the rc.4 evidence-pinned comparison refresh, and compiled model-state integrity checks for strict benchmark evidence. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.7` preview: tier-aware source-preserving doctor plus the preview-first `first-run` orchestrator, compiled model-state integrity checks for strict benchmark evidence, and corrected bearer-token setup snippets that create their parent directory before redirecting output. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.6
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.7
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.6` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.7` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 ## Step 2 — Smoke test (30 seconds)
 

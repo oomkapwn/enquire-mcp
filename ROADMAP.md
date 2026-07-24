@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.6 candidate: autonomous AI/repo discoverability tail on top of rc.5's compiled strict/diagnostic model-state benchmark matrix and TOP-1 project-page funnel).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.7 candidate: token-setup documentation integrity on top of rc.6's autonomous AI/repo discoverability tail).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

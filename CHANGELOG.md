@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.7] — 2026-07-24
+
+> **TL;DR:** **Bearer-token setup commands no longer fail on a clean machine because shell redirection targets a directory the instructions never created.** All three token-saving snippets in the HTTP transport guide and ChatGPT example now create their exact parent first. An order-sensitive docs invariant patrols every `enquire-mcp gen-token > ~/…/token` redirect on those canonical surfaces, so a missing or late `mkdir` fails CI. Runtime behavior is unchanged; **1692 → 1692 source tests.**
+>
+> **Method note:** the deferred P3-29 item was re-derived from current files after `3.12.0-rc.6` had been squash-merged, published and independently verified across exact-`main` CI, npm dist-tags/`gitHead`, package signatures, decoded SLSA provenance, GitHub prerelease state and the stable MCP Registry boundary. A class sweep found three live redirects across the two named files, not merely the two remembered snippets. The existing public-truth test was extended in place with the real documents plus missing-parent, late-parent and ready-parent fixtures; the deliberately bad fixtures prove that the detector is behavior-discriminating without increasing the canonical source-test count.
+
+### Fixed
+
+- **Clean-machine token setup.** `docs/http-transport.md` now creates `~/.enquire` before both token redirects; `examples/chatgpt-actions.md` creates `~/.config/enquire` before its redirect. Existing token-file `0600` hardening remains unchanged.
+
+### Tests (1692)
+
+- Added an order-aware fenced-snippet analyzer to `tests/docs-consistency.test.ts`. It accepts `mkdir -p <parent>` only before a redirect in the same code block and rejects both the original missing-directory shape and the deceptive “mkdir after redirect” shape.
+
 ## [3.12.0-rc.6] — 2026-07-24
 
 > **TL;DR:** **AI agents, registry clients, npm consumers, and people asking for help now get a direct, owned route into the project instead of inferring it from the README alone.** Added a curated `llms-ctx.txt` execution context, shipped both AI-readable text surfaces in the npm tarball, added `CODEOWNERS` and a security-aware `SUPPORT.md`, and filled the MCP Registry's supported `title` + `websiteUrl` fields. GitHub's capped topic set now targets the product's adjacent leadership categories — context engineering, agentic RAG, hybrid search, and semantic search — while retaining the core memory, Obsidian, MCP, and primary-agent terms. A schema audit deliberately rejects the backlog's proposed `server.json` categories/keywords: the official 2025-12-11 schema does not define them, and the official Registry roadmap explicitly excludes tags/categories. Runtime behavior is unchanged; **1692 → 1692 source tests.**

@@ -5,6 +5,7 @@ ChatGPT custom GPT actions speak HTTP, not stdio. Use `enquire-mcp serve-http` w
 ## 1. Generate a bearer token
 
 ```bash
+mkdir -p ~/.config/enquire
 enquire-mcp gen-token > ~/.config/enquire/token
 chmod 600 ~/.config/enquire/token
 ```

@@ -213,6 +213,40 @@ function hybridTemplateInstructionProblems(markdown: string): string[] {
   return problems;
 }
 
+/**
+ * Find shell snippets that redirect `gen-token` into a missing parent.
+ *
+ * The directory must be created earlier in the same fenced block: a later
+ * `mkdir` cannot rescue the already-failed redirection. This deliberately
+ * patrols every executable snippet rather than two known file/line instances.
+ */
+function tokenRedirectParentProblems(markdown: string): string[] {
+  const problems: string[] = [];
+  const readyDirs = new Set<string>();
+  let inFence = false;
+
+  for (const [index, line] of markdown.split("\n").entries()) {
+    if (line.trimStart().startsWith("```")) {
+      inFence = !inFence;
+      readyDirs.clear();
+      continue;
+    }
+    if (!inFence) continue;
+
+    const mkdirMatch = /^\s*mkdir\s+-p\s+["']?(~\/[^\s"']+)["']?\s*(?:#.*)?$/.exec(line);
+    if (mkdirMatch?.[1]) readyDirs.add(mkdirMatch[1]);
+
+    const redirectMatch = /enquire-mcp\s+gen-token\s*>\s*["']?(~\/[^\s"'#]+)["']?/.exec(line);
+    const target = redirectMatch?.[1];
+    if (!target) continue;
+    const slash = target.lastIndexOf("/");
+    const parent = slash < 0 ? "" : target.slice(0, slash);
+    if (!readyDirs.has(parent)) problems.push(`line ${index + 1}: ${parent || "(missing parent)"}`);
+  }
+
+  return problems;
+}
+
 function llmsEmbeddingCatalogProblems(llms: string): string[] {
   const line = llms.split("\n").find((candidate) => candidate.includes("catalogued embedding aliases")) ?? "";
   const problems: string[] = [];
@@ -1325,6 +1359,26 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         "**Data sent anywhere?** Only on `enquire-mcp install-model`. serve mode never makes outbound HTTP."
       ).length
     ).toBeGreaterThan(0);
+
+    for (const file of ["docs/http-transport.md", "examples/chatgpt-actions.md"]) {
+      expect(tokenRedirectParentProblems(await read(file)), `${file} token redirect parent drift`).toEqual([]);
+    }
+    const missingTokenParent = ["```bash", "enquire-mcp gen-token > ~/.config/enquire/token", "```"].join("\n");
+    expect(tokenRedirectParentProblems(missingTokenParent).length).toBeGreaterThan(0);
+    const lateTokenParent = [
+      "```bash",
+      "enquire-mcp gen-token > ~/.config/enquire/token",
+      "mkdir -p ~/.config/enquire",
+      "```"
+    ].join("\n");
+    expect(tokenRedirectParentProblems(lateTokenParent).length).toBeGreaterThan(0);
+    const readyTokenParent = [
+      "```bash",
+      "mkdir -p ~/.config/enquire",
+      "enquire-mcp gen-token > ~/.config/enquire/token",
+      "```"
+    ].join("\n");
+    expect(tokenRedirectParentProblems(readyTokenParent)).toEqual([]);
 
     const httpTransport = await read("src/http-transport.ts");
     const drainMatch = /const DELETE_DRAIN_MS = (\d+);/.exec(httpTransport);

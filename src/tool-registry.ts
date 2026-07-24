@@ -782,9 +782,11 @@ export function registerReadTools(
     async (args) => textResult(await readCanvas(vault, args))
   );
 
-  // v2.7.0 — PDF tools. PDFs are the #1 non-markdown content kind in real
-  // research vaults; no other Obsidian-MCP indexes them. Both tools work
-  // identically over stdio + serve-http transports. Underlying parser
+  // v2.7.0 — PDF tools. PDFs are a high-value non-markdown content kind in
+  // research vaults. Both tools work identically over stdio + serve-http
+  // transports. In the 2026-07-24 pinned peer snapshot, enquire is the only
+  // compared server with a direct first-party PDF extraction/index path;
+  // cyanheads can expose PDF/OCR indirectly through Obsidian plugins. Underlying parser
   // (pdfjs-dist) is an optionalDependency — `obsidian_read_pdf` surfaces a
   // clean install-hint error on missing optional dep, never a cryptic
   // module-not-found stack trace.
@@ -1077,7 +1079,7 @@ export function registerReadTools(
           .boolean()
           .optional()
           .describe(
-            "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. The 'only enquire-mcp does this' feature: generic vector stores can't do this without an Obsidian-aware layer."
+            "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. This Obsidian-aware signal uses vault wikilinks rather than generic vector-store metadata."
           ),
         filter_frontmatter: z
           .record(

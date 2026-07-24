@@ -1104,24 +1104,85 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
-  // v3.7.15 R17-3 — lock COMPARISON.md's reranker-row positioning against
-  // the same v3.7.12 L4 honest framing applied to package.json. Round-17
-  // self-audit found "Cross-encoder reranker (BGE, 5 models)" in
-  // COMPARISON.md (line 31) while v3.7.12 L4 had already updated
-  // package.json#description from "5 cross-encoder reranker models" →
-  // "BGE cross-encoder reranker verified end-to-end (+4 aliases in
-  // catalog ...)". The COMPARISON.md row was missed in v3.7.12 + v3.7.13.
-  //
-  // The invariant: COMPARISON.md must NOT claim a flat "N models" reranker
-  // count (matches the v3.7.12 L4 narrative class fix); IF it mentions a
-  // verified entity, the entity must be BGE (matches DEFAULT_RERANKER_ALIAS).
-  it("COMPARISON.md reranker row uses honest framing (v3.7.15 R17-3)", async () => {
+  // v3.12.0-rc.4 extends the original v3.7.15 reranker-framing pin into a
+  // class guard. The 2026-07-24 competitor refresh found the same stale
+  // factual "only / no other" claim class in README, HTTP docs, benchmarks,
+  // ROADMAP and source descriptions. The deliberately promotional "most
+  // advanced" hero is a positioning line, not an empirical matrix claim,
+  // and is separately pinned by github-metadata-invariant.test.ts. Translated
+  // READMEs retain their old tables only inside an explicitly historical
+  // details block; current positioning above that block must point readers
+  // to OHS and the dated canonical comparison.
+  it("current comparison surfaces avoid unbounded factual category claims (v3.12.0-rc.4)", async () => {
     const comparisonMd = await read("docs/COMPARISON.md");
     // Find any "reranker (BGE, N models)" form — should be ZERO matches post-3.7.15.
     const flatCount = /reranker\s*\(BGE\s*,?\s*\d+\s*models?\)/i.exec(comparisonMd);
     expect(
       flatCount,
       "COMPARISON.md reranker row uses stale 'BGE, N models' framing — use the v3.7.12 L4 honest form 'BGE verified end-to-end' instead"
+    ).toBeNull();
+
+    const unboundedPatterns = [
+      /\bbest-in-class retrieval\b/i,
+      /\bsix features no other Obsidian(?:-| )MCP\b/i,
+      /\bno other Obsidian(?:-| )MCP\b/i,
+      /\bthe only Obsidian(?:-| )MCP\b/i,
+      /\bonly enquire-mcp (?:does|has)\b/i,
+      /\btop-1 by retrieval quality\b/i,
+      /\bthe only local memory layer\b/i
+    ] as const;
+    const stripHistoricalComparison = (markdown: string): string =>
+      markdown.replace(/<details data-historical-comparison>[\s\S]*?<\/details>/g, "");
+    const findUnboundedClaim = (text: string): string | null => {
+      for (const pattern of unboundedPatterns) {
+        const match = pattern.exec(text);
+        if (match) return match[0];
+      }
+      return null;
+    };
+
+    const currentSurfaces = [
+      ...PUBLIC_READMES,
+      "ROADMAP.md",
+      "docs/api.md",
+      "docs/benchmarks.md",
+      "docs/COMPARISON.md",
+      "docs/http-transport.md",
+      "docs/QUICKSTART.md",
+      "assets/social-preview.svg",
+      "scripts/repo-setup.sh",
+      "src/cli.ts",
+      "src/eval.ts",
+      "src/pdf.ts",
+      "src/tool-registry.ts",
+      "src/tools/media.ts",
+      "src/tools/search.ts"
+    ] as const;
+    for (const surface of currentSurfaces) {
+      const current = stripHistoricalComparison(await read(surface));
+      expect(
+        findUnboundedClaim(current),
+        `${surface} carries an unbounded comparative claim; use a dated/pinned evidence boundary`
+      ).toBeNull();
+    }
+
+    for (const localized of PUBLIC_READMES.filter((surface) => surface !== "README.md")) {
+      const markdown = await read(localized);
+      const current = stripHistoricalComparison(markdown);
+      expect(current.length, `${localized} must wrap its legacy table as historical`).toBeLessThan(markdown.length);
+      expect(current, `${localized} current note must name the direct OHS peer`).toContain(
+        "flowing-abyss/obsidian-hybrid-search"
+      );
+      expect(current, `${localized} current note must link the canonical comparison`).toContain("./docs/COMPARISON.md");
+    }
+
+    // NEGATIVE control: the analyzer must catch the exact stale claim class.
+    expect(findUnboundedClaim("No other Obsidian-MCP currently ships remote HTTP.")).toBe("No other Obsidian-MCP");
+    // POSITIVE control: bounded point-in-time language is intentionally allowed.
+    expect(
+      findUnboundedClaim(
+        "Among the pinned 2026-07-24 sources, OHS does not document direct PDF extraction; verify its current tree."
+      )
     ).toBeNull();
   });
 

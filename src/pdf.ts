@@ -1,11 +1,11 @@
 // PDF text extraction for enquire-mcp.
 //
 // v2.7.0 — adds PDF as a first-class indexable content type alongside
-// markdown. No other Obsidian-MCP currently does this. PDFs are the #1
-// non-markdown content kind in real research vaults (papers, scanned
-// notes, downloaded references), and indexing them unlocks search /
-// hybrid retrieval / context-pack across an entire content class
-// the rest of the ecosystem ignores.
+// markdown. In the 2026-07-24 pinned peer snapshot, enquire is the only
+// compared server with a direct first-party PDF extraction/index path
+// (cyanheads can expose PDF/OCR indirectly through Obsidian plugins).
+// Indexing papers, scans, and downloaded references unlocks search /
+// hybrid retrieval / context-pack across that content class.
 //
 // Implementation notes:
 //

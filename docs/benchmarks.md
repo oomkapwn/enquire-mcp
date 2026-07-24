@@ -215,10 +215,13 @@ The Recall trade-off is acceptable — what makes hybrid + reranker useful
 is precise top-3 / top-5 results, which is exactly what an LLM agent
 consumes from a search response.
 
-**This is the strongest evidence for enquire-mcp's positioning** as the
-"top-1 by retrieval quality" Obsidian MCP server: every other Obsidian
-MCP we've benchmarked publicly stops at BM25 + linear scan, which scores
-around the FS-grep-baseline row above.
+**What this result does and does not prove:** it is strong evidence that
+the BGE stage improves enquire-mcp's own plain-hybrid ordering on this
+deterministic corpus. It is not evidence that enquire is "top-1" across
+Obsidian MCPs. `flowing-abyss/obsidian-hybrid-search` now publishes
+Evergreen Notes and LongMemEval-S results under different protocols; an
+apples-to-apples run on the same corpus, judgments, model and scope is
+still required before making a cross-project retrieval-quality claim.
 
 ### HyDE analysis
 

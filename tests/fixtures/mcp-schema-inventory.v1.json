@@ -25,7 +25,7 @@
       "required": 25
     },
     "maxSchemaBytes": {
-      "bytes": 3562,
+      "bytes": 3542,
       "name": "obsidian_search"
     },
     "maxSchemaDepth": {
@@ -234,7 +234,7 @@
         "name": "obsidian_resolve_wikilink"
       },
       {
-        "bytes": 3562,
+        "bytes": 3542,
         "depth": 9,
         "name": "obsidian_search"
       },
@@ -264,9 +264,9 @@
         "name": "obsidian_validate_note_proposal"
       }
     ],
-    "totalSchemaBytes": 25977
+    "totalSchemaBytes": 25957
   },
-  "schemaDigest": "sha256:57dc697bd654627babbcafcbf91c614b00f0109335b4305a4317971308791c5b",
+  "schemaDigest": "sha256:c03a79827159c6a145b5a7f72aed168c2a680e011a4ff96c04b71601d2bd2531",
   "toolCount": 46,
   "tools": [
     {
@@ -1449,7 +1449,7 @@
             "type": "string"
           },
           "graph_boost": {
-            "description": "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. The 'only enquire-mcp does this' feature: generic vector stores can't do this without an Obsidian-aware layer.",
+            "description": "v2.3.0: post-RRF wikilink graph-boost — rerank top-K by counting how many OTHER top-K hits link to each one. Default ON. Set false to disable for diagnostic comparison. This Obsidian-aware signal uses vault wikilinks rather than generic vector-store metadata.",
             "type": "boolean"
           },
           "limit": {

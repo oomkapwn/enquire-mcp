@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.3` preview: tier-aware source-preserving doctor plus the preview-first `first-run` orchestrator. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.4` preview: tier-aware source-preserving doctor plus the preview-first `first-run` orchestrator, with the rc.4 evidence-pinned comparison refresh. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.3
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.3` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.4` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 ## Step 2 — Smoke test (30 seconds)
 
@@ -162,7 +162,7 @@ After vault content changes, rerun `setup` or use `--watch`; a doctor READY resu
 
 ## Help and links
 
-- **Not sure if enquire-mcp is right for you?** See [`docs/COMPARISON.md`](./COMPARISON.md) — honest side-by-side against the main Obsidian MCP alternatives (cyanheads, MarkusPfundstein, StevenStavrakis, FS-only servers) with a 30-second decision tree.
+- **Not sure if enquire-mcp is right for you?** See [`docs/COMPARISON.md`](./COMPARISON.md) — a source-pinned decision guide covering the direct hybrid peer OHS, live-Obsidian servers, model-free filesystem servers and the adjacent Basic Memory workflow.
 - **Issues / bug reports:** [github.com/oomkapwn/enquire-mcp/issues](https://github.com/oomkapwn/enquire-mcp/issues)
 - **Security disclosures:** `oomkapwn@gmail.com`
 - **Full tool reference:** [`docs/api.md`](./api.md)

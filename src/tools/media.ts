@@ -33,10 +33,10 @@ export interface CanvasSummary {
  *
  * Canvas is Obsidian's JSON-format whiteboard with positional nodes (text /
  * file embeds / external URLs / groups) and labeled edges. Per the v1.5
- * competitive audit, no other Obsidian-MCP indexes them; we parse them
- * natively without coupling to the Obsidian app. Malformed JSON canvases
- * surface with `node_count: 0` and `edge_count: 0` rather than poisoning
- * the listing.
+ * pinned 2026-07-24 peer snapshot, the compared alternatives do not
+ * document native Canvas parsing; we implement it without coupling to the
+ * Obsidian app. Malformed JSON canvases surface with `node_count: 0` and
+ * `edge_count: 0` rather than poisoning the listing.
  *
  * @param vault - The vault to scan.
  * @param args - All optional. `folder` restricts the scan. `limit`

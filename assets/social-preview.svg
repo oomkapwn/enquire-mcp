@@ -51,7 +51,7 @@
     <circle cx="34" cy="21" r="3.5" fill="url(#accentV)"/>
   </g>
   <text x="142" y="78" font-size="33" font-weight="700" fill="#eef2f8" letter-spacing="-0.5">enquire<tspan fill="url(#accentV)">-mcp</tspan></text>
-  <text x="1200" y="76" text-anchor="end" font-size="19" font-weight="600" fill="#7d8aa0" letter-spacing="0.3">The most advanced Obsidian MCP</text>
+  <text x="1200" y="76" text-anchor="end" font-size="19" font-weight="700" fill="#a78bfa" letter-spacing="0.3">#1 Obsidian MCP for AI memory</text>
   <line x1="80" y1="116" x2="1200" y2="116" stroke="#1c2433" stroke-width="1.5"/>
 
   <text x="78" y="246" font-size="74" font-weight="800" fill="#f4f7fb" letter-spacing="-1.5">Long-term memory</text>

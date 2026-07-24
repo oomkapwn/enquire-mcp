@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.5] — 2026-07-24
+
+> **TL;DR:** **The strict retrieval benchmark now proves model readiness through actual inference and a complete synthetic embedding sync, while the public project page leads with an explicit TOP-1 product case instead of advertising alternatives.** A corrupt or incompatible cached model could previously fail only during per-note inference; the normal fail-soft sync then skipped every note while `run-benchmarks.mjs` still set `embed_ready=true`, allowing strict canonical evidence to look complete with zero embedding chunks. The benchmark now preflights inference and vector dimensionality, rejects incomplete synthetic syncs, records diagnostic degradation as `meta.partial` in the JSON artifact, and ships a process-level present/missing/corrupt × strict/diagnostic matrix. README plus all 10 translations now state **“The #1 Obsidian MCP for AI memory,”** prove the claim through an enquire-only leadership table, and remove competitor CTAs from the conversion funnel. The pre-publication audit also caught the newly disclosed high-severity `js-yaml` flow-collection DoS and upgrades the direct runtime dependency from 5.2.1 to patched 5.2.2 instead of allowlisting it. Runtime serve behavior is otherwise unchanged; **1690 → 1692 source tests.**
+>
+> **Method note:** the regression launches the real benchmark script against compiled `dist/`, real temporary vault/index/artifact paths and the production benchmark writer. Only the transformers loader boundary is replaced with deterministic present, missing and corrupt fixtures. Every process installs `fetch`/HTTP/HTTPS tripwires; the strict failure cells must exit nonzero without creating their requested artifact, diagnostic cells must declare `meta.partial=true`, healthy cells must declare `false`, and the checked-in canonical benchmark artifact must remain byte-identical. A separate negative control deliberately calls the tripwire to prove the offline assertion can fail. The positioning change keeps the broad TOP-1 credential deliberately promotional while every technical proof remains current and inspectable; a negative-control invariant now rejects competitor links/names and legacy matrices in every public README without weakening the existing evidence-bound factual-claim guard. `npm audit` identifies `GHSA-pm4m-ph32-ghv5` as affecting `js-yaml >=5.0.0 <=5.2.1`; the patched 5.2.2 is verified through the direct dependency graph and the project's source-plus-consumer audit gate.
+
+### Changed
+
+- **TOP-1 project-page funnel.** Replaced the conversion-negative “Where it differs” buyer-routing table with an enquire-only eight-row leadership table spanning retrieval, cross-agent reach, citations, ownership, Obsidian formats, agentic depth, scale and production trust. The hero, sticky navigation, problem/solution narrative and product-fit section now move from pain → promise → proof → install without sending visitors to another product.
+- **All 11 public READMEs aligned.** Removed the ten translated historical competitor matrices, current competitor notices, outbound comparison CTAs and named third-party recommendations. Every language now carries the stable `why-number-one` anchor, localized TOP-1 hero/table and a positive “built for” section.
+- **Human and AI metadata aligned.** npm/package description, MCP Registry description, `llms.txt`, QUICKSTART adoption CTA, social-preview SVG/PNG and the guarded GitHub About lead use the same “#1 Obsidian MCP for AI memory” positioning. Detailed competitive research remains in its evidence archive rather than the public conversion path.
+
+### Security
+
+- **`GHSA-pm4m-ph32-ghv5` closed, not waived.** Bumped the direct runtime `js-yaml` dependency **5.2.1 → 5.2.2**, the upstream patched version for exponential parsing time in flow collections. enquire calls `load()` on vault frontmatter and `.base` files, so the availability bug intersects a real parse surface; the advisory is not added to either audit allowlist. Both the source tree and a temporary published-consumer resolution now report zero unallowlisted production advisories.
+
+### Fixed
+
+- **False-ready corrupt-model benchmark path.** A successful pipeline construction is no longer treated as proof that the cached ONNX model can execute. The benchmark runs one real handle inference, pins its vector count and catalog dimension, then requires all known synthetic notes and at least one chunk to survive embedding sync.
+- **Machine-readable diagnostic state.** Both full and degraded benchmark artifacts now write `meta.partial` explicitly, so downstream consumers do not have to infer evidence quality from stderr or a missing field.
+
+### Tests (1692)
+
+- Added a six-cell process matrix covering present, missing and corrupt model states in strict and `--allow-partial` modes against the compiled benchmark path.
+- Added a behavior-discriminating network-tripwire negative control and byte-preservation checks for the canonical `bench/benchmarks.json`.
+- Extended the existing documentation invariant (source-test count unchanged) with a behavior-discriminating competitor-promotion detector, stable TOP-1 anchor checks across all 11 READMEs, and an explicit positive control allowing the broad product credential while retaining the rc.4 factual overclaim guard.
+- Extended the README anchor invariant to recognize explicit GitHub-supported `<a id>` / `<a name>` targets; its existing negative control now proves both a stable explicit target and a genuinely broken link are distinguished.
+
 ## [3.12.0-rc.4] — 2026-07-24
 
 > **TL;DR:** **The competitive surface is current, source-pinned and honest without giving up the project's deliberate TOP-1 positioning.** `flowing-abyss/obsidian-hybrid-search` is now treated as the direct hybrid/RRF/BGE peer and credited with the stronger public external-dataset evidence; cyanheads is credited with its current Streamable HTTP, JWT/OAuth and live-Obsidian surface; mcpvault's source/README tool-count drift and Basic Memory's evolved co-authored/sync product are explicit. The promotional “most advanced Obsidian MCP” hero remains intentional. Measurable claims no longer pretend that HTTP, hybrid retrieval, PDF integration or benchmark tooling are category-unique, and no cross-project retrieval winner is asserted before a shared-protocol run. Runtime retrieval behavior is unchanged; **1690 → 1690 source tests.**

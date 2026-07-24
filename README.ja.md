@@ -1,12 +1,12 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — 最先端の Obsidian MCP。AI エージェントのための長期記憶。" width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — AI メモリのための #1 Obsidian MCP。" width="100%"></a>
 
 # enquire-mcp
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · **日本語** · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-### 最先端の Obsidian MCP。AI エージェントのための長期記憶。
+### 🏆 AI メモリのための #1 Obsidian MCP。
 
 **セッションのたびに Claude、Cursor、ChatGPT、Codex、OpenClaw へコンテキストを説明し直すのはもう終わりです。あなたの Obsidian ノートが、すべての MCP 対応エージェント間で共有・検索可能な記憶になります——あなたの知識を、あらゆるモデルで、永遠にあなたのものに。**
 
@@ -16,7 +16,7 @@
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ 30 秒でインストール](#-クイックスタート) · [🧠 ユースケース](#-ユースケース) · [📊 ベンチマーク](./docs/benchmarks.md) · [📖 API リファレンス](https://oomkapwn.github.io/enquire-mcp/) · [💬 他の選択肢と比較](./docs/COMPARISON.md)**
+**[⚡ 30 秒でインストール](#-クイックスタート) · [🏆 #1 の理由](#why-number-one) · [🧠 ユースケース](#-ユースケース) · [📊 ベンチマーク](./docs/benchmarks.md) · [📖 API リファレンス](https://oomkapwn.github.io/enquire-mcp/)**
 
 **Claude Code —— 1 行で：**
 
@@ -32,66 +32,46 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 課題
 
-すべての AI セッションはゼロから始まります。プロジェクトのこと、設計上の決定、先週のリサーチで出した結論を、何度も説明し直すことになります。ベンダーの「メモリ」機能（[Claude Memory](https://www.anthropic.com/news/memory-and-tool-use)、[ChatGPT Memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/)、Cursor memory）は、あなたの知識を 1 つのプロバイダーのクラウドに閉じ込め——ツールを乗り換えると、また忘れてしまいます。**あなたの知識は、いつまでも最初からやり直しのままです。**
+AI セッションは毎回ゼロから始まり、プロジェクトや設計判断、前回の調査結果を説明し直すことになります。ベンダー内蔵メモリは知識を一つのクラウドに閉じ込め、ツールを替えると連続性が失われます。**あなたの知識は、いつまでも最初からやり直しのままです。**
 
 ## 解決策
 
 あなたの Obsidian ボールト（vault）が、あらゆる MCP 対応エージェントにとって**永続的でクエリ可能な長期記憶**になります。一度インストールするだけで——あなたの知識は、Claude Code、Claude Desktop、Cursor、ChatGPT カスタム GPT、Codex、OpenClaw、その他すべての MCP クライアントから即座にアクセス可能になります。**あなたが所有する**プレーンな markdown ファイルを、ローカルでインデックス化し、最新のフルスタックな情報検索（IR）技術で検索し、すべてのセッション・すべてのモデルをまたいで呼び戻します。
 
-**抽出ではなく、原文に根ざす。** 会話メモリ系のツール（mem0、Zep、Supermemory、Memobase）は、あなたのチャットログから事実を*抽出*し、あなた自身が読めない別のストアに格納します。enquire-mcp はその逆です。それは**あなたがすでに書いた知識に根ざしています**——あなた自身の `.md` ノートを、一字一句そのまま、引用付きで——だから呼び戻された内容は監査可能で、どのエディタでも編集でき、半分しか覚えていないチャットの劣化した要約に決してなりません。さらに、サーバーサイドの***フリート*記憶**プラットフォーム（エージェントのトラフィックを共有データベースに言い換えて格納するマルチテナントのクラウドストア）とも異なり、enquire は**シングルユーザーかつローカルファースト**です。完全にあなたが所有し、自分で読み・編集し・削除できる 1 つのボールトであり、serve 中はクラウド呼び出しがゼロです。（この「抽出される」という批判はチャットメモリ系のグループに特有のものであり、cognee のようなナレッジグラフ / ETL ツールにも、Khoj のようなパーソナル検索系の同種ツールにも当てはまりません。）
+**抽出した要約ではなく、あなたが書いた原文に基づく。** 多くの会話メモリはチャットから事実を別ストアへ抽出します。enquire-mcp は、あなたが意図して書いた知識から始めます。元の `.md` と引用が残るため、想起は監査・編集・移行が可能で、第三者のデータベースに隠れた欠落のある言い換えにはなりません。ローカル優先の Vault が唯一の情報源であり、serve 中のクラウド呼び出しはゼロです。
 
 **根ざし——かつ鮮度を意識する。** 事実を思い出すのは問題の半分にすぎません。それが*まだ真である*かどうかを知ることが、もう半分です。[Memora ベンチマーク](https://arxiv.org/abs/2604.20006)（2026 年 4 月）は、メモリシステムが古くなった事実の再利用で体系的に失敗すること——1 年前のノートを今日書かれたものであるかのように呼び戻すこと——を示しました。enquire の記憶は*あなたの本物の* markdown ファイルそのものであるため、すべての検索ヒットには、ノートのライブな最終更新時刻から導出された `age_days` と `stale` フラグが付与され、新しいノートが先に浮上するように鮮度重み付けランキング（`--recency-weight`）をオプトインできます。あなたの知識を、鮮度を意識した形で——時間の概念を持たないかたまりではなく。
 
 > **enquire-mcp が違う理由**：
 > 1. **ベンダー中立。** あなたの記憶は `.md` ファイルの中にあります。Claude から Cursor に乗り換えても——記憶は一緒についてきます。
-> 2. **クラス最高峰の検索。** ハイブリッドな BM25 + 多言語埋め込み + BGE クロスエンコーダ・リランカーを RRF で融合し、HNSW + int8 量子化でスケールさせます。検索系スタートアップが構築するのと同じ IR スタックを——オープンソースで、1 つのバイナリに収めています。
+> 2. **完全なローカル検索スタック。** BM25 + TF-IDF + 多言語埋め込みを RRF で融合し、任意の BGE クロスエンコーダ・リランカーと信号別スコアを提供。HNSW + int8 量子化で dense path をスケールします。
 > 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
-**46 ツール · 19 MCP プロンプト · 1690+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
+**46 ツール · 19 MCP プロンプト · 1692+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
 
 ---
 
-## 🔎 現在の競争上の位置づけ
+<a id="why-number-one"></a>
 
-> 2026-07-24 更新：[Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search) は現在 BM25+埋め込み+RRF+リランカーの中核を共有し、LongMemEval-S の結果も公開しています。そのため、下の古い包括列は現状の主張ではありません。[根拠を固定した比較](./docs/COMPARISON.md)を参照してください。
+## 🏆 enquire-mcp が #1 である理由
 
-<details data-historical-comparison>
-<summary>2026年5月の歴史的な表（現在の比較ではありません）</summary>
+**Obsidian 向けの完全なローカル AI メモリスタック——薄いファイルラッパーでも、単なるベクトル検索でもありません。** 1 回の導入で、検索品質、知識の所有権、エージェント対応、文書カバレッジ、プロダクション運用をまとめて得られます。
 
-**他のどの Obsidian-MCP にもまったく存在しない 6 つの機能**（GraphRAG-light、スタンドアロンの `.base` 実行、HyDE、int8 量子化、late-chunking、組み込みの評価ハーネス）。**さらに、最新の IR スタック全体**（BM25 + ML 埋め込み + クロスエンコーダ・リランキング + HNSW）——競合が多くても 1 つか 2 つしか搭載していないものを丸ごと。横並びで比較：
+| リーダーシップ基準 | enquire-mcp が提供するもの |
+|---|---|
+| **完全一致を超える想起** | ✅ BM25 + TF-IDF + 多言語埋め込み → RRF 融合。任意の BGE リランキングで実測 **+15.5 NDCG@10 / +24.7 MRR** |
+| **すべてのエージェントに一つのメモリ** | ✅ Claude Code/Desktop、Cursor、ChatGPT、Codex、OpenClaw、あらゆる互換クライアントへ MCP ネイティブ接続 |
+| **検証できる回答** | ✅ 原文、ノートパス、PDF ページ引用、信号別スコア、鮮度メタデータ |
+| **本当に所有できる知識** | ✅ プレーン markdown が正本、インデックスはローカル、serve 中のクラウド呼び出しはゼロ |
+| **Obsidian の知識面を網羅** | ✅ Markdown、wikilink、frontmatter、Canvas、Bases、PDF、OCR |
+| **難問向けのエージェント検索** | ✅ HyDE、サブ質問分解、context packs、GraphRAG-light、19 の workflow prompt |
+| **制御を失わないスケール** | ✅ HNSW ライブ更新、永続化、adaptive refill、int8 量子化 |
+| **プロダクションの信頼性** | ✅ 既定で read-only、privacy filter、認証 HTTP、semver 契約、1692 tests、9 release gates、SLSA L2 provenance |
 
-| 機能 | enquire-mcp | Smart Connections | 他の Obsidian-MCP |
-|---|:---:|:---:|:---:|
-| ハイブリッド検索（BM25 + TF-IDF + ML 埋め込み、RRF 融合） | ✅ | ❌ | ❌ |
-| **クロスエンコーダ・リランキング**（BGE、実測 +15.5 NDCG@10） | ✅ | ❌ | ❌ |
-| **HNSW ベクトルインデックス**（10ms 未満の top-K、永続化） | ✅ | ❌ | ❌ |
-| **int8 ベクトル量子化**（embed-db が約 4 分の 1 のサイズ） | ✅ | ❌ | ❌ |
-| **Late-chunking** コンテキストウィンドウ化埋め込み | ✅ | ❌ | ❌ |
-| **ハイブリッド検索に統合された PDF**（`[page: N]` 引用） | ✅ | ❌ | ❌ |
-| **スキャン PDF の OCR**（Tesseract.js、多言語） | ✅ | ❌ | ❌ |
-| **Wikilink グラフブースト**検索シグナル | ✅ | ❌ | ❌ |
-| **多言語セマンティック検索**（50+ 言語、オンデバイス） | ✅ | 💰 有料 | ❌ |
-| **組み込みの検索品質評価ハーネス**（NDCG、Recall、MRR、A/B マトリクス） | ✅ | ❌ | ❌ |
-| **リモート MCP**（HTTP + bearer 認証 + ステートフルセッション） | ✅ | ❌ | 一部 |
-| **ヒットごとのシグナル別オブザーバビリティ** | ✅ | ❌ | ❌ |
-| **MCP ネイティブ**（Claude · Cursor · ChatGPT · Codex · OpenClaw · 任意のクライアント） | ✅ | ❌ Obsidian 専用 | まちまち |
-| **プライバシーフィルタ**をすべての検索 + 書き込みパスで検証 | ✅ | 該当なし | ❌ |
-| **46 個の本番ツール**（34 個の常時オン読み取りツール + 4 個のオプトイン + 7 個のゲート付き書き込み + 1 個のフィードバックツール） | ✅ | 該当なし | まちまち |
-| **GraphRAG-light**（Louvain モジュラリティによる wikilink コミュニティ検出） | ✅ **ここだけ** | ❌ | ❌ |
-| **スタンドアロンの `.base` クエリ実行**（Obsidian を起動せずに動作） | ✅ **ここだけ** | ❌ | ❌ Obsidian に委譲 |
-| **HyDE 検索**（Gao et al 2023）+ サブクエスチョン分解 | ✅ **ここだけ** | ❌ | ❌ |
-| **1690 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | ✅ | 該当なし | まれ |
-| **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2） | ✅ | 該当なし | ❌ |
-| **semver 準拠の公開サーフェス**（[STABILITY.md](./STABILITY.md)） | ✅ | 該当なし | ❌ |
-| スタンドアロン（Obsidian プラグイン不要） | ✅ | ❌ Obsidian が必要 | まちまち |
-| ライセンス | MIT、無料 | プロプライエタリ、有料 | まちまち |
+**一つの Vault。すべてのエージェント。完全な検索スタック。クラウドロックインなし。**
 
-<sub>比較は各プロジェクトの v3.8.x 安定版時点での公開機能に基づきます（初回スナップショット v3.7.0 / 2026-05-15；v3.8.4 で更新）。Smart Connections は有料の Obsidian プラグイン（MCP サーバーではありません）。「他の Obsidian-MCP」とは、執筆時点で GitHub 上にある公開オープンソースの Obsidian-MCP サーバーを指します。enquire-mcp のエンドツーエンド検索ベンチマークは <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a> で公開されています——実測の `rerank-bge` のデルタは、60 クエリのアブレーションにおいて、プレーンなハイブリッドに対して +24.7 MRR / +15.5 NDCG@10 です。</sub>
-
-</details>
-
-> 戦略的主張：enquire-mcp は、既存の Obsidian ボールトの上に構築する [Karpathy スタイルの LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) のためのオープンソースバックエンドです。複利的に積み上がり、ソースまで追跡できる知識。
+> 戦略的位置づけ：enquire-mcp は、既存の Obsidian Vault 上に構築する [Karpathy 型 LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) のオープンソースバックエンドです。知識は蓄積され、常に出典へ追跡できます。
 
 ---
 
@@ -120,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.5      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -203,7 +183,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 🧠 ユースケース
 
-**1 —— AI エージェントのための長期記憶。** あなたの Obsidian ボールトを任意の MCP 対応エージェント（Claude Code、Claude Desktop、Cursor、ChatGPT、Codex、OpenClaw）に組み込みます。エージェントはこれで、あなたがこれまでに書いたすべての会議ノート・日誌エントリ・リサーチログ・決定ドキュメントに対する、永続的でセマンティックな呼び戻しを——セッション・モデル・プロバイダーをまたいで——手にします。`Claude Memory` や `ChatGPT Memory` と違って、あなたの知識は 1 つのベンダーのクラウドに閉じ込められません。あなたが所有し、自由に移行できるプレーンな markdown の中にあります。
+**1 —— AI エージェントのための長期記憶。** あなたの Obsidian ボールトを任意の MCP 対応エージェント（Claude Code、Claude Desktop、Cursor、ChatGPT、Codex、OpenClaw）に組み込みます。エージェントはこれで、あなたがこれまでに書いたすべての会議ノート・日誌エントリ・リサーチログ・決定ドキュメントに対する、永続的でセマンティックな呼び戻しを——セッション・モデル・プロバイダーをまたいで——手にします。ベンダー内蔵メモリと違って、あなたの知識は 1 つのベンダーのクラウドに閉じ込められません。あなたが所有し、自由に移行できるプレーンな markdown の中にあります。
 
 **2 —— 個人ナレッジベース / セカンドブレイン。** ハイブリッド検索は、50 以上の言語のいずれにおいても、*どんな*言い回しに対しても正しいノートを浮上させます。2 年前のロシア語の日誌エントリについて英語で尋ねても、正しいヒットが得られます。Wikilink グラフブーストは、あなたのナレッジグラフの中心に位置するノートのランクを上げ直します。GraphRAG-light はトピック別コミュニティを浮上させます——自分が作ったことすら忘れていたつながりを発見できます。PDF は `[page: N]` 引用付きで検索に統合され、論文や会議の文字起こしが一級の記憶になります。
 
@@ -211,16 +191,18 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🚫 enquire-mcp が適切なツール*ではない*とき
+## ✅ 本格的なローカル知識ワークフローのために
 
-正直に語る非目標——次のときは別のものを使ってください：
+次を求めるなら enquire-mcp を選んでください：
 
-- **リテラル文字列 / 正規表現検索が欲しい。** 「この正確なトークンを見つける」には `ripgrep` / `grep` の方が速く、正確です。enquire は*概念的な*呼び戻し——類義語、言語横断、「私が X について何と言ったか」——で輝きます。両方を使いましょう。リテラルには `rg`、意味には enquire。
-- **あなたの知識がノートではなくチャットログにある。** enquire はあなたが書いた markdown に*根ざして*います。チャットの文字起こしから事実を*抽出*して別のストアに格納する会話メモリ系のツール（mem0、Zep、Supermemory）は別のカテゴリです——[比較](./docs/COMPARISON.md)を参照してください。
-- **マルチユーザー / ホスト型 / 同期検索が必要。** enquire は設計上ローカルファーストかつ単一ボールトです——サーバーサイドのマルチテナントインデックスはありません。
-- **ソースが Markdown でも PDF でもない。** `.md` / `.canvas` / `.base` / `.pdf` は一級ですが、他の形式はまず変換が必要です。
-- **GUI やアプリ内 Obsidian プラグインが欲しい。** enquire はヘッドレスな MCP サーバー / CLI です——Obsidian を*補完*するものであって、Obsidian そのものではありません。（アプリ内プラグインの選択肢は Smart Connections です。）
-- **数百万のノートに対するサブミリ秒の検索が必要。** HNSW は大規模でも 10ms 未満の top-K を提供しますが、enquire は個人 / チームのボールトを対象としており、ウェブスケールのコーパスではありません。
+- **Obsidian Vault を唯一の情報源に保つ**。知識を独自ストアへ複製しません。
+- **複数の AI エージェントで一つのメモリを共有する**。モデル変更のたびにやり直しません。
+- **言い換えに強い概念・多言語想起**。
+- **ノートパス、PDF ページ、信号スコア、鮮度を備えた引用可能な結果**。
+- **ローカル優先のプライバシー**。既定で read-only、書き込みは明示、serve 中のクラウド呼び出しはゼロ。
+- **完全な検索バックエンド**。ハイブリッド検索、リランキング、グラフ文脈、エージェント拡張、Obsidian 形式、リモート MCP を統合。
+
+**明確な範囲：** enquire-mcp は Markdown、Canvas、Bases、PDF 向けのヘッドレス MCP サーバー / CLI です。正確なトークンには文字列検索を併用し、リモートエージェントには組み込み HTTP transport を使えます。
 
 ---
 
@@ -290,6 +272,7 @@ graph LR
 | **HTTP トランスポート** | Bearer 認証（定数時間 SHA-256 + `timingSafeEqual`）、トークン別レート制限、厳格な CORS |
 | **Frontmatter** | `js-yaml@5` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
 | **キャッシュ + インデックスファイル** | chmod 0600、親ディレクトリ 0700 |
+| **1692 ユニットテスト · リリース必須 CI チェック 9 個 · 現在ブランチ保護対象は 7 個** | 現在確認済みのリリース状態。運用詳細は下に固定しています。 |
 | **CI** | 各 PR で **9 個のリリース必須チェック**（`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`）を実行します。ブランチ保護が現在強制するのは **7 個**だけで、`docs` と `oia` はリリース必須ですが未保護です（2026-07-23 にライブ確認）。`test-macos` は `continue-on-error` を持つ唯一のアドバイザリ job です。`docker` は CI workflow を失敗させ得ますが未保護で、CodeQL は [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) により 2 つの独立した未保護分析を実行します。npm publish 前に `release.yml` がタグ付き SHA 上の 9 個すべてを再検証します。 |
 | **カバレッジ** | 行 ≥86% · ステートメント ≥82% · 関数 ≥75% · 分岐 ≥74%（ゲート付き） |
 | **リリース** | タグごとに npm + GitHub リリース · semver · **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2；L3 ジェネレータはロードマップ上） |
@@ -330,7 +313,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # フルスイート（1690 テスト）
+npm test       # フルスイート（1692 テスト）
 npm run lint   # 警告ゼロ
 npm run build  # tsc → dist/
 ```

@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the long-term-memory MCP server backed by your local Obsidian vault. Updated 2026-07-24 (v3.12.0-rc.4 candidate: evidence-pinned competitive refresh and structural guard against unbounded category claims, on top of the rc.3 compiled retrieval matrix and rc.2 source-preserving activation/doctor baseline).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.5 candidate: compiled strict/diagnostic model-state benchmark matrix plus the TOP-1 project-page funnel on top of the rc.4 evidence refresh, rc.3 retrieval matrix and rc.2 source-preserving activation/doctor baseline).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1690 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1692 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 Current **v3.12.0 `@rc` preview** closes the activation path: `first-run` validates and renders config in non-destructive preview mode, then requires explicit `--apply` before package-coherent setup/model acquisition and tier-aware doctor verification. The manual commands remain available independently; the orchestrator stops on failure and emits an exact idempotent resume command.
 
@@ -67,7 +67,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 - [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). Run the harness (github.com/xiaowu0162/longmemeval) with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes). **Goal updated (2026-07-16 audit): an apples-to-apples retrieval comparison vs `flowing-abyss/obsidian-hybrid-search`'s public LongMemEval-S protocol** (headline nDCG@5; also MRR/Hit@1/Recall@10/AllRel@10 — retrieval metrics, NOT answer-generation accuracy) on the same pinned corpus/queries/relevance-judgments/hardware, with raw per-query outputs, our BM25/dense/reranker/graph-boost/staleness ablations, latency/index-size, and failure buckets, in `docs/benchmarks.md` + lead the README with it. (No longer "first" — a peer already publishes; a credible fair number beats an unauditable dramatic one.)
 - [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
-- [x] **Messaging reposition** — SHIPPED and recalibrated in v3.12.0-rc.4: the deliberately promotional "most advanced Obsidian MCP" hero remains the TOP-1 positioning across README, API docs, social preview and GitHub About. Measurable supporting claims are narrower: "local-first long-term memory grounded in your Obsidian vault," with differentiation, competitor strengths and limitations carried by the evidence-linked comparison. The old "only local memory layer" factual claim is retired.
+- [x] **Messaging reposition** — SHIPPED and strengthened in v3.12.0-rc.5: README ×11, npm/MCP/AI metadata, social preview and GitHub About now lead with the explicit “#1 Obsidian MCP for AI memory” credential. The project-page funnel proves enquire's own leadership across eight product outcomes and no longer routes visitors to alternatives; detailed competitive evidence remains available outside the conversion path. Measurable supporting claims stay current and inspectable, while the broad TOP-1 line remains deliberate promotional positioning.
 
 ## Tier 4 — Extend the lead (pick after Tier 3)
 

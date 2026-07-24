@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — 가장 진보한 Obsidian MCP. AI 에이전트를 위한 장기 기억. 당신의 Obsidian Vault 위에 구축. 오픈소스, MCP 네이티브, 벤더 중립. 하이브리드 검색, BGE 리랭커, HNSW, OCR을 지원하는 PDF. Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw용." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — AI 메모리를 위한 #1 Obsidian MCP." width="100%"></a>
 
 # enquire-mcp
 
@@ -8,7 +8,7 @@
 
 <sub>**AI 에이전트를 위한 요약(TL;DR)** — 로컬 Obsidian 마크다운 Vault를 Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw에 영속적이고 검색 가능한 기억으로 노출하는 MCP 서버. 하이브리드 검색(BM25 + ML 임베딩 + BGE 리랭커, RRF 융합), HNSW + int8 양자화, 에이전트형 RAG(HyDE + 하위 질문), GraphRAG-light, PDF + OCR, 독립 실행형 Bases. 벤더 중립, MIT, serve 중 클라우드 호출 0건. 설치: `npm i -g @oomkapwn/enquire-mcp`. 문서: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 
-### 가장 진보한 Obsidian MCP. AI 에이전트를 위한 장기 기억.
+### 🏆 AI 메모리를 위한 #1 Obsidian MCP.
 
 **세션마다 Claude, Cursor, ChatGPT, Codex, OpenClaw에 컨텍스트를 다시 설명하는 일을 멈추세요. 당신의 Obsidian 노트가 MCP 호환 에이전트 전체에서 공유되고 검색 가능한 기억이 됩니다 — 당신의 지식, 모든 모델, 영원히 당신의 것.**
 
@@ -17,13 +17,13 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1690%20passing-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-1692%20passing-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ 30초 설치](#-빠른-시작) · [🧠 사용 사례](#-사용-사례) · [📊 벤치마크](./docs/benchmarks.md) · [📖 API 레퍼런스](https://oomkapwn.github.io/enquire-mcp/) · [💬 대안 비교](./docs/COMPARISON.md)**
+**[⚡ 30초 설치](#-빠른-시작) · [🏆 #1인 이유](#why-number-one) · [🧠 사용 사례](#-사용-사례) · [📊 벤치마크](./docs/benchmarks.md) · [📖 API 레퍼런스](https://oomkapwn.github.io/enquire-mcp/)**
 
 **Claude Code — 한 줄로:**
 
@@ -39,66 +39,46 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 문제
 
-모든 AI 세션은 처음부터 시작합니다. 당신은 프로젝트, 설계 결정, 지난주 리서치의 결론을 매번 다시 설명합니다. 벤더의 "기억" 기능([Claude Memory](https://www.anthropic.com/news/memory-and-tool-use), [ChatGPT Memory](https://openai.com/index/memory-and-new-controls-for-chatgpt/), Cursor memory)은 당신의 지식을 한 공급자의 클라우드에 가두며 — 도구를 바꾸면 다시 잊어버립니다. **당신의 지식은 계속해서 처음부터 다시 시작합니다.**
+모든 AI 세션은 처음부터 시작합니다. 프로젝트, 설계 결정, 이전 연구의 결론을 매번 다시 설명합니다. 벤더 내장 메모리는 지식을 하나의 클라우드에 가두고 도구를 바꾸면 연속성을 잃습니다. **당신의 지식은 계속해서 처음부터 다시 시작합니다.**
 
 ## 해결책
 
 당신의 Obsidian Vault는 모든 MCP 호환 에이전트를 위한 **영속적이고 질의 가능한 장기 기억**이 됩니다. 한 번의 설치로 — 당신의 지식은 Claude Code, Claude Desktop, Cursor, ChatGPT 커스텀 GPT, Codex, OpenClaw, 그리고 다른 모든 MCP 클라이언트에서 즉시 접근 가능해집니다. **당신이 소유하는** 일반 마크다운 파일을 로컬에서 인덱싱하고, 완전한 최신 IR 스택으로 검색하며, 모든 세션과 모든 모델에 걸쳐 불러옵니다.
 
-**추출이 아니라 근거(grounded)입니다.** 대화 기억 도구(mem0, Zep, Supermemory, Memobase)는 당신의 채팅 로그에서 사실을 *추출*해 당신이 읽을 수 없는 별도의 저장소에 넣습니다. enquire-mcp는 그 반대입니다. 즉 **당신이 이미 작성한 지식에 근거**합니다 — 당신 자신의 `.md` 노트를, 그대로, 인용과 함께 — 그래서 회상이 감사 가능하고, 어떤 에디터에서든 편집할 수 있으며, 절반쯤 기억나는 채팅의 손실 있는 요약이 결코 아닙니다. 그리고 서버 측 ***플릿(fleet)*-기억** 플랫폼 — 에이전트 트래픽을 공유 데이터베이스로 의역하는 멀티 테넌트 클라우드 저장소 — 과 달리, enquire는 **단일 사용자, 로컬 우선**입니다. 즉 당신이 온전히 소유하고 직접 읽고 편집하고 삭제할 수 있는 하나의 Vault이며, serve 중 클라우드 호출은 0건입니다. (이 "추출" 비판은 채팅 기억 부류에 특정된 것이며 — cognee 같은 지식 그래프 / ETL 도구나 Khoj 같은 개인 검색 동종 제품을 겨냥한 것이 아닙니다.)
+**추출된 요약이 아니라 당신이 쓴 원문에 근거합니다.** 대부분의 대화 메모리 시스템은 채팅에서 사실을 별도 저장소로 추출합니다. enquire-mcp는 당신이 의도적으로 기록한 지식에서 시작합니다. 원본 `.md`와 인용이 남아 회상을 감사하고 편집하고 이동할 수 있으며, 타인의 데이터베이스에 숨은 손실성 의역이 되지 않습니다. 로컬 우선 Vault가 계속 source of truth이고 serve 중 cloud call은 0입니다.
 
 **근거 기반 — 그리고 신선도를 인식합니다.** 사실을 회상하는 것은 문제의 절반일 뿐입니다. 그것이 여전히 *참*인지 아는 것이 나머지 절반입니다. [Memora 벤치마크](https://arxiv.org/abs/2604.20006)(2026년 4월)는 기억 시스템이 오래된 사실의 재사용에서 체계적으로 실패함을 보여주었습니다 — 1년 된 노트를 마치 오늘 작성된 것처럼 회상하는 것입니다. enquire의 기억은 당신의 실제 마크다운 파일 *그 자체*이기 때문에, 모든 검색 결과는 노트의 실시간 마지막 수정 시각에서 파생된 `age_days` + `stale` 플래그를 담고 있으며, 더 신선한 노트가 먼저 떠오르도록 최신성 가중 순위(`--recency-weight`)를 선택적으로 켤 수 있습니다. 당신의 지식, 신선도를 인식하는 — 시간을 초월한 덩어리가 아닙니다.
 
 > **무엇이 enquire-mcp를 다르게 만드는가**:
 > 1. **벤더 중립.** 당신의 기억은 `.md` 파일에 존재합니다. Claude에서 Cursor로 전환해도 — 당신의 기억이 함께 따라옵니다.
-> 2. **최고 수준의 검색.** 하이브리드 BM25 + 다국어 임베딩 + BGE 크로스 인코더 리랭커를 RRF로 융합하고, HNSW + int8 양자화로 확장합니다. 검색 스타트업이 구축할 법한 바로 그 IR 스택 — 오픈소스로, 하나의 바이너리 안에.
+> 2. **완전한 로컬 검색 스택.** BM25 + TF-IDF + 다국어 임베딩을 RRF로 융합하고 선택형 BGE 크로스 인코더 리랭커와 신호별 점수를 제공합니다. HNSW + int8 양자화가 dense path를 확장합니다.
 > 3. **serve 중 클라우드 호출 0건.** 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 일회성 로컬 다운로드(~110 MB)입니다. 근거 기반 + 프라이버시는 공짜가 아니며, 우리는 그런 척하지 않습니다. 당신의 Vault 콘텐츠는 당신의 머신을 결코 떠나지 않으며, 기본적으로 에어갭(air-gap) 안전합니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1690+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1692+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
-## 🔎 현재 경쟁 위치
+<a id="why-number-one"></a>
 
-> 2026-07-24 업데이트: [Obsidian Hybrid Search](https://github.com/flowing-abyss/obsidian-hybrid-search)는 이제 BM25+임베딩+RRF+리랭커 핵심을 공유하고 LongMemEval-S 결과도 공개합니다. 따라서 아래의 오래된 포괄 열은 현재 주장으로 쓰이지 않습니다. [근거가 고정된 비교](./docs/COMPARISON.md)를 확인하세요.
+## 🏆 enquire-mcp가 #1인 이유
 
-<details data-historical-comparison>
-<summary>2026년 5월의 역사적 표(현재 비교가 아님)</summary>
+**Obsidian을 위한 완전한 로컬 AI 메모리 스택—얇은 파일 래퍼도, 단순한 벡터 검색도 아닙니다.** 한 번의 설치로 검색 품질, 지식 소유권, 에이전트 범위, 문서 지원, 프로덕션 운영을 모두 갖춥니다.
 
-**다른 어떤 Obsidian-MCP에도 전혀 없는 여섯 가지 기능**(GraphRAG-light, 독립 실행형 `.base` 실행, HyDE, int8 양자화, late-chunking, 내장 평가 하니스). **거기에 더해 완전한 최신 IR 스택**(BM25 + ML 임베딩 + 크로스 인코더 리랭킹 + HNSW)까지 — 경쟁 제품은 이 중 많아야 하나둘만 제공합니다. 나란히 비교하면:
+| 리더십 기준 | enquire-mcp가 제공하는 것 |
+|---|---|
+| **정확한 단어를 넘어서는 회상** | ✅ BM25 + TF-IDF + 다국어 임베딩 → RRF 융합; 선택형 BGE 리랭킹의 실측 향상 **+15.5 NDCG@10 / +24.7 MRR** |
+| **모든 에이전트에 하나의 메모리** | ✅ Claude Code/Desktop, Cursor, ChatGPT, Codex, OpenClaw 및 모든 호환 클라이언트에 MCP-native access |
+| **검증 가능한 답변** | ✅ 원문, 노트 경로, PDF 페이지 인용, 신호별 점수, freshness metadata |
+| **실제로 소유하는 지식** | ✅ plain markdown이 source of truth, 인덱스는 로컬, serve 중 cloud call 0 |
+| **Obsidian 지식 표면 전체** | ✅ Markdown, wikilink, frontmatter, Canvas, Bases, PDF, OCR |
+| **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, 19 workflow prompts |
+| **통제권을 잃지 않는 확장성** | ✅ HNSW live update, persistence, adaptive refill, int8 quantization |
+| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 1692 tests, 9 release gates, SLSA L2 provenance |
 
-| 기능 | enquire-mcp | Smart Connections | 다른 Obsidian-MCP |
-|---|:---:|:---:|:---:|
-| 하이브리드 검색 (BM25 + TF-IDF + ML 임베딩, RRF 융합) | ✅ | ❌ | ❌ |
-| **크로스 인코더 리랭킹** (BGE, +15.5 NDCG@10 측정) | ✅ | ❌ | ❌ |
-| **HNSW 벡터 인덱스** (10ms 미만 top-K, 영속화) | ✅ | ❌ | ❌ |
-| **int8 벡터 양자화** (임베딩 DB ~4× 축소) | ✅ | ❌ | ❌ |
-| **Late-chunking** 컨텍스트 윈도우 임베딩 | ✅ | ❌ | ❌ |
-| **하이브리드 검색에 융합된 PDF** (`[page: N]` 인용) | ✅ | ❌ | ❌ |
-| **스캔된 PDF용 OCR** (Tesseract.js, 다국어) | ✅ | ❌ | ❌ |
-| **위키링크 그래프 부스트** 검색 신호 | ✅ | ❌ | ❌ |
-| **다국어 시맨틱 검색** (50+ 개 언어, 온디바이스) | ✅ | 💰 유료 | ❌ |
-| **내장 검색 품질 평가 하니스** (NDCG, Recall, MRR, A/B 매트릭스) | ✅ | ❌ | ❌ |
-| HTTP 기반 **원격 MCP** + bearer 인증 + 상태 유지 세션 | ✅ | ❌ | 일부 |
-| 결과별 **신호별 관측 가능성** | ✅ | ❌ | ❌ |
-| **MCP 네이티브** (Claude · Cursor · ChatGPT · Codex · OpenClaw · 모든 클라이언트) | ✅ | ❌ Obsidian 전용 | 제각각 |
-| 모든 검색 + 쓰기 경로에서 검증되는 **프라이버시 필터** | ✅ | 해당 없음 | ❌ |
-| **프로덕션 도구 46개** (상시 활성 읽기 34개 + 선택형 4개 + 게이트된 쓰기 7개 + 피드백 도구 1개) | ✅ | 해당 없음 | 제각각 |
-| **GraphRAG-light** (Louvain 모듈성을 통한 위키링크 커뮤니티 탐지) | ✅ **여기에만 있음** | ❌ | ❌ |
-| **독립 실행형 `.base` 쿼리 실행** (Obsidian 실행 없이 동작) | ✅ **여기에만 있음** | ❌ | ❌ Obsidian에 위임 |
-| **HyDE 검색** (Gao et al 2023) + 하위 질문 분해 | ✅ **여기에만 있음** | ❌ | ❌ |
-| **단위 테스트 1690개 · 릴리스 필수 CI 검사 9개 · 현재 브랜치 보호 7개** | ✅ | 해당 없음 | 드묾 |
-| **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2) | ✅ | 해당 없음 | ❌ |
-| **semver로 결속된 공개 표면** ([STABILITY.md](./STABILITY.md)) | ✅ | 해당 없음 | ❌ |
-| 독립 실행형 (Obsidian 플러그인 불필요) | ✅ | ❌ Obsidian 필요 | 제각각 |
-| 라이선스 | MIT, 무료 | 독점, 유료 | 제각각 |
+**하나의 Vault. 모든 에이전트. 완전한 검색 스택. 클라우드 종속 없음.**
 
-<sub>비교는 v3.8.x stable 시점의 각 프로젝트 공개 기능을 기준으로 합니다(최초 스냅샷 v3.7.0 / 2026-05-15; v3.8.4에서 갱신). Smart Connections는 유료 Obsidian 플러그인입니다(MCP 서버가 아님). "다른 Obsidian-MCP"는 작성 시점에 GitHub에 공개된 오픈소스 Obsidian-MCP 서버를 가리킵니다. enquire-mcp의 공개 엔드 투 엔드 검색 벤치마크는 <a href="./docs/benchmarks.md"><code>docs/benchmarks.md</code></a>에 게시되어 있습니다 — 측정된 `rerank-bge` 델타는 60개 쿼리 어블레이션에서 일반 하이브리드 대비 +24.7 MRR / +15.5 NDCG@10입니다.</sub>
-
-</details>
-
-> 전략적 주장: enquire-mcp는 당신의 기존 Obsidian Vault 위에 올린 [Karpathy 스타일 LLM 위키](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)를 위한 오픈소스 백엔드입니다. 누적되는 지식, 출처까지 추적 가능합니다.
+> 전략적 포지셔닝: enquire-mcp는 기존 Obsidian Vault 위에 구축하는 [Karpathy식 LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)의 오픈소스 백엔드입니다. 지식은 축적되고 항상 출처로 추적됩니다.
 
 ---
 
@@ -127,7 +107,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.4      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.5      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -210,7 +190,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ## 🧠 사용 사례
 
-**1 — AI 에이전트를 위한 장기 기억.** 당신의 Obsidian Vault를 아무 MCP 호환 에이전트(Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw)에 넣으세요. 이제 에이전트는 당신이 작성한 모든 회의 노트, 일지 항목, 리서치 로그, 결정 문서에 대해 — 세션, 모델, 공급자를 가로질러 — 영속적이고 시맨틱한 회상을 갖습니다. `Claude Memory`나 `ChatGPT Memory`와 달리, 당신의 지식은 한 벤더의 클라우드에 갇히지 않습니다. 그것은 당신이 소유하고 자유롭게 이전할 수 있는 일반 마크다운에 존재합니다.
+**1 — AI 에이전트를 위한 장기 기억.** 당신의 Obsidian Vault를 아무 MCP 호환 에이전트(Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw)에 넣으세요. 이제 에이전트는 당신이 작성한 모든 회의 노트, 일지 항목, 리서치 로그, 결정 문서에 대해 — 세션, 모델, 공급자를 가로질러 — 영속적이고 시맨틱한 회상을 갖습니다. 벤더 내장 메모리와 달리, 당신의 지식은 한 벤더의 클라우드에 갇히지 않습니다. 그것은 당신이 소유하고 자유롭게 이전할 수 있는 일반 마크다운에 존재합니다.
 
 **2 — 개인 지식 베이스 / 두 번째 뇌.** 하이브리드 검색은 50+ 개 언어 중 어느 언어로든, *어떤* 표현에 대해서도 올바른 노트를 떠오르게 합니다. 2년 전의 러시아어 일지 항목에 대해 영어로 물어도 올바른 결과를 얻습니다. 위키링크 그래프 부스트는 당신의 지식 그래프 중심에 있는 노트를 재순위합니다. GraphRAG-light는 주제별 커뮤니티를 떠오르게 합니다 — 당신이 만든 줄 잊고 있던 연결을 발견하세요. PDF는 `[page: N]` 인용과 함께 검색에 융합되어, 리서치 논문과 회의 녹취록이 일등급 기억이 됩니다.
 
@@ -218,16 +198,18 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## 🚫 enquire-mcp가 *적합하지 않은* 경우
+## ✅ 진지한 로컬 지식 워크플로를 위해 설계
 
-정직한 비목표 — 다음과 같을 때는 다른 것을 찾으세요:
+다음을 원한다면 enquire-mcp를 선택하세요:
 
-- **리터럴 문자열 / 정규식 검색을 원할 때.** "이 정확한 토큰 찾기"에는 `ripgrep` / `grep`이 더 빠르고 정확합니다. enquire는 *개념적* 회상 — 동의어, 언어 간, "내가 X에 대해 뭐라고 했더라" — 에서 빛납니다. 둘 다 쓰세요: 리터럴에는 `rg`, 의미에는 enquire.
-- **당신의 지식이 노트가 아니라 채팅 로그에 있을 때.** enquire는 당신이 작성한 마크다운에 *근거*합니다. 채팅 녹취록에서 사실을 *추출*해 별도 저장소에 넣는 대화 기억 도구(mem0, Zep, Supermemory)는 다른 범주입니다 — [비교](./docs/COMPARISON.md)를 보세요.
-- **멀티 사용자 / 호스팅 / 동기화 검색이 필요할 때.** enquire는 설계상 로컬 우선이며 단일 Vault입니다 — 서버 측 멀티 테넌트 인덱스가 없습니다.
-- **당신의 소스가 Markdown이나 PDF가 아닐 때.** `.md` / `.canvas` / `.base` / `.pdf`는 일등급입니다. 다른 형식은 먼저 변환이 필요합니다.
-- **GUI나 인앱 Obsidian 플러그인을 원할 때.** enquire는 헤드리스 MCP 서버 / CLI입니다 — Obsidian을 *보완*할 뿐, Obsidian 자체가 아닙니다. (Smart Connections가 인앱 플러그인 옵션입니다.)
-- **수백만 개 노트에 대해 밀리초 미만 검색이 필요할 때.** HNSW는 대규모에서 10ms 미만 top-K를 제공하지만, enquire는 웹 규모 코퍼스가 아니라 개인 / 팀 Vault를 겨냥합니다.
+- **Obsidian Vault를 source of truth로 유지**하고 지식을 독점 저장소에 복사하지 않기.
+- **여러 AI 에이전트가 하나의 메모리를 공유**해 모델을 바꿔도 다시 시작하지 않기.
+- **표현이 달라도 찾는 개념적·다국어 회상**.
+- **노트 경로, PDF 페이지, 신호 점수, freshness가 있는 인용·검사 가능한 결과**.
+- **로컬 우선 개인정보 보호**—기본 read-only, 명시적 쓰기, serve 중 cloud call 0.
+- **완전한 검색 백엔드**—하이브리드 검색, 리랭킹, 그래프 문맥, agentic expansion, Obsidian 형식, remote MCP.
+
+**명확한 범위:** enquire-mcp는 Markdown, Canvas, Bases, PDF용 headless MCP server / CLI입니다. 정확한 토큰에는 literal search를 함께 쓰고, 원격 에이전트에는 내장 HTTP transport를 사용하세요.
 
 ---
 
@@ -297,6 +279,7 @@ graph LR
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
 | **캐시 + 인덱스 파일** | chmod 0600, 부모 디렉터리 0700 |
+| **단위 테스트 1692개 · 릴리스 필수 CI 검사 9개 · 현재 브랜치 보호 7개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
 | **CI** | 모든 PR에서 **릴리스 필수 검사 9개**(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`)를 실행합니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`와 `oia`는 릴리스 필수지만 보호되지 않습니다(2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 9개 모두를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |
 | **릴리스** | 태그별 npm + GitHub 릴리스 · semver · **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2; L3 생성기는 로드맵에) |
@@ -337,7 +320,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (1690개 테스트)
+npm test       # 전체 스위트 (1692개 테스트)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```

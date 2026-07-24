@@ -5,8 +5,9 @@
 // "🛡️ Trust" slugs to `️-trust` (a leading variation-selector + hyphen), so
 // `#trust` never resolved. No existing gate caught either: docs-consistency checks
 // numeric CLAIMS, not link TARGETS. This invariant asserts every in-file `(#anchor)`
-// in every README resolves to a heading, using `github-slugger` — the exact slug
-// algorithm GitHub's own renderer applies (incl. unicode + emoji + VS-16 handling).
+// in every README resolves to a heading or an explicit HTML anchor. Heading slugs
+// use `github-slugger` — the exact algorithm GitHub's own renderer applies
+// (incl. unicode + emoji + VS-16 handling).
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -17,20 +18,24 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * In-file `(#...)` anchors in `markdown` that do NOT resolve to any heading's slug.
+ * In-file `(#...)` anchors in `markdown` that do NOT resolve to any heading slug
+ * or explicit `<a id="...">` / `<a name="...">` target.
  * Only same-document `#anchor` link targets are checked; cross-file (`./x`) and
  * external (`https://`) targets are ignored. Slugs are computed with github-slugger
  * (one slugger per document, matching GitHub's per-page de-duplication semantics).
  */
 function brokenInFileAnchors(markdown: string): string[] {
   const slugger = new GithubSlugger();
-  const heads = new Set<string>();
+  const targets = new Set<string>();
   for (const line of markdown.split("\n")) {
     const m = line.match(/^#{1,6}\s+(.+?)\s*$/);
-    if (m) heads.add(slugger.slug(m[1] as string));
+    if (m) targets.add(slugger.slug(m[1] as string));
+    for (const anchor of line.matchAll(/<a\s+(?:id|name)=["']([^"']+)["'][^>]*>/gi)) {
+      targets.add(anchor[1] as string);
+    }
   }
   const anchors = [...markdown.matchAll(/\]\(#([^)]+)\)/g)].map((m) => m[1] as string);
-  return [...new Set(anchors)].filter((a) => !heads.has(a));
+  return [...new Set(anchors)].filter((a) => !targets.has(a));
 }
 
 async function readmeFiles(): Promise<string[]> {
@@ -38,7 +43,7 @@ async function readmeFiles(): Promise<string[]> {
 }
 
 describe("README anchor-integrity invariant (11-language surface)", () => {
-  it("every in-file (#anchor) in every README resolves to a heading", async () => {
+  it("every in-file (#anchor) in every README resolves to a heading or explicit anchor", async () => {
     const files = await readmeFiles();
     expect(files.length).toBeGreaterThanOrEqual(9); // EN + zh/es/hi/ar/ru/pt/fr/ja
     const failures: string[] = [];
@@ -50,9 +55,15 @@ describe("README anchor-integrity invariant (11-language surface)", () => {
   });
 
   it("NEGATIVE control — the detector flags an anchor with no matching heading (not vacuous)", () => {
-    const md = ["## ⚡ Quick start", "", "[live](#-quick-start) and [dead](#no-such-heading)"].join("\n");
+    const md = [
+      "## ⚡ Quick start",
+      '<a id="stable-proof"></a>',
+      "",
+      "[live](#-quick-start), [explicit](#stable-proof), and [dead](#no-such-heading)"
+    ].join("\n");
     const broken = brokenInFileAnchors(md);
     expect(broken).toContain("no-such-heading"); // the dead link is caught…
     expect(broken).not.toContain("-quick-start"); // …and the real one resolves
+    expect(broken).not.toContain("stable-proof"); // …including explicit stable targets
   });
 });

@@ -1,12 +1,12 @@
 // v3.7.0 PR4 — GitHub repo metadata invariant.
 //
-// Background. The README + npm description lead with "long-term memory for
-// AI agents" (since v3.6.3). The GitHub repo's About description + Topics
+// Background. The README + npm description lead with "#1 Obsidian MCP for
+// AI memory" (since v3.12.0-rc.5). The GitHub repo's About description + Topics
 // were updated to match out-of-band via `gh api`. But that metadata lives
 // only on GitHub — no CI check catches drift if someone (or a future
 // automation) silently rewrites it. This test pulls the current state via
 // `gh api repos/oomkapwn/enquire-mcp` and asserts the positioning + the
-// presence of the 8 hype topics shipped with v3.6.3.
+// presence of the required memory/agent positioning topics.
 //
 // Skip behavior. The test runs only when:
 //   1. `gh` is on PATH and authenticated (typically: in CI via GITHUB_TOKEN,
@@ -47,11 +47,10 @@ const REQUIRED_TOPICS = [
   "zed",
   "gemini-cli"
 ];
-// v3.7.8 — About now leads with "The most advanced Obsidian MCP" credential
-// followed by the value prop. v3.7.9 invariant matches this new lead phrase
-// (the v3.7.0 invariant matched "Memory layer for AI agents"; v3.7.8 changed
-// the About copy out-of-band via gh api, and round-11 caught the test drift).
-const ABOUT_LEADS_WITH = /^The most advanced Obsidian MCP/i;
+// v3.12.0-rc.5 — About now leads with the explicit TOP-1 credential followed
+// by the value prop. This is the live-metadata counterpart to the README,
+// package and social-card positioning surfaces.
+const ABOUT_LEADS_WITH = /^The #1 Obsidian MCP for AI memory\b/i;
 
 // v3.11.0-rc.7 — flake hardening for the (network-y) gh auth/API calls. On
 // 2026-06-23 the CI-GUARD below flaked: `gh auth status` makes a network call to
@@ -218,7 +217,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     ).toBe(true);
   });
 
-  it("repo About description leads with 'The most advanced Obsidian MCP'", () => {
+  it("repo About description leads with 'The #1 Obsidian MCP for AI memory'", () => {
     if (!available) {
       // v3.7.13 L4 — CI now sets `GH_TOKEN: ${{ github.token }}` so this
       // branch only fires in local dev without auth. Production CI runs
@@ -246,7 +245,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     ).toBeNull();
   });
 
-  it("repo Topics include the 8 required memory/positioning keywords", () => {
+  it("repo Topics include all required memory/positioning keywords", () => {
     if (!available) {
       console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
       return;
@@ -273,17 +272,16 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // control (oversight); v3.7.4 closes the gap.
   describe("NEGATIVE-CONTROL: analyzers detect drift on synthetic bad inputs (v3.7.4)", () => {
     it("validateAboutLeadsWith rejects descriptions that don't lead with the canonical phrase", () => {
-      // v3.7.9 — canonical About lead is now "The most advanced Obsidian MCP"
-      // (was "Memory layer for AI agents" before v3.7.8). Update positive +
-      // negative cases accordingly.
-      expect(validateAboutLeadsWith("The most advanced Obsidian MCP — long-term memory for AI agents")).toBe(true);
+      // v3.12.0-rc.5 — canonical About lead is now the explicit TOP-1 phrase.
+      expect(validateAboutLeadsWith("The #1 Obsidian MCP for AI memory — one vault, every agent")).toBe(true);
       // Case-insensitive — same canonical phrase, lowercase.
-      expect(validateAboutLeadsWith("the most advanced obsidian mcp — built")).toBe(true);
+      expect(validateAboutLeadsWith("the #1 obsidian mcp for ai memory — built")).toBe(true);
       // Negative cases — analyzer MUST flag these.
       expect(validateAboutLeadsWith("Memory layer for AI agents — built on Obsidian.")).toBe(false);
+      expect(validateAboutLeadsWith("The most advanced Obsidian MCP — long-term memory")).toBe(false);
       expect(validateAboutLeadsWith("The most advanced MCP server for Obsidian vaults.")).toBe(false); // "MCP server for Obsidian" ≠ "Obsidian MCP"
       expect(validateAboutLeadsWith("")).toBe(false);
-      expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false); // pre-v3.7.8 phrasing
+      expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false);
     });
 
     it("findMissingTopics returns all required topics when given empty input", () => {
@@ -296,7 +294,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     });
 
     it("findMissingTopics returns subset when given partial topic list", () => {
-      // Pass only 3 of 8 required → 5 should be reported missing.
+      // Pass only 3 required topics; every remaining topic must be reported.
       const partial = REQUIRED_TOPICS.slice(0, 3);
       const missing = findMissingTopics(partial);
       expect(missing.length).toBe(REQUIRED_TOPICS.length - 3);
@@ -325,7 +323,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(findSlsaOverclaim("MCP-native, MIT, SLSA L2.")).toBeNull();
       expect(findSlsaOverclaim("... SLSA-2 ...")).toBeNull();
       expect(findSlsaOverclaim("SLSA Build L2")).toBeNull();
-      expect(findSlsaOverclaim("The most advanced Obsidian MCP — no provenance mention")).toBeNull();
+      expect(findSlsaOverclaim("The #1 Obsidian MCP for AI memory — no provenance mention")).toBeNull();
       // Guard against false-positive on unrelated digits near "SLSA"-free text.
       expect(findSlsaOverclaim("Supports 3 transports and L3 caching")).toBeNull();
     });

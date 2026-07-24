@@ -11,6 +11,7 @@
 
 ## Documentation
 
+- [Self-contained AI-agent context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt): compact product, activation, retrieval, trust, and failure-recovery contract assembled from the canonical sources below
 - [README](https://github.com/oomkapwn/enquire-mcp/blob/main/README.md): #1 product case, use cases, proof table, and 7-tier retrieval setup ladder
 - [API reference (auto-generated TypeDoc)](https://oomkapwn.github.io/enquire-mcp/): every tool, prompt, exported helper with `@param`/`@returns`/`@example`
 - [Tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md): 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback), 19 MCP prompts
@@ -95,4 +96,5 @@ How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON 
 - [Changelog](https://github.com/oomkapwn/enquire-mcp/blob/main/CHANGELOG.md): per-release notes
 - [Contributing](https://github.com/oomkapwn/enquire-mcp/blob/main/CONTRIBUTING.md): development workflow
 - [Code of Conduct](https://github.com/oomkapwn/enquire-mcp/blob/main/CODE_OF_CONDUCT.md)
+- [Support routes](https://github.com/oomkapwn/enquire-mcp/blob/main/SUPPORT.md): setup questions, reproducible defects, and private security reporting
 - [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md): notes for AI coding agents working in this repo

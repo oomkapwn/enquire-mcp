@@ -1411,14 +1411,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(jsonLdLanguageAnswer).toContain(defaultReranker);
     expect(jsonLdLanguageAnswer).toContain("English-only");
     expect(jsonLdLanguageAnswer).not.toContain("with a multilingual cross-encoder");
-    expect(llmsEmbeddingCatalogProblems(await read("llms.txt"))).toEqual([]);
+    for (const file of ["llms.txt", "llms-ctx.txt"]) {
+      expect(llmsEmbeddingCatalogProblems(await read(file)), `${file} embedding catalog drift`).toEqual([]);
+    }
     expect(
       llmsEmbeddingCatalogProblems(
         "- Indexes content with catalogued embedding aliases: BGE-base, BGE-multilingual, or any compatible Hugging Face model"
       ).length
     ).toBeGreaterThan(0);
 
-    for (const file of ["AGENTS.md", "llms.txt", "ROADMAP.md"]) {
+    for (const file of ["AGENTS.md", "llms.txt", "llms-ctx.txt", "ROADMAP.md"]) {
       const body = await read(file);
       expect(body, `${file} must carry the release-required count`).toContain("9 release-required");
       expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
@@ -1763,7 +1765,7 @@ function checkAgentsCiGates(agents: string, actualRequired: number): string | nu
   return null;
 }
 
-describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-rc.14 M-2)", () => {
+describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric claims", () => {
   async function countActualTests(): Promise<number> {
     const fs = await import("node:fs/promises");
     const files: string[] = [];
@@ -1823,32 +1825,42 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
 
   // ─── Positive tests (real files must pass) ────────────────────────────
 
-  it("llms.txt test count matches actual it() count", async () => {
-    const err = checkLlmsTestCount(await read("llms.txt"), await countActualTests());
-    expect(err, err ?? "").toBeNull();
+  it("llms.txt and llms-ctx.txt test counts match actual it() count", async () => {
+    const actual = await countActualTests();
+    for (const file of ["llms.txt", "llms-ctx.txt"]) {
+      const err = checkLlmsTestCount(await read(file), actual);
+      expect(err, `${file}: ${err ?? ""}`).toBeNull();
+    }
   });
 
-  it("llms.txt tool count matches actual", async () => {
+  it("llms.txt and llms-ctx.txt tool counts match actual", async () => {
     const counts = await getActualCounts();
-    const err = checkLlmsToolBreakdown(
-      await read("llms.txt"),
-      counts.allTools,
-      counts.alwaysOn,
-      counts.ftsOptIn + counts.diagnostic,
-      counts.writes
-    );
-    expect(err, err ?? "").toBeNull();
+    for (const file of ["llms.txt", "llms-ctx.txt"]) {
+      const err = checkLlmsToolBreakdown(
+        await read(file),
+        counts.allTools,
+        counts.alwaysOn,
+        counts.ftsOptIn + counts.diagnostic,
+        counts.writes
+      );
+      expect(err, `${file}: ${err ?? ""}`).toBeNull();
+    }
   });
 
-  it("llms.txt MCP prompt count matches actual", async () => {
+  it("llms.txt and llms-ctx.txt MCP prompt counts match actual", async () => {
     const counts = await getActualCounts();
-    const err = checkLlmsPromptCount(await read("llms.txt"), counts.prompts);
-    expect(err, err ?? "").toBeNull();
+    for (const file of ["llms.txt", "llms-ctx.txt"]) {
+      const err = checkLlmsPromptCount(await read(file), counts.prompts);
+      expect(err, `${file}: ${err ?? ""}`).toBeNull();
+    }
   });
 
-  it("llms.txt 'N required + M advisory CI gates' matches release.yml REQUIRED count", async () => {
-    const err = checkLlmsCiGates(await read("llms.txt"), await countRequiredCiGates());
-    expect(err, err ?? "").toBeNull();
+  it("llms.txt and llms-ctx.txt release-required counts match release.yml", async () => {
+    const actual = await countRequiredCiGates();
+    for (const file of ["llms.txt", "llms-ctx.txt"]) {
+      const err = checkLlmsCiGates(await read(file), actual);
+      expect(err, `${file}: ${err ?? ""}`).toBeNull();
+    }
   });
 
   it("AGENTS.md test count claim (X+ tests) is a valid lower bound", async () => {
@@ -2075,7 +2087,8 @@ describe("docs/code consistency — llms.txt + AGENTS.md numeric claims (v3.8.0-
       "README.ja.md",
       "README.ko.md",
       "README.de.md",
-      "llms.txt"
+      "llms.txt",
+      "llms-ctx.txt"
     ];
     // `v3.10` optionally + `+`, optional backtick/space, a half- OR full-width open paren,
     // optional space/backtick, then `@rc` — the exact shape of the stale label.

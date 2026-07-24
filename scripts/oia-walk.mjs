@@ -366,6 +366,7 @@ walk("scripts", ".sh", (file) => {
     "README.md",
     "package.json",
     "llms.txt",
+    "llms-ctx.txt",
     "docs/COMPARISON.md",
     "STABILITY.md",
     "assets/social-preview.svg"
@@ -451,7 +452,7 @@ if (!SKIP_NETWORK) {
       !readOnlyPin && 'src/ocr.ts createWorker must set cacheMethod:"readOnly"',
       !installCmd && 'src/cli.ts must register the "install-ocr-lang" subcommand'
     ].filter(Boolean);
-    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "docs/api.md", "llms.txt"];
+    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "docs/api.md", "llms.txt", "llms-ctx.txt"];
     const claimRe =
       /no runtime CDN download|offline-only (?:posture|enforcement)|install-ocr-lang|zero outbound network calls in serve/i;
     for (const file of claimFiles) {
@@ -521,7 +522,7 @@ if (!SKIP_NETWORK) {
       missingRuntimeActions.length > 0 &&
         `src/cli.ts must call setEmbeddingsOffline() before each runtime/query path; missing or late: ${missingRuntimeActions.join(", ")}`
     ].filter(Boolean);
-    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "llms.txt"];
+    const claimFiles = ["SECURITY.md", "README.md", "docs/COMPARISON.md", "llms.txt", "llms-ctx.txt"];
     const claimRe = /zero cloud calls during serve|zero outbound network calls (?:during serve|in serve mode)/i;
     for (const file of claimFiles) {
       const lines = readLines(file);
@@ -789,7 +790,9 @@ const DOCS_FILES_TO_SCAN = [
   "ROADMAP.md",
   "SECURITY.md",
   "STABILITY.md",
-  "llms.txt"
+  "SUPPORT.md",
+  "llms.txt",
+  "llms-ctx.txt"
 ];
 // Walk docs/ for .md files — but skip docs/audits/ since those are by
 // definition historical snapshots (auditor reports timestamped at submission).

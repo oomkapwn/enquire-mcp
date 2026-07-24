@@ -6,7 +6,7 @@
 // only on GitHub — no CI check catches drift if someone (or a future
 // automation) silently rewrites it. This test pulls the current state via
 // `gh api repos/oomkapwn/enquire-mcp` and asserts the positioning + the
-// presence of the required memory/agent positioning topics.
+// exact 20-topic positioning set.
 //
 // Skip behavior. The test runs only when:
 //   1. `gh` is on PATH and authenticated (typically: in CI via GITHUB_TOKEN,
@@ -22,30 +22,33 @@ import { execSync, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const REPO = "oomkapwn/enquire-mcp";
-// v3.7.9 — REQUIRED_TOPICS updated to reflect the v3.7.8 positioning calibration:
-//   - openclaw added (restored after v3.6.3 dropped it to fit hype keywords)
-//   - context-engineering removed (swapped for openclaw in v3.7.8 Topics rebalance)
-// Per round-11 audit: the test was carrying the v3.7.0 8-topic shortlist
-// while the v3.7.8 metadata had moved on. Bringing the invariant up to date.
-// v3.11.2 (codebase-memory-mcp competitive study — agent-SEO) — pin the broadened
-// agent-community targeting so a future Topics rebalance can't silently drop it. The
-// repo is at GitHub's 20-topic cap, so these 4 replaced the redundant retrieval cluster
-// (agentic-rag / hybrid-search / semantic-search — "rag" kept as the umbrella) + generic
-// "claude" (we keep the targeted claude-code / claude-memory). Each surfaces enquire in
-// that client community's GitHub topic search; we are client-agnostic over MCP by design.
-const REQUIRED_TOPICS = [
-  "ai-memory",
+// v3.12.0-rc.6 — GitHub allows 20 topics, so the full set is now intentional
+// and exact rather than a required subset plus eight unguarded extras. Rebalanced
+// four narrow client topics (aider/windsurf/zed/gemini-cli remain npm keywords)
+// into the adjacent categories the product actually leads in: context engineering,
+// agentic RAG, hybrid search, and semantic search. Client-neutral MCP positioning
+// plus the five primary agent communities remain represented.
+const EXPECTED_TOPICS = [
   "agent-memory",
+  "agentic-rag",
+  "ai-memory",
+  "chatgpt",
+  "claude-code",
+  "claude-memory",
+  "codex",
+  "context-engineering",
+  "cursor",
+  "hybrid-search",
   "llm-memory",
   "long-term-memory",
-  "claude-memory",
-  "second-brain",
-  "openclaw",
+  "mcp-server",
+  "model-context-protocol",
+  "obsidian",
   "obsidian-mcp",
-  "aider",
-  "windsurf",
-  "zed",
-  "gemini-cli"
+  "openclaw",
+  "rag",
+  "second-brain",
+  "semantic-search"
 ];
 // v3.12.0-rc.5 — About now leads with the explicit TOP-1 credential followed
 // by the value prop. This is the live-metadata counterpart to the README,
@@ -162,9 +165,13 @@ function fetchRepoMeta(): RepoMeta | null {
 function validateAboutLeadsWith(description: string): boolean {
   return ABOUT_LEADS_WITH.test(description ?? "");
 }
-function findMissingTopics(topics: string[]): string[] {
+function findTopicDrift(topics: string[]): { missing: string[]; unexpected: string[] } {
   const set = new Set(topics ?? []);
-  return REQUIRED_TOPICS.filter((t) => !set.has(t));
+  const expected = new Set(EXPECTED_TOPICS);
+  return {
+    missing: EXPECTED_TOPICS.filter((t) => !set.has(t)),
+    unexpected: [...set].filter((t) => !expected.has(t)).sort()
+  };
 }
 
 // v3.9.0-rc.31 — SLSA-overclaim guard for the repo About description.
@@ -245,7 +252,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     ).toBeNull();
   });
 
-  it("repo Topics include all required memory/positioning keywords", () => {
+  it("repo Topics exactly match the intentional 20-topic discoverability set", () => {
     if (!available) {
       console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
       return;
@@ -256,8 +263,11 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       "gh api call failed despite gh being available — check rate limit / network / token scope"
     ).not.toBeNull();
     if (!meta) return;
-    const missing = findMissingTopics(meta.topics);
-    expect(missing, `Missing topics: ${missing.join(", ")}`).toEqual([]);
+    const drift = findTopicDrift(meta.topics);
+    expect(
+      drift,
+      `Topic drift — missing: ${drift.missing.join(", ") || "(none)"}; unexpected: ${drift.unexpected.join(", ") || "(none)"}`
+    ).toEqual({ missing: [], unexpected: [] });
   });
 
   // v3.7.4 — NEGATIVE-CONTROL siblings. The 2 production tests above pass
@@ -284,31 +294,31 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false);
     });
 
-    it("findMissingTopics returns all required topics when given empty input", () => {
-      const missing = findMissingTopics([]);
-      expect(missing.length).toBe(REQUIRED_TOPICS.length);
-      // Spot-check that each required topic is in the missing list.
-      for (const required of REQUIRED_TOPICS) {
-        expect(missing).toContain(required);
+    it("findTopicDrift returns all expected topics when given empty input", () => {
+      const drift = findTopicDrift([]);
+      expect(drift.missing.length).toBe(EXPECTED_TOPICS.length);
+      expect(drift.unexpected).toEqual([]);
+      for (const expected of EXPECTED_TOPICS) {
+        expect(drift.missing).toContain(expected);
       }
     });
 
-    it("findMissingTopics returns subset when given partial topic list", () => {
-      // Pass only 3 required topics; every remaining topic must be reported.
-      const partial = REQUIRED_TOPICS.slice(0, 3);
-      const missing = findMissingTopics(partial);
-      expect(missing.length).toBe(REQUIRED_TOPICS.length - 3);
+    it("findTopicDrift reports missing and unexpected topics together", () => {
+      // Pass only 3 expected topics plus a stale client topic. Both directions
+      // of drift must be visible; a missing-only analyzer would accept extras.
+      const partial = [...EXPECTED_TOPICS.slice(0, 3), "aider"];
+      const drift = findTopicDrift(partial);
+      expect(drift.missing.length).toBe(EXPECTED_TOPICS.length - 3);
+      expect(drift.unexpected).toEqual(["aider"]);
       // The 3 we passed must NOT be in missing.
-      for (const passed of partial) {
-        expect(missing).not.toContain(passed);
+      for (const passed of EXPECTED_TOPICS.slice(0, 3)) {
+        expect(drift.missing).not.toContain(passed);
       }
     });
 
-    it("findMissingTopics returns [] when all required topics are present (positive control)", () => {
-      // Mix required topics with some unrelated extras — analyzer should
-      // ignore the extras and report no missing.
-      const full = [...REQUIRED_TOPICS, "extra-1", "extra-2"];
-      expect(findMissingTopics(full)).toEqual([]);
+    it("findTopicDrift returns no drift only for the exact set (positive control)", () => {
+      expect(findTopicDrift([...EXPECTED_TOPICS].reverse())).toEqual({ missing: [], unexpected: [] });
+      expect(findTopicDrift([...EXPECTED_TOPICS, "extra-topic"]).unexpected).toEqual(["extra-topic"]);
     });
 
     it("findSlsaOverclaim flags SLSA-3/L3/L4 and passes SLSA L2 (v3.9.0-rc.31)", () => {

@@ -105,7 +105,7 @@ Conecte a qualquer cliente MCP:
 **Quer todo o poder híbrido?** Conclua o preflight híbrido e depois inicie o servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -112,7 +112,7 @@ enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cur
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

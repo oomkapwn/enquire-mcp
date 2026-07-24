@@ -8,6 +8,7 @@ The default `serve` subcommand runs over **stdio** — fast, secure, but local-o
 
 ```bash
 # 1. Generate a bearer token (one-time, store in a password manager)
+mkdir -p ~/.enquire
 enquire-mcp gen-token > ~/.enquire/token   # base64url, 43 chars
 
 # 2. Start the HTTP server (binds 127.0.0.1:3000 by default).
@@ -99,6 +100,7 @@ enquire-mcp gen-token
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 # Save it once:
+mkdir -p ~/.enquire
 enquire-mcp gen-token > ~/.enquire/token
 chmod 600 ~/.enquire/token
 ```

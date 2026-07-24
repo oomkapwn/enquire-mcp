@@ -1480,7 +1480,27 @@ async function main() {
     await db.open();
     try {
       const embedder = await loadEmbedder(EMBEDDER_ALIAS);
+      // A successfully-created pipeline is not evidence that the cached model
+      // can execute: corrupt/incompatible ONNX weights may fail only on the
+      // first inference. Probe the real handle before bulk sync and pin the
+      // catalog dimensionality so a broken model can never be reported ready.
+      const smokeVectors = await embedder.embed(["enquire benchmark model preflight"]);
+      if (smokeVectors.length !== 1 || smokeVectors[0]?.length !== modelMeta.dim) {
+        throw new Error(
+          `embedding model preflight returned ${smokeVectors.length} vector(s) at dim=${smokeVectors[0]?.length ?? 0}; expected 1 at dim=${modelMeta.dim}`
+        );
+      }
       const r = await syncEmbedDb(vault, db, embedder);
+      const expectedNotes = Object.keys(VAULT_NOTES).length;
+      const syncedNotes = r.added + r.updated + r.unchanged;
+      // syncEmbedDb deliberately skips individual unreadable notes for normal
+      // user builds. This synthetic benchmark has a fresh DB and fully-known
+      // corpus, so even one skip invalidates the measurement.
+      if (syncedNotes !== expectedNotes || r.total_chunks === 0) {
+        throw new Error(
+          `benchmark embedding sync incomplete: ${syncedNotes}/${expectedNotes} notes, ${r.total_chunks} chunks`
+        );
+      }
       process.stderr.write(
         `bench: embeddings built (${r.total_chunks} chunks, ${(performance.now() - embedderStart).toFixed(0)}ms)\n`
       );
@@ -1723,6 +1743,10 @@ async function main() {
     return;
   }
 
+  // A diagnostic artifact must declare its degraded state inside the JSON,
+  // not only in ephemeral stderr. Full runs explicitly record `false` so a
+  // downstream consumer never has to infer the contract from missing fields.
+  meta.partial = decision.partial;
   const outFile = decision.file;
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   // Atomic write: tmp + rename, so a crash mid-write can't truncate the artifact.

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.5] — 2026-07-24
+
+> **TL;DR:** **The strict retrieval benchmark now proves model readiness through actual inference and a complete synthetic embedding sync instead of trusting pipeline construction.** A corrupt or incompatible cached model could previously fail only during per-note inference; the normal fail-soft sync then skipped every note while `run-benchmarks.mjs` still set `embed_ready=true`, allowing strict canonical evidence to look complete with zero embedding chunks. The benchmark now preflights inference and vector dimensionality, rejects incomplete synthetic syncs, records diagnostic degradation as `meta.partial` in the JSON artifact, and ships a process-level present/missing/corrupt × strict/diagnostic matrix. Runtime serve behavior is unchanged; **1690 → 1692 source tests.**
+>
+> **Method note:** the regression launches the real benchmark script against compiled `dist/`, real temporary vault/index/artifact paths and the production benchmark writer. Only the transformers loader boundary is replaced with deterministic present, missing and corrupt fixtures. Every process installs `fetch`/HTTP/HTTPS tripwires; the strict failure cells must exit nonzero without creating their requested artifact, diagnostic cells must declare `meta.partial=true`, healthy cells must declare `false`, and the checked-in canonical benchmark artifact must remain byte-identical. A separate negative control deliberately calls the tripwire to prove the offline assertion can fail.
+
+### Fixed
+
+- **False-ready corrupt-model benchmark path.** A successful pipeline construction is no longer treated as proof that the cached ONNX model can execute. The benchmark runs one real handle inference, pins its vector count and catalog dimension, then requires all known synthetic notes and at least one chunk to survive embedding sync.
+- **Machine-readable diagnostic state.** Both full and degraded benchmark artifacts now write `meta.partial` explicitly, so downstream consumers do not have to infer evidence quality from stderr or a missing field.
+
+### Tests (1692)
+
+- Added a six-cell process matrix covering present, missing and corrupt model states in strict and `--allow-partial` modes against the compiled benchmark path.
+- Added a behavior-discriminating network-tripwire negative control and byte-preservation checks for the canonical `bench/benchmarks.json`.
+
 ## [3.12.0-rc.4] — 2026-07-24
 
 > **TL;DR:** **The competitive surface is current, source-pinned and honest without giving up the project's deliberate TOP-1 positioning.** `flowing-abyss/obsidian-hybrid-search` is now treated as the direct hybrid/RRF/BGE peer and credited with the stronger public external-dataset evidence; cyanheads is credited with its current Streamable HTTP, JWT/OAuth and live-Obsidian surface; mcpvault's source/README tool-count drift and Basic Memory's evolved co-authored/sync product are explicit. The promotional “most advanced Obsidian MCP” hero remains intentional. Measurable claims no longer pretend that HTTP, hybrid retrieval, PDF integration or benchmark tooling are category-unique, and no cross-project retrieval winner is asserted before a shared-protocol run. Runtime retrieval behavior is unchanged; **1690 → 1690 source tests.**

@@ -66,7 +66,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1690 unit tests passing on every PR
+- 1692 unit tests passing on every PR
 - 9 release-required CI checks per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)

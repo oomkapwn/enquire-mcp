@@ -9,6 +9,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  buildPrivacyArgs,
   buildServeArgs,
   CONFIG_CLIENTS,
   CONFIG_TIERS,
@@ -46,6 +47,11 @@ const windowsBase: ConfigInput = {
     argsPrefix: ["C:\\Program Files\\enquire's runtime\\dist\\index.js"]
   }
 };
+const privacyBase: ConfigInput = {
+  ...base,
+  excludeGlobs: ["Private/**", "semi;colon/**"],
+  readPaths: ["Projects/**", "O'Brien.md"]
+};
 
 describe("mcp-config — tier flags + serve args", () => {
   it("exports one canonical tier vocabulary for configure and doctor", () => {
@@ -74,6 +80,23 @@ describe("mcp-config — tier flags + serve args", () => {
     expect(buildServeArgs(base)).toContain("--vault");
     expect(buildServeArgs(base)).toContain("/abs/My Vault");
   });
+  it("uses one lossless privacy vector for generated runtime commands", () => {
+    const privacy = buildPrivacyArgs(privacyBase);
+    expect(privacy).toEqual([
+      "--exclude-glob",
+      "Private/**",
+      "semi;colon/**",
+      "--read-paths",
+      "Projects/**",
+      "O'Brien.md"
+    ]);
+    expect(buildServeArgs(privacyBase).slice(-privacy.length)).toEqual(privacy);
+    expect(runtimeCommandArgs(privacyBase).args.slice(-privacy.length)).toEqual(privacy);
+    // NEGATIVE control: an unfiltered config must not synthesize privacy flags.
+    expect(buildPrivacyArgs(base)).toEqual([]);
+    expect(buildServeArgs(base)).not.toContain("--exclude-glob");
+    expect(buildServeArgs(base)).not.toContain("--read-paths");
+  });
   it("npxCommandArgs wraps the serve args after the pinned package spec", () => {
     const fallback = { ...base, invocation: undefined };
     const { command, args } = npxCommandArgs(fallback);
@@ -100,6 +123,9 @@ describe("mcp-config — tier flags + serve args", () => {
     expect(
       renderShellCommand("C:\\Program Files\\nodejs\\node.exe", ["C:\\Program Files\\index.js"], "win32", false)
     ).toBe("'C:\\Program Files\\nodejs\\node.exe' 'C:\\Program Files\\index.js'");
+  });
+  it("POSIX quoting round-trips through /bin/sh", (ctx) => {
+    if (process.platform === "win32") return ctx.skip();
     for (const tricky of ["/abs/Vault!/Notes", "/abs/it's-safe", "$(printf INJECTED);`printf BAD`"]) {
       const roundTrip = execFileSync("/bin/sh", ["-c", `set -- ${shellQuote(tricky)}; printf %s "$1"`], {
         encoding: "utf8"
@@ -178,6 +204,27 @@ describe("mcp-config — per-client rendering", () => {
     expect(windowsToml).toContain('command = "C:\\\\Program Files\\\\nodejs\\\\node.exe"');
     expect(windowsToml).toContain('"C:\\\\Users\\\\O\'Brien\\\\Vault & Notes;$(BAD)"');
     expect(windowsToml).not.toContain('command = "& ');
+
+    const controlToml = renderClientBody("codex", {
+      ...base,
+      vault: "/abs/line\nwith\ttab\u0001and\u007fdel"
+    });
+    const argsLine = controlToml.split("\n").find((line) => line.startsWith("args = ")) ?? "";
+    expect(argsLine).toContain('"/abs/line\\nwith\\ttab\\u0001and\\u007fdel"');
+    expect(argsLine).not.toContain("\u0001");
+    expect(argsLine).not.toContain("\u007f");
+    expect(() => renderClientBody("codex", { ...base, http: true })).toThrow(/stdio only/);
+  });
+
+  it("preserves privacy arrays as native args in JSON clients", () => {
+    const parsed = JSON.parse(renderClientBody("cursor", privacyBase)) as {
+      mcpServers: Record<string, { args: string[] }>;
+    };
+    const args = parsed.mcpServers.obsidian?.args ?? [];
+    expect(args.slice(-6)).toEqual(buildPrivacyArgs(privacyBase));
+    expect(args).toContain("O'Brien.md");
+    // NEGATIVE control: JSON args are raw values, never shell-quoted copies.
+    expect(args).not.toContain(`'O'"'"'Brien.md'`);
   });
 
   it("http tier explains the serve-http bearer flow + a URL-form config", () => {
@@ -267,6 +314,16 @@ describe("mcp-config — preflight hint", () => {
     expect(hint).toMatch(/\/usr\/bin\/node .* setup --vault .* --include-pdfs/);
     expect(hint).toContain("/opt/enquire/dist/index.js install-model rerank-bge");
     expect(hint).toContain("/opt/enquire/dist/index.js doctor --tier hybrid-live --vault");
+  });
+  it("propagates the same privacy policy through setup and doctor hints", () => {
+    const hint = preflightHint(privacyBase);
+    const expectedPrivacy = "--exclude-glob 'Private/**' 'semi;colon/**' --read-paths 'Projects/**' 'O'\"'\"'Brien.md'";
+    expect(hint.match(/--exclude-glob/g)).toHaveLength(2);
+    expect(hint.match(/--read-paths/g)).toHaveLength(2);
+    expect(hint).toContain(`setup --vault '/abs/My Vault' ${expectedPrivacy}`);
+    expect(hint).toContain(`doctor --tier hybrid --vault '/abs/My Vault' ${expectedPrivacy}`);
+    // NEGATIVE control: install-model is vault-independent and carries no privacy args.
+    expect(hint).toMatch(/install-model rerank-bge\nThen verify/);
   });
   it("NEGATIVE control — basic tier does NOT tell the user to run setup", () => {
     const hint = preflightHint({ ...base, tier: "basic" });

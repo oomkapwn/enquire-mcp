@@ -279,23 +279,38 @@ function hybridExamplePackageIdentityProblems(raw: string, _previewVersion: stri
   return problems;
 }
 
-/** Setup completion must invoke the exact currently-running package copy, never a bare/global sibling. */
-function setupCompletionIdentityProblems(cliSource: string): string[] {
+/** Setup completion must invoke the exact entry identity captured once by the CLI guard. */
+function setupCompletionIdentityProblems(cliSource: string, indexSource: string): string[] {
   const marker = "✓ Embedder + indexes ready.";
   const start = cliSource.indexOf(marker);
   const section = start < 0 ? "" : cliSource.slice(Math.max(0, start - 900), start + 1800);
   const problems: string[] = [];
   if (!section) return ["missing setup completion section"];
-  const selfPrefixInterpolation = "$" + "{selfPrefix}";
+  const invocationPrefixInterpolation = "$" + "{invocationPrefix}";
   for (const markerText of [
-    "await fs.realpath(process.argv[1])",
-    "renderShellCommand(process.execPath",
     "process.platform",
-    `${selfPrefixInterpolation} install-model`,
-    `${selfPrefixInterpolation} doctor`,
-    `${selfPrefixInterpolation} serve`
+    `${invocationPrefixInterpolation} install-model`,
+    `${invocationPrefixInterpolation} doctor`,
+    `${invocationPrefixInterpolation} serve`
   ]) {
     if (!section.includes(markerText)) problems.push(`setup completion missing ${markerText}`);
+  }
+  for (const markerText of [
+    "const invocationPrefix = invocation",
+    "renderShellCommand(invocation.command, invocation.argsPrefix, process.platform)",
+    'renderShellCommand("npx", ["-y", exactPackageSpec], process.platform)'
+  ]) {
+    if (!cliSource.includes(markerText)) problems.push(`CLI invocation renderer missing ${markerText}`);
+  }
+  for (const markerText of [
+    "const argv = realpathSync(process.argv[1])",
+    "cliInvocation = { command: process.execPath, argsPrefix: [argv] }",
+    "main(cliInvocation)"
+  ]) {
+    if (!indexSource.includes(markerText)) problems.push(`CLI entry guard missing ${markerText}`);
+  }
+  if (cliSource.includes("await fs.realpath(process.argv[1])")) {
+    problems.push("setup completion re-resolves process.argv[1] after entry capture");
   }
   if (/`\s+enquire-mcp (?:install-model|doctor|serve)/.test(section)) {
     problems.push("setup completion retains a bare cross-install command");
@@ -1279,13 +1294,21 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "the package-identity detector must reject the former global-preflight/npx-runtime split"
     ).toBeGreaterThan(0);
     const cliSource = await read("src/cli.ts");
-    expect(setupCompletionIdentityProblems(cliSource)).toEqual([]);
+    const indexSource = await read("src/index.ts");
+    expect(setupCompletionIdentityProblems(cliSource, indexSource)).toEqual([]);
     expect(
       setupCompletionIdentityProblems(
-        'process.stdout.write("\\n✓ Embedder + indexes ready."); `   enquire-mcp install-model rerank-bge`;'
+        'process.stdout.write("\\n✓ Embedder + indexes ready."); `   enquire-mcp install-model rerank-bge`;',
+        indexSource
       ).length,
       "the setup-completion detector must reject bare follow-up commands"
     ).toBeGreaterThan(0);
+    expect(
+      setupCompletionIdentityProblems(
+        cliSource,
+        indexSource.replace("cliInvocation = { command: process.execPath, argsPrefix: [argv] };", "")
+      )
+    ).toContain("CLI entry guard missing cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
 
     const server = await read("src/server.ts");
     const serverRerankerDoc = /\/\*\*[^*\n]*reranker model alias[^*\n]*\*\//.exec(server)?.[0] ?? "";
@@ -1345,6 +1368,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         expect(current, `${file} must carry the current stable token`).toContain(stableToken);
         await fs.writeFile(fixtureFile, current.replaceAll(stableToken, `v${staleMajorMinor}.x`));
       }
+      // A neighboring line that merely says "after", "based on", or "gates"
+      // is not sufficient tombstone evidence for a current-state claim. The
+      // former broad history markers let this stale line pass.
+      const roadmapFixture = path.join(fixtureRoot, "ROADMAP.md");
+      const roadmap = await fs.readFile(roadmapFixture, "utf8");
+      await fs.writeFile(
+        roadmapFixture,
+        `After v1.0.0, an unrelated report based on v1.0 gates v1.0.\n` +
+          `stable v${staleMajorMinor}.x is the current release.\n${roadmap}`
+      );
       const oia = spawnSync(process.execPath, [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network"], {
         cwd: fixtureRoot,
         encoding: "utf8",
@@ -1358,6 +1391,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
           `[STALE-DOC-CURRENCY-CLAIM] ${file}:`
         );
       }
+      expect(output, "adjacent weak history wording must not mask a stale current claim").toContain(
+        "[STALE-DOC-CURRENCY-CLAIM] ROADMAP.md:2"
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

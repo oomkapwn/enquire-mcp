@@ -128,6 +128,8 @@ Want to test from the terminal instead? Once you've built the FTS5 index via `se
 You now have working TF-IDF search. To unlock the full hybrid stack:
 
 - **Prepare hybrid (`v3.12.0-rc.1+`)** — run `enquire-mcp setup --vault /absolute/path/to/your/vault`, `enquire-mcp install-model rerank-bge`, and `enquire-mcp doctor --tier hybrid --vault /absolute/path/to/your/vault` from the exact global installation selected in Step 1. Then run `enquire-mcp configure --tier hybrid --client claude-desktop --vault /absolute/path/to/your/vault`: its generated config and preflight pin the physical Node + enquire entry paths, preventing a different cwd or npx resolution from selecting another package-local cache.
+
+The physical pin deliberately prioritizes exact package/cache coherence over automatic upgrades. Re-run `configure` after moving or upgrading Node/enquire-mcp, changing installation method, or clearing an npx cache; a config whose pinned executable was removed cannot update itself.
 - **PDF search** — add `--include-pdfs` to setup, verify with `doctor --tier hybrid-live`, and generate the client config with `configure --tier hybrid-live`. PDFs get blended into `obsidian_search` results with `[page: N]` citation markers.
 - **Cross-encoder reranking** — pre-cache `rerank-bge`, then add `--enable-reranker`. Measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation).
 - **Sub-10ms top-K at scale** — add `--use-hnsw`. HNSW vector index, persisted to disk so cold starts stay ~50ms.

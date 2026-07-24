@@ -203,6 +203,38 @@ describe("runDoctor — tiers and readiness", () => {
     expect(result.checks.find((check) => check.id === "model:embedding-cache")?.status).toBe("warn");
   });
 
+  it("basic treats an invalid hybrid-only model selection as advisory", async () => {
+    const result = await diagnose({
+      tier: "basic",
+      modelEntry: undefined,
+      modelAlias: "not-a-model",
+      dependencyProbe: async () => false
+    });
+    expect(result.checks.find((check) => check.id === "model:selection")).toMatchObject({
+      status: "warn",
+      required: false
+    });
+    expect(result.ready).toBe(true);
+
+    const hybrid = await diagnose({
+      tier: "hybrid",
+      modelEntry: undefined,
+      modelAlias: "not-a-model",
+      dependencyProbe: async () => false
+    });
+    expect(hybrid.checks.find((check) => check.id === "model:selection")).toMatchObject({
+      status: "missing",
+      required: true
+    });
+    expect(hybrid.ready).toBe(false);
+  });
+
+  it("rejects an unknown tier at the programmatic boundary", async () => {
+    await expect(runDoctor({ vault: root, tier: "bogus" as never })).rejects.toThrow(
+      /Unknown doctor tier 'bogus'.*basic \| hybrid \| hybrid-live/
+    );
+  });
+
   it("publishes the exact required-check set for each tier", async () => {
     const basic = await diagnose({ tier: "basic", dependencyProbe: async () => false });
     const hybrid = await diagnose({ tier: "hybrid", dependencyProbe: async () => false });
@@ -473,9 +505,9 @@ describe("runDoctor — exact model cache", () => {
     expect(check?.detail).toContain("onnx/model_quantized.onnx");
   });
 
-  it("surfaces an invalid programmatic model alias as an error check", async () => {
-    const result = await diagnose({ modelEntry: undefined, modelAlias: "does-not-exist", tier: "basic" });
-    expect(result.checks.find((check) => check.id === "model:selection")?.status).toBe("error");
+  it("surfaces an invalid programmatic model alias as a required hybrid check", async () => {
+    const result = await diagnose({ modelEntry: undefined, modelAlias: "does-not-exist", tier: "hybrid" });
+    expect(result.checks.find((check) => check.id === "model:selection")?.status).toBe("missing");
     expect(result.ready).toBe(false);
   });
 
@@ -1256,9 +1288,32 @@ describe("runDoctor — privacy", () => {
       expect(result.checks.find((check) => check.id === "vault")?.detail).toContain("enumeration skipped");
       expect(enumerate).not.toHaveBeenCalled();
       expect(result.ready).toBe(false);
+      expect(result.checks.find((check) => check.id === "index:fts5")?.hint).toBeUndefined();
+      expect(result.checks.find((check) => check.id === "index:embed")?.hint).toBeUndefined();
     } finally {
       enumerate.mockRestore();
     }
+  });
+
+  it("repair hints preserve privacy filters and custom index locations", async () => {
+    const indexFile = path.join(cacheRoot, "custom fts.db");
+    const embedFile = path.join(cacheRoot, "custom embed.db");
+    const result = await diagnose({
+      indexFile,
+      embedFile,
+      excludeGlobs: ["Private/**", "semi;colon/**"],
+      readPaths: ["Projects/**"],
+      repairCommandPrefix: "/usr/bin/node '/opt/enquire mcp/dist/index.js'"
+    });
+    const indexHint = result.checks.find((check) => check.id === "index:fts5")?.hint ?? "";
+    const embedHint = result.checks.find((check) => check.id === "index:embed")?.hint ?? "";
+    const privacy = "--exclude-glob 'Private/**' 'semi;colon/**' --read-paths 'Projects/**'";
+    const canonicalRoot = await fs.realpath(root);
+    expect(indexHint).toContain(`index --vault ${canonicalRoot} --index-file '${indexFile}' ${privacy}`);
+    expect(embedHint).toContain(`build-embeddings --vault ${canonicalRoot} --embed-file '${embedFile}' ${privacy}`);
+    // NEGATIVE control: each repair command carries only its own storage override.
+    expect(indexHint).not.toContain("--embed-file");
+    expect(embedHint).not.toContain("--index-file");
   });
 });
 

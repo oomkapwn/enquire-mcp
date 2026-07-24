@@ -115,6 +115,12 @@ export const CACHE_FILE_HELP = "Override the persistent-cache file location";
 export const INDEX_FILE_HELP = "Override the FTS5 index file location";
 
 /**
+ * `--embed-file` flag help. Shared across every command that reads, builds,
+ * diagnoses or removes the persistent embedding index.
+ */
+export const EMBED_FILE_HELP = "Override the embedding-index (.embed.db) file location";
+
+/**
  * `--quantize-embeddings` flag help (v3.8.0-rc.11 M-1 root-class fix; caught
  * by the new cli-parity invariant). Pre-rc.11 serve had a 355-char detailed
  * description with v2.16 history + recall numbers + accepted aliases; serve-http

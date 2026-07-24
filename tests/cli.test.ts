@@ -136,6 +136,20 @@ describe("CLI entry-point guard (audit v0.7.5 P0)", () => {
     expect(parsed.mcpServers.obsidian?.args[0]).not.toBe(link);
   });
 
+  it("captures the physical CLI entry once and forbids later argv symlink re-resolution", async () => {
+    const indexSource = await fs.readFile(path.resolve(__dirname, "../src/index.ts"), "utf8");
+    const cliSource = await fs.readFile(path.resolve(__dirname, "../src/cli.ts"), "utf8");
+    const repeatedArgvRealpath = /(?:fs\.)?realpath(?:Sync)?\(\s*process\.argv\[1\]\s*\)/;
+
+    expect(indexSource).toContain("cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
+    expect(indexSource).toContain("main(cliInvocation)");
+    expect(repeatedArgvRealpath.test(cliSource)).toBe(false);
+
+    // NEGATIVE control: the detector catches the former action-time
+    // re-resolution that allowed a symlink retarget after the entry guard.
+    expect(repeatedArgvRealpath.test("const entry = await fs.realpath(process.argv[1]);")).toBe(true);
+  });
+
   it("invokes main() when run via /tmp on macOS (which itself is a symlink to /private/tmp)", async (ctx) => {
     const exists = await fs
       .stat(distEntry)
@@ -322,7 +336,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
 
   // v3.11.6-rc.4 (activation, audit P0) — `configure` prints a ready-to-paste
   // MCP client config for the given vault. Non-destructive (writes nothing).
-  it("`configure --vault <v> --client cursor` prints parseable mcpServers JSON, exit 0", (ctx) => {
+  it("`configure --vault <v> --client cursor` prints parseable mcpServers JSON, exit 0", async (ctx) => {
     if (!distExists()) return ctx.skip();
     const res = spawnSync(process.execPath, [distEntry, "configure", "--vault", vault, "--client", "cursor"], {
       encoding: "utf8",
@@ -333,10 +347,41 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // extract the fenced JSON body and assert it parses with the vault wired in
     const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
     const parsed = JSON.parse(json) as { mcpServers: Record<string, { command: string; args: string[] }> };
-    expect(parsed.mcpServers.obsidian?.args).toContain(vault);
+    expect(parsed.mcpServers.obsidian?.args).toContain(await fs.realpath(vault));
     expect(parsed.mcpServers.obsidian?.command).toBe(process.execPath);
     expect(parsed.mcpServers.obsidian?.args[0]).toBe(distEntry);
     expect(parsed.mcpServers.obsidian?.args).not.toContain("@oomkapwn/enquire-mcp@latest");
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("--exclude-glob");
+    expect(parsed.mcpServers.obsidian?.args).not.toContain("--read-paths");
+  });
+
+  it("`configure` preserves privacy policy in runtime, setup, and doctor commands", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const res = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "configure",
+        "--vault",
+        vault,
+        "--client",
+        "cursor",
+        "--exclude-glob",
+        "Private/**",
+        "semi;colon/**",
+        "--read-paths",
+        "Projects/**"
+      ],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(res.status).toBe(0);
+    const out = res.stdout ?? "";
+    const json = out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as { mcpServers: Record<string, { args: string[] }> };
+    const args = parsed.mcpServers.obsidian?.args ?? [];
+    expect(args.slice(-5)).toEqual(["--exclude-glob", "Private/**", "semi;colon/**", "--read-paths", "Projects/**"]);
+    expect(out.match(/--exclude-glob/g)).toHaveLength(3);
+    expect(out.match(/--read-paths/g)).toHaveLength(3);
   });
 
   it("`configure --tier bogus` fails fast (exit 1) with valid tiers listed", (ctx) => {
@@ -356,6 +401,57 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(unsafeName.status).toBe(1);
     expect(`${unsafeName.stdout ?? ""}${unsafeName.stderr ?? ""}`).toMatch(/invalid --name/);
     expect(unsafeName.stdout ?? "").not.toContain("touch_BAD -- npx");
+  });
+
+  it("`configure` rejects invalid vaults/privacy and incompatible HTTP clients before output", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const missing = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", path.join(tmpdir, "missing"), "--client", "cursor"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stderr ?? "").toMatch(/Vault not found/);
+    expect(missing.stdout ?? "").not.toContain("# enquire-mcp configure");
+
+    const fileVault = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", path.join(vault, "Apollo.md"), "--client", "cursor"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(fileVault.status).toBe(1);
+    expect(fileVault.stderr ?? "").toMatch(/not a directory/);
+
+    const invalidPrivacy = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--client", "cursor", "--exclude-glob", "   "],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(invalidPrivacy.status).toBe(1);
+    expect(invalidPrivacy.stderr ?? "").toMatch(/whitespace-only patterns/);
+    expect(invalidPrivacy.stdout ?? "").not.toContain("serve --vault");
+
+    if (process.platform !== "win32") {
+      const controlVault = path.join(tmpdir, "line\nbreak");
+      await fs.mkdir(controlVault);
+      const controlPath = spawnSync(
+        process.execPath,
+        [distEntry, "configure", "--vault", controlVault, "--client", "cursor"],
+        { encoding: "utf8", timeout: 15000 }
+      );
+      expect(controlPath.status).toBe(1);
+      expect(controlPath.stderr ?? "").toMatch(/control characters/);
+      expect(controlPath.stdout ?? "").not.toContain("# enquire-mcp configure");
+    }
+
+    const codexHttp = spawnSync(
+      process.execPath,
+      [distEntry, "configure", "--vault", vault, "--client", "codex", "--http"],
+      { encoding: "utf8", timeout: 15000 }
+    );
+    expect(codexHttp.status).toBe(1);
+    expect(codexHttp.stderr ?? "").toMatch(/--http is incompatible with --client codex/);
+    expect(codexHttp.stdout ?? "").not.toContain("[mcp_servers.");
   });
 
   it("`doctor --tier basic --json` reports basic READY on an unprepared accessible vault", async (ctx) => {
@@ -638,13 +734,28 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(metaBefore?.tokenize_mode).toBe("trigram");
     // Re-run `setup --skip-embeddings`. Pre-v3.6.4 this would silently
     // destroy trigram and rebuild as unicode61. Post-v3.6.4: preservation.
-    const setupResult = spawnSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
-      encoding: "utf8"
-    });
+    const setupResult = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "setup",
+        "--vault",
+        vault,
+        "--skip-embeddings",
+        "--exclude-glob",
+        "Private/**",
+        "--read-paths",
+        "*.md"
+      ],
+      { encoding: "utf8" }
+    );
     // v3.6.4 setup emits an info line when honoring trigram. Assert via
     // combined stdout/stderr.
     const combined = (setupResult.stdout ?? "") + (setupResult.stderr ?? "");
     expect(combined).toMatch(/honoring existing tokenize_mode=trigram/);
+    expect(combined.match(/--exclude-glob 'Private\/\*\*'/g)).toHaveLength(1);
+    expect(combined.match(/--read-paths '\*\.md'/g)).toHaveLength(1);
+    expect(combined).toMatch(/setup --vault .* --exclude-glob 'Private\/\*\*' --read-paths '\*\.md'/);
     // The on-disk meta must still be trigram after setup.
     const metaAfter = await peekFtsMetaSafe(indexFile);
     expect(metaAfter?.tokenize_mode).toBe("trigram");

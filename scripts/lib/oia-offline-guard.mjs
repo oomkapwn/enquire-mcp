@@ -41,6 +41,36 @@ function isOfflineEnableCall(node) {
   return node.arguments.length === 1 && unwrapParentheses(node.arguments[0]).kind === ts.SyntaxKind.TrueKeyword;
 }
 
+function isOfflineDisableCall(node) {
+  return (
+    isIdentifierCall(node, "setEmbeddingsOffline") &&
+    node.arguments.length === 1 &&
+    unwrapParentheses(node.arguments[0]).kind === ts.SyntaxKind.FalseKeyword
+  );
+}
+
+function hasInterveningCall(sourceFile, container, startNode, endNode, predicate) {
+  const start = startNode.getStart(sourceFile);
+  const end = endNode.getStart(sourceFile);
+  let found = false;
+  visit(container, (candidate) => {
+    if (found) return;
+    const position = candidate.getStart(sourceFile);
+    if (position > start && position < end && predicate(candidate)) found = true;
+  });
+  return found;
+}
+
+function hasOfflineResetBetween(sourceFile, container, startNode, endNode) {
+  return hasInterveningCall(
+    sourceFile,
+    container,
+    startNode,
+    endNode,
+    (candidate) => isOfflineDisableCall(candidate) || isIdentifierCall(candidate, "restoreOnlineEnv")
+  );
+}
+
 function firstIdentifierCall(node, name) {
   let found;
   visit(node, (candidate) => {
@@ -254,7 +284,12 @@ function cachedBranchGuard(sourceFile, functionName, conditionIdentifiers, retur
       }
     }
   }
-  return Boolean(guard && guardedReturn && guard.getStart(sourceFile) < guardedReturn.getStart(sourceFile));
+  return Boolean(
+    guard &&
+      guardedReturn &&
+      guard.getStart(sourceFile) < guardedReturn.getStart(sourceFile) &&
+      !hasOfflineResetBetween(sourceFile, branch, guard, guardedReturn)
+  );
 }
 
 function orderedFunctionBoundary(sourceFile, functionName, pathName) {
@@ -263,7 +298,12 @@ function orderedFunctionBoundary(sourceFile, functionName, pathName) {
   if (!fn?.body) return false;
   const guard = directOfflineEnableCall(fn.body);
   const path = firstIdentifierCall(fn.body, pathName);
-  return Boolean(guard && path && guard.getStart(sourceFile) < path.getStart(sourceFile));
+  return Boolean(
+    guard &&
+      path &&
+      guard.getStart(sourceFile) < path.getStart(sourceFile) &&
+      !hasOfflineResetBetween(sourceFile, fn.body, guard, path)
+  );
 }
 
 function runtimeActionStatus(cliSourceFile) {
@@ -300,7 +340,12 @@ function runtimeActionStatus(cliSourceFile) {
     }
     const guard = directOfflineEnableCall(callback.body);
     const path = firstIdentifierCall(callback, pathName);
-    status[command] = Boolean(guard && path && guard.getStart(cliSourceFile) < path.getStart(cliSourceFile));
+    status[command] = Boolean(
+      guard &&
+        path &&
+        guard.getStart(cliSourceFile) < path.getStart(cliSourceFile) &&
+        !hasOfflineResetBetween(cliSourceFile, callback.body, guard, path)
+    );
   }
   return status;
 }

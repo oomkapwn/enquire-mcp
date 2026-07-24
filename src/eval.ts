@@ -710,6 +710,9 @@ export function evalQuerySetFingerprint(queries: readonly EvalQuery[]): string {
 }
 
 function validateEvalQueryCohort(queries: readonly EvalQuery[]): void {
+  if (queries.length === 0) {
+    throw new Error("enquire eval: query cohort must contain at least one query");
+  }
   const seenIds = new Set<string>();
   for (let index = 0; index < queries.length; index++) {
     const query = queries[index];

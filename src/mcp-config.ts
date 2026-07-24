@@ -53,6 +53,10 @@ export type ConfigClient = (typeof CONFIG_CLIENTS)[number];
 export interface ConfigInput {
   /** Absolute vault path (the caller resolves it). */
   vault: string;
+  /** Privacy denylist propagated unchanged to setup, doctor, and runtime. */
+  excludeGlobs?: string[];
+  /** Privacy allowlist propagated unchanged to setup, doctor, and runtime. */
+  readPaths?: string[];
   /** Capability tier → which serve flags the generated config carries. */
   tier: ConfigTier;
   /** MCP server key / name in the client config. */
@@ -126,10 +130,24 @@ export function tierServeFlags(tier: ConfigTier): string[] {
   }
 }
 
+/**
+ * Build the canonical privacy argument vector shared by setup, doctor, repair
+ * hints, and generated runtime configs.
+ *
+ * @param input - Privacy patterns to preserve across every activation step.
+ * @returns Raw CLI arguments; renderers remain responsible for shell quoting.
+ */
+export function buildPrivacyArgs(input: Pick<ConfigInput, "excludeGlobs" | "readPaths">): string[] {
+  const args: string[] = [];
+  if (input.excludeGlobs?.length) args.push("--exclude-glob", ...input.excludeGlobs);
+  if (input.readPaths?.length) args.push("--read-paths", ...input.readPaths);
+  return args;
+}
+
 /** The `serve` / `serve-http` argument vector (after the package spec). */
 export function buildServeArgs(input: ConfigInput): string[] {
   const sub = input.http ? "serve-http" : "serve";
-  return [sub, "--vault", input.vault, ...tierServeFlags(input.tier)];
+  return [sub, "--vault", input.vault, ...tierServeFlags(input.tier), ...buildPrivacyArgs(input)];
 }
 
 /** The full local-stdio command + args (`npx -y <pkg> serve …`). */
@@ -194,9 +212,39 @@ export function renderShellCommand(
   return platform === "win32" && executable ? `& ${rendered}` : rendered;
 }
 
-/** TOML string literal (basic string, backslash + quote escaped). */
+/** TOML basic string with quotes, backslashes, and forbidden controls escaped. */
 function tomlStr(s: string): string {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  let escaped = "";
+  for (const character of s) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    switch (character) {
+      case "\b":
+        escaped += "\\b";
+        break;
+      case "\t":
+        escaped += "\\t";
+        break;
+      case "\n":
+        escaped += "\\n";
+        break;
+      case "\f":
+        escaped += "\\f";
+        break;
+      case "\r":
+        escaped += "\\r";
+        break;
+      case '"':
+        escaped += '\\"';
+        break;
+      case "\\":
+        escaped += "\\\\";
+        break;
+      default:
+        escaped +=
+          codePoint <= 0x1f || codePoint === 0x7f ? `\\u${codePoint.toString(16).padStart(4, "0")}` : character;
+    }
+  }
+  return `"${escaped}"`;
 }
 
 /** Human title + where the config goes, per client. */
@@ -228,6 +276,9 @@ export function clientMeta(client: ConfigClient): { title: string; location: str
 /** Render the config body (no header) for one client. */
 export function renderClientBody(client: ConfigClient, input: ConfigInput): string {
   requireValidServerName(input.name);
+  if (client === "codex" && input.http) {
+    throw new Error("Codex config supports stdio only; use the HTTP client form instead of --client codex --http");
+  }
   const { command, args } = runtimeCommandArgs(input);
   const name = input.name;
 
@@ -285,15 +336,31 @@ export function renderAllClients(input: ConfigInput): string {
 export function preflightHint(input: ConfigInput): string {
   const prefix = invocationShellPrefix(input);
   const shellLabel = input.platform === "win32" ? " (PowerShell)" : "";
+  const command = (args: readonly string[]) =>
+    `${prefix} ${args.map((arg) => shellQuote(arg, input.platform)).join(" ")}`;
+  const privacyArgs = buildPrivacyArgs(input);
   if (input.tier === "basic") {
-    return `Basic tier needs no indexing — it scans the vault live. Verify anytime${shellLabel}: ${prefix} doctor --tier basic --vault ${shellQuote(input.vault, input.platform)}`;
+    return `Basic tier needs no indexing — it scans the vault live. Verify anytime${shellLabel}: ${command([
+      "doctor",
+      "--tier",
+      "basic",
+      "--vault",
+      input.vault,
+      ...privacyArgs
+    ])}`;
   }
-  const pdfFlag = input.tier === "hybrid-live" ? " --include-pdfs" : "";
+  const setupArgs = [
+    "setup",
+    "--vault",
+    input.vault,
+    ...(input.tier === "hybrid-live" ? ["--include-pdfs"] : []),
+    ...privacyArgs
+  ];
   return (
     `Before this works, build the indexes and pre-cache both offline ML models (~120MB embedder + ~110MB reranker)${shellLabel}:\n` +
-    `  ${prefix} setup --vault ${shellQuote(input.vault, input.platform)}${pdfFlag}\n` +
-    `  ${prefix} install-model rerank-bge\n` +
+    `  ${command(setupArgs)}\n` +
+    `  ${command(["install-model", "rerank-bge"])}\n` +
     `Then verify readiness:\n` +
-    `  ${prefix} doctor --tier ${input.tier} --vault ${shellQuote(input.vault, input.platform)}`
+    `  ${command(["doctor", "--tier", input.tier, "--vault", input.vault, ...privacyArgs])}`
   );
 }

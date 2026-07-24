@@ -758,9 +758,6 @@ function cmpMajorMinor(a, b) {
 const HISTORY_CONTEXT_MARKERS = [
   /\binitial\b/i,
   /\bfrom\b.*\bv?\d+\.\d+/i, // "initial v3.7.0 from 2026-..."
-  /\bafter\b.*\bv?\d+\.\d+/i,
-  /\bbased\s+on\b.*\bv?\d+\.\d+/i,
-  /\bgates?\b.*\bv?\d+\.\d+/i,
   /\bsince\b/i,
   /\bPre-v?\d/i,
   /\b(history|legacy|tombstone|previously|was)\b/i,

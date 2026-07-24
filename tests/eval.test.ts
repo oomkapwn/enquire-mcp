@@ -178,6 +178,16 @@ describe("readQueriesJsonl (v2.12.0)", () => {
     await fs.rm(tmpFile, { force: true });
   });
 
+  it("rejects an empty effective cohort while accepting comments around a real query", async () => {
+    tmpFile = path.join(os.tmpdir(), `enquire-eval-${Date.now()}.jsonl`);
+    await fs.writeFile(tmpFile, "\n  // no queries follow\n\t\n");
+    await expect(readQueriesJsonl(tmpFile)).rejects.toThrow(/at least one query/);
+
+    await fs.writeFile(tmpFile, '// cohort note\n{"query":"real query","relevant":["a.md"]}\n');
+    await expect(readQueriesJsonl(tmpFile)).resolves.toHaveLength(1);
+    await fs.rm(tmpFile, { force: true });
+  });
+
   it("throws with line number on malformed JSON", async () => {
     tmpFile = path.join(os.tmpdir(), `enquire-eval-${Date.now()}.jsonl`);
     await fs.writeFile(tmpFile, '{"query":"ok","relevant":["a.md"]}\nthis is not json');
@@ -243,6 +253,23 @@ describe("runEval (v2.12.0)", () => {
     for (const suffix of ["", "-wal", "-shm"]) {
       await fs.rm(`${dbFile}${suffix}`, { force: true });
     }
+  });
+
+  it("rejects a direct empty cohort before retrieval while accepting one query", async () => {
+    const v = new Vault(root);
+    const common = {
+      vault: v,
+      ftsIndex: idx,
+      embedFile: path.join(root, "nonexistent.embed.db"),
+      k: 10
+    };
+    await expect(runEval({ ...common, queries: [] })).rejects.toThrow(/at least one query/);
+    await expect(
+      runEval({
+        ...common,
+        queries: [{ id: "control", query: "Apollo", relevant: ["apollo.md"] }]
+      })
+    ).resolves.toMatchObject({ query_count: 1, query_errors: 0 });
   });
 
   it("scores a single query with known-relevant docs", async () => {

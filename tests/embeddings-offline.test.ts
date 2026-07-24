@@ -201,6 +201,14 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         "query"
       );
 
+      const resetBeforeQueryCli = sources.cliSrc.replace(
+        queryGuard,
+        `${queryGuard.split("\n")[0]}\n      setEmbeddingsOffline(false);\n      const v = new Vault(opts.vault);`
+      );
+      expect(
+        inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: resetBeforeQueryCli }).missingRuntimeActions
+      ).toContain("query");
+
       const shadowedCli = sources.cliSrc.replace(
         queryGuard,
         `      const setEmbeddingsOffline = () => {};\n${queryGuard}`
@@ -245,6 +253,24 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       expect(inspectEmbeddingsOfflineGuards({ ...sources, embSrc: wrongRerankerCondition }).cachedRerankerGuard).toBe(
         false
       );
+
+      const restoredCachedPipeline = sources.embSrc.replace(
+        "    if (transformersModule) applyOfflineEnv(transformersModule);\n    return pipelineCtor;",
+        "    if (transformersModule) applyOfflineEnv(transformersModule);\n" +
+          "    if (transformersModule) restoreOnlineEnv(transformersModule);\n" +
+          "    return pipelineCtor;"
+      );
+      expect(inspectEmbeddingsOfflineGuards({ ...sources, embSrc: restoredCachedPipeline }).cachedPipelineGuard).toBe(
+        false
+      );
+
+      const prepareBoundary = "  setEmbeddingsOffline();\n  // v3.11.5-rc.1 CRL-1";
+      expect(sources.serverSrc).toContain(prepareBoundary);
+      const resetServer = sources.serverSrc.replace(
+        prepareBoundary,
+        "  setEmbeddingsOffline();\n  setEmbeddingsOffline(false);\n  // v3.11.5-rc.1 CRL-1"
+      );
+      expect(inspectEmbeddingsOfflineGuards({ ...sources, serverSrc: resetServer }).serverBoundary).toBe(false);
     } finally {
       vi.doUnmock("@huggingface/transformers");
       vi.resetModules();

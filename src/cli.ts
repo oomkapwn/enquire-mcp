@@ -8,6 +8,7 @@ import {
   CONFIG_TIER_HELP,
   DIAGNOSTIC_SEARCH_TOOLS_HELP,
   DISABLED_TOOLS_HELP,
+  EMBED_FILE_HELP,
   ENABLE_WRITE_HELP,
   ENABLED_TOOLS_HELP,
   INDEX_FILE_HELP,
@@ -34,6 +35,7 @@ import {
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
 import { VERSION } from "./index.js";
 import {
+  buildPrivacyArgs,
   CONFIG_CLIENTS,
   CONFIG_TIERS,
   type ConfigClient,
@@ -172,6 +174,9 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
  * not catch — an unexpected throw propagates to the top-level handler in
  * `index.ts` which prints it and exits non-zero.
  *
+ * @param invocation - Physical Node + package entry identity captured by the
+ * CLI entry guard. Programmatic callers may omit it and use the exact-version
+ * npx fallback for generated commands.
  * @returns A promise that resolves once argument parsing + the selected
  *   subcommand's action have completed (commander's `parseAsync`).
  * @example
@@ -183,8 +188,12 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
  *
  * v3.9.0-rc.28 (external-audit M-4) — the entry point previously had zero TSDoc.
  */
-export async function main(): Promise<void> {
+export async function main(invocation?: ConfigInput["invocation"]): Promise<void> {
   const program = new Command();
+  const exactPackageSpec = `@oomkapwn/enquire-mcp@${VERSION}`;
+  const invocationPrefix = invocation
+    ? renderShellCommand(invocation.command, invocation.argsPrefix, process.platform)
+    : renderShellCommand("npx", ["-y", exactPackageSpec], process.platform);
   program
     .name("enquire-mcp")
     .description("enquire — MCP server for Obsidian vaults. Named after Tim Berners-Lee's 1980 prototype of the WWW.")
@@ -723,7 +732,7 @@ export async function main(): Promise<void> {
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
-    .option("--embed-file <path>", "Override the .embed.db file location")
+    .option("--embed-file <path>", EMBED_FILE_HELP)
     .option("--exclude-glob <pattern...>", "Exclude paths matching glob (repeatable)")
     .option("--read-paths <pattern...>", "Strict allowlist of glob patterns (repeatable)")
     .option(
@@ -816,7 +825,7 @@ export async function main(): Promise<void> {
       "Delete the embedding index files (.embed.db + WAL/SHM sidecar + HNSW .hnsw.bin/.hnsw.meta.json sidecars) for a given vault"
     )
     .requiredOption("--vault <path>", "Vault whose embedding index to delete")
-    .option("--embed-file <path>", "Override the embedding-index file location")
+    .option("--embed-file <path>", EMBED_FILE_HELP)
     .action(async (opts: { vault: string; embedFile?: string }) => {
       const vault = new Vault(opts.vault);
       await vault.ensureExists();
@@ -844,6 +853,8 @@ export async function main(): Promise<void> {
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--tier <tier>", CONFIG_TIER_HELP)
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--embed-file <path>", EMBED_FILE_HELP)
     .option(
       "--exclude-glob <pattern...>",
       "Privacy denylist (same semantics as `serve`) — live vault content counts reflect the filter; this is not a retroactive index-membership or purge audit."
@@ -854,7 +865,15 @@ export async function main(): Promise<void> {
     )
     .option("--json", "Emit machine-readable JSON instead of the colored banner")
     .action(
-      async (opts: { vault: string; tier?: string; json?: boolean; excludeGlob?: string[]; readPaths?: string[] }) => {
+      async (opts: {
+        vault: string;
+        tier?: string;
+        indexFile?: string;
+        embedFile?: string;
+        json?: boolean;
+        excludeGlob?: string[];
+        readPaths?: string[];
+      }) => {
         const tier = opts.tier ?? "hybrid";
         if (!isConfigTier(tier)) {
           process.stderr.write(`enquire doctor: invalid --tier '${tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
@@ -864,16 +883,10 @@ export async function main(): Promise<void> {
         const result = await runDoctor({
           vault: opts.vault,
           tier,
-          ...(process.argv[1]
-            ? {
-                repairCommandPrefix: renderShellCommand(
-                  process.execPath,
-                  [await fs.realpath(process.argv[1])],
-                  process.platform
-                ),
-                repairCommandPlatform: process.platform
-              }
-            : {}),
+          ...(opts.indexFile ? { indexFile: opts.indexFile } : {}),
+          ...(opts.embedFile ? { embedFile: opts.embedFile } : {}),
+          repairCommandPrefix: invocationPrefix,
+          repairCommandPlatform: process.platform,
           ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
           ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
         });
@@ -896,55 +909,91 @@ export async function main(): Promise<void> {
     .option("--tier <tier>", CONFIG_TIER_HELP)
     .option("--name <name>", "MCP server key/name in the generated config (default: obsidian)", "obsidian")
     .option("--http", "Emit the remote serve-http (Streamable HTTP + bearer) form instead of local stdio")
-    .action(async (opts: { vault: string; client?: string; tier?: string; name?: string; http?: boolean }) => {
-      const tier = opts.tier ?? "hybrid";
-      if (!isConfigTier(tier)) {
-        process.stderr.write(`enquire configure: invalid --tier '${opts.tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
-        process.exit(1);
+    .option("--exclude-glob <pattern...>", "Privacy denylist propagated to setup, doctor, and runtime.")
+    .option("--read-paths <pattern...>", "Privacy allowlist propagated to setup, doctor, and runtime.")
+    .action(
+      async (opts: {
+        vault: string;
+        client?: string;
+        tier?: string;
+        name?: string;
+        http?: boolean;
+        excludeGlob?: string[];
+        readPaths?: string[];
+      }) => {
+        const tier = opts.tier ?? "hybrid";
+        if (!isConfigTier(tier)) {
+          process.stderr.write(`enquire configure: invalid --tier '${opts.tier}'. Use ${CONFIG_TIERS.join(" | ")}.\n`);
+          process.exit(1);
+        }
+        if (opts.client && !CONFIG_CLIENTS.includes(opts.client as ConfigClient)) {
+          process.stderr.write(
+            `enquire configure: invalid --client '${opts.client}'. Use one of: ${CONFIG_CLIENTS.join(", ")} (or omit for all).\n`
+          );
+          process.exit(1);
+        }
+        if (opts.http && opts.client && opts.client !== "http") {
+          process.stderr.write(
+            `enquire configure: --http is incompatible with --client ${opts.client}; use --client http or omit --client.\n`
+          );
+          process.exit(1);
+        }
+        const name = opts.name ?? "obsidian";
+        if (!isValidServerName(name)) {
+          process.stderr.write(
+            "enquire configure: invalid --name. Use only letters, digits, dot, underscore, or hyphen.\n"
+          );
+          process.exit(1);
+        }
+        // Resolve and validate before emitting a config. A ready-looking snippet
+        // for a missing/file vault would fail only after a client installs it.
+        let configuredVault: Vault;
+        try {
+          configuredVault = new Vault(path.resolve(opts.vault), {
+            ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+            ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+          });
+          await configuredVault.ensureExists();
+          if (
+            [...configuredVault.root].some((character) => {
+              const codePoint = character.codePointAt(0) ?? 0;
+              return codePoint <= 0x1f || codePoint === 0x7f;
+            })
+          ) {
+            throw new Error("Vault paths containing control characters cannot be rendered safely");
+          }
+        } catch (error) {
+          process.stderr.write(
+            `enquire configure: invalid vault/privacy configuration: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`
+          );
+          process.exit(1);
+        }
+        const input: ConfigInput = {
+          vault: configuredVault.root,
+          tier,
+          name,
+          http: opts.http ?? false,
+          ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+          ...(opts.readPaths ? { readPaths: opts.readPaths } : {}),
+          packageSpec: exactPackageSpec,
+          platform: process.platform,
+          ...(invocation ? { invocation } : {})
+        };
+        const body =
+          opts.client && opts.client !== "http" && input.http
+            ? renderClientConfig("http", input)
+            : opts.client
+              ? renderClientConfig(opts.client as ConfigClient, input)
+              : input.http
+                ? renderClientConfig("http", input)
+                : renderAllClients(input);
+        process.stdout.write(`# enquire-mcp configure — ${input.name} → ${input.vault} (${tier})\n\n`);
+        process.stdout.write(`${body}\n\n`);
+        process.stdout.write(`---\n${preflightHint(input)}\n`);
       }
-      if (opts.client && !CONFIG_CLIENTS.includes(opts.client as ConfigClient)) {
-        process.stderr.write(
-          `enquire configure: invalid --client '${opts.client}'. Use one of: ${CONFIG_CLIENTS.join(", ")} (or omit for all).\n`
-        );
-        process.exit(1);
-      }
-      const name = opts.name ?? "obsidian";
-      if (!isValidServerName(name)) {
-        process.stderr.write(
-          "enquire configure: invalid --name. Use only letters, digits, dot, underscore, or hyphen.\n"
-        );
-        process.exit(1);
-      }
-      // Resolve to an absolute path so the emitted config is portable (a
-      // relative --vault would be meaningless from the client's cwd).
-      const input: ConfigInput = {
-        vault: path.resolve(opts.vault),
-        tier,
-        name,
-        http: opts.http ?? false,
-        packageSpec: `@oomkapwn/enquire-mcp@${VERSION}`,
-        platform: process.platform,
-        ...(process.argv[1]
-          ? {
-              invocation: {
-                command: process.execPath,
-                argsPrefix: [await fs.realpath(process.argv[1])]
-              }
-            }
-          : {})
-      };
-      const body =
-        opts.client && opts.client !== "http" && input.http
-          ? renderClientConfig("http", input)
-          : opts.client
-            ? renderClientConfig(opts.client as ConfigClient, input)
-            : input.http
-              ? renderClientConfig("http", input)
-              : renderAllClients(input);
-      process.stdout.write(`# enquire-mcp configure — ${input.name} → ${input.vault} (${tier})\n\n`);
-      process.stdout.write(`${body}\n\n`);
-      process.stdout.write(`---\n${preflightHint(input)}\n`);
-    });
+    );
 
   program
     .command("setup")
@@ -1014,9 +1063,30 @@ export async function main(): Promise<void> {
           idx.close();
         }
 
+        const quotedVault = shellQuote(v.root, process.platform);
+        const privacyArgs = buildPrivacyArgs({
+          ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
+          ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+        })
+          .map((arg) => shellQuote(arg, process.platform))
+          .join(" ");
+        const privacySuffix = privacyArgs ? ` ${privacyArgs}` : "";
+
         if (opts.skipEmbeddings) {
           process.stdout.write("\n>> Step 2-3 skipped (--skip-embeddings)\n");
-          process.stdout.write("\nSetup partial. Run without --skip-embeddings to enable ML hybrid retrieval.\n");
+          const modelSuffix =
+            command.getOptionValueSource("embeddingModel") === "cli"
+              ? ` --embedding-model ${shellQuote(opts.embeddingModel ?? DEFAULT_MODEL_ALIAS, process.platform)}`
+              : "";
+          const quantizationSuffix =
+            command.getOptionValueSource("quantizeEmbeddings") === "cli"
+              ? ` --quantize-embeddings ${shellQuote(opts.quantizeEmbeddings ?? "f32", process.platform)}`
+              : "";
+          const pdfSuffix = opts.includePdfs ? " --include-pdfs" : "";
+          process.stdout.write(
+            "\nSetup partial. Continue without dropping the vault privacy policy:\n" +
+              `   ${invocationPrefix} setup --vault ${quotedVault}${modelSuffix}${quantizationSuffix}${pdfSuffix}${privacySuffix}\n`
+          );
           return;
         }
 
@@ -1089,26 +1159,22 @@ export async function main(): Promise<void> {
         }
 
         const doctorTier = opts.includePdfs ? "hybrid-live" : "hybrid";
-        const quotedVault = shellQuote(v.root, process.platform);
         // Keep follow-up commands on the exact package copy that performed
         // setup. Model caches are package-local, so a bare global command or a
         // fresh npx resolution could validate/start a different cache root.
-        const currentEntry = process.argv[1] ? await fs.realpath(process.argv[1]) : undefined;
-        const selfPrefix = currentEntry
-          ? renderShellCommand(process.execPath, [currentEntry], process.platform)
-          : renderShellCommand("npx", ["-y", `@oomkapwn/enquire-mcp@${VERSION}`], process.platform);
         const shellLabel = process.platform === "win32" ? " (PowerShell)" : "";
         process.stdout.write(`\n✓ Embedder + indexes ready. Complete the exact tier preflight${shellLabel}:\n`);
         process.stdout.write(
-          `   ${selfPrefix} install-model ${DEFAULT_RERANKER_ALIAS}\n` +
-            `   ${selfPrefix} doctor --tier ${doctorTier} --vault ${quotedVault}\n`
+          `   ${invocationPrefix} install-model ${DEFAULT_RERANKER_ALIAS}\n` +
+            `   ${invocationPrefix} doctor --tier ${doctorTier} --vault ${quotedVault}${privacySuffix}\n`
         );
         process.stdout.write("Then run:\n");
         process.stdout.write(
-          `   ${selfPrefix} serve --vault ${quotedVault} --persistent-index --enable-reranker --use-hnsw`
+          `   ${invocationPrefix} serve --vault ${quotedVault} --persistent-index --enable-reranker --use-hnsw`
         );
         if (opts.includePdfs) process.stdout.write(" --include-pdfs --watch");
         if (quantization !== "f32") process.stdout.write(` --quantize-embeddings ${quantization}`);
+        process.stdout.write(privacySuffix);
         process.stdout.write("\n");
       }
     );

@@ -22,7 +22,7 @@ import {
   resolveTransformersCacheDir
 } from "./embeddings.js";
 import { defaultIndexFile, type TokenizeMode } from "./fts5.js";
-import { type ConfigTier, shellQuote } from "./mcp-config.js";
+import { buildPrivacyArgs, CONFIG_TIERS, type ConfigTier, isConfigTier, shellQuote } from "./mcp-config.js";
 import { EMBED_DB_SCHEMA_VERSION, FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { Vault } from "./vault.js";
 
@@ -936,7 +936,11 @@ export interface RunDoctorOptions {
  */
 export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const checks: DoctorCheck[] = [];
-  const tier = opts.tier ?? "hybrid";
+  const requestedTier: string = opts.tier ?? "hybrid";
+  if (!isConfigTier(requestedTier)) {
+    throw new Error(`Unknown doctor tier '${requestedTier}'. Use ${CONFIG_TIERS.join(" | ")}.`);
+  }
+  const tier = requestedTier;
   const repairPrefix = opts.repairCommandPrefix ?? "<same-enquire-package-invocation>";
   const dependencyProbe = opts.dependencyProbe ?? probeOptionalDep;
   const safeProbe = async (specifier: string): Promise<boolean> => {
@@ -984,6 +988,24 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       detail: `${opts.excludeGlobs?.length ?? 0} exclude-glob denylist · ${opts.readPaths?.length ?? 0} read-path allowlist pattern(s)`
     });
   }
+  const renderRepairHint = (
+    subcommand: "index" | "build-embeddings",
+    fileFlag: "--index-file" | "--embed-file",
+    fileOverride?: string
+  ): string | undefined => {
+    if (!privacyConfigValid) return undefined;
+    const args = [
+      subcommand,
+      "--vault",
+      vault.root,
+      ...(fileOverride ? [fileFlag, path.resolve(fileOverride)] : []),
+      ...buildPrivacyArgs({
+        ...(opts.excludeGlobs ? { excludeGlobs: opts.excludeGlobs } : {}),
+        ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
+      })
+    ];
+    return `${repairPrefix} ${args.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ")}`;
+  };
 
   // 1. Vault path exists + is readable.
   let vaultExists = false;
@@ -1096,8 +1118,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     checks.push({
       id: "model:selection",
       label: "Embedding model selection",
-      status: "error",
-      required: true,
+      status: requiredFailureStatus(tier, "hybrid"),
+      required: capabilityRequired(tier, "hybrid"),
       detail: error instanceof Error ? error.message : String(error),
       hint: `Use one of: ${Object.keys(EMBEDDING_MODELS).join(", ")}`
     });
@@ -1136,7 +1158,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
             status: requiredFailureStatus(tier, "hybrid"),
             required: capabilityRequired(tier, "hybrid"),
             detail: `${indexFile} is incompatible: ${problems.join("; ")}`,
-            hint: `${repairPrefix} index --vault ${shellQuote(vault.root, opts.repairCommandPlatform)}`
+            hint: renderRepairHint("index", "--index-file", opts.indexFile)
           });
         }
       } else {
@@ -1151,7 +1173,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
               ? inspection.issue.includes("active SQLite")
                 ? "Stop active enquire-mcp processes, then run doctor again"
                 : "The source was left untouched; inspect it separately or retry when it is stable"
-              : `${repairPrefix} index --vault ${shellQuote(vault.root, opts.repairCommandPlatform)}`
+              : renderRepairHint("index", "--index-file", opts.indexFile)
         });
       }
     } else {
@@ -1215,7 +1237,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
             status: requiredFailureStatus(tier, "hybrid"),
             required: capabilityRequired(tier, "hybrid"),
             detail: `${embedFile} is incompatible: ${problems.join("; ")}`,
-            hint: `${repairPrefix} build-embeddings --vault ${shellQuote(vault.root, opts.repairCommandPlatform)}`
+            hint: renderRepairHint("build-embeddings", "--embed-file", opts.embedFile)
           });
         }
       } else {
@@ -1230,7 +1252,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
               ? inspection.issue.includes("active SQLite")
                 ? "Stop active enquire-mcp processes, then run doctor again"
                 : "The source was left untouched; inspect it separately or retry when it is stable"
-              : `${repairPrefix} build-embeddings --vault ${shellQuote(vault.root, opts.repairCommandPlatform)}`
+              : renderRepairHint("build-embeddings", "--embed-file", opts.embedFile)
         });
       }
     } else {

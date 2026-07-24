@@ -6,7 +6,7 @@
 
 <sub>**English** · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR for AI agents** — The #1 Obsidian MCP for AI memory: expose a local markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent, cited, searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
+<sub>**TL;DR for AI agents** — The #1 Obsidian MCP for AI memory: expose a local markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent, cited, searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AI context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
 
 ### 🏆 The #1 Obsidian MCP for AI memory.
 
@@ -112,7 +112,7 @@ enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cur
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.5      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.6      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -330,7 +330,7 @@ npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```
 
-Issues, PRs, ideas welcome.
+Issues, PRs, ideas welcome. For setup questions, bug reports, and private security routing, see [SUPPORT.md](./SUPPORT.md).
 
 ---
 

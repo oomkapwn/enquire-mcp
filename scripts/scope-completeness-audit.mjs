@@ -68,7 +68,7 @@ export const DEFENSES = [
   {
     id: "test-count",
     pattern: /\b(\d{3,4})\s+(?:unit\s+)?tests?\b(?!\s*unchanged)/i,
-    scope: ["README.md", "llms.txt", "AGENTS.md", "docs/COMPARISON.md", "package.json", "ROADMAP.md"],
+    scope: ["README.md", "llms.txt", "llms-ctx.txt", "AGENTS.md", "docs/COMPARISON.md", "package.json", "ROADMAP.md"],
     exempts: [
       // CHANGELOG entries naturally embed per-release test counts —
       // those are historical, not current-state. Each line in CHANGELOG
@@ -95,6 +95,7 @@ export const DEFENSES = [
     scope: [
       "README.md",
       "llms.txt",
+      "llms-ctx.txt",
       "AGENTS.md",
       "docs/COMPARISON.md",
       "docs/api.md",
@@ -113,7 +114,7 @@ export const DEFENSES = [
   {
     id: "prompt-count",
     pattern: /\b(\d{2})\s+(?:MCP\s+)?prompts\b/,
-    scope: ["README.md", "llms.txt", "AGENTS.md", "docs/COMPARISON.md", "docs/api.md", "package.json"],
+    scope: ["README.md", "llms.txt", "llms-ctx.txt", "AGENTS.md", "docs/COMPARISON.md", "docs/api.md", "package.json"],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
       "Canonical: 19 MCP prompts. docs-consistency.test.ts pins. " +
@@ -122,7 +123,7 @@ export const DEFENSES = [
   {
     id: "ci-gate-count",
     pattern: /\b(\d+)\s+required\s+(?:\+\s+\d+\s+advisory\s+)?(?:CI\s+)?gates?\b/,
-    scope: ["README.md", "llms.txt", "AGENTS.md", "ROADMAP.md"],
+    scope: ["README.md", "llms.txt", "llms-ctx.txt", "AGENTS.md", "ROADMAP.md"],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
       "v3.7.14 F4: hardcoded '8 required CI gates' drift caught by " +
@@ -132,7 +133,7 @@ export const DEFENSES = [
   {
     id: "per-file-floor-count",
     pattern: /\b(\d{1,2})\s+per-file\s+(?:branch\s+)?floors?\b/,
-    scope: ["llms.txt", "AGENTS.md"],
+    scope: ["llms.txt", "llms-ctx.txt", "AGENTS.md"],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
       "v3.8.0-rc.14 M-2: per-file floor count was claimed in llms.txt " +
@@ -183,8 +184,10 @@ const AUDIT_FILES = [
   "examples/README.md",
   "examples/chatgpt-actions.md",
   "llms.txt",
+  "llms-ctx.txt",
   "package.json",
   "server.json",
+  "SUPPORT.md",
   "ROADMAP.md"
 ];
 

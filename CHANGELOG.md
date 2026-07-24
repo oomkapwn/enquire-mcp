@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.6] — 2026-07-24
+
+> **TL;DR:** **AI agents, registry clients, npm consumers, and people asking for help now get a direct, owned route into the project instead of inferring it from the README alone.** Added a curated `llms-ctx.txt` execution context, shipped both AI-readable text surfaces in the npm tarball, added `CODEOWNERS` and a security-aware `SUPPORT.md`, and filled the MCP Registry's supported `title` + `websiteUrl` fields. GitHub's capped topic set now targets the product's adjacent leadership categories — context engineering, agentic RAG, hybrid search, and semantic search — while retaining the core memory, Obsidian, MCP, and primary-agent terms. A schema audit deliberately rejects the backlog's proposed `server.json` categories/keywords: the official 2025-12-11 schema does not define them, and the official Registry roadmap explicitly excludes tags/categories. Runtime behavior is unchanged; **1692 → 1692 source tests.**
+>
+> **Method note:** work resumed from a fresh `origin/main` worktree after independently re-auditing rc.5: PR #382's squash SHA, annotated tag target, all release/CI jobs, npm `rc` dist-tag + `gitHead` + attestation metadata, GitHub Pages, stable MCP Registry entry, open PR/issues, Dependabot, and CodeQL state all agreed. The discoverability implementation was then derived from the current llms.txt proposal and official MCP Registry sources rather than copying the stale backlog field names. `llms-ctx.txt` reuses existing project contracts and is added to the same numeric, embedding-catalog, release-posture, offline-runtime, SLSA, version-currency, and scope-completeness defenses as `llms.txt`. The existing positive and negative-control declarations were broadened in place, so the invariant gains coverage without changing the source-test count. The live GitHub-topic invariant now rejects both missing and unexpected topics, closing the previous eight-topic blind spot.
+
+### Added
+
+- **Self-contained AI-agent context.** `llms-ctx.txt` gives an agent one compact product, activation, minimum-loop, capability, retrieval, trust, and recovery contract with canonical source links. README and `llms.txt` link it directly; npm now packages both `llms.txt` and `llms-ctx.txt`.
+- **Ownership and support routing.** `.github/CODEOWNERS` assigns the whole repository to `@oomkapwn`. `SUPPORT.md` separates Discussions, reproducible bugs, and private security disclosure, lists a useful redacted diagnostic payload, and explicitly warns against posting vault data or tokens.
+- **Supported MCP Registry identity.** `server.json` now supplies the schema-defined human-readable title and canonical project URL.
+
+### Changed
+
+- **Exact GitHub topic portfolio.** Replaced the narrow `aider`, `windsurf`, `zed`, and `gemini-cli` slots with `context-engineering`, `agentic-rag`, `hybrid-search`, and `semantic-search`; those clients remain npm keywords and are still supported through MCP. The invariant now pins the complete 20-topic set, not a permissive subset.
+- **Public roadmap truth.** Closed the autonomous AI-search/repo-page tail, recorded why Registry categories/keywords were not added, marked Discussions as already enabled, and separated the shipped ownership/support files from the still-open SLSA L3/SBOM workflow work.
+
+### Tests (1692)
+
+- Extended the existing `llms.txt` numeric and embedding-catalog checks to `llms-ctx.txt`, retaining their intentionally bad fixtures as behavior-discriminating negative controls.
+- Added `llms-ctx.txt` and `SUPPORT.md` to the state-driven OIA and scope-completeness inventories; offline-model, OCR, SLSA-level, CI-posture, and version-currency claims now patrol the new surface.
+- Tightened the authenticated live GitHub metadata test to report both missing and unexpected topics; its existing empty, partial, stale-extra, and exact-set controls prove both directions.
+
 ## [3.12.0-rc.5] — 2026-07-24
 
 > **TL;DR:** **The strict retrieval benchmark now proves model readiness through actual inference and a complete synthetic embedding sync, while the public project page leads with an explicit TOP-1 product case instead of advertising alternatives.** A corrupt or incompatible cached model could previously fail only during per-note inference; the normal fail-soft sync then skipped every note while `run-benchmarks.mjs` still set `embed_ready=true`, allowing strict canonical evidence to look complete with zero embedding chunks. The benchmark now preflights inference and vector dimensionality, rejects incomplete synthetic syncs, records diagnostic degradation as `meta.partial` in the JSON artifact, and ships a process-level present/missing/corrupt × strict/diagnostic matrix. README plus all 10 translations now state **“The #1 Obsidian MCP for AI memory,”** prove the claim through an enquire-only leadership table, and remove competitor CTAs from the conversion funnel. The pre-publication audit also caught the newly disclosed high-severity `js-yaml` flow-collection DoS and upgrades the direct runtime dependency from 5.2.1 to patched 5.2.2 instead of allowlisting it. Runtime serve behavior is otherwise unchanged; **1690 → 1692 source tests.**

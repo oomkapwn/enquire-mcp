@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.5 candidate: compiled strict/diagnostic model-state benchmark matrix plus the TOP-1 project-page funnel on top of the rc.4 evidence refresh, rc.3 retrieval matrix and rc.2 source-preserving activation/doctor baseline).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.6 candidate: autonomous AI/repo discoverability tail on top of rc.5's compiled strict/diagnostic model-state benchmark matrix and TOP-1 project-page funnel).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -59,7 +59,7 @@ Severity-ordered, phased per the project's "no big-bang" rule; audit checkpoint 
 
 The capability gap is won; this closes the *visibility* gap. (Several items below need an account/OAuth action and are listed under "Requires the maintainer".)
 
-- [~] **rc.14 — AI-search + repo-page.** MOSTLY DONE (2026-07-17 audit): FAQPage+SoftwareSourceCode JSON-LD shipped v3.9.0-rc.17, glama.json rc.17, hero one-liner rc.27, social-preview rc.29. STILL OPEN: `llms-ctx.txt` companion · `server.json` categories/keywords (schema re-verify) · canonical-URL comments. Original scope: **FAQPage JSON-LD** (highest AI-citation rate; the README FAQ already has the Q&A pairs — extend `inject-jsonld.mjs`) + `SoftwareSourceCode`/`targetProduct` + `maintainer`/`dateModified`/`featureList` in the existing JSON-LD · `llms.txt` blockquote split + generated `llms-ctx.txt` companion · `server.json` `categories`/`keywords`/`homepage` (within the 2025-12-11 schema) · `glama.json` (maintainer + related servers) · canonical-URL comments in README · move the `claude mcp add` one-liner into the hero · **regenerate the social-preview** (`scripts/render-social-preview.mjs`) — dark GitHub-native palette; deliberately count-agnostic (rc.29 dropped hardcoded stat-pills to avoid a numeric-drift surface).
+- [x] **AI-search + repo-page.** CLOSED in v3.12.0-rc.6: the curated `llms-ctx.txt` companion, npm-packaged `llms.txt`, supported MCP Registry `title` + `websiteUrl`, exact 20-topic GitHub discoverability set, `CODEOWNERS`, and `SUPPORT.md` complete the autonomous tail. The official 2025-12-11 Registry schema was re-read before editing: it has no standard `categories` or `keywords`, and the Registry roadmap explicitly says tags/categories are unsupported, so no vendor-shaped fields were invented. Canonical identity is already carried by the JSON-LD graph (`@id`, `codeRepository`, `targetProduct`) plus `server.json.websiteUrl`; an inert README comment adds no crawler contract. Earlier pieces shipped as FAQPage + SoftwareSourceCode JSON-LD (v3.9.0-rc.17), `glama.json` (rc.17), hero install line (rc.27), social preview (rc.29), and the TOP-1 public funnel (v3.12.0-rc.5).
 - [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [x] **Obsidian-MCP COMPARISON table** — refreshed in v3.12.0-rc.4 against immutable 2026-07-24 source commits. OHS is now treated as the direct hybrid/reranker peer and its stronger public benchmark evidence is explicit; cyanheads, mcpvault and Basic Memory were reclassified from their current sources; translated legacy tables are visibly historical; a positive/negative-control invariant rejects current unbounded category claims. Re-audit quarterly because competitor facts remain point-in-time.
 
@@ -76,14 +76,14 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 - [ ] **Conversational write-back** — a `remember` / distill-to-vault tool turning an agent conversation into durable markdown memory (the mem0/Zep core use-case), entering that niche directly.
 - [x] **Queryable wikilink graph tool** — SHIPPED: `obsidian_find_path` (shortest-path) + `obsidian_get_note_neighbors` (entity-neighborhood) + `obsidian_get_communities` expose the graph already built for community detection. _(Marked done in the 2026-07-16 audit truth-reset — the tools exist in TOOL_MANIFEST; remaining work is examples + usage measurement, not build.)_
 - [ ] **ColBERT-style late-interaction reranker** as an opt-in `--reranker colbert` for long documents.
-- [ ] **Earn real SLSA Build L3** via `slsa-framework/slsa-github-generator`; restore an L3 badge once verified. + CycloneDX SBOM on release, `step-security/harden-runner` egress auditing, CODEOWNERS / SUPPORT.md.
+- [ ] **Earn real SLSA Build L3** via `slsa-framework/slsa-github-generator`; restore an L3 badge once verified. + CycloneDX SBOM on release and `step-security/harden-runner` egress auditing. (`CODEOWNERS` + `SUPPORT.md` shipped in v3.12.0-rc.6.)
 
 ## Requires the maintainer (account / OAuth / external — I can't do these for you)
 
 - **Claim the Glama server** (GitHub OAuth) + deploy the Dockerfile + publish a Glama release → moves it from "withheld from search" (17% score) to indexed for 50k+ Glama users. (I'll add `glama.json` + the Dockerfile; you claim + deploy.)
-- **Verify the official MCP Registry entry resolves and tracks the published version** via `mcp-publisher` (re-publish on each release; confirm `io.github.oomkapwn/enquire-mcp` is `active` / `isLatest`).
+- **Keep the official MCP Registry entry tracking stable releases** via `mcp-publisher`. Verified 2026-07-24: `io.github.oomkapwn/enquire-mcp` is active and stable v3.11.6 is `isLatest`; prereleases intentionally remain npm/GitHub-only.
 - **Post to the Obsidian forum thread** (81.2k views — the primary organic discovery surface) with the comparison table; submit to **PulseMCP**, **mcp.so**, **smithery.ai**, **Cursor MCP marketplace**; update the awesome-mcp-servers PR with the Glama badge.
-- **Enable GitHub Discussions** + pin the repo on your profile.
+- **Pin the repo on your GitHub profile.** Discussions are already enabled and linked from `SUPPORT.md`.
 
 ## Explicit non-goals
 

@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas a la nube durante el servicio.** El modelo de embeddings se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local única (~110 MB), no una clave de API en la nube. Estar anclado y ser privado no sale gratis, y no fingimos que sí: el contenido de tu bóveda nunca sale de tu máquina, seguro para entornos aislados por defecto ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1681+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 1690+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -76,7 +76,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **GraphRAG-light** (detección de comunidades de wikilinks por modularidad de Louvain) | ✅ **solo aquí** | ❌ | ❌ |
 | **Ejecución autónoma de consultas `.base`** (funciona sin Obsidian abierto) | ✅ **solo aquí** | ❌ | ❌ delega en Obsidian |
 | **Recuperación HyDE** (Gao et al. 2023) + descomposición en subpreguntas | ✅ **solo aquí** | ❌ | ❌ |
-| **1681 pruebas unitarias · 9 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | ✅ | n/d | raro |
+| **1690 pruebas unitarias · 9 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | ✅ | n/d | raro |
 | **Procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2) | ✅ | n/d | ❌ |
 | **Superficie pública ligada a semver** ([STABILITY.md](./STABILITY.md)) | ✅ | n/d | ❌ |
 | Autónomo (sin necesidad de plugin de Obsidian) | ✅ | ❌ requiere Obsidian | varía |
@@ -113,8 +113,12 @@ Conéctalo a cualquier cliente MCP:
 **¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2      # exact prerelease package
 enquire-mcp --version
+# recommended: preview first, then explicitly apply the same package-coherent plan
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
+# manual equivalent below: choose this instead of first-run --apply, not in addition
 enquire-mcp setup --vault <path>                          # guarda el embedder y construye FTS5 + embed-db
 enquire-mcp install-model rerank-bge                      # guarda el reranker sin conexión
 enquire-mcp doctor --tier hybrid --vault <path>           # preparación estructural/runtime

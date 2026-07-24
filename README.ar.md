@@ -56,7 +56,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **صفر استدعاءات سحابية أثناء التشغيل.** نموذج التضمين يعمل **على جهازك** ويُفهرس markdown الذي كتبته **أنت** — ولهذا فهو تنزيل محلي لمرة واحدة (~110 ميغابايت)، لا مفتاح API سحابي. الرسوخ والخصوصية لهما ثمن، ولا ندّعي خلاف ذلك: محتوى مكتبتك لا يغادر جهازك أبداً، وهي آمنة للعمل المعزول (air-gap) افتراضياً ([مفروضة بالكود](./SECURITY.md)، لا مجرّد طموح).
 > 4. **استدعاء واعٍ بالحداثة.** تُبلّغ كل نتيجة عن عمر الملاحظة؛ وإعادة الترتيب الاختيارية بالحداثة تتيح للوكيل تفضيل المعرفة الحديثة ووسم الحقائق القديمة لإعادة التحقق — حدود "الوعي بالنسيان"، مبنيّة على `mtime` الذي تملكه ملفاتك أصلاً.
 
-**46 أداة · 19 موجِّه MCP · 1681+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
+**46 أداة · 19 موجِّه MCP · 1690+ اختبار وحدة · 50+ لغة · إصدار مستقر v3.11.x · مُقيَّد بالـ semver · MIT · إثبات بناء npm (SLSA L2).**
 
 </div>
 
@@ -90,7 +90,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **GraphRAG-light** (كشف مجتمعات Wikilink بمعامل Louvain) | ✅ **حصرياً هنا** | ❌ | ❌ |
 | **تنفيذ استعلام `.base` مستقل** (يعمل دون تشغيل Obsidian) | ✅ **حصرياً هنا** | ❌ | ❌ يفوّض إلى Obsidian |
 | **استرجاع HyDE** (Gao et al 2023) + تفكيك الأسئلة الفرعية | ✅ **حصرياً هنا** | ❌ | ❌ |
-| **1681 اختبار وحدة · 9 فحوص CI مطلوبة للإصدار · 7 محمية حالياً على الفرع** | ✅ | غير منطبق | نادر |
+| **1690 اختبار وحدة · 9 فحوص CI مطلوبة للإصدار · 7 محمية حالياً على الفرع** | ✅ | غير منطبق | نادر |
 | **إثبات بناء موقَّع** (npm + Sigstore، SLSA Build L2) | ✅ | غير منطبق | ❌ |
 | **سطح عام مُقيَّد بالـ semver** ([STABILITY.md](./STABILITY.md)) | ✅ | غير منطبق | ❌ |
 | تشغيل مستقل (لا حاجة لإضافة Obsidian) | ✅ | ❌ يتطلب Obsidian | متفاوت |
@@ -139,8 +139,12 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 </div>
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2      # exact prerelease package
 enquire-mcp --version
+# recommended: preview first, then explicitly apply the same package-coherent plan
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
+enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
+# manual equivalent below: choose this instead of first-run --apply, not in addition
 enquire-mcp setup --vault <path>                          # caches embedder; builds FTS5 + embed-db
 enquire-mcp install-model rerank-bge                      # caches the offline reranker
 enquire-mcp doctor --tier hybrid --vault <path>           # structural/runtime readiness
@@ -413,7 +417,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1681 tests)
+npm test       # full suite (1690 tests)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

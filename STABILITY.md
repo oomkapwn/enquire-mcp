@@ -38,7 +38,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 Every flag available from stable `@latest` on `enquire-mcp serve` / `serve-http` / `index` / `build-embeddings` / `setup` / `eval` / `doctor` / `configure` / `clear-cache` / `clear-index` / `clear-embeddings` / `gen-token` / `install-model` / `install-ocr-lang` / `query` / `prune` is stable. New flags arrive in minor releases; existing flag names, accepted values, and defaults do not change without a major bump.
 
-`eval-compare` is a v3.12.0 `@rc` preview. It joins this stability promise when the minor release is promoted to `@latest`; until then its prerelease contract may still be refined.
+`eval-compare` and `first-run` are v3.12.0 `@rc` previews. They join this stability promise when the minor release is promoted to `@latest`; until then their prerelease contracts may still be refined. `first-run` is preview-first: adding `--apply` is the explicit authorization boundary for local index/model-cache preparation.
 
 Notable defaults that are part of the contract:
 - `serve` is read-only by default — `--enable-write` required for the write tools.

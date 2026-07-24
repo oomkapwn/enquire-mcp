@@ -1,5 +1,7 @@
+import { CONFIG_CLIENTS } from "./mcp-config.js";
+
 /**
- * Shared CLI help strings for `serve` and `serve-http` subcommands.
+ * Shared CLI help strings for commands that expose the same option contract.
  *
  * Background — v3.5.12 audit #4 (LOW finding 3.1) caught that the same
  * flag had two different help strings between stdio (`serve`) and
@@ -138,3 +140,12 @@ export const QUANTIZE_EMBEDDINGS_HELP =
  */
 export const CONFIG_TIER_HELP =
   "Capability tier: basic (live scan, zero setup) | hybrid (FTS5 + embeddings + reranker + HNSW) | hybrid-live (hybrid + PDFs + --watch). Default: hybrid";
+
+/** Shared `--client` help for configure and first-run. */
+export const CONFIG_CLIENT_HELP = `Target client: ${CONFIG_CLIENTS.join(" | ")} (default: print all)`;
+
+/** Shared `--name` help for configure and first-run. */
+export const CONFIG_NAME_HELP = "MCP server key/name in the generated config (default: obsidian)";
+
+/** Shared `--http` help for configure and first-run. */
+export const CONFIG_HTTP_HELP = "Emit the remote serve-http (Streamable HTTP + bearer) form instead of local stdio";

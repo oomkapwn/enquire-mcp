@@ -29,7 +29,7 @@ import {
   tierServeFlags
 } from "../src/mcp-config.js";
 
-const EXACT_SPEC = "@oomkapwn/enquire-mcp@3.12.0-rc.1";
+const EXACT_SPEC = "@oomkapwn/enquire-mcp@3.12.0-rc.2";
 const base: ConfigInput = {
   vault: "/abs/My Vault",
   tier: "hybrid",

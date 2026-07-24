@@ -25,26 +25,32 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the tier-aware, source-state-preserving doctor that debuts in `v3.12.0-rc.1`. Until that release reaches `@latest`, install that exact prerelease globally, then keep setup and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.2` preview: tier-aware source-preserving doctor plus the preview-first `first-run` orchestrator. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.1
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.2
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.1` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.2` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 ## Step 2 — Smoke test (30 seconds)
 
-With `v3.12.0-rc.1+`, confirm the server can read your vault before touching any client config. `doctor --tier basic` is a source-state-preserving check of the zero-setup tier. It reads vault/index/cache state but does not write SQLite contents/schema or create SQLite sidecars (ordinary reads may update OS access-time metadata). If you stay on the current stable channel, skip this preview-only step and continue with the zero-setup config in Step 3.
+With `v3.12.0-rc.2+`, preview one package-coherent basic-tier activation before touching indexes or model caches:
 
 ```bash
-enquire-mcp doctor --tier basic --vault /absolute/path/to/your/vault
+enquire-mcp first-run --tier basic --client claude-desktop --vault /absolute/path/to/your/vault
 ```
 
-Expected output: a `READY for basic` checklist with the vault path `OK`. Optional hybrid/PDF/OCR capabilities may show `WARN`; they do not block the basic live-scan tier. Omitting `--tier` intentionally defaults to the exact `hybrid` contract and exits 1 until its indexes, dependencies, embedder, reranker, and HNSW prerequisites are present.
+Default `first-run` is non-destructive: it validates the vault through `configure`, prints the physically pinned client snippet, and lists the exact remaining command without running it. For basic, explicit `--apply` runs only the read-only doctor check; for hybrid tiers it is the consent boundary before indexes/model-cache state may be created:
 
-For machine-readable output append `--json`; each check includes `required`, and active/large/unstable SQLite sources report `unverified` rather than “missing.” A READY verdict covers structural/runtime prerequisites only: it does not certify index freshness, complete PDF coverage, watcher delivery, OCR language packs, or model artifact integrity/inference loadability.
+```bash
+enquire-mcp first-run --tier basic --client claude-desktop --vault /absolute/path/to/your/vault --apply
+```
+
+Expected output: the generated config followed by a `READY for basic` checklist with the vault path `OK`. Optional hybrid/PDF/OCR capabilities may show `WARN`; they do not block the basic live-scan tier. The underlying `doctor --tier basic` reads vault/index/cache state but does not write SQLite contents/schema or create SQLite sidecars (ordinary reads may update OS access-time metadata). A READY verdict covers structural/runtime prerequisites only: it does not certify index freshness, complete PDF coverage, watcher delivery, OCR language packs, or model artifact integrity/inference loadability.
+
+For machine-readable diagnostics, run `enquire-mcp doctor --tier basic --vault /absolute/path/to/your/vault --json`; each check includes `required`, and active/large/unstable SQLite sources report `unverified` rather than “missing.” If you stay on the current stable channel, skip this preview-only step and continue with the zero-setup config in Step 3.
 
 ## Step 3 — Wire into Claude Desktop (60 seconds)
 
@@ -127,7 +133,7 @@ Want to test from the terminal instead? Once you've built the FTS5 index via `se
 
 You now have working TF-IDF search. To unlock the full hybrid stack:
 
-- **Prepare hybrid (`v3.12.0-rc.1+`)** — run `enquire-mcp setup --vault /absolute/path/to/your/vault`, `enquire-mcp install-model rerank-bge`, and `enquire-mcp doctor --tier hybrid --vault /absolute/path/to/your/vault` from the exact global installation selected in Step 1. Then run `enquire-mcp configure --tier hybrid --client claude-desktop --vault /absolute/path/to/your/vault`: its generated config and preflight pin the physical Node + enquire entry paths, preventing a different cwd or npx resolution from selecting another package-local cache.
+- **Prepare hybrid (`v3.12.0-rc.2+`)** — first preview `enquire-mcp first-run --tier hybrid --client claude-desktop --vault /absolute/path/to/your/vault`; inspect its generated config and planned effects, then repeat with `--apply`. It runs the same physical package's idempotent `setup`, verified `rerank-bge` acquisition, and tier-aware `doctor`, stopping at the first failure with an exact resume command. The manual equivalent remains `setup` → `install-model rerank-bge` → `doctor --tier hybrid` → `configure`; use it when you need to drive individual steps.
 
 The physical pin deliberately prioritizes exact package/cache coherence over automatic upgrades. Re-run `configure` after moving or upgrading Node/enquire-mcp, changing installation method, or clearing an npx cache; a config whose pinned executable was removed cannot update itself.
 - **PDF search** — add `--include-pdfs` to setup, verify with `doctor --tier hybrid-live`, and generate the client config with `configure --tier hybrid-live`. PDFs get blended into `obsidian_search` results with `[page: N]` citation markers.

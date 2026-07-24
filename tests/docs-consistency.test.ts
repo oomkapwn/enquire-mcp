@@ -157,6 +157,9 @@ function hybridOnboardingProblems(
   const problems: string[] = [];
   const install = markdown.indexOf(`npm install -g @oomkapwn/enquire-mcp@${previewVersion}`);
   const version = markdown.indexOf("enquire-mcp --version", Math.max(0, install));
+  const firstRunCommand = "enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>";
+  const firstRunPreview = markdown.indexOf(`${firstRunCommand}\n`, Math.max(0, version));
+  const firstRunApply = markdown.indexOf(`${firstRunCommand} --apply`, Math.max(0, firstRunPreview));
   const setup = markdown.indexOf("enquire-mcp setup --vault <path>");
   const reranker = markdown.indexOf(`enquire-mcp install-model ${defaultReranker}`, Math.max(0, setup));
   const doctor = markdown.indexOf("enquire-mcp doctor --tier hybrid --vault <path>", Math.max(0, reranker));
@@ -167,6 +170,8 @@ function hybridOnboardingProblems(
   const serve = markdown.indexOf("enquire-mcp serve --vault <path>", Math.max(0, configure));
   if (install < 0) problems.push("missing exact prerelease package");
   if (version < 0) problems.push("missing version verification");
+  if (firstRunPreview < 0) problems.push("missing non-destructive first-run preview");
+  if (firstRunApply < 0) problems.push("missing explicit first-run apply");
   if (setup < 0) problems.push("missing setup");
   if (reranker < 0) problems.push("missing reranker cache");
   if (doctor < 0) problems.push("missing tiered doctor");
@@ -176,7 +181,9 @@ function hybridOnboardingProblems(
     !(
       install >= 0 &&
       install < version &&
-      version < setup &&
+      version < firstRunPreview &&
+      firstRunPreview < firstRunApply &&
+      firstRunApply < setup &&
       setup < reranker &&
       reranker < doctor &&
       doctor < configure &&
@@ -257,8 +264,8 @@ function hybridExamplePackageIdentityProblems(raw: string, _previewVersion: stri
   for (const subcommand of ["setup", "install-model", "doctor"]) {
     if (!setup.includes(`${executable} ${subcommand}`)) problems.push(`setup comment missing physical ${subcommand}`);
   }
-  if (!setup.includes("configure --tier hybrid-live --client claude-desktop")) {
-    problems.push("setup does not prefer generated physical config");
+  if (!setup.includes("first-run --tier hybrid-live --client claude-desktop")) {
+    problems.push("setup does not prefer preview-first generated physical config");
   }
   if (server?.command !== executable) problems.push("runtime does not use the documented physical executable");
   const args = server?.args;
@@ -421,7 +428,7 @@ function stableApiLabelProblems(apiMd: string, previewVersion: string): string[]
   for (const row of previewRows) {
     if (!row.includes("`@rc` preview")) problems.push(`candidate row lacks @rc preview marker: ${row.slice(0, 80)}`);
   }
-  for (const command of ["doctor", "setup", "configure", "eval", "eval-compare", "install-model"]) {
+  for (const command of ["doctor", "setup", "configure", "first-run", "eval", "eval-compare", "install-model"]) {
     const row = rows.find((line) => line.startsWith(`| \`${command}\``)) ?? "";
     if (!row.includes(allowed) || !row.includes("`@rc` preview")) {
       problems.push(`${command} row is missing its explicit ${allowed} @rc preview contract`);
@@ -1259,7 +1266,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const stalePreviewLabel = "v0.0.0-rc.9";
     const otherwiseValidApiFixture = [
       "Version labels below identify the first stable release.",
-      ...["doctor", "setup", "configure", "eval", "eval-compare", "install-model"].map(
+      ...["doctor", "setup", "configure", "first-run", "eval", "eval-compare", "install-model"].map(
         (command, index) =>
           `| \`${command}\` | ${allowedPreviewLabel} \`@rc\` preview${index === 0 ? `; ${stalePreviewLabel}` : ""} |`
       )
@@ -1419,6 +1426,8 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(problems).toContain("missing tiered doctor");
     expect(problems).toContain("missing exact prerelease package");
     expect(problems).toContain("missing version verification");
+    expect(problems).toContain("missing non-destructive first-run preview");
+    expect(problems).toContain("missing explicit first-run apply");
     expect(problems).toContain("missing physical configure step");
     expect(problems).toContain("hybrid commands out of order");
     expect(problems).toContain("serve missing --enable-reranker");

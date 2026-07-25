@@ -43,8 +43,12 @@ jobs:
       - name: Assert tag is on main and required CI checks passed
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -eu
+          TAG="$RELEASE_TAG"
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"
           SHA=$(git rev-parse HEAD)
           echo "Tagged SHA: $SHA"
           git fetch origin main --depth=200
@@ -68,26 +72,31 @@ jobs:
           # v3.8.0-rc.6 — bumped to 9 by adding `oia` (Outside-In Audit;
           # promoted from advisory after one release cycle with 0 false
           # positives — round-23 audit response).
+          # Public gate-count mirror; tests pin this exact inventory to the
+          # shared evaluator used below. Do not use a regex/count as readiness.
           REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia"
+          REQ_COUNT=9
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
-            FAILED=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
-            if [ "$FAILED" != "0" ]; then
+            RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks)
+            STATE=$(printf '%s' "$RESULT" | jq -r '.state')
+            if [ "$STATE" = "failed" ]; then
               echo "::error::Required CI checks failed on $SHA"
-              echo "$JSON" | jq -r --arg req "$REQUIRED" '.check_runs[] | select(.name | test($req)) | "\(.name): \(.conclusion)"'
+              printf '%s' "$RESULT" | jq -r '.failed[] | "\(.name): \(.conclusion)"'
               exit 1
             fi
-            DONE=$(echo "$JSON" | jq -r --arg req "$REQUIRED" '[.check_runs[] | select(.name | test($req)) | select(.conclusion != null)] | length')
-            REQ_COUNT=9
-            if [ "$DONE" -ge "$REQ_COUNT" ]; then
-              echo "✓ All $DONE required checks passed on $SHA"
+            DONE=$(printf '%s' "$RESULT" | jq -r '.succeeded | length')
+            if [ "$STATE" = "ready" ]; then
+              echo "✓ All $REQ_COUNT distinct required checks passed on $SHA"
               break
             fi
             if [ $attempt -eq 10 ]; then
-              echo "::error::Timed out waiting for CI on $SHA after 5 minutes"
+              MISSING=$(printf '%s' "$RESULT" | jq -r '[.missing[], .pending[]] | join(", ")')
+              echo "::error::Timed out waiting for CI on $SHA after 5 minutes; unresolved: $MISSING"
               exit 1
             fi
-            echo "CI still running ($DONE/$REQ_COUNT required checks complete; attempt $attempt/10) — waiting 30s..."
+            UNRESOLVED=$(printf '%s' "$RESULT" | jq -r '[.missing[], .pending[]] | join(", ")')
+            echo "CI still running ($DONE/$REQ_COUNT distinct checks passed; unresolved: $UNRESOLVED; attempt $attempt/10) — waiting 30s..."
             sleep 30
           done
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7

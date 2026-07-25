@@ -49,7 +49,7 @@ export const DIAGNOSTIC_SEARCH_TOOLS_HELP =
  * are required to expose the tool).
  */
 export const PERSISTENT_INDEX_HELP =
-  "Maintain a SQLite FTS5 inverted index for sub-100ms BM25-ranked search. Required for obsidian_full_text_search — also pass --diagnostic-search-tools to surface it alongside the default hybrid obsidian_search.";
+  "Maintain a SQLite FTS5 inverted index for indexed BM25-ranked search. Required for obsidian_full_text_search — also pass --diagnostic-search-tools to surface it alongside the default hybrid obsidian_search.";
 
 /**
  * `--watch` flag help. Shared between `serve` and `serve-http` so the text

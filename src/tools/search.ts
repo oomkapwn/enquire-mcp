@@ -830,8 +830,8 @@ export interface EmbedSearchResponse {
 
 /**
  * v2.13.0 — optional HNSW context. When passed, embeddingsSearch routes
- * the k-NN lookup through the in-memory HNSW index (sub-10ms at any
- * scale) instead of the O(n) brute-force cosine in EmbedDb.search().
+ * the k-NN lookup through the in-memory approximate nearest-neighbor index
+ * instead of the O(n) brute-force cosine in EmbedDb.search().
  * `rowByLabel` is the label → source-row mapping established at HNSW
  * build time (typically labels are `embeddings.id`, set in
  * `EmbedDb.getAllVectors()`).
@@ -980,8 +980,9 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  * Supports HyDE (Hypothetical Document Embeddings, Gao et al 2023): pass
  * `hypothetical_answer` and that text is embedded instead of `query` —
  * typically +2-5 NDCG@10 on under-specified queries. Optional HNSW
- * acceleration (sub-10ms k-NN at any scale) when an {@link HnswSearchContext}
- * is provided; otherwise falls back to brute-force cosine in `EmbedDb`.
+ * approximate nearest-neighbor acceleration is used when an
+ * {@link HnswSearchContext} is provided; otherwise falls back to brute-force
+ * cosine in `EmbedDb`.
  *
  * Privacy contract: hits are filtered through `vault.isExcluded()` before
  * return — entries in the `.embed.db` for paths now matched by
@@ -1157,8 +1158,8 @@ export async function embeddingsSearch(
       // vector spaces → cosine returns garbage. CRIT-1 fixed the build
       // side; this is the corresponding search-side guard.
       assertHnswModelMatchesEmbedder(embedder.model.alias, hnsw.modelAlias);
-      // v2.13.0 — HNSW path. Sub-10ms top-K at any scale. We over-fetch
-      // more than brute-force because HNSW can occasionally miss a true
+      // v2.13.0 — HNSW approximate nearest-neighbor path. We over-fetch more
+      // than brute-force because HNSW can occasionally miss a true
       // nearest neighbor AND because the privacy filter pares down the pool.
       // v3.8.0-rc.9 R-10 — bumped multiplier from ×2 → ×3 (effective 4× →
       // 6× limit) to reduce under-return when many embed-db entries are
@@ -1601,8 +1602,8 @@ export async function searchHybrid(
     rerankerOverride?: { score(query: string, passages: readonly string[]): Promise<number[]> };
     /**
      * v2.13.0 — optional HNSW context for the embeddings-search arm.
-     * When passed, the embedding-side k-NN goes through the in-memory
-     * HNSW index (sub-10ms at any scale) instead of the O(n) brute-force
+     * When passed, the embedding-side k-NN goes through the in-memory HNSW
+     * approximate nearest-neighbor index instead of the O(n) brute-force
      * cosine in EmbedDb.search(). Built on serve start; lives in
      * ServerDeps.hnswContext. Null/undefined → brute-force fallback.
      */

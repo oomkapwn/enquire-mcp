@@ -37,7 +37,7 @@ node scripts/smoke.mjs ~/Documents/MyVault
   - `@huggingface/transformers` — required by ML embeddings + cross-encoder reranker (`build-embeddings`, `--enable-reranker`).
   - `pdfjs-dist` — required by PDF tools (`obsidian_read_pdf`, `--include-pdfs`).
   - `tesseract.js` — required by `obsidian_ocr_pdf` for scanned/image-only PDFs.
-  - `hnswlib-node` — required by `--use-hnsw` (sub-10ms top-K vector search).
+  - `hnswlib-node` — required by `--use-hnsw` (HNSW approximate nearest-neighbor search).
   - `@napi-rs/canvas` — used by Tesseract OCR + social-preview render script.
 
   Adding a new **mandatory** dep is a high-bar PR (tickets the markdown-only happy path with size + audit-surface costs). Adding a new **optional** dep is OK if it's gated behind a flag and the failure mode on missing-dep is a clean error message pointing at the flag.

@@ -1143,9 +1143,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // "#1 Obsidian MCP for AI memory" line is deliberate positioning, not an
   // empirical cross-project metric. Concrete retrieval wins, exclusivity
   // claims and competitor capabilities remain bounded by current evidence.
-  // Public READMEs now prove enquire's own value instead of linking out to
-  // alternatives; docs/COMPARISON.md remains available as the dated audit
-  // record without occupying the front-page funnel.
+  // Every buyer-facing comparison surface now proves enquire's own value
+  // instead of linking out to alternatives. The comparison page is a TOP-1
+  // acquisition battlecard; raw competitor research stays in the private
+  // collab record rather than the public product funnel.
   it("TOP-1 positioning stays promotional while factual claims stay bounded (v3.12.0-rc.5)", async () => {
     const comparisonMd = await read("docs/COMPARISON.md");
     // Find any "reranker (BGE, N models)" form — should be ZERO matches post-3.7.15.
@@ -1225,6 +1226,63 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       );
     }
 
+    const acquisitionSurfaces = ["docs/COMPARISON.md", "ROADMAP.md", "src/prompts.ts", "src/tool-registry.ts"] as const;
+    for (const surface of acquisitionSurfaces) {
+      const current = await read(surface);
+      for (const marker of competitorPromotionMarkers) {
+        if (marker === "./docs/COMPARISON.md") continue;
+        expect(
+          current.includes(marker),
+          `${surface} promotes an alternative via "${marker}" instead of converting to enquire-mcp`
+        ).toBe(false);
+      }
+    }
+    expect(comparisonMd).toContain("# Why enquire-mcp is the #1 Obsidian MCP for AI memory");
+    expect(comparisonMd).toContain("The grounded answer is:");
+    expect(comparisonMd).toContain("Source: 99_Daily/2026-05-02.md");
+
+    const unsupportedPerformancePatterns = [
+      /\bmillion-chunk\b/i,
+      /\bat any scale\b/i,
+      /\bsub-10ms\b/i,
+      /<\s*100ms always\b/i,
+      /\balways under 100ms\b/i
+    ] as const;
+    const findUnsupportedPerformanceClaim = (text: string): string | null => {
+      for (const pattern of unsupportedPerformancePatterns) {
+        const match = pattern.exec(text);
+        if (match) return match[0];
+      }
+      return null;
+    };
+    const performanceClaimSurfaces = [
+      ...PUBLIC_READMES,
+      "CITATION.cff",
+      "CONTRIBUTING.md",
+      "docs/api.md",
+      "docs/QUICKSTART.md",
+      "docs/COMPARISON.md",
+      "examples/claude-desktop-hybrid.json",
+      "llms.txt",
+      "scripts/inject-jsonld.mjs",
+      "scripts/run-benchmarks.mjs",
+      "src/cli-help.ts",
+      "src/cli.ts",
+      "src/embed-db.ts",
+      "src/fts5.ts",
+      "src/hnsw.ts",
+      "src/server.ts",
+      "src/tool-registry.ts",
+      "src/tools/search.ts"
+    ] as const;
+    for (const surface of performanceClaimSurfaces) {
+      const current = await read(surface);
+      expect(
+        findUnsupportedPerformanceClaim(current),
+        `${surface} carries an unbounded performance claim; publish a corpus + hardware + command instead`
+      ).toBeNull();
+    }
+
     // NEGATIVE control: the analyzer must catch the exact stale claim class.
     expect(findUnboundedClaim("No other Obsidian-MCP currently ships remote HTTP.")).toBe("No other Obsidian-MCP");
     // NEGATIVE control: the front-page analyzer must catch a competitor CTA.
@@ -1239,6 +1297,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         "Among the pinned 2026-07-24 sources, OHS does not document direct PDF extraction; verify its current tree."
       )
     ).toBeNull();
+    // NEGATIVE controls: the performance analyzer catches each deleted claim class.
+    expect(findUnsupportedPerformanceClaim("sub-10ms top-K")).toBe("sub-10ms");
+    expect(findUnsupportedPerformanceClaim("HNSW stays fast at any scale")).toBe("at any scale");
+    expect(findUnsupportedPerformanceClaim("a BM25 query is always under 100ms")).toBe("always under 100ms");
+    // POSITIVE control: a bounded, corpus-specific observation remains publishable.
+    expect(findUnsupportedPerformanceClaim("50–100ms BM25 top-10 at 1,771 chunks / 368 files in issue #10")).toBeNull();
   });
 
   // v3.7.14 F4 — close the "Hardcoded counts in docs without an invariant"

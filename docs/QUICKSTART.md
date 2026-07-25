@@ -138,7 +138,7 @@ You now have working TF-IDF search. To unlock the full hybrid stack:
 The physical pin deliberately prioritizes exact package/cache coherence over automatic upgrades. Re-run `configure` after moving or upgrading Node/enquire-mcp, changing installation method, or clearing an npx cache; a config whose pinned executable was removed cannot update itself.
 - **PDF search** — add `--include-pdfs` to setup, verify with `doctor --tier hybrid-live`, and generate the client config with `configure --tier hybrid-live`. PDFs get blended into `obsidian_search` results with `[page: N]` citation markers.
 - **Cross-encoder reranking** — pre-cache `rerank-bge`, then add `--enable-reranker`. Measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation).
-- **Sub-10ms top-K at scale** — add `--use-hnsw`. HNSW vector index, persisted to disk so cold starts stay ~50ms.
+- **Approximate nearest-neighbor retrieval** — add `--use-hnsw`. The HNSW index persists to disk to avoid an unchanged-corpus rebuild; benchmark latency and recall on your own vault.
 - **Harder questions** — try `obsidian_hyde_search` (HyDE retrieval, Gao et al 2023) when the literal query phrasing doesn't match how the notes are written.
 - **Full 46-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.
 

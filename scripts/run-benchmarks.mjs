@@ -148,7 +148,8 @@ tags: [reference, vector-index]
 # HNSW — Hierarchical Navigable Small World
 
 HNSW is an approximate nearest neighbor (ANN) algorithm for high-dimensional
-vector indexes. Sub-10ms top-K at any practical scale. Hierarchical layers
+vector indexes. Query cost grows sublinearly in typical ANN workloads, but
+latency and recall must be measured on the target corpus. Hierarchical layers
 of small-world graphs let the search walk down from coarse to fine.
 
 Use cases: backing a hybrid retrieval stack, k-NN over [[Embeddings]],

@@ -107,7 +107,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -240,10 +240,10 @@ graph LR
 | 등급 | 설정 | 얻는 것 |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF 코사인 (설정 0, 즉시) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (100ms 미만 top-10) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (인덱스 기반 어휘 검색) |
 | **3** | + `setup` (모델 다운로드 + 임베딩 DB 구축) | + 다국어 ML 임베딩 |
 | **4** | + `--enable-reranker` | + BGE 크로스 인코더 (측정된 +15.5 NDCG@10) |
-| **5** | + `--use-hnsw` | + 백만 청크 규모에서 10ms 미만 top-K |
+| **5** | + `--use-hnsw` | + 영속 HNSW를 이용한 근사 최근접 이웃 검색 |
 | **6** | + `--include-pdfs` | + 위의 모든 것에 융합된 PDF |
 | **7** | `serve-http --bearer-token …` | + 원격 MCP (Claude.ai 웹, ChatGPT, Cursor HTTP, 모바일) |
 
@@ -297,7 +297,7 @@ graph LR
 
 **데이터가 어딘가로 전송되나요?** 외부 다운로드는 명시적 획득 명령에서만 발생합니다. `enquire-mcp setup`, `enquire-mcp build-embeddings`, `enquire-mcp install-model`은 HuggingFace의 ONNX 가중치를 받을 수 있고, `enquire-mcp install-ocr-lang`은 OCR용 Tesseract 언어 팩을 받습니다. serve 모드는 절대 외부로 나가는 HTTP를 만들지 않습니다. 임베딩 + 리랭커는 로컬 CPU에서 실행됩니다.
 
-**성능은요?** FTS5 콜드 빌드: 1k 노트당 ~5초, 50k당 ~30초. BM25 쿼리: 항상 <100ms. 임베딩 빌드: M1에서 청크당 ~30ms. **HNSW top-10: 어떤 규모에서도 10ms 미만.** serve 콜드 스타트: HNSW 영속화 시 ~50ms.
+**성능은요?** Vault 크기, 하드웨어, 모델, 활성 검색 계층에 따라 달라집니다. 공개 근거에는 1,771 chunks / 368 files에서 BM25 top-10이 **50–100ms**였다는 운영 보고와 100–1,000 notes에서 FTS5가 선형 스캔보다 **37–103×** 빨랐다는 재현 가능한 합성 벤치마크가 포함됩니다. 지연 시간 SLO를 정하기 전에 자신의 Vault에서 내장 평가를 실행하세요.
 
 **언어는요?** 기본 embedder는 `paraphrase-multilingual-MiniLM-L12-v2`(50+개 언어)이며 러시아어 + 영어 이중 언어 Vault에서 엔드 투 엔드 검증되었습니다. 기본 cross-encoder reranker는 `rerank-bge`(English-only; 엔드 투 엔드 검증된 유일한 catalog alias)입니다. 다국어 reranker alias는 현재 transformers.js tokenizer 호환성 검사에 실패합니다. CJK/태국어/크메르어 토큰화에는 `Intl.Segmenter`를 사용합니다.
 

@@ -100,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -233,10 +233,10 @@ graph LR
 | 层级 | 启用方式 | 你得到什么 |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF 余弦（零配置，即时） |
-| **2** | + `--persistent-index` | + BM25 / FTS5（sub-100ms top-10） |
+| **2** | + `--persistent-index` | + BM25 / FTS5（索引化词法检索） |
 | **3** | + `setup`（下载模型 + 构建向量库） | + 多语言 ML 向量嵌入 |
 | **4** | + `--enable-reranker` | + BGE 交叉编码器（实测 +15.5 NDCG@10） |
-| **5** | + `--use-hnsw` | + 百万级 chunk 规模下 sub-10ms top-K |
+| **5** | + `--use-hnsw` | + 带持久化 HNSW 的近似最近邻检索 |
 | **6** | + `--include-pdfs` | + PDF 融入以上全部 |
 | **7** | `serve-http --bearer-token …` | + 远程 MCP（Claude.ai 网页、ChatGPT、Cursor HTTP、移动端） |
 
@@ -290,7 +290,7 @@ graph LR
 
 **会把数据发到哪里吗？** 只有显式获取命令会对外下载：`enquire-mcp setup`、`enquire-mcp build-embeddings` 和 `enquire-mcp install-model` 可能从 HuggingFace 下载 ONNX 权重；`enquire-mcp install-ocr-lang` 下载用于 OCR 的 Tesseract 语言包。serve 模式从不发起对外 HTTP。向量嵌入与重排都在本地 CPU 运行。
 
-**性能如何？** 冷构建 FTS5：约 5s/1k 笔记、约 30s/50k。BM25 查询：始终 <100ms。**HNSW top-10：任意规模 sub-10ms。** 启用 HNSW 持久化时 serve 冷启动约 50ms。
+**性能如何？** 性能取决于知识库大小、硬件、模型和启用的检索层。公开证据包括：在 1,771 个 chunk / 368 个文件上的 BM25 top-10 生产报告为 **50–100ms**，以及在 100–1,000 篇笔记上 FTS5 相对线性扫描快 **37–103 倍**的可复现实验。设定延迟 SLO 前，请在自己的知识库上运行内置评测和基准。
 
 **支持哪些语言？** 默认嵌入模型是 `paraphrase-multilingual-MiniLM-L12-v2`（50+ 语言），已在俄文 + 英文双语仓库上完成端到端验证。默认交叉编码重排器是 `rerank-bge`（English-only；目前唯一经过端到端验证的目录别名）；多语言重排器别名目前会在 transformers.js tokenizer 兼容性检查中失败。CJK / 泰文 / 高棉文分词通过 `Intl.Segmenter`。
 

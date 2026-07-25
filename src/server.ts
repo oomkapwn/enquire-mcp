@@ -93,10 +93,9 @@ export interface ServeOptions {
   rerankerModel?: string;
   /** v2.9.0 — how many top fused candidates to rerank (default 50). */
   rerankerTopN?: string;
-  /** v2.13.0 — build an in-memory HNSW vector index on serve start.
-   *  Off by default; rebuild cost ~25s for 50K chunks. Sub-10ms top-K
-   *  per query thereafter, vs O(n) brute-force without it. Defers
-   *  persistence to v3.0. */
+  /** v2.13.0 — build an in-memory HNSW approximate nearest-neighbor index
+   *  on serve start instead of the O(n) brute-force dense path. Off by
+   *  default; latency and recall depend on corpus, hardware, and parameters. */
   useHnsw?: boolean;
   /** v2.13.0 — HNSW search-time beam width (default 100; ≥k). */
   hnswEf?: string;
@@ -170,8 +169,8 @@ export interface ServerDeps {
   enabledTools: Set<string>;
   warningTracker: { printed: boolean };
   /**
-   * v2.13.0 — opt-in HNSW vector index built in-memory on serve start
-   * from the embed-db rows. Sub-10ms top-K queries vs O(n) brute-force.
+   * v2.13.0 — opt-in HNSW approximate nearest-neighbor index built in-memory
+   * on serve start from the embed-db rows instead of O(n) brute force.
    * `null` when `--use-hnsw` wasn't passed or the embed-db doesn't exist.
    */
   hnswContext: {
@@ -427,11 +426,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     }
   }
 
-  // v2.13.0 — opt-in HNSW vector index. Built in-memory on serve start
-  // from the embed-db rows. Acceptable boot-time cost (≤30s for 50K
-  // chunks) in exchange for sub-10ms top-K queries thereafter, vs O(n)
-  // brute-force without it. We deliberately don't persist — see
-  // src/hnsw.ts header comment for the rationale.
+  // v2.13.0 — opt-in HNSW approximate nearest-neighbor index. Built in-memory
+  // on serve start from the embed-db rows instead of the O(n) brute-force
+  // dense path. Build/query performance must be measured on the target vault.
   let hnswContext: ServerDeps["hnswContext"] = null;
   if (opts.useHnsw) {
     try {
@@ -476,9 +473,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         try {
           const startMs = Date.now();
           // v2.16.0 — try to load from disk first if persistence is enabled.
-          // Skip-rebuild path: ~50ms read vs ~25s build for 50K-chunk
-          // vault when nothing changed since last serve. Staleness
-          // detected via `EmbedDb.computeSignature()` mismatch.
+          // Skip-rebuild path: load the persisted sidecar when nothing changed
+          // since last serve. Staleness is detected via
+          // `EmbedDb.computeSignature()` mismatch.
           // v3.10.0-rc.20 (audit M7) — shared base derivation with the eraser
           // (EmbedDb.clearOnDisk), so the persisted sidecars + the erased
           // sidecars can never drift (right-to-erasure completeness).

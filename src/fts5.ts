@@ -1,5 +1,5 @@
-// SQLite FTS5 inverted index for sub-100ms BM25-ranked search on
-// multi-thousand-note vaults. Opt-in via `--persistent-index`.
+// SQLite FTS5 inverted index for indexed BM25-ranked search. Opt-in via
+// `--persistent-index`.
 //
 // Architecture credit: external user feedback in issue #10 — concrete schema,
 // tokenize choice (`unicode61 remove_diacritics 2`), source_state mtime-tracking
@@ -200,8 +200,9 @@ interface Stmt {
 
 /**
  * SQLite FTS5 inverted index over chunked note content. Opt-in via
- * `--persistent-index`. Provides sub-100ms BM25-ranked search on
- * multi-thousand-note vaults; falls back transparently to the in-memory
+ * `--persistent-index`. The production evidence linked in this module reports
+ * 50–100ms BM25 top-10 at 1,771 chunks / 368 files; other corpora and hardware
+ * must be measured independently. Falls back transparently to the in-memory
  * parallel-scan path when `better-sqlite3` isn't installed.
  *
  * Construct, then call `open()`, then drive incremental sync via

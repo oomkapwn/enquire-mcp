@@ -115,7 +115,7 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
     {
       title: "Full-text search (BM25, FTS5 index)",
       description:
-        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Sub-100ms on multi-thousand-note vaults. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with BOTH `--persistent-index` (so the FTS5 index exists) AND `--diagnostic-search-tools` (single-ranker diagnostic surface; the hybrid `obsidian_search` tool is the recommended default).",
+        "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with BOTH `--persistent-index` (so the FTS5 index exists) AND `--diagnostic-search-tools` (single-ranker diagnostic surface; the hybrid `obsidian_search` tool is the recommended default).",
       annotations: { ...READ_ONLY, title: "Full-text search" },
       inputSchema: {
         // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-tool-registry-fts-query-cap)
@@ -787,7 +787,7 @@ export function registerReadTools(
   // research vaults. Both tools work identically over stdio + serve-http
   // transports. In the 2026-07-24 pinned peer snapshot, enquire is the only
   // compared server with a direct first-party PDF extraction/index path;
-  // cyanheads can expose PDF/OCR indirectly through Obsidian plugins. Underlying parser
+  // Other deployments may expose PDF/OCR indirectly through Obsidian plugins. Underlying parser
   // (pdfjs-dist) is an optionalDependency — `obsidian_read_pdf` surfaces a
   // clean install-hint error on missing optional dep, never a cryptic
   // module-not-found stack trace.
@@ -931,7 +931,7 @@ export function registerReadTools(
       {
         title: "Semantic search (TF-IDF cosine)",
         description:
-          "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free / offline / no model download — closes the gap to Smart Connections without paywall, ML deps, or HTTP. Use this when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first). **v3.10:** each hit also carries `age_days` + a `stale` flag (from the note's live mtime) — a freshness signal you can reason over.",
+          "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free, offline, and model-free: use it when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first). **v3.10:** each hit also carries `age_days` + a `stale` flag (from the note's live mtime) — a freshness signal you can reason over.",
         annotations: { ...READ_ONLY, title: "Semantic search" },
         inputSchema: {
           query: z
@@ -962,7 +962,7 @@ export function registerReadTools(
       {
         title: "Embeddings search (ML, paraphrase-multilingual)",
         description:
-          "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index (~1ms/chunk on M1). Subsequent queries are sub-100ms top-10. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
+          "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index. Query latency depends on corpus and hardware; enable HNSW when measurements justify approximate nearest-neighbor retrieval. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
         annotations: { ...READ_ONLY, title: "Embeddings search" },
         inputSchema: {
           query: z
@@ -1037,7 +1037,7 @@ export function registerReadTools(
     {
       title: "Hybrid search (BM25 + TF-IDF + embeddings, RRF-fused)",
       description:
-        '**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it matches Smart Connections-quality retrieval — free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. **v2.8.0:** when `--include-pdfs` was passed to `serve` (or `enquire-mcp index --include-pdfs` ran), PDF chunks are blended into results — each hit carries a `kind: "md" | "pdf"` flag and PDF chunks include `[page: N]` markers in snippets so agents can cite the right page. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics. **v3.10 (forgetting-aware):** every hit also carries `age_days` (whole days since the note was last edited, from its live mtime) and a `stale` boolean (true past ~1 year) — use these to flag a recalled fact as possibly out-of-date instead of stating it as current. Ranking stays relevance-driven by default; if the server was started with `--recency-weight`, fresher notes are blended upward.',
+        '**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it provides full hybrid conceptual + lexical retrieval, free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. **v2.8.0:** when `--include-pdfs` was passed to `serve` (or `enquire-mcp index --include-pdfs` ran), PDF chunks are blended into results — each hit carries a `kind: "md" | "pdf"` flag and PDF chunks include `[page: N]` markers in snippets so agents can cite the right page. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics. **v3.10 (forgetting-aware):** every hit also carries `age_days` (whole days since the note was last edited, from its live mtime) and a `stale` boolean (true past ~1 year) — use these to flag a recalled fact as possibly out-of-date instead of stating it as current. Ranking stays relevance-driven by default; if the server was started with `--recency-weight`, fresher notes are blended upward.',
       annotations: { ...READ_ONLY, title: "Hybrid search" },
       inputSchema: {
         query: z
@@ -1146,8 +1146,7 @@ export function registerReadTools(
     async (args) => textResult(await chatThreadRead(vault, args))
   );
 
-  // v2.2.0: context pack — Smart Connections "Send to Smart Context" pattern,
-  // MCP-native (works with any AI client, not just Obsidian).
+  // v2.2.0: MCP-native context pack (works with any AI client, not just Obsidian).
   server.registerTool(
     "obsidian_context_pack",
     {

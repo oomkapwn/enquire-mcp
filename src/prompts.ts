@@ -814,13 +814,13 @@ Goal: zero filing burden on the user. The AI does the indexing.`
     })
   );
 
-  // v2.5.0 — agentic prompts (Khoj parity, lite scope).
+  // v2.5.0 — agentic persona + scheduled-automation prompts.
   // Agent personas + scheduled automations as prompts that orchestrate
   // existing tools. Pure agent-side: no server-side state, no LLM calls.
   // HTTP transport is a separate larger-scope sprint (planned post v2.5).
 
   /**
-   * Khoj-style persona-scoped vault search — folder-scoped retrieval with
+   * Persona-scoped vault search — folder-scoped retrieval with
    * persona-tuned response framing.
    *
    * Use case: distinct "agents" over distinct vault zones — "research-
@@ -838,7 +838,7 @@ Goal: zero filing burden on the user. The AI does the indexing.`
     {
       title: "Search the vault as a named persona (folder-scoped + tuned)",
       description:
-        "Khoj-style agent persona pattern: scope retrieval to a folder + apply a persona-specific lens to the response. Useful when you want 'research-assistant' behavior over `Research/` distinct from 'editor' over `Drafts/`. Pure prompt template — orchestrates existing search tools with a fixed scope/instructions.",
+        "Scope retrieval to a folder and apply a persona-specific lens to the response. Useful when you want 'research-assistant' behavior over `Research/` distinct from 'editor' over `Drafts/`. Pure prompt template — orchestrates existing search tools with a fixed scope/instructions.",
       argsSchema: {
         persona: z
           .string()
@@ -872,7 +872,7 @@ Stay in the persona for the entire response. If asked something out-of-scope (e.
   );
 
   /**
-   * Khoj-style automation setup — wire up a cron'd vault query that lands
+   * Scheduled automation setup — wire up a cron'd vault query that lands
    * in a daily note or digest.
    *
    * Use case: "every Monday at 9am, surface last week's edits and
@@ -889,7 +889,7 @@ Stay in the persona for the entire response. If asked something out-of-scope (e.
   server.registerPrompt(
     "vault_automation_setup",
     {
-      title: "Set up a scheduled vault query (Khoj-style automations)",
+      title: "Set up a scheduled vault query",
       description:
         "Walks you through creating a cron'd vault query whose results land as a daily note or get appended to a digest. Bridges enquire-mcp tools + the host's `scheduled-tasks` MCP (or any cron tool the agent has access to). Pure orchestration — no server-side state.",
       argsSchema: {
@@ -934,7 +934,7 @@ Steps:
 
 5. **Smoke once.** Before the first scheduled run, execute the tool sequence ONCE manually so the user verifies output shape. Show the produced markdown.
 
-This is the Khoj automation pattern translated to MCP: research that comes to you instead of you remembering to ask for it.`
+This is proactive MCP research: results come to you instead of waiting for you to remember to ask.`
           }
         }
       ]

@@ -13,7 +13,7 @@
 
 - [Self-contained AI-agent context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt): compact product, activation, retrieval, trust, and failure-recovery contract assembled from the canonical sources below
 - [README](https://github.com/oomkapwn/enquire-mcp/blob/main/README.md): #1 product case, use cases, proof table, and 7-tier retrieval setup ladder
-- [API reference (auto-generated TypeDoc)](https://oomkapwn.github.io/enquire-mcp/): every tool, prompt, exported helper with `@param`/`@returns`/`@example`
+- [API reference (auto-generated TypeDoc)](https://oomkapwn.github.io/enquire-mcp/api/): every tool, prompt, exported helper with `@param`/`@returns`/`@example`
 - [Tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md): 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback), 19 MCP prompts
 - [Quickstart guide](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md): step-by-step onboarding
 - [Retrieval benchmarks](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/benchmarks.md): NDCG@10, Recall@K, MRR with reranker ablation
@@ -67,7 +67,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1716 unit tests passing on every PR
+- 1720 unit tests passing on every PR
 - 9 release-required CI checks per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)

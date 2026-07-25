@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.14 candidate: verified client-specific install actions).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.15 candidate: GitHub Pages product front door).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1716 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1720 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 Current **v3.12.0 `@rc` preview** closes the activation path: `first-run` validates and renders config in non-destructive preview mode, then requires explicit `--apply` before package-coherent setup/model acquisition and tier-aware doctor verification. The manual commands remain available independently; the orchestrator stops on failure and emits an exact idempotent resume command.
 
@@ -43,8 +43,9 @@ lead immediately visible and independently reproducible:
 - **Publish a recognized memory benchmark.** The next major credibility asset
   is a reproducible LongMemEval-S run with raw outputs, ablations,
   latency/index-size measurements, and failure buckets.
-- **Shorten onboarding again.** Initialize instructions, one-click client
-  links, and a benefit-led Pages landing surface remain the conversion tail.
+- **Shorten onboarding again.** Initialize instructions and verified
+  client-specific install actions now lead into a benefit-led Pages landing;
+  external client marketplaces remain the conversion tail.
 
 The durable positioning is concrete: **the complete local-first long-term
 memory backend grounded in the vault you own**. The proof stack lives in
@@ -79,6 +80,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 - [x] **AI-search + repo-page.** CLOSED in v3.12.0-rc.6: the curated `llms-ctx.txt` companion, npm-packaged `llms.txt`, supported MCP Registry `title` + `websiteUrl`, exact 20-topic GitHub discoverability set, `CODEOWNERS`, and `SUPPORT.md` complete the autonomous tail. The official 2025-12-11 Registry schema was re-read before editing: it has no standard `categories` or `keywords`, and the Registry roadmap explicitly says tags/categories are unsupported, so no vendor-shaped fields were invented. Canonical identity is already carried by the JSON-LD graph (`@id`, `codeRepository`, `targetProduct`) plus `server.json.websiteUrl`; an inert README comment adds no crawler contract. Earlier pieces shipped as FAQPage + SoftwareSourceCode JSON-LD (v3.9.0-rc.17), `glama.json` (rc.17), hero install line (rc.27), social preview (rc.29), and the TOP-1 public funnel (v3.12.0-rc.5).
 - [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [x] **TOP-1 comparison battlecard** — rebuilt in v3.12.0-rc.12 as an enquire-first acquisition surface: buyer outcomes, a runnable cited-memory example, complete-stack proof, current CI-derived counts, and direct activation. Public competitor recommendations were removed; a positive/negative-control invariant keeps them out while preserving evidence-bound product claims.
+- [x] **GitHub Pages product front door** — rebuilt in v3.12.0-rc.15 as a dependency-free acquisition surface for humans, AI agents, and search indexers. TypeDoc remains complete at `/api/`; historical symbol URLs remain valid; a deterministic composite builder and structural workflow tests keep PR validation and deployment on the same artifact.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 

@@ -7,8 +7,9 @@
 // type for Google AI Overviews / Perplexity / Bing Copilot).
 //
 // Goal: make AI search engines recognize enquire-mcp as a SoftwareApplication
-// with proper metadata AND surface the FAQ answers directly. JSON-LD in
-// <head> is the canonical structured-data format these crawlers parse.
+// with proper metadata AND surface the FAQ answers directly. v3.12.0-rc.15's
+// Pages builder imports the pure graph generator for the acquisition landing;
+// the CLI injection form remains useful for standalone generated HTML.
 //
 // What it does: read package.json (canonical source for name/version/desc),
 // generate a JSON-LD `@graph` blob, and inject it into the <head> of the file
@@ -21,8 +22,8 @@
 // (tests/jsonld.test.ts) — the output is deterministic (no dates / RNG) so
 // the structure can be asserted exactly.
 //
-// Run via: node scripts/inject-jsonld.mjs [docs/api-reference/index.html]
-// Called from .github/workflows/publish-docs.yml after `npm run docs:api`.
+// Run standalone via: node scripts/inject-jsonld.mjs [path/to/index.html]
+// The production Pages path is `npm run docs:pages`.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

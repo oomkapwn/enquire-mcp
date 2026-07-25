@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.15] — 2026-07-25
+
+> **TL;DR:** **GitHub Pages is now a benefit-led, human- and AI-readable product front door instead of opening on a generated TypeDoc index.** The new static landing explains the local cited-memory outcome, complete retrieval stack, measured proof, client activation paths, trust posture, FAQ, and agent-readable resources; the full TypeDoc reference remains available at `/api/`, while every historical deep symbol URL remains valid. **1716 → 1720 source tests.**
+>
+> **Method note:** the Pages contract was audited against the live rc.14 deployment before implementation. A deterministic composite builder now fails closed unless representative TypeDoc symbols exist, copies that complete reference both to `/api/` and to its legacy root paths, then overlays the versioned landing and validates local links, required metadata, unresolved placeholders, and artifact contents. PR CI builds the exact same composite artifact that the main-only deploy workflow uploads. Positive tests prove root, `/api/`, and legacy URL coexistence; negative controls reject incomplete TypeDoc input and a broken landing link; a workflow invariant prevents deployment from reverting to the old TypeDoc-only artifact.
+
+### Added
+
+- **Conversion-first Pages landing.** A responsive, dependency-free product page leads with the cited-memory outcome, a real deterministic synthetic-vault answer, the complete local retrieval stack, measured benchmark deltas, trust controls, audience-specific use cases, and an accessible client install selector.
+- **AI/search indexability.** Canonical, Open Graph, Twitter Card, Schema.org `SoftwareApplication` / `SoftwareSourceCode` / `FAQPage`, `robots.txt`, `sitemap.xml`, web manifest, `llms.txt`, and deep `llms-ctx.txt` ship together in the public artifact.
+- **Deterministic Pages builder.** `npm run docs:pages` assembles and validates one upload artifact from generated TypeDoc plus the version-controlled landing source.
+
+### Changed
+
+- **Stable API front door without link breakage.** Generated API documentation is canonical at `/api/`; the complete TypeDoc tree is also retained at the artifact root so existing `/functions/...`, `/interfaces/...`, `/modules/...`, and asset URLs continue to resolve.
+- **One CI/deploy contract.** The PR `docs` job and the push-to-main Pages workflow both run the composite builder; only a validated `.pages-dist` can be uploaded.
+- **Public API links.** All 11 README languages, `llms.txt`, and benchmark documentation now point to `/api/` instead of relying on the former root index.
+
+### Tests (1720)
+
+- Four Pages contract tests cover workflow wiring, composite output, a missing-TypeDoc negative control, and a broken-local-link negative control.
+- Build, lint, full tests, coverage, OIA, packaged-consumer, generated docs, and release identity remain mandatory gates.
+
+### Stats
+
+- Runtime retrieval, dependencies, MCP tools/prompts, and schemas: unchanged (46 tools, 19 prompts).
+- Source tests: 1716 → 1720.
+- Release posture: prerelease `@rc`; stable `@latest` remains 3.11.6.
+
 ## [3.12.0-rc.14] — 2026-07-25
 
 > **TL;DR:** **`configure` now turns each generated vault configuration into the strongest install action that the named client actually supports.** VS Code receives its official encoded `vscode:mcp/install` review URI; Claude Code and Codex receive copy-and-run CLI commands; Claude Desktop, Cursor, Windsurf, and remote HTTP are explicitly labeled copy-only because their public one-click surfaces cannot accept an arbitrary vault-specific local command. Every route retains the transparent generated config and physical runtime pin. **1716 → 1716 source tests.**

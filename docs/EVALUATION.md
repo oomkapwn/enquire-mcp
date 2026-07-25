@@ -92,31 +92,70 @@ If you publish a headline number (e.g. against a peer's LongMemEval protocol), t
 
 > **Repository checkout only:** the benchmark helper below is contributor tooling and is not included in the npm package.
 
-`scripts/bench-longmemeval.mjs` runs the **same public protocol** the closest peer (`flowing-abyss/obsidian-hybrid-search`, "OHS") publishes: **scope-per-question** (each question materializes its OWN LongMemEval haystack as a temp vault, so search is scoped to that mini-vault — NOT one global search over all ~22k notes) at **k=10**, reporting **nDCG@5, nDCG@10, MRR, Hit@1, Hit@5, Recall@10, AllRel@10** grouped by LongMemEval `question_type`.
+`scripts/bench-longmemeval.mjs` reproduces the closest peer's public
+**global-index + scope-per-question** shape at its evidence-pinned commit
+`c0922d955f5bf5abaad14a11cbb3e11303cd6036`: every non-abstention question is
+materialized under its own folder, one index is built over the selected cohort,
+and each query is folder-scoped to its own haystack. This preserves global
+BM25/TF-IDF corpus statistics without turning the task into an unscoped search.
+At the required **k=10**, it reports **nDCG@5, nDCG@10, MRR, Hit@1, Hit@5,
+Recall@10, AllRel@10** overall, by `question_type`, and per query.
 
 ```bash
-# 1. download the dataset (NOT committed — size + licensing):
-#    https://github.com/xiaowu0162/LongMemEval  (longmemeval_s)
-# 2. run the peer protocol (local embeddings; add --recency-compare for the differentiator):
+# 1. Download the official cleaned LongMemEval-S dataset (NOT committed):
+curl -fL \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json \
+  -o longmemeval_s_cleaned.json
+# 2. Run the global-index/scoped protocol. `--limit N` is diagnostic-only;
+#    omit it from a publishable full-cohort run.
 npm run build
-node scripts/bench-longmemeval.mjs --dataset longmemeval_s.json --k 10 --embeddings \
-  --recency-compare --output eval/results/longmemeval-s.json
+node scripts/bench-longmemeval.mjs \
+  --dataset longmemeval_s_cleaned.json \
+  --dataset-source https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json \
+  --k 10 --embeddings --recency-compare \
+  --output eval/results/longmemeval-s.json
 ```
+
+The current canonical cohort is content-pinned at 277,383,467 bytes,
+SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`,
+and 500 instances. Any different bytes or selected subset remains a
+`diagnostic-partial` artifact even when its filename looks official.
 
 **Categories** (from LongMemEval `question_type`): `single-session-user` / `single-session-assistant` / `single-session-preference` / `multi-session` / `temporal-reasoning` / `knowledge-update`. Diagnose by `by_category` weakest-first; `multi-session` (low AllRel@10 = only part of the evidence found), `temporal-reasoning`, and `knowledge-update` are where a static retriever is weakest.
 
-**The freshness differentiator (`--recency-compare`):** runs each question with `--recency-weight` OFF then ON and reports the per-category Δ. Lead the write-up with this — enquire's `--recency-weight` is designed to help exactly the `temporal-reasoning` / `knowledge-update` / `preference` categories a timeless store ignores (the Memora frontier). This is a story no static-retriever peer can tell.
+**The freshness differentiator (`--recency-compare`):** runs each question with
+`--recency-weight` OFF then ON and reports the per-category delta. Source
+session dates become file mtimes by preserving each session's age relative to
+its question date and normalizing that age after indexing, immediately before
+search. That makes the
+production mtime-based re-ranker meaningful without letting the benchmark
+calendar date change the result.
 
 ### Honest publishing (mandatory disclosure)
 
-- **Disclose the embedding backend.** This harness runs **local on-device** embeddings (transformers.js) by default. **OHS's headline 0.895 uses a CLOUD model (`bge-m3` via OpenRouter)** — that is a *different measurement*, not directly comparable to a local number. Our local-first result and a cloud result are two independent points; say which you ran.
+- **Disclose the embedding backend.** `--embeddings` runs the default **local
+  on-device** transformers.js model; without the flag the artifact explicitly
+  says BM25 + TF-IDF only. **OHS's pinned 0.895 artifact uses `baai/bge-m3`**,
+  which is a different model measurement; do not turn the two numbers into a
+  model-controlled head-to-head.
 - **Disclose the scope.** This is scoped-per-question retrieval (the peer's protocol), NOT a global unscoped search across the whole corpus — say so.
 - **It measures retrieval, not QA.** Ranking the answer-bearing session near the top; answer generation is the calling agent's job.
-- Publish the `--output` JSON (raw per-category) + the exact command. A credible local-first, scope-disclosed number beats an unauditable headline.
+- Publish the `--output` JSON + exact command. The artifact records dataset
+  SHA-256/bytes/source declaration, implementation commit + dirty state,
+  privacy-safe hardware/runtime metadata, phase timings/peak RSS, summaries,
+  categories, and raw per-query paths/metrics. Any `--limit` run is stamped
+  `diagnostic-partial`; a full canonical run from a dirty or unresolvable Git
+  state is stamped `diagnostic-untrusted`. Only `status: complete` with
+  `publishable: true` may be used as the headline.
 
 ## Cost / re-indexing guardrails
 
-The full LongMemEval-S vault is ~22k notes; indexing it (especially with a cloud embedding model) is slow and can cost API budget. **Run the full eval once, keep the JSON, and analyze it** — don't re-run just to inspect. Re-run only after an intentional model or retrieval-code change. `enquire-mcp eval` reuses the persistent per-vault index (incremental), so a re-run over an unchanged vault + model is fast.
+The full LongMemEval-S vault is ~22k notes. The dedicated harness builds one
+temporary global index per invocation and removes it afterward, so a full dense
+run remains expensive even though it no longer rebuilds per question. Use a
+small `--limit` canary first; then **run the full cohort once, keep its JSON, and
+analyze that artifact**. The general `enquire-mcp eval` command has a separate
+persistent-index workflow for user-owned vaults.
 
 ## Repository source map
 

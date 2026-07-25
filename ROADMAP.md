@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-25 (v3.12.0-rc.16 candidate: TOP-1 repository conversion rebuild).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-25 (v3.12.0-rc.17 candidate: evidence-grade LongMemEval-S harness).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -85,7 +85,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
-- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). Run the public LongMemEval-S protocol with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes): headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 on a pinned corpus, queries, relevance judgments, model/scope rules, and reference hardware. Publish raw per-query outputs, BM25/dense/reranker/graph-boost/staleness ablations, latency/index-size, and failure buckets in `docs/benchmarks.md`, then lead the README with the result.
+- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). The v3.12.0-rc.17 candidate closes the pre-run evidence gap: official-cleaned schema/hash provenance, label-free session paths, one global index with per-question scope, raw per-query results, reference-hardware/timing/index-size metadata, and date-faithful recency ablation. Remaining: run the full local-embedding cohort from the exact clean release commit, review the result, publish headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 and failure slices in `docs/benchmarks.md`, then lead the README with the result.
 - [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
 - [x] **Messaging reposition** — SHIPPED and strengthened in v3.12.0-rc.5: README ×11, npm/MCP/AI metadata, social preview and GitHub About now lead with the explicit “#1 Obsidian MCP for AI memory” credential. The project-page funnel proves enquire's own leadership across eight product outcomes and no longer routes visitors to alternatives; detailed competitive evidence remains available outside the conversion path. Measurable supporting claims stay current and inspectable, while the broad TOP-1 line remains deliberate promotional positioning.
 

@@ -3,10 +3,10 @@ import { createRequire, register, syncBuiltinESMExports } from "node:module";
 
 register("./loader.mjs", import.meta.url);
 
-const marker = process.env.ENQUIRE_BENCH_NETWORK_MARKER;
+const marker = process.env.ENQUIRE_TEST_NETWORK_MARKER;
 const trip = (surface, target) => {
   if (marker) appendFileSync(marker, `${surface}: ${String(target).slice(0, 160)}\n`);
-  throw new Error(`BENCH NETWORK TRIPWIRE: ${surface}`);
+  throw new Error(`TEST NETWORK TRIPWIRE: ${surface}`);
 };
 
 globalThis.fetch = (input) => trip("fetch", input);

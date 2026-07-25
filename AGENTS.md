@@ -9,7 +9,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
 - Tests: `tests/*.test.ts` (Vitest, 1710+ tests)
 - Build: `npm run build` (tsc → `dist/`)
-- Test: `npm test` (full suite)
+- Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
 - Coverage: `npm run test:coverage` (12 per-file coverage floors enforced)
 - Audit: `npm run check:audit` (source + published-consumer dependency graphs)
@@ -110,7 +110,7 @@ npm ci                              # install (uses package-lock.json)
 npm run build                       # tsc → dist/
 
 # Test
-npm test                            # full suite
+npm test                            # full unit + compiled-dist suite
 npm test -- --reporter=verbose      # detailed output
 npm test -- tests/cli-parity        # run one file
 

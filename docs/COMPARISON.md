@@ -93,7 +93,7 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **1710** |
+| Test count (public) | **1716** |
 | Release-required CI gates | **9** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |

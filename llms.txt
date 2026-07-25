@@ -67,7 +67,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1710 unit tests passing on every PR
+- 1716 unit tests passing on every PR
 - 9 release-required CI checks per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
 - Signed build provenance on every npm release (npm + Sigstore, SLSA Build L2; isolated-builder L3 on the roadmap)
@@ -78,6 +78,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON schema comes from `tools/list`):
 
+- **Handshake contract.** `initialize.instructions` gives each connection a deterministic, configuration-aware recall, evidence, freshness, write, feedback, and untrusted-content contract. It recommends only tools that survive live feature gates and exact-name filters; `tools/list` remains authoritative.
 - **Minimum loop.** `obsidian_search "<query>"` (umbrella; auto-fuses BM25 + TF-IDF + embeddings and reranks) → read top hits with `obsidian_read_note` (by path or title; `format: "map"` for a headings-only outline) → **cite the source note path on every fact** (and `[page: N]` for PDFs). If nothing relevant returns, say so — don't guess.
 - **When to prefer enquire.** Use it for *conceptual / cross-language / "what did I say about X"* recall. Use plain `grep` / `ripgrep` for exact literal strings — enquire is meaning-first, not a substring matcher.
 - **Observability.** Every hit carries `per_signal: { bm25, tfidf, embeddings }` (why it ranked) and, on the v3.10 line, `age_days` + a `stale` flag (freshness from live mtime). Scores sort *within one query* — don't compare across queries or reranker-on vs reranker-off runs.

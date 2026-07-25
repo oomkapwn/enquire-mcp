@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.13] — 2026-07-25
+
+> **TL;DR:** **Every MCP client now receives a compact, configuration-aware operating contract in the `initialize` response.** The guidance recommends only tools that survive the live feature gates and exact-name allow/deny filters; explains the search → context-pack → source-read workflow; requires path/line/page grounding and freshness-aware uncertainty; states that retrieved vault content is untrusted data, never instructions; and distinguishes read-only, write-enabled, feedback-enabled, and filtered profiles. The payload is deterministic and capped at 2,048 UTF-8 bytes. **1710 → 1716 source tests.**
+>
+> **Method note:** the implementation derives its profile from `TOOL_MANIFEST` using the same FTS5, diagnostic, write, feedback, allowlist, and denylist decisions as runtime registration. Tests cover default, maximally enabled, filtered, and no-general-recall profiles; a negative control removes every workflow entrypoint; and real compiled stdio MCP handshakes prove the emitted `initialize.instructions` text stays aligned with the actual `tools/list` surface. The existing maximally enabled emitted-schema inventory and five evidence-backed client profiles remain a separate unchanged compatibility gate.
+
+### Added
+
+- **Agent-native first-contact guidance.** Clients no longer need to ingest README or `llms.txt` to discover the recommended recall loop, citation/freshness semantics, write posture, feedback policy, and prompt-injection boundary.
+- **Configuration-aware tool selection.** If `obsidian_search` is filtered out, the instructions fall back in order to context packing, diagnostic text search, note listing, or a known-path read; if no general recall entrypoint exists, the response says so instead of recommending an unavailable tool.
+- **Bounded protocol metadata.** `MAX_INITIALIZE_INSTRUCTIONS_BYTES` pins the payload to 2,048 UTF-8 bytes and fails closed if future prose exceeds the bound.
+
+### Tests (1716)
+
+- Six new tests cover read-only and maximally enabled profiles, exact allowlist behavior, the no-entrypoint negative control, byte/determinism guarantees, and two real MCP initialize handshakes.
+- The filtered handshake requires `initialize.instructions` and `tools/list` to agree on the same three callable tools, including one gated write tool.
+- Build, lint, emitted-schema inventory, and the versioned client-profile matrix remain required gates.
+
+### Stats
+
+- MCP tools/prompts and their JSON schemas: unchanged (46 tools, 19 prompts).
+- Protocol behavior: additive `initialize.instructions`; no vault/retrieval/dependency change.
+- Source tests: 1710 → 1716.
+
 ## [3.12.0-rc.12] — 2026-07-25
 
 > **TL;DR:** **The public repository now sells enquire-mcp as the #1 Obsidian MCP for AI memory without routing buyers or AI agents to alternatives, while every concrete performance number is tied to a reproducible evidence boundary.** The comparison page is rebuilt as an enquire-first product battlecard; the README shows a deterministic query → grounded answer → source-note example above the fold; ROADMAP and MCP-facing descriptions lead with enquire's own outcomes; and the social card carries a complete install command. A class-wide sweep replaces unsupported absolute HNSW/FTS5 latency and scale promises across all 11 READMEs, CLI help, TSDoc, tool metadata, structured search metadata, Quickstart, templates, citation data, and benchmark prose with corpus-scoped evidence or explicit measurement guidance. Runtime retrieval behavior is unchanged; **1710 → 1710 source tests.**

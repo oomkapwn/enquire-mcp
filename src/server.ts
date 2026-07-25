@@ -6,6 +6,7 @@ import { type loadEmbedder, resolveModel, setEmbeddingsOffline } from "./embeddi
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { defaultIndexFile, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
 import { VERSION } from "./index.js";
+import { buildInitializeInstructions, resolveInitializeToolProfile } from "./initialize-instructions.js";
 import { registerPrompts } from "./prompts.js";
 import { parseFeedbackConfig, parseRecencyConfig } from "./retrieval-opts.js";
 import { shutdownStdioDeps } from "./shutdown.js";
@@ -677,10 +678,23 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
   // Enforce the runtime privacy boundary here too, before any registered tool
   // can lazily load an embedder or reranker.
   setEmbeddingsOffline();
-  const server = new McpServer({
-    name: "enquire",
-    version: VERSION
+  const initializeToolProfile = resolveInitializeToolProfile({
+    hasFtsIndex: deps.ftsIndex !== null,
+    diagnosticSearchTools: opts.diagnosticSearchTools ?? false,
+    writeTools: deps.vault.writeEnabled,
+    feedbackTool: deps.feedbackStore !== null,
+    enabledTools: deps.enabledTools,
+    disabledTools: deps.disabledTools
   });
+  const server = new McpServer(
+    {
+      name: "enquire",
+      version: VERSION
+    },
+    {
+      instructions: buildInitializeInstructions(initializeToolProfile)
+    }
+  );
 
   // v1.10/v1.11 — per-tool gating. Monkey-patch registerTool ONCE so every
   // register* function below transparently honors the gating rules.

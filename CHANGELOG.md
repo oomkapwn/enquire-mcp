@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.17] — 2026-07-25
+
+> **TL;DR:** **The LongMemEval-S credibility lever is now safe to measure once instead of producing an expensive but unauditable number.** The harness matches the pinned peer's global-index + question-folder scope shape, removes answer-label leakage from paths/headings, validates and hashes the official cleaned cohort, makes freshness dates reproducible, and writes raw per-query + provenance + hardware + timing + index-size evidence. Diagnostic limits are visibly partial. Runtime server behavior is unchanged; **1720 → 1720 source tests.**
+>
+> **Method note:** the existing script, publishing guide, official `longmemeval_s_cleaned.json`, and `flowing-abyss/obsidian-hybrid-search@c0922d955f5bf5abaad14a11cbb3e11303cd6036` preparer/result were re-audited before any full run. The official file is 277,383,467 bytes with SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`: 500 questions, 30 abstentions, 470 scoreable questions, and 23,867 sessions. A one-question and ten-question BM25+TF-IDF canary exercised the real compiled stack; both artifacts were stamped `diagnostic-partial` and are not published as benchmark results.
+
+### Corrected
+
+- **Corpus-statistics protocol.** The old helper rebuilt FTS5/TF-IDF/embeddings separately for every question. That made BM25/TF-IDF statistics local to each mini-vault, while the pinned peer builds one ~22k-note index and applies a question-folder filter. rc.17 materializes the selected cohort once, builds each index once, and searches with `folder: question_id`.
+- **Ground-truth leakage.** Source session ids such as `answer_…` previously appeared in note filenames and `# Session …` headings. Neutral `question_id/0001.md` paths and `# Conversation` bodies now match the peer materialization without exposing the answer label.
+- **Freshness semantics.** `--recency-compare` previously wrote every temporary note "now", so the production mtime-based recency stage saw equal ages. Session mtimes now preserve each source session's age relative to `question_date`, normalized after content indexing at the pre-search anchor so neither wall-clock year nor a long dense-index build distorts the result.
+- **Dataset currency.** Download guidance now names the official cleaned Hugging Face file instead of the legacy repository filename. Schema checks fail before indexing on misaligned arrays, unsafe/duplicate question ids, invalid roles/dates, missing answer sessions, or ambiguous duplicated answer ids. The 13 official questions with one duplicated distractor id each are accepted and disclosed; there are zero answer-id ambiguities.
+
+### Evidence contract
+
+- Output schema v1 records dataset filename/bytes/SHA-256/source declaration/cohort shape, comparator commit, package version + Git commit + dirty state, privacy-safe CPU/runtime/RAM facts, per-phase timing, peak RSS, FTS/embed index footprint, actual ranker usage, overall/category summaries, and raw per-query relevant/top/missed paths + metrics.
+- `--limit N` writes `status: diagnostic-partial` / `partial: true`; the full 500-instance cohort alone can produce `status: complete`.
+- Even the full canonical cohort is `diagnostic-untrusted` unless Git resolves to an exact clean commit; publication requires `publishable: true`.
+- Peer-protocol `k` is fail-closed at exactly 10; malformed limits, recency parameters, dates, schema, unknown flags, ranker errors, or an output path that aliases the dataset abort rather than writing a headline-shaped artifact.
+- Per-query recency evidence includes its own top/missed paths, metrics, signals and latency, so the aggregate freshness delta is independently auditable.
+
+### Tests (1720)
+
+- The existing 16-test LongMemEval suite now proves label-free numeric materialization, path/date/schema negative controls, official duplicate-id handling, and category/metric aggregation.
+- Its compiled process contract builds a two-question global FTS5 corpus, asserts the provenance-complete artifact and top relevant numeric path, forbids answer-id leakage/hostname collection, checks index bytes, and verifies non-protocol `--k 5` exits 2.
+- Full source-test count is unchanged because the former empty-aggregation test now carries the process/schema contract in the same `it()` block.
+
+### Stats
+
+- Runtime server, dependencies, MCP tools/prompts, and schemas: unchanged (46 tools, 19 prompts).
+- Source tests: 1720 unchanged.
+- Official cleaned cohort validated locally: 500 questions / 470 scoreable / 30 abstention / 23,867 sessions.
+- Publication posture: harness ready; full local-embedding reference run and result review remain the next backlog step.
+
 ## [3.12.0-rc.16] — 2026-07-25
 
 > **TL;DR:** **The repository front door now sells enquire-mcp as the complete local intelligence layer for an Obsidian vault: “Your vault. Every agent. One memory.”** The canonical README leads with portable agent memory + local document intelligence, restores the maintainer-requested ✓/✕ competitor matrix, makes PDFs/OCR, Canvas, and executable Bases first-class buying edges, and replaces the social card with a modern source → local intelligence → agents system visual. The same decisive comparison now ships on Pages. Runtime behavior is unchanged; **1720 → 1720 source tests.**

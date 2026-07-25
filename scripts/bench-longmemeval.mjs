@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v3.9.0-rc.19 — LongMemEval RETRIEVAL benchmark harness.
+// v3.12.0-rc.17 — evidence-grade LongMemEval-S RETRIEVAL benchmark harness.
 //
 // What this measures (and what it does NOT):
 //   • enquire-mcp is a RETRIEVER over a vault, not an answer-generating chat
@@ -26,50 +26,72 @@
 //                              {"role":"assistant","content":"...","has_answer":true} ], ... ],
 //     "answer_session_ids": ["s3", ...]   // the evidence-bearing session(s)
 //   }
-// Each question carries its OWN haystack — so the harness materializes one
-// temp vault PER question, indexes it, runs one search, scores, tears down.
-// That's why a full longmemeval_s run is heavy (hundreds of sessions × N
-// questions) and is a maintainer-gated step, not a CI gate.
+// Each question carries its OWN haystack. To match the closest peer's published
+// scope protocol, the harness materializes every scored question into ONE
+// temporary vault, builds ONE global index, and restricts each query to its
+// question folder. This matters: BM25/TF-IDF corpus statistics come from the
+// same global ~22k-note corpus as the peer protocol, while retrieval remains
+// scope-per-question.
 //
 // The dataset is NOT committed (size + licensing). Download it yourself:
-//   https://github.com/xiaowu0162/LongMemEval  (longmemeval_s / _m / _oracle)
+//   https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
 // then:
-//   npm run build && node scripts/bench-longmemeval.mjs --dataset <path-to.json> [--limit N] [--k 10] [--embeddings]
+//   npm run build && node scripts/bench-longmemeval.mjs \
+//     --dataset longmemeval_s_cleaned.json --dataset-source <official-url> \
+//     --k 10 --embeddings --output <result.json>
 //
-// `sessionToMarkdown` / `sessionNotePath` / `relevantSessionPaths` /
-// `isAbstention` / `aggregateByType` are exported pure (no dist dependency)
-// for unit testing (tests/longmemeval-harness.test.ts).
+// Pure helpers are exported (no dist dependency) for unit testing in
+// tests/longmemeval-harness.test.ts.
 
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const distDir = path.join(repoRoot, "dist");
+export const OFFICIAL_LONGMEMEVAL_S_URL =
+  "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json";
+export const OFFICIAL_LONGMEMEVAL_S_SHA256 = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442";
+export const OFFICIAL_LONGMEMEVAL_S_BYTES = 277_383_467;
+export const OFFICIAL_LONGMEMEVAL_S_INSTANCES = 500;
+export const OHS_COMPARATOR_COMMIT = "c0922d955f5bf5abaad14a11cbb3e11303cd6036";
+const SAFE_QUESTION_ID = /^[A-Za-z0-9_-]+$/;
+const LONGMEMEVAL_DATE = /^(\d{4})\/(\d{2})\/(\d{2})(?: \([^)]+\))?(?: (\d{2}):(\d{2}))?$/;
 
 // ─── Pure, testable helpers (no dist / no I/O) ──────────────────────────────
 
-/** Sanitize a session id into a stable, safe vault note path under `sessions/`. */
-export function sessionNotePath(sessionId) {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `sessions/${safe}.md`;
+/**
+ * Stable scope-relative note path that exposes neither the source session id
+ * nor its `answer_` prefix. LongMemEval source ids encode ground truth, so
+ * putting them in filenames/headings would contaminate a retrieval benchmark.
+ */
+export function sessionNotePath(questionId, sessionIndex) {
+  if (typeof questionId !== "string" || !SAFE_QUESTION_ID.test(questionId)) {
+    throw new Error(`unsafe LongMemEval question_id: ${String(questionId)}`);
+  }
+  if (!Number.isInteger(sessionIndex) || sessionIndex < 0) {
+    throw new Error(`invalid LongMemEval session index: ${String(sessionIndex)}`);
+  }
+  return `${questionId}/${String(sessionIndex + 1).padStart(4, "0")}.md`;
 }
 
 /**
- * Render one haystack session (array of {role, content} turns) as a markdown
- * note body. Deterministic — no dates/RNG beyond the passed `date`.
+ * Render one haystack session as a label-free Markdown conversation. The
+ * answer-bearing session id is intentionally absent from the note.
  */
-export function sessionToMarkdown(session, sessionId, date) {
-  const lines = [`# Session ${sessionId}`];
-  if (date) lines.push(`*${date}*`);
-  lines.push("");
+export function sessionToMarkdown(session, date) {
+  const lines = ["# Conversation", ""];
+  if (date) lines.push(`Date: ${date}`, "");
   for (const turn of session ?? []) {
     if (!turn || typeof turn.content !== "string") continue;
     const role = turn.role === "assistant" ? "Assistant" : "User";
-    lines.push(`**${role}:** ${turn.content}`, "");
+    lines.push(`## ${role}`, "", turn.content, "");
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }
@@ -82,24 +104,175 @@ export function sessionToMarkdown(session, sessionId, date) {
  * handle that (recall is undefined; the question tests abstention, not recall).
  */
 export function relevantSessionPaths(instance) {
-  const ids = new Set();
+  const indexes = new Set();
+  const sessionIds = instance?.haystack_session_ids ?? [];
   if (Array.isArray(instance?.answer_session_ids)) {
-    for (const id of instance.answer_session_ids) ids.add(id);
+    for (const id of instance.answer_session_ids) {
+      const index = sessionIds.indexOf(id);
+      if (index >= 0) indexes.add(index);
+    }
   }
-  if (ids.size === 0 && Array.isArray(instance?.haystack_sessions)) {
-    const sessIds = instance.haystack_session_ids ?? [];
+  if (indexes.size === 0 && Array.isArray(instance?.haystack_sessions)) {
     instance.haystack_sessions.forEach((sess, i) => {
-      if (Array.isArray(sess) && sess.some((t) => t?.has_answer)) {
-        ids.add(sessIds[i] ?? `idx-${i}`);
-      }
+      if (Array.isArray(sess) && sess.some((t) => t?.has_answer)) indexes.add(i);
     });
   }
-  return new Set([...ids].map(sessionNotePath));
+  return new Set([...indexes].map((index) => sessionNotePath(instance.question_id, index)));
 }
 
 /** LongMemEval abstention questions (id suffix "_abs") have no in-haystack answer. */
 export function isAbstention(instance) {
-  return typeof instance?.question_id === "string" && instance.question_id.endsWith("_abs");
+  return (
+    (typeof instance?.question_id === "string" && instance.question_id.endsWith("_abs")) ||
+    (Array.isArray(instance?.answer_session_ids) && instance.answer_session_ids.length === 0)
+  );
+}
+
+/** Parse LongMemEval's stable `YYYY/MM/DD (Day) HH:MM` date as UTC. */
+export function parseLongMemEvalDate(value) {
+  if (typeof value !== "string") return null;
+  const match = LONGMEMEVAL_DATE.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour = "00", minute = "00"] = match;
+  const timestamp = Date.UTC(
+    Number.parseInt(year, 10),
+    Number.parseInt(month, 10) - 1,
+    Number.parseInt(day, 10),
+    Number.parseInt(hour, 10),
+    Number.parseInt(minute, 10)
+  );
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== Number.parseInt(year, 10) ||
+    date.getUTCMonth() !== Number.parseInt(month, 10) - 1 ||
+    date.getUTCDate() !== Number.parseInt(day, 10) ||
+    date.getUTCHours() !== Number.parseInt(hour, 10) ||
+    date.getUTCMinutes() !== Number.parseInt(minute, 10)
+  ) {
+    return null;
+  }
+  return timestamp;
+}
+
+/**
+ * Normalize a historical session mtime relative to its question date. This
+ * preserves the dataset's age/order signal while making a recency comparison
+ * independent of the calendar date on which the benchmark is executed.
+ */
+export function normalizedSessionMtimeMs(sessionDate, questionDate, anchorMs) {
+  const sessionMs = parseLongMemEvalDate(sessionDate);
+  const questionMs = parseLongMemEvalDate(questionDate);
+  if (sessionMs === null || questionMs === null) {
+    throw new Error(`invalid LongMemEval date pair: session=${String(sessionDate)} question=${String(questionDate)}`);
+  }
+  return anchorMs - Math.max(0, questionMs - sessionMs);
+}
+
+/**
+ * Fail-fast schema validation for the cleaned LongMemEval-S publishing cohort.
+ * Returns the input array so callers can validate inline before doing any
+ * expensive indexing.
+ */
+export function validateLongMemEvalInstances(instances) {
+  if (!Array.isArray(instances) || instances.length === 0) {
+    throw new Error("LongMemEval dataset must be a non-empty JSON array");
+  }
+  const seen = new Set();
+  for (let i = 0; i < instances.length; i++) {
+    const item = instances[i];
+    const at = `LongMemEval instance[${i}]`;
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${at} must be an object`);
+    for (const key of ["question_id", "question_type", "question", "question_date"]) {
+      if (typeof item[key] !== "string" || item[key].trim() === "") throw new Error(`${at}.${key} must be non-empty`);
+    }
+    if (!SAFE_QUESTION_ID.test(item.question_id)) throw new Error(`${at}.question_id is not path-safe`);
+    if (seen.has(item.question_id)) throw new Error(`${at}.question_id is duplicated`);
+    seen.add(item.question_id);
+    for (const key of ["haystack_session_ids", "haystack_dates", "haystack_sessions", "answer_session_ids"]) {
+      if (!Array.isArray(item[key])) throw new Error(`${at}.${key} must be an array`);
+    }
+    const count = item.haystack_sessions.length;
+    if (count === 0) throw new Error(`${at}.haystack_sessions must not be empty`);
+    if (item.haystack_session_ids.length !== count || item.haystack_dates.length !== count) {
+      throw new Error(`${at} haystack arrays are misaligned`);
+    }
+    if (parseLongMemEvalDate(item.question_date) === null) throw new Error(`${at}.question_date is invalid`);
+    const sessionIdCounts = new Map();
+    for (let si = 0; si < count; si++) {
+      const sessionId = item.haystack_session_ids[si];
+      if (typeof sessionId !== "string" || sessionId.length === 0) throw new Error(`${at} has an invalid session id`);
+      sessionIdCounts.set(sessionId, (sessionIdCounts.get(sessionId) ?? 0) + 1);
+      if (parseLongMemEvalDate(item.haystack_dates[si]) === null) throw new Error(`${at} has an invalid session date`);
+      const session = item.haystack_sessions[si];
+      if (!Array.isArray(session)) throw new Error(`${at}.haystack_sessions[${si}] must be an array`);
+      for (let ti = 0; ti < session.length; ti++) {
+        const turn = session[ti];
+        if (!turn || typeof turn !== "object" || typeof turn.content !== "string") {
+          throw new Error(`${at}.haystack_sessions[${si}][${ti}] has invalid content`);
+        }
+        if (turn.role !== "user" && turn.role !== "assistant") {
+          throw new Error(`${at}.haystack_sessions[${si}][${ti}] has invalid role`);
+        }
+      }
+    }
+    for (const answerId of item.answer_session_ids) {
+      const occurrences = typeof answerId === "string" ? (sessionIdCounts.get(answerId) ?? 0) : 0;
+      if (occurrences === 0) {
+        throw new Error(`${at} references a missing answer session`);
+      }
+      if (occurrences > 1) throw new Error(`${at} has an ambiguous duplicated answer session`);
+    }
+    if (!isAbstention(item) && item.answer_session_ids.length === 0) {
+      throw new Error(`${at} has no ground-truth answer session`);
+    }
+  }
+  return instances;
+}
+
+/** Dataset-level duplicate-id disclosure (cleaned S currently has distractor duplicates). */
+export function duplicateSessionIdStats(instances) {
+  let questions = 0;
+  let extraOccurrences = 0;
+  let answerAmbiguities = 0;
+  for (const item of instances) {
+    const counts = new Map();
+    for (const id of item.haystack_session_ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
+    const duplicateCounts = [...counts.values()].filter((count) => count > 1);
+    if (duplicateCounts.length > 0) questions += 1;
+    extraOccurrences += duplicateCounts.reduce((sum, count) => sum + count - 1, 0);
+    for (const answerId of item.answer_session_ids ?? []) {
+      if ((counts.get(answerId) ?? 0) > 1) answerAmbiguities += 1;
+    }
+  }
+  return {
+    questions_with_duplicate_session_ids: questions,
+    extra_session_id_occurrences: extraOccurrences,
+    answer_id_ambiguities: answerAmbiguities
+  };
+}
+
+/** Exact canonical-cohort gate for a headline-shaped artifact. */
+export function isCanonicalLongMemEvalS(dataset, selectedInstances) {
+  return (
+    dataset.sha256 === OFFICIAL_LONGMEMEVAL_S_SHA256 &&
+    dataset.size_bytes === OFFICIAL_LONGMEMEVAL_S_BYTES &&
+    dataset.total_instances === OFFICIAL_LONGMEMEVAL_S_INSTANCES &&
+    selectedInstances === OFFICIAL_LONGMEMEVAL_S_INSTANCES
+  );
+}
+
+/** Publication state from cohort identity plus exact clean implementation state. */
+export function benchmarkArtifactStatus(canonicalCohort, implementation) {
+  if (!canonicalCohort) return { status: "diagnostic-partial", partial: true, publishable: false };
+  const publishable =
+    typeof implementation?.git_commit === "string" &&
+    /^[a-f0-9]{40}$/.test(implementation.git_commit) &&
+    implementation.git_dirty === false;
+  return {
+    status: publishable ? "complete" : "diagnostic-untrusted",
+    partial: false,
+    publishable
+  };
 }
 
 /**
@@ -207,31 +380,141 @@ export function recencyDelta(baseByCategory, afterByCategory) {
 function parseArgs(argv) {
   const args = {
     dataset: null,
+    datasetSource: null,
     limit: Infinity,
     k: 10,
     embeddings: false,
-    // v3.11.6-rc.10 (C-2) — peer-protocol options.
-    output: null, // write the full result JSON (raw per-category, for publishing)
-    recencyCompare: false, // also run with --recency-weight ON and report the by-category delta
-    recencyWeight: 0.3, // the ON-pass weight for --recency-compare
+    output: null,
+    recencyCompare: false,
+    recencyWeight: 0.3,
     staleDays: 365
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--dataset") args.dataset = argv[++i];
-    else if (a === "--limit") args.limit = Number.parseInt(argv[++i], 10);
-    else if (a === "--k") args.k = Number.parseInt(argv[++i], 10);
+    const takeValue = () => {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error(`${a} requires a value`);
+      i += 1;
+      return value;
+    };
+    if (a === "--dataset") args.dataset = takeValue();
+    else if (a === "--dataset-source") args.datasetSource = takeValue();
+    else if (a === "--limit") args.limit = Number(takeValue());
+    else if (a === "--k") args.k = Number(takeValue());
     else if (a === "--embeddings") args.embeddings = true;
-    else if (a === "--output") args.output = argv[++i];
+    else if (a === "--output") args.output = takeValue();
     else if (a === "--recency-compare") args.recencyCompare = true;
-    else if (a === "--recency-weight") args.recencyWeight = Number.parseFloat(argv[++i]);
-    else if (a === "--stale-days") args.staleDays = Number.parseInt(argv[++i], 10);
+    else if (a === "--recency-weight") args.recencyWeight = Number(takeValue());
+    else if (a === "--stale-days") args.staleDays = Number(takeValue());
+    else throw new Error(`unknown argument: ${String(a)}`);
   }
   return args;
 }
 
+function validateArgs(args) {
+  if (!Number.isInteger(args.k) || args.k !== 10) {
+    throw new Error(`LongMemEval peer protocol requires --k 10 (received ${String(args.k)})`);
+  }
+  if (args.limit !== Infinity && (!Number.isInteger(args.limit) || args.limit <= 0)) {
+    throw new Error(`--limit must be a positive integer (received ${String(args.limit)})`);
+  }
+  if (!Number.isFinite(args.recencyWeight) || args.recencyWeight < 0 || args.recencyWeight > 1) {
+    throw new Error(`--recency-weight must be between 0 and 1 (received ${String(args.recencyWeight)})`);
+  }
+  if (!Number.isInteger(args.staleDays) || args.staleDays <= 0) {
+    throw new Error(`--stale-days must be a positive integer (received ${String(args.staleDays)})`);
+  }
+  if (args.datasetSource !== null) {
+    try {
+      const source = new URL(args.datasetSource);
+      if (source.protocol !== "https:" && source.protocol !== "http:") {
+        throw new Error("unsupported source protocol");
+      }
+    } catch {
+      throw new Error(`--dataset-source must be an absolute HTTP(S) URL (received ${String(args.datasetSource)})`);
+    }
+  }
+}
+
+function elapsedMs(start) {
+  return Math.round((performance.now() - start) * 100) / 100;
+}
+
+function round4(value) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function countSignals(rows) {
+  const counts = { bm25: 0, tfidf: 0, embeddings: 0 };
+  for (const row of rows) {
+    for (const signal of row.signals_used) counts[signal] += 1;
+  }
+  return counts;
+}
+
+async function implementationMetadata() {
+  const pkg = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
+  const git = (args) => {
+    try {
+      return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+  };
+  const commit = git(["rev-parse", "HEAD"]);
+  const status = git(["status", "--porcelain", "--untracked-files=no"]);
+  return {
+    package_version: pkg.version,
+    git_commit: commit,
+    git_dirty: status === null ? null : status.length > 0
+  };
+}
+
+function environmentMetadata() {
+  const cpus = os.cpus();
+  return {
+    node: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    cpu_model: cpus[0]?.model ?? "unknown",
+    logical_cpu_count: cpus.length,
+    total_memory_bytes: os.totalmem()
+  };
+}
+
+async function writeJsonAtomic(output, payload) {
+  const absolute = path.resolve(output);
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  const temp = `${absolute}.${process.pid}.tmp`;
+  try {
+    await fs.writeFile(temp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await fs.rename(temp, absolute);
+  } finally {
+    await fs.rm(temp, { force: true });
+  }
+}
+
+async function sqliteFootprintBytes(file) {
+  let bytes = 0;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try {
+      bytes += (await fs.stat(`${file}${suffix}`)).size;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return bytes;
+}
+
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+    validateArgs(args);
+  } catch (error) {
+    process.stderr.write(`enquire LongMemEval: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
   if (!args.dataset || !existsSync(args.dataset)) {
     process.stderr.write(
       [
@@ -241,35 +524,58 @@ async function main() {
         "session(s) — NOT end-to-end QA accuracy (enquire is a retriever).",
         "",
         "Download the dataset (not committed — size + licensing):",
-        "  https://github.com/xiaowu0162/LongMemEval  (longmemeval_s / _m / _oracle)",
+        `  ${OFFICIAL_LONGMEMEVAL_S_URL}`,
         "then run:",
-        "  npm run build && node scripts/bench-longmemeval.mjs --dataset <path.json> [--limit N] [--k 10] [--embeddings]",
+        "  npm run build && node scripts/bench-longmemeval.mjs \\",
+        "    --dataset longmemeval_s_cleaned.json --dataset-source <official-url> \\",
+        "    --k 10 --embeddings --output <result.json>",
         ""
       ].join("\n")
     );
     process.exit(2);
   }
-
-  const raw = JSON.parse(await fs.readFile(args.dataset, "utf8"));
-  const instances = Array.isArray(raw) ? raw : (raw.questions ?? []);
-  if (instances.length === 0) {
-    process.stderr.write(`enquire LongMemEval: ${args.dataset} contained no instances\n`);
+  if (args.output && path.resolve(args.output) === path.resolve(args.dataset)) {
+    process.stderr.write("enquire LongMemEval: --output must not overwrite --dataset\n");
     process.exit(2);
   }
+
+  const runStarted = performance.now();
+  const generatedAt = new Date().toISOString();
+  let datasetText;
+  let parsed;
+  try {
+    datasetText = await fs.readFile(args.dataset, "utf8");
+    parsed = JSON.parse(datasetText);
+  } catch (error) {
+    process.stderr.write(
+      `enquire LongMemEval: invalid dataset JSON (${error instanceof Error ? error.message : String(error)})\n`
+    );
+    process.exit(2);
+  }
+  const instances = Array.isArray(parsed) ? parsed : parsed?.questions;
+  try {
+    validateLongMemEvalInstances(instances);
+  } catch (error) {
+    process.stderr.write(`enquire LongMemEval: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  }
+  const dataset = {
+    variant: "longmemeval-compatible",
+    filename: path.basename(args.dataset),
+    size_bytes: Buffer.byteLength(datasetText, "utf8"),
+    sha256: createHash("sha256").update(datasetText).digest("hex"),
+    official_download_url: OFFICIAL_LONGMEMEVAL_S_URL,
+    declared_source_url: args.datasetSource,
+    total_instances: instances.length,
+    duplicate_session_ids: duplicateSessionIdStats(instances)
+  };
+  if (isCanonicalLongMemEvalS(dataset, instances.length)) dataset.variant = "longmemeval_s_cleaned";
 
   const { Vault } = await import(path.join(distDir, "vault.js"));
   const { FtsIndex } = await import(path.join(distDir, "fts5.js"));
   const { syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js"));
   const { searchHybrid } = await import(path.join(distDir, "tools", "index.js"));
 
-  // v3.11.6-rc.12 (re-sweep MED) — `--embeddings` used to be a LABEL-ONLY flag:
-  // it drove the disclosure header + output JSON ("local-transformers.js") while
-  // no embed-db was ever built and searchHybrid got no embedFile — a published
-  // artifact would have claimed an embedding backend that never ran (the
-  // claimed-guarantee-vs-code-guard class). Now the flag is REAL: load the local
-  // embedder ONCE (fail-FAST if the optional dep / model cache is missing — a
-  // publishing harness must never silently degrade under a disclosure) and build
-  // a per-question embed-db over the scoped mini-vault.
   let embedder = null;
   let embedModel = null;
   let EmbedDbCtor = null;
@@ -290,7 +596,6 @@ async function main() {
       process.exit(2);
     }
   }
-  // v3.11.6-rc.10 (C-2) — the rc.5 OHS-comparable metric set.
   const { recallAtK, reciprocalRank, ndcgAtK, hitAtK, allRelevantAtK } = await import(path.join(distDir, "eval.js"));
 
   const k = args.k;
@@ -306,108 +611,214 @@ async function main() {
     all_rel_10: allRelevantAtK(retrieved, relevant, 10) ? 1 : 0
   });
 
-  const base = []; // recency OFF (the headline)
-  const withRecency = []; // recency ON (only when --recency-compare)
+  const base = [];
+  const withRecency = [];
+  const perQuery = [];
   let abstentions = 0;
-  let processed = 0;
   const total = Math.min(instances.length, args.limit);
+  const selected = instances.slice(0, total);
+  const scorable = [];
+  for (const inst of selected) {
+    if (isAbstention(inst)) {
+      abstentions += 1;
+      continue;
+    }
+    const relevant = relevantSessionPaths(inst);
+    if (relevant.size === 0) {
+      process.stderr.write(`enquire LongMemEval: ${inst.question_id} has no scoreable ground truth\n`);
+      process.exit(2);
+    }
+    scorable.push({ inst, relevant });
+  }
+  if (scorable.length === 0) {
+    process.stderr.write("enquire LongMemEval: selected cohort contains no scoreable questions\n");
+    process.exit(2);
+  }
+
   process.stderr.write(
-    `enquire LongMemEval: ${total} question(s), k=${k}, embeddings=${args.embeddings ? "on" : "off (BM25+TF-IDF)"}` +
+    `enquire LongMemEval: ${scorable.length} scored question(s), one global scoped vault, k=${k}, ` +
+      `embeddings=${args.embeddings ? "on" : "off (BM25+TF-IDF)"}` +
       `${args.recencyCompare ? `, recency-compare w=${args.recencyWeight}` : ""}\n`
   );
 
-  for (let qi = 0; qi < total; qi++) {
-    const inst = instances[qi];
-    if (!inst || typeof inst.question !== "string") continue;
-    if (isAbstention(inst)) {
-      abstentions += 1;
-      continue; // abstention questions have no in-haystack relevant session
-    }
-    const relevant = relevantSessionPaths(inst);
-    if (relevant.size === 0) continue; // can't score without ground truth
-
-    const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-vault-"));
-    const idxDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-idx-"));
-    let ftsIndex = null;
-    try {
-      const sessIds = inst.haystack_session_ids ?? [];
-      const dates = inst.haystack_dates ?? [];
-      await fs.mkdir(path.join(vaultRoot, "sessions"), { recursive: true });
-      for (let si = 0; si < (inst.haystack_sessions?.length ?? 0); si++) {
-        const sid = sessIds[si] ?? `idx-${si}`;
-        const md = sessionToMarkdown(inst.haystack_sessions[si], sid, dates[si]);
-        await fs.writeFile(path.join(vaultRoot, sessionNotePath(sid)), md, "utf8");
+  const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-vault-"));
+  const idxDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-lme-idx-"));
+  let ftsIndex = null;
+  const timing = {
+    materialize_ms: 0,
+    fts_index_ms: 0,
+    embedding_index_ms: 0,
+    retime_ms: 0,
+    base_search_ms: 0,
+    recency_search_ms: 0
+  };
+  const indexFootprint = {
+    fts_bytes: 0,
+    embeddings_bytes: 0
+  };
+  let notesWritten = 0;
+  try {
+    const materializeStarted = performance.now();
+    for (const { inst } of scorable) {
+      await fs.mkdir(path.join(vaultRoot, inst.question_id), { recursive: true });
+      for (let si = 0; si < inst.haystack_sessions.length; si++) {
+        const relPath = sessionNotePath(inst.question_id, si);
+        const absolute = path.join(vaultRoot, relPath);
+        await fs.writeFile(absolute, sessionToMarkdown(inst.haystack_sessions[si], inst.haystack_dates[si]), "utf8");
+        notesWritten += 1;
       }
-      const vault = new Vault(vaultRoot);
-      ftsIndex = new FtsIndex({ file: path.join(idxDir, "lme.fts5.db"), vaultRoot: vault.root });
-      // rc.12 (re-sweep HIGH) — the index MUST be opened before syncFtsIndex;
-      // pre-rc.12 this line was missing, so every run crashed on question 1
-      // (`FtsIndex.open() must be called before use`) — the harness had never
-      // successfully executed end-to-end.
-      await ftsIndex.open();
-      await syncFtsIndex(vault, ftsIndex);
-      // rc.12 — REAL embeddings arm (see the loader above): build the scoped
-      // mini-vault's embed-db so the hybrid search actually fuses the local
-      // embedding signal the disclosure claims.
-      let embedFile = "";
-      if (embedder && EmbedDbCtor && embedModel) {
-        embedFile = path.join(idxDir, "lme.embed.db");
-        const db = new EmbedDbCtor({
-          file: embedFile,
-          vaultRoot: vault.root,
-          modelAlias: embedModel.alias,
-          dim: embedModel.dim
-        });
+    }
+    timing.materialize_ms = elapsedMs(materializeStarted);
+
+    const indexVault = new Vault(vaultRoot);
+    ftsIndex = new FtsIndex({ file: path.join(idxDir, "lme.fts5.db"), vaultRoot: indexVault.root });
+    const ftsStarted = performance.now();
+    await ftsIndex.open();
+    await syncFtsIndex(indexVault, ftsIndex);
+    timing.fts_index_ms = elapsedMs(ftsStarted);
+
+    let embedFile = "";
+    if (embedder && EmbedDbCtor && embedModel) {
+      const embedStarted = performance.now();
+      embedFile = path.join(idxDir, "lme.embed.db");
+      const db = new EmbedDbCtor({
+        file: embedFile,
+        vaultRoot: indexVault.root,
+        modelAlias: embedModel.alias,
+        dim: embedModel.dim
+      });
+      try {
         await db.open();
-        await syncEmbedDb(vault, db, embedder);
+        await syncEmbedDb(indexVault, db, embedder);
+      } finally {
         db.close();
       }
-      const type = inst.question_type ?? "unknown";
-      // scope-per-question: this vault IS the question's LongMemEval haystack.
-      const searchCtx = { ftsIndex, embedFile };
-      const r0 = await searchHybrid(vault, { query: inst.question, limit: k }, searchCtx);
-      base.push(
-        scoreOhs(
-          r0.matches.map((m) => m.path),
-          relevant,
-          type
-        )
+      indexFootprint.embeddings_bytes = await sqliteFootprintBytes(embedFile);
+      timing.embedding_index_ms = elapsedMs(embedStarted);
+    }
+
+    // Normalize after the expensive content indexes are complete so "question
+    // date = now" cannot drift by hours during a dense build. Content is
+    // unchanged; a fresh Vault below observes the final benchmark mtimes.
+    const retimeStarted = performance.now();
+    const mtimeAnchor = Date.now();
+    for (const { inst } of scorable) {
+      for (let si = 0; si < inst.haystack_sessions.length; si++) {
+        const absolute = path.join(vaultRoot, sessionNotePath(inst.question_id, si));
+        const mtime = normalizedSessionMtimeMs(inst.haystack_dates[si], inst.question_date, mtimeAnchor);
+        await fs.utimes(absolute, new Date(mtime), new Date(mtime));
+      }
+    }
+    timing.retime_ms = elapsedMs(retimeStarted);
+
+    const searchVault = new Vault(vaultRoot);
+    const searchCtx = { ftsIndex, embedFile };
+    for (let qi = 0; qi < scorable.length; qi++) {
+      const { inst, relevant } = scorable[qi];
+      const baseStarted = performance.now();
+      const r0 = await searchHybrid(
+        searchVault,
+        { query: inst.question, folder: inst.question_id, limit: k },
+        searchCtx
       );
+      const baseLatency = elapsedMs(baseStarted);
+      timing.base_search_ms += baseLatency;
+      if (Object.keys(r0.signal_errors ?? {}).length > 0) {
+        throw new Error(`${inst.question_id} ranker error: ${JSON.stringify(r0.signal_errors)}`);
+      }
+      const topPaths = r0.matches.map((match) => match.path);
+      const scored = scoreOhs(topPaths, relevant, inst.question_type);
+      base.push({ ...scored, signals_used: r0.signals_used });
+
+      let recencyLatency = null;
+      let recencyEvidence = null;
       if (args.recencyCompare) {
+        const recencyStarted = performance.now();
         const r1 = await searchHybrid(
-          vault,
-          { query: inst.question, limit: k },
+          searchVault,
+          { query: inst.question, folder: inst.question_id, limit: k },
           { ...searchCtx, recency: { weight: args.recencyWeight, staleDays: args.staleDays } }
         );
-        withRecency.push(
-          scoreOhs(
-            r1.matches.map((m) => m.path),
+        recencyLatency = elapsedMs(recencyStarted);
+        timing.recency_search_ms += recencyLatency;
+        if (Object.keys(r1.signal_errors ?? {}).length > 0) {
+          throw new Error(`${inst.question_id} recency ranker error: ${JSON.stringify(r1.signal_errors)}`);
+        }
+        withRecency.push({
+          ...scoreOhs(
+            r1.matches.map((match) => match.path),
             relevant,
-            type
-          )
-        );
+            inst.question_type
+          ),
+          signals_used: r1.signals_used
+        });
+        const recencyTopPaths = r1.matches.map((match) => match.path);
+        const recencyScored = scoreOhs(recencyTopPaths, relevant, inst.question_type);
+        recencyEvidence = {
+          top_paths: recencyTopPaths,
+          missed_paths: [...relevant].filter((relPath) => !recencyTopPaths.includes(relPath)),
+          ndcg_5: recencyScored.ndcg_5,
+          ndcg_10: recencyScored.ndcg_10,
+          mrr: recencyScored.mrr,
+          hit_1: recencyScored.hit_1 === 1,
+          hit_5: recencyScored.hit_5 === 1,
+          recall_10: recencyScored.recall_10,
+          all_rel_10: recencyScored.all_rel_10 === 1,
+          signals_used: r1.signals_used,
+          latency_ms: recencyLatency
+        };
       }
-      processed += 1;
-      if (processed % 25 === 0) process.stderr.write(`  …${processed}/${total}\n`);
-    } finally {
-      // rc.12 — close in the FINALLY (pre-rc.12 the close sat mid-try and
-      // leaked the SQLite handle when a search threw).
-      ftsIndex?.close?.();
-      await fs.rm(vaultRoot, { recursive: true, force: true });
-      await fs.rm(idxDir, { recursive: true, force: true });
+
+      perQuery.push({
+        id: inst.question_id,
+        query: inst.question,
+        category: inst.question_type,
+        scope: `${inst.question_id}/`,
+        relevant_paths: [...relevant],
+        top_paths: topPaths,
+        missed_paths: [...relevant].filter((relPath) => !topPaths.includes(relPath)),
+        ndcg_5: scored.ndcg_5,
+        ndcg_10: scored.ndcg_10,
+        mrr: scored.mrr,
+        hit_1: scored.hit_1 === 1,
+        hit_5: scored.hit_5 === 1,
+        recall_10: scored.recall_10,
+        all_rel_10: scored.all_rel_10 === 1,
+        signals_used: r0.signals_used,
+        latency_ms: baseLatency,
+        ...(recencyEvidence === null ? {} : { recency: recencyEvidence })
+      });
+      if ((qi + 1) % 25 === 0) process.stderr.write(`  …${qi + 1}/${scorable.length}\n`);
     }
+    ftsIndex.close();
+    ftsIndex = null;
+    indexFootprint.fts_bytes = await sqliteFootprintBytes(path.join(idxDir, "lme.fts5.db"));
+  } finally {
+    ftsIndex?.close?.();
+    await fs.rm(vaultRoot, { recursive: true, force: true });
+    await fs.rm(idxDir, { recursive: true, force: true });
   }
 
+  timing.base_search_ms = round4(timing.base_search_ms);
+  timing.recency_search_ms = round4(timing.recency_search_ms);
   const agg = aggregateByCategory(base);
   const fmt = (m) => `${m.toFixed(4)}`;
 
   // ── Disclosure header (per the C-2 honest-publishing bar) ──
-  process.stdout.write(`\n=== enquire LongMemEval-S RETRIEVAL (peer-protocol; scope-per-question, k=${k}) ===\n`);
+  const canonicalCohort = isCanonicalLongMemEvalS(dataset, selected.length);
+  const implementation = await implementationMetadata();
+  const { status, partial, publishable } = benchmarkArtifactStatus(canonicalCohort, implementation);
+  process.stdout.write(
+    `\n=== enquire LongMemEval-S RETRIEVAL (${status === "complete" ? "" : `${status.toUpperCase()}; `}global index + scope-per-question, k=${k}) ===\n`
+  );
   process.stdout.write(
     `embedding backend: ${embedModel ? `LOCAL on-device (transformers.js · ${embedModel.alias})` : "OFF (BM25 + TF-IDF only)"} — ` +
       "NOT a cloud model; a cloud-embedding peer number (e.g. bge-m3) is a different measurement.\n"
   );
-  process.stdout.write(`scored ${base.length} question(s) · ${abstentions} abstention(s) skipped\n\n`);
+  process.stdout.write(
+    `dataset sha256=${dataset.sha256} · ${notesWritten} notes · scored ${base.length} question(s) · ` +
+      `${abstentions} abstention(s) skipped\n\n`
+  );
   process.stdout.write(
     `overall  nDCG@5=${fmt(agg.overall.ndcg_5)}  nDCG@10=${fmt(agg.overall.ndcg_10)}  MRR=${fmt(agg.overall.mrr)}  ` +
       `Hit@1=${fmt(agg.overall.hit_1)}  Hit@5=${fmt(agg.overall.hit_5)}  Recall@10=${fmt(agg.overall.recall_10)}  ` +
@@ -442,23 +853,54 @@ async function main() {
   }
 
   if (args.output) {
+    const resourceUsage = process.resourceUsage();
     const payload = {
       meta: {
-        protocol: "longmemeval-s-scope-per-question",
-        k,
-        embeddings: args.embeddings,
-        // rc.12 — derived from the embedder that ACTUALLY loaded (fail-fast
-        // above guarantees embedModel is set iff embeddings really ran), so the
-        // published artifact can never claim a backend that didn't execute.
-        embedding_backend: embedModel ? `local-transformers.js (${embedModel.alias})` : "none-bm25-tfidf",
-        scored: base.length,
-        abstentions_skipped: abstentions
+        schema_version: 1,
+        generated_at: generatedAt,
+        status,
+        partial,
+        canonical_cohort: canonicalCohort,
+        publishable,
+        protocol: {
+          name: "longmemeval-s-global-index-scope-per-question",
+          comparator: "flowing-abyss/obsidian-hybrid-search",
+          comparator_commit: OHS_COMPARATOR_COMMIT,
+          k,
+          index_state: "rebuilt-once-for-selected-cohort",
+          query_scope: "question-folder",
+          timestamp_policy: "session age relative to question date, normalized after content indexing and before search"
+        },
+        dataset: {
+          ...dataset,
+          selected_instances: selected.length,
+          scored_instances: base.length,
+          abstentions_skipped: abstentions,
+          materialized_notes: notesWritten
+        },
+        retrieval: {
+          embeddings: args.embeddings,
+          embedding_backend: embedModel ? `local-transformers.js (${embedModel.alias})` : "none-bm25-tfidf",
+          base_signal_query_counts: countSignals(base),
+          recency_compare: args.recencyCompare,
+          recency_weight: args.recencyCompare ? args.recencyWeight : null,
+          stale_days: args.recencyCompare ? args.staleDays : null
+        },
+        implementation,
+        environment: environmentMetadata(),
+        timing: {
+          ...timing,
+          index_footprint_bytes: indexFootprint,
+          total_ms: elapsedMs(runStarted),
+          max_rss_kib: resourceUsage.maxRSS
+        }
       },
       summary: agg.overall,
       by_category: agg.by_category,
+      per_query: perQuery,
       ...(recencyReport ? { recency: recencyReport } : {})
     };
-    await fs.writeFile(args.output, `${JSON.stringify(payload, null, 2)}\n`);
+    await writeJsonAtomic(args.output, payload);
     process.stderr.write(`\nwrote result JSON → ${args.output}\n`);
   }
 

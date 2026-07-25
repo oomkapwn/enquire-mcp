@@ -460,8 +460,9 @@ relative terms.
 [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (Wu et al. 2024,
 [arXiv:2410.10813](https://arxiv.org/abs/2410.10813)) is the standard
 long-term-memory benchmark the AI-memory leaders (Mem0, Zep) publish against.
-No Obsidian-MCP has any LongMemEval-derived number — so a measured one is a
-clear differentiator.
+A closest-category search peer now publishes a LongMemEval-S retrieval result;
+our opportunity is a reproducible local-first number plus the raw evidence and
+freshness ablation needed to make it credible.
 
 **What we measure — and what we don't.** enquire-mcp is a *retriever* over a
 vault, not an answer-generating chat assistant. So this harness reports
@@ -473,24 +474,35 @@ context, which is the calling agent's job, not the memory layer's. Reporting a
 QA-accuracy number for a retriever would be an overclaim.
 
 **Harness.** [`scripts/bench-longmemeval.mjs`](https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/bench-longmemeval.mjs)
-(shipped v3.9.0-rc.19) materializes each question's haystack sessions into a
-throwaway vault (one note per session), indexes it with FTS5, runs
-`searchHybrid`, and scores `recall@k` / `MRR` / `NDCG@k` of the answer
-session(s) — aggregated overall and per `question_type` (single-session,
-multi-session, temporal-reasoning, knowledge-update, …). Abstention questions
-(`*_abs`) are counted separately, not scored for recall.
+materializes the selected non-abstention cohort into one throwaway global vault
+with a numeric, label-free filename per session; builds FTS5 and optional local
+embeddings once; and restricts each query to its question folder. This matches
+the pinned peer's global-index + scope-per-question shape while preventing
+`answer_…` source ids from leaking into searchable paths/headings. It reports
+the complete k=10 metric set overall, per `question_type`, and per query.
 
 **Running it** (the dataset is **not** committed — size + licensing):
 
 ```bash
-# 1. Download longmemeval_s / _m / _oracle from the LongMemEval repo
-# 2. Then:
-npm run bench:longmemeval -- --dataset path/to/longmemeval_s.json --k 10
-#   optional: --limit N (sample the first N questions) · --embeddings (add the
-#   dense arm — heavy: per-question embed-db build)
+curl -fL \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json \
+  -o longmemeval_s_cleaned.json
+npm run bench:longmemeval -- \
+  --dataset longmemeval_s_cleaned.json \
+  --dataset-source https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json \
+  --k 10 --embeddings --recency-compare \
+  --output eval/results/longmemeval-s.json
 ```
 
-**Status:** the harness + its pure-function tests ship in v3.9.0-rc.19; the
+Use `--limit N` only for a canary; its artifact is marked
+`diagnostic-partial`. Every JSON records dataset SHA-256/size/source
+declaration, implementation commit + dirty state, privacy-safe hardware,
+timings/peak RSS, summaries, categories, and raw per-query evidence.
+A full canonical cohort from a dirty/unresolvable Git state is still
+`diagnostic-untrusted`; publication requires `status: complete` and
+`publishable: true`.
+
+**Status:** the evidence-grade harness ships in v3.12.0-rc.17; the
 **headline numbers are intentionally not published here yet** — they will be
 added once the maintainer runs the full set on reference hardware and reviews
 the methodology (a published LongMemEval figure is the project's credibility

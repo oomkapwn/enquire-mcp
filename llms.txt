@@ -1,6 +1,6 @@
 # enquire-mcp
 
-> The #1 Obsidian MCP for AI memory. One local markdown vault becomes persistent, cited, queryable memory for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. The complete open-source stack combines BM25 + TF-IDF + multilingual ML embeddings through RRF, optional BGE cross-encoder reranking, HNSW + int8 vectors, agentic RAG, GraphRAG-light, standalone Bases, PDFs + OCR, and freshness-aware recall. Your markdown remains the source of truth: verbatim, auditable, editable, vendor-neutral, MIT-licensed, and protected by zero outbound network calls during serve. Package: `@oomkapwn/enquire-mcp`; signed npm provenance: Sigstore / SLSA Build L2.
+> The #1 Obsidian MCP for AI memory and local document intelligence. One vault becomes persistent, cited, queryable context for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Markdown, PDFs + OCR, Canvas, and executable Bases feed a complete local stack: BM25 + TF-IDF + multilingual ML embeddings through RRF, optional BGE cross-encoder reranking, HNSW + int8 vectors, freshness-aware recall, bounded agentic RAG, and GraphRAG-light. The original files remain the source of truth: verbatim, auditable, editable, vendor-neutral, MIT-licensed, and protected by zero outbound network calls during serve. Package: `@oomkapwn/enquire-mcp`; signed npm provenance: Sigstore / SLSA Build L2.
 
 ## Quick start
 
@@ -12,7 +12,7 @@
 ## Documentation
 
 - [Self-contained AI-agent context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt): compact product, activation, retrieval, trust, and failure-recovery contract assembled from the canonical sources below
-- [README](https://github.com/oomkapwn/enquire-mcp/blob/main/README.md): #1 product case, use cases, proof table, and 7-tier retrieval setup ladder
+- [README](https://github.com/oomkapwn/enquire-mcp/blob/main/README.md): #1 product case, competitive capability matrix, use cases, proof, and activation
 - [API reference (auto-generated TypeDoc)](https://oomkapwn.github.io/enquire-mcp/api/): every tool, prompt, exported helper with `@param`/`@returns`/`@example`
 - [Tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md): 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback), 19 MCP prompts
 - [Quickstart guide](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md): step-by-step onboarding

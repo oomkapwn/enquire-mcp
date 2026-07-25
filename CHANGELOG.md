@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.16] — 2026-07-25
+
+> **TL;DR:** **The repository front door now sells enquire-mcp as the complete local intelligence layer for an Obsidian vault: “Your vault. Every agent. One memory.”** The canonical README leads with portable agent memory + local document intelligence, restores the maintainer-requested ✓/✕ competitor matrix, makes PDFs/OCR, Canvas, and executable Bases first-class buying edges, and replaces the social card with a modern source → local intelligence → agents system visual. The same decisive comparison now ships on Pages. Runtime behavior is unchanged; **1720 → 1720 source tests.**
+>
+> **Method note:** the public surfaces were audited as one conversion funnel—GitHub README, Pages, Open Graph image, npm description, AI index entrypoints, and comparison page—then the current public READMEs of Smart Connections, Obsidian Hybrid Search, obsidian-mcp-server, and Vault Cortex were reviewed at pinned commits on 2026-07-25. The matrix compares complete product combinations rather than pretending every sub-feature is absent: `✕` means the complete row was not documented at the pinned snapshot. The TOP-1 invariant now permits dated factual contrast but rejects competitor CTAs, requires all four source SHAs, and proves the social-preview message/count analyzer with negative controls.
+
+### Changed
+
+- **Outcome-first repository narrative.** The hero now explains the buyer transformation before the retrieval acronyms: notes, PDFs, Canvas, and Bases become one private, cited memory layer for every MCP agent.
+- **Decisive competitive matrix.** README, `docs/COMPARISON.md`, and Pages show the same complete-stack standards: full local retrieval ladder, bounded agentic orchestration, freshness-aware recall, rich-document coverage, ranking explanations, safe authority, and release trust.
+- **Modern social preview.** A generated 2.5D local-memory system illustration is composited with deterministic SVG typography, exact product counts, and a clear `YOUR VAULT. EVERY AGENT.` message at 1280×640.
+- **Search and agent readability.** npm/Pages metadata now includes local document intelligence, Obsidian PDF search, Canvas, and Bases alongside the established AI-memory category.
+
+### Tests (1720)
+
+- The existing TOP-1 invariant requires the dated matrix, four exact competitor source snapshots, evidence legend, and no competitor CTA; negative and positive controls distinguish promotion from factual contrast.
+- The existing social-preview invariant now pins the headline, document-intelligence line, exact test count, generated-art input, and compositing path; mutations prove stale text/counts are detected.
+- The Pages composite test now requires the comparison section, matrix semantics, review date, and new hero message.
+- Build, lint, full tests, coverage, OIA, packaged-consumer, generated docs, and release identity remain mandatory gates.
+
+### Stats
+
+- Runtime retrieval, dependencies, MCP tools/prompts, and schemas: unchanged (46 tools, 19 prompts).
+- Source tests: 1720 unchanged.
+- Public acquisition surface: README + comparison + Pages + social preview + npm metadata aligned.
+- Release posture: prerelease `@rc`; stable `@latest` remains 3.11.6.
+
 ## [3.12.0-rc.15] — 2026-07-25
 
 > **TL;DR:** **GitHub Pages is now a benefit-led, human- and AI-readable product front door instead of opening on a generated TypeDoc index.** The new static landing explains the local cited-memory outcome, complete retrieval stack, measured proof, client activation paths, trust posture, FAQ, and agent-readable resources; the full TypeDoc reference remains available at `/api/`, while every historical deep symbol URL remains valid. **1716 → 1720 source tests.**

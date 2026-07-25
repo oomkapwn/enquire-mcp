@@ -992,15 +992,35 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
   });
 
-  it("social-preview.svg test count matches actual (when present)", async () => {
+  it("social-preview composition keeps the TOP-1 message and exact proof count", async () => {
     const svg = await read("assets/social-preview.svg");
     const actual = await countActualTests();
-    // The SVG shows e.g. `<text ...>665</text>` next to `tests`. Look for any
-    // number-text near the word "tests".
-    const near = /(\d+)<\/text>\s*[^<]*<text[^>]*>tests/.exec(svg);
-    if (near) {
-      expect(Number.parseInt(near[1] ?? "0", 10)).toBe(actual);
-    }
+    const previewProblems = (candidate: string): string[] => {
+      const problems: string[] = [];
+      for (const marker of [
+        "#1 OBSIDIAN MCP",
+        "YOUR VAULT.",
+        "EVERY AGENT.",
+        "Private AI memory + document intelligence.",
+        "Notes, PDFs, Canvas, and Bases in. Cited context out."
+      ]) {
+        if (!candidate.includes(marker)) problems.push(`missing ${marker}`);
+      }
+      const near = /TESTS<\/text>\s*<text[^>]*>(\d+)<\/text>/i.exec(candidate);
+      if (!near) problems.push("missing test proof");
+      else if (Number.parseInt(near[1] ?? "0", 10) !== actual) problems.push(`stale test count ${near[1]}`);
+      return problems;
+    };
+    expect(previewProblems(svg)).toEqual([]);
+    expect(previewProblems(svg.replace("EVERY AGENT.", "ONE AGENT."))).toContain("missing EVERY AGENT.");
+    expect(previewProblems(svg.replace(`>${actual}</text>`, `>${actual + 1}</text>`))).toContain(
+      `stale test count ${actual + 1}`
+    );
+
+    const renderer = await read("scripts/render-social-preview.mjs");
+    expect(renderer).toContain('"social-preview-art.png"');
+    expect(renderer).toContain(".composite([{ input: overlay }])");
+    expect((await fs.stat(path.join(repoRoot, "assets/social-preview-art.png"))).size).toBeGreaterThan(100_000);
   });
 
   // v3.9.0-rc.37 (audit F1) — ROADMAP.md carried a stale "Process maturity —
@@ -1143,11 +1163,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // "#1 Obsidian MCP for AI memory" line is deliberate positioning, not an
   // empirical cross-project metric. Concrete retrieval wins, exclusivity
   // claims and competitor capabilities remain bounded by current evidence.
-  // Every buyer-facing comparison surface now proves enquire's own value
-  // instead of linking out to alternatives. The comparison page is a TOP-1
-  // acquisition battlecard; raw competitor research stays in the private
-  // collab record rather than the public product funnel.
-  it("TOP-1 positioning stays promotional while factual claims stay bounded (v3.12.0-rc.5)", async () => {
+  // v3.12.0-rc.16 restores the maintainer-requested ✓/✕ matrix without
+  // reopening the old unbounded-claim class. Named competitors are allowed for
+  // search intent and dated factual contrast; competitor CTAs remain forbidden.
+  // Every ✕ means the COMPLETE composite row was not documented on the pinned
+  // public snapshot, not that every sub-feature is absent.
+  it("TOP-1 positioning stays promotional while factual claims stay bounded (v3.12.0-rc.16)", async () => {
     const comparisonMd = await read("docs/COMPARISON.md");
     // Find any "reranker (BGE, N models)" form — should be ZERO matches post-3.7.15.
     const flatCount = /reranker\s*\(BGE\s*,?\s*\d+\s*models?\)/i.exec(comparisonMd);
@@ -1172,22 +1193,24 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
       return null;
     };
-    const competitorPromotionMarkers = [
-      "./docs/COMPARISON.md",
-      "flowing-abyss/obsidian-hybrid-search",
-      "cyanheads/obsidian-mcp-server",
-      "bitbonsai/mcpvault",
-      "basicmachines-co/basic-memory",
-      "Smart Connections",
-      "mem0",
-      "Zep",
-      "Supermemory",
-      "Memobase",
-      "cognee",
-      "Khoj"
+    const competitorCtaPatterns = [
+      /\b(?:choose|pick|try|install|switch to|use)\s+(?:Smart Connections|Obsidian Hybrid Search|Vault Cortex)\b/i,
+      /\bwhen to (?:choose|pick|use) (?:a competitor|something else|an alternative)\b/i,
+      /\bbetter off with (?:Smart Connections|Obsidian Hybrid Search|Vault Cortex)\b/i
     ] as const;
-    const findCompetitorPromotion = (text: string): string | null =>
-      competitorPromotionMarkers.find((marker) => text.includes(marker)) ?? null;
+    const findCompetitorCta = (text: string): string | null => {
+      for (const pattern of competitorCtaPatterns) {
+        const match = pattern.exec(text);
+        if (match) return match[0];
+      }
+      return null;
+    };
+    const competitorRepoLinks = [
+      "github.com/brianpetro/obsidian-smart-connections",
+      "github.com/flowing-abyss/obsidian-hybrid-search",
+      "github.com/cyanheads/obsidian-mcp-server",
+      "github.com/aliasunder/vault-cortex"
+    ] as const;
 
     const currentSurfaces = [
       ...PUBLIC_READMES,
@@ -1217,27 +1240,33 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     for (const readme of PUBLIC_READMES) {
       const markdown = await read(readme);
       expect(markdown, `${readme} must expose the stable TOP-1 proof anchor`).toContain('<a id="why-number-one"></a>');
-      expect(
-        findCompetitorPromotion(markdown),
-        `${readme} promotes an alternative from the product-page funnel`
-      ).toBeNull();
-      expect(markdown, `${readme} must not retain the rc.4 historical competitor matrix`).not.toContain(
-        "data-historical-comparison"
-      );
+      expect(findCompetitorCta(markdown), `${readme} contains a competitor CTA instead of factual contrast`).toBeNull();
+      for (const repoLink of competitorRepoLinks) {
+        expect(markdown, `${readme} links visitors directly to competitor repo ${repoLink}`).not.toContain(repoLink);
+      }
     }
 
     const acquisitionSurfaces = ["docs/COMPARISON.md", "ROADMAP.md", "src/prompts.ts", "src/tool-registry.ts"] as const;
     for (const surface of acquisitionSurfaces) {
       const current = await read(surface);
-      for (const marker of competitorPromotionMarkers) {
-        if (marker === "./docs/COMPARISON.md") continue;
-        expect(
-          current.includes(marker),
-          `${surface} promotes an alternative via "${marker}" instead of converting to enquire-mcp`
-        ).toBe(false);
-      }
+      expect(findCompetitorCta(current), `${surface} contains a competitor CTA`).toBeNull();
     }
-    expect(comparisonMd).toContain("# Why enquire-mcp is the #1 Obsidian MCP for AI memory");
+    const readme = await read("README.md");
+    expect(readme).toContain("| Complete leadership standard | **enquire-mcp** | Smart Connections");
+    expect(readme).toContain("✅ = the complete row is built in");
+    expect(readme).toContain("[competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence)");
+
+    expect(comparisonMd).toContain("# Why enquire-mcp is the #1 Obsidian MCP");
+    expect(comparisonMd).toContain("### Dated competitive evidence");
+    expect(comparisonMd).toContain("Reviewed 2026-07-25 against pinned public README snapshots:");
+    for (const sha of [
+      "3f07d51a3a5e08f724c8e62719ac75ff675eee13",
+      "c0922d955f5bf5abaad14a11cbb3e11303cd6036",
+      "9e9861be17395e942ee7aac3b3607cf9dc4d97b2",
+      "9f344557ab4137cbba694e4955d6a5294c535885"
+    ]) {
+      expect(comparisonMd, `COMPARISON.md is missing pinned competitor snapshot ${sha}`).toContain(sha);
+    }
     expect(comparisonMd).toContain("The grounded answer is:");
     expect(comparisonMd).toContain("Source: 99_Daily/2026-05-02.md");
 
@@ -1286,9 +1315,11 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     // NEGATIVE control: the analyzer must catch the exact stale claim class.
     expect(findUnboundedClaim("No other Obsidian-MCP currently ships remote HTTP.")).toBe("No other Obsidian-MCP");
     // NEGATIVE control: the front-page analyzer must catch a competitor CTA.
-    expect(findCompetitorPromotion("Compare with flowing-abyss/obsidian-hybrid-search")).toBe(
-      "flowing-abyss/obsidian-hybrid-search"
-    );
+    expect(findCompetitorCta("Choose Smart Connections for this instead.")).toBe("Choose Smart Connections");
+    // POSITIVE control: a pinned factual contrast is allowed.
+    expect(
+      findCompetitorCta("Smart Connections was reviewed at a pinned public commit; this row covers its MCP surface.")
+    ).toBeNull();
     // POSITIVE control: the broad product credential is intentionally allowed.
     expect(findUnboundedClaim("The #1 Obsidian MCP for AI memory.")).toBeNull();
     // POSITIVE control: bounded point-in-time language is intentionally allowed.

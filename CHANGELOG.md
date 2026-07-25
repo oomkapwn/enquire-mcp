@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.18] — 2026-07-26
+
+> **TL;DR:** **Fresh FTS5 builds are no longer quadratic in the number of notes, and folder-scoped search now enters through the inverted index instead of filtering a global term-hit scan.** The official LongMemEval-S run exposed an unconditional delete on the UNINDEXED `rel_path` column before every insert: after 60m14s rc.17 still had not reached query 1. FTS schema v6 adds one indexed, relevance-neutral scope token per chunk for exact-path replacement and prefix-scoped folders, while the raw path remains a residual correctness check. `doctor` understands and enforces the new on-disk contract. **1720 → 1720 source tests.**
+>
+> **Method note:** the failure was reproduced from the exact clean rc.17 release commit `1c04faaaba453bc2088555c30d4cb6e84f872a6a` against the official 277,383,467-byte LongMemEval-S file (SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`). At a bounded 3,614.27-second cutoff, the retained SQLite index had reached 20,621 files / 1,068,934 chunks but the harness had emitted no 25-query progress marker and no result artifact; repeated process samples converged on `fts5NextMethod → sqlite3_step`. The final one-token implementation built all 22,419 scoreable-cohort notes in 55.47 seconds and completed all 470 queries in 428.27 seconds on the same A18 Pro; the artifact is correctly `diagnostic-untrusted` because it came from a dirty development branch, so its retrieval score is not promoted as a canonical headline.
+
+### Fixed
+
+- **O(N²) fresh-index build.** `reindexFile` and `reindexPdfFile` unconditionally executed `DELETE FROM chunks WHERE rel_path = ?` before every insert. Because `rel_path` is intentionally `UNINDEXED` inside the FTS5 virtual table, every new note scanned all chunks accumulated so far. Exact-path deletion, `dropFile`, and `getChunk` now intersect with an indexed path token before the raw-path residual check.
+- **Global folder-filter scan.** Folder-scoped BM25 used only `substr(rel_path, ...)` after the MATCH term query, forcing FTS5 to visit term hits outside the requested subtree. The MATCH expression now intersects user content terms with a prefix-preserving folder scope token; the existing `substr` predicate remains as a defense-in-depth exact-prefix check.
+- **Scope leakage / ranking neutrality.** User terms are explicitly restricted to `{content title aliases}`. The internal `scope_tokens` column has BM25 weight zero, so path encoding selects candidates without becoming searchable content or changing relevance.
+- **Schema-aware diagnostics.** FTS schema `5 → 6` triggers the existing atomic auto-rebuild. The source-preserving `doctor` snapshot validator now requires `scope_tokens` in the exact indexed-column position and rejects a v6 look-alike that omits it.
+
+### Design
+
+- One `s<UTF-8-hex-path>` token per chunk is collision-free, inert for every legal Obsidian filename, and prefix-preserving. Exact paths use the whole token; folder scopes use the encoded `folder/` prefix plus FTS5's suffix wildcard.
+- The first repair used an exact SHA-256 token plus one hash per ancestor folder. The measured 496-note canary was correct but stored redundant postings. The final one-token design kept the same `0.9000` nDCG@5/MRR/Recall@10 canary summary while reducing FTS bytes `21,688,320 → 18,665,472` (−13.9%) and FTS sync `604.91 → 529.94 ms` on the same run shape.
+- The full one-token diagnostic run reproduced the first safe repair's overall and per-category summaries exactly while reducing FTS footprint `996,806,656 → 859,369,472` bytes (−13.8%). Timing is reported per-run rather than compared between those two successful runs because machine-load variance made the smaller final index's build slower in that sample.
+
+### Tests (1720)
+
+- Existing lifecycle tests now cover exact-path token replacement/removal, nested folder inclusion, sibling-prefix exclusion, special/emoji folders, internal-token non-searchability, and matching-schema preservation.
+- A class invariant forbids bare `DELETE FROM chunks WHERE rel_path = ?` and requires all three removal/replacement paths to use `chunks MATCH` first.
+- `doctor`'s existing semantic-lookalike matrix adds the missing-scope negative control and updates every otherwise-valid v6 fixture.
+- Canonical source-test count stays 1720 because the controls extend existing `it()` blocks.
+
+### Stats
+
+- Runtime API, MCP tools/prompts, dependencies, and default search behavior: unchanged (46 tools, 19 prompts).
+- Persistence format: FTS5 schema v6; an existing persistent index rebuilds once on first open.
+- Source tests: 1720 unchanged.
+- Benchmark publication posture: the scalability blocker is closed; the canonical dense run still requires the exact clean rc.18 release commit before a headline score can be published.
+
 ## [3.12.0-rc.17] — 2026-07-25
 
 > **TL;DR:** **The LongMemEval-S credibility lever is now safe to measure once instead of producing an expensive but unauditable number.** The harness matches the pinned peer's global-index + question-folder scope shape, removes answer-label leakage from paths/headings, validates and hashes the official cleaned cohort, makes freshness dates reproducible, and writes raw per-query + provenance + hardware + timing + index-size evidence. Diagnostic limits are visibly partial. Runtime server behavior is unchanged; **1720 → 1720 source tests.**

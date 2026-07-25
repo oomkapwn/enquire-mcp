@@ -2,7 +2,18 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { chunkContent, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe, safeFts5Query } from "../src/fts5.js";
+import {
+  chunkContent,
+  deriveFtsTitle,
+  extractAliases,
+  FtsIndex,
+  ftsFolderToken,
+  ftsPathToken,
+  ftsScopeTokens,
+  peekFtsMetaSafe,
+  safeFts5Query
+} from "../src/fts5.js";
+import { FTS_SCHEMA_VERSION } from "../src/schema-contract.js";
 
 let canRunFts5 = true;
 beforeAll(async () => {
@@ -293,6 +304,12 @@ describe("FtsIndex — full lifecycle", () => {
       expect(idx.search("to-be-deleted-marker").length).toBe(0);
       expect(idx.totalFiles()).toBe(0);
       expect(idx.totalChunks()).toBe(0);
+      // Class invariant for rc.18: every chunk replacement/removal path must
+      // enter through the indexed scope token. A bare rel_path DELETE scans
+      // the growing FTS virtual table and made a 22k-note fresh build O(N²).
+      const source = await fs.readFile(path.resolve("src/fts5.ts"), "utf8");
+      expect(source).not.toContain("DELETE FROM chunks WHERE rel_path = ?");
+      expect(source.match(/DELETE FROM chunks WHERE chunks MATCH \? AND rel_path = \?/g)).toHaveLength(3);
     } finally {
       idx.close();
     }
@@ -364,15 +381,27 @@ describe("FtsIndex — full lifecycle", () => {
 
   it("folder filter restricts results to a subtree", async () => {
     if (!canRunFts5) return;
+    expect(ftsFolderToken("projects/")).toBe(ftsFolderToken("projects"));
+    expect(ftsFolderToken("projects")).not.toBe(ftsFolderToken("inbox"));
+    expect(ftsScopeTokens("projects/nested/a.md")).toBe(ftsPathToken("projects/nested/a.md"));
+    expect(ftsPathToken("projects/nested/a.md")).toMatch(/^[a-z0-9]+$/);
+    expect(ftsPathToken("projects/nested/a.md")).toMatch(
+      new RegExp(`^${ftsFolderToken("projects/nested").slice(0, -1)}`)
+    );
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
     await idx.open();
     try {
       idx.reindexFile("projects/a.md", 1000, "common-marker in projects");
+      idx.reindexFile("projects/nested/c.md", 1000, "common-marker in nested project");
+      idx.reindexFile("projects-archive/d.md", 1000, "common-marker in a sibling prefix");
       idx.reindexFile("inbox/b.md", 1000, "common-marker in inbox");
       const all = idx.search("common-marker");
-      expect(all.length).toBe(2);
+      expect(all.length).toBe(4);
       const projectsOnly = idx.search("common-marker", { folder: "projects" });
-      expect(projectsOnly.map((h) => h.rel_path)).toEqual(["projects/a.md"]);
+      expect(projectsOnly.map((h) => h.rel_path).sort()).toEqual(["projects/a.md", "projects/nested/c.md"]);
+      // NEGATIVE control: the internal scope column must select rows but never
+      // become user-searchable content or affect BM25 relevance.
+      expect(idx.search(ftsPathToken("projects/a.md"))).toEqual([]);
     } finally {
       idx.close();
     }
@@ -609,12 +638,12 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
   // The pre-rc.15 test titled "v3 → v4 auto-rebuilds" actually opened the CURRENT
   // schema, closed, and reopened the SAME current schema — so it verified
   // PRESERVATION on a match, never REBUILD on a mismatch (and its v3→v4 title was
-  // stale: production SCHEMA_VERSION is 5). This writes a genuine legacy
+  // stale: production SCHEMA_VERSION is now imported above). This writes a genuine legacy
   // `schema_version` into the meta table and asserts the mismatch triggers a
   // rebuild that discards the old rows.
   it("a LEGACY schema_version in meta triggers a rebuild that DISCARDS old rows", async () => {
     if (!canRunFts5) return;
-    // 1. Build a real current-schema (v5) index with a marker row.
+    // 1. Build a real current-schema index with a marker row.
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx.open();
     idx.reindexFile("legacy-marker.md", 1000, "uniquelegacymarker content");
@@ -629,14 +658,14 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
     expect(raw.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({ value: "4" });
     raw.close();
 
-    // 3. Reopen via FtsIndex — the 4 ≠ 5 mismatch must REBUILD (drop old rows).
+    // 3. Reopen via FtsIndex — the legacy/current mismatch must REBUILD (drop old rows).
     const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx2.open();
     expect(idx2.totalChunks(), "rebuild must discard the legacy-schema rows").toBe(0);
     expect(idx2.search("uniquelegacymarker"), "the old marker must be gone after rebuild").toEqual([]);
     // And the meta is bumped back to the current version.
     const meta = await peekFtsMetaSafe(dbFile);
-    expect(meta?.schema_version).toBe(String(5));
+    expect(meta?.schema_version).toBe(String(FTS_SCHEMA_VERSION));
     idx2.close();
   });
 

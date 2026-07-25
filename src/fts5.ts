@@ -89,6 +89,51 @@ export function deriveFtsTitle(relPath: string): string {
 // title/alias match outranks a body-only mention. title/aliases are stored
 // ONLY on chunk 0 of each note (not every chunk) to avoid one note's
 // title-match flooding the BM25 candidate set. Schema bump auto-rebuilds.
+// v6 (v3.12.0-rc.18) added the INDEXED `scope_tokens` column (col 3).
+// Collision-free encoded path tokens let FTS5 prune replacement
+// deletes and folder-scoped searches inside its inverted index instead of
+// scanning the UNINDEXED `rel_path` column. Its BM25 weight is zero, so scope
+// constraints select the corpus without contributing relevance.
+const BM25_WEIGHT_SCOPE = 0.0;
+
+/**
+ * Stable FTS-safe token for one exact vault-relative source path.
+ *
+ * UTF-8 hex keeps every legal filename inert in MATCH expressions and is
+ * prefix-preserving: a folder token can select descendants with FTS5's indexed
+ * prefix operator. One token per chunk covers both exact-path and ancestor
+ * folder lookup, avoiding repeated ancestor postings in large/deep vaults.
+ *
+ * @param relPath - Vault-relative source path.
+ * @returns One collision-free alphanumeric token.
+ */
+export function ftsPathToken(relPath: string): string {
+  return `s${Buffer.from(relPath, "utf8").toString("hex")}`;
+}
+
+/**
+ * Stable FTS-safe prefix token for one vault-relative folder scope.
+ *
+ * @param folder - Vault-relative folder, with or without trailing slashes.
+ * @returns One alphanumeric path prefix plus FTS5's suffix wildcard.
+ */
+export function ftsFolderToken(folder: string): string {
+  const prefix = `${stripTrailingSlashes(folder)}/`;
+  return `${ftsPathToken(prefix)}*`;
+}
+
+/**
+ * Build the indexed scope token for one source.
+ *
+ * The original `rel_path` stays UNINDEXED and is retained as a residual
+ * equality/prefix check for defense-in-depth.
+ *
+ * @param relPath - Vault-relative source path.
+ * @returns One FTS-safe, prefix-preserving path token.
+ */
+export function ftsScopeTokens(relPath: string): string {
+  return ftsPathToken(relPath);
+}
 
 /**
  * FTS5 tokenizer mode. `unicode61` (default) tokenizes on Unicode word
@@ -345,6 +390,7 @@ export class FtsIndex {
           content,
           title,
           aliases,
+          scope_tokens,
           rel_path UNINDEXED,
           chunk_index UNINDEXED,
           line_start UNINDEXED,
@@ -463,7 +509,10 @@ export class FtsIndex {
   dropFile(relPath: string): void {
     const db = this.requireDb();
     const txn = db.transaction(() => {
-      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM chunks WHERE chunks MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
+      );
       db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
     });
     txn();
@@ -495,10 +544,14 @@ export class FtsIndex {
     const chunks = chunkContent(content);
     const tagsSerialized = tags.length ? tags.join(",") : "";
     const aliasesSerialized = aliases.length ? aliases.join(" ") : "";
+    const scopeTokens = ftsScopeTokens(relPath);
     const txn = db.transaction(() => {
-      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM chunks WHERE chunks MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
+      );
       const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
       );
       // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
       // with leading/trailing commas for exact-tag matching at query time.
@@ -525,6 +578,7 @@ export class FtsIndex {
           enriched,
           i === 0 ? title : "",
           i === 0 ? aliasesSerialized : "",
+          scopeTokens,
           relPath,
           i,
           c.lineStart,
@@ -564,19 +618,23 @@ export class FtsIndex {
     // its title; index it in the weighted `title` column so a PDF is findable by
     // name even when the query terms aren't in the extracted page text.
     const pdfTitle = path.basename(relPath).replace(/\.pdf$/i, "");
+    const scopeTokens = ftsScopeTokens(relPath);
     // v3.7.10 (external audit #10) — same transaction wrapper as
     // reindexFile(). See its TSDoc for rationale.
     const txn = db.transaction(() => {
-      db.prepare("DELETE FROM chunks WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM chunks WHERE chunks MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
+      );
       const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, ?, ?, ?, '', ?, 'pdf')"
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, ?, ?, ?, ?, '', ?, 'pdf')"
       );
       chunks.forEach((c, i) => {
         // No wikilink/tag enrichment for PDFs (they don't have either). The
         // page marker is already in c.text so it shows up in snippets.
         // rc.6 re-sweep: title on chunk 0 only (see reindexFile) to avoid the
         // per-chunk title-match candidate-set saturation.
-        insert.run(c.text, i === 0 ? pdfTitle : "", relPath, i, c.lineStart, c.lineEnd, c.text);
+        insert.run(c.text, i === 0 ? pdfTitle : "", scopeTokens, relPath, i, c.lineStart, c.lineEnd, c.text);
       });
       db.prepare(
         "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
@@ -610,8 +668,9 @@ export class FtsIndex {
     const limit = opts.limit ?? 25;
     const safe = safeFts5Query(rawQuery);
     if (!safe) return [];
+    let matchQuery = `{content title aliases} : (${safe})`;
     const where: string[] = ["chunks MATCH ?"];
-    const params: unknown[] = [safe];
+    const params: unknown[] = [matchQuery];
     if (opts.folder) {
       // Prefix-equality via substr — avoids GLOB pattern semantics so folder
       // names containing `*`, `?`, `[`, `]` (rare but possible in Obsidian)
@@ -626,6 +685,11 @@ export class FtsIndex {
       // code UNITS) diverged for any folder name with an astral-plane char (emoji): e.g.
       // "📚Books/" has JS length 8 but occupies 7 code points, so substr(rel_path,1,8)
       // over-read by one and matched ZERO rows. Bind the prefix string twice instead.
+      // v6: intersect the content query with an indexed ancestor-folder token.
+      // The residual rel_path predicate preserves exact path semantics; the
+      // token makes FTS5 visit only the requested subtree's term hits.
+      matchQuery = `(${matchQuery}) AND scope_tokens : ${ftsFolderToken(opts.folder)}`;
+      params[0] = matchQuery;
       where.push("substr(chunks.rel_path, 1, length(?)) = ?");
       params.push(prefix, prefix);
     }
@@ -654,7 +718,7 @@ export class FtsIndex {
              chunks.line_start AS line_start, chunks.line_end AS line_end,
              chunks.kind AS kind,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
-             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}) AS score
+             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE}) AS score
       FROM chunks
       ${join}
       WHERE ${where.join(" AND ")}
@@ -696,8 +760,14 @@ export class FtsIndex {
   getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
     const db = this.requireDb();
     const sql =
-      "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE rel_path = ? AND chunk_index = ?";
-    const row = db.prepare(sql).get<{ content: string; line_start: number; line_end: number }>(relPath, chunkIndex);
+      "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE chunks MATCH ? AND rel_path = ? AND chunk_index = ?";
+    const row = db
+      .prepare(sql)
+      .get<{ content: string; line_start: number; line_end: number }>(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath,
+        chunkIndex
+      );
     return row ?? null;
   }
 

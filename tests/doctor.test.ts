@@ -773,15 +773,23 @@ describe("runDoctor — strict source-state preservation", () => {
       {
         slug: "reordered",
         columns:
-          "title, content, aliases, rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, " +
+          "title, content, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, " +
           "line_end UNINDEXED, tags UNINDEXED, raw_content UNINDEXED, kind UNINDEXED",
         tokenizer: "unicode61 remove_diacritics 2",
         expected: "column order is incompatible"
       },
       {
+        slug: "missing-scope-token",
+        columns:
+          "content, title, aliases, rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, " +
+          "line_end UNINDEXED, tags UNINDEXED, raw_content UNINDEXED, kind UNINDEXED",
+        tokenizer: "unicode61 remove_diacritics 2",
+        expected: "missing column(s): scope_tokens"
+      },
+      {
         slug: "indexed-rel-path",
         columns:
-          "content, title, aliases, rel_path, chunk_index UNINDEXED, line_start UNINDEXED, " +
+          "content, title, aliases, scope_tokens, rel_path, chunk_index UNINDEXED, line_start UNINDEXED, " +
           "line_end UNINDEXED, tags UNINDEXED, raw_content UNINDEXED, kind UNINDEXED",
         tokenizer: "unicode61 remove_diacritics 2",
         expected: "rel_path must be UNINDEXED"
@@ -789,7 +797,7 @@ describe("runDoctor — strict source-state preservation", () => {
       {
         slug: "tokenizer-mismatch",
         columns:
-          "content, title, aliases, rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, " +
+          "content, title, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, " +
           "line_end UNINDEXED, tags UNINDEXED, raw_content UNINDEXED, kind UNINDEXED",
         tokenizer: "trigram",
         expected: "tokenizer does not match"
@@ -828,7 +836,7 @@ describe("runDoctor — strict source-state preservation", () => {
     composite.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE VIRTUAL TABLE chunks USING fts5(
-        content, title, aliases, rel_path UNINDEXED, chunk_index UNINDEXED,
+        content, title, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED,
         line_start UNINDEXED, line_end UNINDEXED, tags UNINDEXED,
         raw_content UNINDEXED, kind UNINDEXED,
         tokenize='unicode61 remove_diacritics 2'
@@ -863,7 +871,7 @@ describe("runDoctor — strict source-state preservation", () => {
     contentless.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE VIRTUAL TABLE chunks USING fts5(
-        content, title, aliases, rel_path UNINDEXED, chunk_index UNINDEXED,
+        content, title, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED,
         line_start UNINDEXED, line_end UNINDEXED, tags UNINDEXED,
         raw_content UNINDEXED, kind UNINDEXED,
         tokenize='unicode61 remove_diacritics 2',
@@ -902,7 +910,7 @@ describe("runDoctor — strict source-state preservation", () => {
         PRIMARY KEY(key, value)
       );
       CREATE VIRTUAL TABLE chunks USING fts5(
-        content, title, aliases, rel_path UNINDEXED, chunk_index UNINDEXED,
+        content, title, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED,
         line_start UNINDEXED, line_end UNINDEXED, tags UNINDEXED,
         raw_content UNINDEXED, kind UNINDEXED,
         tokenize='unicode61 remove_diacritics 2'

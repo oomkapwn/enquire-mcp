@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1710+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1716+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -26,6 +26,7 @@ src/
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── first-run.ts        — deterministic preview/apply onboarding plan + stop/resume executor
 ├── server.ts           — MCP server bootstrap + dependency wiring
+├── initialize-instructions.ts — configuration-aware, byte-bounded MCP handshake guidance
 ├── tool-registry.ts    — tool registration manifest
 ├── tool-manifest.ts    — tool metadata (names, schemas, readOnlyHint)
 ├── prompts.ts          — 19 MCP prompts

@@ -45,7 +45,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > **enquire-mcp 的与众不同之处**：
 > 1. **厂商中立。** 你的记忆存在 `.md` 文件里。从 Claude 换到 Cursor——记忆随你而来。
 > 2. **完整的本地检索栈。** BM25 + TF-IDF + 多语言嵌入经 RRF 融合，可选 BGE 交叉编码器重排并提供分信号得分；HNSW + int8 量化负责扩展稠密检索。
-> 3. **serve 期间零云端调用。** 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 110 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
+> 3. **serve 期间零云端调用。** q8 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 118 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
 **46 个工具 · 19 个 MCP 提示词 · 1720+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
@@ -100,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.18      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.19      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

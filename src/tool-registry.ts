@@ -962,7 +962,7 @@ export function registerReadTools(
       {
         title: "Embeddings search (ML, paraphrase-multilingual)",
         description:
-          "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~120MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index. Query latency depends on corpus and hardware; enable HNSW when measurements justify approximate nearest-neighbor retrieval. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
+          "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 q8 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~118MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index. Query latency depends on corpus and hardware; enable HNSW when measurements justify approximate nearest-neighbor retrieval. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
         annotations: { ...READ_ONLY, title: "Embeddings search" },
         inputSchema: {
           query: z

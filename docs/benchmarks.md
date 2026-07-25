@@ -509,8 +509,15 @@ the methodology (a published LongMemEval figure is the project's credibility
 centerpiece, so it goes through the same "measured, reproducible, reviewed"
 bar as every other number in this document — never a placeholder or an
 estimate). v3.12.0-rc.18 removes the O(N²) fresh-FTS build that the first
-official global run exposed and pushes folder scope into the inverted index;
-the canonical dense result still must come from the exact clean release commit.
+official global run exposed and pushes folder scope into the inverted index.
+Its exact clean sparse control (`d4d3dd190e66c898a0bb56d862ea2b4854d801fa`)
+completed all 470 scoreable questions with nDCG@5 **0.8038**, MRR **0.8621**,
+Hit@1 **0.8468**, Recall@10 **0.7974**, and AllRel@10 **0.7170**; this is a
+BM25+TF-IDF control, not the hybrid headline. The dense pre-run then exposed
+that transformers.js v4 selected a 470 MB FP32 graph when a custom model id
+was supplied, despite the documented ~118 MB q8 contract. v3.12.0-rc.19 pins
+q8 explicitly and invalidates FP32-derived embed/HNSW state; the canonical
+dense result must come from that exact clean release commit.
 
 ## Context efficiency (token cost)
 

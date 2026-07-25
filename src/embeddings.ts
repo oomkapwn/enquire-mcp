@@ -4,8 +4,8 @@
 // `obsidian_embeddings_search`. Read-only / TF-IDF / FTS5 paths stay zero-cost.
 //
 // Architecture:
-//   - We expose two catalog'd models: `multilingual` (default; 50+ languages,
-//     384-dim, ~120 MB) and `bge` (English-tuned, 384-dim, ~33 MB).
+//   - We expose two catalog'd q8 models: `multilingual` (default; 50+ languages,
+//     384-dim, ~118 MB) and `bge` (English-tuned, 384-dim, ~33 MB).
 //   - Network-enabled install/build commands pull models from HuggingFace Hub
 //     on first use; serve/query/eval only load an existing local cache. Files are cached by
 //     transformers.js under its OWN package dir — `<install>/node_modules/
@@ -32,6 +32,8 @@ export interface EmbeddingModel {
   dim: number;
   /** Approximate disk footprint in MB after download, for progress messages. */
   approxSizeMB: number;
+  /** ONNX weight dtype loaded by transformers.js. Pinned to q8 for bounded local inference. */
+  dtype: "q8";
   /** True if this model has been trained on multilingual data. */
   multilingual: boolean;
   /** Maximum input tokens before transformers.js truncates. */
@@ -49,7 +51,8 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
     alias: "multilingual",
     hfId: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
     dim: 384,
-    approxSizeMB: 120,
+    approxSizeMB: 118,
+    dtype: "q8",
     multilingual: true,
     maxTokens: 128
   },
@@ -58,6 +61,7 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
     hfId: "Xenova/bge-small-en-v1.5",
     dim: 384,
     approxSizeMB: 33,
+    dtype: "q8",
     multilingual: false,
     maxTokens: 512
   }
@@ -120,7 +124,7 @@ export function resolveTransformersCacheDir(): string | null {
 /**
  * Look up an entry in the {@link EMBEDDING_MODELS} catalog. Throws with
  * a list of known aliases if the input is unknown — surfaces typos at
- * CLI parse time rather than after a 120MB model download.
+ * CLI parse time rather than after a 118MB model download.
  *
  * @param alias - Model alias, or `undefined` for the default ({@link DEFAULT_MODEL_ALIAS}).
  * @returns The matching {@link EmbeddingModel} entry.
@@ -147,7 +151,13 @@ export interface Embedder {
 // Lazy-loaded transformers.js pipeline so the heavy ONNX runtime + sharp +
 // tokenizer transitive deps surface only when the user actually invokes an
 // embeddings codepath. Mirrors the better-sqlite3 lazy-load in src/fts5.ts.
-let pipelineCtor: ((task: string, model: string) => Promise<unknown>) | null = null;
+type EmbeddingPipelineCtor = (
+  task: string,
+  model: string,
+  options: { dtype: EmbeddingModel["dtype"] }
+) => Promise<unknown>;
+
+let pipelineCtor: EmbeddingPipelineCtor | null = null;
 let autoTokenizerCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 let autoModelForSeqClsCtor: { from_pretrained: (id: string, opts?: unknown) => Promise<unknown> } | null = null;
 let transformersModule: unknown | null = null;
@@ -159,7 +169,7 @@ const offlineEnvOriginals = new WeakMap<
 // v3.10.0-rc.42 (audit F1, HIGH) — serve-mode offline ENFORCEMENT for the embedder +
 // reranker model load. README/llms.txt/SECURITY.md claim "zero cloud calls during serve";
 // pre-rc.42 that was ASPIRATIONAL — a missing local cache let transformers.js silently
-// CDN-fetch (~120MB) on a serve-time query. This makes the claim a real CODE GUARD,
+// CDN-fetch (~118MB) on a serve-time query. This makes the claim a real CODE GUARD,
 // mirroring OCR's `assertOcrLangsInstalled` (overclaim #16). Every runtime
 // boundary (CLI plus prepareServerDeps for programmatic stdio/HTTP consumers)
 // calls setEmbeddingsOffline() before model load; cached constructor paths
@@ -225,7 +235,7 @@ export function offlineModelLoadError(alias: string, hfId: string, _original: un
   );
 }
 
-async function loadPipeline(): Promise<(task: string, model: string) => Promise<unknown>> {
+async function loadPipeline(): Promise<EmbeddingPipelineCtor> {
   if (pipelineCtor) {
     if (transformersModule) applyOfflineEnv(transformersModule);
     return pipelineCtor;
@@ -233,7 +243,7 @@ async function loadPipeline(): Promise<(task: string, model: string) => Promise<
   try {
     // Dynamic import keeps the heavy module out of cold-start cost.
     const mod = (await import("@huggingface/transformers")) as {
-      pipeline?: (task: string, model: string) => Promise<unknown>;
+      pipeline?: EmbeddingPipelineCtor;
     };
     if (!mod.pipeline) throw new Error("@huggingface/transformers has no `pipeline` export");
     applyOfflineEnv(mod); // rc.42 F1 — serve sets local-cache-only before any model load
@@ -302,7 +312,7 @@ async function loadTransformersForRerank(): Promise<{
 }
 
 /** Load an embedder for the given model alias. First call may block on
- *  model download from HuggingFace (~120MB for multilingual). Subsequent
+ *  q8 model download from HuggingFace (~118MB for multilingual). Subsequent
  *  calls reuse the cached weights from the transformers.js package cache
  *  (resolve the exact path via `resolveTransformersCacheDir()`).
  *
@@ -312,7 +322,7 @@ const embedderCache = new Map<string, Promise<Embedder>>();
 
 // v3.10.0-rc.38 (audit #2) — cache the loaded handle (the heavy ONNX
 // InferenceSession) per alias so it's built ONCE per process, not rebuilt on
-// every embeddings query. Pre-rc.38 each obsidian_search re-parsed the ~120MB
+// every embeddings query. Pre-rc.38 each obsidian_search re-parsed the ~118MB
 // embedder graph (hundreds of ms + a transient native alloc per query; N
 // concurrent queries → N simultaneous sessions). The PROMISE-cache also collapses
 // a concurrent first-load thundering-herd; a rejected load is evicted so a later
@@ -334,7 +344,11 @@ async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
     options: { pooling: "mean"; normalize: boolean }
   ) => Promise<{ data: Float32Array; dims: readonly number[] }>;
   try {
-    extractor = (await pipeline("feature-extraction", model.hfId)) as typeof extractor;
+    // transformers.js v4 only applies the feature-extraction pipeline's
+    // default dtype when it also chooses the default model. Because enquire
+    // supplies a custom model id, omitting this option selects fp32 on Node
+    // CPU (~470 MB for multilingual) rather than the catalogued q8 artifact.
+    extractor = (await pipeline("feature-extraction", model.hfId, { dtype: model.dtype })) as typeof extractor;
   } catch (err) {
     // Offline runtime blocks CDN fallback; redact the loader cause and fail closed with a repair hint.
     throw embeddingsOffline ? offlineModelLoadError(model.alias, model.hfId, err) : err;

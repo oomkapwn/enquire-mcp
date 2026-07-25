@@ -1274,7 +1274,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const cacheRoots = opts.modelCacheRoot ? [opts.modelCacheRoot] : candidateModelCacheRoots();
   const searchedCacheRoots =
     cacheRoots.length > 0 ? cacheRoots.join(", ") : "no runtime package-local cache root could be resolved";
-  const modelCache = await inspectModelCache(cacheRoots, selectedModel, "onnx/model.onnx");
+  const modelCache = await inspectModelCache(cacheRoots, selectedModel, "onnx/model_quantized.onnx");
   checks.push({
     id: "model:embedding-cache",
     label: `Embedding model cache (${selectedModel.alias})`,

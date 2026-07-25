@@ -52,7 +52,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > **Was enquire-mcp anders macht**:
 > 1. **Anbieterneutral.** Ihr Gedächtnis lebt in `.md`-Dateien. Wechseln Sie von Claude zu Cursor — Ihr Gedächtnis kommt mit.
 > 2. **Vollständiger lokaler Retrieval-Stack.** BM25 + TF-IDF + mehrsprachige Embeddings werden per RRF fusioniert, mit optionalem BGE-Cross-Encoder-Reranker und Signal-Scores; HNSW + int8-Quantisierung skalieren den dichten Pfad.
-> 3. **Null Cloud-Aufrufe während des Servings.** Das Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~110 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
+> 3. **Null Cloud-Aufrufe während des Servings.** Das q8-Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~118 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
 **46 Tools · 19 MCP-Prompts · 1720+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
@@ -107,7 +107,7 @@ In jeden MCP-Client einklinken:
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.18      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.19      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

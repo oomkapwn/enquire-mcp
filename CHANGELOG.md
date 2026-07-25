@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.19] — 2026-07-26
+
+> **TL;DR:** **Local embeddings now load the q8 ONNX graph the product has always sized and documented, rather than silently selecting FP32 on Node CPU.** The exact clean rc.18 dense LongMemEval pre-run exposed that transformers.js v4 does not apply the feature-extraction pipeline's default dtype when the caller supplies a custom model id: enquire therefore loaded `model.onnx` (470,268,510 bytes) instead of `model_quantized.onnx` (118,308,126 bytes). Every embedding model now declares and passes `dtype:"q8"` explicitly; `doctor` requires that exact artifact; embed schema v4 rebuilds old FP32-derived vectors; and the HNSW signature includes the embed schema so a stale graph cannot survive the migration. **1720 → 1720 source tests.**
+>
+> **Method note:** rc.18 was first verified on its exact clean release SHA `d4d3dd190e66c898a0bb56d862ea2b4854d801fa`: the complete sparse LongMemEval control finished 470 scoreable queries in 438.08 seconds at nDCG@5 0.8038, whereas the dense run was intentionally stopped after 891.22 seconds when the cache and process profile proved it was using the unintended FP32 artifact. On the rc.19 candidate, a real online `install-model multilingual` downloaded and inference-smoked the q8 graph successfully (SHA-256 `66fc00f5f29afcaff34092e1bdd20008ca3918265a82fb9695a551e510cc4ebc`; 589,332,480-byte peak RSS including the install process, versus 1,592,983,552 bytes observed in the FP32 probe). A bilingual 12-text FP32↔q8 differential produced vector cosine min 0.9975 / mean 0.9983, 4/4 top-1 agreement, and 100% mean top-3 overlap. These are migration canaries, not a published retrieval headline.
+
+### Fixed
+
+- **Explicit inference dtype.** `EmbeddingModel` carries a literal `dtype:"q8"` contract and `buildEmbedder` passes it as the third `pipeline()` argument. There is deliberately no FP32 fallback: silently switching model spaces would make an existing index look valid while querying it with incompatible vectors.
+- **Exact cache diagnostics.** `doctor` now requires non-empty `onnx/model_quantized.onnx` for embedders as well as rerankers. An FP32-only cache is reported incomplete with the package-coherent `install-model` repair command.
+- **Derived-index migration.** Embed schema `3 → 4` invalidates every old or unknown-provenance vector database. Missing legacy schema metadata is no longer treated as compatible. `computeSignature()` includes `embedSchema=4`, invalidating persisted HNSW sidecars even when dimensions, row count, ids, model alias and storage quantization are otherwise identical. Run the normal idempotent `setup` or `build-embeddings` path once to repopulate q8 vectors.
+- **Benchmark provenance.** LongMemEval artifacts record `local-transformers.js (<alias>, q8)` rather than naming only the alias, so a future dtype regression is visible in the result itself.
+- **Size-claim class sweep.** The model catalog, 11-language acquisition surface, CLI-generated preflight, MCP tool description, API guide and source comments now consistently identify the 118 MB q8 embedder. The public claim matches the artifact exercised by code.
+
+### Tests (1720)
+
+- The existing embedder constructor test captures the actual pipeline options for both aliases and rejects an FP32 selection; mutation-verification removed the third `pipeline()` argument and made that exact test fail before the fix was restored.
+- The existing exact-cache matrix proves both embedding and reranker FP32-only caches fail readiness.
+- The existing schema test now proves matching v4 state is preserved, a v3 database rebuilds, and a populated legacy database with no version also rebuilds.
+- HNSW signature expectations pin `embedSchema=4`; catalog tests pin every embedding alias to q8 and a bounded download size.
+- Canonical source-test count stays 1720 because all controls extend existing `it()` blocks.
+
+### Stats
+
+- Runtime API, MCP tools/prompts, and dependencies: unchanged (46 tools, 19 prompts).
+- Model artifact: multilingual embedder 470,268,510-byte FP32 → 118,308,126-byte q8 (−74.8%).
+- Persistence contract: embed schema v4; existing embedding databases and HNSW sidecars invalidate once, then `setup` / `build-embeddings` repopulates them.
+- Benchmark posture: sparse control is complete and publishable; the canonical hybrid headline still requires the exact clean rc.19 dense run.
+
 ## [3.12.0-rc.18] — 2026-07-26
 
 > **TL;DR:** **Fresh FTS5 builds are no longer quadratic in the number of notes, and folder-scoped search now enters through the inverted index instead of filtering a global term-hit scan.** The official LongMemEval-S run exposed an unconditional delete on the UNINDEXED `rel_path` column before every insert: after 60m14s rc.17 still had not reached query 1. FTS schema v6 adds one indexed, relevance-neutral scope token per chunk for exact-path replacement and prefix-scoped folders, while the raw path remains a residual correctness check. `doctor` understands and enforces the new on-disk contract. **1720 → 1720 source tests.**

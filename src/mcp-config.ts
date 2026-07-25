@@ -507,7 +507,7 @@ export function preflightHint(input: ConfigInput): string {
     ...privacyArgs
   ];
   return (
-    `Before this works, build the indexes and pre-cache both offline ML models (~120MB embedder + ~110MB reranker)${shellLabel}:\n` +
+    `Before this works, build the indexes and pre-cache both offline ML models (~118MB q8 embedder + ~110MB reranker)${shellLabel}:\n` +
     `  ${command(setupArgs)}\n` +
     `  ${command(["install-model", "rerank-bge"])}\n` +
     `Then verify readiness:\n` +

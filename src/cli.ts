@@ -924,7 +924,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("configure")
     .description(
-      "Print a ready-to-paste MCP client config for THIS vault. Non-destructive — it writes nothing; it prints the exact snippet (and where it goes) for Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Codex, or a remote HTTP client. Pick a `--tier` (basic = live scan, no setup; hybrid = full retrieval, needs `setup`) and optionally a `--client`. Run this right after install to skip hand-assembling config."
+      "Generate the strongest verified install action plus the exact fallback MCP config for THIS vault. Non-destructive — it writes nothing. VS Code gets a native review URI, Claude Code/Codex get copy-and-run commands, and Marketplace/Registry-only targets are labeled copy-only. Pick a `--tier` (basic = live scan, no setup; hybrid = full retrieval, needs `setup`) and optionally a `--client`. Run this right after install to skip hand-assembling config."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--client <name>", CONFIG_CLIENT_HELP)

@@ -117,10 +117,12 @@ enquire-mcp configure --vault <path>                 # prints config for every c
 enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cursor|vscode|codex|windsurf|claude-desktop|http)
 ```
 
+The output is honest about each client's install boundary: **VS Code gets its official review-and-install URI**, Claude Code and Codex get copy-and-run commands, and clients whose one-click flow only accepts Marketplace/Registry entries are labeled **copy-only** with the exact fallback config. The generated vault path and physical package entrypoint remain visible for review before anything is saved.
+
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.13      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.14      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -165,9 +167,20 @@ Prefer the ready-to-paste output of `enquire-mcp configure --tier hybrid --clien
 <details>
 <summary><b>Cursor</b> — MCP stdio config + agent rule</summary>
 
-Drop [`examples/cursor-mcp.json`](./examples/cursor-mcp.json) at `~/.cursor/mcp.json` (edit the vault path). In your `.cursorrules` file or chat:
+Run `enquire-mcp configure --client cursor --vault <path>` for the exact copy-only block, or drop [`examples/cursor-mcp.json`](./examples/cursor-mcp.json) at `~/.cursor/mcp.json` and edit the vault path. Cursor's public one-click route is Marketplace-only, so enquire never prints an unverified vault-bearing `cursor://` link. In your `.cursorrules` file or chat:
 
 > Before suggesting code that touches a topic I might have notes on (architecture decisions, API contracts, vendor evaluations), call `obsidian_search` first. Treat my Obsidian vault as authoritative context.
+
+</details>
+
+<details>
+<summary><b>VS Code</b> — generated review-and-install URI + JSON fallback</summary>
+
+```bash
+enquire-mcp configure --client vscode --vault <path>
+```
+
+Open the generated `vscode:mcp/install?...` URI. VS Code decodes the exact server name, command, arguments, and vault path into a native review prompt; approve only after checking them. The same output includes the `.vscode/mcp.json` block as a transparent copy-only fallback.
 
 </details>
 
@@ -181,7 +194,18 @@ Follow [`examples/chatgpt-actions.md`](./examples/chatgpt-actions.md) to expose 
 </details>
 
 <details>
-<summary><b>OpenClaw / Codex / any other MCP client</b></summary>
+<summary><b>Codex</b> — generated CLI install + TOML fallback</summary>
+
+```bash
+enquire-mcp configure --client codex --vault <path>
+```
+
+Copy and run the generated `codex mcp add ... -- ...` command. The same output retains the equivalent `[mcp_servers."obsidian"]` TOML block so the installed command and durable config are both inspectable.
+
+</details>
+
+<details>
+<summary><b>OpenClaw / any other MCP client</b></summary>
 
 Same `npx -y @oomkapwn/enquire-mcp serve --vault <path>` command works for any MCP-compatible client. See the client's own MCP-config docs for where to drop the server entry, then use any of the prompts above.
 

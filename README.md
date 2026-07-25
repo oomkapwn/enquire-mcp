@@ -64,7 +64,7 @@ One install turns your existing vault into a **persistent, queryable knowledge d
 > **What makes enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
 > 2. **Full-stack local retrieval.** Hybrid BM25 + TF-IDF + multilingual embeddings fused via RRF, with an optional BGE cross-encoder reranker and per-signal scores; HNSW + int8 quantization scale the dense path.
-> 3. **Zero cloud calls during serve.** The embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~110 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
+> 3. **Zero cloud calls during serve.** The q8 embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~118 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
 **46 tools · 19 MCP prompts · 1720 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
@@ -133,7 +133,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.18      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.19      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

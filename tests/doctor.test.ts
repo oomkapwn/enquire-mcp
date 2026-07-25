@@ -69,7 +69,11 @@ function diagnose(overrides: Partial<RunDoctorOptions> = {}) {
   });
 }
 
-async function cacheModel(model: { hfId: string }, onnxFile = "model.onnx", targetRoot = cacheRoot): Promise<void> {
+async function cacheModel(
+  model: { hfId: string },
+  onnxFile = "model_quantized.onnx",
+  targetRoot = cacheRoot
+): Promise<void> {
   const dir = path.join(targetRoot, ...model.hfId.split("/"));
   await fs.mkdir(path.join(dir, "onnx"), { recursive: true });
   await fs.writeFile(path.join(dir, "config.json"), '{"model_type":"bert"}');
@@ -315,7 +319,7 @@ describe("runDoctor — tiers and readiness", () => {
     expect(missingEmbedder.ready).toBe(false);
 
     const embedderOnly = path.join(cacheRoot, "embedder-only");
-    await cacheModel(embeddingModel, "model.onnx", embedderOnly);
+    await cacheModel(embeddingModel, "model_quantized.onnx", embedderOnly);
     const missingReranker = await diagnose({ ...paths, modelCacheRoot: embedderOnly });
     expect(missingReranker.checks.find((check) => check.id === "model:embedding-cache")?.status).toBe("ok");
     expect(missingReranker.checks.find((check) => check.id === "model:reranker-cache")).toMatchObject({
@@ -452,11 +456,11 @@ describe("runDoctor — exact model cache", () => {
     await fs.writeFile(path.join(dir, "config.json"), "{}");
     await fs.writeFile(path.join(dir, "tokenizer_config.json"), "{}");
     await fs.writeFile(path.join(dir, "tokenizer.json"), "{}");
-    await fs.writeFile(path.join(dir, "onnx", "model.onnx"), "");
+    await fs.writeFile(path.join(dir, "onnx", "model_quantized.onnx"), "");
     const result = await diagnose();
     const model = result.checks.find((check) => check.id === "model:embedding-cache");
     expect(model?.status).toBe("missing");
-    expect(model?.detail).toContain("onnx/model.onnx");
+    expect(model?.detail).toContain("onnx/model_quantized.onnx");
   });
 
   it("requires every exact non-empty embedding cache artifact", async () => {
@@ -474,9 +478,9 @@ describe("runDoctor — exact model cache", () => {
       [
         "onnx-path",
         async (dir: string) => {
-          await fs.rename(path.join(dir, "onnx", "model.onnx"), path.join(dir, "model.onnx"));
+          await fs.rename(path.join(dir, "onnx", "model_quantized.onnx"), path.join(dir, "model_quantized.onnx"));
         },
-        "onnx/model.onnx"
+        "onnx/model_quantized.onnx"
       ],
       ["zero-byte-config", (dir: string) => fs.truncate(path.join(dir, "config.json"), 0), "config.json"],
       [
@@ -486,7 +490,7 @@ describe("runDoctor — exact model cache", () => {
       ]
     ] as const) {
       const targetRoot = path.join(cacheRoot, name);
-      await cacheModel(embeddingModel, "model.onnx", targetRoot);
+      await cacheModel(embeddingModel, "model_quantized.onnx", targetRoot);
       const modelDir = path.join(targetRoot, ...embeddingModel.hfId.split("/"));
       await mutate(modelDir);
       const result = await diagnose({ modelCacheRoot: targetRoot });
@@ -496,13 +500,18 @@ describe("runDoctor — exact model cache", () => {
     }
   });
 
-  it("requires the q8 reranker artifact rather than an arbitrary ONNX file", async () => {
-    const targetRoot = path.join(cacheRoot, "wrong-reranker-dtype");
-    await cacheModel(rerankerModel, "model.onnx", targetRoot);
-    const result = await diagnose({ modelCacheRoot: targetRoot });
-    const check = result.checks.find((candidate) => candidate.id === "model:reranker-cache");
-    expect(check?.status).toBe("missing");
-    expect(check?.detail).toContain("onnx/model_quantized.onnx");
+  it("requires q8 artifacts rather than arbitrary cached fp32 graphs", async () => {
+    for (const [kind, model, checkId] of [
+      ["embedding", embeddingModel, "model:embedding-cache"],
+      ["reranker", rerankerModel, "model:reranker-cache"]
+    ] as const) {
+      const targetRoot = path.join(cacheRoot, `wrong-${kind}-dtype`);
+      await cacheModel(model, "model.onnx", targetRoot);
+      const result = await diagnose({ modelCacheRoot: targetRoot });
+      const check = result.checks.find((candidate) => candidate.id === checkId);
+      expect(check?.status, kind).toBe("missing");
+      expect(check?.detail, kind).toContain("onnx/model_quantized.onnx");
+    }
   });
 
   it("surfaces an invalid programmatic model alias as a required hybrid check", async () => {

@@ -432,7 +432,7 @@ describe("EmbedDb", () => {
     }
   });
 
-  it("schema bump from v1 → v2 auto-rebuilds (idempotent on matching schema)", async () => {
+  it("schema mismatch and missing legacy version rebuild; matching schema preserves", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db1.open();
@@ -447,6 +447,30 @@ describe("EmbedDb", () => {
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
     db2.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+    raw.close();
+
+    // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old vectors.
+    const db3 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db3.open();
+    expect(db3.totalChunks()).toBe(0);
+    db3.upsertNote("b.md", 2000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2([0, 1, 0, 0]) }
+    ]);
+    db3.close();
+
+    const legacy = new Database(file);
+    legacy.prepare("DELETE FROM meta WHERE key = 'schema_version'").run();
+    legacy.close();
+
+    // NEGATIVE control: unknown legacy provenance must not be accepted as q8.
+    const db4 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db4.open();
+    expect(db4.totalChunks()).toBe(0);
+    db4.close();
   });
 });
 

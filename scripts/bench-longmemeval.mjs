@@ -880,7 +880,9 @@ async function main() {
         },
         retrieval: {
           embeddings: args.embeddings,
-          embedding_backend: embedModel ? `local-transformers.js (${embedModel.alias})` : "none-bm25-tfidf",
+          embedding_backend: embedModel
+            ? `local-transformers.js (${embedModel.alias}, ${embedModel.dtype})`
+            : "none-bm25-tfidf",
           base_signal_query_counts: countSignals(base),
           recency_compare: args.recencyCompare,
           recency_weight: args.recencyCompare ? args.recencyWeight : null,

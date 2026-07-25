@@ -118,12 +118,14 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
   it("cached constructors reapply offline guards and OIA rejects comment-only / late guards", async () => {
     const env = { allowRemoteModels: true, allowLocalModels: true };
     const remotePolicyAtLoad: boolean[] = [];
+    const embeddingDtypesAtLoad: unknown[] = [];
     const rerankerPolicyAtLoad: boolean[] = [];
     vi.resetModules();
     vi.doMock("@huggingface/transformers", () => ({
       env,
-      pipeline: async () => {
+      pipeline: async (_task: string, _model: string, options: { dtype?: unknown }) => {
         remotePolicyAtLoad.push(env.allowRemoteModels);
+        embeddingDtypesAtLoad.push(options.dtype);
         return async () => ({
           data: new Float32Array(384),
           dims: [1, 384] as const
@@ -150,6 +152,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       isolated.setEmbeddingsOffline(true);
       await isolated.loadEmbedder("bge");
       expect(remotePolicyAtLoad).toEqual([true, false]);
+      expect(embeddingDtypesAtLoad).toEqual(["q8", "q8"]);
+      expect(embeddingDtypesAtLoad).not.toContain("fp32"); // NEGATIVE: never silently load the 470 MB artifact.
       expect(env.allowRemoteModels).toBe(false);
       expect(env.allowLocalModels).toBe(true);
 

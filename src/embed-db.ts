@@ -34,6 +34,8 @@ import { stripTrailingSlashes } from "./wildcard-match.js";
 // per-vector dequantization. ~4× storage reduction, ~1-2% recall@10 loss.
 // Mode is per-database; mixing rows is unsupported (a mode change
 // triggers full rebuild via the bootstrap-schema check).
+// v4 (v3.12.0-rc.19) pins q8 inference weights. Even though the stored BLOB
+// layout is unchanged, every vector must be rebuilt in the new model space.
 
 /** Content-source kind. Mirrors ChunkKind in src/fts5.ts. */
 export type EmbedChunkKind = "md" | "pdf";
@@ -348,7 +350,11 @@ export class EmbedDb {
     `);
 
     const meta = this.readMeta();
-    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(EMBED_DB_SCHEMA_VERSION);
+    const uninitialized = Object.keys(meta).length === 0;
+    // A genuinely new database has no metadata yet. Any populated legacy
+    // database without a schema version is unknown provenance and must rebuild;
+    // accepting it here could preserve pre-rc.19 fp32-model vectors.
+    const versionMatch = uninitialized || meta.schema_version === String(EMBED_DB_SCHEMA_VERSION);
     const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
     const modelMatch = meta.model_alias === undefined || meta.model_alias === this.modelAlias;
     const dimMatch = meta.dim === undefined || meta.dim === String(this.dim);
@@ -648,6 +654,8 @@ export class EmbedDb {
    *     deletes+reinserts so max-id always advances).
    *   • dim + model alias guard against a model swap that re-embeds with
    *     a different vector space.
+   *   • embedding schema guards inference-contract migrations (for example,
+   *     fp32 → q8 model weights) even when rowcount, ids and dimensions match.
    */
   computeSignature(): string {
     const db = this.requireDb();
@@ -665,7 +673,10 @@ export class EmbedDb {
     // vectors no longer matched the int8 bytes in the new embed-db rows.
     // Including `quantization` in the signature forces a rebuild on
     // encoding switch.
-    return `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias};quant=${this.quantization}`;
+    return (
+      `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias};quant=${this.quantization};` +
+      `embedSchema=${EMBED_DB_SCHEMA_VERSION}`
+    );
   }
 
   /**

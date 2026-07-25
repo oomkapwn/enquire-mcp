@@ -28,6 +28,8 @@ describe("EMBEDDING_MODELS catalog (v2.0 alpha)", () => {
   it("each model declares an HF id under Xenova org (Xenova ships ONNX-converted weights)", () => {
     for (const m of Object.values(EMBEDDING_MODELS)) {
       expect(m.hfId.startsWith("Xenova/")).toBe(true);
+      expect(m.dtype).toBe("q8");
+      expect(m.approxSizeMB).toBeLessThan(200);
     }
   });
 });

@@ -50,6 +50,78 @@ export const CONFIG_CLIENTS = [
 ] as const;
 export type ConfigClient = (typeof CONFIG_CLIENTS)[number];
 
+/** Installation affordance emitted for a generated client configuration. */
+export type ClientInstallMode = "command" | "uri" | "copy-only";
+
+/** A client-specific install route plus its user-facing safety boundary. */
+export interface ClientInstallAction {
+  /** Whether the route is a runnable command, client URI, or manual copy step. */
+  mode: ClientInstallMode;
+  /** Short explanation printed immediately before the generated config. */
+  summary: string;
+  /** Generated command or URI when the client exposes a verified route. */
+  value?: string;
+}
+
+/**
+ * Dated source evidence for every client install mode.
+ *
+ * Keep this map exhaustive: adding a client without classifying its current,
+ * official install contract must fail TypeScript rather than silently inherit
+ * an invented deeplink. Re-verify when a vendor changes its MCP onboarding.
+ */
+export const CLIENT_INSTALL_EVIDENCE = {
+  "claude-code": {
+    checked: "2026-07-25",
+    source: "https://code.claude.com/docs/en/mcp#installing-mcp-servers",
+    route: "command"
+  },
+  "claude-desktop": {
+    checked: "2026-07-25",
+    source: "https://modelcontextprotocol.io/quickstart/user",
+    route: "copy-only"
+  },
+  cursor: {
+    checked: "2026-07-25",
+    source: "https://cursor.com/docs/mcp",
+    route: "copy-only"
+  },
+  windsurf: {
+    checked: "2026-07-25",
+    source: "https://docs.windsurf.com/windsurf/cascade/mcp#one-click-install-via-deeplink",
+    route: "copy-only"
+  },
+  vscode: {
+    checked: "2026-07-25",
+    client: "VS Code 1.130.0 arm64 (`--add-mcp`, isolated user data)",
+    source: "https://code.visualstudio.com/api/extension-guides/ai/mcp#create-an-mcp-installation-url",
+    route: "uri"
+  },
+  codex: {
+    checked: "2026-07-25",
+    client: "codex-cli 0.146.0-alpha.3.1 (`mcp add --help`)",
+    source: "https://learn.chatgpt.com/docs/extend/mcp#configure-with-the-cli",
+    route: "command"
+  },
+  http: {
+    checked: "2026-07-25",
+    source: "https://modelcontextprotocol.io/docs/develop/connect-remote-servers",
+    route: "copy-only"
+  }
+} as const satisfies Record<
+  ConfigClient,
+  {
+    checked: `${number}-${number}-${number}`;
+    client?: string;
+    source: `https://${string}`;
+    route: ClientInstallMode;
+  }
+>;
+
+// Project safety ceiling, not a vendor-claimed maximum. Oversized definitions
+// retain the complete JSON fallback instead of depending on OS URI handling.
+const MAX_GENERATED_INSTALL_URI_CHARS = 8_192;
+
 export interface ConfigInput {
   /** Absolute vault path (the caller resolves it). */
   vault: string;
@@ -273,6 +345,78 @@ export function clientMeta(client: ConfigClient): { title: string; location: str
   }
 }
 
+/**
+ * Build the verified install affordance for one generated client config.
+ *
+ * VS Code's official URI accepts one server definition encoded as JSON.
+ * Claude Code and Codex expose CLI installers. Cursor and Windsurf only expose
+ * one-click routes for marketplace/registry entries, so an arbitrary
+ * vault-specific local command remains explicitly copy-only.
+ *
+ * @param client - Target MCP client.
+ * @param input - Validated vault/runtime configuration.
+ * @returns The install mode, explanation, and optional generated command/URI.
+ */
+export function clientInstallAction(client: ConfigClient, input: ConfigInput): ClientInstallAction {
+  requireValidServerName(input.name);
+  const { command, args } = runtimeCommandArgs(input);
+
+  switch (client) {
+    case "claude-code":
+      return {
+        mode: "command",
+        summary: "Install action: copy and run the command below; Claude Code saves the reviewed entry."
+      };
+    case "codex":
+      return {
+        mode: "command",
+        summary: "Install action: copy and run this Codex command; the TOML block remains the copy-only fallback.",
+        value: `codex mcp add ${input.name} -- ${renderShellCommand(command, args, input.platform, false)}`
+      };
+    case "vscode": {
+      if (input.http) {
+        throw new Error("VS Code install URI supports this generated local stdio form only; use --client http");
+      }
+      const definition = { name: input.name, command, args };
+      const value = `vscode:mcp/install?${encodeURIComponent(JSON.stringify(definition))}`;
+      if (value.length > MAX_GENERATED_INSTALL_URI_CHARS) {
+        return {
+          mode: "copy-only",
+          summary:
+            "Install action: copy-only — this generated definition exceeds enquire's bounded install-URI size; paste the complete JSON block."
+        };
+      }
+      return {
+        mode: "uri",
+        summary: "Install action: open this URI in VS Code, review the exact command and vault path, then approve.",
+        value
+      };
+    }
+    case "claude-desktop":
+      return {
+        mode: "copy-only",
+        summary: "Install action: copy-only — paste the generated block into Claude Desktop's config, then restart."
+      };
+    case "cursor":
+      return {
+        mode: "copy-only",
+        summary:
+          "Install action: copy-only — Cursor one-click installs require a Marketplace entry; paste this vault-specific block."
+      };
+    case "windsurf":
+      return {
+        mode: "copy-only",
+        summary:
+          "Install action: copy-only — Windsurf deeplinks open Registry entries; paste this vault-specific block."
+      };
+    case "http":
+      return {
+        mode: "copy-only",
+        summary: "Install action: copy-only — start the authenticated endpoint, then add its URL in the remote client."
+      };
+  }
+}
+
 /** Render the config body (no header) for one client. */
 export function renderClientBody(client: ConfigClient, input: ConfigInput): string {
   requireValidServerName(input.name);
@@ -322,9 +466,15 @@ export function renderClientBody(client: ConfigClient, input: ConfigInput): stri
 /** Render one client's full block (title + location + body), markdown-fenced. */
 export function renderClientConfig(client: ConfigClient, input: ConfigInput): string {
   const meta = clientMeta(client);
+  const action = clientInstallAction(client, input);
   const shellFence = input.platform === "win32" ? "powershell" : "bash";
   const fence = client === "codex" ? "toml" : client === "claude-code" || client === "http" ? shellFence : "json";
-  return `## ${meta.title}\n${meta.location}\n\n\`\`\`${fence}\n${renderClientBody(client, input)}\n\`\`\``;
+  const actionValue = action.value
+    ? action.mode === "command"
+      ? `\n\n\`\`\`${shellFence}\n${action.value}\n\`\`\``
+      : `\n${action.value}`
+    : "";
+  return `## ${meta.title}\n${meta.location}\n\n${action.summary}${actionValue}\n\n\`\`\`${fence}\n${renderClientBody(client, input)}\n\`\`\``;
 }
 
 /** Render every client (used when `--client all` / no client given). */

@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.13 candidate: agent-native initialize guidance).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.14 candidate: verified client-specific install actions).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

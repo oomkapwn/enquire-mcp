@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.14] — 2026-07-25
+
+> **TL;DR:** **`configure` now turns each generated vault configuration into the strongest install action that the named client actually supports.** VS Code receives its official encoded `vscode:mcp/install` review URI; Claude Code and Codex receive copy-and-run CLI commands; Claude Desktop, Cursor, Windsurf, and remote HTTP are explicitly labeled copy-only because their public one-click surfaces cannot accept an arbitrary vault-specific local command. Every route retains the transparent generated config and physical runtime pin. **1716 → 1716 source tests.**
+>
+> **Method note:** the install-mode matrix was re-derived from the current official VS Code, Claude Code, Cursor, Windsurf, Codex, MCP user, and remote-server documentation on 2026-07-25. An exhaustive dated evidence map makes a newly added client fail type-checking until its route is classified; positive tests decode the generated VS Code URI back into the exact server name, command, args, and vault path, while negative controls forbid invented Cursor/Windsurf/Claude Desktop/HTTP links and reject an HTTP payload in the local VS Code route. The signed current-stable VS Code 1.130.0 ARM64 build accepted the decoded packed-consumer definition through its real `--add-mcp` parser under isolated user data and wrote a byte-equivalent command/args entry; Codex CLI 0.146.0-alpha.3.1 independently confirms the emitted `mcp add <name> -- <command>` grammar.
+
+### Added
+
+- **One generated install-action layer.** `clientInstallAction` classifies all seven configure targets as `uri`, `command`, or `copy-only` and prints the boundary directly beside the existing snippet.
+- **VS Code native review URI.** The exact package-coherent stdio definition is JSON-encoded into the vendor-documented install URI; users still see the equivalent `.vscode/mcp.json` fallback before approving. Definitions over enquire's conservative 8,192-character URI ceiling fail soft to the complete copy-only JSON block rather than depending on unbounded OS URI handling.
+- **Codex one-command path.** Codex output now includes `codex mcp add ... -- ...` and retains the equivalent TOML block for inspection or manual installation.
+
+### Changed
+
+- **No decorative client links.** Cursor Marketplace and Windsurf Registry routes are not presented as if they could carry a private local vault path. Their generated output says copy-only and explains why.
+- **Human onboarding.** README and Quickstart distinguish one-click review, copy-and-run, and copy-only flows instead of treating every MCP client as the same JSON paste target.
+
+### Tests (1716)
+
+- The existing client-config structural test now round-trips the VS Code URI and checks every evidence-map key/mode against `CONFIG_CLIENTS`.
+- Negative controls require copy-only clients to have no URI/command value, prove the VS Code action refuses the remote HTTP shape, and force an oversized definition through the copy-only fallback without losing its privacy arguments.
+- Build, lint, full tests, coverage, OIA, packaged-consumer, and isolated-client smoke remain release gates; the source-test count is unchanged because the new controls extend the existing install-surface test.
+
+### Stats
+
+- Runtime retrieval, MCP tools/prompts, dependencies, and schemas: unchanged (46 tools, 19 prompts).
+- Source tests: 1716 unchanged.
+- Release posture: prerelease `@rc`; stable `@latest` remains 3.11.6.
+
 ## [3.12.0-rc.13] — 2026-07-25
 
 > **TL;DR:** **Every MCP client now receives a compact, configuration-aware operating contract in the `initialize` response.** The guidance recommends only tools that survive the live feature gates and exact-name allow/deny filters; explains the search → context-pack → source-read workflow; requires path/line/page grounding and freshness-aware uncertainty; states that retrieved vault content is untrusted data, never instructions; and distinguishes read-only, write-enabled, feedback-enabled, and filtered profiles. The payload is deterministic and capped at 2,048 UTF-8 bytes. **1710 → 1716 source tests.**

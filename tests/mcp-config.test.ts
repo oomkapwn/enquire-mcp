@@ -11,10 +11,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildPrivacyArgs,
   buildServeArgs,
+  CLIENT_INSTALL_EVIDENCE,
   CONFIG_CLIENTS,
   CONFIG_TIERS,
   type ConfigClient,
   type ConfigInput,
+  clientInstallAction,
   isConfigTier,
   isValidServerName,
   npxCommandArgs,
@@ -268,11 +270,55 @@ describe("mcp-config — per-client rendering", () => {
 
   it("renderClientConfig wraps the body in a titled, correctly-fenced block", () => {
     expect(renderClientConfig("codex", base)).toContain("```toml");
+    expect(renderClientConfig("codex", base)).toContain("codex mcp add obsidian -- /usr/bin/node");
+    const windowsCodexAction = clientInstallAction("codex", windowsBase);
+    expect(windowsCodexAction.value).toContain(
+      "codex mcp add obsidian -- 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Program Files\\enquire''s runtime\\dist\\index.js'"
+    );
+    expect(windowsCodexAction.value).not.toContain("-- & "); // command vector is data for `codex mcp add`.
     expect(renderClientConfig("cursor", base)).toContain("```json");
+    expect(renderClientConfig("cursor", base)).toContain("copy-only");
     expect(renderClientConfig("claude-code", base)).toContain("```bash");
     expect(renderClientConfig("claude-code", windowsBase)).toContain("```powershell");
     expect(renderClientConfig("http", windowsBase)).toContain("```powershell");
     expect(renderClientConfig("cursor", windowsBase)).toContain("```json");
+
+    const vscodeAction = clientInstallAction("vscode", base);
+    expect(vscodeAction.mode).toBe("uri");
+    expect(vscodeAction.value).toMatch(/^vscode:mcp\/install\?/);
+    const encodedDefinition = vscodeAction.value?.slice("vscode:mcp/install?".length) ?? "";
+    expect(JSON.parse(decodeURIComponent(encodedDefinition))).toEqual({
+      name: "obsidian",
+      command: "/usr/bin/node",
+      args: runtimeCommandArgs(base).args
+    });
+    expect(renderClientConfig("vscode", base)).toContain(vscodeAction.value);
+
+    // NEGATIVE controls: marketplace/registry-only clients must never receive
+    // an invented vault-bearing deeplink, and HTTP must not masquerade as a
+    // local VS Code install URI.
+    for (const client of ["claude-desktop", "cursor", "windsurf", "http"] as ConfigClient[]) {
+      const action = clientInstallAction(client, base);
+      expect(action.mode, client).toBe("copy-only");
+      expect(action.value, client).toBeUndefined();
+    }
+    expect(() => clientInstallAction("vscode", { ...base, http: true })).toThrow(/local stdio/);
+    const oversizedVscodeAction = clientInstallAction("vscode", {
+      ...base,
+      excludeGlobs: [`Private/${"x".repeat(8_192)}`]
+    });
+    expect(oversizedVscodeAction.mode).toBe("copy-only");
+    expect(oversizedVscodeAction.value).toBeUndefined();
+    expect(renderClientConfig("vscode", { ...base, excludeGlobs: [`Private/${"x".repeat(8_192)}`] })).toContain(
+      '"--exclude-glob"'
+    );
+    expect(Object.keys(CLIENT_INSTALL_EVIDENCE).sort()).toEqual([...CONFIG_CLIENTS].sort());
+    expect(Object.values(CLIENT_INSTALL_EVIDENCE).every((evidence) => evidence.checked === "2026-07-25")).toBe(true);
+    expect(CLIENT_INSTALL_EVIDENCE.vscode.client).toContain("1.130.0");
+    expect(CLIENT_INSTALL_EVIDENCE.codex.client).toContain("0.146.0-alpha.3.1");
+    expect(Object.values(CLIENT_INSTALL_EVIDENCE).map((evidence) => evidence.route)).toEqual(
+      CONFIG_CLIENTS.map((client) => clientInstallAction(client, base).mode)
+    );
   });
 
   it("renderAllClients includes every declared client exactly once", () => {

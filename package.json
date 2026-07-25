@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.12.0-rc.13",
+  "version": "3.12.0-rc.14",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
   "description": "The #1 Obsidian MCP for AI memory: one local markdown vault becomes persistent, cited memory for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question decomposition), GraphRAG-light (Louvain), standalone Obsidian Bases, PDFs + Tesseract OCR. 46 tools, 19 MCP prompts, 1716 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",

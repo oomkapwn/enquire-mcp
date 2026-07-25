@@ -508,7 +508,9 @@ added once the maintainer runs the full set on reference hardware and reviews
 the methodology (a published LongMemEval figure is the project's credibility
 centerpiece, so it goes through the same "measured, reproducible, reviewed"
 bar as every other number in this document — never a placeholder or an
-estimate).
+estimate). v3.12.0-rc.18 removes the O(N²) fresh-FTS build that the first
+official global run exposed and pushes folder scope into the inverted index;
+the canonical dense result still must come from the exact clean release commit.
 
 ## Context efficiency (token cost)
 

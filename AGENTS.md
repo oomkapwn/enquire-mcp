@@ -57,7 +57,7 @@ tests/
 
 docs/
 ├── api.md              — tool catalog
-├── COMPARISON.md       — vs Smart Connections / other Obsidian-MCPs
+├── COMPARISON.md       — TOP-1 product case + evidence-bound proof surface
 ├── QUICKSTART.md       — onboarding
 ├── benchmarks.md       — retrieval-quality benchmarks
 ├── http-transport.md   — remote MCP transport guide

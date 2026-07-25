@@ -105,7 +105,7 @@ Conecte a qualquer cliente MCP:
 **Quer todo o poder híbrido?** Conclua o preflight híbrido e depois inicie o servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -238,10 +238,10 @@ O `obsidian_search` detecta automaticamente os sinais disponíveis e degrada de 
 | Nível | Configuração | O que você obtém |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF cosine (zero configuração, instantâneo) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (top-10 em menos de 100 ms) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (recuperação lexical indexada) |
 | **3** | + `setup` (baixa o modelo + constrói o embed-db) | + embeddings de ML multilíngues |
 | **4** | + `--enable-reranker` | + cross-encoder BGE (+15.5 NDCG@10 medido) |
-| **5** | + `--use-hnsw` | + top-K em menos de 10 ms na escala de milhões de chunks |
+| **5** | + `--use-hnsw` | + vizinhos aproximados com HNSW persistente |
 | **6** | + `--include-pdfs` | + PDFs mesclados em tudo o que está acima |
 | **7** | `serve-http --bearer-token …` | + MCP remoto (Claude.ai web, ChatGPT, Cursor HTTP, mobile) |
 
@@ -295,7 +295,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superfície de estabilidad
 
 **Algum dado é enviado para algum lugar?** Downloads de saída ocorrem somente em comandos explícitos de aquisição: `enquire-mcp setup`, `enquire-mcp build-embeddings` e `enquire-mcp install-model` podem baixar pesos ONNX do HuggingFace; `enquire-mcp install-ocr-lang` baixa um pacote de idioma Tesseract para OCR. O modo serve nunca faz HTTP de saída. Embeddings + reranker rodam na CPU, localmente.
 
-**Desempenho?** Build a frio do FTS5: ~5s/1k notas, ~30s/50k. Consulta BM25: <100ms sempre. Build de embedding: ~30ms/chunk no M1. **HNSW top-10: menos de 10 ms em qualquer escala.** Cold-start do serve: ~50ms com persistência do HNSW.
+**Desempenho?** Depende do tamanho do vault, hardware, modelo e camadas de recuperação ativas. A evidência pública inclui um relato de produção de **50–100ms** para BM25 top-10 com 1.771 chunks / 368 arquivos e um benchmark sintético reproduzível em que o FTS5 supera a varredura linear em **37–103×** com 100–1.000 notas. Rode a avaliação integrada no seu vault antes de definir um SLO de latência.
 
 **Idiomas?** O embedder padrão é `paraphrase-multilingual-MiniLM-L12-v2` (50+ idiomas), validado ponta a ponta em vaults bilíngues russo + inglês. O reranker cross-encoder padrão é `rerank-bge` (English-only; o único alias do catálogo validado ponta a ponta); os aliases multilíngues de reranker atualmente falham na verificação de compatibilidade do tokenizer do transformers.js. A tokenização CJK/tailandês/khmer usa `Intl.Segmenter`.
 

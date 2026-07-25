@@ -114,7 +114,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 </div>
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -293,10 +293,10 @@ graph LR
 | الطبقة | طريقة التفعيل | ما تحصل عليه |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF cosine (بلا إعداد، فوري) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (top-10 دون 100ms) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (استرجاع لفظي مفهرس) |
 | **3** | + `setup` (تنزيل نموذج + بناء embed-db) | + تضمينات ML متعددة اللغات |
 | **4** | + `--enable-reranker` | + مُرمِّز متقاطع BGE (‎+15.5 NDCG@10 مقاسة) |
-| **5** | + `--use-hnsw` | + top-K دون 10ms على نطاق ملايين الـ chunks |
+| **5** | + `--use-hnsw` | + استرجاع تقريبي لأقرب الجيران مع HNSW مستدام |
 | **6** | + `--include-pdfs` | + دمج ملفات PDF في كل ما سبق |
 | **7** | `serve-http --bearer-token …` | + MCP بعيد (ويب Claude.ai، ChatGPT، Cursor HTTP، الجوال) |
 
@@ -364,7 +364,7 @@ graph LR
 
 **هل تُرسَل بياناتي إلى أي مكان؟** لا تحدث التنزيلات الخارجية إلا عبر أوامر الحصول الصريحة: قد تنزّل `enquire-mcp setup` و`enquire-mcp build-embeddings` و`enquire-mcp install-model` أوزان ONNX من HuggingFace، وينزّل `enquire-mcp install-ocr-lang` حزمة لغة Tesseract الخاصة بـ OCR. وضع التشغيل (serve) لا يجري أبداً أي اتصال HTTP خارجي. التضمينات وإعادة الترتيب تعمل محلياً على وحدة المعالجة المركزية.
 
-**ما الأداء؟** بناء FTS5 على البارد: نحو 5s/1k ملاحظة، ونحو 30s/50k. استعلام BM25: دائماً <100ms. **HNSW top-10: دون 10ms على أي نطاق.** بدء التشغيل على البارد مع استدامة HNSW: نحو 50ms.
+**ما الأداء؟** يعتمد على حجم الخزنة والعتاد والنموذج وطبقات الاسترجاع المفعّلة. تتضمن الأدلة العامة تقرير إنتاج قدره **50–100ms** لـ BM25 top-10 عند 1,771 chunk / 368 ملفاً، واختباراً اصطناعياً قابلاً للتكرار يُظهر تسارع FTS5 بمقدار **37–103×** مقابل المسح الخطي عند 100–1,000 ملاحظة. شغّل التقييم المدمج على خزنتك قبل تحديد هدف زمن استجابة.
 
 **أي اللغات؟** نموذج الـembedder الافتراضي هو `paraphrase-multilingual-MiniLM-L12-v2` (أكثر من 50 لغة)، وقد تم التحقق منه من البداية إلى النهاية على خزائن ثنائية الروسية + الإنجليزية. أما reranker ذو الـcross-encoder الافتراضي فهو `rerank-bge` (English-only؛ الاسم الوحيد في الكتالوج الذي تم التحقق منه من البداية إلى النهاية)؛ وتفشل أسماء reranker متعددة اللغات حالياً في فحص توافق tokenizer الخاص بـtransformers.js. تستخدم تجزئة CJK / التايلندية / الخميرية `Intl.Segmenter`.
 

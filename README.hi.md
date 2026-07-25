@@ -102,7 +102,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -237,10 +237,10 @@ graph LR
 | स्तर | सेटअप | आपको क्या मिलता है |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF cosine (ज़ीरो सेटअप, तत्काल) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (sub-100ms top-10) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (इंडेक्स्ड लेक्सिकल रिट्रीवल) |
 | **3** | + `setup` (मॉडल डाउनलोड + embed-db बनाता है) | + बहुभाषी ML embeddings |
 | **4** | + `--enable-reranker` | + BGE cross-encoder (मापा गया +15.5 NDCG@10) |
-| **5** | + `--use-hnsw` | + मिलियन-chunk पैमाने पर sub-10ms top-K |
+| **5** | + `--use-hnsw` | + persisted HNSW के साथ approximate nearest-neighbor retrieval |
 | **6** | + `--include-pdfs` | + उपरोक्त सभी में घुले PDF |
 | **7** | `serve-http --bearer-token …` | + रिमोट MCP (Claude.ai वेब, ChatGPT, Cursor HTTP, मोबाइल) |
 
@@ -294,7 +294,7 @@ graph LR
 
 **डेटा कहीं भेजा जाता है?** बाहरी डाउनलोड केवल स्पष्ट acquisition कमांड पर होते हैं: `enquire-mcp setup`, `enquire-mcp build-embeddings` और `enquire-mcp install-model` HuggingFace से ONNX weights ला सकते हैं; `enquire-mcp install-ocr-lang` OCR के लिए Tesseract भाषा पैक लाता है। serve मोड कभी बाहरी HTTP नहीं करता। Embeddings + reranker स्थानीय CPU पर चलते हैं।
 
-**प्रदर्शन?** कोल्ड-बिल्ड FTS5: ~5s/1k नोट्स, ~30s/50k। BM25 क्वेरी: हमेशा <100ms। **HNSW top-10: किसी भी पैमाने पर sub-10ms।** HNSW persistence के साथ serve कोल्ड-स्टार्ट: ~50ms।
+**प्रदर्शन?** यह vault के आकार, हार्डवेयर, मॉडल और चालू retrieval layers पर निर्भर करता है। सार्वजनिक प्रमाण में 1,771 chunks / 368 files पर BM25 top-10 का **50–100ms** production report और 100–1,000 notes पर linear scan से FTS5 की **37–103×** reproducible speedup शामिल है। latency SLO तय करने से पहले अपने vault पर built-in eval चलाएँ।
 
 **भाषाएँ?** डिफ़ॉल्ट embedder `paraphrase-multilingual-MiniLM-L12-v2` (50+ भाषाएँ) है, जिसे रूसी + अंग्रेज़ी bilingual vaults पर end-to-end सत्यापित किया गया है। डिफ़ॉल्ट cross-encoder reranker `rerank-bge` (English-only; end-to-end सत्यापित एकमात्र catalog alias) है; multilingual reranker aliases अभी transformers.js tokenizer compatibility check में विफल होते हैं। CJK / थाई / खमेर tokenization के लिए `Intl.Segmenter` उपयोग होता है।
 

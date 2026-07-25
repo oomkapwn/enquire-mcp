@@ -34,7 +34,7 @@
 - Indexes content with FTS5 (BM25), TF-IDF, and one of the two catalogued embedding aliases: `multilingual` (paraphrase-multilingual-MiniLM-L12-v2) or `bge` (bge-small-en-v1.5)
 - Fuses multiple retrieval signals via Reciprocal Rank Fusion (RRF, k=60 per Cormack et al)
 - Optional BGE cross-encoder reranking (+15.5 NDCG@10 / +24.7 MRR measured on a 60-query ablation)
-- HNSW vector index for sub-10ms top-K queries at million-chunk scale
+- HNSW approximate nearest-neighbor index with persistence, live watcher updates, and adaptive refill
 - int8 vector quantization (~4× smaller embed-db at ~1-2% recall@10 cost)
 - Standalone `.base` query execution (Obsidian Bases DSL — no Obsidian process required)
 - GraphRAG-light: wikilink community detection via Louvain modularity

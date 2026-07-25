@@ -294,15 +294,16 @@ curl -sX POST "$URL" \
 - **Rate limit is per-process.** If you run multiple processes (e.g. team-tier with one process per user behind a reverse proxy), each enforces its own bucket. For shared limits use the reverse proxy's rate-limit module.
 - **Logs go to stderr.** The ready banner, skip-tool warnings, and transport errors all go to stderr — keep it captured by systemd / your tunnel.
 
-## Comparison vs other Obsidian-MCPs
+## Why enquire's HTTP transport
 
-Remote HTTP is no longer unique in this category. The 2026-07-24 evidence snapshot found three distinct shapes:
+Remote access keeps the same local-first retrieval engine and source-grounded
+results while adding an explicit network trust boundary. Choose stateless mode
+for independent requests or stateful mode when the client needs session reuse,
+SSE, and explicit termination. Bearer auth, CORS, rate/session/connection
+bounds, readiness, and rollback-aware session shutdown are part of the same
+server instead of an external compatibility layer.
 
-- enquire-mcp: stateful or stateless Streamable HTTP, bearer auth, CORS, rate/session/connection bounds, readiness;
-- `flowing-abyss/obsidian-hybrid-search`: one shared long-lived search/index process with Host-header protection;
-- `cyanheads/obsidian-mcp-server`: stateless Streamable HTTP with JWT/OAuth, backed by a running Obsidian Local REST API.
-
-Choose on lifecycle and trust boundary, not the presence of HTTP alone. enquire is the fit when its stateful session semantics and explicit resource limits matter; OHS is the focused shared-search service; cyanheads is the live-Obsidian/OAuth option. See the dated, source-pinned [`COMPARISON.md`](./COMPARISON.md).
+See [`COMPARISON.md`](./COMPARISON.md) for the complete product case.
 
 ## Troubleshooting
 

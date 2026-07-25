@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-24 (v3.12.0-rc.8 candidate: token-setup documentation integrity on top of rc.6's autonomous AI/repo discoverability tail).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.12 candidate: public conversion and evidence integrity).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -23,16 +23,33 @@ Already shipped and differentiating:
 
 Current **v3.12.0 `@rc` preview** closes the activation path: `first-run` validates and renders config in non-destructive preview mode, then requires explicit `--apply` before package-coherent setup/model acquisition and tier-aware doctor verification. The manual commands remain available independently; the orchestrator stops on failure and emits an exact idempotent resume command.
 
-## Competitive read (why the roadmap is shaped the way it is)
+## Leadership plan (why the roadmap is shaped this way)
 
-The 2026-07-24 source-pinned refresh changes the strategic picture: **enquire has a broad, inspectable product surface, but it is not categorically ahead.** `flowing-abyss/obsidian-hybrid-search` is a direct retrieval peer with stronger public external-dataset evidence, while `cyanheads/obsidian-mcp-server` has the deeper live-Obsidian and OAuth surface. The current gap is a fair shared-protocol benchmark plus discoverability, not another unbounded feature-count claim.
+The 2026-07-25 full-surface audit confirms a broad, inspectable product lead:
+enquire combines the complete retrieval ladder, freshness-aware memory,
+Obsidian-native document coverage, agentic workflows, remote transport
+controls, and a verifiable release chain in one package.
 
-- **vs focused Obsidian retrieval** — OHS also combines lexical and dense retrieval through RRF and offers a BGE reranker. It adds a native Obsidian plugin, local or OpenAI-compatible embeddings and published Evergreen/LongMemEval-S artifacts. enquire differs through TF-IDF as a third signal, HNSW/int8, standalone Bases, direct PDF/OCR, freshness controls, agentic prompts and a broader stateful-HTTP operational surface. Those are workflow differences; they do not prove a search-quality win.
-- **vs live-Obsidian servers** — cyanheads now documents 14 tool entries, three resources, stateless Streamable HTTP, JWT/OAuth, active-file access, command execution and optional Omnisearch/Text Extractor integration. Its running-Obsidian dependency buys capabilities enquire intentionally does not expose. Markus remains the thinner Python REST wrapper.
-- **vs model-free filesystem servers** — mcpvault covers filesystem CRUD, metadata, wikilinks and lexical/BM25 search without a model or persistent vector-index lifecycle. Its pinned source inventory and README disagree on the total; the discrepancy is recorded in the comparison, not scored.
-- **vs adjacent memory products** — Basic Memory is now a two-way human/agent Markdown knowledge base with graph/schema tools and optional hosted sync, mobile and team access. That is a different product loop from read-first retrieval over an existing general-purpose vault.
+The remaining leverage is not another disconnected feature. It is making the
+lead immediately visible and independently reproducible:
 
-**The single highest-leverage move remains a reproducible LongMemEval-S run under OHS's published protocol.** OHS currently reports nDCG@5 0.895 / MRR 0.920 / Hit@1 0.889 / Recall@10 0.950 on its pinned 470-query result. enquire's existing 60-query synthetic ablation answers a narrower question: how much each stage improves its own stack. The backlog therefore calls for the same corpus, judgments, model/scope rules, raw outputs, latency/index-size measurements and failure buckets before either project is ranked. The positioning that survives this audit is concrete: **local-first long-term memory grounded in the vault you own**, with explicit trade-offs documented in [`docs/COMPARISON.md`](./docs/COMPARISON.md).
+- **Show the result first.** The canonical README now demonstrates a concrete
+  query, grounded answer, and source note above the fold.
+- **Turn comparison traffic into activation.** The public comparison page is
+  now a TOP-1 product battlecard with internal proof links and no outbound
+  recommendations.
+- **Bind every number to evidence.** Absolute scale/latency promises are
+  replaced by corpus-scoped observations, commands, and CI invariants.
+- **Publish a recognized memory benchmark.** The next major credibility asset
+  is a reproducible LongMemEval-S run with raw outputs, ablations,
+  latency/index-size measurements, and failure buckets.
+- **Shorten onboarding again.** Initialize instructions, one-click client
+  links, and a benefit-led Pages landing surface remain the conversion tail.
+
+The durable positioning is concrete: **the complete local-first long-term
+memory backend grounded in the vault you own**. The proof stack lives in
+[`docs/COMPARISON.md`](./docs/COMPARISON.md), [`docs/benchmarks.md`](./docs/benchmarks.md),
+and the 9-gate release chain.
 
 ---
 
@@ -61,19 +78,19 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 - [x] **AI-search + repo-page.** CLOSED in v3.12.0-rc.6: the curated `llms-ctx.txt` companion, npm-packaged `llms.txt`, supported MCP Registry `title` + `websiteUrl`, exact 20-topic GitHub discoverability set, `CODEOWNERS`, and `SUPPORT.md` complete the autonomous tail. The official 2025-12-11 Registry schema was re-read before editing: it has no standard `categories` or `keywords`, and the Registry roadmap explicitly says tags/categories are unsupported, so no vendor-shaped fields were invented. Canonical identity is already carried by the JSON-LD graph (`@id`, `codeRepository`, `targetProduct`) plus `server.json.websiteUrl`; an inert README comment adds no crawler contract. Earlier pieces shipped as FAQPage + SoftwareSourceCode JSON-LD (v3.9.0-rc.17), `glama.json` (rc.17), hero install line (rc.27), social preview (rc.29), and the TOP-1 public funnel (v3.12.0-rc.5).
 - [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
-- [x] **Obsidian-MCP COMPARISON table** — refreshed in v3.12.0-rc.4 against immutable 2026-07-24 source commits. OHS is now treated as the direct hybrid/reranker peer and its stronger public benchmark evidence is explicit; cyanheads, mcpvault and Basic Memory were reclassified from their current sources; translated legacy tables are visibly historical; a positive/negative-control invariant rejects current unbounded category claims. Re-audit quarterly because competitor facts remain point-in-time.
+- [x] **TOP-1 comparison battlecard** — rebuilt in v3.12.0-rc.12 as an enquire-first acquisition surface: buyer outcomes, a runnable cited-memory example, complete-stack proof, current CI-derived counts, and direct activation. Public competitor recommendations were removed; a positive/negative-control invariant keeps them out while preserving evidence-bound product claims.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
-- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). Run the harness (github.com/xiaowu0162/longmemeval) with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes). **Goal updated (2026-07-16 audit): an apples-to-apples retrieval comparison vs `flowing-abyss/obsidian-hybrid-search`'s public LongMemEval-S protocol** (headline nDCG@5; also MRR/Hit@1/Recall@10/AllRel@10 — retrieval metrics, NOT answer-generation accuracy) on the same pinned corpus/queries/relevance-judgments/hardware, with raw per-query outputs, our BM25/dense/reranker/graph-boost/staleness ablations, latency/index-size, and failure buckets, in `docs/benchmarks.md` + lead the README with it. (No longer "first" — a peer already publishes; a credible fair number beats an unauditable dramatic one.)
+- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). Run the public LongMemEval-S protocol with `obsidian_search` as the retrieval backend (benchmark conversations ingested as notes): headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 on a pinned corpus, queries, relevance judgments, model/scope rules, and reference hardware. Publish raw per-query outputs, BM25/dense/reranker/graph-boost/staleness ablations, latency/index-size, and failure buckets in `docs/benchmarks.md`, then lead the README with the result.
 - [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
 - [x] **Messaging reposition** — SHIPPED and strengthened in v3.12.0-rc.5: README ×11, npm/MCP/AI metadata, social preview and GitHub About now lead with the explicit “#1 Obsidian MCP for AI memory” credential. The project-page funnel proves enquire's own leadership across eight product outcomes and no longer routes visitors to alternatives; detailed competitive evidence remains available outside the conversion path. Measurable supporting claims stay current and inspectable, while the broad TOP-1 line remains deliberate promotional positioning.
 
 ## Tier 4 — Extend the lead (pick after Tier 3)
 
 - [ ] **Late chunking** opt-in at markdown-heading boundaries (GraLC-RAG, arXiv:2603.22633) — preserves cross-section context; measurable via structural-coverage metrics.
-- [ ] **GraphRAG-full** — entity/relationship extraction from note *content* (not just wikilinks), staying local — to match cognee/Zep-class KGs.
-- [ ] **Conversational write-back** — a `remember` / distill-to-vault tool turning an agent conversation into durable markdown memory (the mem0/Zep core use-case), entering that niche directly.
+- [ ] **GraphRAG-full** — local entity/relationship extraction from note *content* (not just wikilinks), strengthening the knowledge graph without cloud ingestion.
+- [ ] **Conversational write-back** — a reviewable `remember` / distill-to-vault tool that turns an agent conversation into durable Markdown memory.
 - [x] **Queryable wikilink graph tool** — SHIPPED: `obsidian_find_path` (shortest-path) + `obsidian_get_note_neighbors` (entity-neighborhood) + `obsidian_get_communities` expose the graph already built for community detection. _(Marked done in the 2026-07-16 audit truth-reset — the tools exist in TOOL_MANIFEST; remaining work is examples + usage measurement, not build.)_
 - [ ] **ColBERT-style late-interaction reranker** as an opt-in `--reranker colbert` for long documents.
 - [ ] **Earn real SLSA Build L3** via `slsa-framework/slsa-github-generator`; restore an L3 badge once verified. + CycloneDX SBOM on release and `step-security/harden-runner` egress auditing. (`CODEOWNERS` + `SUPPORT.md` shipped in v3.12.0-rc.6.)

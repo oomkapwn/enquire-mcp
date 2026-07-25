@@ -31,6 +31,14 @@
 claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 ```
 
+**See cited memory in one query**
+
+| You ask | enquire-backed answer |
+|---|---|
+| *“What project did I work on, and what idea did I log?”* | **“You worked on Apollo and logged an idea about velocity.”**<br>Source: `99_Daily/2026-05-02.md` |
+
+<sub>This exact note lives in the repository's [deterministic synthetic vault](./scripts/synthetic-vault.mjs), and the query is part of the [runnable evaluation set](./examples/queries.jsonl)—a reproducible product path, not a mock screenshot.</sub>
+
 </div>
 
 ---
@@ -112,7 +120,7 @@ enquire-mcp configure --vault <path> --client cursor # just one (claude-code|cur
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -245,10 +253,10 @@ graph LR
 | Tier | Setup | What you get |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF cosine (zero setup, instant) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (sub-100ms top-10) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (indexed lexical retrieval) |
 | **3** | + `setup` (downloads model + builds embed-db) | + multilingual ML embeddings |
 | **4** | + `--enable-reranker` | + BGE cross-encoder (+15.5 NDCG@10 measured) |
-| **5** | + `--use-hnsw` | + sub-10ms top-K at million-chunk scale |
+| **5** | + `--use-hnsw` | + approximate nearest-neighbor retrieval with persisted HNSW |
 | **6** | + `--include-pdfs` | + PDFs blended into all of the above |
 | **7** | `serve-http --bearer-token …` | + remote MCP (Claude.ai web, ChatGPT, Cursor HTTP, mobile) |
 
@@ -302,7 +310,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 **Data sent anywhere?** Outbound downloads occur only on explicit acquisition commands: `enquire-mcp setup`, `enquire-mcp build-embeddings`, and `enquire-mcp install-model` may fetch ONNX weights from HuggingFace; `enquire-mcp install-ocr-lang` fetches a Tesseract language pack. Serve mode never makes outbound HTTP ([enforced](./SECURITY.md), not aspirational). Embeddings + reranker run on CPU locally.
 
-**Performance?** Cold-build FTS5: ~5s/1k notes, ~30s/50k. BM25 query: <100ms always. Embedding build: ~30ms/chunk on M1. **HNSW top-10: sub-10ms at any scale.** Serve cold-start: ~50ms with HNSW persistence.
+**Performance?** It depends on vault size, hardware, model, and enabled retrieval layers. The public evidence includes a production report of **50–100ms BM25 top-10 at 1,771 chunks / 368 files** plus a reproducible synthetic benchmark showing **37–103×** FTS5 speedup over linear scan at 100–1,000 notes. Run the built-in eval and benchmark commands on your vault before setting a latency SLO; see [benchmarks](./docs/benchmarks.md) and the [FTS5 implementation note](./docs/api.md#obsidian_full_text_search).
 
 **Languages?** The default embedder is `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages), validated end-to-end on Russian + English bilingual vaults. The default cross-encoder reranker is `rerank-bge` (English-only; the only catalog alias verified end-to-end); multilingual reranker aliases currently fail their transformers.js tokenizer compatibility check. CJK/Thai/Khmer tokenization uses `Intl.Segmenter`.
 

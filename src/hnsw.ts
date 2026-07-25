@@ -2,10 +2,9 @@
 //
 // v2.13.0 — closes the "brute-force semantic search doesn't scale" gap. The
 // existing path in `EmbedDb.search()` runs O(n) cosine over every embedded
-// chunk per query (~5ms at 8K chunks, ~30ms at 50K, ~300ms at 500K, ~3s at
-// 5M). HNSW is the IR-standard graph-based index that achieves O(log n)
-// approximate nearest neighbor lookups — sub-10ms even at million-chunk
-// scale, with recall@K ≥ 95% at default parameters (M=16, efConstruction=200).
+// chunk per query. HNSW is the IR-standard graph-based index for approximate
+// nearest-neighbor lookup. Real latency and recall depend on corpus shape,
+// hardware, and the search/build parameters; benchmark the target vault.
 //
 // Architecture: in-memory rebuild on serve start.
 //
@@ -32,14 +31,8 @@
 //
 // (See "Historical note" above re: hnswlib-wasm vs hnswlib-node choice.)
 //
-// Performance characteristics on M1 Pro (cosine space, dim=384):
-//   • Build: ~0.5ms per vector → 8K chunks ≈ 4s, 50K ≈ 25s, 500K ≈ 4min
-//   • Query: ~0.5-1ms per top-10 lookup, independent of corpus size
-//
-// Recall@10 vs brute-force on the same corpus is consistently ≥98% at
-// default params. Users tuning for max recall can pass `--hnsw-ef-search`
-// to widen the search beam (default 100; higher = more accurate,
-// slower).
+// Users tuning for recall can pass `--hnsw-ef-search` to widen the search
+// beam (default 100; higher is generally more accurate and slower).
 
 import type { EmbedSearchHit } from "./embed-db.js";
 import { optionalDepDetail } from "./optional-dep.js";
@@ -495,8 +488,7 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
  *
  * On success returns `{ index, rowsByLabel }` so the caller can wire
  * both into `searchHybrid`'s `hnsw` context without rebuilding from
- * scratch. Typical boot-time win: ~25s rebuild → ~50ms load on a
- * 50K-chunk vault.
+ * scratch. The actual boot-time win depends on index size and storage.
  */
 export async function loadHnswFromDisk(
   file: string,

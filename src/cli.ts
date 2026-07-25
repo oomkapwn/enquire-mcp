@@ -145,7 +145,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--use-hnsw",
-      "v2.13.0 — build an in-memory HNSW vector index on serve start (or rebuild if `.embed.db` is missing). Sub-10ms top-K queries at any vault scale, vs O(n) brute-force without it. Build cost: ~5s for 8K chunks, ~25s for 50K, ~4min for 500K (one-time per serve). Recall@10 ≥ 98% vs brute-force at default params. Requires the `hnswlib-node` optionalDependency (native binding via N-API)."
+      "v2.13.0 — build an in-memory HNSW approximate nearest-neighbor index on serve start (or rebuild if `.embed.db` is missing), replacing the O(n) brute-force dense path. Build time, query latency, and recall depend on corpus, hardware, and HNSW parameters; benchmark your vault before setting an SLO. Requires the `hnswlib-node` optionalDependency (native binding via N-API)."
     )
     .option(
       "--hnsw-ef <n>",
@@ -157,7 +157,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--no-hnsw-persist",
-      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start (~25s for 50K chunks). Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
+      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start. Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
     )
     .option(
       "--ocr-pdfs",

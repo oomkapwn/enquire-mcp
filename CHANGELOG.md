@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.12] — 2026-07-25
+
+> **TL;DR:** **The public repository now sells enquire-mcp as the #1 Obsidian MCP for AI memory without routing buyers or AI agents to alternatives, while every concrete performance number is tied to a reproducible evidence boundary.** The comparison page is rebuilt as an enquire-first product battlecard; the README shows a deterministic query → grounded answer → source-note example above the fold; ROADMAP and MCP-facing descriptions lead with enquire's own outcomes; and the social card carries a complete install command. A class-wide sweep replaces unsupported absolute HNSW/FTS5 latency and scale promises across all 11 READMEs, CLI help, TSDoc, tool metadata, structured search metadata, Quickstart, templates, citation data, and benchmark prose with corpus-scoped evidence or explicit measurement guidance. Runtime retrieval behavior is unchanged; **1710 → 1710 source tests.**
+>
+> **Method note:** a full project/positioning audit followed the stale claim from the front-page FAQ through every current public and agent-readable surface rather than patching the first instance. The sweep separated deliberate promotional positioning (“#1 Obsidian MCP for AI memory”) from concrete empirical claims: the slogan remains strong, while latency, scale, recall, counts, security, and compatibility require a current source, CI invariant, or disclosed measurement. Historical release claims remain in the append-only changelog. The existing TOP-1 documentation test was broadened in place with negative controls for competitor promotion and each removed performance-claim class, so the source-test declaration count does not change.
+
+### Changed
+
+- **TOP-1 acquisition surface.** `docs/COMPARISON.md` now explains the buyer outcome, seven-layer product stack, current CI-derived proof, ideal customer, runnable activation path, and evidence policy. It contains no outbound competitor recommendation or “pick something else” funnel.
+- **Concrete above-fold demo.** The canonical README shows a question, grounded answer, and `99_Daily/2026-05-02.md` citation linked to the deterministic synthetic vault, smoke path, and evaluation query set.
+- **AI/search-indexable positioning.** ROADMAP, MCP prompt/tool descriptions, API copy, `llms.txt`, JSON-LD FAQ data, and the install graphic now reinforce enquire's own category leadership and direct activation.
+- **Evidence-bound performance language.** Removed unbounded “sub-10ms at any scale,” “million-chunk,” and unconditional sub-100ms promises from every live surface. The replacement cites the scoped 1,771-chunk / 368-file BM25 report and reproducible 100–1,000-note FTS5 benchmark, or tells operators to measure their own corpus before setting an SLO.
+
+### Tests (1710)
+
+- The existing TOP-1 invariant now patrols every public README plus the comparison, roadmap, CLI/TSDoc, MCP metadata, structured metadata, templates, and benchmark copy for the deleted absolute performance claim classes.
+- Competitor-promotion controls now cover the comparison, roadmap, prompt registry, and tool registry; deliberately bad fixtures prove both analyzers can fail.
+- Social preview was regenerated from the edited SVG and visually checked at its native 1280×640 resolution; the complete npm install command fits without clipping.
+
+### Stats
+
+- Runtime/dependency behavior: unchanged; descriptions, documentation, metadata, tests, and generated social art only.
+- Public surface: 46 tools, 19 prompts, 1710 source tests, 11 README languages.
+- Release posture: prerelease `@rc`; stable `@latest` remains 3.11.6.
+
 ## [3.12.0-rc.11] — 2026-07-25
 
 > **TL;DR:** **The compiled CLI model-alias regression is now hermetic, deterministic, and fail-closed against accidental network access.** A test-only ESM loader substitutes a deterministic `@huggingface/transformers` implementation, while process-level `fetch`, `http`, and `https` tripwires prove the command neither downloads a model nor relies on a developer cache. The test now requires a successful command exit instead of accepting embedder-load failure as sufficient evidence, completes within a 15-second budget instead of allowing 90 seconds, and includes a negative control that deliberately attempts a request and proves the tripwire records and rejects it. Runtime behavior is unchanged; **1710 → 1710 source tests.**

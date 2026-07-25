@@ -81,7 +81,7 @@
   <g transform="translate(80,512)">
     <rect x="0" y="0" width="470" height="58" rx="12" fill="#0c121d" stroke="#283246" stroke-width="1.5"/>
     <rect x="0" y="0" width="4" height="58" rx="2" fill="url(#accent)"/>
-    <text x="24" y="37" font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace" font-size="21" fill="#e6edf3"><tspan fill="#8b5cf6">$</tspan> claude mcp add enquire-mcp</text>
+    <text x="24" y="37" font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace" font-size="21" fill="#e6edf3"><tspan fill="#8b5cf6">$</tspan> npm i -g @oomkapwn/enquire-mcp</text>
   </g>
 
   <text x="80" y="606" font-size="17.5" font-weight="500" fill="#71809a">MIT  &#183;  SLSA L2 provenance  &#183;  Claude &#183; Cursor &#183; ChatGPT &#183; Codex &#183; OpenClaw</text>

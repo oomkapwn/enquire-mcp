@@ -105,7 +105,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.11      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.12      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -238,10 +238,10 @@ graph LR
 | Уровень | Настройка | Что вы получаете |
 |---|---|---|
 | **1** | `serve --vault <path>` | TF-IDF косинус (ноль настройки, мгновенно) |
-| **2** | + `--persistent-index` | + BM25 / FTS5 (top-10 за менее чем 100 мс) |
+| **2** | + `--persistent-index` | + BM25 / FTS5 (индексированный лексический поиск) |
 | **3** | + `setup` (загружает модель + строит embed-db) | + многоязычные ML-эмбеддинги |
 | **4** | + `--enable-reranker` | + кросс-энкодер BGE (+15.5 NDCG@10 по замерам) |
-| **5** | + `--use-hnsw` | + top-K за менее чем 10 мс на масштабе в миллионы чанков |
+| **5** | + `--use-hnsw` | + приближённый поиск ближайших соседей с персистентным HNSW |
 | **6** | + `--include-pdfs` | + PDF, вплетённые во всё вышеперечисленное |
 | **7** | `serve-http --bearer-token …` | + удалённый MCP (веб Claude.ai, ChatGPT, Cursor по HTTP, мобильные) |
 
@@ -295,7 +295,7 @@ graph LR
 
 **Куда-нибудь отправляются данные?** Исходящие загрузки выполняются только явными командами получения данных: `enquire-mcp setup`, `enquire-mcp build-embeddings` и `enquire-mcp install-model` могут загрузить ONNX-веса с HuggingFace, а `enquire-mcp install-ocr-lang` — языковой пакет Tesseract для OCR. Режим serve никогда не делает исходящих HTTP-запросов. Эмбеддинги + реранкер работают на CPU локально.
 
-**Производительность?** Холодная сборка FTS5: ~5с/1k заметок, ~30с/50k. BM25-запрос: <100 мс всегда. Сборка эмбеддингов: ~30 мс/чанк на M1. **HNSW top-10: менее 10 мс на любом масштабе.** Холодный старт serve: ~50 мс при персистентности HNSW.
+**Производительность?** Зависит от размера vault, железа, модели и включённых слоёв поиска. Публичные данные включают production-отчёт **50–100 мс** для BM25 top-10 на 1 771 чанке / 368 файлах и воспроизводимый синтетический benchmark с ускорением FTS5 в **37–103×** против линейного сканирования на 100–1 000 заметок. Перед фиксацией latency SLO запустите встроенную оценку на своём vault.
 
 **Языки?** Эмбеддер по умолчанию — `paraphrase-multilingual-MiniLM-L12-v2` (50+ языков), сквозным образом проверенный на двуязычных русско-английских хранилищах. Кросс-энкодер по умолчанию — `rerank-bge` (English-only; единственный вариант каталога, проверенный сквозным образом); многоязычные варианты reranker сейчас не проходят проверку совместимости tokenizer в transformers.js. Токенизация CJK/тайского/кхмерского выполняется через `Intl.Segmenter`.
 

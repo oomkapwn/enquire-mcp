@@ -15,8 +15,8 @@
 //   - meta-table cross-vault contamination guard (vault_root, model alias, dim)
 //   - source_state mtime tracking for incremental rebuilds
 //
-// Brute-force cosine is fast enough for vaults up to ~50K chunks (~50ms top-10
-// on 50K × 384 floats). HNSW comes in v2.1 if real users hit that ceiling.
+// The default dense path is brute-force cosine. HNSW provides an approximate
+// nearest-neighbor path when corpus-scale measurements justify the index.
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -217,8 +217,8 @@ export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
  * table for cross-vault contamination guards). Vectors are stored as
  * Float32 BLOBs (default) or int8-quantized BLOBs (`quantization: "int8"`,
  * ~4× storage reduction at ~1-2% recall@10 cost). Brute-force cosine
- * top-K via {@link EmbedDb.search} or wrap with HNSW (see `src/hnsw.ts`)
- * for sub-10ms queries at million-chunk scale.
+ * top-K is available via {@link EmbedDb.search}; wrap with HNSW (see
+ * `src/hnsw.ts`) for approximate nearest-neighbor retrieval.
  *
  * Schema is bootstrapped on `open()` and auto-rebuilt on any meta
  * mismatch (vault root, model alias, dim, quantization, schema version).

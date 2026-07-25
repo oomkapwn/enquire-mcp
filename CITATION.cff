@@ -122,7 +122,7 @@ references:
     journal: "IEEE Transactions on Pattern Analysis and Machine Intelligence"
     volume: "42"
     issue: "4"
-    notes: "HNSW vector index. enquire-mcp uses hnswlib-node for sub-10ms top-K vector retrieval."
+    notes: "HNSW vector index. enquire-mcp uses hnswlib-node for approximate nearest-neighbor retrieval."
     url: "https://arxiv.org/abs/1603.09320"
   - type: article
     title: "C-Pack: Packed Resources For General Chinese Embeddings"

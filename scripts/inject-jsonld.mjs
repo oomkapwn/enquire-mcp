@@ -53,7 +53,7 @@ export const FAQ_ENTRIES = [
   },
   {
     q: "What is the query performance?",
-    a: "Cold-build FTS5 is ~5s per 1k notes (~30s per 50k). A BM25 query is always under 100ms, and HNSW top-10 vector search is sub-10ms at any scale. Serve cold-start is ~50ms with HNSW persistence."
+    a: "Performance depends on vault size, hardware, model, and enabled retrieval layers. The public evidence includes a production report of 50–100ms BM25 top-10 at 1,771 chunks / 368 files and a reproducible synthetic benchmark showing 37–103x FTS5 speedup over linear scan at 100–1,000 notes. Run the built-in evaluation on your own vault before setting a latency SLO."
   },
   {
     q: "What languages are supported?",

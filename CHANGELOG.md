@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.10] — 2026-07-25
+
+> **TL;DR:** **The npm release gate now proves release identity and nine distinct successful CI contexts instead of trusting a matching-run count.** The trigger tag must equal `v${package.json.version}` before publication, and a shared evaluator selects the latest run for each exact required context. Duplicate reruns can no longer hide a missing gate; prefixes such as `lint-extra` do not match `lint`; pending, skipped, neutral or failed latest runs do not qualify. **1703 → 1710 source tests.**
+>
+> **Method note:** a whole-project release-pipeline audit re-derived the workflow from its GitHub API query through `npm publish`. The pre-fix `DONE >= 9` condition counted every concluded regex-matching run, so ten duplicates across eight names could satisfy a nine-name policy, while no guard connected a pushed `v*` tag to the checked-out package version. The fix moves both decisions into a dependency-free pure evaluator used by the workflow and tests; fixtures exercise missing, duplicate, prefix, pending, failed/retried and tag/version-mismatch states, and the existing public gate-count mirror is pinned to the exact operational inventory.
+
+### Security
+
+- **Tag/package identity is fail-closed.** `release.yml` resolves the workflow trigger tag and refuses to proceed unless it exactly equals `v${package.json.version}`. A valid `main` commit can no longer be published from a mistyped or misleading tag.
+- **Required contexts are identities, not a count.** `scripts/check-release-integrity.mjs` owns the exact nine names, selects the latest run per name, requires `conclusion=success`, and reports missing/in-progress states until the bounded poll expires.
+
+### Tests (1710)
+
+- Positive controls cover an exact tag/version pair and one successful run for every required context.
+- Negative controls prove duplicate `lint` runs and `lint-extra` cannot conceal a missing `oia`, a newer failure overrides an older success, a newer successful rerun recovers, pending remains pending, and skipped is not accepted as success.
+- Workflow wiring is structurally pinned to the shared evaluator, while its public `REQUIRED`/`REQ_COUNT` mirror must enumerate the same exact names.
+
+### Stats
+
+- Runtime/API compatibility: unchanged; release workflow + dependency-free script + tests only.
+- Source tests: 1703 → 1710.
+
 ## [3.12.0-rc.9] — 2026-07-25
 
 > **TL;DR:** **Clears newly-published reviewed HIGH `GHSA-mh99-v99m-4gvg` without weakening the audit gate.** The advisory's small brace-pattern input can make vulnerable `brace-expansion<=5.0.7` exhaust the Node process through unbounded aggregate output length. Exact `main` resolved `5.0.7` only on the dev-time TypeDoc → minimatch path, but the project's source-tree audit correctly treats a HIGH dev advisory as release-blocking. The existing root override now selects first-patched `brace-expansion@5.0.8`; the source allowlist remains empty, runtime dependencies are unchanged, and **1703 → 1703 source tests.**

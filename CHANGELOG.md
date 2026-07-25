@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.9] — 2026-07-25
+
+> **TL;DR:** **Clears newly-published reviewed HIGH `GHSA-mh99-v99m-4gvg` without weakening the audit gate.** The advisory's small brace-pattern input can make vulnerable `brace-expansion<=5.0.7` exhaust the Node process through unbounded aggregate output length. Exact `main` resolved `5.0.7` only on the dev-time TypeDoc → minimatch path, but the project's source-tree audit correctly treats a HIGH dev advisory as release-blocking. The existing root override now selects first-patched `brace-expansion@5.0.8`; the source allowlist remains empty, runtime dependencies are unchanged, and **1703 → 1703 source tests.**
+>
+> **Method note:** the advisory was published at 2026-07-24 21:53Z, after the `3.12.0-rc.8` exact-main CI and release had completed. A fresh `npm ci` reproduced one HIGH and `npm run check:audit` failed closed on the exact GHSA before any candidate edit. GitHub's reviewed advisory identifies `5.0.8` as the first patched release; `npm explain` re-derived the sole TypeDoc → minimatch path rather than trusting the advisory's package name alone. Verification compares representative brace/glob outputs across 5.0.7 and 5.0.8, runs the hostile chained-brace input in a constrained child process to distinguish the vulnerable crash from the patched bounded completion, confirms production-only resolution excludes the package, then runs TypeDoc plus the full source-and-packed-consumer release gates.
+
+### Security
+
+- **Patched aggregate expansion bound.** Advanced the existing `brace-expansion` override from `^5.0.7` to `^5.0.8`. The upstream fix adds a total-character ceiling inside the output-building loops, preventing the fatal OOM class while preserving the existing result-count cap.
+- **No exception added.** `scripts/check-audit.mjs` keeps its source `ALLOWLIST` empty. The fix is resolved at the dependency root instead of documenting acceptance of a patchable HIGH.
+
+### Tests (1703)
+
+- Positive compatibility control: normal brace patterns and minimatch patterns produce identical results under 5.0.7 and 5.0.8.
+- Negative behavioral control: the reviewed chained-brace shape crashes the vulnerable version under a constrained heap, while 5.0.8 completes with bounded output.
+- Supply-chain controls: exact-tree audit, production-only dependency inspection, TypeDoc generation, packed-consumer audit, and all standard release gates.
+
+### Stats
+
+- Runtime/API compatibility: unchanged; the patched package is dev-only through TypeDoc.
+- Source tests: 1703 unchanged.
+
 ## [3.12.0-rc.8] — 2026-07-24
 
 > **TL;DR:** **Expensive scanned-PDF OCR can no longer fan out into concurrent Tesseract/canvas pipelines, accumulate an unbounded queue of retained PDF buffers, or run without a wall-clock bound.** Every MCP-tool and watcher invocation now shares one FIFO process-wide slot, a four-call waiting cap, and a ten-minute default budget that includes queue wait. Timeout or SDK client cancellation returns a stable error immediately, cancels the active pdfjs render, terminates Tesseract, destroys the PDF task, and keeps the slot leased until that cleanup has actually settled—so a timed-out worker cannot make the concurrency limit lie. The risk-triggered audit also found and closed a pre-existing `loadingTask` leak when PDF acquisition itself rejects. **1692 → 1703 source tests.**

@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory backed by your local vault. Updated 2026-07-25 (v3.12.0-rc.15 candidate: GitHub Pages product front door).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-25 (v3.12.0-rc.16 candidate: TOP-1 repository conversion rebuild).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -81,6 +81,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 - [x] **TDQS pass on all 46 tool descriptions** (the initial 45 shipped v3.10-rc.7; `obsidian_mark_useful` added v3.11.0) — well-described tools are selected ~260% more often (Glama TDQS / arXiv 2602.14878); 89% of MCP tools omit "when NOT to use". rc.7 added explicit purpose / when-to-use / when-NOT-to-use / pre-condition (`--enable-write`, `setup` required) lines to every tool.
 - [x] **TOP-1 comparison battlecard** — rebuilt in v3.12.0-rc.12 as an enquire-first acquisition surface: buyer outcomes, a runnable cited-memory example, complete-stack proof, current CI-derived counts, and direct activation. Public competitor recommendations were removed; a positive/negative-control invariant keeps them out while preserving evidence-bound product claims.
 - [x] **GitHub Pages product front door** — rebuilt in v3.12.0-rc.15 as a dependency-free acquisition surface for humans, AI agents, and search indexers. TypeDoc remains complete at `/api/`; historical symbol URLs remain valid; a deterministic composite builder and structural workflow tests keep PR validation and deployment on the same artifact.
+- [x] **TOP-1 repository conversion rebuild** — v3.12.0-rc.16 reframes the front door around portable agent memory + local document intelligence, restores a dated evidence-bound ✓/✕ matrix, and replaces the social preview with a modern vault → local intelligence → agents composition.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 

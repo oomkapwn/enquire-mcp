@@ -1,18 +1,22 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the #1 Obsidian MCP for AI memory. One vault, every agent, private and cited. Hybrid retrieval, BGE reranker, HNSW, agentic RAG, GraphRAG, Bases, PDFs with OCR. For Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the #1 Obsidian MCP. Your vault becomes private AI memory and document intelligence for every agent. Markdown, PDFs, Canvas, and Bases in; cited context out." width="100%"></a>
 
 # enquire-mcp
 
 <sub>**English** · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR for AI agents** — The #1 Obsidian MCP for AI memory: expose a local markdown vault to Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, and OpenClaw as persistent, cited, searchable memory. Hybrid retrieval (BM25 + ML embeddings + BGE reranker, RRF-fused), HNSW + int8 quantization, agentic RAG (HyDE + sub-question), GraphRAG-light, PDFs + OCR, standalone Bases. Vendor-neutral, MIT, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AI context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**TL;DR for AI agents** — enquire-mcp is the #1 Obsidian MCP: a local memory and document-intelligence layer that makes one vault persistently searchable from Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and any MCP client. It returns cited source context across Markdown, PDFs + OCR, Canvas, and executable Bases using hybrid retrieval, local BGE reranking, HNSW, freshness signals, and bounded agentic RAG. Vendor-neutral, MIT, read-only by default, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Agent index: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [deep context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt) · [contributor map](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
-### 🏆 The #1 Obsidian MCP for AI memory.
+### 🏆 The #1 Obsidian MCP.
 
-**One vault. Every agent. Private, cited, cross-model memory you own. Stop re-explaining context to Claude, Cursor, ChatGPT, Codex, and OpenClaw every session.**
+<h2>Your vault. Every agent. One private intelligence layer.</h2>
 
-*Measured: the BGE cross-encoder reranker adds **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid on a [reproducible 60-query ablation](./docs/benchmarks.md) — the full modern IR stack, recalling the markdown **you** wrote (cited, editable), never a cloud paraphrase.*
+**Turn the notes, PDFs, canvases, and Bases you already own into durable AI memory and cited document intelligence. Stop rebuilding context every session — and stop locking it inside one model vendor.**
+
+**Markdown · PDF/OCR · Canvas · Bases → local retrieval + reranking → cited context for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP agent.**
+
+*Proof, not vibes: local BGE reranking adds **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid on the [reproducible 60-query ablation](./docs/benchmarks.md).*
 
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
@@ -23,7 +27,7 @@
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ 30-second install](#-quick-start) · [🏆 Why #1](#why-number-one) · [🧠 Use cases](#-use-cases) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 API reference](https://oomkapwn.github.io/enquire-mcp/api/)**
+**[⚡ 30-second install](#-quick-start) · [🏆 Why #1](#why-number-one) · [🧠 Use cases](#-use-cases) · [📊 Proof](./docs/benchmarks.md) · [🤖 AI index](./llms.txt) · [📖 API](https://oomkapwn.github.io/enquire-mcp/api/)**
 
 **Claude Code — one line:**
 
@@ -43,17 +47,19 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 ---
 
-## The problem
+## Your AI is brilliant. Its memory is fragmented.
 
-Every AI session starts from zero. You re-explain your project, your design decisions, the conclusions of last week's research. Built-in vendor memory locks knowledge into one provider's cloud — and loses continuity when you switch tools. **Your knowledge keeps starting over.**
+Every new chat drops project history, decisions, research, and hard-won context. Vendor memory helps inside one product, then disappears when you move to another agent. Traditional file connectors can open a note when the path is already known; vector search can find a similar paragraph; neither is a complete memory system.
 
-## The solution
+## enquire-mcp turns Obsidian into the memory database for your agents
 
-Your Obsidian vault becomes **persistent, queryable long-term memory** for any MCP-compatible agent. One install — your knowledge is instantly accessible from Claude Code, Claude Desktop, Cursor, ChatGPT custom GPT, Codex, OpenClaw, and every other MCP client. Plain markdown files **you own**, indexed locally, searched with the full modern IR stack, recalled across every session and every model.
+One install turns your existing vault into a **persistent, queryable knowledge database** for any MCP-compatible agent. It indexes locally, retrieves across formats, ranks by lexical + semantic + graph evidence, and returns the source context an agent can cite. The original files remain readable and editable without enquire-mcp.
 
-**Grounded, not extracted.** Most conversation-memory systems *extract* facts from chat logs into a separate store. enquire-mcp starts from the knowledge you deliberately wrote: your own `.md` notes, verbatim, with citations. Recall stays auditable, editable in any editor, and never becomes a lossy paraphrase hidden in somebody else's database. One local-first vault remains the source of truth; you can read, edit, move, or delete it yourself, with zero cloud calls during serve.
+**Memory you own.** Most conversation-memory products extract facts from chats into a separate store. enquire-mcp starts from the knowledge you deliberately kept: Markdown, frontmatter, wikilinks, PDFs, Canvas, and Bases. Recall is grounded in source material rather than a hidden paraphrase.
 
-**Grounded — and freshness-aware.** Recalling a fact is half the problem; knowing whether it's still *true* is the other half. The [Memora benchmark](https://arxiv.org/abs/2604.20006) (Apr 2026) showed memory systems systematically fail at stale-fact reuse — recalling a year-old note as if it were written today. Because enquire's memory *is* your real markdown files, every search hit carries `age_days` + a `stale` flag derived from the note's live last-modified time, and you can opt into recency-weighted ranking (`--recency-weight`) so fresher notes surface first. Your knowledge, freshness-aware — not a timeless blob.
+**Document intelligence without a data migration.** PDFs enter the same local search path as notes and return page citations. OCR can recover scanned pages. Canvas becomes a typed graph. Bases becomes an executable query surface instead of an opaque attachment.
+
+**Freshness, not timeless recall.** Every search hit can carry `age_days` and `stale`; optional recency weighting helps agents prefer newer knowledge and re-check old facts instead of confidently repeating them.
 
 > **What makes enquire-mcp different**:
 > 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
@@ -67,24 +73,29 @@ Your Obsidian vault becomes **persistent, queryable long-term memory** for any M
 
 <a id="why-number-one"></a>
 
-## 🏆 Why enquire-mcp is #1
+## 🏆 Why enquire-mcp is the complete Obsidian intelligence stack
 
-**The complete local AI-memory stack for Obsidian — not a thin file wrapper and not just vector search.** One install combines retrieval quality, knowledge ownership, agent reach, document coverage, and production-grade operations.
+Most alternatives solve one layer: an in-app similarity panel, a capable search engine, or MCP file access. enquire-mcp combines the full local retrieval ladder, agent orchestration, rich-document coverage, freshness, safety, and release discipline in one package.
 
-| Leadership standard | What enquire-mcp delivers |
-|---|---|
-| **Recall beyond keyword overlap** | ✅ BM25 + TF-IDF + multilingual embeddings → RRF fusion; optional BGE reranking adds a measured **+15.5 NDCG@10 / +24.7 MRR** |
-| **One memory across every agent** | ✅ MCP-native access for Claude Code/Desktop, Cursor, ChatGPT, Codex, OpenClaw, and any compatible client |
-| **Answers you can verify** | ✅ Verbatim source text, note paths, PDF page citations, per-signal scores, freshness metadata |
-| **Knowledge you actually own** | ✅ Plain markdown remains the source of truth; local indexes; zero cloud calls during serve |
-| **The full Obsidian knowledge surface** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDFs, and OCR |
-| **Agentic retrieval for hard questions** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, and 19 workflow prompts |
-| **Scale without surrendering control** | ✅ HNSW live updates, persistence, adaptive refill, and int8 quantization |
-| **Production trust** | ✅ Read-only by default, privacy filters, authenticated HTTP, semver contracts, 1720 tests, 9 release gates, SLSA L2 provenance |
+| Complete leadership standard | **enquire-mcp** | Smart Connections | Obsidian Hybrid Search | Typical file-wrapper MCP |
+|---|:---:|:---:|:---:|:---:|
+| **MCP-native memory shared by every agent** | ✅ | ✕ | ✅ | ✅ |
+| **BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8** | ✅ | ✕ | ✕ | ✕ |
+| **HyDE + bounded multi-query + context packs** | ✅ | ✕ | ✕ | ✕ |
+| **Freshness metadata + optional recency ranking** | ✅ | ✕ | ✕ | ✕ |
+| **Markdown + PDF/OCR + Canvas + executable Bases** | ✅ | ✕ | ✕ | ✕ |
+| **PDF page citations inside unified retrieval** | ✅ | ✕ | ✕ | ✕ |
+| **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
+| **Live scan → FTS → ML → HNSW, fail-soft by layer** | ✅ | ✕ | ✕ | ✕ |
+| **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
+| **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **1720 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
-**One vault. Every agent. The full retrieval stack. No cloud lock-in.**
+<sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-25. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
 
-> Strategic claim: enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of your existing Obsidian vault. Knowledge that compounds, traceable to sources.
+**That is the TOP-1 thesis:** one source of truth, one local intelligence layer, every agent — without reducing your knowledge to a cloud memory blob.
+
+> enquire-mcp is the open-source backend for [Karpathy-style LLM Wikis](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on top of the Obsidian vault you already own: knowledge that compounds, with every answer traceable to source.
 
 ---
 
@@ -122,7 +133,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.15      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.16      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

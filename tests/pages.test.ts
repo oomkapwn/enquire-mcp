@@ -63,6 +63,10 @@ describe("GitHub Pages artifact", () => {
     expect(landing).toContain("application/ld+json");
     expect(landing).toContain("FAQPage");
     expect(landing).toContain('id="install"');
+    expect(landing).toContain('id="compare"');
+    expect(landing).toContain("Your vault.<br>Every agent.");
+    expect(landing).toContain("Complete leadership standard");
+    expect(landing).toContain("Reviewed 2026-07-25");
     expect(landing).toContain('href="./api/"');
     expect(landing).not.toContain("__ENQUIRE_VERSION__");
     expect(legacySymbol).toContain("searchHybrid");

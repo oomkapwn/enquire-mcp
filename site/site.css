@@ -737,6 +737,106 @@ h3 {
   font-size: 10px;
 }
 
+.compare-section {
+  position: relative;
+  border-top: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 8% 15%, rgba(111, 141, 255, 0.11), transparent 24rem),
+    radial-gradient(circle at 92% 76%, rgba(184, 108, 255, 0.14), transparent 26rem),
+    #090c15;
+}
+
+.compare-scroll {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(13, 17, 29, 0.86);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+
+.compare-table {
+  width: 100%;
+  min-width: 880px;
+  border-collapse: collapse;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.compare-table th,
+.compare-table td {
+  padding: 19px 20px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+
+.compare-table tr:last-child th,
+.compare-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.compare-table th:last-child,
+.compare-table td:last-child {
+  border-right: 0;
+}
+
+.compare-table thead th {
+  background: rgba(255, 255, 255, 0.025);
+  color: #8e97b1;
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.compare-table thead th:nth-child(2) {
+  background: linear-gradient(180deg, rgba(184, 108, 255, 0.2), rgba(184, 108, 255, 0.08));
+  color: #eadcff;
+}
+
+.compare-table th:first-child {
+  width: 38%;
+  color: var(--muted-strong);
+  font-weight: 720;
+  text-align: left;
+}
+
+.compare-table td {
+  color: #626b85;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.compare-table td.wins {
+  background: rgba(184, 108, 255, 0.07);
+  color: var(--green);
+}
+
+.compare-table td.partial {
+  color: #a5aec8;
+}
+
+.compare-foot {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.compare-foot p {
+  max-width: 780px;
+  margin: 0;
+  color: #7f88a1;
+  font-size: 12px;
+}
+
+.compare-foot a {
+  color: #d8c0f8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .proof-section {
   border-block: 1px solid var(--line);
   background:
@@ -1277,6 +1377,10 @@ h3 {
     grid-template-columns: 1fr 1fr;
   }
 
+  .compare-foot {
+    grid-template-columns: 1fr;
+  }
+
   .metric-primary {
     grid-column: 1 / -1;
   }
@@ -1358,6 +1462,11 @@ h3 {
 
   .section {
     padding-block: 90px;
+  }
+
+  .compare-table th,
+  .compare-table td {
+    padding: 16px;
   }
 
   .leadership-grid,

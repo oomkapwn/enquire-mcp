@@ -1,15 +1,15 @@
-# Why enquire-mcp is the #1 Obsidian MCP for AI memory
+# Why enquire-mcp is the #1 Obsidian MCP
 
-**One vault. Every agent. Private, cited memory you own.**
+**Your vault. Every agent. One private intelligence layer.**
 
-enquire-mcp turns the Markdown you already trust into a complete local memory
-backend for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible
-agent. It combines high-quality retrieval, source-grounded answers, Obsidian
-format coverage, agent workflows, and production controls in one open-source
-package.
+enquire-mcp turns the knowledge you already trust into a complete local memory
+and document-intelligence backend for Claude, Cursor, ChatGPT, Codex, OpenClaw,
+and every MCP-compatible agent. Notes, PDFs, Canvas, and Bases go in; cited,
+freshness-aware context comes out.
 
 > **The category leader for people who want their own knowledge to compound
-> across agents without moving it into a vendor cloud.**
+> across agents without moving it into a vendor cloud or rebuilding context
+> for every new chat.**
 
 [Install in 30 seconds](../README.md#-quick-start) ·
 [See the retrieval evidence](./benchmarks.md) ·
@@ -34,9 +34,9 @@ starts from your real knowledge base:
 - **Privacy is the default architecture.** Serve makes zero cloud calls, models
   run locally, reads can be path-filtered, and writes are disabled by default.
 
-That is why enquire-mcp is positioned as **the #1 Obsidian MCP for AI memory**:
-it is not merely a file connector or a search box. It is the full memory
-backend.
+That is why enquire-mcp is positioned as **the #1 Obsidian MCP**: it is not
+merely a file connector, an in-app similarity panel, or a search box. It is the
+full local intelligence layer.
 
 ## See the result, not just the feature list
 
@@ -69,7 +69,66 @@ product path, not a mock screenshot.
 
 ---
 
-## Why enquire-mcp wins
+## The TOP-1 capability matrix
+
+The rows below deliberately test **complete product combinations**, not isolated
+checkboxes. A peer that implements one or two parts of a row still receives
+`✕` for the complete row. That is the relevant buying question: how many extra
+products, plugins, scripts, and operational contracts are needed to reproduce
+the same outcome?
+
+| Complete leadership standard | **enquire-mcp** | Smart Connections | Obsidian Hybrid Search | Typical file-wrapper MCP |
+|---|:---:|:---:|:---:|:---:|
+| **MCP-native memory shared by every agent** | ✅ | ✕ | ✅ | ✅ |
+| **BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8** | ✅ | ✕ | ✕ | ✕ |
+| **HyDE + bounded multi-query + context packs** | ✅ | ✕ | ✕ | ✕ |
+| **Freshness metadata + optional recency ranking** | ✅ | ✕ | ✕ | ✕ |
+| **Markdown + PDF/OCR + Canvas + executable Bases** | ✅ | ✕ | ✕ | ✕ |
+| **PDF page citations inside unified retrieval** | ✅ | ✕ | ✕ | ✕ |
+| **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
+| **Live scan → FTS → ML → HNSW, fail-soft by layer** | ✅ | ✕ | ✕ | ✕ |
+| **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
+| **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **1720 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+
+**Legend:** `✅` means the complete row is built in. `✕` means the complete
+combination was not documented on the reviewed public product surface; it does
+not claim that every sub-feature is absent.
+
+### Dated competitive evidence
+
+Reviewed 2026-07-25 against pinned public README snapshots:
+
+- **Smart Connections** at
+  [`3f07d51a3a5e08f724c8e62719ac75ff675eee13`](https://github.com/brianpetro/obsidian-smart-connections/tree/3f07d51a3a5e08f724c8e62719ac75ff675eee13):
+  a polished Obsidian-native local semantic-connections plugin with optional
+  reranking and a Pro Bases integration; its reviewed surface is not a
+  standalone MCP memory backend.
+- **Obsidian Hybrid Search** at
+  [`c0922d955f5bf5abaad14a11cbb3e11303cd6036`](https://github.com/flowing-abyss/obsidian-hybrid-search/tree/c0922d955f5bf5abaad14a11cbb3e11303cd6036):
+  a strong local search engine with BM25, embeddings, RRF, a BGE reranker,
+  graph traversal, CLI, plugin, and MCP access. It earns the MCP row but does
+  not document the complete combinations in the remaining rows.
+- **obsidian-mcp-server** at
+  [`9e9861be17395e942ee7aac3b3607cf9dc4d97b2`](https://github.com/cyanheads/obsidian-mcp-server/tree/9e9861be17395e942ee7aac3b3607cf9dc4d97b2):
+  the representative file-wrapper surface. It provides capable read/write
+  tools through Obsidian's Local REST API and can delegate search to
+  Omnisearch, but does not document enquire's integrated retrieval,
+  freshness, orchestration, and release combinations.
+
+The audit also checked the emerging **Vault Cortex** surface at
+[`9f344557ab4137cbba694e4955d6a5294c535885`](https://github.com/aliasunder/vault-cortex/tree/9f344557ab4137cbba694e4955d6a5294c535885).
+It documents a credible standalone hybrid MCP, remote OAuth, structured memory,
+write-back, prompts, and broad file reading. That makes it a serious adjacent
+peer—not evidence against the matrix: the reviewed snapshot still does not
+document the complete retrieval ladder, freshness contract, executable Bases,
+stage explanations, or release-chain combination used in the rows above.
+
+The matrix is intentionally easy to re-audit: change a source snapshot or row
+boundary and the evidence date must change with it. It is not a claim about
+private branches, future releases, or unadvertised behavior.
+
+## What the complete stack delivers
 
 | What a serious AI-memory backend needs | What enquire-mcp delivers | Why it matters |
 |---|---|---|
@@ -78,8 +137,8 @@ product path, not a mock screenshot.
 | **Precision on hard queries** | Optional BGE cross-encoder reranking | Measured **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid in the published ablation |
 | **Citable answers** | Verbatim snippets, paths, line spans, PDF pages, and per-signal scores | Agents can show where every answer came from |
 | **Freshness-aware memory** | `age_days`, `stale`, and optional recency weighting | Old facts are visible instead of silently reused as current |
-| **The full Obsidian surface** | Markdown, wikilinks, frontmatter, Canvas, Bases, PDFs, and OCR | One backend covers the knowledge you actually keep |
-| **Agentic retrieval** | HyDE, sub-question decomposition, context packs, GraphRAG-light, and 19 prompts | Complex questions get a workflow, not just a search result |
+| **Document intelligence** | Markdown, wikilinks, frontmatter, Canvas, executable Bases, PDFs, and OCR | One backend covers the knowledge you actually keep |
+| **Agentic retrieval** | HyDE, bounded subqueries, context packs, GraphRAG-light, and 19 prompts | Complex questions get a workflow, not just a search result |
 | **Local scale controls** | HNSW, int8 vectors, persistence, live watcher updates, and adaptive refill | Dense retrieval stays practical as a real vault grows |
 | **Remote-agent readiness** | Streamable HTTP, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
 | **Safe defaults** | Read-only by default, explicit write gate, privacy filters, dry-run support | Agents receive the minimum authority they need |

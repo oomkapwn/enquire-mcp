@@ -19,7 +19,7 @@ const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
 const BENCH_ENTRY = path.join(PROJECT_ROOT, "scripts", "run-benchmarks.mjs");
 const DIST_ENTRY = path.join(PROJECT_ROOT, "dist", "index.js");
 const CANONICAL_ARTIFACT = path.join(PROJECT_ROOT, "bench", "benchmarks.json");
-const REGISTER_FIXTURE = path.join(PROJECT_ROOT, "tests", "fixtures", "benchmark-model-loader", "register.mjs");
+const REGISTER_FIXTURE = path.join(PROJECT_ROOT, "tests", "fixtures", "transformers-test-loader", "register.mjs");
 
 type ModelState = "present" | "missing" | "corrupt";
 type BenchMode = "strict" | "diagnostic";
@@ -48,8 +48,8 @@ function runScenario(state: ModelState, mode: BenchMode) {
     env: {
       ...process.env,
       NODE_OPTIONS: `--import=${pathToFileURL(REGISTER_FIXTURE).href}`,
-      ENQUIRE_BENCH_NETWORK_MARKER: networkMarker,
-      ENQUIRE_BENCH_TEST_MODEL_STATE: state
+      ENQUIRE_TEST_MODEL_STATE: state,
+      ENQUIRE_TEST_NETWORK_MARKER: networkMarker
     }
   });
   return { ...result, output, networkMarker };
@@ -114,11 +114,11 @@ describe("compiled benchmark model-state matrix (rc.5)", () => {
       env: {
         ...process.env,
         NODE_OPTIONS: `--import=${pathToFileURL(REGISTER_FIXTURE).href}`,
-        ENQUIRE_BENCH_NETWORK_MARKER: marker
+        ENQUIRE_TEST_NETWORK_MARKER: marker
       }
     });
     expect(result.status).not.toBe(0);
     expect(readFileSync(marker, "utf8")).toMatch(/fetch: https:\/\/example\.invalid\/model/);
-    expect(result.stderr).toMatch(/BENCH NETWORK TRIPWIRE/);
+    expect(result.stderr).toMatch(/TEST NETWORK TRIPWIRE/);
   });
 });

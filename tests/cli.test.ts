@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
 import { peekFtsMetaSafe } from "../src/fts5.js";
@@ -793,12 +794,10 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(metaAfter?.tokenize_mode).toBe("trigram");
   });
 
-  // v3.8.0-rc.6 T-FLAKE-1 — per-it timeout MUST exceed the spawnSync
-  // timeout, otherwise vitest kills the test before the subprocess
-  // finishes (subprocess loads the embedder which can take 30-60s cold
-  // on macOS CI). Round-23 external audit caught the mismatch: vitest
-  // global testTimeout=15s vs spawnSync=60s. Per-it override to 90s
-  // gives subprocess room to finish + 30s assertion budget after.
+  // v3.12.0-rc.11 — this process-level regression must never depend on a
+  // developer's model cache or Hugging Face availability. A registered ESM
+  // loader swaps only @huggingface/transformers for a deterministic embedder;
+  // the network tripwire covers fetch/http/https in the child process.
   it("`enquire-mcp build-embeddings` (no --embedding-model) HONORS existing model_alias=bge in stderr message (v3.7.0 M-1)", async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();
@@ -821,18 +820,42 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // bge and rebuild as multilingual. Post-v3.6.4: peek + honor + emit
     // stderr line BEFORE embedder load.
     //
-    // We don't assert exit code because the embedder may fail to load in
-    // CI environments without the model cached. The stderr line is the
-    // ground-truth proof that v3.6.4 peek-honor logic ran.
+    const registerFixture = path.resolve(__dirname, "fixtures", "transformers-test-loader", "register.mjs");
+    const networkMarker = path.join(tmpdir, "build-embeddings.network");
+    const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(registerFixture).href}`]
+      .filter(Boolean)
+      .join(" ");
+    const hermeticEnv = {
+      ...process.env,
+      NODE_OPTIONS: nodeOptions,
+      ENQUIRE_TEST_MODEL_STATE: "present",
+      ENQUIRE_TEST_NETWORK_MARKER: networkMarker
+    };
     const buildResult = spawnSync(process.execPath, [distEntry, "build-embeddings", "--vault", vault], {
       encoding: "utf8",
-      timeout: 60_000
+      env: hermeticEnv,
+      timeout: 10_000
     });
+    expect(buildResult.error, buildResult.stderr).toBeUndefined();
+    expect(buildResult.status, buildResult.stderr).toBe(0);
     const stderr = buildResult.stderr ?? "";
     expect(stderr).toMatch(/honoring existing model_alias=bge/);
-    // After the run (success OR embedder-load failure), the on-disk meta
-    // must NOT have been silently rewritten to "multilingual".
+    await expect(fs.stat(networkMarker)).rejects.toThrow();
+    // After the hermetic successful run, the on-disk meta must NOT have
+    // been silently rewritten to "multilingual".
     const metaAfter = await peekEmbedDbMeta(embedFile);
     expect(metaAfter?.model_alias).toBe("bge");
-  }, 90_000);
+
+    // NEGATIVE control: prove the same child-process tripwire would record
+    // and reject a real outbound attempt instead of merely leaving no marker.
+    const controlMarker = path.join(tmpdir, "network-control.marker");
+    const control = spawnSync(process.execPath, ["-e", "fetch('https://example.invalid/model')"], {
+      encoding: "utf8",
+      env: { ...hermeticEnv, ENQUIRE_TEST_NETWORK_MARKER: controlMarker },
+      timeout: 5_000
+    });
+    expect(control.status).not.toBe(0);
+    expect(await fs.readFile(controlMarker, "utf8")).toMatch(/fetch: https:\/\/example\.invalid\/model/);
+    expect(control.stderr).toMatch(/TEST NETWORK TRIPWIRE/);
+  }, 15_000);
 });

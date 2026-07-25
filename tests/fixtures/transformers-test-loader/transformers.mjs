@@ -1,6 +1,6 @@
-const state = process.env.ENQUIRE_BENCH_TEST_MODEL_STATE;
+const state = process.env.ENQUIRE_TEST_MODEL_STATE;
 if (!["present", "missing", "corrupt"].includes(state)) {
-  throw new Error(`Unknown ENQUIRE_BENCH_TEST_MODEL_STATE: ${String(state)}`);
+  throw new Error(`Unknown ENQUIRE_TEST_MODEL_STATE: ${String(state)}`);
 }
 
 export const env = {

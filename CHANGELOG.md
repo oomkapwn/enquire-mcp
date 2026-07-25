@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.11] — 2026-07-25
+
+> **TL;DR:** **The compiled CLI model-alias regression is now hermetic, deterministic, and fail-closed against accidental network access.** A test-only ESM loader substitutes a deterministic `@huggingface/transformers` implementation, while process-level `fetch`, `http`, and `https` tripwires prove the command neither downloads a model nor relies on a developer cache. The test now requires a successful command exit instead of accepting embedder-load failure as sufficient evidence, completes within a 15-second budget instead of allowing 90 seconds, and includes a negative control that deliberately attempts a request and proves the tripwire records and rejects it. Runtime behavior is unchanged; **1710 → 1710 source tests.**
+>
+> **Method note:** the whole-project audit traced an apparent “unsupported model” risk through the compiled CLI test and found that the production alias path was correct, but its regression test delegated success to local Hugging Face state and did not assert the subprocess exit code. The existing benchmark fixture was generalized into a reusable transformer-loader fixture, then exercised through the real built CLI process. The full suite dropped from roughly 74 seconds at audit baseline to about 31 seconds on the same worktree while strengthening, rather than weakening, the behavior proof.
+
+### Tests (1710)
+
+- Positive control runs the real compiled `build-embeddings` command against a synthetic vault, asserts exit code zero, observes the stored `bge` alias in stderr and on disk, and proves no network marker was created.
+- Negative control deliberately calls `fetch` in the same instrumented child environment and requires both the marker and stable tripwire rejection, demonstrating that the no-network assertion is live.
+- The generalized fixture remains the model-state benchmark loader, so both benchmark and CLI regressions share one deterministic transformer boundary without production hooks.
+
+### Stats
+
+- Runtime/API compatibility: unchanged; test fixtures and agent command guidance only.
+- Source tests: 1710 unchanged.
+- Full-suite wall time on the audited worktree: approximately 74s → 31s.
+
 ## [3.12.0-rc.10] — 2026-07-25
 
 > **TL;DR:** **The npm release gate now proves release identity and nine distinct successful CI contexts instead of trusting a matching-run count.** The trigger tag must equal `v${package.json.version}` before publication, and a shared evaluator selects the latest run for each exact required context. Duplicate reruns can no longer hide a missing gate; prefixes such as `lint-extra` do not match `lint`; pending, skipped, neutral or failed latest runs do not qualify. **1703 → 1710 source tests.**

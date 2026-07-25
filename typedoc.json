@@ -15,9 +15,9 @@
     "src/tool-manifest.ts"
   ],
 
-  // Generated HTML site goes to docs/api-reference/. This directory is
-  // gitignored — CI regenerates it on every push to main and deploys
-  // to GitHub Pages via .github/workflows/publish-docs.yml.
+  // Generated HTML goes to docs/api-reference/. This directory is gitignored.
+  // scripts/build-pages.mjs then places a copy under /api/ and another at the
+  // historical root symbol paths before the landing page replaces root index.
   "out": "docs/api-reference",
 
   // Honor the @internal tag added to internal helpers in v3.6.0-rc.3.

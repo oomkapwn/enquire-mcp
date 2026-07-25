@@ -546,7 +546,7 @@ script prints is an illustration of the *method*, not a claim about real vaults.
 
 - [`docs/COMPARISON.md`](./COMPARISON.md) — feature matrix vs. other
   Obsidian-MCP servers.
-- [`docs/api-reference/`](https://oomkapwn.github.io/enquire-mcp/) — TypeDoc-generated API
+- [`docs/api-reference/`](https://oomkapwn.github.io/enquire-mcp/api/) — TypeDoc-generated API
   reference (links into `searchHybrid`, `embeddingsSearch`,
   `semanticSearch`).
 - [`src/eval.ts`](https://github.com/oomkapwn/enquire-mcp/blob/main/src/eval.ts) — the eval harness used by both this

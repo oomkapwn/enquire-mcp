@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1716+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1720+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -45,6 +45,7 @@ src/
 
 scripts/
 ├── oia-walk.mjs                       — state-driven drift scan (12 checks)
+├── build-pages.mjs                    — deterministic Pages landing + TypeDoc composite
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
 ├── check-version-consistency.mjs      — version sync across 7 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality
@@ -63,6 +64,8 @@ docs/
 ├── benchmarks.md       — retrieval-quality benchmarks
 ├── http-transport.md   — remote MCP transport guide
 └── api-reference/      — auto-generated TypeDoc (do NOT edit by hand)
+
+site/                   — version-controlled GitHub Pages landing source
 ```
 
 ## Conventions

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0d17">
+    <meta name="color-scheme" content="dark">
+    <meta
+      name="description"
+      content="The #1 Obsidian MCP for AI memory. Turn one local Markdown vault into private, cited, cross-model memory for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP agent."
+    >
+    <meta
+      name="keywords"
+      content="Obsidian MCP, AI memory, agent memory, long-term memory, local RAG, Claude memory, Cursor memory, Codex MCP, Model Context Protocol"
+    >
+    <meta name="author" content="Alex (@OomkaBear)">
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+    <link rel="canonical" href="https://oomkapwn.github.io/enquire-mcp/">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./site.css">
+    <link rel="icon" href="./social-preview.png" type="image/png">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="enquire-mcp">
+    <meta property="og:url" content="https://oomkapwn.github.io/enquire-mcp/">
+    <meta property="og:title" content="enquire-mcp — Long-term memory for your AI agents">
+    <meta
+      property="og:description"
+      content="One vault. Every agent. Private, cited memory you own — powered by the complete local retrieval stack."
+    >
+    <meta property="og:image" content="https://oomkapwn.github.io/enquire-mcp/social-preview.png">
+    <meta property="og:image:width" content="1280">
+    <meta property="og:image:height" content="640">
+    <meta property="og:image:alt" content="enquire-mcp — long-term memory for your AI agents">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="enquire-mcp — Long-term memory for your AI agents">
+    <meta
+      name="twitter:description"
+      content="The #1 Obsidian MCP for AI memory: private, cited, cross-model memory from the Markdown you already own."
+    >
+    <meta name="twitter:image" content="https://oomkapwn.github.io/enquire-mcp/social-preview.png">
+
+    <title>enquire-mcp — #1 Obsidian MCP for AI memory</title>
+    <!-- ENQUIRE_JSONLD -->
+    <script defer src="./site.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="./" aria-label="enquire-mcp home">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span>enquire<span class="brand-accent">-mcp</span></span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary navigation">
+          <a href="#why">Why #1</a>
+          <a href="#proof">Proof</a>
+          <a href="#install">Install</a>
+          <a href="#faq">FAQ</a>
+          <a href="./api/">API</a>
+        </nav>
+        <a class="button button-compact button-ghost" href="https://github.com/oomkapwn/enquire-mcp">
+          GitHub
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span>The #1 Obsidian MCP for AI memory</p>
+          <h1 id="hero-title">Long-term memory<br>your AI agents can <em>cite.</em></h1>
+          <p class="hero-lede">
+            Turn the Markdown you already own into private, searchable memory for Claude, Cursor,
+            ChatGPT, Codex, OpenClaw, and every MCP-compatible agent.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#install">Install in 30 seconds <span aria-hidden="true">→</span></a>
+            <a class="button button-secondary" href="#proof">See the evidence</a>
+          </div>
+          <div class="trust-line" aria-label="Core guarantees">
+            <span>Local-first</span>
+            <span>Read-only by default</span>
+            <span>Zero cloud calls during serve</span>
+          </div>
+        </div>
+
+        <div class="hero-system" aria-label="Your vault becomes cited memory across AI agents">
+          <div class="system-glow" aria-hidden="true"></div>
+          <div class="system-row source-row">
+            <div class="system-card vault-card">
+              <span class="system-kicker">YOUR SOURCE OF TRUTH</span>
+              <strong>Markdown vault</strong>
+              <span class="file-stack" aria-hidden="true">
+                <i>## decision.md</i>
+                <i>[[research]]</i>
+                <i>meeting.pdf · p. 12</i>
+              </span>
+            </div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="system-card engine-card">
+              <span class="system-kicker">LOCAL MEMORY ENGINE</span>
+              <strong>enquire-mcp</strong>
+              <span class="engine-signals">
+                <i>BM25</i><i>ML</i><i>RRF</i><i>BGE</i>
+              </span>
+            </div>
+          </div>
+          <div class="agent-rail" aria-label="Supported AI agent families">
+            <span>Claude</span>
+            <span>Cursor</span>
+            <span>ChatGPT</span>
+            <span>Codex</span>
+            <span>OpenClaw</span>
+          </div>
+          <article class="answer-card">
+            <div class="answer-head">
+              <span class="answer-status"><i aria-hidden="true"></i> Grounded answer</span>
+              <span>0.94 confidence</span>
+            </div>
+            <p>“You worked on Apollo and logged an idea about velocity.”</p>
+            <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/synthetic-vault.mjs">
+              Source: 99_Daily/2026-05-02.md · deterministic synthetic vault
+            </a>
+          </article>
+        </div>
+      </section>
+
+      <section class="proof-bar" aria-label="Project proof">
+        <div class="shell proof-grid">
+          <div><strong>46</strong><span>MCP tools</span></div>
+          <div><strong>19</strong><span>agent workflows</span></div>
+          <div><strong>1,720</strong><span>public tests</span></div>
+          <div><strong>9</strong><span>release gates</span></div>
+          <div><strong>50+</strong><span>languages</span></div>
+        </div>
+      </section>
+
+      <section class="section shell" id="why" aria-labelledby="why-title">
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">Built for memory that compounds</p>
+            <h2 id="why-title">Not a file wrapper.<br><em>The complete local memory stack.</em></h2>
+          </div>
+          <p>
+            Literal search is useful. Vector search is useful. Real long-term memory needs both —
+            plus reranking, citations, freshness, graph context, document coverage, and production controls.
+          </p>
+        </div>
+
+        <div class="leadership-grid">
+          <article class="feature-card feature-card-wide">
+            <span class="card-index">01</span>
+            <div>
+              <h3>Recall beyond keyword overlap</h3>
+              <p>
+                BM25, TF-IDF, and multilingual embeddings are RRF-fused, graph-boosted, and optionally
+                reranked by a local BGE cross-encoder.
+              </p>
+            </div>
+            <div class="signal-visual" aria-hidden="true">
+              <span style="--signal: 82%">BM25<i></i></span>
+              <span style="--signal: 68%">TF-IDF<i></i></span>
+              <span style="--signal: 91%">Embedding<i></i></span>
+              <span style="--signal: 96%">Reranked<i></i></span>
+            </div>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">02</span>
+            <h3>One memory. Every agent.</h3>
+            <p>MCP-native access keeps the same knowledge available when you change model, client, or workflow.</p>
+            <div class="mini-orbit" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">03</span>
+            <h3>Answers you can audit</h3>
+            <p>Verbatim snippets, paths, line spans, PDF pages, freshness, and per-signal scores travel with every hit.</p>
+            <div class="citation-chip">research/RAG.md <span>¶ 44–51</span></div>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">04</span>
+            <h3>Your files stay yours</h3>
+            <p>Plain Markdown remains the source of truth. Local indexes are rebuildable. Serve mode is offline by default.</p>
+            <div class="privacy-state"><span aria-hidden="true">●</span> outbound network: 0</div>
+          </article>
+
+          <article class="feature-card">
+            <span class="card-index">05</span>
+            <h3>The whole Obsidian surface</h3>
+            <p>Markdown, wikilinks, frontmatter, Canvas, Bases, PDFs, OCR, tags, daily notes, and graph communities.</p>
+            <div class="format-list" aria-label="Supported formats"><span>MD</span><span>PDF</span><span>BASE</span><span>CANVAS</span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section proof-section" id="proof" aria-labelledby="proof-title">
+        <div class="shell">
+          <div class="section-heading centered-heading">
+            <p class="eyebrow">Measured, reproducible, inspectable</p>
+            <h2 id="proof-title">Marketing that ships with <em>receipts.</em></h2>
+            <p>Concrete claims map to source, CI invariants, or disclosed measurements.</p>
+          </div>
+          <div class="metric-grid">
+            <article class="metric-card metric-primary">
+              <span class="metric-label">BGE RERANKER · NDCG@10</span>
+              <strong>+15.5</strong>
+              <p>Measured over plain hybrid retrieval in the public 60-query within-project ablation.</p>
+              <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/docs/benchmarks.md">Read the methodology <span aria-hidden="true">→</span></a>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">BGE RERANKER · MRR</span>
+              <strong>+24.7</strong>
+              <p>The same reproducible corpus, query set, relevance judgments, and comparison protocol.</p>
+              <a href="https://github.com/oomkapwn/enquire-mcp/tree/main/bench">Inspect the artifacts <span aria-hidden="true">→</span></a>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">RELEASE INTEGRITY</span>
+              <strong>9/9</strong>
+              <p>Lint, Node 22/24 tests, smoke, audit, coverage, version sync, docs, and outside-in drift checks.</p>
+              <a href="https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml">View live CI <span aria-hidden="true">→</span></a>
+            </article>
+          </div>
+          <div class="proof-note">
+            <span class="proof-note-mark" aria-hidden="true">✓</span>
+            <p><strong>Signed supply chain.</strong> npm releases carry Sigstore provenance bound to the tagged main commit; stable and RC channels stay separate.</p>
+            <a href="https://www.npmjs.com/package/@oomkapwn/enquire-mcp">Verify on npm</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section shell" id="fit" aria-labelledby="fit-title">
+        <div class="section-heading split-heading">
+          <div>
+            <p class="eyebrow">One backend, three high-value workflows</p>
+            <h2 id="fit-title">Built for people who<br><em>need context to survive sessions.</em></h2>
+          </div>
+          <p>Start with live scan and no index. Add hybrid retrieval, reranking, HNSW, PDFs, and OCR only when your vault needs them.</p>
+        </div>
+        <div class="audience-grid">
+          <article>
+            <span>01 · BUILDERS</span>
+            <h3>Coding agents that remember decisions</h3>
+            <p>Give Claude Code, Cursor, and Codex durable access to architecture notes, incidents, contracts, and project history.</p>
+          </article>
+          <article>
+            <span>02 · RESEARCHERS</span>
+            <h3>Evidence across notes and PDFs</h3>
+            <p>Search across languages, cite the exact page, and preserve the original source instead of an extracted cloud summary.</p>
+          </article>
+          <article>
+            <span>03 · KNOWLEDGE WORKERS</span>
+            <h3>A second brain every model can use</h3>
+            <p>Meetings, journals, people, and decisions remain portable Markdown while every MCP client gets the same memory layer.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section install-section" id="install" aria-labelledby="install-title">
+        <div class="shell install-shell">
+          <div class="install-copy">
+            <p class="eyebrow">No account. No API key. No migration.</p>
+            <h2 id="install-title">Your vault can become memory <em>in 30 seconds.</em></h2>
+            <ol class="install-steps">
+              <li><span>1</span><div><strong>Install</strong><p>One npm package. Node 22.13+.</p></div></li>
+              <li><span>2</span><div><strong>Point at your vault</strong><p>Keep Markdown where it already lives.</p></div></li>
+              <li><span>3</span><div><strong>Connect an agent</strong><p>Generate the strongest verified action for its client.</p></div></li>
+            </ol>
+            <p class="install-footnote">Basic live scan requires no indexing or model download.</p>
+          </div>
+
+          <div class="terminal" data-install-selector>
+            <div class="terminal-top">
+              <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Quick install</span>
+              <span class="terminal-version">build __ENQUIRE_VERSION__</span>
+            </div>
+            <div class="client-tabs" role="tablist" aria-label="Choose your AI client">
+              <button type="button" role="tab" id="tab-claude" aria-controls="panel-claude" aria-selected="true" data-client="claude">Claude Code</button>
+              <button type="button" role="tab" id="tab-vscode" aria-controls="panel-vscode" aria-selected="false" tabindex="-1" data-client="vscode">VS Code</button>
+              <button type="button" role="tab" id="tab-codex" aria-controls="panel-codex" aria-selected="false" tabindex="-1" data-client="codex">Codex</button>
+              <button type="button" role="tab" id="tab-other" aria-controls="panel-other" aria-selected="false" tabindex="-1" data-client="other">Other MCP</button>
+            </div>
+
+            <div class="command-panel" role="tabpanel" id="panel-claude" aria-labelledby="tab-claude" data-panel="claude">
+              <p>Install and connect Claude Code in two commands:</p>
+              <pre><code id="command-claude"><span class="prompt">$</span> npm install -g @oomkapwn/enquire-mcp
+<span class="prompt">$</span> claude mcp add obsidian -- enquire-mcp serve --vault /absolute/path/to/vault</code></pre>
+              <button class="copy-button" type="button" data-copy-target="command-claude">Copy commands</button>
+            </div>
+
+            <div class="command-panel" role="tabpanel" id="panel-vscode" aria-labelledby="tab-vscode" data-panel="vscode" hidden>
+              <p>Generate VS Code’s official native review-and-install URI:</p>
+              <pre><code id="command-vscode"><span class="prompt">$</span> npm install -g @oomkapwn/enquire-mcp
+<span class="prompt">$</span> enquire-mcp configure --client vscode --vault /absolute/path/to/vault</code></pre>
+              <button class="copy-button" type="button" data-copy-target="command-vscode">Copy commands</button>
+            </div>
+
+            <div class="command-panel" role="tabpanel" id="panel-codex" aria-labelledby="tab-codex" data-panel="codex" hidden>
+              <p>Generate the exact <code>codex mcp add</code> command and TOML fallback:</p>
+              <pre><code id="command-codex"><span class="prompt">$</span> npm install -g @oomkapwn/enquire-mcp
+<span class="prompt">$</span> enquire-mcp configure --client codex --vault /absolute/path/to/vault</code></pre>
+              <button class="copy-button" type="button" data-copy-target="command-codex">Copy commands</button>
+            </div>
+
+            <div class="command-panel" role="tabpanel" id="panel-other" aria-labelledby="tab-other" data-panel="other" hidden>
+              <p>Print reviewed config for Claude Desktop, Cursor, Windsurf, HTTP, or every client:</p>
+              <pre><code id="command-other"><span class="prompt">$</span> npm install -g @oomkapwn/enquire-mcp
+<span class="prompt">$</span> enquire-mcp configure --vault /absolute/path/to/vault</code></pre>
+              <button class="copy-button" type="button" data-copy-target="command-other">Copy commands</button>
+            </div>
+
+            <div class="terminal-links">
+              <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md">5-minute quickstart</a>
+              <a href="./api/">API reference</a>
+              <a href="https://github.com/oomkapwn/enquire-mcp/tree/main/examples">Client templates</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section shell agent-section" aria-labelledby="agent-title">
+        <div>
+          <p class="eyebrow">A first-class page for humans and agents</p>
+          <h2 id="agent-title">Give your AI the project in <em>one fetch.</em></h2>
+          <p>
+            Structured metadata, crawlable proof, a compact AI index, and generated API docs make the
+            product legible before an agent ever clones the repository.
+          </p>
+        </div>
+        <div class="agent-links">
+          <a href="./llms.txt"><span>AI INDEX</span><strong>llms.txt</strong><i aria-hidden="true">→</i></a>
+          <a href="./llms-ctx.txt"><span>DEEP CONTEXT</span><strong>llms-ctx.txt</strong><i aria-hidden="true">→</i></a>
+          <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md"><span>CONTRIBUTOR MAP</span><strong>AGENTS.md</strong><i aria-hidden="true">→</i></a>
+          <a href="./api/"><span>GENERATED CONTRACT</span><strong>TypeDoc API</strong><i aria-hidden="true">→</i></a>
+        </div>
+      </section>
+
+      <section class="section faq-section" id="faq" aria-labelledby="faq-title">
+        <div class="shell faq-shell">
+          <div class="section-heading">
+            <p class="eyebrow">The practical questions</p>
+            <h2 id="faq-title">Before you give an agent<br><em>your second brain.</em></h2>
+          </div>
+          <div class="faq-list">
+            <!-- ENQUIRE_FAQ -->
+          </div>
+        </div>
+      </section>
+
+      <section class="final-cta">
+        <div class="shell final-cta-inner">
+          <p class="eyebrow">Build memory once. Use it from every agent.</p>
+          <h2>Your knowledge should outlive<br><em>the chat window.</em></h2>
+          <div>
+            <a class="button button-primary" href="#install">Install enquire-mcp <span aria-hidden="true">→</span></a>
+            <a class="button button-secondary" href="https://github.com/oomkapwn/enquire-mcp">Star on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div>
+          <a class="brand" href="./" aria-label="enquire-mcp home">
+            <span class="brand-mark" aria-hidden="true"><span></span></span>
+            <span>enquire<span class="brand-accent">-mcp</span></span>
+          </a>
+          <p>Private, cited long-term memory from the Markdown you own.</p>
+        </div>
+        <nav aria-label="Product links">
+          <strong>Product</strong>
+          <a href="#why">Why #1</a>
+          <a href="#proof">Proof</a>
+          <a href="#install">Install</a>
+          <a href="./api/">API</a>
+        </nav>
+        <nav aria-label="Project links">
+          <strong>Project</strong>
+          <a href="https://github.com/oomkapwn/enquire-mcp">GitHub</a>
+          <a href="https://www.npmjs.com/package/@oomkapwn/enquire-mcp">npm</a>
+          <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md">Security</a>
+          <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/LICENSE">MIT license</a>
+        </nav>
+      </div>
+      <div class="shell footer-bottom">
+        <span>Built from <code>__ENQUIRE_VERSION__</code> · local-first · vendor-neutral</span>
+        <span>© 2026 Alex (@OomkaBear)</span>
+      </div>
+    </footer>
+  </body>
+</html>

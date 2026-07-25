@@ -6,7 +6,7 @@
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · **Português** · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR para agentes de IA** — servidor MCP que expõe um vault local de markdown do Obsidian para Claude Code, Claude Desktop, Cursor, ChatGPT, Codex e OpenClaw como memória persistente e pesquisável. Recuperação híbrida (BM25 + embeddings de ML + reranker BGE, fundidos via RRF), HNSW + quantização int8, RAG agêntico (HyDE + sub-perguntas), GraphRAG-light, PDFs + OCR, Bases autônomas. Neutro em relação a fornecedores, MIT, zero chamadas à nuvem durante o serve. Instalação: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/).</sub>
+<sub>**TL;DR para agentes de IA** — servidor MCP que expõe um vault local de markdown do Obsidian para Claude Code, Claude Desktop, Cursor, ChatGPT, Codex e OpenClaw como memória persistente e pesquisável. Recuperação híbrida (BM25 + embeddings de ML + reranker BGE, fundidos via RRF), HNSW + quantização int8, RAG agêntico (HyDE + sub-perguntas), GraphRAG-light, PDFs + OCR, Bases autônomas. Neutro em relação a fornecedores, MIT, zero chamadas à nuvem durante o serve. Instalação: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
 ### 🏆 O Obsidian MCP nº 1 para memória de IA.
 
@@ -15,13 +15,13 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1716%20passing-brightgreen.svg)](#️-confiança)
+[![tests](https://img.shields.io/badge/tests-1720%20passing-brightgreen.svg)](#️-confiança)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ Instalação em 30 segundos](#-início-rápido) · [🏆 Por que é nº 1](#why-number-one) · [🧠 Casos de uso](#-casos-de-uso) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 Referência da API](https://oomkapwn.github.io/enquire-mcp/)**
+**[⚡ Instalação em 30 segundos](#-início-rápido) · [🏆 Por que é nº 1](#why-number-one) · [🧠 Casos de uso](#-casos-de-uso) · [📊 Benchmarks](./docs/benchmarks.md) · [📖 Referência da API](https://oomkapwn.github.io/enquire-mcp/api/)**
 
 **Claude Code — em uma linha:**
 
@@ -53,7 +53,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 > 3. **Zero chamadas à nuvem durante o serve.** Modelos em cache local (download único do HuggingFace). O conteúdo do seu vault nunca sai da sua máquina. Seguro para ambientes isolados (air-gap) por padrão.
 > 4. **Recuperação consciente da atualidade.** Cada resultado informa quão antiga é a nota; o reranqueamento por recência opcional permite que um agente prefira conhecimento recente e sinalize fatos desatualizados para reverificação — a fronteira consciente do esquecimento, construída sobre o `mtime` que seus arquivos já têm.
 
-**46 ferramentas · 19 prompts MCP · 1716+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
+**46 ferramentas · 19 prompts MCP · 1720+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
 
 ---
 
@@ -72,7 +72,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 | **Toda a superfície de conhecimento do Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF e OCR |
 | **Recuperação agêntica para perguntas difíceis** | ✅ HyDE, decomposição em subperguntas, context packs, GraphRAG-light e 19 prompts de workflow |
 | **Escala sem abrir mão do controle** | ✅ Atualizações HNSW ao vivo, persistência, refill adaptativo e quantização int8 |
-| **Confiança de produção** | ✅ Somente leitura por padrão, filtros de privacidade, HTTP autenticado, contratos semver, 1716 testes, 9 gates de release e proveniência SLSA L2 |
+| **Confiança de produção** | ✅ Somente leitura por padrão, filtros de privacidade, HTTP autenticado, contratos semver, 1720 testes, 9 gates de release e proveniência SLSA L2 |
 
 **Um vault. Todos os agentes. A pilha completa. Sem lock-in de nuvem.**
 
@@ -105,7 +105,7 @@ Conecte a qualquer cliente MCP:
 **Quer todo o poder híbrido?** Conclua o preflight híbrido e depois inicie o servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.14      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.15      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -213,7 +213,7 @@ Escolha o enquire-mcp quando quiser:
 
 ## 📖 Referência da API
 
-**[Referência da API auto-gerada em oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/)** — cada ferramenta, prompt e helper exportado com TSDoc completo (`@param` / `@returns` / `@example`). Reconstruída a partir do código a cada push para `main` via [`publish-docs.yml`](https://github.com/oomkapwn/enquire-mcp/blob/main/.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Sem desvio por construção: o mesmo TSDoc que agentes de IA e IDEs veem é o que é publicado.
+**[Referência da API auto-gerada em oomkapwn.github.io/enquire-mcp](https://oomkapwn.github.io/enquire-mcp/api/)** — cada ferramenta, prompt e helper exportado com TSDoc completo (`@param` / `@returns` / `@example`). Reconstruída a partir do código a cada push para `main` via [`publish-docs.yml`](https://github.com/oomkapwn/enquire-mcp/blob/main/.github/workflows/publish-docs.yml) (TypeDoc → GitHub Pages). Sem desvio por construção: o mesmo TSDoc que agentes de IA e IDEs veem é o que é publicado.
 
 ---
 
@@ -277,7 +277,7 @@ Mais 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidia
 | **Transporte HTTP** | Autenticação por bearer (SHA-256 de tempo constante + `timingSafeEqual`), rate-limit por token, CORS estrito |
 | **Frontmatter** | `js-yaml@5` `load` (schema core YAML 1.2, seguro por padrão) — sem execução de código |
 | **Arquivos de cache + índice** | chmod 0600, diretório pai 0700 |
-| **1716 testes unitários · 9 checks de CI exigidos para release · 7 atualmente protegidos** | Postura de release verificada; o detalhe operacional está fixado abaixo. |
+| **1720 testes unitários · 9 checks de CI exigidos para release · 7 atualmente protegidos** | Postura de release verificada; o detalhe operacional está fixado abaixo. |
 | **CI** | Cada PR executa **9 checks exigidos para release**: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs` e `oia`. A branch protection atualmente exige apenas **7**; `docs` e `oia` são necessários para publicar, mas não estão protegidos (verificado ao vivo em 2026-07-23). `test-macos` é o único job consultivo com `continue-on-error`. `docker` pode fazer o workflow de CI falhar, mas não está protegido; o CodeQL executa duas análises separadas e não protegidas via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes do npm publish, `release.yml` reverifica os 9 no SHA marcado. |
 | **Cobertura** | Linhas ≥86% · statements ≥82% · funções ≥75% · branches ≥74% (com gate) |
 | **Releases** | npm + GitHub release por tag · semver · **proveniência de build assinada** (npm + Sigstore, SLSA Build L2; gerador L3 no roadmap) |
@@ -318,7 +318,7 @@ Canal: `npm install @oomkapwn/enquire-mcp` → último estável (`@latest` = v3.
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suíte completa (1716 testes)
+npm test       # suíte completa (1720 testes)
 npm run lint   # zero avisos
 npm run build  # tsc → dist/
 ```

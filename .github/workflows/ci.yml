@@ -199,6 +199,10 @@ jobs:
             echo "::error::TypeDoc emitted warnings or errors — fix them before merge"
             exit 1
           fi
+      # The Pages root is a human/AI landing page while the generated reference
+      # remains available at /api/ and every historical symbol URL. Build and
+      # validate that composite artifact on PRs, not only after merge.
+      - run: npm run docs:pages
 
   # v3.7.19 (round-21 self-audit θ1) — Outside-In Audit job.
   # The OIA script (added v3.7.17) catches "state-driven" drift that

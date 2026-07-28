@@ -450,6 +450,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         return texts.map((_, i) => {
           const vec = new Float32Array(mockDim);
           for (let j = 0; j < mockDim; j++) vec[j] = (i + 1) / (j + 1);
+          const norm = Math.sqrt([...vec].reduce((sum, value) => sum + value * value, 0));
+          for (let j = 0; j < mockDim; j++) vec[j] = (vec[j] ?? 0) / norm;
           return vec;
         });
       }
@@ -512,7 +514,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     const mockEmbedder = {
       model: { alias: "test-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
       async embed(texts: readonly string[]): Promise<Float32Array[]> {
-        return texts.map(() => new Float32Array(4));
+        return texts.map(() => new Float32Array([1, 0, 0, 0]));
       }
     };
 

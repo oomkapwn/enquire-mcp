@@ -122,6 +122,15 @@ describe("EmbedDb", () => {
         { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: vec([1, 0, 0]) }
       ])
     ).toThrow(/dim mismatch/);
+    for (const vector of [
+      new Float32Array([Number.NaN, 0, 0, 1]),
+      new Float32Array([0, 0, 0, 0]),
+      new Float32Array([2, 0, 0, 0])
+    ]) {
+      expect(() =>
+        db.upsertNote("a.md", 1000, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector }])
+      ).toThrow(/finite and L2-normalized/);
+    }
     db.close();
   });
 
@@ -429,6 +438,258 @@ describe("EmbedDb", () => {
       expect(all.sort()).toEqual(["a.md", "p.pdf"]);
     } finally {
       db.close();
+    }
+  });
+
+  it("auditKind reports complete markdown and PDF indexes independently", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("a.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 2, textPreview: "a0", vector: l2([1, 0, 0, 0]) },
+        { chunkIndex: 1, lineStart: 3, lineEnd: 4, textPreview: "a1", vector: l2([0, 1, 0, 0]) }
+      ]);
+      db.upsertNote(
+        "paper.pdf",
+        2000,
+        [{ chunkIndex: 0, lineStart: 1, lineEnd: 5, textPreview: "p0", vector: l2([0, 0, 1, 0]) }],
+        "pdf"
+      );
+
+      expect(db.auditKind("md")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 2,
+        indexed_chunks: 2,
+        mismatched_files: 0
+      });
+      expect(db.auditKind("pdf")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 1,
+        indexed_chunks: 1,
+        mismatched_files: 0
+      });
+
+      db.upsertNote("empty.md", 1100, []);
+      expect(db.auditKind("md")).toEqual({
+        indexed_files: 2,
+        declared_chunks: 2,
+        indexed_chunks: 2,
+        mismatched_files: 1
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("(negative control) auditKind detects a deleted markdown embedding without flagging PDF", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: l2([1, 0, 0, 0]) },
+      { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "a1", vector: l2([0, 1, 0, 0]) }
+    ]);
+    db.upsertNote(
+      "paper.pdf",
+      2000,
+      [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p0", vector: l2([0, 0, 1, 0]) }],
+      "pdf"
+    );
+    db.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("DELETE FROM embeddings WHERE rel_path = ? AND chunk_index = ?").run("a.md", 1);
+    raw.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    try {
+      expect(reopened.auditKind("md")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 2,
+        indexed_chunks: 1,
+        mismatched_files: 1
+      });
+      expect(reopened.auditKind("pdf").mismatched_files).toBe(0);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("(negative control) auditKind detects an embedding-only PDF path without flagging markdown", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.upsertNote(
+      "paper.pdf",
+      2000,
+      [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p0", vector: l2([0, 1, 0, 0]) }],
+      "pdf"
+    );
+    db.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw
+      .prepare(
+        `INSERT INTO embeddings
+           (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
+         SELECT ?, 0, 1, 1, ?, vector, 'pdf'
+         FROM embeddings
+         WHERE rel_path = ?`
+      )
+      .run("orphan.pdf", "orphan", "paper.pdf");
+    raw.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    try {
+      expect(reopened.auditKind("pdf")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 1,
+        indexed_chunks: 2,
+        mismatched_files: 1
+      });
+      expect(reopened.auditKind("md").mismatched_files).toBe(0);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("(negative control) auditKind rejects a non-contiguous index range even when row count matches", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: l2([1, 0, 0, 0]) },
+      { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "a1", vector: l2([0, 1, 0, 0]) }
+    ]);
+    db.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("UPDATE embeddings SET chunk_index = 2 WHERE rel_path = ? AND chunk_index = 1").run("a.md");
+    raw.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    try {
+      expect(reopened.auditKind("md")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 2,
+        indexed_chunks: 2,
+        mismatched_files: 1
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("(negative control) auditKind rejects REAL indices, corrupt vectors, and invalid/cross-kind rows", async () => {
+    const file = path.join(dir, "test.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("a.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: l2([1, 0, 0, 0]) },
+      { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "a1", vector: l2([0, 1, 0, 0]) },
+      { chunkIndex: 2, lineStart: 3, lineEnd: 3, textPreview: "a2", vector: l2([0, 0, 1, 0]) }
+    ]);
+    const healthyManifest = db.fingerprintKind("md");
+    expect(db.auditVectorHealth("md")).toEqual({ invalid_vectors: 0 });
+    db.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("UPDATE embeddings SET chunk_index = 0.5 WHERE rel_path = ? AND chunk_index = 1").run("a.md");
+    raw.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    expect(reopened.auditKind("md").mismatched_files).toBe(1);
+    reopened.close();
+
+    const corruptVector = new Database(file);
+    corruptVector.prepare("UPDATE embeddings SET chunk_index = 1 WHERE rel_path = ? AND chunk_index = 0.5").run("a.md");
+    corruptVector.prepare("UPDATE embeddings SET vector = x'00' WHERE rel_path = ? AND chunk_index = 1").run("a.md");
+    corruptVector.close();
+
+    const vectorAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await vectorAudit.open();
+    expect(vectorAudit.auditKind("md").mismatched_files).toBe(1);
+    vectorAudit.close();
+
+    const zeroBytes = Buffer.from(new Float32Array([0, 0, 0, 0]).buffer);
+    const numericalVector = new Database(file);
+    numericalVector
+      .prepare("UPDATE embeddings SET vector = ? WHERE rel_path = ? AND chunk_index = 1")
+      .run(zeroBytes, "a.md");
+    numericalVector.close();
+
+    const numericalAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await numericalAudit.open();
+    expect(numericalAudit.auditKind("md").mismatched_files).toBe(0);
+    expect(numericalAudit.auditVectorHealth("md")).toEqual({ invalid_vectors: 1 });
+    expect(numericalAudit.fingerprintKind("md")).not.toBe(healthyManifest);
+    numericalAudit.close();
+
+    const restoredBytes = Buffer.from(new Float32Array([0, 1, 0, 0]).buffer);
+    const restoreVector = new Database(file);
+    restoreVector
+      .prepare("UPDATE embeddings SET vector = ? WHERE rel_path = ? AND chunk_index = 1")
+      .run(restoredBytes, "a.md");
+    restoreVector.close();
+    const restoredAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await restoredAudit.open();
+    expect(restoredAudit.auditVectorHealth("md")).toEqual({ invalid_vectors: 0 });
+    expect(restoredAudit.fingerprintKind("md")).toBe(healthyManifest);
+    restoredAudit.close();
+
+    const invalidKind = new Database(file);
+    invalidKind.prepare("UPDATE embeddings SET kind = 'bogus' WHERE rel_path = ?").run("a.md");
+    invalidKind.prepare("UPDATE source_state SET kind = 'bogus' WHERE rel_path = ?").run("a.md");
+    invalidKind.close();
+
+    const kindAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await kindAudit.open();
+    try {
+      expect(kindAudit.auditKind("md").mismatched_files).toBe(1);
+      expect(kindAudit.auditKind("pdf").mismatched_files).toBe(1);
+    } finally {
+      kindAudit.close();
+    }
+
+    const crossKind = new Database(file);
+    crossKind.prepare("UPDATE embeddings SET kind = 'md' WHERE rel_path = ?").run("a.md");
+    crossKind.prepare("UPDATE source_state SET kind = 'md' WHERE rel_path = ?").run("a.md");
+    crossKind
+      .prepare(
+        `INSERT INTO embeddings
+           (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
+         SELECT rel_path, 3, 4, 4, 'cross-kind', vector, 'pdf'
+         FROM embeddings
+         WHERE rel_path = ? AND chunk_index = 0`
+      )
+      .run("a.md");
+    crossKind.close();
+
+    const crossKindAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await crossKindAudit.open();
+    try {
+      // The three valid md rows exactly satisfy the md declaration. The only
+      // md mismatch is the extra, otherwise-valid pdf row on that declared path.
+      expect(crossKindAudit.auditKind("md")).toEqual({
+        indexed_files: 1,
+        declared_chunks: 3,
+        indexed_chunks: 3,
+        mismatched_files: 1
+      });
+    } finally {
+      crossKindAudit.close();
     }
   });
 

@@ -1,10 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
-import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
-import { type loadEmbedder, resolveModel, setEmbeddingsOffline } from "./embeddings.js";
+import { resolveModel, setEmbeddingsOffline } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
-import { defaultIndexFile, deriveFtsTitle, extractAliases, FtsIndex, peekFtsMetaSafe } from "./fts5.js";
+import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, syncFtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { buildInitializeInstructions, resolveInitializeToolProfile } from "./initialize-instructions.js";
 import { registerPrompts } from "./prompts.js";
@@ -23,6 +22,11 @@ import {
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
 import type { WriteRequestTracker } from "./write-lifecycle.js";
+
+// v3.12.0-rc.20 — bulk embedding sync moved to a testable leaf module.
+// Re-export the historical server.js paths so CLI/scripts keep working.
+export { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
+export { syncFtsIndex } from "./fts5.js";
 
 /**
  * Configuration for {@link startServer} / {@link prepareServerDeps}.
@@ -867,145 +871,6 @@ export function formatReadyBanner(deps: ServerDeps): string {
 // here so that src/index.ts + tests/late-chunking.test.ts see no API change.
 export { buildEmbedText } from "./embed-pipeline.js";
 
-// v2.0 alpha — sync the persistent embedding index. Same incremental-rebuild
-// pattern as syncFtsIndex (mtime tracked in source_state); we only re-embed
-// notes whose mtime changed. Embedding is the bottleneck (~5-30ms per chunk
-// CPU on M1), so incremental updates are critical for vaults of any size.
-//
-// v3.8.0-rc.4 — the inner-loop helpers `embedSingleNote` (rc.2) and
-// `embedSinglePdf` (rc.3) moved to `./embed-pipeline.js` so tests can
-// import them directly (server.ts is in RESTRICTED_MODULES of the
-// no-internal-imports Class A invariant). syncEmbedDb / syncPdfEmbedDb
-// stay here as they use ServerDeps + bulk-sync orchestration.
-
-export async function syncEmbedDb(
-  vault: Vault,
-  db: EmbedDb,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
-  opts: { lateChunkContext?: number } = {}
-): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
-  const contextChars = opts.lateChunkContext ?? 0;
-  const entries = await vault.listMarkdown();
-  const known = new Map<string, number>();
-  // v2.8.0: scope to kind="md" so the markdown-sync path doesn't see (and
-  // potentially delete) PDF rows added by syncPdfEmbedDb.
-  for (const s of db.getSourceStates("md")) known.set(s.rel_path, s.mtime_ms);
-
-  const live = new Set<string>();
-  let added = 0;
-  let updated = 0;
-  let unchanged = 0;
-  // v2.0.0-beta.4: per-note progress logging. Pre-fix, build-embeddings on
-  // a 100+ note vault gave the user zero feedback for 10+ minutes — when
-  // it eventually hung on a pathological note (long content × big batch),
-  // the user couldn't tell "still working" from "stuck forever". Now we
-  // log every Nth note with running rate so the user sees life signs and
-  // can ctrl-C with confidence if rate collapses to 0.
-  const totalToProcess = entries.length;
-  const logEvery = Math.max(1, Math.floor(totalToProcess / 20)); // ~5% increments
-  let processed = 0;
-  const startMs = Date.now();
-  for (const e of entries) {
-    live.add(e.relPath);
-    const prevMtime = known.get(e.relPath);
-    if (prevMtime !== undefined && prevMtime === e.mtimeMs) {
-      unchanged += 1;
-      processed += 1;
-      continue;
-    }
-    try {
-      // v3.8.0-rc.2 R-7 — delegate single-note chunk+embed work to the
-      // shared helper so the watcher can use the same pipeline. The
-      // many-chunks warning stays here (bulk-sync context only).
-      const result = await embedSingleNote(vault, embedder, e, { lateChunkContext: contextChars });
-      if (result === null) {
-        // No body — drop any stale entries.
-        db.deleteNote(e.relPath);
-        processed += 1;
-        continue;
-      }
-      if (result.chunks >= 30) {
-        process.stderr.write(
-          `enquire: ${e.relPath} → ${result.chunks} chunks (this one will be slow; consider splitting the note)\n`
-        );
-      }
-      db.upsertNote(e.relPath, e.mtimeMs, result.rows);
-      if (prevMtime === undefined) added += 1;
-      else updated += 1;
-    } catch (err) {
-      process.stderr.write(
-        `enquire: skipping ${e.relPath} during embed sync — ${err instanceof Error ? err.message : String(err)}\n`
-      );
-    }
-    processed += 1;
-    if (processed % logEvery === 0 || processed === totalToProcess) {
-      const elapsed = (Date.now() - startMs) / 1000;
-      const rate = processed / elapsed;
-      const eta = totalToProcess - processed > 0 ? (totalToProcess - processed) / rate : 0;
-      process.stderr.write(
-        `enquire: embed sync ${processed}/${totalToProcess} (${rate.toFixed(1)} notes/s; ETA ${eta.toFixed(0)}s)\n`
-      );
-    }
-  }
-
-  // Delete entries for files that have vanished.
-  let deleted = 0;
-  for (const relPath of known.keys()) {
-    if (!live.has(relPath)) {
-      db.deleteNote(relPath);
-      deleted += 1;
-    }
-  }
-
-  return {
-    added,
-    updated,
-    deleted,
-    unchanged,
-    total_chunks: db.totalChunks()
-  };
-}
-
-export async function syncFtsIndex(
-  vault: Vault,
-  idx: FtsIndex
-): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
-  const entries = await vault.listMarkdown();
-  const live = entries.map((e) => ({ relPath: e.relPath, mtimeMs: e.mtimeMs }));
-  // v2.8.0: scope to kind="md" so markdown-sync doesn't try to delete PDF
-  // rows added by syncPdfFtsIndex.
-  const diff = idx.diff(live, "md");
-  for (const relPath of diff.deleted) idx.dropFile(relPath);
-  for (const relPath of [...diff.added, ...diff.updated]) {
-    const entry = entries.find((e) => e.relPath === relPath);
-    if (!entry) continue;
-    try {
-      const note = await vault.readNote(entry.absPath, entry.mtimeMs);
-      const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      idx.reindexFile(
-        relPath,
-        entry.mtimeMs,
-        note.content,
-        wikilinkTargets,
-        note.parsed.tags,
-        deriveFtsTitle(relPath),
-        extractAliases(note.parsed.frontmatter)
-      );
-    } catch (err) {
-      process.stderr.write(
-        `enquire: skipping ${relPath} during fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`
-      );
-    }
-  }
-  return {
-    added: diff.added.length,
-    updated: diff.updated.length,
-    deleted: diff.deleted.length,
-    unchanged: diff.unchanged.length,
-    total_chunks: idx.totalChunks()
-  };
-}
-
 /**
  * v2.8.0 — sync PDF chunks into the FTS5 index. Same incremental-mtime
  * pattern as syncFtsIndex but for PDFs: list .pdf files, diff against
@@ -1077,105 +942,5 @@ export async function syncPdfFtsIndex(
     deleted: diff.deleted.length,
     unchanged: diff.unchanged.length,
     total_chunks: idx.totalChunks()
-  };
-}
-
-// v3.8.0-rc.4 — embedSinglePdf moved to src/embed-pipeline.ts (see
-// rc.4 file header at the top of syncEmbedDb above).
-
-/**
- * v2.8.0 — sync PDF chunks into the embedding index. Mirrors syncEmbedDb
- * but for PDFs. Page boundaries are preserved as `[page: N]` markers
- * before chunking so embeddings carry page-citation context.
- */
-export async function syncPdfEmbedDb(
-  vault: Vault,
-  db: EmbedDb,
-  embedder: Awaited<ReturnType<typeof loadEmbedder>>,
-  opts: { lateChunkContext?: number } = {}
-): Promise<{ added: number; updated: number; deleted: number; unchanged: number; total_chunks: number }> {
-  const contextChars = opts.lateChunkContext ?? 0;
-  const pdfEntries = await vault.listFilesByExtension(".pdf");
-  const known = new Map<string, number>();
-  for (const s of db.getSourceStates("pdf")) known.set(s.rel_path, s.mtime_ms);
-
-  const live = new Set<string>();
-  let added = 0;
-  let updated = 0;
-  let unchanged = 0;
-  let skipped = 0;
-  const totalToProcess = pdfEntries.length;
-  if (totalToProcess === 0) {
-    // Still need to handle deletions — PDFs that vanished from disk.
-    let deleted = 0;
-    for (const relPath of known.keys()) {
-      db.deleteNote(relPath);
-      deleted += 1;
-    }
-    return { added: 0, updated: 0, deleted, unchanged: 0, total_chunks: db.totalChunks() };
-  }
-  // v3.8.0-rc.3 — extractPdfText lazy-import moved into embedSinglePdf helper.
-  const logEvery = Math.max(1, Math.floor(totalToProcess / 20));
-  let processed = 0;
-  const startMs = Date.now();
-  for (const e of pdfEntries) {
-    live.add(e.relPath);
-    const prevMtime = known.get(e.relPath);
-    if (prevMtime !== undefined && prevMtime === e.mtimeMs) {
-      unchanged += 1;
-      processed += 1;
-      continue;
-    }
-    try {
-      // v3.8.0-rc.3 R-7 — delegate single-PDF chunk+embed work to the
-      // shared helper (DRY with watcher PDF path).
-      const result = await embedSinglePdf(vault, embedder, e, { lateChunkContext: contextChars });
-      if (result === null) {
-        // Image-only PDF OR zero chunks. Drop stale rows if previously
-        // indexed; otherwise skip with a stderr note.
-        if (prevMtime !== undefined) {
-          db.deleteNote(e.relPath);
-          process.stderr.write(
-            `enquire: dropping stale embed rows for ${e.relPath} — PDF is now image-only / scanned (or empty after extraction)\n`
-          );
-        } else {
-          process.stderr.write(`enquire: skipping ${e.relPath} during pdf-embed sync — image-only / scanned\n`);
-        }
-        skipped += 1;
-        processed += 1;
-        continue;
-      }
-      db.upsertNote(e.relPath, e.mtimeMs, result.rows, "pdf");
-      if (prevMtime === undefined) added += 1;
-      else updated += 1;
-    } catch (err) {
-      process.stderr.write(
-        `enquire: skipping ${e.relPath} during pdf-embed sync — ${err instanceof Error ? err.message : String(err)}\n`
-      );
-      skipped += 1;
-    }
-    processed += 1;
-    if (processed % logEvery === 0 || processed === totalToProcess) {
-      const elapsed = (Date.now() - startMs) / 1000;
-      const rate = processed / elapsed;
-      const eta = totalToProcess - processed > 0 ? (totalToProcess - processed) / rate : 0;
-      process.stderr.write(
-        `enquire: pdf-embed sync ${processed}/${totalToProcess} (${rate.toFixed(2)} pdfs/s; ETA ${eta.toFixed(0)}s${skipped > 0 ? `; ${skipped} skipped` : ""})\n`
-      );
-    }
-  }
-  let deleted = 0;
-  for (const relPath of known.keys()) {
-    if (!live.has(relPath)) {
-      db.deleteNote(relPath);
-      deleted += 1;
-    }
-  }
-  return {
-    added,
-    updated,
-    deleted,
-    unchanged,
-    total_chunks: db.totalChunks()
   };
 }

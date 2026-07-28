@@ -31,8 +31,8 @@ import { describe, expect, it } from "vitest";
 //
 // Allowed:
 //   - import paths under `src/tools/index.js` (the tools barrel)
-//   - import paths under any `src/{vault,fts5,embed-db,hnsw,bases,
-//     communities,dql,embeddings,eval,ocr,pdf,periodic,rrf,parser,
+//   - import paths under any `src/{vault,fts5,embed-db,embed-pipeline,
+//     embed-sync,hnsw,bases,communities,dql,embeddings,eval,ocr,pdf,periodic,rrf,parser,
 //     doctor,watcher,http-transport,cli-help,tool-manifest}.js`
 //     (infrastructure + manifest + constants modules)
 //   - `src/index.js` (the slim re-export barrel — its only purpose

@@ -106,7 +106,12 @@ const FLOORS = {
   // v3.8.0-rc.4 — embed-pipeline extracted from server.ts. INFO-2
   // (round-24 audit) noted it was missing from FLOORS; added here in
   // rc.8 set the floor at 84%; later behavior additions intentionally kept it.
-  "src/embed-pipeline.ts": { branches: 84 }
+  "src/embed-pipeline.ts": { branches: 84 },
+  // v3.12.0-rc.20 — strict benchmark completeness moved into its own shared
+  // Markdown/PDF synchronizer. Measured at 85.71% branches / 93.27% lines;
+  // retain ~2pp headroom while preventing this evidence-critical boundary
+  // from disappearing behind the global average.
+  "src/embed-sync.ts": { branches: 83, lines: 91 }
 };
 
 const summary = JSON.parse(readFileSync(SUMMARY_PATH, "utf8"));

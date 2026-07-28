@@ -63,6 +63,48 @@ let readQueriesJsonl;
 let syncFtsIndex;
 let syncEmbedDb;
 
+/**
+ * Verify a strict embedding-sync report for this benchmark's fresh Markdown-only
+ * vault. The raw equations are checked independently; `complete: true` alone is
+ * never sufficient evidence.
+ */
+export function benchmarkEmbeddingSyncComplete(report, expectedNotes) {
+  if (!report || typeof report !== "object" || !Number.isSafeInteger(expectedNotes) || expectedNotes <= 0) return false;
+  const integerFields = [
+    "added",
+    "updated",
+    "deleted",
+    "unchanged",
+    "total_chunks",
+    "total_files",
+    "processed_files",
+    "empty",
+    "failed",
+    "indexed_files",
+    "declared_chunks",
+    "indexed_chunks",
+    "mismatched_files"
+  ];
+  if (integerFields.some((field) => !Number.isSafeInteger(report[field]) || report[field] < 0)) return false;
+  return (
+    report.mode === "strict" &&
+    report.complete === true &&
+    report.total_files === expectedNotes &&
+    report.processed_files === expectedNotes &&
+    report.added === expectedNotes &&
+    report.updated === 0 &&
+    report.unchanged === 0 &&
+    report.deleted === 0 &&
+    report.empty === 0 &&
+    report.failed === 0 &&
+    report.indexed_files === expectedNotes &&
+    report.declared_chunks === report.indexed_chunks &&
+    report.indexed_chunks > 0 &&
+    report.total_chunks === report.indexed_chunks &&
+    report.mismatched_files === 0
+  );
+}
+
 /** Preflight + load the compiled dist symbols the benchmark body uses. Called
  *  only from the CLI entry (never on a bare `import` of this module). */
 async function loadDistBuildArtifacts() {
@@ -70,12 +112,12 @@ async function loadDistBuildArtifacts() {
     process.stderr.write("dist/ not found — run `npm run build` first.\n");
     process.exit(1);
   }
-  ({ searchHybrid, semanticSearch, embeddingsSearch } = await import(path.join(distDir, "tools", "index.js")));
-  ({ FtsIndex } = await import(path.join(distDir, "fts5.js")));
+  ({ searchHybrid, semanticSearch, embeddingsSearch } = await import(path.join(distDir, "tools", "search.js")));
+  ({ FtsIndex, syncFtsIndex } = await import(path.join(distDir, "fts5.js")));
   ({ Vault } = await import(path.join(distDir, "vault.js")));
   ({ reciprocalRankFusion } = await import(path.join(distDir, "rrf.js")));
   ({ ndcgAtK, recallAtK, reciprocalRank, readQueriesJsonl } = await import(path.join(distDir, "eval.js")));
-  ({ syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js")));
+  ({ syncEmbedDb } = await import(path.join(distDir, "embed-sync.js")));
 }
 
 // ─── Synthetic vault — deterministic content ─────────────────────────────────
@@ -1461,7 +1503,7 @@ async function main() {
   process.stderr.write("bench: building FTS5 index...\n");
   const ftsIndex = new FtsIndex({ file: ftsFile, vaultRoot: vault.root });
   await ftsIndex.open();
-  const ftsReport = await syncFtsIndex(vault, ftsIndex);
+  const ftsReport = await syncFtsIndex(vault, ftsIndex, { mode: "strict" });
   process.stderr.write(
     `bench: FTS5 indexed ${ftsReport.added + ftsReport.unchanged} files, ${ftsReport.total_chunks} chunks\n`
   );
@@ -1471,6 +1513,7 @@ async function main() {
   const EMBEDDER_ALIAS = "bge";
   let embedReady = false;
   let embedSkipReason = null;
+  let embedSync = null;
   process.stderr.write(`bench: building embeddings (model=${EMBEDDER_ALIAS})...\n`);
   const embedderStart = performance.now();
   try {
@@ -1491,19 +1534,19 @@ async function main() {
           `embedding model preflight returned ${smokeVectors.length} vector(s) at dim=${smokeVectors[0]?.length ?? 0}; expected 1 at dim=${modelMeta.dim}`
         );
       }
-      const r = await syncEmbedDb(vault, db, embedder);
+      const r = await syncEmbedDb(vault, db, embedder, { mode: "strict" });
+      embedSync = r;
       const expectedNotes = Object.keys(VAULT_NOTES).length;
-      const syncedNotes = r.added + r.updated + r.unchanged;
-      // syncEmbedDb deliberately skips individual unreadable notes for normal
-      // user builds. This synthetic benchmark has a fresh DB and fully-known
-      // corpus, so even one skip invalidates the measurement.
-      if (syncedNotes !== expectedNotes || r.total_chunks === 0) {
+      // Strict sync proves its physical DB state. The independent fixture
+      // count additionally catches accidental corpus drift.
+      if (!benchmarkEmbeddingSyncComplete(r, expectedNotes)) {
         throw new Error(
-          `benchmark embedding sync incomplete: ${syncedNotes}/${expectedNotes} notes, ${r.total_chunks} chunks`
+          `benchmark embedding sync incomplete: ${r.indexed_files}/${expectedNotes} notes, ` +
+            `${r.indexed_chunks}/${r.declared_chunks} chunks`
         );
       }
       process.stderr.write(
-        `bench: embeddings built (${r.total_chunks} chunks, ${(performance.now() - embedderStart).toFixed(0)}ms)\n`
+        `bench: embeddings built (${r.indexed_chunks} chunks, ${(performance.now() - embedderStart).toFixed(0)}ms)\n`
       );
       embedReady = true;
     } finally {
@@ -1523,6 +1566,7 @@ async function main() {
     embedder: EMBEDDER_ALIAS,
     embed_ready: embedReady,
     embed_skip_reason: embedSkipReason,
+    embed_sync: embedSync,
     node_version: process.version,
     platform: `${os.platform()} ${os.arch()}`,
     cpu_model: os.cpus()[0]?.model ?? "unknown",

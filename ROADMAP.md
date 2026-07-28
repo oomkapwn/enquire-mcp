@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-26 (v3.12.0-rc.19 candidate: explicit q8 embeddings for the canonical LongMemEval-S run).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-28 (v3.12.0-rc.20 candidate: evidence-complete dense-benchmark provenance).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1720 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1740 tests, 9 release-required CI checks (7 currently branch-protected), semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
 Current **v3.12.0 `@rc` preview** closes the activation path: `first-run` validates and renders config in non-destructive preview mode, then requires explicit `--apply` before package-coherent setup/model acquisition and tier-aware doctor verification. The manual commands remain available independently; the orchestrator stops on failure and emits an exact idempotent resume command.
 
@@ -85,7 +85,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
-- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). v3.12.0-rc.17 closed the evidence-contract gap; rc.18 closed the O(N²) fresh-FTS blocker. The exact clean rc.18 sparse control completed (470 scoreable queries, nDCG@5 0.8038), but its dense pre-run exposed an independent transformers.js FP32/q8 dtype drift. rc.19 pins q8 and invalidates FP32-derived embed/HNSW state. Remaining: run the full dense cohort from the exact clean rc.19 release commit, review it, publish headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 and failure slices in `docs/benchmarks.md`, then lead the README with the result.
+- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). v3.12.0-rc.17 closed the initial evidence-contract gap; rc.18 closed the O(N²) fresh-FTS blocker; rc.19 pinned q8 and completed the 470-query dense run. That result remains deliberately unpromoted because its temporary DB was removed before a literal physical row audit could be retained. rc.20 makes strict file/chunk/index/query completeness, the independent 500/470/30/22,419 cohort shape, exact release identity, source/`dist` fingerprints, and cached ONNX/tokenizer hashes publication gates. Remaining after rc.20 ships: run the full dense cohort from the exact tagged release, review the schema-v2 artifact, publish headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 and failure slices in `docs/benchmarks.md`, then lead the README with the reviewed result.
 - [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
 - [x] **Messaging reposition** — SHIPPED and strengthened in v3.12.0-rc.5: README ×11, npm/MCP/AI metadata, social preview and GitHub About now lead with the explicit “#1 Obsidian MCP for AI memory” credential. The project-page funnel proves enquire's own leadership across eight product outcomes and no longer routes visitors to alternatives; detailed competitive evidence remains available outside the conversion path. Measurable supporting claims stay current and inspectable, while the broad TOP-1 line remains deliberate promotional positioning.
 

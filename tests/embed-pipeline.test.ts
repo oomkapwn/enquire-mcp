@@ -36,6 +36,8 @@ const mockEmbedder = {
     return texts.map((_, i) => {
       const v = new Float32Array(4);
       for (let j = 0; j < 4; j++) v[j] = (i + 1) / (j + 1);
+      const norm = Math.sqrt([...v].reduce((sum, value) => sum + value * value, 0));
+      for (let j = 0; j < v.length; j++) v[j] = (v[j] ?? 0) / norm;
       return v;
     });
   }
@@ -53,7 +55,7 @@ const emptyVectorEmbedder = {
   async embed(texts: readonly string[]): Promise<Float32Array[]> {
     // Return one fewer vector than requested to exercise the
     // "embedder returned no vector for chunk N" guard.
-    return texts.slice(0, -1).map(() => new Float32Array(4));
+    return texts.slice(0, -1).map(() => new Float32Array([1, 0, 0, 0]));
   }
 };
 
@@ -185,7 +187,26 @@ describe("embedSingleNote", () => {
         absPath: filePath,
         mtimeMs: stat.mtimeMs
       })
-    ).rejects.toThrow(/embedder returned no vector/);
+    ).rejects.toThrow(/embedder returned \d+ vectors/);
+
+    for (const [vector, expected] of [
+      [new Float32Array([Number.NaN, 0, 0, 1]), /non-finite component/],
+      [new Float32Array([0, 0, 0, 0]), /norm must be finite and non-zero/],
+      [new Float32Array([2, 0, 0, 0]), /must be L2-normalized/]
+    ] as const) {
+      await expect(
+        embedSingleNote(
+          v,
+          {
+            ...mockEmbedder,
+            async embed(texts: readonly string[]) {
+              return texts.map(() => vector);
+            }
+          },
+          { relPath: "many.md", absPath: filePath, mtimeMs: stat.mtimeMs }
+        )
+      ).rejects.toThrow(expected);
+    }
   });
 
   it("uses frontmatter title for docTitle when present", async () => {
@@ -256,7 +277,7 @@ describe("embedSinglePdf", () => {
         absPath: filePath,
         mtimeMs: stat.mtimeMs
       })
-    ).rejects.toThrow(/embedder returned no vector/);
+    ).rejects.toThrow(/embedder returned \d+ vectors/);
   });
 
   it("honors lateChunkContext opt (rc.3 context-windowing parity with md path)", async () => {

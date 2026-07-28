@@ -141,12 +141,79 @@ calendar date change the result.
 - **Disclose the scope.** This is scoped-per-question retrieval (the peer's protocol), NOT a global unscoped search across the whole corpus — say so.
 - **It measures retrieval, not QA.** Ranking the answer-bearing session near the top; answer generation is the calling agent's job.
 - Publish the `--output` JSON + exact command. The artifact records dataset
-  SHA-256/bytes/source declaration, implementation commit + dirty state,
-  privacy-safe hardware/runtime metadata, phase timings/peak RSS, summaries,
-  categories, and raw per-query paths/metrics. Any `--limit` run is stamped
-  `diagnostic-partial`; a full canonical run from a dirty or unresolvable Git
-  state is stamped `diagnostic-untrusted`. Only `status: complete` with
-  `publishable: true` may be used as the headline.
+  SHA-256/bytes/source declaration, exact local+remote release tag/commit and
+  `origin/main` ancestry, scoped tracked+untracked cleanliness, start/end
+  source and executed-`dist` fingerprints, an independent deterministic
+  source rebuild, installed dependency/compiler receipts, Node injection
+  posture, privacy-safe hardware metadata, phase timings/peak RSS, summaries,
+  categories, and raw per-query paths/metrics. Canonical manifests reject
+  symlinks and other non-regular entries. Any `--limit` run is stamped
+  `diagnostic-partial`; a full canonical run whose release, implementation, or
+  runtime provenance cannot be proven is stamped `diagnostic-untrusted`. Only
+  `status: complete` with `publishable: true` may be used as the headline.
+
+**Artifact schema v2 makes both indexes evidence-bearing.**
+`meta.retrieval.fts_sync` always records strict source-file accounting,
+empty/failed counts, declared versus physical chunk totals, and the
+kind-scoped FTS integrity audit. With `--embeddings`,
+`meta.retrieval.embedding_sync` records the parallel embed-db evidence; a
+sparse run records `embedding_sync: null`. After every base and optional
+recency query has completed, the harness physically re-audits both active
+indexes, recomputes the exact physical-row SHA-256 manifests and dense-vector
+health, and stores those values plus `post_run_audit`/`post_run_unchanged`.
+Recency mtimes are applied before strict synchronization; an exact
+`materialized_corpus` byte manifest is then compared before/after queries and
+its final path/mtime map must still reconcile with FTS `source_state`. The
+dataset note count, that manifest, and the union of every query's materialized
+paths must name the same exact corpus. Recency ranking uses one serialized
+reference timestamp shared with mtime normalization, so crossing a wall-clock
+day during a long dense build cannot alter the result. The
+publication guard recomputes the raw equations: a standalone `complete: true`
+cannot mask a skipped/empty file, non-fresh build, live-corpus mutation,
+zero/missing/orphan/cross-kind chunk, invalid physical row, non-strict mode, or
+post-query drift. Any such artifact is `diagnostic-incomplete`.
+
+**Raw query evidence is validated independently of aggregates.** Schema v2
+requires the exact dataset-derived id/query/category/relevant/materialized-path
+map for all 470 questions (plus one nested recency result per question when
+enabled), canonical `question_id/` scope, unique normalized in-corpus result
+paths, finite 0..1 metrics, booleans for hit/AllRel, non-negative latency, and
+unique known signal names. Every dense base result and nested recency result
+must contain the embedding signal. Those checks are separate from the
+official 500/470/30/22,419 dataset-and-materialization gate, so plausible
+aggregate counters cannot conceal malformed raw rows. Per-query metrics and the
+published base summaries, nested recency summaries, and category deltas are
+recomputed from those exact paths.
+
+**Dense model provenance is three-phase and fail-closed.** The
+harness pins the multilingual alias, Hugging Face id, q8 dtype, and dimension,
+forces transformers.js offline before loading, and snapshots the exact local
+cache before load, after load, and after all queries. The cache must contain
+exactly `config.json`, `onnx/model_quantized.onnx`, `tokenizer.json`, and
+`tokenizer_config.json`, each with its pinned official SHA-256; missing,
+alternate, temporary, or extra artifacts fail closed. Canonical implementation
+evidence additionally requires the exact remote tag on the benchmark SHA
+reachable from live `origin/main`; a live source path/type/mode/byte manifest
+equal to that tag's tree; observable allowlisted Node posture and hardened Git
+execution with replacement objects disabled; a
+lockfile-derived hashed transitive dependency closure for SQLite,
+transformers/tokenizer/ONNX, YAML, and the TypeScript compiler; and a clean
+source rebuild whose JavaScript manifest exactly equals the executed `dist`.
+Every installed reachable dependency must match the tagged lock graph and
+carry a registry URL plus one canonical 64-byte SHA-512 SRI. Missing, mutable,
+observably injected, symlinked, or
+lock-incoherent evidence makes the artifact `diagnostic-untrusted`. Dependency
+receipts prove exact installed bytes remained stable and bind them to tagged
+archive identities; they do not by themselves prove that post-install bytes
+were reconstructed from those tarballs, so a clean install/reproduction and
+maintainer review remain mandatory.
+
+The runtime receipt rejects every visible non-empty `LD_*`/`DYLD_*` variable
+and every Node option outside its narrow memory-limit allowlist. This is
+process-state evidence, not an attestation against an already-compromised
+process: code loaded before the harness could erase or monkeypatch in-process
+evidence. Run canonical measurements in a clean trusted job/container with no
+preload; hostile same-process code is outside this artifact's threat model.
 
 ## Cost / re-indexing guardrails
 

@@ -12,7 +12,10 @@
 //   - cli.ts            : `main()` + commander program definition (CLI parsing).
 //   - first-run.ts      : deterministic preview/apply onboarding plan + executor.
 //   - server.ts         : ServeOptions / ServerDeps / prepareServerDeps / buildMcpServer /
-//                         startServer / formatReadyBanner / buildEmbedText / sync* fns.
+//                         startServer / formatReadyBanner + compatibility re-exports.
+//   - embed-pipeline.ts : buildEmbedText + single-note / single-PDF embedding pipeline.
+//   - embed-sync.ts     : bulk Markdown/PDF sync with fail-soft production and strict
+//                         evidence-completeness modes.
 //   - tool-registry.ts  : registerReadTools / registerWriteTools / registerFtsTools /
 //                         registerResources / registerChunkResource + utility helpers
 //                         (textResult, encodeNotePath, decodeNotePath, parsePositiveInt,
@@ -43,7 +46,7 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.12.0-rc.19";
+export const VERSION = "3.12.0-rc.20";
 
 // Re-exports — preserve the v3.5.x public surface so http-transport.ts and
 // tests don't need to know about the new module layout. The set below
@@ -51,8 +54,9 @@ export const VERSION = "3.12.0-rc.19";
 // `parsePositiveInt`, `parseQuantizationMode`, `startServer` (named-exported
 // at bottom-of-file), plus the named-on-declaration `buildMcpServer`,
 // `buildEmbedText`, `formatReadyBanner`, `prepareServerDeps`, and the
-// interface types `ServeOptions` / `ServerDeps`. The sync* helpers live in
-// `./server.js` for `cli.ts`'s use only — they were file-private in v3.5.x.
+// interface types `ServeOptions` / `ServerDeps`. `buildEmbedText` and the
+// sync* helpers are implemented in `embed-pipeline.ts` / `embed-sync.ts` and
+// re-exported by `server.ts`; they were file-private in v3.5.x.
 export { main } from "./cli.js";
 export {
   buildEmbedText,

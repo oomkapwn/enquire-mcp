@@ -60,8 +60,6 @@ export const ALLOWLIST = {
  * Every entry must name the unreachable surface and an upstream removal trigger.
  */
 export const CONSUMER_ALLOWLIST = {
-  "GHSA-frvp-7c67-39w9":
-    "MCP SDK 1.29.0 pins @hono/node-server ^1.19.9, below the first patched 2.0.5; enquire never uses the affected serveStatic API. Remove when https://github.com/modelcontextprotocol/typescript-sdk/issues/2531 ships.",
   "GHSA-xcpc-8h2w-3j85":
     "transformers 4.2.0 pins onnxruntime-node 1.24.3, whose adm-zip ^0.5.16 cannot admit patched 0.6.0; enquire never accepts or extracts caller-supplied ZIP archives. Remove when https://github.com/huggingface/transformers.js/issues/1727 resolves upstream.",
   "GHSA-f88m-g3jw-g9cj":

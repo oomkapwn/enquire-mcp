@@ -1614,8 +1614,10 @@ export async function searchHybrid(
      * note's live-mtime recency (see `recencyScore` in staleness.ts). `weight = 0` (or
      * undefined) is a no-op — the default keeps ranking purely relevance-driven.
      * `staleDays` is the recency half-life (the age at which recency = 0.5).
+     * `nowMs` pins the age reference for deterministic evidence runs; normal
+     * product callers omit it and use one live `Date.now()` per response.
      */
-    recency?: { weight: number; staleDays: number };
+    recency?: { weight: number; staleDays: number; nowMs?: number };
     /**
      * v3.11.0 — optional opt-in closed-loop feedback re-ranking. When `weight > 0`
      * AND `scores` is non-empty, the final fused order is re-sorted by a blend of
@@ -2107,7 +2109,8 @@ export async function searchHybrid(
       const { stat } = await import("node:fs/promises");
       const w = Math.min(1, Math.max(0, ctx.recency.weight));
       const staleDays = ctx.recency.staleDays;
-      const now = Date.now();
+      const now =
+        typeof ctx.recency.nowMs === "number" && Number.isFinite(ctx.recency.nowMs) ? ctx.recency.nowMs : Date.now();
       const pathOf = (id: string): string => {
         if (granularity !== "block") return id;
         const h = id.lastIndexOf("#");

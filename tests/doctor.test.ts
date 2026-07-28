@@ -112,7 +112,7 @@ async function createEmbed(
         lineStart: 1,
         lineEnd: 1,
         textPreview: "sentinel",
-        vector: new Float32Array(embeddingModel.dim).fill(0.25)
+        vector: new Float32Array(embeddingModel.dim).fill(1 / Math.sqrt(embeddingModel.dim))
       }
     ]);
   }
@@ -1259,7 +1259,7 @@ describe("runDoctor — strict source-state preservation", () => {
         lineStart: chunkIndex + 1,
         lineEnd: chunkIndex + 1,
         textPreview: `vector ${chunkIndex}`,
-        vector: new Float32Array(embeddingModel.dim)
+        vector: Float32Array.from({ length: embeddingModel.dim }, (_value, index) => (index === 0 ? 1 : 0))
       }))
     );
     embed.close();

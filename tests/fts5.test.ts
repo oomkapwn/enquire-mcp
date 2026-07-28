@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chunkContent,
   deriveFtsTitle,
@@ -11,9 +11,11 @@ import {
   ftsPathToken,
   ftsScopeTokens,
   peekFtsMetaSafe,
-  safeFts5Query
+  safeFts5Query,
+  syncFtsIndex
 } from "../src/fts5.js";
 import { FTS_SCHEMA_VERSION } from "../src/schema-contract.js";
+import { Vault } from "../src/vault.js";
 
 let canRunFts5 = true;
 beforeAll(async () => {
@@ -595,17 +597,31 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       const pdfDiff = idx.diff([{ relPath: "b.pdf", mtimeMs: 2000 }], "pdf");
       expect(pdfDiff.deleted).toEqual([]);
       expect(pdfDiff.unchanged).toEqual(["b.pdf"]);
+      expect(idx.auditKind("md")).toEqual({
+        declared_files: 1,
+        indexed_files: 1,
+        declared_chunks: 1,
+        indexed_chunks: 1,
+        mismatched_files: 0
+      });
+      expect(idx.auditKind("pdf")).toEqual({
+        declared_files: 1,
+        indexed_files: 1,
+        declared_chunks: 1,
+        indexed_chunks: 1,
+        mismatched_files: 0
+      });
     } finally {
       idx.close();
     }
   });
 
-  it("diff(kind=undefined) sees both kinds — backward compat for legacy callers", async () => {
+  it("global diff sees both kinds; auditKind independently rejects every physical-corruption class", async () => {
     if (!canRunFts5) return;
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx.open();
     try {
-      idx.reindexFile("a.md", 1000, "alpha");
+      idx.reindexFile("a.md", 1000, "alpha\n\nsecond");
       idx.reindexPdfFile("b.pdf", 2000, [{ pageNumber: 1, text: "beta" }]);
       // Global diff with no kind filter shows both as known.
       const all = idx.diff([
@@ -615,6 +631,191 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       expect(all.unchanged.sort()).toEqual(["a.md", "b.pdf"]);
     } finally {
       idx.close();
+    }
+
+    const { default: Database } = await import("better-sqlite3");
+    const raw = new Database(dbFile);
+    const audited = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    await audited.open();
+    const expectMismatches = (md: number, pdf: number): void => {
+      expect(audited.auditKind("md").mismatched_files).toBe(md);
+      expect(audited.auditKind("pdf").mismatched_files).toBe(pdf);
+    };
+    const repairMarkdown = (): void => {
+      audited.reindexFile("a.md", 1000, "alpha\n\nsecond");
+      expectMismatches(0, 0);
+    };
+    try {
+      // Invalid source declarations: zero/negative and non-integer counts.
+      raw.prepare("UPDATE source_state SET n_chunks = 0 WHERE rel_path = 'a.md'").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE source_state SET n_chunks = 1.5 WHERE rel_path = 'a.md'").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+
+      // Invalid physical indices: non-integer, negative, and gapped.
+      raw.prepare("UPDATE chunks SET chunk_index = 0.5 WHERE rel_path = 'a.md' AND chunk_index = 1").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET chunk_index = -1 WHERE rel_path = 'a.md' AND chunk_index = 1").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET chunk_index = 2 WHERE rel_path = 'a.md' AND chunk_index = 1").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+
+      // Both line columns are type-checked, and the range must be valid.
+      raw.prepare("UPDATE chunks SET line_start = 1.5 WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET line_end = 'bad' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET line_start = 3, line_end = 2 WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+
+      raw.prepare("UPDATE chunks SET raw_content = x'00' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET content = x'00' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET content = '' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET raw_content = '' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      raw.prepare("UPDATE chunks SET scope_tokens = 'wrong' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(1, 0);
+      raw
+        .prepare("UPDATE chunks SET scope_tokens = ? WHERE rel_path = 'a.md' AND chunk_index = 0")
+        .run(ftsScopeTokens("a.md"));
+      expectMismatches(0, 0);
+
+      const manifestBeforeMutation = audited.fingerprintKind("md");
+      raw.prepare("UPDATE chunks SET tags = 'same-shape-mutation' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(0, 0);
+      expect(audited.fingerprintKind("md")).not.toBe(manifestBeforeMutation);
+      raw.prepare("UPDATE chunks SET tags = '' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
+      expectMismatches(0, 0);
+      expect(audited.fingerprintKind("md")).toBe(manifestBeforeMutation);
+
+      // A physical row with no source declaration fails only its own kind.
+      raw
+        .prepare(
+          `INSERT INTO chunks
+             (content, title, aliases, scope_tokens, rel_path, chunk_index,
+              line_start, line_end, tags, raw_content, kind)
+           VALUES ('orphan', '', '', ?, 'orphan.md', 0, 1, 1, '', 'orphan', 'md')`
+        )
+        .run(ftsScopeTokens("orphan.md"));
+      expectMismatches(1, 0);
+      raw.prepare("DELETE FROM chunks WHERE rel_path = 'orphan.md'").run();
+      expectMismatches(0, 0);
+
+      // A valid-but-wrong kind on a declared path contaminates both scoped
+      // views: cross-kind for markdown and orphaned physical data for PDF.
+      raw
+        .prepare(
+          `INSERT INTO chunks
+             (content, title, aliases, scope_tokens, rel_path, chunk_index,
+              line_start, line_end, tags, raw_content, kind)
+           VALUES ('cross', '', '', ?, 'a.md', 2, 3, 3, '', 'cross', 'pdf')`
+        )
+        .run(ftsScopeTokens("a.md"));
+      expectMismatches(1, 1);
+      raw.prepare("DELETE FROM chunks WHERE rel_path = 'a.md' AND kind = 'pdf'").run();
+      expectMismatches(0, 0);
+
+      // Unknown kinds are global integrity failures, whether the bad value
+      // lives in the physical rows or only in source_state.
+      raw
+        .prepare(
+          `INSERT INTO chunks
+             (content, title, aliases, scope_tokens, rel_path, chunk_index,
+              line_start, line_end, tags, raw_content, kind)
+           VALUES ('bad kind', '', '', ?, 'bad-kind.md', 0, 1, 1, '', 'bad kind', 'bogus')`
+        )
+        .run(ftsScopeTokens("bad-kind.md"));
+      expectMismatches(1, 1);
+      raw.prepare("DELETE FROM chunks WHERE rel_path = 'bad-kind.md'").run();
+      expectMismatches(0, 0);
+
+      raw
+        .prepare(
+          `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+           VALUES ('bad-state.md', 1, 1, 'bogus', 'now')`
+        )
+        .run();
+      expectMismatches(1, 1);
+      raw.prepare("DELETE FROM source_state WHERE rel_path = 'bad-state.md'").run();
+      expectMismatches(0, 0);
+    } finally {
+      audited.close();
+      raw.close();
+    }
+
+    // Strict benchmark mode must abort on an empty source instead of
+    // publishing the optimistic pre-sync diff counters. After removing the
+    // negative control, the same real Vault/SQLite path yields exact evidence.
+    const vaultRoot = path.join(dbDir, "vault");
+    await fs.mkdir(vaultRoot);
+    await fs.writeFile(path.join(vaultRoot, "good.md"), "indexable text");
+    await fs.writeFile(path.join(vaultRoot, "empty.md"), "");
+    const syncIndex = new FtsIndex({ file: path.join(dbDir, "sync.db"), vaultRoot });
+    await syncIndex.open();
+    try {
+      await expect(syncFtsIndex(new Vault(vaultRoot), syncIndex, { mode: "strict" })).rejects.toThrow(
+        /produced zero FTS chunks/
+      );
+      await fs.unlink(path.join(vaultRoot, "empty.md"));
+      await syncIndex.clearOnDisk();
+      await syncIndex.open();
+      const report = await syncFtsIndex(new Vault(vaultRoot), syncIndex, { mode: "strict" });
+      expect(report).toMatchObject({
+        mode: "strict",
+        audited: true,
+        added: 1,
+        total_files: 1,
+        processed_files: 1,
+        empty: 0,
+        failed: 0,
+        declared_files: 1,
+        indexed_files: 1,
+        mismatched_files: 0,
+        complete: true
+      });
+      expect(report.manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
+
+      const goodPath = path.join(vaultRoot, "good.md");
+      await fs.writeFile(goodPath, "");
+      const future = new Date(Date.now() + 60_000);
+      await fs.utimes(goodPath, future, future);
+      await expect(syncFtsIndex(new Vault(vaultRoot), syncIndex, { mode: "strict" })).rejects.toThrow(
+        /produced zero FTS chunks/
+      );
+      expect(syncIndex.search("indexable")).toHaveLength(1);
+
+      const failSoftAuditSpy = vi.spyOn(syncIndex, "auditKind");
+      const failSoftManifestSpy = vi.spyOn(syncIndex, "fingerprintKind");
+      const failSoft = await syncFtsIndex(new Vault(vaultRoot), syncIndex);
+      expect(failSoft).toMatchObject({
+        mode: "fail-soft",
+        audited: false,
+        empty: 1,
+        failed: 0,
+        manifest_sha256: null,
+        complete: false
+      });
+      expect(failSoftAuditSpy).not.toHaveBeenCalled();
+      expect(failSoftManifestSpy).not.toHaveBeenCalled();
+      expect(syncIndex.search("indexable")).toEqual([]);
+      expect(syncIndex.totalFiles()).toBe(0);
+    } finally {
+      syncIndex.close();
     }
   });
 

@@ -19,6 +19,7 @@ import { lookupFoldedKey } from "./name-fold.js";
 import { optionalDepDetail } from "./optional-dep.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { iterateContentLines } from "./structure.js";
+import type { Vault } from "./vault.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
 
 // v3.11.6-rc.6 (competitive-study C-3) — FTS5 column weights for BM25. The
@@ -166,8 +167,15 @@ export interface FtsSearchHit {
   kind: ChunkKind;
 }
 
-/** Counter summary returned by the FTS5 sync routine in `server.ts`. */
+/** Error-handling mode for the Markdown-to-FTS sync routine. */
+export type FtsSyncMode = "fail-soft" | "strict";
+
+/** Raw counter and physical-integrity evidence returned by FTS5 sync. */
 export interface FtsSyncReport {
+  /** Requested error policy. Product startup defaults to fail-soft; evidence runs use strict. */
+  mode: FtsSyncMode;
+  /** Whether the expensive physical-row audit and manifest were computed. */
+  audited: boolean;
   /** Files newly indexed (no prior source_state row). */
   added: number;
   /** Files re-indexed due to mtime change. */
@@ -178,6 +186,45 @@ export interface FtsSyncReport {
   unchanged: number;
   /** Total chunks in the index after the sync. */
   total_chunks: number;
+  /** Live Markdown source files observed at sync start. */
+  total_files: number;
+  /** Live files either indexed, classified empty/failed, or verified unchanged. */
+  processed_files: number;
+  /** Live files that produced no indexable chunks. */
+  empty: number;
+  /** Per-file read/index failures caught in fail-soft mode. */
+  failed: number;
+  /** Files declared in `source_state` by the final physical audit. */
+  declared_files: number;
+  /** Distinct physical chunk paths found by the final physical audit. */
+  indexed_files: number;
+  /** Sum of declared per-file chunk counts. */
+  declared_chunks: number;
+  /** Actual physical Markdown chunk rows. */
+  indexed_chunks: number;
+  /** Unique paths rejected by the physical audit. */
+  mismatched_files: number;
+  /** SHA-256 over the exact kind-scoped source-state and chunk payload, or null when unaudited. */
+  manifest_sha256: string | null;
+  /** Derived raw-equation result; publication guards recompute it independently. */
+  complete: boolean;
+}
+
+/** Read-only physical-completeness summary for one FTS content kind. */
+export interface FtsKindAudit {
+  /** Files declared in `source_state` for the requested kind. */
+  declared_files: number;
+  /** Distinct physical chunk paths stored for the requested kind. */
+  indexed_files: number;
+  /** Sum of the per-file chunk counts declared in `source_state`. */
+  declared_chunks: number;
+  /** Actual physical chunk rows stored for the requested kind. */
+  indexed_chunks: number;
+  /**
+   * Unique paths whose declaration, row shape, kind, or contiguous chunk
+   * range is invalid, including chunk-only paths and globally invalid kinds.
+   */
+  mismatched_files: number;
 }
 
 interface SourceStateRow {
@@ -241,6 +288,17 @@ interface Stmt {
   run(...params: unknown[]): { changes: number };
   all<T = unknown>(...params: unknown[]): T[];
   get<T = unknown>(...params: unknown[]): T | undefined;
+  iterate<T = unknown>(...params: unknown[]): IterableIterator<T>;
+}
+
+function updateManifestValue(hash: ReturnType<typeof createHash>, value: string | number | Buffer): void {
+  const type = Buffer.isBuffer(value) ? "b" : typeof value === "number" ? "n" : "s";
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
+  hash.update(type);
+  hash.update(String(bytes.byteLength));
+  hash.update(":");
+  hash.update(bytes);
+  hash.update(";");
 }
 
 /**
@@ -493,6 +551,199 @@ export class FtsIndex {
     for (const relPath of storedMap.keys()) if (!live.has(relPath)) deleted.push(relPath);
 
     return { added, updated, deleted, unchanged };
+  }
+
+  /**
+   * Audit the physical FTS rows for one content kind without mutating them.
+   *
+   * A declared file is complete only when it has a positive integer
+   * `n_chunks`, the same number of physical rows, and one valid row at every
+   * integer index in `0..n_chunks - 1`. The audit also rejects invalid line
+   * ranges or raw-content storage, chunk-only paths, a different kind on a
+   * declared path, and invalid kinds anywhere in either table. Those global
+   * checks deliberately fail closed so a scoped markdown or PDF audit cannot
+   * certify an index whose other rows have unknown provenance.
+   *
+   * @param kind - Content-source kind to audit.
+   * @returns Declared and physical file/chunk counts plus the number of
+   *   unique mismatched paths.
+   * @example
+   * ```ts
+   * const audit = idx.auditKind("md");
+   * if (audit.mismatched_files > 0) {
+   *   throw new Error("FTS index is physically incomplete");
+   * }
+   * ```
+   */
+  auditKind(kind: ChunkKind): FtsKindAudit {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        `WITH declared AS (
+           SELECT rel_path, n_chunks
+           FROM source_state
+           WHERE kind = ?
+         ),
+         actual AS (
+           SELECT
+             rel_path,
+             COUNT(*) AS actual_count,
+             COUNT(DISTINCT chunk_index) AS distinct_index_count,
+             MIN(chunk_index) AS min_index,
+             MAX(chunk_index) AS max_index,
+             SUM(
+               CASE
+                 WHEN typeof(rel_path) <> 'text'
+                   OR rel_path = ''
+                   OR typeof(content) <> 'text'
+                   OR length(content) = 0
+                   OR typeof(title) <> 'text'
+                   OR typeof(aliases) <> 'text'
+                   OR typeof(scope_tokens) <> 'text'
+                   OR scope_tokens <> ('s' || lower(hex(CAST(rel_path AS BLOB))))
+                   OR typeof(chunk_index) NOT IN ('integer', 'real')
+                   OR chunk_index <> CAST(chunk_index AS INTEGER)
+                   OR chunk_index < 0
+                   OR typeof(line_start) NOT IN ('integer', 'real')
+                   OR line_start <> CAST(line_start AS INTEGER)
+                   OR typeof(line_end) NOT IN ('integer', 'real')
+                   OR line_end <> CAST(line_end AS INTEGER)
+                   OR line_start < 1
+                   OR line_end < line_start
+                   OR typeof(tags) <> 'text'
+                   OR typeof(raw_content) <> 'text'
+                   OR length(raw_content) = 0
+                 THEN 1
+                 ELSE 0
+               END
+             ) AS invalid_row_count
+           FROM chunks
+           WHERE kind = ?
+           GROUP BY rel_path
+         ),
+         mismatched AS (
+           SELECT d.rel_path
+           FROM declared AS d
+           LEFT JOIN actual AS a ON a.rel_path = d.rel_path
+           WHERE
+             typeof(d.rel_path) <> 'text'
+             OR d.rel_path = ''
+             OR typeof(d.n_chunks) <> 'integer'
+             OR d.n_chunks <= 0
+             OR COALESCE(a.actual_count, 0) <> d.n_chunks
+             OR COALESCE(a.distinct_index_count, 0) <> d.n_chunks
+             OR COALESCE(a.invalid_row_count, 0) <> 0
+             OR (d.n_chunks > 0 AND (a.min_index <> 0 OR a.max_index <> d.n_chunks - 1))
+           UNION
+           SELECT a.rel_path
+           FROM actual AS a
+           LEFT JOIN declared AS d ON d.rel_path = a.rel_path
+           WHERE d.rel_path IS NULL
+           UNION
+           SELECT c.rel_path
+           FROM chunks AS c
+           INNER JOIN declared AS d ON d.rel_path = c.rel_path
+           WHERE c.kind <> ?
+           UNION
+           SELECT rel_path
+           FROM chunks
+           WHERE typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+           UNION
+           SELECT rel_path
+           FROM source_state
+           WHERE typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+         )
+         SELECT
+           (SELECT COUNT(*) FROM declared) AS declared_files,
+           (SELECT COUNT(*) FROM actual) AS indexed_files,
+           COALESCE((SELECT SUM(n_chunks) FROM declared), 0) AS declared_chunks,
+           COALESCE((SELECT SUM(actual_count) FROM actual), 0) AS indexed_chunks,
+           (SELECT COUNT(*) FROM mismatched) AS mismatched_files`
+      )
+      .get<FtsKindAudit>(kind, kind, kind);
+    return (
+      row ?? {
+        declared_files: 0,
+        indexed_files: 0,
+        declared_chunks: 0,
+        indexed_chunks: 0,
+        mismatched_files: 0
+      }
+    );
+  }
+
+  /**
+   * Hash the exact physical source declarations and FTS chunk payload for one
+   * content kind without materializing all rows in memory.
+   *
+   * The manifest is intended for before/after integrity checks in strict
+   * evidence runs. It includes source mtimes and timestamps as well as every
+   * stored searchable and metadata column, so an in-place mutation that keeps
+   * aggregate counts unchanged still changes the digest.
+   *
+   * @param kind - Content-source kind to fingerprint.
+   * @returns Lowercase SHA-256 digest of the ordered physical rows.
+   */
+  fingerprintKind(kind: ChunkKind): string {
+    const db = this.requireDb();
+    const hash = createHash("sha256");
+    hash.update("enquire-fts-kind-manifest-v1;");
+    for (const row of db
+      .prepare(
+        `SELECT rel_path, mtime_ms, n_chunks, kind, indexed_at
+         FROM source_state
+         WHERE kind = ?
+         ORDER BY rel_path`
+      )
+      .iterate<{
+        rel_path: string;
+        mtime_ms: number;
+        n_chunks: number;
+        kind: string;
+        indexed_at: string;
+      }>(kind)) {
+      hash.update("source;");
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.mtime_ms);
+      updateManifestValue(hash, row.n_chunks);
+      updateManifestValue(hash, row.kind);
+      updateManifestValue(hash, row.indexed_at);
+    }
+    for (const row of db
+      .prepare(
+        `SELECT content, title, aliases, scope_tokens, rel_path, chunk_index,
+                line_start, line_end, tags, raw_content, kind
+         FROM chunks
+         WHERE kind = ?
+         ORDER BY rel_path, chunk_index, rowid`
+      )
+      .iterate<{
+        content: string;
+        title: string;
+        aliases: string;
+        scope_tokens: string;
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        tags: string;
+        raw_content: string;
+        kind: string;
+      }>(kind)) {
+      hash.update("chunk;");
+      updateManifestValue(hash, row.content);
+      updateManifestValue(hash, row.title);
+      updateManifestValue(hash, row.aliases);
+      updateManifestValue(hash, row.scope_tokens);
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.chunk_index);
+      updateManifestValue(hash, row.line_start);
+      updateManifestValue(hash, row.line_end);
+      updateManifestValue(hash, row.tags);
+      updateManifestValue(hash, row.raw_content);
+      updateManifestValue(hash, row.kind);
+    }
+    return hash.digest("hex");
   }
 
   /** Drop a file's chunks + state row. Idempotent.
@@ -785,6 +1036,127 @@ export class FtsIndex {
     const row = db.prepare("SELECT COUNT(*) AS c FROM source_state").get<{ c: number }>();
     return row?.c ?? 0;
   }
+}
+
+/**
+ * Incrementally synchronize Markdown notes into an opened FTS5 index.
+ *
+ * Product startup uses the default fail-soft mode so one unreadable note does
+ * not take down the server. Evidence-producing benchmarks pass `strict`,
+ * which aborts on the first read/index failure or zero-chunk note and verifies
+ * the final `source_state`/physical-row equations before returning.
+ *
+ * @param vault - Vault whose visible Markdown notes form the live source set.
+ * @param idx - Open FTS index to update and, in strict mode, physically audit.
+ * @param opts.mode - Error policy; defaults to `"fail-soft"`.
+ * @returns Raw counters. Strict mode also returns the full physical audit and
+ *   manifest; fail-soft mode marks `audited:false`, leaves audit counters at
+ *   zero, and returns a null manifest to avoid an O(all rows) startup scan.
+ * @throws {Error} In strict mode when a file cannot be indexed or the final
+ *   audit is incomplete.
+ * @example
+ * ```ts
+ * const report = await syncFtsIndex(vault, index, { mode: "strict" });
+ * if (!report.complete) throw new Error("incomplete FTS index");
+ * ```
+ */
+export async function syncFtsIndex(
+  vault: Vault,
+  idx: FtsIndex,
+  opts: { mode?: FtsSyncMode } = {}
+): Promise<FtsSyncReport> {
+  const mode = opts.mode ?? "fail-soft";
+  const entries = await vault.listMarkdown();
+  const live = entries.map((entry) => ({ relPath: entry.relPath, mtimeMs: entry.mtimeMs }));
+  const diff = idx.diff(live, "md");
+  const entriesByPath = new Map(entries.map((entry) => [entry.relPath, entry]));
+  const addedPaths = new Set(diff.added);
+  let added = 0;
+  let updated = 0;
+  let empty = 0;
+  let failed = 0;
+  let processed = diff.unchanged.length;
+  for (const relPath of [...diff.added, ...diff.updated]) {
+    const entry = entriesByPath.get(relPath);
+    if (!entry) continue;
+    try {
+      const note = await vault.readNote(entry.absPath, entry.mtimeMs);
+      if (chunkContent(note.content).length === 0) {
+        empty += 1;
+        processed += 1;
+        if (mode === "strict") throw new Error(`${relPath} produced zero FTS chunks`);
+        idx.dropFile(relPath);
+        continue;
+      }
+      const wikilinkTargets = note.parsed.wikilinks
+        .map((wikilink) => wikilink.target)
+        .filter((target) => target.length > 0);
+      const indexedChunks = idx.reindexFile(
+        relPath,
+        entry.mtimeMs,
+        note.content,
+        wikilinkTargets,
+        note.parsed.tags,
+        deriveFtsTitle(relPath),
+        extractAliases(note.parsed.frontmatter)
+      );
+      if (indexedChunks <= 0) throw new Error(`${relPath} produced zero FTS chunks after validation`);
+      processed += 1;
+      if (addedPaths.has(relPath)) added += 1;
+      else updated += 1;
+    } catch (error) {
+      if (mode === "strict") throw error;
+      failed += 1;
+      processed += 1;
+      process.stderr.write(
+        `enquire: skipping ${relPath} during fts5 sync — ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+  }
+  for (const relPath of diff.deleted) idx.dropFile(relPath);
+  const audited = mode === "strict";
+  const audit: FtsKindAudit = audited
+    ? idx.auditKind("md")
+    : {
+        declared_files: 0,
+        indexed_files: 0,
+        declared_chunks: 0,
+        indexed_chunks: 0,
+        mismatched_files: 0
+      };
+  const manifestSha256 = audited ? idx.fingerprintKind("md") : null;
+  const complete =
+    audited &&
+    processed === entries.length &&
+    failed === 0 &&
+    empty === 0 &&
+    audit.declared_files === entries.length &&
+    audit.indexed_files === entries.length &&
+    audit.declared_chunks === audit.indexed_chunks &&
+    audit.mismatched_files === 0 &&
+    (entries.length === 0 || audit.indexed_chunks > 0);
+  const report: FtsSyncReport = {
+    mode,
+    audited,
+    added,
+    updated,
+    deleted: diff.deleted.length,
+    unchanged: diff.unchanged.length,
+    total_chunks: idx.totalChunks(),
+    total_files: entries.length,
+    processed_files: processed,
+    empty,
+    failed,
+    ...audit,
+    manifest_sha256: manifestSha256,
+    complete
+  };
+  if (mode === "strict" && !complete) {
+    throw new Error(
+      `FTS sync incomplete (${audit.declared_files}/${entries.length} files, ${audit.indexed_chunks}/${audit.declared_chunks} chunks, ${audit.mismatched_files} mismatches)`
+    );
+  }
+  return report;
 }
 
 /**

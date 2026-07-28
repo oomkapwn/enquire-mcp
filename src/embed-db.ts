@@ -18,6 +18,7 @@
 // The default dense path is brute-force cosine. HNSW provides an approximate
 // nearest-neighbor path when corpus-scale measurements justify the index.
 
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
@@ -64,7 +65,7 @@ export interface EmbedSearchHit {
   kind: EmbedChunkKind;
 }
 
-/** Counter summary returned by the embed-sync routine in `server.ts`. */
+/** Historical counter summary returned by the bulk embedding-sync routines. */
 export interface EmbedSyncReport {
   /** Files newly embedded (no prior source_state row). */
   added: number;
@@ -76,6 +77,28 @@ export interface EmbedSyncReport {
   unchanged: number;
   /** Total chunks in the index after the sync. */
   total_chunks: number;
+}
+
+/** Read-only completeness summary for one embedding content kind. */
+export interface EmbedKindAudit {
+  /** Files declared as indexed in `source_state` for the requested kind. */
+  indexed_files: number;
+  /** Sum of the per-file chunk counts declared in `source_state`. */
+  declared_chunks: number;
+  /** Actual embedding rows stored for the requested kind. */
+  indexed_chunks: number;
+  /**
+   * Unique paths whose declaration, row structure, vector encoding, or
+   * contiguous index range is invalid, plus embedding-only paths and invalid
+   * content-kind rows.
+   */
+  mismatched_files: number;
+}
+
+/** Numerical-health summary for stored embedding vectors of one kind. */
+export interface EmbedVectorAudit {
+  /** Rows containing non-finite, zero-length, or materially non-unit vectors. */
+  invalid_vectors: number;
 }
 
 interface SourceStateRow {
@@ -132,6 +155,26 @@ interface Stmt {
   run(...params: unknown[]): { changes: number; lastInsertRowid: bigint | number };
   all<T = unknown>(...params: unknown[]): T[];
   get<T = unknown>(...params: unknown[]): T | undefined;
+  iterate<T = unknown>(...params: unknown[]): IterableIterator<T>;
+}
+
+function updateManifestValue(hash: ReturnType<typeof createHash>, value: string | number | Buffer): void {
+  const type = Buffer.isBuffer(value) ? "b" : typeof value === "number" ? "n" : "s";
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
+  hash.update(type);
+  hash.update(String(bytes.byteLength));
+  hash.update(":");
+  hash.update(bytes);
+  hash.update(";");
+}
+
+function vectorNormSquared(vector: Float32Array): number {
+  let normSquared = 0;
+  for (const value of vector) {
+    if (!Number.isFinite(value)) return Number.NaN;
+    normSquared += value * value;
+  }
+  return normSquared;
 }
 
 export interface EmbedDbOptions {
@@ -489,6 +532,17 @@ export class EmbedDb {
             `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${dim}`
           );
         }
+        const normSquared = vectorNormSquared(c.vector);
+        if (
+          !Number.isFinite(normSquared) ||
+          normSquared <= Number.EPSILON ||
+          normSquared < 0.998 ||
+          normSquared > 1.002
+        ) {
+          throw new Error(
+            `invalid vector for ${relPath} chunk ${c.chunkIndex}: components must be finite and L2-normalized`
+          );
+        }
         // v2.17.0 — encode per the configured quantization mode.
         // f32: zero-copy slice over the source buffer (matches v2.16- behavior).
         // int8: per-vector quantize + 8-byte (vMin, scale) tuple.
@@ -557,6 +611,203 @@ export class EmbedDb {
     return db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
   }
 
+  /**
+   * Audit one content kind without mutating the index.
+   *
+   * A declared file is complete only when its actual rows have the declared
+   * count and occupy the contiguous chunk-index range `0..n_chunks - 1`.
+   * Embedding-only paths are also mismatches. Both sides are filtered by
+   * `kind`, so independent markdown and PDF syncs cannot contaminate one
+   * another's result.
+   *
+   * @param kind Content-source kind to audit.
+   * @returns Aggregate counts and the number of unique mismatched paths.
+   * @example
+   * const audit = db.auditKind("md");
+   * if (audit.mismatched_files > 0) throw new Error("embedding index is incomplete");
+   */
+  auditKind(kind: EmbedChunkKind): EmbedKindAudit {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        `WITH declared AS (
+           SELECT rel_path, n_chunks
+           FROM source_state
+           WHERE kind = ?
+         ),
+         actual AS (
+           SELECT
+             rel_path,
+             COUNT(*) AS actual_count,
+             MIN(chunk_index) AS min_index,
+             MAX(chunk_index) AS max_index,
+             SUM(
+               CASE
+                 WHEN typeof(chunk_index) <> 'integer'
+                   OR chunk_index < 0
+                   OR typeof(line_start) <> 'integer'
+                   OR typeof(line_end) <> 'integer'
+                   OR line_start < 1
+                   OR line_end < line_start
+                   OR typeof(text_preview) <> 'text'
+                   OR typeof(vector) <> 'blob'
+                   OR length(vector) <> ?
+                 THEN 1
+                 ELSE 0
+               END
+             ) AS invalid_row_count
+           FROM embeddings
+           WHERE kind = ?
+           GROUP BY rel_path
+         ),
+         mismatched AS (
+           SELECT d.rel_path
+           FROM declared AS d
+           LEFT JOIN actual AS a ON a.rel_path = d.rel_path
+           WHERE
+             typeof(d.n_chunks) <> 'integer'
+             OR d.n_chunks <= 0
+             OR COALESCE(a.actual_count, 0) <> d.n_chunks
+             OR COALESCE(a.invalid_row_count, 0) <> 0
+             OR (d.n_chunks > 0 AND (a.min_index <> 0 OR a.max_index <> d.n_chunks - 1))
+           UNION
+           SELECT a.rel_path
+           FROM actual AS a
+           LEFT JOIN declared AS d ON d.rel_path = a.rel_path
+           WHERE d.rel_path IS NULL
+           UNION
+           SELECT e.rel_path
+           FROM embeddings AS e
+           INNER JOIN declared AS d ON d.rel_path = e.rel_path
+           WHERE e.kind <> ?
+           UNION
+           SELECT rel_path
+           FROM embeddings
+           WHERE kind NOT IN ('md', 'pdf')
+           UNION
+           SELECT rel_path
+           FROM source_state
+           WHERE kind NOT IN ('md', 'pdf')
+         )
+         SELECT
+           (SELECT COUNT(*) FROM declared) AS indexed_files,
+           COALESCE((SELECT SUM(n_chunks) FROM declared), 0) AS declared_chunks,
+           COALESCE((SELECT SUM(actual_count) FROM actual), 0) AS indexed_chunks,
+           (SELECT COUNT(*) FROM mismatched) AS mismatched_files`
+      )
+      .get<EmbedKindAudit>(kind, this.encodedBytes, kind, kind);
+    return (
+      row ?? {
+        indexed_files: 0,
+        declared_chunks: 0,
+        indexed_chunks: 0,
+        mismatched_files: 0
+      }
+    );
+  }
+
+  /**
+   * Validate numerical health of every stored vector for one content kind.
+   *
+   * Evidence-grade embeddings must be finite, non-zero, and approximately
+   * L2-normalized. The wider tolerance accounts for optional int8 storage
+   * quantization while still rejecting zero/NaN/Infinity and arbitrary-scale
+   * payloads that would invalidate cosine-as-dot-product search.
+   *
+   * @param kind Content-source kind to inspect.
+   * @returns Count of invalid physical vector rows.
+   */
+  auditVectorHealth(kind: EmbedChunkKind): EmbedVectorAudit {
+    const db = this.requireDb();
+    let invalidVectors = 0;
+    for (const row of db
+      .prepare("SELECT vector FROM embeddings WHERE kind = ? ORDER BY rel_path, chunk_index, id")
+      .iterate<{ vector: Buffer }>(kind)) {
+      if (!Buffer.isBuffer(row.vector) || row.vector.byteLength !== this.encodedBytes) {
+        invalidVectors += 1;
+        continue;
+      }
+      let vector: Float32Array;
+      try {
+        vector =
+          this.quantization === "int8"
+            ? decodeInt8Vector(row.vector, this.dim)
+            : new Float32Array(row.vector.buffer, row.vector.byteOffset, this.dim);
+      } catch {
+        invalidVectors += 1;
+        continue;
+      }
+      const normSquared = vectorNormSquared(vector);
+      if (!Number.isFinite(normSquared) || normSquared < 0.81 || normSquared > 1.21) {
+        invalidVectors += 1;
+      }
+    }
+    return { invalid_vectors: invalidVectors };
+  }
+
+  /**
+   * Hash the exact kind-scoped source declarations and embedding payload.
+   *
+   * Rows are streamed in deterministic order so strict before/after evidence
+   * detects same-shape in-place mutations without loading the vector corpus
+   * into memory.
+   *
+   * @param kind Content-source kind to fingerprint.
+   * @returns Lowercase SHA-256 digest of all ordered physical fields.
+   */
+  fingerprintKind(kind: EmbedChunkKind): string {
+    const db = this.requireDb();
+    const hash = createHash("sha256");
+    hash.update("enquire-embed-kind-manifest-v1;");
+    for (const row of db
+      .prepare(
+        `SELECT rel_path, mtime_ms, n_chunks, kind, indexed_at
+         FROM source_state
+         WHERE kind = ?
+         ORDER BY rel_path`
+      )
+      .iterate<{
+        rel_path: string;
+        mtime_ms: number;
+        n_chunks: number;
+        kind: string;
+        indexed_at: string;
+      }>(kind)) {
+      hash.update("source;");
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.mtime_ms);
+      updateManifestValue(hash, row.n_chunks);
+      updateManifestValue(hash, row.kind);
+      updateManifestValue(hash, row.indexed_at);
+    }
+    for (const row of db
+      .prepare(
+        `SELECT rel_path, chunk_index, line_start, line_end, text_preview, vector, kind
+         FROM embeddings
+         WHERE kind = ?
+         ORDER BY rel_path, chunk_index, id`
+      )
+      .iterate<{
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        text_preview: string;
+        vector: Buffer;
+        kind: string;
+      }>(kind)) {
+      hash.update("embedding;");
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.chunk_index);
+      updateManifestValue(hash, row.line_start);
+      updateManifestValue(hash, row.line_end);
+      updateManifestValue(hash, row.text_preview);
+      updateManifestValue(hash, row.vector);
+      updateManifestValue(hash, row.kind);
+    }
+    return hash.digest("hex");
+  }
+
   /** Brute-force cosine top-K. Vectors are L2-normalized at insert time so
    *  cosine == dot product. Acceptable up to ~50K chunks; v2.1 will swap to
    *  HNSW if real vaults hit that ceiling. */
@@ -564,6 +815,15 @@ export class EmbedDb {
     const db = this.requireDb();
     if (queryVec.length !== this.dim) {
       throw new Error(`query vector dim mismatch: got ${queryVec.length}, expected ${this.dim}`);
+    }
+    const queryNormSquared = vectorNormSquared(queryVec);
+    if (
+      !Number.isFinite(queryNormSquared) ||
+      queryNormSquared <= Number.EPSILON ||
+      queryNormSquared < 0.998 ||
+      queryNormSquared > 1.002
+    ) {
+      throw new Error("query vector must contain finite components and be L2-normalized");
     }
     const minScore = opts.minScore ?? -Infinity;
     // CodeQL js/polynomial-redos flags `\/+$` here as polynomial. False

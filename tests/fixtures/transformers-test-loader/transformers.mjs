@@ -9,6 +9,7 @@ export const env = {
 };
 
 const DIM = 384;
+const failMatch = process.env.ENQUIRE_TEST_EMBED_FAIL_MATCH;
 
 function missing(stage) {
   if (state === "missing") throw new Error(`fixture model missing at ${stage}`);
@@ -41,6 +42,9 @@ export async function pipeline(task) {
   return async (texts) => {
     corrupt("embedding inference");
     const input = Array.isArray(texts) ? texts : [texts];
+    if (failMatch && input.some((text) => String(text).includes(failMatch))) {
+      throw new Error(`fixture embedding failure for match: ${failMatch}`);
+    }
     const data = new Float32Array(input.length * DIM);
     for (let index = 0; index < input.length; index++) {
       data.set(vectorFor(input[index]), index * DIM);

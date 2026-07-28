@@ -83,10 +83,11 @@ async function main() {
     process.exit(1);
   }
   const EMBEDDER_ALIAS = "bge";
-  const { contextPack, searchHybrid } = await import(path.join(distDir, "tools", "index.js"));
+  const { contextPack } = await import(path.join(distDir, "tools", "meta.js"));
+  const { searchHybrid } = await import(path.join(distDir, "tools", "search.js"));
   const { Vault } = await import(path.join(distDir, "vault.js"));
-  const { FtsIndex } = await import(path.join(distDir, "fts5.js"));
-  const { syncFtsIndex, syncEmbedDb } = await import(path.join(distDir, "server.js"));
+  const { FtsIndex, syncFtsIndex } = await import(path.join(distDir, "fts5.js"));
+  const { syncEmbedDb } = await import(path.join(distDir, "embed-sync.js"));
 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bench-context-"));
   const cacheDir = path.join(root, ".cache");
@@ -107,7 +108,7 @@ async function main() {
     const embedFile = path.join(cacheDir, "bench.embed.db");
     ftsIndex = new FtsIndex({ file: ftsFile, vaultRoot: vault.root });
     await ftsIndex.open();
-    await syncFtsIndex(vault, ftsIndex);
+    await syncFtsIndex(vault, ftsIndex, { mode: "strict" });
 
     let embedReady = false;
     try {
@@ -116,10 +117,16 @@ async function main() {
       const m = resolveModel(EMBEDDER_ALIAS);
       const db = new EmbedDb({ file: embedFile, vaultRoot: vault.root, modelAlias: m.alias, dim: m.dim });
       await db.open();
-      const embedder = await loadEmbedder(EMBEDDER_ALIAS);
-      await syncEmbedDb(vault, db, embedder);
-      db.close();
-      embedReady = true;
+      try {
+        const embedder = await loadEmbedder(EMBEDDER_ALIAS);
+        const report = await syncEmbedDb(vault, db, embedder, { mode: "strict" });
+        if (!report.complete) {
+          throw new Error("strict context benchmark embedding sync returned incomplete evidence");
+        }
+        embedReady = true;
+      } finally {
+        db.close();
+      }
     } catch (e) {
       process.stderr.write(
         `embeddings unavailable (${(e?.message ?? e).toString().slice(0, 80)}) — measuring FTS-only pack\n`

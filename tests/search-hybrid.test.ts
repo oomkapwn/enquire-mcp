@@ -479,15 +479,29 @@ describe("searchHybrid — opt-in recency re-ranking (v3.10 rc.5)", () => {
 
   it("with recency weight 1.0, the FRESH note rises above the more-relevant old one", async () => {
     const v = new Vault(rRoot);
+    const fixedNow = (await fs.stat(path.join(rRoot, "beta.md"))).mtimeMs + DAY;
     const result = await searchHybrid(
       v,
       { query: "kubernetes", limit: 5 },
-      { ftsIndex: null, embedFile: embedFile(), recency: { weight: 1, staleDays: 365 } }
+      { ftsIndex: null, embedFile: embedFile(), recency: { weight: 1, staleDays: 365, nowMs: fixedNow } }
     );
     expect(result.matches.length).toBe(2);
     // weight 1 → order is purely by recency → the 1-day note beats the 1000-day note.
     expect(result.matches[0]?.path).toBe("beta.md");
     expect(result.matches[1]?.path).toBe("alpha.md");
+
+    // NEGATIVE control: pinning the reference before both mtimes clamps both
+    // ages to zero. Their recency keys tie, so stable relevance order returns.
+    const beforeBothMtimes = await searchHybrid(
+      v,
+      { query: "kubernetes", limit: 5 },
+      {
+        ftsIndex: null,
+        embedFile: embedFile(),
+        recency: { weight: 1, staleDays: 365, nowMs: fixedNow - 2_000 * DAY }
+      }
+    );
+    expect(beforeBothMtimes.matches.map((match) => match.path)).toEqual(["alpha.md", "beta.md"]);
   });
 
   // NEGATIVE control: weight 0 must NOT change anything — identical to baseline.

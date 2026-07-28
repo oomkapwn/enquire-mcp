@@ -13,7 +13,7 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs build script, no type declarations (CLI guarded by isEntrypoint).
-import { parseBenchArgs, resolveBenchWrite } from "../scripts/run-benchmarks.mjs";
+import { benchmarkEmbeddingSyncComplete, parseBenchArgs, resolveBenchWrite } from "../scripts/run-benchmarks.mjs";
 
 const CANON = "/repo/bench/benchmarks.json";
 
@@ -43,6 +43,40 @@ describe("parseBenchArgs (rc.15 M-1)", () => {
       allowPartial: true,
       output: "/tmp/x.json"
     });
+  });
+});
+
+describe("benchmarkEmbeddingSyncComplete", () => {
+  const complete = {
+    mode: "strict",
+    complete: true,
+    added: 2,
+    updated: 0,
+    deleted: 0,
+    unchanged: 0,
+    total_chunks: 4,
+    total_files: 2,
+    processed_files: 2,
+    empty: 0,
+    failed: 0,
+    indexed_files: 2,
+    declared_chunks: 4,
+    indexed_chunks: 4,
+    mismatched_files: 0
+  };
+
+  it("accepts a strict fresh-vault report whose raw counters and physical audit agree", () => {
+    expect(benchmarkEmbeddingSyncComplete(complete, 2)).toBe(true);
+  });
+
+  it("rejects forged complete=true when any load-bearing raw field is inconsistent", () => {
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, mode: "fail-soft" }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, processed_files: 1 }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, added: 1, unchanged: 1 }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, failed: 1 }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, declared_chunks: 5 }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, mismatched_files: 1 }, 2)).toBe(false);
+    expect(benchmarkEmbeddingSyncComplete({ ...complete, indexed_chunks: -1 }, 2)).toBe(false);
   });
 });
 

@@ -363,6 +363,23 @@ async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
   const MAX_INTERNAL_BATCH = 8;
 
   const dim = model.dim;
+  const assertModelVector = (vector: Float32Array, batchIndex: number) => {
+    if (vector.length !== dim) {
+      throw new Error(`Model ${model.hfId} returned vector ${batchIndex} with dim=${vector.length}, expected ${dim}.`);
+    }
+    let normSquared = 0;
+    for (const value of vector) {
+      if (!Number.isFinite(value)) {
+        throw new Error(`Model ${model.hfId} returned a non-finite embedding component.`);
+      }
+      normSquared += value * value;
+    }
+    if (!Number.isFinite(normSquared) || normSquared < 0.998 || normSquared > 1.002) {
+      throw new Error(
+        `Model ${model.hfId} returned a non-normalized embedding (norm²=${normSquared}); refusing invalid cosine input.`
+      );
+    }
+  };
   return {
     model,
     async embed(texts: readonly string[]): Promise<Float32Array[]> {
@@ -381,7 +398,9 @@ async function buildEmbedder(model: EmbeddingModel): Promise<Embedder> {
         for (let i = 0; i < batch.length; i++) {
           const start = i * dim;
           // Copy the slice — the underlying buffer is reused by transformers.js.
-          out.push(new Float32Array(tensor.data.slice(start, start + dim)));
+          const vector = new Float32Array(tensor.data.slice(start, start + dim));
+          assertModelVector(vector, batchStart + i);
+          out.push(vector);
         }
       }
       return out;

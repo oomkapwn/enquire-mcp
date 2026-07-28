@@ -16,15 +16,19 @@
 //      → rows). They belong with other infrastructure (vault, fts5,
 //      embed-db, embeddings), not with the server boilerplate.
 //
-// rc.4 splits them out into this dedicated module. server.ts +
-// watcher.ts both import from here. tests/embed-pipeline.test.ts gets
-// to import them directly (no invariant violation). watcher.ts coverage
-// floor goes back up from the rc.3-deferred 69% → ≥71% as a result.
+// rc.4 split the per-file helpers into this dedicated module. watcher.ts
+// imports them directly, while tests/embed-pipeline.test.ts can exercise them
+// without crossing the server-module boundary.
 //
 // rc.6 ARCH-1 — `buildEmbedText` moved here from server.ts to break the
 // circular import (embed-pipeline → server → embed-pipeline that rc.4
 // introduced). server.ts now re-exports it from here for backward compat
 // so that src/index.ts and tests/late-chunking.test.ts see no API change.
+//
+// v3.12.0-rc.20 moves the bulk Markdown/PDF orchestration to embed-sync.ts.
+// That module composes these per-file helpers and adds shared fail-soft /
+// strict-completeness behavior; server.ts only re-exports the sync entrypoints
+// for existing CLI and contributor-script imports.
 
 import * as path from "node:path";
 import type { loadEmbedder } from "./embeddings.js";
@@ -116,6 +120,37 @@ export interface EmbedRow {
 }
 
 /**
+ * Fail closed when an embedding result cannot support cosine-as-dot-product
+ * retrieval.
+ *
+ * The embedder contract promises one finite, L2-normalized vector of the model
+ * dimension per input. Checking that contract at the pipeline boundary keeps
+ * NaN, Infinity, zero, wrong-size, and arbitrary-scale outputs out of both the
+ * persistent database and strict benchmark evidence.
+ *
+ * @param vector Candidate embedding vector.
+ * @param expectedDim Model dimension declared by the embedder.
+ * @param context Human-readable source/chunk label for the error.
+ * @throws {Error} When the vector is malformed or not L2-normalized.
+ */
+export function assertEmbeddingVector(vector: Float32Array, expectedDim: number, context: string): void {
+  if (vector.length !== expectedDim) {
+    throw new Error(`${context}: vector dim ${vector.length}, expected ${expectedDim}`);
+  }
+  let normSquared = 0;
+  for (const value of vector) {
+    if (!Number.isFinite(value)) throw new Error(`${context}: vector contains a non-finite component`);
+    normSquared += value * value;
+  }
+  if (!Number.isFinite(normSquared) || normSquared <= Number.EPSILON) {
+    throw new Error(`${context}: vector norm must be finite and non-zero`);
+  }
+  if (normSquared < 0.998 || normSquared > 1.002) {
+    throw new Error(`${context}: vector must be L2-normalized (norm²=${normSquared})`);
+  }
+}
+
+/**
  * v3.8.0-rc.2 R-7 — embed-vector pipeline for a single markdown note.
  * Extracted from the inner loop of `syncEmbedDb` so both the bulk sync
  * and the runtime watcher can use the same chunking + embedding +
@@ -155,9 +190,13 @@ export async function embedSingleNote(
     })
   );
   const vectors = await embedder.embed(embedTexts);
+  if (vectors.length !== chunks.length) {
+    throw new Error(`embedder returned ${vectors.length} vectors for ${chunks.length} chunks of ${entry.relPath}`);
+  }
   const rows = chunks.map((c, i) => {
     const vector = vectors[i];
     if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
+    assertEmbeddingVector(vector, embedder.model.dim, `${entry.relPath} chunk ${i}`);
     return {
       chunkIndex: i,
       lineStart: c.lineStart + lineOffset,
@@ -225,9 +264,13 @@ export async function embedSinglePdf(
   const docTitle = path.basename(entry.relPath, ".pdf");
   const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
   const vectors = await embedder.embed(embedTexts);
+  if (vectors.length !== chunks.length) {
+    throw new Error(`embedder returned ${vectors.length} vectors for ${chunks.length} chunks of ${entry.relPath}`);
+  }
   const rows = chunks.map((c, i) => {
     const vector = vectors[i];
     if (!vector) throw new Error(`embedder returned no vector for chunk ${i} of ${entry.relPath}`);
+    assertEmbeddingVector(vector, embedder.model.dim, `${entry.relPath} chunk ${i}`);
     return {
       chunkIndex: i,
       lineStart: c.lineStart,

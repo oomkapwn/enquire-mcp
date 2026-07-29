@@ -124,6 +124,7 @@ function publicCiPostureProblems(
   for (const marker of [
     "docs",
     "oia",
+    "test-windows",
     "test-macos",
     "continue-on-error",
     "docker",
@@ -2108,7 +2109,7 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
       );
     }
     // v3.11.4-rc.2 (full-audit DOCS-TESTCOUNT-I18N-1) — the tests BADGE is an EXACT, language-
-    // NEUTRAL surface (`tests-N%20passing`) that the lower-bound stat-line check above does NOT
+    // NEUTRAL surface (`tests-N%20contracts`) that the lower-bound stat-line check above does NOT
     // cover; the rc.1 1440→1441 bump synced only en/fr and left the translation badges stale at
     // 1440. Guard every README badge (canonical + translations) === the real count so an exact
     // badge can't silently drift again. Translations without a badge are simply skipped.
@@ -2116,7 +2117,7 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
     let badgesChecked = 0;
     for (const file of allReadmes) {
       const md = await read(file);
-      const badge = /tests-(\d+)(?:%20| )passing/.exec(md);
+      const badge = /tests-(\d+)(?:%20| )contracts/.exec(md);
       if (!badge) continue;
       badgesChecked += 1;
       expect(Number.parseInt(badge[1] ?? "0", 10), `${file} tests badge must equal the real count ${actualTests}`).toBe(

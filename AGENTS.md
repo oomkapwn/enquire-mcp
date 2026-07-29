@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1740+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1744+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-All 9 release-required CI checks run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. Local checks above must pass before pushing.
+`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -146,9 +146,9 @@ node scripts/check-changelog-coverage.mjs
 node scripts/smoke.mjs
 ```
 
-## CI checks (9 release-required; 7 branch-protected)
+## CI checks (direct release gates + transitive Windows; 7 branch-protected)
 
-Release-required (all run on PRs; `release.yml` blocks publication unless all 9 passed on the tagged SHA):
+Directly release-required (all run on PRs; `release.yml` blocks publication unless every listed gate passed on the tagged SHA):
 1. `lint` — biome check
 2. `test (22)` — full suite plus native SQLite/FTS probe on exact Node 22.13.0 (`engines.node` floor)
 3. `test (24)` — full suite on Node 24
@@ -161,6 +161,7 @@ Release-required (all run on PRs; `release.yml` blocks publication unless all 9 
 
 Additional unprotected checks:
 - `test-macos` is the only `continue-on-error` advisory job.
+- `test-windows` is fail-capable and unprotected by its own name, but transitively blocks protected/release-required `smoke`.
 - `docker` (image build + `tools/list` smoke) is fail-capable and can make the CI workflow red, but is not branch-protected.
 - GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
 
@@ -171,7 +172,7 @@ Live branch-protection snapshot (verified 2026-07-23): exactly the first 7 conte
 - **Do NOT modify shared CLI help strings inline.** Lift to `src/cli-help.ts` first. The `cli-parity.test.ts` invariant fails inline drift between serve and serve-http.
 - **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 7 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading, server.json version + packages[0]).
 - **Do NOT skip CI hooks** (`--no-verify`) without explicit user instruction. Investigate the hook failure root cause.
-- **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + 9 release-required checks.
+- **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + every directly enumerated release check.
 - **Do NOT tag the pre-merge branch SHA.** Tag the squash-merge SHA on main after `gh pr merge --squash`. Rule since v3.7.15 (`Assert tag is on main` guard).
 - **Do NOT edit `docs/api-reference/`** — it's auto-generated TypeDoc output. Edit TSDoc in `src/` instead.
 - **Do NOT add `// current X%` inline comments without commitment to maintain.** OIA check 6 catches drift > 1pp against `coverage-summary.json`. Either keep current OR remove the annotation.

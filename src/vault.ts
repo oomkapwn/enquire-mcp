@@ -6,8 +6,14 @@ import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
 import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
+import { windowsRelativePathProblem } from "./windows-path.js";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
+
+function vaultRelative(root: string, abs: string): string {
+  const rel = path.relative(root, abs);
+  return path.sep === "\\" ? rel.replaceAll("\\", "/") : rel;
+}
 
 // v3.11.7-rc.2 (post-merge re-sweep A10-F1) — serialize append size-check
 // + write by physical file identity across EVERY Vault instance in this
@@ -132,6 +138,7 @@ export interface VaultOptions {
  */
 export class Vault {
   root: string;
+  private readonly configuredRoot: string;
   readonly maxFileBytes: number;
   readonly maxCacheEntries: number;
   readonly writeEnabled: boolean;
@@ -152,6 +159,7 @@ export class Vault {
 
   constructor(root: string, opts: VaultOptions = {}) {
     this.root = path.resolve(root);
+    this.configuredRoot = this.root;
     this.maxFileBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
     this.maxCacheEntries = opts.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
     this.writeEnabled = opts.enableWrite ?? false;
@@ -307,9 +315,13 @@ export class Vault {
         // otherwise pollute the in-memory cache with a key pointing outside
         // the vault. The orphaned entry would never be served (resolveSafePath
         // blocks reads), but it would persist back to disk on next save.
-        const abs = path.resolve(this.root, entry.relPath);
+        let abs: string;
+        try {
+          abs = this.resolveInside(entry.relPath);
+        } catch {
+          return { kind: "drop" } as const;
+        }
         const relCheck = path.relative(this.root, abs);
-        if (relCheck.startsWith("..") || path.isAbsolute(relCheck)) return { kind: "drop" } as const;
         // v3.7.16 P1-4 — drop entries that violate the current privacy
         // filters (--exclude-glob / --read-paths). Pre-3.7.16, loadDiskCache
         // happily restored full note bodies even after the user added a new
@@ -328,10 +340,24 @@ export class Vault {
           if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
           // Belt-and-braces: realpath check in case the path includes a symlink
           // chain that resolves outside the vault.
-          const real = await fs.realpath(abs).catch(() => abs);
+          const real = await this.realpathSafe(abs);
           const realRel = path.relative(this.root, real);
           if (realRel.startsWith("..") || path.isAbsolute(realRel)) return { kind: "drop" } as const;
-          return { kind: "hit", abs, entry } as const;
+          const canonicalRel = vaultRelative(this.root, real);
+          // The lexical fast-path above is insufficient on case-insensitive
+          // filesystems and for in-vault symlink aliases: the cache key may say
+          // `private/Secret.md` while realpath resolves to excluded
+          // `Private/Secret.md`. Re-apply privacy to the physical identity
+          // before any note body enters memory.
+          if (this.isExcluded(canonicalRel)) {
+            return { kind: "drop", excludedByPrivacy: true } as const;
+          }
+          return {
+            kind: "hit",
+            abs: real,
+            entry,
+            needsMigration: entry.relPath !== canonicalRel
+          } as const;
         } catch {
           // Source file gone — drop and force a clean rewrite on next save.
           return { kind: "drop" } as const;
@@ -341,6 +367,7 @@ export class Vault {
     let loaded = 0;
     let dropped = 0;
     let droppedByPrivacy = 0;
+    const migrationNeeded = checks.some((result) => result.kind === "hit" && result.needsMigration);
     for (const result of checks) {
       if (result.kind === "drop") {
         dropped += 1;
@@ -349,7 +376,10 @@ export class Vault {
         }
         continue;
       }
-      if (this.cache.size >= this.maxCacheEntries) break;
+      // Keep scanning after the in-memory LRU reaches capacity: later entries
+      // can still be stale, deleted, or newly excluded and must mark the
+      // persisted snapshot dirty even though they will not be loaded.
+      if (this.cache.size >= this.maxCacheEntries) continue;
       this.cache.set(result.abs, {
         content: result.entry.content,
         parsed: result.entry.parsed,
@@ -357,11 +387,11 @@ export class Vault {
       });
       loaded += 1;
     }
-    // If we silently dropped any persisted entries (deleted notes, oversized,
-    // mtime-stale), mark the cache dirty so the next save rewrites WITHOUT
-    // those entries. Closes the audit finding about deleted-note content
-    // lingering on disk after the source note is removed from the vault.
-    if (dropped > 0) this.cacheDirty = true;
+    // If we silently dropped any persisted entries (deleted, oversized,
+    // mtime-stale, private) or accepted a legacy identity for migration, mark
+    // the cache dirty so the next save rewrites only canonical admitted hits.
+    // Closes both deleted-note retention and case-variant privacy rehydration.
+    if (dropped > 0 || migrationNeeded) this.cacheDirty = true;
     // v3.7.16 P1-4 — when entries were dropped specifically because a new
     // privacy filter excluded them, surface that to stderr so operators
     // see the privacy-boundary correction (e.g., adding --exclude-glob
@@ -420,7 +450,7 @@ export class Vault {
     const entries: DiskCacheEntry[] = [];
     for (const [abs, cached] of this.cache) {
       entries.push({
-        relPath: path.relative(this.root, abs),
+        relPath: vaultRelative(this.root, abs),
         mtimeMs: cached.mtimeMs,
         content: cached.content,
         parsed: cached.parsed
@@ -474,10 +504,36 @@ export class Vault {
    * @throws {Error} If the resolved path escapes the vault root.
    */
   resolveInside(p: string): string {
-    const abs = path.resolve(this.root, p);
-    const rel = path.relative(this.root, abs);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    if (process.platform === "win32") {
+      if (/^[a-z]:(?:[^\\/]|$)/iu.test(p)) {
+        throw new Error(`Refusing Windows drive-relative vault path: ${JSON.stringify(p)}`);
+      }
+      if (/^(?:\\\\|\/\/)[?.][\\/]/u.test(p)) {
+        throw new Error(`Refusing Windows device-namespace vault path: ${JSON.stringify(p)}`);
+      }
+    }
+
+    let abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(this.root, p);
+    let rel = path.relative(this.root, abs);
+    let contained = !rel.startsWith("..") && !path.isAbsolute(rel);
+    if (!contained && path.isAbsolute(p) && this.configuredRoot !== this.root) {
+      rel = path.relative(this.configuredRoot, abs);
+      contained = !rel.startsWith("..") && !path.isAbsolute(rel);
+      if (contained) {
+        // Map an accepted configured-root alias onto the canonical root. This
+        // preserves absolute-path compatibility without letting downstream
+        // relPath/error/cache consumers observe an escaping alias identity.
+        abs = path.resolve(this.root, rel);
+      }
+    }
+    if (!contained) {
       throw new Error(`Path escapes vault root: ${p}`);
+    }
+    if (process.platform === "win32") {
+      const problem = windowsRelativePathProblem(rel);
+      if (problem) {
+        throw new Error(`Refusing Windows-unsafe vault path: ${problem}`);
+      }
     }
     return abs;
   }
@@ -496,7 +552,7 @@ export class Vault {
    */
   async listMarkdown(folder?: string): Promise<FileEntry[]> {
     if (!this.ready) await this.ensureExists();
-    const start = folder ? this.resolveInside(folder) : this.root;
+    let start = folder ? this.resolveInside(folder) : this.root;
     if (folder) {
       const lstat = await fs.lstat(start).catch(() => null);
       if (!lstat) return [];
@@ -507,6 +563,7 @@ export class Vault {
       if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
       // If the requested folder itself matches an exclude glob, treat as empty.
       if (this.isExcluded(rel)) return [];
+      start = real;
     }
     const out: FileEntry[] = [];
     await walk(start, this.root, out);
@@ -525,7 +582,7 @@ export class Vault {
    *  v1.7 canvas tools and any future file-format-specific tools. */
   async listFilesByExtension(ext: string, folder?: string): Promise<FileEntry[]> {
     if (!this.ready) await this.ensureExists();
-    const start = folder ? this.resolveInside(folder) : this.root;
+    let start = folder ? this.resolveInside(folder) : this.root;
     if (folder) {
       const lstat = await fs.lstat(start).catch(() => null);
       if (!lstat || lstat.isSymbolicLink()) return [];
@@ -534,6 +591,7 @@ export class Vault {
       const rel = path.relative(this.root, real);
       if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
       if (this.isExcluded(rel)) return [];
+      start = real;
     }
     const out: FileEntry[] = [];
     await walkAnyExt(start, this.root, out, ext.toLowerCase());
@@ -552,13 +610,16 @@ export class Vault {
    *  (e.g. resolveTarget's periodic fallback). Mutates + returns the same error object. */
   private sanitizeFsError(err: unknown): unknown {
     if (err instanceof Error) {
-      const root = this.root;
-      const strip = (s: string): string => s.split(`${root}${path.sep}`).join("").split(root).join("");
-      if (typeof err.message === "string" && err.message.includes(root)) err.message = strip(err.message);
+      const roots = [...new Set([this.root, this.configuredRoot])].sort((a, b) => b.length - a.length);
+      const strip = (value: string): string =>
+        roots.reduce((sanitized, root) => sanitized.split(`${root}${path.sep}`).join("").split(root).join(""), value);
+      if (typeof err.message === "string" && roots.some((root) => err.message.includes(root))) {
+        err.message = strip(err.message);
+      }
       const rec = err as unknown as Record<string, unknown>;
       for (const k of ["path", "dest"] as const) {
         const v = rec[k];
-        if (typeof v === "string" && v.includes(root)) rec[k] = strip(v);
+        if (typeof v === "string" && roots.some((root) => v.includes(root))) rec[k] = strip(v);
       }
     }
     return err;
@@ -759,6 +820,12 @@ export class Vault {
     if (Buffer.byteLength(content, "utf8") > this.maxFileBytes) {
       throw new Error(`Refusing to write ${Buffer.byteLength(content, "utf8")} bytes (limit ${this.maxFileBytes})`);
     }
+    if (process.platform === "win32") {
+      const rawProblem = windowsRelativePathProblem(relPath);
+      if (rawProblem) {
+        throw new Error(`Refusing Windows-unsafe vault path: ${rawProblem}`);
+      }
+    }
     // v2.0.0-beta.1 audit fix: reject empty / whitespace-only / dot-only note
     // names before they normalize into bare `.md` (which the walker hides as a
     // dotfile — silent footgun). The schema enforces `min(1)` upstream too.
@@ -812,7 +879,7 @@ export class Vault {
     // user-facing "Note already exists" error for back-compat).
     const targetLstat = await fs.lstat(abs).catch(() => null);
     if (targetLstat?.isSymbolicLink()) {
-      throw new Error(`Refusing to write — target is a symlink: ${path.relative(this.root, abs)}`);
+      throw new Error(`Refusing to write — target is a symlink: ${vaultRelative(this.root, abs)}`);
     }
     if (opts.overwrite) {
       // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
@@ -861,7 +928,7 @@ export class Vault {
     const stat = await this.statSafe(abs);
     return {
       absPath: abs,
-      relPath: path.relative(this.root, abs),
+      relPath: vaultRelative(this.root, abs),
       mtimeMs: stat.mtimeMs,
       bytes: stat.size
     };
@@ -870,8 +937,8 @@ export class Vault {
   private async assertParentInsideVault(abs: string): Promise<void> {
     let current = path.dirname(abs);
     while (current !== this.root && current !== path.dirname(current)) {
-      const real = await fs.realpath(current).catch(() => null);
-      if (real) {
+      try {
+        const real = await this.realpathSafe(current);
         const rel = path.relative(this.root, real);
         if (rel.startsWith("..") || path.isAbsolute(rel)) {
           // rc.36 F-3 (P-3 / ν-class sibling) — echo the path RELATIVE to the
@@ -880,10 +947,14 @@ export class Vault {
           // serve-http discloses the host filesystem layout. Mirrors the
           // sibling symlink throw above (`path.relative(this.root, abs)`).
           throw new Error(
-            `Refusing to write — parent directory resolves outside vault: ${path.relative(this.root, current)}`
+            `Refusing to write — parent directory resolves outside vault: ${vaultRelative(this.root, current)}`
           );
         }
         break;
+      } catch (err) {
+        if (!isErrnoException(err) || (err.code !== "ENOENT" && err.code !== "ENOTDIR")) {
+          throw err;
+        }
       }
       current = path.dirname(current);
     }
@@ -907,8 +978,7 @@ export class Vault {
    * so it has no canonical case). Linux ext4/btrfs (case-sensitive)
    * filesystems treat realpath as a no-op, so this is portable.
    *
-   * Falls back to the lexical form if no parent exists (vault root
-   * missing — handled by the broader `ensureExists` startup check).
+   * Any unexpected stat/realpath failure or physical escape fails closed.
    */
   /**
    * Public alias for {@link canonicalRelForPrivacyCheck}. v3.7.16 P1-6 —
@@ -918,11 +988,10 @@ export class Vault {
    * orchestrators pre-check without duplicating the realpath logic.
    */
   async canonicalRelForPrivacyCheckPublic(abs: string): Promise<string> {
-    return this.canonicalRelForPrivacyCheck(abs);
+    return this.canonicalRelForPrivacyCheck(this.resolveInside(abs));
   }
 
   private async canonicalRelForPrivacyCheck(abs: string): Promise<string> {
-    const lexical = path.relative(this.root, abs).replace(/\\/g, "/");
     let existing = abs;
     const tail: string[] = [];
     // Walk UP until we find an existing path (or hit vault root).
@@ -930,23 +999,34 @@ export class Vault {
       try {
         await this.statSafe(existing);
         break;
-      } catch {
+      } catch (err) {
+        if (!isErrnoException(err) || (err.code !== "ENOENT" && err.code !== "ENOTDIR")) {
+          throw err;
+        }
         const parent = path.dirname(existing);
-        if (parent === existing) return lexical; // hit FS root unexpectedly
+        if (parent === existing) {
+          throw new Error("Refusing path whose existing parent cannot be resolved inside the vault");
+        }
         tail.unshift(path.basename(existing));
         existing = parent;
-        if (existing.length < this.root.length) return lexical; // walked past vault root
+        const canonicalRel = path.relative(this.root, existing);
+        const configuredRel = path.relative(this.configuredRoot, existing);
+        const insideCanonical = !canonicalRel.startsWith("..") && !path.isAbsolute(canonicalRel);
+        const insideConfigured = !configuredRel.startsWith("..") && !path.isAbsolute(configuredRel);
+        if (!insideCanonical && !insideConfigured) {
+          throw new Error("Refusing path whose existing parent escapes the vault");
+        }
       }
     }
     // Resolve realpath on the existing prefix → canonical case from disk.
-    const realExisting = await fs.realpath(existing).catch(() => existing);
+    const realExisting = await this.realpathSafe(existing);
     // Re-join the not-yet-existing tail (caller's case is fine for non-
     // existent segments).
     const canonicalAbs = tail.length === 0 ? realExisting : path.join(realExisting, ...tail);
-    const rel = path.relative(this.root, canonicalAbs).replace(/\\/g, "/");
-    // If the canonical-form path escapes the vault, fall back to the
-    // lexical form — the broader path-traversal check will catch it.
-    if (rel.startsWith("..") || path.isAbsolute(rel)) return lexical;
+    const rel = vaultRelative(this.root, canonicalAbs);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error("Refusing path whose canonical form escapes the vault");
+    }
     return rel;
   }
 
@@ -1007,7 +1087,7 @@ export class Vault {
     }
     const targetLstat = await fs.lstat(toAbs).catch(() => null);
     if (targetLstat?.isSymbolicLink()) {
-      throw new Error(`Refusing to rename — destination is a symlink: ${path.relative(this.root, toAbs)}`);
+      throw new Error(`Refusing to rename — destination is a symlink: ${vaultRelative(this.root, toAbs)}`);
     }
     await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
     // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
@@ -1063,8 +1143,8 @@ export class Vault {
     this.cache.delete(toAbs);
     const stat = await this.statSafe(toAbs);
     return {
-      from: path.relative(this.root, fromAbs),
-      to: path.relative(this.root, toAbs),
+      from: vaultRelative(this.root, fromAbs),
+      to: vaultRelative(this.root, toAbs),
       mtimeMs: stat.mtimeMs
     };
   }
@@ -1098,7 +1178,7 @@ export class Vault {
     const initialAbs = await this.resolveSafePath(relOrAbs);
     const initialStat = await this.statSafe(initialAbs);
     if (!initialStat.isFile()) {
-      throw new Error(`Refusing to append — target is not a regular file: ${path.relative(this.root, initialAbs)}`);
+      throw new Error(`Refusing to append — target is not a regular file: ${vaultRelative(this.root, initialAbs)}`);
     }
     const lockKey = appendIdentityKey(initialStat);
     return withAppendIdentityLock(lockKey, async () => {
@@ -1106,7 +1186,7 @@ export class Vault {
       // silently redirect the append to a different inode or escape the lock.
       const abs = await this.resolveSafePath(relOrAbs);
       if (abs !== initialAbs) {
-        throw new Error(`Refusing to append — target changed while waiting: ${path.relative(this.root, initialAbs)}`);
+        throw new Error(`Refusing to append — target changed while waiting: ${vaultRelative(this.root, initialAbs)}`);
       }
       await this.assertParentInsideVault(abs);
       const relForFilter = await this.canonicalRelForPrivacyCheck(abs);
@@ -1129,7 +1209,7 @@ export class Vault {
       try {
         const before = await handle.stat();
         if (!before.isFile()) {
-          throw new Error(`Refusing to append — target is not a regular file: ${path.relative(this.root, abs)}`);
+          throw new Error(`Refusing to append — target is not a regular file: ${vaultRelative(this.root, abs)}`);
         }
         if (appendIdentityKey(before) !== lockKey) {
           throw new Error(`Refusing to append — target changed while waiting: ${relForFilter}`);
@@ -1148,7 +1228,7 @@ export class Vault {
           throw new Error(`Refusing to append — target changed during validation: ${relForFilter}`);
         }
         if (before.size + additionBytes > this.maxFileBytes) {
-          throw new Error(`Refusing to grow ${path.relative(this.root, abs)} past ${this.maxFileBytes} bytes`);
+          throw new Error(`Refusing to grow ${vaultRelative(this.root, abs)} past ${this.maxFileBytes} bytes`);
         }
         await handle.writeFile(addition, "utf8");
         after = await handle.stat();
@@ -1158,7 +1238,7 @@ export class Vault {
       this.cache.delete(abs);
       return {
         absPath: abs,
-        relPath: path.relative(this.root, abs),
+        relPath: vaultRelative(this.root, abs),
         mtimeMs: after.mtimeMs,
         appended_bytes: additionBytes
       };
@@ -1201,7 +1281,7 @@ export class Vault {
    *  stays inside the vault; callers needing that should use
    *  {@link resolveInside}. */
   toRel(abs: string): string {
-    return path.relative(this.root, abs);
+    return vaultRelative(this.root, abs);
   }
 
   /**
@@ -1260,17 +1340,11 @@ export class Vault {
 
   private async resolveSafePath(relOrAbs: string): Promise<string> {
     if (!this.ready) await this.ensureExists();
-    let abs: string;
-    if (path.isAbsolute(relOrAbs)) {
-      const realIn = await fs.realpath(relOrAbs).catch(() => relOrAbs);
-      abs = realIn;
-      const rel = path.relative(this.root, abs);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        throw new Error(`Path escapes vault root: ${relOrAbs}`);
-      }
-    } else {
-      abs = this.resolveInside(relOrAbs);
-    }
+    // Root initialization may stat/realpath the configured vault itself.
+    // Candidate-path I/O begins only after lexical containment and Windows
+    // component validation; absolute paths through the configured root alias
+    // remain accepted after `this.root` is canonicalized.
+    const abs = this.resolveInside(relOrAbs);
     try {
       const real = await this.realpathSafe(abs);
       const rel = path.relative(this.root, real);
@@ -1294,7 +1368,7 @@ export class Vault {
           this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))
             ? "--read-paths allowlist (path doesn't match any allow-glob)"
             : "--exclude-glob denylist";
-        throw new Error(`Path is excluded by ${reason}: ${rel}`);
+        throw new Error(`Path is excluded by ${reason}: ${norm}`);
       }
       return real;
     } catch (err) {
@@ -1310,7 +1384,7 @@ export class Vault {
     const stat = await this.statSafe(abs);
     if (stat.size > this.maxFileBytes) {
       throw new Error(
-        `File too large (${stat.size} bytes > limit ${this.maxFileBytes}): ${path.relative(this.root, abs)}`
+        `File too large (${stat.size} bytes > limit ${this.maxFileBytes}): ${vaultRelative(this.root, abs)}`
       );
     }
   }
@@ -1382,7 +1456,7 @@ async function walk(dir: string, root: string, out: FileEntry[], depth = 0): Pro
       if (!stat) continue;
       out.push({
         absPath: full,
-        relPath: path.relative(root, full),
+        relPath: vaultRelative(root, full),
         basename: e.name,
         mtimeMs: stat.mtimeMs
       });
@@ -1416,7 +1490,7 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
       if (!stat) continue;
       out.push({
         absPath: full,
-        relPath: path.relative(root, full),
+        relPath: vaultRelative(root, full),
         basename: e.name,
         mtimeMs: stat.mtimeMs
       });

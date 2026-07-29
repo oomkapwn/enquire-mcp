@@ -500,7 +500,7 @@ export class VaultWatcher {
         .catch((err) => {
           if (!this.silent) {
             process.stderr.write(
-              `enquire: watcher error on ${path.relative(root, absPath)} (${kind}) — ${
+              `enquire: watcher error on ${this.vault.toRel(absPath)} (${kind}) — ${
                 err instanceof Error ? err.message : String(err)
               }\n`
             );
@@ -528,8 +528,9 @@ export class VaultWatcher {
     // must not mutate embed-db/HNSW post-drain (belt-and-suspenders to the onChange
     // guard + the watcher being stopped first in close()).
     if (this.closed) return;
-    const relPath = path.relative(this.vault.root, absPath);
-    if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) return;
+    const nativeRelPath = path.relative(this.vault.root, absPath);
+    if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) return;
+    const relPath = this.vault.toRel(absPath);
     // v3.10.0-rc.20 (audit M7) — privacy defense-in-depth. The chokidar
     // `ignored` predicate (see watch() setup) already drops excluded paths, but
     // re-check here so a `--exclude-glob` / `--read-paths`-filtered note can

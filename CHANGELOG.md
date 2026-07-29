@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.21] — 2026-07-29
+
+> **TL;DR:** **The queued maintenance patches land without changing the runtime product surface.** The development toolchain advances to `@biomejs/biome` 2.5.6 and `@types/node` 26.1.2, the Biome schema stays aligned with the installed CLI, and every workflow checkout use moves from the immutable `actions/checkout` v7.0.0 commit to the signed v7.0.1 commit. Runtime dependencies, MCP tools/prompts, schemas, persistence formats and default behavior are unchanged; **1740 source tests remain unchanged.**
+>
+> **Method note:** Dependabot PR #401 was based on the exact rc.20 source; PR #397 carried the correct mechanical workflow patch but was based on rc.19. Both were treated as reviewed inputs rather than merged release history: their exact diffs were reapplied together on current `origin/main`, the official `actions/checkout@v7.0.1` tag was independently resolved to verified commit `3d3c42e5aac5ba805825da76410c181273ba90b1`, and the lockfile delta was constrained to its two rc.21 version fields, the two declared dev patches and Biome's platform packages. Under the current CI-only validation policy, executable validation runs only in GitHub-hosted CI on the exact candidate SHA. No local install, build, lint, test, coverage, smoke, OIA, package-consumer or client workload is used; no benchmark or evaluation workload is run locally or remotely for this release lane.
+
+### Changed — bounded maintenance
+
+- **Biome 2.5.6.** The declared range, resolved CLI and every optional platform package advance together from 2.5.4 to 2.5.6. `biome.json` now references the matching 2.5.6 schema rather than leaving a non-blocking version drift behind.
+- **Node declarations 26.1.2.** `@types/node` advances one patch with its existing transitive shape unchanged; this is compile-time-only and does not change the declared Node runtime floor.
+- **Checkout 7.0.1.** Every checkout use in CI, documentation publication, release and the explicitly confirmed dist-tag cleanup workflow is pinned to the official signed v7.0.1 commit. No tag-only action reference is introduced.
+
+### Verification boundary
+
+- The combined candidate must pass all 9 release-required jobs on its exact SHA; Docker, GitHub-hosted macOS and both default CodeQL analyses are reviewed before merge.
+- The release still tags the squash-merge commit on `main`, not this branch head, and publishes immediately only after the exact-`main` gate is green.
+
+### Stats
+
+- Runtime dependencies and behavior: unchanged.
+- MCP surface: unchanged (46 tools, 19 prompts).
+- Source tests: 1740 → 1740.
+- Workflow checkout references: pinned to the signed v7.0.1 commit.
+
+**Lesson:** Dependabot branches are evidence-bearing inputs, not release history: a mechanically safe patch still needs rebasing onto the current product state, sibling-callsite enumeration and fresh exact-candidate CI.
+
 ## [3.12.0-rc.20] — 2026-07-28
 
 > **TL;DR:** **A benchmark can no longer become headline-shaped unless its source files, physical FTS/embedding rows, queries, retrieval-signal use, executed `dist`, runtime-dependency receipts, local model artifacts, and remote release identity are all accounted for.** The normal product keeps its established fail-soft indexing posture; evidence callers opt into strict FTS and embedding synchronization, raw accounting, physical SQLite audits, and a second audit after every query has completed. LongMemEval artifact schema v2 independently pins the official 500/470/30/22,419 cohort shape, validates raw per-query scope/signals/metrics, fixes the offline q8 model identity and bytes, and binds the run to the remotely tagged `origin/main` implementation through a deterministic source rebuild, non-symlink manifests, observable runtime-injection posture, and lock-coherent dependency/compiler receipts. **1720 → 1740 source tests.**

@@ -183,34 +183,31 @@ describe("createNote", () => {
     expect(renamed.to).toBe("Renamed.md");
   });
 
-  it(
-    "rejects writes and renames through a symlink whose target is outside the vault (audit v0.7.3 P1)",
-    async (ctx) => {
-      const v = new Vault(root, { enableWrite: true });
-      await v.ensureExists();
-      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-link-out-"));
-      const outsideTarget = path.join(outside, "outside-target.md");
-      await fs.writeFile(outsideTarget, "BEFORE");
-      try {
-        await fs.symlink(outsideTarget, path.join(root, "Link.md")).catch(() => null);
-        const linkExists = await fs.lstat(path.join(root, "Link.md")).catch(() => null);
-        if (!linkExists) return ctx.skip();
-        await fs.writeFile(path.join(root, "Source.md"), "SOURCE");
-        await expect(renameNote(v, { from: "Source.md", to: "Link.md", overwrite: true })).rejects.toThrow(
-          /destination is a symlink/
-        );
-        await expect(createNote(v, { path: "Link.md", content: "AFTER", overwrite: true })).rejects.toThrow(
-          /target is a symlink/
-        );
-        expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe("SOURCE");
-        const after = await fs.readFile(outsideTarget, "utf8");
-        expect(after).toBe("BEFORE");
-      } finally {
-        await fs.unlink(path.join(root, "Link.md")).catch(() => {});
-        await fs.rm(outside, { recursive: true, force: true });
-      }
+  it("rejects writes and renames through a symlink whose target is outside the vault (audit v0.7.3 P1)", async (ctx) => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-link-out-"));
+    const outsideTarget = path.join(outside, "outside-target.md");
+    await fs.writeFile(outsideTarget, "BEFORE");
+    try {
+      await fs.symlink(outsideTarget, path.join(root, "Link.md")).catch(() => null);
+      const linkExists = await fs.lstat(path.join(root, "Link.md")).catch(() => null);
+      if (!linkExists) return ctx.skip();
+      await fs.writeFile(path.join(root, "Source.md"), "SOURCE");
+      await expect(renameNote(v, { from: "Source.md", to: "Link.md", overwrite: true })).rejects.toThrow(
+        /destination is a symlink/
+      );
+      await expect(createNote(v, { path: "Link.md", content: "AFTER", overwrite: true })).rejects.toThrow(
+        /target is a symlink/
+      );
+      expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe("SOURCE");
+      const after = await fs.readFile(outsideTarget, "utf8");
+      expect(after).toBe("BEFORE");
+    } finally {
+      await fs.unlink(path.join(root, "Link.md")).catch(() => {});
+      await fs.rm(outside, { recursive: true, force: true });
     }
-  );
+  });
 
   it("rejects writes whose parent dir is a symlink to outside the vault", async () => {
     const v = new Vault(root, { enableWrite: true });
@@ -307,10 +304,43 @@ describe("appendToNote", () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     await createNote(v, { path: "Log.md", content: "first entry" });
-    const out = await appendToNote(v, { path: "Log.md", content: "second entry" });
+    // Windows/Node may expose a different path-stat dev+ino identity than fstat
+    // for the same file. Identity must remain descriptor-only; this mutation is
+    // the deterministic negative control for the old mixed-stat comparison.
+    const pathStat = await fs.stat(path.join(root, "Log.md"));
+    const pathStatSpy = vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(pathStat, { dev: pathStat.dev + 1 }));
+    const out = await appendToNote(v, { path: "Log.md", content: "second entry" }).finally(() =>
+      pathStatSpy.mockRestore()
+    );
     expect(out.appended_bytes).toBeGreaterThan(0);
     const text = await fs.readFile(path.join(root, "Log.md"), "utf8");
     expect(text).toBe("first entry\n\nsecond entry");
+
+    // A real replacement between the descriptor probe and write handle must
+    // still fail closed; neither the original nor replacement may be changed.
+    const swap = path.join(root, "Swap.md");
+    await fs.writeFile(swap, "ORIGINAL");
+    const canonicalSwap = await fs.realpath(swap);
+    const canonicalMoved = path.join(path.dirname(canonicalSwap), "Swap-moved.md");
+    const openTarget = v as unknown as {
+      openSafe(p: string, flags: string | number, mode?: number): Promise<import("node:fs/promises").FileHandle>;
+    };
+    const realOpenSafe = openTarget.openSafe.bind(v);
+    let swapOpens = 0;
+    const openSafeSpy = vi.spyOn(openTarget, "openSafe").mockImplementation(async (p, flags, mode) => {
+      if (p === canonicalSwap && ++swapOpens === 2) {
+        await fs.rename(canonicalSwap, canonicalMoved);
+        await fs.writeFile(canonicalSwap, "REPLACEMENT");
+      }
+      return mode === undefined ? realOpenSafe(p, flags) : realOpenSafe(p, flags, mode);
+    });
+    try {
+      await expect(v.appendNote("Swap.md", "\nMUST NOT APPEND")).rejects.toThrow(/target changed while waiting/);
+    } finally {
+      openSafeSpy.mockRestore();
+    }
+    expect(await fs.readFile(canonicalMoved, "utf8")).toBe("ORIGINAL");
+    expect(await fs.readFile(canonicalSwap, "utf8")).toBe("REPLACEMENT");
   });
 
   it("supports custom separator", async () => {

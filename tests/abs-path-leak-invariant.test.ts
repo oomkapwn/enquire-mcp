@@ -139,6 +139,35 @@ function mutationLeafProbeProblems(src: string): string[] {
   return problems;
 }
 
+function appendIdentityProblems(src: string): string[] {
+  const problems: string[] = [];
+  const append = methodBody(src, "appendNote");
+  const descriptorStats = append.match(/\b(?:identityHandle|handle|validationHandle)\.stat\(\)/g)?.length ?? 0;
+  if (
+    !append.includes("const initialType = await this.lstatIfExistsSafe(initialAbs)") ||
+    !append.includes("initialType && !initialType.isFile()") ||
+    !append.includes("fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK") ||
+    !append.includes("const identityHandle = await this.openSafe(initialAbs, appendFlags)") ||
+    !append.includes("initialStat = await identityHandle.stat()") ||
+    !append.includes("const lockKey = appendIdentityKey(initialStat)") ||
+    !append.includes("appendIdentityKey(before) !== lockKey") ||
+    !append.includes("appendIdentityKey(pathIdentity) !== appendIdentityKey(before)") ||
+    descriptorStats < 3
+  ) {
+    problems.push(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
+    );
+  }
+  if (
+    append.includes("this.statSafe(initialAbs)") ||
+    append.includes("this.statSafe(realAfterOpen)") ||
+    /\b(?:before|pathIdentity)\.dev\b/.test(append)
+  ) {
+    problems.push("append identity must not compare path stat with descriptor stat or bypass appendIdentityKey");
+  }
+  return problems;
+}
+
 describe("abs-path-leak inventory invariant (rc.49)", () => {
   it("every raw fs sink in src/vault.ts sits in a sanitizing (or exempt) method", () => {
     const src = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
@@ -149,6 +178,7 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
       `Raw fs sinks not funnelled through sanitizeFsError (leak the host abs path):\n${detail}`
     ).toEqual([]);
     expect(mutationLeafProbeProblems(src)).toEqual([]);
+    expect(appendIdentityProblems(src)).toEqual([]);
   });
 
   it("detector flags a raw sink in a non-sanitizing method (NEGATIVE control)", () => {
@@ -176,6 +206,22 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
     );
     expect(mutationLeafProbeProblems(rawWriteProbe)).toContain(
       "writeNote must use the mutation leaf assertion at every required phase"
+    );
+
+    const appendBody = methodBody(realVault, "appendNote");
+    const pathStatIdentity = appendBody.replace(
+      "initialStat = await identityHandle.stat();",
+      "initialStat = await this.statSafe(initialAbs);"
+    );
+    expect(appendIdentityProblems(realVault.replace(appendBody, pathStatIdentity))).toContain(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
+    );
+    const blockingSpecialFileOpen = appendBody.replace(
+      "fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK",
+      "fsConstants.O_NOFOLLOW"
+    );
+    expect(appendIdentityProblems(realVault.replace(appendBody, blockingSpecialFileOpen))).toContain(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
     );
   });
 });

@@ -1215,7 +1215,29 @@ export class Vault {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note appends");
     }
     const initialAbs = await this.resolveSafePath(relOrAbs);
-    const initialStat = await this.statSafe(initialAbs);
+    await this.assertParentInsideVault(initialAbs);
+    // Type-only preflight preserves the normal deliberate error for special
+    // files. It is never used as identity evidence: a swap can happen after
+    // lstat, so every security decision below is re-derived from a descriptor.
+    const initialType = await this.lstatIfExistsSafe(initialAbs);
+    if (initialType && !initialType.isFile()) {
+      throw new Error(`Refusing to append — target is not a regular file: ${vaultRelative(this.root, initialAbs)}`);
+    }
+    // Deliberately omit O_CREAT: append is an existing-note operation.
+    // The pre-fix string flag "a" included O_CREAT, so resolveSafePath's
+    // ENOENT fallback plus an out-of-vault parent symlink created and wrote
+    // an arbitrary missing leaf outside the vault.
+    // O_NONBLOCK prevents a special-file replacement from hanging the server;
+    // it does not change ordinary regular-file append semantics.
+    const posixSafeOpen = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+    const appendFlags = fsConstants.O_WRONLY | fsConstants.O_APPEND | posixSafeOpen;
+    const identityHandle = await this.openSafe(initialAbs, appendFlags);
+    let initialStat: import("node:fs").Stats;
+    try {
+      initialStat = await identityHandle.stat();
+    } finally {
+      await identityHandle.close();
+    }
     if (!initialStat.isFile()) {
       throw new Error(`Refusing to append — target is not a regular file: ${vaultRelative(this.root, initialAbs)}`);
     }
@@ -1237,12 +1259,7 @@ export class Vault {
         throw new Error(`Refusing to append — target is excluded by ${reason}: ${relForFilter}`);
       }
 
-      // Deliberately omit O_CREAT: append is an existing-note operation.
-      // The pre-fix string flag "a" included O_CREAT, so resolveSafePath's
-      // ENOENT fallback plus an out-of-vault parent symlink created and wrote
-      // an arbitrary missing leaf outside the vault.
-      const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW;
-      const handle = await this.openSafe(abs, fsConstants.O_WRONLY | fsConstants.O_APPEND | noFollow);
+      const handle = await this.openSafe(abs, appendFlags);
       const additionBytes = Buffer.byteLength(addition, "utf8");
       let after: import("node:fs").Stats;
       try {
@@ -1255,16 +1272,22 @@ export class Vault {
         }
 
         // Verify the descriptor still names the in-vault path we validated.
-        // O_NOFOLLOW closes a leaf-symlink swap on POSIX; this dev/ino check
-        // also catches a parent/leaf rename between resolution and open.
+        // Identity is derived only from FileHandle.stat(): path stat and
+        // descriptor stat travel through different Win32/libuv surfaces and
+        // cannot be assumed to expose an interchangeable dev+ino token.
         const realAfterOpen = await this.realpathSafe(abs);
         const relAfterOpen = path.relative(this.root, realAfterOpen);
         if (relAfterOpen.startsWith("..") || path.isAbsolute(relAfterOpen)) {
           throw new Error(`Resolved path escapes vault root: ${relOrAbs}`);
         }
-        const pathStat = await this.statSafe(realAfterOpen);
-        if (before.ino !== 0 && pathStat.ino !== 0 && (before.dev !== pathStat.dev || before.ino !== pathStat.ino)) {
-          throw new Error(`Refusing to append — target changed during validation: ${relForFilter}`);
+        const validationHandle = await this.openSafe(realAfterOpen, appendFlags);
+        try {
+          const pathIdentity = await validationHandle.stat();
+          if (appendIdentityKey(pathIdentity) !== appendIdentityKey(before)) {
+            throw new Error(`Refusing to append — target changed during validation: ${relForFilter}`);
+          }
+        } finally {
+          await validationHandle.close();
         }
         if (before.size + additionBytes > this.maxFileBytes) {
           throw new Error(`Refusing to grow ${vaultRelative(this.root, abs)} past ${this.maxFileBytes} bytes`);

@@ -14,8 +14,10 @@ import {
   offendingAdvisories,
   packedConsumerManifest,
   releaseChannelForVersion,
+  retryableAuditError,
   staleAllowlistEntries,
-  validateAuditReport
+  validateAuditReport,
+  validateAuditReportWithRetry
 } from "../scripts/check-audit.mjs";
 
 const sample = {
@@ -163,6 +165,136 @@ describe("check-audit scoped gate (rc.50)", () => {
         metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 1, total: 1 } }
       })
     ).toThrow(/incomplete advisory trace/);
+
+    const cleanAuditReport = {
+      auditReportVersion: 2,
+      vulnerabilities: {},
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 } }
+    };
+    expect(
+      retryableAuditError({
+        message: "503 Service Unavailable",
+        method: "POST",
+        uri: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+        headers: {},
+        statusCode: 503,
+        body: "upstream unavailable"
+      })
+    ).toMatchObject({ statusCode: 503 });
+    expect(retryableAuditError({ error: { code: "EAI_AGAIN" } })).toMatchObject({ code: "EAI_AGAIN" });
+    expect(retryableAuditError({ auditReportVersion: 2, statusCode: 503 })).toBeUndefined();
+
+    let transientAttempts = 0;
+    const retrySleeps: number[] = [];
+    const retryWarnings: Array<{ number: number; attempts: number; delayMs: number; diagnostic: string }> = [];
+    const recoveredAudit = validateAuditReportWithRetry(
+      () => {
+        transientAttempts++;
+        return transientAttempts < 3
+          ? {
+              message: "registry response contains SECRET-MESSAGE",
+              method: "POST",
+              uri: "https://token@registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+              headers: { authorization: "SECRET-HEADER" },
+              statusCode: 503,
+              body: "SECRET-BODY"
+            }
+          : cleanAuditReport;
+      },
+      {
+        backoffMs: 5,
+        sleep: (ms: number) => retrySleeps.push(ms),
+        onRetry: (event: { number: number; attempts: number; delayMs: number; diagnostic: string }) =>
+          retryWarnings.push(event),
+        label: "published-consumer"
+      }
+    );
+    expect(recoveredAudit).toEqual(cleanAuditReport);
+    expect(transientAttempts).toBe(3);
+    expect(retrySleeps).toEqual([5, 10]);
+    expect(retryWarnings.map((event) => event.diagnostic)).toEqual(["status=503", "status=503"]);
+    expect(JSON.stringify(retryWarnings)).not.toMatch(/SECRET|registry\.npmjs\.org/);
+
+    let exhaustedAttempts = 0;
+    expect(() =>
+      validateAuditReportWithRetry(
+        () => {
+          exhaustedAttempts++;
+          return { statusCode: 503, message: "SECRET-FINAL" };
+        },
+        { attempts: 3, backoffMs: 0, sleep: () => {}, label: "published-consumer" }
+      )
+    ).toThrow(/after 3 attempts \(status=503\); refusing to treat it as clean/);
+    expect(exhaustedAttempts).toBe(3);
+
+    const advisoryReport = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "evil-pkg": {
+          severity: "high",
+          via: [
+            {
+              url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+              severity: "high",
+              title: "RCE",
+              name: "evil-pkg"
+            }
+          ]
+        }
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 } }
+    };
+    let advisoryAttempts = 0;
+    let advisorySleeps = 0;
+    const validatedAdvisory = validateAuditReportWithRetry(
+      () => {
+        advisoryAttempts++;
+        return advisoryReport;
+      },
+      { sleep: () => advisorySleeps++ }
+    );
+    expect(advisoryAttempts).toBe(1);
+    expect(advisorySleeps).toBe(0);
+    expect(
+      offendingAdvisories(validatedAdvisory, { minSeverity: "moderate", allowlist: {} }).map(
+        (advisory: { id: string }) => advisory.id
+      )
+    ).toContain("GHSA-aaaa-bbbb-cccc");
+
+    const immediateFailures = [
+      { name: "permanent status", value: { statusCode: 401, message: "not authorized" } },
+      { name: "unknown code", value: { error: { code: "EUNKNOWN", summary: "SECRET-UNKNOWN" } } },
+      { name: "contradictory signals", value: { error: { code: "E503", statusCode: 401 } } },
+      {
+        name: "report-shaped error",
+        value: {
+          ...cleanAuditReport,
+          error: { code: "E503", statusCode: 503 }
+        }
+      },
+      { name: "malformed payload", value: {} }
+    ];
+    for (const { name, value } of immediateFailures) {
+      let calls = 0;
+      const failure = (() => {
+        try {
+          validateAuditReportWithRetry(
+            () => {
+              calls++;
+              return value;
+            },
+            { sleep: () => expect.fail(`${name} must not sleep`) }
+          );
+          return null;
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(calls, name).toBe(1);
+      expect(failure, name).toBeInstanceOf(Error);
+      expect((failure as Error).message, name).toMatch(/refusing to treat it as clean/);
+      expect((failure as Error).message, name).not.toMatch(/SECRET|registry\.npmjs\.org/);
+    }
 
     expect(npmProcessSpec("linux", {}, "/usr/bin/node")).toEqual({ command: "npm", argsPrefix: [] });
     expect(

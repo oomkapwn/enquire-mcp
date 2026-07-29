@@ -67,9 +67,106 @@ export const CONSUMER_ALLOWLIST = {
 };
 
 const SEV_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
+const AUDIT_RETRY_ATTEMPTS = 3;
+const AUDIT_RETRY_BACKOFF_MS = 5_000;
+const RETRYABLE_AUDIT_CODES = new Set([
+  "E408",
+  "E425",
+  "E429",
+  "E500",
+  "E502",
+  "E503",
+  "E504",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETRESET",
+  "ENETUNREACH",
+  "EPIPE",
+  "ESOCKETTIMEDOUT",
+  "ETIMEDOUT"
+]);
+const RETRYABLE_AUDIT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const SAFE_AUDIT_CODE = /^[A-Z][A-Z0-9_]{0,31}$/u;
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeAuditStatus(value) {
+  if (Number.isInteger(value) && value >= 100 && value <= 599) return value;
+  if (typeof value === "string" && /^[1-5]\d\d$/u.test(value)) return Number(value);
+  return undefined;
+}
+
+function auditErrorFields(value) {
+  if (!isRecord(value)) return undefined;
+  const nestedError = isRecord(value.error) ? value.error : undefined;
+  const rawCode = nestedError?.code ?? value.code;
+  const code = typeof rawCode === "string" && SAFE_AUDIT_CODE.test(rawCode) ? rawCode : undefined;
+  const statusCode = normalizeAuditStatus(
+    nestedError?.statusCode ?? nestedError?.status ?? value.statusCode ?? value.status
+  );
+  return { code, statusCode };
+}
+
+function auditErrorDiagnostic(value) {
+  const fields = auditErrorFields(value);
+  if (!fields) return undefined;
+  const parts = [fields.code ? `code=${fields.code}` : "", fields.statusCode ? `status=${fields.statusCode}` : ""];
+  const diagnostic = parts.filter(Boolean).join(" ");
+  if (diagnostic) return diagnostic;
+  return Object.hasOwn(value, "error") ? "structured-error" : undefined;
+}
+
+/**
+ * Identify only an explicit transient npm registry/transport error payload.
+ * Report-shaped, contradictory, permanent and unknown payloads are never
+ * retried. npm's own JSON audit-error renderer emits a top-level
+ * `statusCode`; some transport paths instead expose a normalized error code.
+ *
+ * @param {unknown} value - Parsed `npm audit --json` payload.
+ * @returns {{code?:string,statusCode?:number}|undefined} Safe retry signal.
+ * @example
+ * retryableAuditError({ statusCode: 503 }); // { statusCode: 503 }
+ */
+export function retryableAuditError(value) {
+  if (
+    !isRecord(value) ||
+    Object.hasOwn(value, "auditReportVersion") ||
+    Object.hasOwn(value, "vulnerabilities") ||
+    Object.hasOwn(value, "metadata")
+  ) {
+    return undefined;
+  }
+  const fields = auditErrorFields(value);
+  if (!fields || (!fields.code && fields.statusCode === undefined)) return undefined;
+
+  const statusFromCode =
+    fields.code && /^E([1-5]\d\d)$/u.test(fields.code) ? Number(fields.code.slice(1)) : undefined;
+  if (
+    statusFromCode !== undefined &&
+    fields.statusCode !== undefined &&
+    statusFromCode !== fields.statusCode
+  ) {
+    return undefined;
+  }
+  if (fields.statusCode !== undefined && !RETRYABLE_AUDIT_STATUSES.has(fields.statusCode)) {
+    return undefined;
+  }
+
+  const retryableCode = fields.code ? RETRYABLE_AUDIT_CODES.has(fields.code) : false;
+  const retryableStatus =
+    fields.statusCode !== undefined && RETRYABLE_AUDIT_STATUSES.has(fields.statusCode);
+  if (fields.code && !retryableCode) return undefined;
+  return retryableCode || retryableStatus ? fields : undefined;
+}
+
+function sleepMs(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
@@ -137,12 +234,14 @@ export function validateAuditReport(value) {
   if (
     !isRecord(value) ||
     value.auditReportVersion !== 2 ||
-    value.error ||
+    Object.hasOwn(value, "error") ||
     !isRecord(value.vulnerabilities) ||
     !isRecord(value.metadata) ||
     !isRecord(value.metadata.vulnerabilities)
   ) {
-    throw new Error("npm audit returned an error or malformed report; refusing to treat it as clean");
+    const diagnostic = auditErrorDiagnostic(value);
+    const suffix = diagnostic ? ` (${diagnostic})` : "";
+    throw new Error(`npm audit returned an error or malformed report${suffix}; refusing to treat it as clean`);
   }
   const vulnerabilityNames = Object.keys(value.vulnerabilities);
   const severityCounts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
@@ -164,6 +263,54 @@ export function validateAuditReport(value) {
     throw new Error("npm audit returned an incomplete advisory trace; refusing to treat it as clean");
   }
   return value;
+}
+
+/**
+ * Validate an npm audit report, retrying only narrowly recognized transient
+ * registry/transport payloads. Invalid JSON, schema drift, real reports and
+ * permanent/unknown errors are evaluated once and fail closed.
+ *
+ * @param {() => unknown} attempt - Produce one already-parsed npm payload.
+ * @param {object} options - Retry controls; injection points keep tests fast.
+ * @param {number} [options.attempts=3] - Maximum payload attempts.
+ * @param {number} [options.backoffMs=5000] - Linear backoff unit.
+ * @param {(ms:number) => void} [options.sleep] - Synchronous delay function.
+ * @param {(event:object) => void} [options.onRetry] - Sanitized retry observer.
+ * @param {string} [options.label="audit"] - Fixed non-secret scope label.
+ * @returns {object} A validated npm audit report.
+ * @example
+ * validateAuditReportWithRetry(() => cleanReport, { attempts: 1 });
+ */
+export function validateAuditReportWithRetry(
+  attempt,
+  {
+    attempts = AUDIT_RETRY_ATTEMPTS,
+    backoffMs = AUDIT_RETRY_BACKOFF_MS,
+    sleep = sleepMs,
+    onRetry = () => {},
+    label = "audit"
+  } = {}
+) {
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error("npm audit retry attempts must be a positive integer");
+  }
+  for (let number = 1; number <= attempts; number++) {
+    const value = attempt();
+    const transient = retryableAuditError(value);
+    if (!transient) return validateAuditReport(value);
+
+    const diagnostic = auditErrorDiagnostic(value) ?? "transient-error";
+    if (number === attempts) {
+      throw new Error(
+        `npm audit ${label} returned a retryable registry/transport error after ${attempts} attempts ` +
+          `(${diagnostic}); refusing to treat it as clean`
+      );
+    }
+    const delayMs = backoffMs * number;
+    onRetry({ number, attempts, delayMs, diagnostic });
+    sleep(delayMs);
+  }
+  throw new Error("unreachable npm audit retry state");
 }
 
 /**
@@ -277,7 +424,7 @@ function runNpm(args, options) {
   });
 }
 
-function runAudit(scopeFlag, cwd = REPO_ROOT) {
+function readAuditPayload(scopeFlag, cwd) {
   let output;
   try {
     output = runNpm(["audit", scopeFlag, "--json"], {
@@ -296,7 +443,18 @@ function runAudit(scopeFlag, cwd = REPO_ROOT) {
   } catch (err) {
     throw new Error(`npm audit produced invalid JSON: ${err?.message ?? err}`);
   }
-  return validateAuditReport(parsed);
+  return parsed;
+}
+
+function runAudit(scopeFlag, cwd = REPO_ROOT, label = "audit") {
+  return validateAuditReportWithRetry(() => readAuditPayload(scopeFlag, cwd), {
+    label,
+    onRetry: ({ number, attempts, delayMs, diagnostic }) => {
+      console.error(
+        `[check-audit] WARN — ${label} ${diagnostic}; retrying after ${delayMs} ms (${number}/${attempts})`
+      );
+    }
+  });
 }
 
 function runPublishedConsumerAudit() {
@@ -331,7 +489,7 @@ function runPublishedConsumerAudit() {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
     });
-    return { audit: runAudit("--omit=dev", consumerDir), version: packed.version };
+    return { audit: runAudit("--omit=dev", consumerDir, "published-consumer"), version: packed.version };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -339,8 +497,8 @@ function runPublishedConsumerAudit() {
 
 if (isEntrypoint(import.meta.url)) {
   // Same thresholds as the bare gate this replaces: prod ≥ moderate, dev ≥ high.
-  const prodAudit = runAudit("--omit=dev");
-  const devAudit = runAudit("--include=dev");
+  const prodAudit = runAudit("--omit=dev", REPO_ROOT, "source-prod");
+  const devAudit = runAudit("--include=dev", REPO_ROOT, "source-dev");
   const prodAll = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: {} });
   const devAll = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: {} });
   const prod = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: ALLOWLIST });

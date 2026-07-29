@@ -640,6 +640,25 @@ export class Vault {
       throw this.sanitizeFsError(err);
     }
   }
+  private async lstatIfExistsSafe(p: string): Promise<import("node:fs").Stats | null> {
+    try {
+      return await fs.lstat(p);
+    } catch (err) {
+      if (isErrnoException(err) && err.code === "ENOENT") return null;
+      throw this.sanitizeFsError(err);
+    }
+  }
+  private async assertMutationLeafNotSymlink(
+    p: string,
+    operation: "write" | "rename"
+  ): Promise<import("node:fs").Stats | null> {
+    const leaf = await this.lstatIfExistsSafe(p);
+    if (leaf?.isSymbolicLink()) {
+      const role = operation === "write" ? "target" : "destination";
+      throw new Error(`Refusing to ${operation} — ${role} is a symlink: ${vaultRelative(this.root, p)}`);
+    }
+    return leaf;
+  }
   private async realpathSafe(p: string): Promise<string> {
     try {
       return await fs.realpath(p);
@@ -836,6 +855,10 @@ export class Vault {
     const targetRel = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
     const abs = this.resolveInside(targetRel);
     await this.assertParentInsideVault(abs);
+    // Preserve the explicit leaf-symlink refusal before canonical privacy
+    // validation follows the target. Unexpected lstat failures fail closed;
+    // only a genuinely absent leaf is allowed to continue.
+    await this.assertMutationLeafNotSymlink(abs, "write");
     // v2.0.0-beta.1 P0 fix: enforce --read-paths / --exclude-glob on writes.
     // Pre-fix, `writeNote()` used `resolveInside()` (path-traversal only) and
     // never called `isExcluded()`, so `--read-paths "Public/**"` allowed
@@ -877,10 +900,7 @@ export class Vault {
     // legacy stat-based check stays as a no-op (writeFile-with-`wx` throws
     // EEXIST on existing destination, which we translate to the same
     // user-facing "Note already exists" error for back-compat).
-    const targetLstat = await fs.lstat(abs).catch(() => null);
-    if (targetLstat?.isSymbolicLink()) {
-      throw new Error(`Refusing to write — target is a symlink: ${vaultRelative(this.root, abs)}`);
-    }
+    const targetLstat = await this.assertMutationLeafNotSymlink(abs, "write");
     if (opts.overwrite) {
       // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
       // rename(2) over the target, so a crash/SIGKILL mid-write can never truncate the
@@ -899,8 +919,7 @@ export class Vault {
       // the random suffix means the path can't be pre-planted; together they close it.
       // (The random name also fixes the rc.12 stale-`.tmp` footgun — a leftover tmp from a
       // crashed write no longer blocks future overwrites under a fixed `wx` name.)
-      const existing = await this.statSafe(abs).catch(() => null);
-      const tmpMode = existing ? existing.mode & 0o777 : 0o666;
+      const tmpMode = targetLstat ? targetLstat.mode & 0o777 : 0o666;
       const tmp = `${abs}.${randomBytes(8).toString("hex")}.tmp`;
       let fh: import("node:fs/promises").FileHandle | undefined;
       try {
@@ -991,6 +1010,25 @@ export class Vault {
     return this.canonicalRelForPrivacyCheck(this.resolveInside(abs));
   }
 
+  /**
+   * Refuse a rename destination leaf symlink before canonical privacy
+   * resolution follows it, then return the canonical relative identity used
+   * by the privacy filter.
+   *
+   * @param abs - Destination path under the configured or canonical vault root.
+   * @returns Canonical vault-relative destination identity.
+   * @example
+   * ```ts
+   * await vault.canonicalRenameDestinationRelPublic(vault.resolveInside("Archive/Note.md"));
+   * ```
+   * @internal
+   */
+  async canonicalRenameDestinationRelPublic(abs: string): Promise<string> {
+    const resolved = this.resolveInside(abs);
+    await this.assertMutationLeafNotSymlink(resolved, "rename");
+    return this.canonicalRelForPrivacyCheck(resolved);
+  }
+
   private async canonicalRelForPrivacyCheck(abs: string): Promise<string> {
     let existing = abs;
     const tail: string[] = [];
@@ -1077,7 +1115,7 @@ export class Vault {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
     // writeNote does, so users with --read-paths see the actual reason.
     // v3.7.16 P1-6 — case-insensitive bypass closure (same as writeNote).
-    const toRelForFilter = await this.canonicalRelForPrivacyCheck(toAbs);
+    const toRelForFilter = await this.canonicalRenameDestinationRelPublic(toAbs);
     if (this.isExcluded(toRelForFilter)) {
       const reason =
         this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(toRelForFilter))
@@ -1085,11 +1123,12 @@ export class Vault {
           : "--exclude-glob denylist";
       throw new Error(`Refusing to rename — destination is excluded by ${reason}: ${toRelNorm}`);
     }
-    const targetLstat = await fs.lstat(toAbs).catch(() => null);
-    if (targetLstat?.isSymbolicLink()) {
-      throw new Error(`Refusing to rename — destination is a symlink: ${vaultRelative(this.root, toAbs)}`);
-    }
     await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
+    await this.assertParentInsideVault(toAbs);
+    // Recheck beside the mutation after awaits in validation/mkdir. This
+    // narrows the stable-pre-state validation window; the non-following/atomic
+    // rename/link operations remain authoritative if the leaf changes later.
+    await this.assertMutationLeafNotSymlink(toAbs, "rename");
     // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
     // Pre-3.7.14 we did `stat(toAbs)`-then-`rename(fromAbs, toAbs)`. POSIX
     // rename(2) silently REPLACES the destination if it exists, so between

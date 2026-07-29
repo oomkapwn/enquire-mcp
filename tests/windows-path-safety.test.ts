@@ -48,6 +48,9 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       "LPT³.ext",
       "CONIN$",
       "conout$.md",
+      "CON .txt",
+      "NUL...txt",
+      "COM1 .md",
       "Folder/NUL.md",
       "bad<.md",
       "bad>.md",
@@ -81,6 +84,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       "LPT10.md",
       "COM0x.md",
       "CONINbox.md",
+      "CON text.md",
       "name.with.dots.md",
       "café.md",
       "emoji-🧠.md"
@@ -105,9 +109,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       .spyOn(fs, "realpath")
       .mockRejectedValueOnce(Object.assign(new Error("canonical realpath denied"), { code: "EACCES" }));
     try {
-      await expect(vault.canonicalRelForPrivacyCheckPublic(absoluteGood)).rejects.toThrow(
-        /canonical realpath denied/
-      );
+      await expect(vault.canonicalRelForPrivacyCheckPublic(absoluteGood)).rejects.toThrow(/canonical realpath denied/);
     } finally {
       realpathSpy.mockRestore();
     }

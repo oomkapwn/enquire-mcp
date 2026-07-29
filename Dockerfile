@@ -10,11 +10,10 @@
 #  - Builds from source so the image reflects the repo at HEAD, not a published
 #    tag.
 #  - Optional native deps (better-sqlite3, hnswlib-node, pdfjs-dist, tesseract.js,
-#    @napi-rs/canvas) are PRESENT at build time (so `tsc` can resolve their type
-#    declarations — they're referenced in typed dynamic imports) but NEVER
-#    natively compiled (`npm ci --ignore-scripts` → no python/make/g++ needed)
-#    and PRUNED from the slim runtime image. Each is loaded via a lazy
-#    `await import()` only when a heavy tool is actually CALLED, so the MCP
+#    @napi-rs/canvas) are PRESENT at build time but NEVER natively compiled
+#    (`npm ci --ignore-scripts` → no python/make/g++ needed), then PRUNED from
+#    the slim runtime image. Each is loaded through a lazy optional-dependency
+#    boundary only when a heavy tool is actually CALLED, so the MCP
 #    handshake + `tools/list` work without them. The umbrella `obsidian_search`
 #    degrades to pure-JS TF-IDF; heavy retrieval (FTS5 BM25, ML embeddings, HNSW,
 #    PDF/OCR) needs those native deps — use the npm install path, which compiles
@@ -33,11 +32,10 @@
 FROM node:22-slim AS build
 WORKDIR /app
 # Install ALL deps (incl. optional) but skip lifecycle scripts. The build uses
-# a prebuilt platform-native TypeScript 7 compiler; optional app packages also
-# provide the TYPE DECLARATIONS needed for typed dynamic imports (hnswlib-node,
-# pdfjs-dist, tesseract.js, @napi-rs/canvas). `--ignore-scripts` avoids locally
-# compiling native app deps. After building, prune dev AND optional packages so
-# neither the compiler nor those optional packages enter the runtime image.
+# a prebuilt platform-native TypeScript 7 compiler; `--ignore-scripts` avoids
+# locally compiling native app deps. Runtime-only optional import boundaries
+# keep native feature loading fail-soft. After building, prune dev AND optional
+# packages so neither the compiler nor those optional packages enter the image.
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY . .

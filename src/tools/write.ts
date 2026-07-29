@@ -245,7 +245,7 @@ export async function renameNote(
   // catches them with the same canonical check.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
-  const canonicalToRel = await vault.canonicalRelForPrivacyCheckPublic(toAbsCheck);
+  const canonicalToRel = await vault.canonicalRenameDestinationRelPublic(toAbsCheck);
   const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
@@ -264,10 +264,13 @@ export async function renameNote(
   // still throws EEXIST → "Destination already exists". A non-case-only existing dest is rejected here.
   const caseOnlyRename = fromAbs !== toAbsCheck && fromAbs.toLowerCase() === toAbsCheck.toLowerCase();
   if (!args.overwrite && !caseOnlyRename) {
-    const exists = await vault
-      .stat(toAbsCheck)
-      .then(() => true)
-      .catch(() => false);
+    let exists = false;
+    try {
+      await vault.stat(toAbsCheck);
+      exists = true;
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT")) throw err;
+    }
     if (exists) {
       throw new Error(`Destination already exists: ${toRelCheck} (pass overwrite=true to replace)`);
     }

@@ -13,11 +13,36 @@
 // surface the code and never the raw message.
 
 /**
+ * Import an optional package without coupling TypeScript compilation to that
+ * package being installed on the current host.
+ *
+ * npm may legitimately omit an optional native dependency after its install
+ * script fails. Passing the specifier through this runtime-only boundary lets
+ * the rest of the package compile and preserves the feature's fail-soft loader.
+ *
+ * @param specifier - Runtime package or package-subpath specifier.
+ * @returns The imported module namespace as an untrusted value for the caller
+ *   to narrow before use.
+ * @example
+ * ```ts
+ * const namespace = await importOptionalDependency("hnswlib-node");
+ * ```
+ */
+export async function importOptionalDependency(specifier: string): Promise<unknown> {
+  return import(specifier);
+}
+
+/**
  * Build a path-free detail suffix for a failed optional-dep `import()` catch.
  * Returns e.g. `error code: ERR_MODULE_NOT_FOUND` (or `error code: unknown`),
  * never the raw `err.message` (which embeds the importing file's absolute path).
  *
  * @param err - The caught error from `await import(...)`.
+ * @returns A path-free error-code detail.
+ * @example
+ * ```ts
+ * optionalDepDetail({ code: "ERR_MODULE_NOT_FOUND" }); // "error code: ERR_MODULE_NOT_FOUND"
+ * ```
  */
 export function optionalDepDetail(err: unknown): string {
   const code =

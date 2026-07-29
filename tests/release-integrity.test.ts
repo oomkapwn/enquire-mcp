@@ -210,7 +210,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     if (
       !windowsProbeRun.includes('new Database(":memory:")') ||
       !windowsProbeRun.includes("CREATE VIRTUAL TABLE notes USING fts5") ||
-      !windowsProbeRun.includes('INSERT INTO notes(body) VALUES (?)') ||
+      !windowsProbeRun.includes("INSERT INTO notes(body) VALUES (?)") ||
       !windowsProbeRun.includes("notes MATCH") ||
       !windowsProbeRun.includes('row?.body !== "windows probe"') ||
       !windowsProbeRun.includes('throw new Error("Windows SQLite FTS5 probe returned the wrong row")') ||
@@ -248,14 +248,10 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
 
   if (!smokeJob) return [...problems, "missing smoke job"];
   const smokeNeeds = Array.isArray(smokeJob.needs) ? smokeJob.needs.filter((item) => typeof item === "string") : [];
-  if (
-    smokeNeeds.length !== 2 ||
-    !smokeNeeds.includes("test") ||
-    !smokeNeeds.includes("test-windows")
-  ) {
+  if (smokeNeeds.length !== 2 || !smokeNeeds.includes("test") || !smokeNeeds.includes("test-windows")) {
     problems.push("smoke must wait for exactly the Linux matrix and blocking Windows job");
   }
-  if (smokeJob.if !== "${{ always() }}") {
+  if (smokeJob.if !== `\${{ always() }}`) {
     problems.push("smoke must run its prerequisite gate even after an upstream failure");
   }
   if ("continue-on-error" in smokeJob) {
@@ -275,8 +271,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     prerequisiteGate?.name !== "Require Linux and Windows test prerequisites" ||
     "continue-on-error" in (prerequisiteGate ?? {}) ||
     "if" in (prerequisiteGate ?? {}) ||
-    prerequisiteEnv?.LINUX_TEST_RESULT !== "${{ needs.test.result }}" ||
-    prerequisiteEnv?.WINDOWS_TEST_RESULT !== "${{ needs['test-windows'].result }}" ||
+    prerequisiteEnv?.LINUX_TEST_RESULT !== `\${{ needs.test.result }}` ||
+    prerequisiteEnv?.WINDOWS_TEST_RESULT !== `\${{ needs['test-windows'].result }}` ||
     !prerequisiteRun.includes('"$LINUX_TEST_RESULT" != "success"') ||
     !prerequisiteRun.includes('"$WINDOWS_TEST_RESULT" != "success"') ||
     !prerequisiteRun.includes("] || [") ||
@@ -450,9 +446,9 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("test-windows must run npm lifecycle scripts through pinned Git Bash");
-    expect(
-      nodeFloorCiProblems(ci.replace('"caseprobe.md"', '"CaseProbe.md"'), pkg.engines?.node)
-    ).toContain("test-windows platform and case-insensitive filesystem assertion is missing");
+    expect(nodeFloorCiProblems(ci.replace('"caseprobe.md"', '"CaseProbe.md"'), pkg.engines?.node)).toContain(
+      "test-windows platform and case-insensitive filesystem assertion is missing"
+    );
     expect(
       nodeFloorCiProblems(
         ci.replace(
@@ -494,10 +490,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          "  docs:\n    runs-on: ubuntu-latest",
-          "  docs:\n    if: false\n    runs-on: ubuntu-latest"
-        ),
+        ci.replace("  docs:\n    runs-on: ubuntu-latest", "  docs:\n    if: false\n    runs-on: ubuntu-latest"),
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
@@ -527,17 +520,14 @@ describe("release identity and exact required-check gate", () => {
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
     expect(
-      nodeFloorCiProblems(
-        ci.replace("    needs: [test, test-windows]", "    needs: [test]"),
-        pkg.engines?.node
-      )
+      nodeFloorCiProblems(ci.replace("    needs: [test, test-windows]", "    needs: [test]"), pkg.engines?.node)
     ).toContain("smoke must wait for exactly the Linux matrix and blocking Windows job");
     expect(
-      nodeFloorCiProblems(ci.replace("    if: ${{ always() }}", "    if: success()"), pkg.engines?.node)
+      nodeFloorCiProblems(ci.replace(`    if: \${{ always() }}`, "    if: success()"), pkg.engines?.node)
     ).toContain("smoke must run its prerequisite gate even after an upstream failure");
-    expect(
-      nodeFloorCiProblems(ci.replace(' ] || [ "', ' ] && [ "'), pkg.engines?.node)
-    ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
+    expect(nodeFloorCiProblems(ci.replace(' ] || [ "', ' ] && [ "'), pkg.engines?.node)).toContain(
+      "smoke prerequisite gate must fail closed on either Linux or Windows failure"
+    );
     expect(
       nodeFloorCiProblems(
         ci.replace(
@@ -559,8 +549,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       nodeFloorCiProblems(
         ci.replace(
-          '            exit 1\n          fi\n      - uses: actions/checkout@',
-          '            exit 0\n          fi\n      - uses: actions/checkout@'
+          "            exit 1\n          fi\n      - uses: actions/checkout@",
+          "            exit 0\n          fi\n      - uses: actions/checkout@"
         ),
         pkg.engines?.node
       )

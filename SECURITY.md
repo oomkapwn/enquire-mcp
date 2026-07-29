@@ -157,14 +157,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.23)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.24)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of v3.12.0-rc.23, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
+As of v3.12.0-rc.24, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
 
 - [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
 - [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).

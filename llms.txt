@@ -67,7 +67,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1744 unit tests declared; required PR CI runs the general Linux suite plus 4 Windows-only contracts in the pinned Windows lane
+- 1748 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only contracts in the pinned Windows lane
 - 9 release-required CI checks are directly enumerated by `release.yml` and run per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - Pinned `test-windows` is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, beyond the direct inventory above
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses

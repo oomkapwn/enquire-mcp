@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.12.0-rc.23",
+  "version": "3.12.0-rc.24",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "The #1 Obsidian MCP for AI memory and local document intelligence: turn Markdown, PDFs + OCR, Canvas, and executable Bases into persistent, cited context for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Full hybrid retrieval (BM25 + TF-IDF + ML + RRF + BGE), HNSW + int8, freshness-aware recall, agentic RAG, GraphRAG-light. 46 tools, 19 MCP prompts, 1744 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "The #1 Obsidian MCP for AI memory and local document intelligence: turn Markdown, PDFs + OCR, Canvas, and executable Bases into persistent, cited context for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Full hybrid retrieval (BM25 + TF-IDF + ML + RRF + BGE), HNSW + int8, freshness-aware recall, agentic RAG, GraphRAG-light. 46 tools, 19 MCP prompts, 1748 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"

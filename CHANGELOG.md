@@ -18,6 +18,11 @@ All notable changes to this project will be documented here. The format follows 
 
 - The combined candidate must pass all 9 release-required jobs on its exact SHA; Docker, GitHub-hosted macOS and both default CodeQL analyses are reviewed before merge.
 - The release still tags the squash-merge commit on `main`, not this branch head, and publishes immediately only after the exact-`main` gate is green.
+- The first remote CI pass correctly rejected stale rc.20 preview labels. The current-claim sweep now advances every localized README plus the quickstart, API catalog, roadmap and security posture to this exact rc.21 candidate; historical rc.20 evidence remains historical.
+
+### Tests (1740)
+
+- The source-test inventory is unchanged; documentation invariants bind current prerelease instructions and API labels to the package version.
 
 ### Stats
 

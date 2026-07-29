@@ -133,7 +133,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.20      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.21      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

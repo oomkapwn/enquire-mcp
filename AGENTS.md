@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-All 9 release-required CI checks run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. Local checks above must pass before pushing.
+All 9 release-required CI checks run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -150,7 +150,7 @@ node scripts/smoke.mjs
 
 Release-required (all run on PRs; `release.yml` blocks publication unless all 9 passed on the tagged SHA):
 1. `lint` — biome check
-2. `test (22)` — full suite on Node 22
+2. `test (22)` — full suite plus native SQLite/FTS probe on exact Node 22.13.0 (`engines.node` floor)
 3. `test (24)` — full suite on Node 24
 4. `smoke` — JSON-RPC smoke against synthetic vault
 5. `audit` — source + published-consumer dependency audit (prod moderate+, dev high+)

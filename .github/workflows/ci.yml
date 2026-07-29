@@ -37,6 +37,7 @@ jobs:
       - run: npm run lint
 
   test:
+    name: test (${{ matrix.label }})
     # Required gate. Runs on Linux to keep check-run names stable for the
     # branch protection ruleset.
     # v3.5.11 — dropped Node 20 from matrix. pdfjs-dist v5.7+ requires
@@ -49,10 +50,21 @@ jobs:
     # other optional native deps behave).
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        include:
+          # v3.12.0-rc.22 — exercise the literal public floor, not the latest
+          # floating Node 22.x. Keep the label stable because branch protection
+          # and the release workflow require the exact `test (22)` context.
+          - label: "22"
+            node-version: "22.13.0"
+            floor: true
+          - label: "24"
+            node-version: "24"
+            floor: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -60,6 +72,16 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Assert exact declared Node floor
+        if: matrix.floor
+        run: |
+          node -e '
+            const declared = require("./package.json").engines?.node;
+            const expected = `>=${process.versions.node}`;
+            if (declared !== expected) {
+              throw new Error(`engines.node=${declared}; exact CI floor=${expected}`);
+            }
+          '
       - name: Install deps (npm ci with retry)
         # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
         # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
@@ -72,6 +94,23 @@ jobs:
             sleep 15
           done
       - run: npm run build
+      - name: Probe native SQLite and FTS5 at declared floor
+        if: matrix.floor
+        run: |
+          node --input-type=module -e '
+            import Database from "better-sqlite3";
+            const db = new Database(":memory:");
+            try {
+              db.exec("CREATE VIRTUAL TABLE notes USING fts5(body)");
+              db.prepare("INSERT INTO notes(body) VALUES (?)").run("exact floor probe");
+              const row = db.prepare("SELECT body FROM notes WHERE notes MATCH ?").get("floor");
+              if (row?.body !== "exact floor probe") {
+                throw new Error("SQLite FTS5 floor probe returned the wrong row");
+              }
+            } finally {
+              db.close();
+            }
+          '
       - run: npm test
         env:
           # v3.7.13 L4 — feed the GH token to `tests/github-metadata-invariant.test.ts`
@@ -240,12 +279,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: test
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
-          node-version: 22
+          # v3.12.0-rc.22 — run the MCP/FTS smoke at the literal public floor.
+          node-version: "22.13.0"
           cache: npm
       - name: Install deps (npm ci with retry)
         # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall

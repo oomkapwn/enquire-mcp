@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.22] — 2026-07-29
+
+> **TL;DR:** **The required Linux matrix now tests the Node version we actually promise.** The protected `test (22)` context keeps its exact public/check-run identity but moves from floating Node 22 — which resolved to 22.23.1 on the `better-sqlite3` 13 PR — to the literal `engines.node` floor, 22.13.0. That leg asserts the runtime/package contract, opens native SQLite, writes and queries FTS5, then runs the full suite; the existing JSON-RPC/FTS smoke is pinned to the same floor. Node 24 remains the newer-major control. Dependencies, the public Node floor, the nine-check release inventory and runtime behavior are unchanged; **1740 source tests remain unchanged.**
+>
+> **Method note:** closed dependency PR #399 exposed the blind spot: its floating `test (22)` job was green on Node 22.23.1, while a separate exact-runtime reproduction showed `better-sqlite3` 13.0.1's Node-API 10 binary was incompatible with Node 22.13.0's Node-API 9 boundary. The correction therefore changes the existing required leg instead of adding an unprotected advisory job or silently raising `engines.node`. A structural analyzer derives the exact floor from `package.json`, pins both stable check labels and the smoke runtime, and is exercised with floating-version and mismatched-floor negative controls. Under the current CI-only policy, executable validation runs only in GitHub-hosted CI; no local install, build, lint, test, coverage, smoke, OIA, package-consumer, benchmark or evaluation workload is used.
+
+### Changed — literal minimum-runtime validation
+
+- **Stable protected contexts, exact runtime.** The matrix is now explicit metadata: label `22` runs Node `22.13.0`, while label `24` runs Node 24. `name: test (${{ matrix.label }})` preserves the required `test (22)` / `test (24)` check names used by branch protection and `release.yml`.
+- **Fail-closed floor admission.** Before install, the floor leg requires `engines.node` to equal `>=${process.versions.node}`, and npm engine-strict is enabled for both the test and smoke jobs. A future floating runtime, incompatible dependency engine or version-range drift fails before its green result can be mistaken for minimum-version evidence.
+- **Native SQLite/FTS probe.** After install and build, the floor leg opens `better-sqlite3` at `:memory:`, creates an FTS5 table, inserts one row, queries it and closes the database before the full suite. This reaches the lazy native constructor that an import-only check would miss.
+- **MCP smoke at the same floor.** The existing synthetic-vault scan and `--persistent-index` JSON-RPC smoke now run on exact Node 22.13.0 rather than floating Node 22.
+
+### Structural defense and verification boundary
+
+- The existing release-integrity invariant parses the real workflow, derives the literal `>=X.Y.Z` floor, and requires stable labels, exact setup-node inputs, engine-strict admission, the bound runtime assertion, executable retry install, build, the bound native SQLite/FTS probe, full suite and both distinct smoke paths. Required jobs and the probe may not declare `continue-on-error`.
+- Its negative controls inject a floating floor, a mismatched/invalid engine range, disabled engine-strict, a vacuous runtime comparison, an unbound native probe, an `echo` in place of the suite, `continue-on-error`, and a floating smoke runtime; each mutation must be rejected. The source-test count is unchanged because the controls extend an existing `it()` block.
+- **Empirical positive and negative controls.** Clean baseline SHA `3759592` passed all nine release-required jobs, Docker and advisory macOS in [run 30448869279](https://github.com/oomkapwn/enquire-mcp/actions/runs/30448869279). Disposable SHA `ba08e6c` then replayed the exact `better-sqlite3` 13.0.1 graph from closed PR #399: on Node 22.13.0, engine-strict install and build passed before the first `new Database(":memory:")` segfaulted with exit 139 in [`test (22)`](https://github.com/oomkapwn/enquire-mcp/actions/runs/30449266552/job/90567124299), while [`test (24)`](https://github.com/oomkapwn/enquire-mcp/actions/runs/30449266552/job/90567124309) passed the full suite as the newer-runtime control. Revert commit `7161345` restored both package files byte-for-byte to the clean baseline; the disposable dependency graph is not part of the candidate.
+
+### Tests (1740)
+
+- `release-integrity.test.ts` now guards the literal Node floor, stable check-run labels, explicit native probe and exact-floor smoke with positive and negative configurations.
+- Existing `cli`, `fts5`, `embed-db`, compiled MCP and smoke paths remain the behavioral positive controls on the supported dependency graph.
+
+### Stats
+
+- Public Node contract: unchanged at `>=22.13.0`.
+- Required CI inventory: unchanged at 9; branch-protected contexts unchanged at 7.
+- Runtime dependencies and MCP behavior: unchanged.
+- Source tests: 1740 → 1740 source tests.
+
+**Lesson:** a major-only CI label is not minimum-version evidence. Preserve the public check name, but bind its runtime to the literal package floor and exercise the first native operation that can reveal ABI incompatibility.
+
 ## [3.12.0-rc.21] — 2026-07-29
 
 > **TL;DR:** **The queued maintenance patches land without changing the runtime product surface.** The development toolchain advances to `@biomejs/biome` 2.5.6 and `@types/node` 26.1.2, the Biome schema stays aligned with the installed CLI, and every workflow checkout use moves from the immutable `actions/checkout` v7.0.0 commit to the signed v7.0.1 commit. Runtime dependencies, MCP tools/prompts, schemas, persistence formats and default behavior are unchanged; **1740 source tests remain unchanged.**

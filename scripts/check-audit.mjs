@@ -145,13 +145,8 @@ export function retryableAuditError(value) {
   const fields = auditErrorFields(value);
   if (!fields || (!fields.code && fields.statusCode === undefined)) return undefined;
 
-  const statusFromCode =
-    fields.code && /^E([1-5]\d\d)$/u.test(fields.code) ? Number(fields.code.slice(1)) : undefined;
-  if (
-    statusFromCode !== undefined &&
-    fields.statusCode !== undefined &&
-    statusFromCode !== fields.statusCode
-  ) {
+  const statusFromCode = fields.code && /^E([1-5]\d\d)$/u.test(fields.code) ? Number(fields.code.slice(1)) : undefined;
+  if (statusFromCode !== undefined && fields.statusCode !== undefined && statusFromCode !== fields.statusCode) {
     return undefined;
   }
   if (fields.statusCode !== undefined && !RETRYABLE_AUDIT_STATUSES.has(fields.statusCode)) {
@@ -159,8 +154,7 @@ export function retryableAuditError(value) {
   }
 
   const retryableCode = fields.code ? RETRYABLE_AUDIT_CODES.has(fields.code) : false;
-  const retryableStatus =
-    fields.statusCode !== undefined && RETRYABLE_AUDIT_STATUSES.has(fields.statusCode);
+  const retryableStatus = fields.statusCode !== undefined && RETRYABLE_AUDIT_STATUSES.has(fields.statusCode);
   if (fields.code && !retryableCode) return undefined;
   return retryableCode || retryableStatus ? fields : undefined;
 }

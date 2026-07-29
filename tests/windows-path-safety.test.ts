@@ -4,16 +4,18 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { embedSingleNote } from "../src/embed-pipeline.js";
+import type { Embedder } from "../src/embeddings.js";
 import { FtsIndex } from "../src/fts5.js";
+import type { HnswIndex } from "../src/hnsw.js";
 import { renameNote } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
-import { VaultWatcher } from "../src/watcher.js";
+import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
 import { windowsRelativePathProblem } from "../src/windows-path.js";
 
 let root: string;
 let outside: string;
 
-const WATCHER_STATE_TIMEOUT_MS = 15_000;
+const WATCHER_STATE_TIMEOUT_MS = 10_000;
 const WATCHER_STABLE_WINDOW_MS = 1_200;
 const WATCHER_POLL_MS = 75;
 
@@ -22,19 +24,24 @@ const watcherEmbedder = {
     alias: "windows-watcher-mock",
     hfId: "local/test-only",
     dim: 4,
+    approxSizeMB: 0,
+    dtype: "q8",
     multilingual: true,
     maxTokens: 128
   },
   async embed(texts: readonly string[]): Promise<Float32Array[]> {
     return texts.map(() => new Float32Array([1, 0, 0, 0]));
   }
-};
+} satisfies Embedder;
 
 interface WindowsWatcherFixture {
   vault: Vault;
   fts: FtsIndex;
   embedDb: EmbedDb;
   watcher: VaultWatcher;
+  reindexedPaths: string[];
+  hnswLabels: Set<number>;
+  hnswRowsByLabel: Map<number, HnswRowMeta>;
 }
 
 interface WindowsWatcherSnapshot {
@@ -42,6 +49,9 @@ interface WindowsWatcherSnapshot {
   ftsByMarker: Record<string, string[]>;
   embedByMarker: Record<string, string[]>;
   embedPaths: string[];
+  embedRows: Array<{ label: number; relPath: string; textPreview: string }>;
+  hnswLabels: number[];
+  hnswRows: Array<{ label: number; relPath: string; textPreview: string }>;
   ftsAudit: ReturnType<FtsIndex["auditKind"]>;
   embedAudit: ReturnType<EmbedDb["auditKind"]>;
 }
@@ -76,9 +86,49 @@ async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise
     embedDb.upsertNote(relPath, stat.mtimeMs, embedded.rows);
   }
 
+  const reindexedPaths: string[] = [];
+  const originalReindexFile = fts.reindexFile.bind(fts);
+  fts.reindexFile = (...args: Parameters<FtsIndex["reindexFile"]>) => {
+    reindexedPaths.push(args[0]);
+    return originalReindexFile(...args);
+  };
+  const seededRows = embedDb.getAllVectors();
+  const hnswLabels = new Set(seededRows.map((row) => row.label));
+  const hnswRowsByLabel = new Map<number, HnswRowMeta>(
+    seededRows.map((row) => [
+      row.label,
+      {
+        rel_path: row.rel_path,
+        chunk_index: row.chunk_index,
+        line_start: row.line_start,
+        line_end: row.line_end,
+        text_preview: row.text_preview,
+        kind: row.kind
+      }
+    ])
+  );
+  const hnsw: HnswIndex = {
+    dim: watcherEmbedder.model.dim,
+    get size() {
+      return hnswLabels.size;
+    },
+    searchKnn: () => ({ labels: [], distances: [] }),
+    saveTo: async () => true,
+    applyDiff(removeLabels, addPoints) {
+      let removed = 0;
+      for (const label of removeLabels) {
+        if (hnswLabels.delete(label)) removed += 1;
+      }
+      for (const point of addPoints) hnswLabels.add(point.label);
+      return { removed, added: addPoints.length };
+    },
+    resize: () => {},
+    capacity: () => ({ currentCount: hnswLabels.size, maxElements: Number.MAX_SAFE_INTEGER })
+  };
   const watcher = new VaultWatcher({ vault, ftsIndex: fts, silent: true });
   watcher.attachEmbed(embedDb, watcherEmbedder, 0);
-  return { vault, fts, embedDb, watcher };
+  watcher.attachHnsw(hnsw, hnswRowsByLabel);
+  return { vault, fts, embedDb, watcher, reindexedPaths, hnswLabels, hnswRowsByLabel };
 }
 
 async function snapshotWindowsWatcherState(
@@ -103,6 +153,13 @@ async function snapshotWindowsWatcherState(
     ftsByMarker,
     embedByMarker,
     embedPaths: [...new Set(fixture.embedDb.getSourceStates("md").map((state) => state.rel_path))].sort(),
+    embedRows: embedRows
+      .map((row) => ({ label: row.label, relPath: row.rel_path, textPreview: row.text_preview }))
+      .sort((a, b) => a.label - b.label),
+    hnswLabels: [...fixture.hnswLabels].sort((a, b) => a - b),
+    hnswRows: [...fixture.hnswRowsByLabel]
+      .map(([label, row]) => ({ label, relPath: row.rel_path, textPreview: row.text_preview }))
+      .sort((a, b) => a.label - b.label),
     ftsAudit: fixture.fts.auditKind("md"),
     embedAudit: fixture.embedDb.auditKind("md")
   };
@@ -138,8 +195,28 @@ function watcherAuditsMatch(snapshot: WindowsWatcherSnapshot, expectedFiles: num
     snapshot.ftsAudit.indexed_files === expectedFiles &&
     snapshot.ftsAudit.mismatched_files === 0 &&
     snapshot.embedAudit.indexed_files === expectedFiles &&
-    snapshot.embedAudit.mismatched_files === 0
+    snapshot.embedAudit.mismatched_files === 0 &&
+    JSON.stringify(snapshot.hnswLabels) === JSON.stringify(snapshot.embedRows.map((row) => row.label)) &&
+    JSON.stringify(snapshot.hnswRows) === JSON.stringify(snapshot.embedRows)
   );
+}
+
+async function closeWindowsWatcherFixture(
+  fixture: WindowsWatcherFixture,
+  junctions: readonly string[] = []
+): Promise<void> {
+  try {
+    await fixture.watcher.close();
+  } finally {
+    try {
+      for (const junction of junctions) {
+        if ((await fs.lstat(junction).catch(() => null))?.isSymbolicLink()) await fs.unlink(junction);
+      }
+    } finally {
+      fixture.embedDb.close();
+      fixture.fts.close();
+    }
+  }
 }
 
 beforeEach(async () => {
@@ -148,7 +225,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const junction of [path.join(root, "Outside"), path.join(root, "Incoming", "Outside")]) {
+  for (const junction of [
+    path.join(root, "Outside"),
+    path.join(root, "Incoming", "Outside"),
+    path.join(outside, "Incoming.staging", "Outside")
+  ]) {
     const junctionStat = await fs.lstat(junction).catch(() => null);
     if (junctionStat?.isSymbolicLink()) {
       await fs.unlink(junction);
@@ -527,9 +608,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       await fixture.watcher.close();
       expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
     } finally {
-      await fixture.watcher.close();
-      fixture.embedDb.close();
-      fixture.fts.close();
+      await closeWindowsWatcherFixture(fixture);
     }
   });
 
@@ -566,9 +645,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       await fixture.watcher.close();
       expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
     } finally {
-      await fixture.watcher.close();
-      fixture.embedDb.close();
-      fixture.fts.close();
+      await closeWindowsWatcherFixture(fixture);
     }
   });
 
@@ -577,7 +654,8 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       "Atomic.md": "# Atomic\n\noldatomicwatchermarker\n"
     });
     const replacement = path.join(root, "Atomic.swap");
-    await fs.writeFile(replacement, "# Atomic\n\nnewatomicwatchermarker\n");
+    const replacementContent = "# Atomic\n\nnewatomicwatchermarker\n";
+    await fs.writeFile(replacement, replacementContent);
     const markers = ["oldatomicwatchermarker", "newatomicwatchermarker"] as const;
     const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
       !snapshot.diskNames.includes("Atomic.swap") &&
@@ -606,13 +684,11 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
         expected
       );
       expect(expected(stable)).toBe(true);
-      expect(await fs.readFile(path.join(root, "Atomic.md"), "utf8")).toContain("newatomicwatchermarker");
+      expect(await fs.readFile(path.join(root, "Atomic.md"), "utf8")).toBe(replacementContent);
       await fixture.watcher.close();
       expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
     } finally {
-      await fixture.watcher.close();
-      fixture.embedDb.close();
-      fixture.fts.close();
+      await closeWindowsWatcherFixture(fixture);
     }
   });
 
@@ -622,7 +698,8 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
     const sentinel = path.join(sentinelDir, "Secret.md");
     const staging = path.join(outside, "Incoming.staging");
     await fs.mkdir(sentinelDir, { recursive: true });
-    await fs.writeFile(sentinel, "# Secret\n\njunctionsecretwatchermarker\n");
+    const sentinelContent = "# Secret\n\njunctionsecretwatchermarker\n";
+    await fs.writeFile(sentinel, sentinelContent);
     await fs.mkdir(staging, { recursive: true });
     await fs.writeFile(path.join(staging, "Visible.md"), "# Visible\n\njunctionvisiblewatchermarker\n");
     await fs.symlink(sentinelDir, path.join(staging, "Outside"), "junction");
@@ -652,18 +729,18 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
         expected
       );
       expect(expected(stable)).toBe(true);
-      expect(await fs.readFile(path.join(root, "Incoming", "Outside", "Secret.md"), "utf8")).toContain(
-        "junctionsecretwatchermarker"
+      expect(await fs.readFile(path.join(root, "Incoming", "Outside", "Secret.md"), "utf8")).toBe(
+        sentinelContent
       );
-      expect(await fs.readFile(sentinel, "utf8")).toContain("junctionsecretwatchermarker");
+      expect(await fs.readFile(sentinel, "utf8")).toBe(sentinelContent);
       await fixture.watcher.close();
       expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
+      expect([...new Set(fixture.reindexedPaths)]).toEqual(["Incoming/Visible.md"]);
     } finally {
-      await fixture.watcher.close();
-      const junction = path.join(root, "Incoming", "Outside");
-      if ((await fs.lstat(junction).catch(() => null))?.isSymbolicLink()) await fs.unlink(junction);
-      fixture.embedDb.close();
-      fixture.fts.close();
+      await closeWindowsWatcherFixture(fixture, [
+        path.join(root, "Incoming", "Outside"),
+        path.join(outside, "Incoming.staging", "Outside")
+      ]);
     }
   });
 });

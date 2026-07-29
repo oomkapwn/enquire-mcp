@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.24] — 2026-07-29
+
+> **TL;DR:** **The blocking real-Windows lane now proves that watcher-driven indexes reach and retain the right final state after native rename/replacement delivery.** Four Windows-only contracts perform exactly one ordinary rename, case-only rename, same-path atomic replacement, or move-in of a directory after watcher readiness. Across a 1.2-second sampled window, each passive observation requires disk state, FTS5 marker/path results, EmbedDb path/preview/audit state, and the attached HNSW label set plus path/preview metadata map to agree before the assertions repeat after watcher close drains the queue. The junction scenario combines a visible note with an external sentinel reachable through raw filesystem reads and proves only the visible note ever reaches FTS ingestion. Runtime implementation logic, dependencies, MCP tools, prompts and persistence schemas are unchanged; release version metadata advances. **1744 → 1748 source tests.**
+>
+> **Method note:** the existing watcher helper was unsuitable because it retries by writing the file again, which can hide loss of the original native event. These tests instead mutate once, poll read-only state for up to 10 seconds, require every sampled observation in a 1.2-second stable window to satisfy the final predicate, and fail with the last structured snapshot. Pre-mutation negative controls prove that each final predicate is initially false. Executable validation remains GitHub-hosted under the current policy: no install, build, lint, tests, coverage, smoke, OIA, package-consumer, benchmark or evaluation workload runs on the maintainer MacBook.
+
+### Added — bounded Windows watcher final-state contracts
+
+- **Ordinary rename:** a seeded `Old.md` plus untouched `Keep.md` becomes exactly `New.md` plus `Keep.md`. The renamed marker must move in FTS5 and EmbedDb without retaining the old path, while HNSW labels plus attached path/preview metadata remain equal to EmbedDb and the positive-control marker remains discoverable only at `Keep.md`.
+- **Case-only rename:** an on-disk `Foo.md → foo.md` operation must converge to the exact spelling returned by Win32 directory enumeration. FTS5 and EmbedDb must expose only `foo.md`; HNSW labels plus attached path/preview metadata must mirror EmbedDb, and case-sensitive assertions ensure the old identity cannot pass as equivalent.
+- **Same-path atomic replacement:** one rename of a prewritten `.swap` over `Atomic.md` must remove the old marker, expose the new marker through FTS5 and embedding previews with one live source identity, and leave the on-disk file byte-for-byte equal to the prepared replacement. The post-close assertion catches an already-queued destructive handler that would otherwise erase a briefly correct state.
+- **Moved-in tree with a real junction:** one directory rename introduces both `Incoming/Visible.md` and a directory junction to an external directory containing `Secret.md`. Raw reads through the junction and through the direct target both return the exact prepared sentinel contents; the watcher must index the visible note, retain no secret path/content, and never call the FTS ingestion boundary for the junction target.
+- **HNSW ghost defense:** each fixture seeds a deterministic in-memory HNSW double from the real EmbedDb IDs, attaches it through the production watcher API, and compares its live label set plus attached path/preview metadata map with the database after every stable state and close/drain. This makes a deleted-label ghost or stale attached path visible without claiming native search/vector parity, search quality or a benchmark.
+- **Failure diagnostics and cleanup:** the observer reports disk names, marker-to-path maps and physical FTS/embed audits on timeout. Junction cleanup covers both the staging and moved location before recursive temporary-directory cleanup; DB handles close even when watcher shutdown fails.
+
+### Release evidence and boundaries
+
+- The four scenarios run inside the existing pinned `windows-2025` / exact Node 22.13.0 job, which is a fail-closed prerequisite of protected/release-required `smoke`; release gate names remain nine and branch-protected names remain seven.
+- Multiple independent executions are required on the exact final candidate SHA. They are separate GitHub job attempts, not Vitest retries, repeated writes or a relaxed flaky-test policy.
+- This RC proves the named operations on GitHub's default case-insensitive Windows filesystem. It does **not** claim exhaustive Unicode case folding, case-sensitive NTFS directories, MAX_PATH/8.3 aliases, SMB/ReFS/FAT/WSL behavior, concurrent junction retargeting, arbitrary multi-writer races, events arriving before late `attachEmbed`/`attachHnsw`, or one-generation FTS/embed consistency while a file changes during asynchronous extraction.
+- The result is a stronger regression and release contract for behavior the current implementation already satisfies; no speculative watcher reconciliation refactor is included.
+
+### Stats
+
+- Source tests: 1744 → 1748.
+- New Windows watcher scenarios: 4; each has one filesystem mutation, a pre-state negative control, bounded stable-state proof and post-close proof.
+- Runtime implementation logic/behavior, dependencies, MCP tools/prompts, schema versions and release context names: unchanged; release version metadata advances.
+
+**Lesson:** native watcher correctness is a final-state property, not an event-sequence property. Mutating again while waiting can make a broken first delivery look healthy; a passive, stable-window observer exposes what the user will actually query.
+
 ## [3.12.0-rc.23] — 2026-07-29
 
 > **TL;DR:** **Windows path safety is now a release-blocking filesystem contract instead of an inferred portability claim.** A pinned `windows-2025` / Node 22.13.0 lane proves that it is running on a case-insensitive Win32 filesystem, loads native SQLite/FTS5, and exercises real directory junctions, reserved DOS device names, alternate data streams, mixed-separator traversal, case-folded privacy and rename behavior. The audit also fixed three concrete Windows correctness/privacy defects: public/persisted relative paths could contain `\` and miss folder-scoped retrieval; a case-variant or aliased persistent-cache key could rehydrate an excluded note body, and tail drops were not accounted after the in-memory LRU filled; while a case-variant `rename_note` source could move the file without rewriting its self-links or backlinks. The nine gate names directly enumerated by `release.yml` remain stable; `test-windows` is an additional fail-capable named check-run enforced transitively through the existing protected/release-required `smoke` context. **1740 → 1744 source tests.**

@@ -60,7 +60,6 @@ async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise
   const vault = new Vault(root);
   await vault.ensureExists();
   const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: root });
-  await fts.open();
   const embedDb = new EmbedDb({
     file: path.join(outside, "watcher.embed.db"),
     vaultRoot: root,
@@ -68,67 +67,77 @@ async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise
     dim: watcherEmbedder.model.dim,
     quantization: "f32"
   });
-  await embedDb.open();
+  try {
+    await fts.open();
+    await embedDb.open();
 
-  for (const [relPath, content] of Object.entries(notes)) {
-    const absPath = path.join(root, ...relPath.split("/"));
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, content);
-    const stat = await fs.stat(absPath);
-    fts.reindexFile(relPath, stat.mtimeMs, content);
-    const embedded = await embedSingleNote(
-      vault,
-      watcherEmbedder,
-      { relPath, absPath, mtimeMs: stat.mtimeMs },
-      { lateChunkContext: 0 }
+    for (const [relPath, content] of Object.entries(notes)) {
+      const absPath = path.join(root, ...relPath.split("/"));
+      await fs.mkdir(path.dirname(absPath), { recursive: true });
+      await fs.writeFile(absPath, content);
+      const stat = await fs.stat(absPath);
+      fts.reindexFile(relPath, stat.mtimeMs, content);
+      const embedded = await embedSingleNote(
+        vault,
+        watcherEmbedder,
+        { relPath, absPath, mtimeMs: stat.mtimeMs },
+        { lateChunkContext: 0 }
+      );
+      if (!embedded) throw new Error(`test fixture note unexpectedly produced no chunks: ${relPath}`);
+      embedDb.upsertNote(relPath, stat.mtimeMs, embedded.rows);
+    }
+
+    const reindexedPaths: string[] = [];
+    const originalReindexFile = fts.reindexFile.bind(fts);
+    fts.reindexFile = (...args: Parameters<FtsIndex["reindexFile"]>) => {
+      reindexedPaths.push(args[0]);
+      return originalReindexFile(...args);
+    };
+    const seededRows = embedDb.getAllVectors();
+    const hnswLabels = new Set(seededRows.map((row) => row.label));
+    const hnswRowsByLabel = new Map<number, HnswRowMeta>(
+      seededRows.map((row) => [
+        row.label,
+        {
+          rel_path: row.rel_path,
+          chunk_index: row.chunk_index,
+          line_start: row.line_start,
+          line_end: row.line_end,
+          text_preview: row.text_preview,
+          kind: row.kind
+        }
+      ])
     );
-    if (!embedded) throw new Error(`test fixture note unexpectedly produced no chunks: ${relPath}`);
-    embedDb.upsertNote(relPath, stat.mtimeMs, embedded.rows);
+    const hnsw: HnswIndex = {
+      dim: watcherEmbedder.model.dim,
+      get size() {
+        return hnswLabels.size;
+      },
+      searchKnn: () => ({ labels: [], distances: [] }),
+      saveTo: async () => true,
+      applyDiff(removeLabels, addPoints) {
+        let removed = 0;
+        for (const label of removeLabels) {
+          if (hnswLabels.delete(label)) removed += 1;
+        }
+        for (const point of addPoints) hnswLabels.add(point.label);
+        return { removed, added: addPoints.length };
+      },
+      resize: () => {},
+      capacity: () => ({ currentCount: hnswLabels.size, maxElements: Number.MAX_SAFE_INTEGER })
+    };
+    const watcher = new VaultWatcher({ vault, ftsIndex: fts, silent: true });
+    watcher.attachEmbed(embedDb, watcherEmbedder, 0);
+    watcher.attachHnsw(hnsw, hnswRowsByLabel);
+    return { vault, fts, embedDb, watcher, reindexedPaths, hnswLabels, hnswRowsByLabel };
+  } catch (error) {
+    try {
+      embedDb.close();
+    } finally {
+      fts.close();
+    }
+    throw error;
   }
-
-  const reindexedPaths: string[] = [];
-  const originalReindexFile = fts.reindexFile.bind(fts);
-  fts.reindexFile = (...args: Parameters<FtsIndex["reindexFile"]>) => {
-    reindexedPaths.push(args[0]);
-    return originalReindexFile(...args);
-  };
-  const seededRows = embedDb.getAllVectors();
-  const hnswLabels = new Set(seededRows.map((row) => row.label));
-  const hnswRowsByLabel = new Map<number, HnswRowMeta>(
-    seededRows.map((row) => [
-      row.label,
-      {
-        rel_path: row.rel_path,
-        chunk_index: row.chunk_index,
-        line_start: row.line_start,
-        line_end: row.line_end,
-        text_preview: row.text_preview,
-        kind: row.kind
-      }
-    ])
-  );
-  const hnsw: HnswIndex = {
-    dim: watcherEmbedder.model.dim,
-    get size() {
-      return hnswLabels.size;
-    },
-    searchKnn: () => ({ labels: [], distances: [] }),
-    saveTo: async () => true,
-    applyDiff(removeLabels, addPoints) {
-      let removed = 0;
-      for (const label of removeLabels) {
-        if (hnswLabels.delete(label)) removed += 1;
-      }
-      for (const point of addPoints) hnswLabels.add(point.label);
-      return { removed, added: addPoints.length };
-    },
-    resize: () => {},
-    capacity: () => ({ currentCount: hnswLabels.size, maxElements: Number.MAX_SAFE_INTEGER })
-  };
-  const watcher = new VaultWatcher({ vault, ftsIndex: fts, silent: true });
-  watcher.attachEmbed(embedDb, watcherEmbedder, 0);
-  watcher.attachHnsw(hnsw, hnswRowsByLabel);
-  return { vault, fts, embedDb, watcher, reindexedPaths, hnswLabels, hnswRowsByLabel };
 }
 
 async function snapshotWindowsWatcherState(
@@ -143,9 +152,7 @@ async function snapshotWindowsWatcherState(
       ...new Set(fixture.fts.search(marker, { limit: 50 }).map((result) => result.rel_path))
     ].sort();
     embedByMarker[marker] = [
-      ...new Set(
-        embedRows.filter((row) => row.text_preview.includes(marker)).map((row) => row.rel_path)
-      )
+      ...new Set(embedRows.filter((row) => row.text_preview.includes(marker)).map((row) => row.rel_path))
     ].sort();
   }
   return {
@@ -592,9 +599,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       await fixture.watcher.start();
       await new Promise((resolve) => setTimeout(resolve, 50));
       const before = await snapshotWindowsWatcherState(fixture, markers);
-      expect(expected(before), "NEGATIVE control: pre-rename state must not satisfy the final predicate").toBe(
-        false
-      );
+      expect(expected(before), "NEGATIVE control: pre-rename state must not satisfy the final predicate").toBe(false);
       expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Old.md"]);
       expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Old.md"]);
 
@@ -629,9 +634,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(await fs.readFile(path.join(root, "foo.md"), "utf8")).toContain("casewatchermarker");
       const before = await snapshotWindowsWatcherState(fixture, markers);
-      expect(expected(before), "NEGATIVE control: pre-rename casing must not satisfy the final predicate").toBe(
-        false
-      );
+      expect(expected(before), "NEGATIVE control: pre-rename casing must not satisfy the final predicate").toBe(false);
       expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Foo.md"]);
       expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Foo.md"]);
 
@@ -655,7 +658,6 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
     });
     const replacement = path.join(root, "Atomic.swap");
     const replacementContent = "# Atomic\n\nnewatomicwatchermarker\n";
-    await fs.writeFile(replacement, replacementContent);
     const markers = ["oldatomicwatchermarker", "newatomicwatchermarker"] as const;
     const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
       !snapshot.diskNames.includes("Atomic.swap") &&
@@ -668,12 +670,11 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       watcherAuditsMatch(snapshot, 1);
 
     try {
+      await fs.writeFile(replacement, replacementContent);
       await fixture.watcher.start();
       await new Promise((resolve) => setTimeout(resolve, 50));
       const before = await snapshotWindowsWatcherState(fixture, markers);
-      expect(expected(before), "NEGATIVE control: old bytes must not satisfy the replacement predicate").toBe(
-        false
-      );
+      expect(expected(before), "NEGATIVE control: old bytes must not satisfy the replacement predicate").toBe(false);
       expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Atomic.md"]);
       expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Atomic.md"]);
 
@@ -697,12 +698,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
     const sentinelDir = path.join(outside, "sentinel");
     const sentinel = path.join(sentinelDir, "Secret.md");
     const staging = path.join(outside, "Incoming.staging");
-    await fs.mkdir(sentinelDir, { recursive: true });
     const sentinelContent = "# Secret\n\njunctionsecretwatchermarker\n";
-    await fs.writeFile(sentinel, sentinelContent);
-    await fs.mkdir(staging, { recursive: true });
-    await fs.writeFile(path.join(staging, "Visible.md"), "# Visible\n\njunctionvisiblewatchermarker\n");
-    await fs.symlink(sentinelDir, path.join(staging, "Outside"), "junction");
     const markers = ["junctionvisiblewatchermarker", "junctionsecretwatchermarker"] as const;
     const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
       snapshot.diskNames.includes("Incoming") &&
@@ -714,13 +710,17 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
       watcherAuditsMatch(snapshot, 1);
 
     try {
+      await fs.mkdir(sentinelDir, { recursive: true });
+      await fs.writeFile(sentinel, sentinelContent);
+      await fs.mkdir(staging, { recursive: true });
+      await fs.writeFile(path.join(staging, "Visible.md"), "# Visible\n\njunctionvisiblewatchermarker\n");
+      await fs.symlink(sentinelDir, path.join(staging, "Outside"), "junction");
       await fixture.watcher.start();
       await new Promise((resolve) => setTimeout(resolve, 50));
       const before = await snapshotWindowsWatcherState(fixture, markers);
-      expect(
-        expected(before),
-        "NEGATIVE control: the empty index must not satisfy the moved-tree predicate"
-      ).toBe(false);
+      expect(expected(before), "NEGATIVE control: the empty index must not satisfy the moved-tree predicate").toBe(
+        false
+      );
 
       await fs.rename(staging, path.join(root, "Incoming"));
 

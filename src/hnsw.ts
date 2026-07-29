@@ -23,11 +23,10 @@
 // path for server-side vault retrieval.
 //
 // Native dep: `hnswlib-node@^3.0` (Node-N-API binding to the C++ hnswlib
-// reference impl). Maintained by yoshoku since 2022, stable since v3.0
-// (March 2024). Ships prebuilds for darwin-x64/arm64 + linux-x64/arm64
-// + win32-x64; falls back to source build (requires C++ toolchain) on
-// uncommon platforms. Lazy-loaded — same `optionalDependencies` pattern
-// as tesseract.js / pdfjs-dist / @huggingface/transformers.
+// reference impl). Native availability depends on the host platform/ABI;
+// npm is allowed to omit an optional dependency whose native install fails.
+// Lazy-loaded — same `optionalDependencies` pattern as tesseract.js /
+// pdfjs-dist / @huggingface/transformers.
 //
 // (See "Historical note" above re: hnswlib-wasm vs hnswlib-node choice.)
 //
@@ -35,7 +34,7 @@
 // beam (default 100; higher is generally more accurate and slower).
 
 import type { EmbedSearchHit } from "./embed-db.js";
-import { optionalDepDetail } from "./optional-dep.js";
+import { importOptionalDependency, optionalDepDetail } from "./optional-dep.js";
 
 /** A single labeled vector — used to populate the index. */
 export interface LabeledVector {
@@ -206,9 +205,8 @@ export interface HnswIndex {
  * Lazy-load `hnswlib-node`. Same clean-error pattern as the other
  * optional-dep loaders (tesseract.js, pdfjs-dist, @huggingface/
  * transformers). Throws with an install hint if the dep isn't present
- * or the native binding failed to load (typically from a missing
- * prebuild for an uncommon platform — falls back to source build,
- * which requires a C++ toolchain).
+ * or its source-built native binding failed to load. npm may omit the
+ * package entirely when that optional native installation fails.
  */
 interface HnswlibNodeModule {
   HierarchicalNSW: new (space: "cosine" | "l2" | "ip", dim: number) => HnswNativeIndex;
@@ -247,14 +245,26 @@ interface HnswNativeIndex {
 }
 
 let cachedModule: HnswlibNodeModule | null = null;
+
+function asHnswlibNodeModule(value: unknown): HnswlibNodeModule | null {
+  if (typeof value !== "object" || value === null) return null;
+  const namespace = value as Record<string, unknown>;
+  for (const candidate of [namespace.default, namespace]) {
+    if (typeof candidate !== "object" || candidate === null) continue;
+    if (typeof (candidate as Record<string, unknown>).HierarchicalNSW === "function") {
+      return candidate as unknown as HnswlibNodeModule;
+    }
+  }
+  return null;
+}
+
 async function loadHnswlib(): Promise<HnswlibNodeModule> {
   if (cachedModule) return cachedModule;
   try {
-    const mod = (await import("hnswlib-node")) as { default?: HnswlibNodeModule } & Partial<HnswlibNodeModule>;
-    // hnswlib-node ships as CJS with a default export; ESM consumers get
-    // both `.default` and the named exports. Try both.
-    const lib = mod.default ?? (mod as HnswlibNodeModule);
-    if (typeof lib.HierarchicalNSW !== "function") {
+    // hnswlib-node ships as CJS; ESM consumers may expose the module through
+    // `.default`, named exports, or both. Narrow the untrusted namespace.
+    const lib = asHnswlibNodeModule(await importOptionalDependency("hnswlib-node"));
+    if (!lib) {
       throw new Error("hnswlib-node has no HierarchicalNSW export — package mismatch");
     }
     cachedModule = lib;
@@ -333,9 +343,8 @@ export async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: Hns
  */
 function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): HnswIndex {
   // v3.9.0-rc.2 — `size` is a fallback. When the live-update methods
-  // (`applyDiff`, `resize`) are unavailable on the native lib (older
-  // hnswlib-node, or some platforms with a missing prebuild), the index
-  // is read-only and `size` stays at the buildHnsw-time value. When the
+  // (`applyDiff`, `resize`) are unavailable on an older native library,
+  // the index is read-only and `size` stays at the buildHnsw-time value. When the
   // methods ARE available, the `size` getter delegates to
   // `ctor.getCurrentCount()` so callers always see the live count after
   // mutations. We probe once at wrap time.

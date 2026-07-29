@@ -233,9 +233,11 @@ export async function renameNote(
   // Resolve from (must exist) — vault.stat() rejects traversal + excluded paths
   // and confirms the file is real. resolveInside() is the public wrapper for
   // the same path-normalization logic without an existence check.
-  const fromAbs = vault.resolveInside(fromRelNorm);
-  const fromRel = vault.toRel(fromAbs);
-  await vault.stat(fromAbs); // throws on missing source — fail fast.
+  const fromAbsCheck = vault.resolveInside(fromRelNorm);
+  await vault.stat(fromAbsCheck); // physical containment + privacy before canonicalization I/O.
+  const fromRel = await vault.canonicalRelForPrivacyCheckPublic(fromAbsCheck);
+  const fromAbs = vault.resolveInside(fromRel);
+  await vault.stat(fromAbs); // re-check after canonicalization — fail closed on a path race.
   // Validate to-path early so we don't do O(N) work then fail.
   // v3.7.16 P1-6 sibling — use the canonical-case form so case-insensitive
   // FS variants (`personal/x.md` vs `Personal/x.md`) don't slip past the
@@ -243,7 +245,7 @@ export async function renameNote(
   // catches them with the same canonical check.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
-  const canonicalToRel = await vault.canonicalRelForPrivacyCheckPublic(toAbsCheck);
+  const canonicalToRel = await vault.canonicalRenameDestinationRelPublic(toAbsCheck);
   const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
@@ -262,10 +264,13 @@ export async function renameNote(
   // still throws EEXIST → "Destination already exists". A non-case-only existing dest is rejected here.
   const caseOnlyRename = fromAbs !== toAbsCheck && fromAbs.toLowerCase() === toAbsCheck.toLowerCase();
   if (!args.overwrite && !caseOnlyRename) {
-    const exists = await vault
-      .stat(toAbsCheck)
-      .then(() => true)
-      .catch(() => false);
+    let exists = false;
+    try {
+      await vault.stat(toAbsCheck);
+      exists = true;
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT")) throw err;
+    }
     if (exists) {
       throw new Error(`Destination already exists: ${toRelCheck} (pass overwrite=true to replace)`);
     }
@@ -399,7 +404,7 @@ export async function renameNote(
       // Atomic file move + cache invalidation. Most likely to fail (cross-fs
       // rename, race on destination, permission issue). Run FIRST so failure
       // here doesn't leave updated backlinks pointing at a phantom target.
-      await vault.renameFile(fromRelNorm, toRelNorm, { overwrite: args.overwrite });
+      await vault.renameFile(fromRel, toRelNorm, { overwrite: args.overwrite });
       renamed = true;
       throwIfWriteAborted(options.signal);
       // Backlink rewrites — destination already exists on disk, so even a
@@ -417,7 +422,7 @@ export async function renameNote(
       const failures = await restoreNoteSnapshots(vault, committedBacklinks);
       if (renamed) {
         try {
-          await vault.renameFile(toRelNorm, fromRelNorm, { overwrite: true });
+          await vault.renameFile(toRelNorm, fromRel, { overwrite: true });
         } catch (rollbackErr) {
           failures.push(
             `${toRelCheck} → ${fromRel}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`

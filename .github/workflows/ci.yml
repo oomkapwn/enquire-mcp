@@ -121,6 +121,72 @@ jobs:
           # permissions required — read-only About/Topics fetch).
           GH_TOKEN: ${{ github.token }}
 
+  test-windows:
+    name: test-windows
+    # v3.12.0-rc.23 — a real, pinned Windows filesystem lane. The repository's
+    # existing lifecycle scripts are deliberately exercised through Git Bash;
+    # this is a hostile-filesystem contract, not a cmd.exe compatibility claim.
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_SCRIPT_SHELL: 'C:\Program Files\Git\bin\bash.exe'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Assert real case-insensitive Windows filesystem
+        run: |
+          node --input-type=module -e '
+            import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+            import { tmpdir } from "node:os";
+            import { join } from "node:path";
+            if (process.platform !== "win32") {
+              throw new Error(`expected win32, received ${process.platform}`);
+            }
+            const dir = mkdtempSync(join(tmpdir(), "enquire-win-probe-"));
+            try {
+              writeFileSync(join(dir, "CaseProbe.md"), "probe");
+              if (!existsSync(join(dir, "caseprobe.md"))) {
+                throw new Error("Windows filesystem probe is not case-insensitive");
+              }
+            } finally {
+              rmSync(dir, { recursive: true, force: true });
+            }
+          '
+      - name: Install deps (npm ci with retry)
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed; retrying in 15s"
+            sleep 15
+          done
+      - run: npm run build
+      - name: Probe native SQLite and FTS5 on Windows
+        run: |
+          node --input-type=module -e '
+            import Database from "better-sqlite3";
+            const db = new Database(":memory:");
+            try {
+              db.exec("CREATE VIRTUAL TABLE notes USING fts5(body)");
+              db.prepare("INSERT INTO notes(body) VALUES (?)").run("windows probe");
+              const row = db.prepare("SELECT body FROM notes WHERE notes MATCH ?").get("windows");
+              if (row?.body !== "windows probe") {
+                throw new Error("Windows SQLite FTS5 probe returned the wrong row");
+              }
+            } finally {
+              db.close();
+            }
+          '
+      - run: npm test -- tests/windows-path-safety.test.ts
+
   test-macos:
     # v2.0.0-beta.3: cross-platform advisory job (not required by branch
     # protection, doesn't block merges). Catches macOS-specific path /
@@ -227,6 +293,14 @@ jobs:
             sleep 15
           done
       - run: npm run build
+      # The SVG carries exact proof counts used in the README/social card.
+      # Regenerate the committed PNG remotely and fail on byte drift so the
+      # binary asset cannot silently lag its reviewable source.
+      - id: preview_render
+        run: npm run render:preview
+      - name: Require committed social-preview bytes
+        id: preview_diff
+        run: git diff --exit-code -- assets/social-preview.png
       # TypeDoc warnings on PR — treat as failure so doc drift fails CI,
       # not silently lands on main. The shell pipe captures the output and
       # greps for the "Found N warnings" / "Found N errors" lines.
@@ -278,10 +352,22 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: test
+    # Keep the protected/release-required `smoke` context name stable while
+    # making the Windows filesystem lane a real blocking prerequisite.
+    needs: [test, test-windows]
+    if: ${{ always() }}
     env:
       NPM_CONFIG_ENGINE_STRICT: "true"
     steps:
+      - name: Require Linux and Windows test prerequisites
+        env:
+          LINUX_TEST_RESULT: ${{ needs.test.result }}
+          WINDOWS_TEST_RESULT: ${{ needs['test-windows'].result }}
+        run: |
+          if [ "$LINUX_TEST_RESULT" != "success" ] || [ "$WINDOWS_TEST_RESULT" != "success" ]; then
+            echo "::error::test=$LINUX_TEST_RESULT test-windows=$WINDOWS_TEST_RESULT"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:

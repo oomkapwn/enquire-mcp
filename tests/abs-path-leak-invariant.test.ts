@@ -27,11 +27,10 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(__dirname, "..");
 
 // The fs ops that can throw a raw Error embedding the absolute path. `realpath` is
-// INCLUDED — rc.49 found resolveSafePath's realpath leaked ENOTDIR with the abs path
-// (the behavioral test caught what the first static sweep missed). lstat/chmod stay
-// excluded: they are always `.catch`-guarded probes (the detector also skips any line
-// containing `.catch(`).
-const SINK = /\bfs\.(stat|realpath|readFile|writeFile|mkdir|open|rename|link|copyFile|unlink|readdir)\(/;
+// INCLUDED — rc.49 found resolveSafePath's realpath leaked ENOTDIR with the abs path,
+// and rc.23 found mutation-target lstat probes swallowed every error as "absent".
+// chmod stays excluded; `.catch`-guarded read-only probes are skipped explicitly.
+const SINK = /\bfs\.(stat|lstat|realpath|readFile|writeFile|mkdir|open|rename|link|copyFile|unlink|readdir)\(/;
 // A class member at exactly 2-space indent. Control-flow keywords at that indent
 // (`if (`, `for (`, …) are NOT methods — exclude them so block bodies aren't
 // mis-attributed.
@@ -99,6 +98,76 @@ function findUnsanitizedFsSinks(src: string): Array<{ method: string; line: numb
   return out;
 }
 
+function methodBody(src: string, name: string): string {
+  const method = splitMethods(vaultClassBody(src).body).find((candidate) => candidate.name === name);
+  return method?.lines.join("\n") ?? "";
+}
+
+function mutationLeafProbeProblems(src: string): string[] {
+  const problems: string[] = [];
+  const lstat = methodBody(src, "lstatIfExistsSafe");
+  if (
+    !lstat.includes("await fs.lstat(p)") ||
+    !lstat.includes('err.code === "ENOENT"') ||
+    !lstat.includes("throw this.sanitizeFsError(err)") ||
+    lstat.includes(".catch(") ||
+    lstat.includes('err.code === "ENOTDIR"')
+  ) {
+    problems.push("lstatIfExistsSafe must return missing only for ENOENT and sanitize every other error");
+  }
+
+  const assertLeaf = methodBody(src, "assertMutationLeafNotSymlink");
+  if (!assertLeaf.includes("await this.lstatIfExistsSafe(p)") || !assertLeaf.includes(".isSymbolicLink()")) {
+    problems.push("mutation leaf assertion must route through the fail-closed lstat helper");
+  }
+
+  const requiredCalls = new Map([
+    ["writeNote", 2],
+    ["canonicalRenameDestinationRelPublic", 1],
+    ["renameFile", 1]
+  ]);
+  for (const [name, minimum] of requiredCalls) {
+    const body = methodBody(src, name);
+    const calls = body.match(/\bassertMutationLeafNotSymlink\(/g)?.length ?? 0;
+    if (calls < minimum || body.includes("fs.lstat(")) {
+      problems.push(`${name} must use the mutation leaf assertion at every required phase`);
+    }
+  }
+  if (!methodBody(src, "renameFile").includes("canonicalRenameDestinationRelPublic(toAbs)")) {
+    problems.push("renameFile must use the operation-aware canonical destination preflight");
+  }
+  return problems;
+}
+
+function appendIdentityProblems(src: string): string[] {
+  const problems: string[] = [];
+  const append = methodBody(src, "appendNote");
+  const descriptorStats = append.match(/\b(?:identityHandle|handle|validationHandle)\.stat\(\)/g)?.length ?? 0;
+  if (
+    !append.includes("const initialType = await this.lstatIfExistsSafe(initialAbs)") ||
+    !append.includes("initialType && !initialType.isFile()") ||
+    !append.includes("fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK") ||
+    !append.includes("const identityHandle = await this.openSafe(initialAbs, appendFlags)") ||
+    !append.includes("initialStat = await identityHandle.stat()") ||
+    !append.includes("const lockKey = appendIdentityKey(initialStat)") ||
+    !append.includes("appendIdentityKey(before) !== lockKey") ||
+    !append.includes("appendIdentityKey(pathIdentity) !== appendIdentityKey(before)") ||
+    descriptorStats < 3
+  ) {
+    problems.push(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
+    );
+  }
+  if (
+    append.includes("this.statSafe(initialAbs)") ||
+    append.includes("this.statSafe(realAfterOpen)") ||
+    /\b(?:before|pathIdentity)\.dev\b/.test(append)
+  ) {
+    problems.push("append identity must not compare path stat with descriptor stat or bypass appendIdentityKey");
+  }
+  return problems;
+}
+
 describe("abs-path-leak inventory invariant (rc.49)", () => {
   it("every raw fs sink in src/vault.ts sits in a sanitizing (or exempt) method", () => {
     const src = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
@@ -108,6 +177,8 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
       offenders,
       `Raw fs sinks not funnelled through sanitizeFsError (leak the host abs path):\n${detail}`
     ).toEqual([]);
+    expect(mutationLeafProbeProblems(src)).toEqual([]);
+    expect(appendIdentityProblems(src)).toEqual([]);
   });
 
   it("detector flags a raw sink in a non-sanitizing method (NEGATIVE control)", () => {
@@ -122,5 +193,35 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
     // An explicit exemption marker suppresses the flag.
     const exempt = `export class Vault {\n  async internal(p) {\n    // abs-path-safe(rc.49): startup-only\n    return await fs.mkdir(p, { recursive: true });\n  }\n}`;
     expect(findUnsanitizedFsSinks(exempt)).toHaveLength(0);
+
+    const realVault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
+    const lstatHelper = methodBody(realVault, "lstatIfExistsSafe");
+    const failOpenHelper = lstatHelper.replace("throw this.sanitizeFsError(err);", "return null;");
+    expect(mutationLeafProbeProblems(realVault.replace(lstatHelper, failOpenHelper))).toContain(
+      "lstatIfExistsSafe must return missing only for ENOENT and sanitize every other error"
+    );
+    const rawWriteProbe = realVault.replace(
+      'await this.assertMutationLeafNotSymlink(abs, "write");',
+      "await fs.lstat(abs).catch(() => null);"
+    );
+    expect(mutationLeafProbeProblems(rawWriteProbe)).toContain(
+      "writeNote must use the mutation leaf assertion at every required phase"
+    );
+
+    const appendBody = methodBody(realVault, "appendNote");
+    const pathStatIdentity = appendBody.replace(
+      "initialStat = await identityHandle.stat();",
+      "initialStat = await this.statSafe(initialAbs);"
+    );
+    expect(appendIdentityProblems(realVault.replace(appendBody, pathStatIdentity))).toContain(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
+    );
+    const blockingSpecialFileOpen = appendBody.replace(
+      "fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK",
+      "fsConstants.O_NOFOLLOW"
+    );
+    expect(appendIdentityProblems(realVault.replace(appendBody, blockingSpecialFileOpen))).toContain(
+      "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
+    );
   });
 });

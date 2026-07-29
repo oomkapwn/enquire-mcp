@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { opensBlockFence } from "../src/fence.js";
 import { appendToNote, archiveNote, createNote, renameNote, replaceInNotes } from "../src/tools/index.js";
 import { replaceStringOutsideCodeFences, rewriteOutsideCodeFences } from "../src/tools/write.js";
@@ -110,30 +110,97 @@ describe("createNote", () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     await createNote(v, { path: "Twice.md", content: "first" });
+    if (process.platform !== "win32") {
+      await fs.chmod(path.join(root, "Twice.md"), 0o600);
+    }
     await createNote(v, { path: "Twice.md", content: "second", overwrite: true });
     const text = await fs.readFile(path.join(root, "Twice.md"), "utf8");
     expect(text).toBe("second");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(root, "Twice.md"))).mode & 0o777).toBe(0o600);
+    }
   });
 
-  it("rejects path traversal in writes", async () => {
+  it("rejects traversal and fails closed when mutation leaf probes cannot complete", async () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     await expect(createNote(v, { path: "../outside.md", content: "nope" })).rejects.toThrow(/escapes vault root/);
+
+    const firstWriteLstat = vi
+      .spyOn(fs, "lstat")
+      .mockRejectedValueOnce(Object.assign(new Error("write preflight lstat denied"), { code: "EACCES" }));
+    try {
+      await expect(v.writeNote("DeniedWrite.md", "must not exist")).rejects.toThrow(/write preflight lstat denied/);
+    } finally {
+      firstWriteLstat.mockRestore();
+    }
+    expect(await fs.stat(path.join(root, "DeniedWrite.md")).catch(() => null)).toBeNull();
+
+    const secondWriteLstat = vi
+      .spyOn(fs, "lstat")
+      .mockRejectedValueOnce(Object.assign(new Error("missing write leaf"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("write near-mutation lstat denied"), { code: "EACCES" }));
+    try {
+      await expect(v.writeNote("DeniedSecondWrite.md", "must not exist")).rejects.toThrow(
+        /write near-mutation lstat denied/
+      );
+    } finally {
+      secondWriteLstat.mockRestore();
+    }
+    expect(await fs.stat(path.join(root, "DeniedSecondWrite.md")).catch(() => null)).toBeNull();
+
+    await fs.writeFile(path.join(root, "ProbeSource.md"), "SOURCE");
+    const firstRenameLstat = vi
+      .spyOn(fs, "lstat")
+      .mockRejectedValueOnce(Object.assign(new Error("rename preflight lstat denied"), { code: "EACCES" }));
+    try {
+      await expect(renameNote(v, { from: "ProbeSource.md", to: "DeniedRename.md" })).rejects.toThrow(
+        /rename preflight lstat denied/
+      );
+    } finally {
+      firstRenameLstat.mockRestore();
+    }
+    expect(await fs.readFile(path.join(root, "ProbeSource.md"), "utf8")).toBe("SOURCE");
+    expect(await fs.stat(path.join(root, "DeniedRename.md")).catch(() => null)).toBeNull();
+
+    const secondRenameLstat = vi
+      .spyOn(fs, "lstat")
+      .mockRejectedValueOnce(Object.assign(new Error("missing rename leaf"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("rename near-mutation lstat denied"), { code: "EACCES" }));
+    try {
+      await expect(v.renameFile("ProbeSource.md", "DeniedSecondRename.md")).rejects.toThrow(
+        /rename near-mutation lstat denied/
+      );
+    } finally {
+      secondRenameLstat.mockRestore();
+    }
+    expect(await fs.readFile(path.join(root, "ProbeSource.md"), "utf8")).toBe("SOURCE");
+    expect(await fs.stat(path.join(root, "DeniedSecondRename.md")).catch(() => null)).toBeNull();
+
+    const fresh = await v.writeNote("Fresh.md", "fresh");
+    expect(fresh.relPath).toBe("Fresh.md");
+    const renamed = await renameNote(v, { from: "ProbeSource.md", to: "Renamed.md" });
+    expect(renamed.to).toBe("Renamed.md");
   });
 
-  it("rejects writing through a symlink whose target is outside the vault (audit v0.7.3 P1)", async () => {
+  it("rejects writes and renames through a symlink whose target is outside the vault (audit v0.7.3 P1)", async (ctx) => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-link-out-"));
     const outsideTarget = path.join(outside, "outside-target.md");
     await fs.writeFile(outsideTarget, "BEFORE");
     try {
-      await fs.symlink(outsideTarget, path.join(root, "Link.md"));
+      await fs.symlink(outsideTarget, path.join(root, "Link.md")).catch(() => null);
       const linkExists = await fs.lstat(path.join(root, "Link.md")).catch(() => null);
-      if (!linkExists) return;
+      if (!linkExists) return ctx.skip();
+      await fs.writeFile(path.join(root, "Source.md"), "SOURCE");
+      await expect(renameNote(v, { from: "Source.md", to: "Link.md", overwrite: true })).rejects.toThrow(
+        /destination is a symlink/
+      );
       await expect(createNote(v, { path: "Link.md", content: "AFTER", overwrite: true })).rejects.toThrow(
         /target is a symlink/
       );
+      expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe("SOURCE");
       const after = await fs.readFile(outsideTarget, "utf8");
       expect(after).toBe("BEFORE");
     } finally {
@@ -237,10 +304,43 @@ describe("appendToNote", () => {
     const v = new Vault(root, { enableWrite: true });
     await v.ensureExists();
     await createNote(v, { path: "Log.md", content: "first entry" });
-    const out = await appendToNote(v, { path: "Log.md", content: "second entry" });
+    // Windows/Node may expose a different path-stat dev+ino identity than fstat
+    // for the same file. Identity must remain descriptor-only; this mutation is
+    // the deterministic negative control for the old mixed-stat comparison.
+    const pathStat = await fs.stat(path.join(root, "Log.md"));
+    const pathStatSpy = vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(pathStat, { dev: pathStat.dev + 1 }));
+    const out = await appendToNote(v, { path: "Log.md", content: "second entry" }).finally(() =>
+      pathStatSpy.mockRestore()
+    );
     expect(out.appended_bytes).toBeGreaterThan(0);
     const text = await fs.readFile(path.join(root, "Log.md"), "utf8");
     expect(text).toBe("first entry\n\nsecond entry");
+
+    // A real replacement between the descriptor probe and write handle must
+    // still fail closed; neither the original nor replacement may be changed.
+    const swap = path.join(root, "Swap.md");
+    await fs.writeFile(swap, "ORIGINAL");
+    const canonicalSwap = await fs.realpath(swap);
+    const canonicalMoved = path.join(path.dirname(canonicalSwap), "Swap-moved.md");
+    const openTarget = v as unknown as {
+      openSafe(p: string, flags: string | number, mode?: number): Promise<import("node:fs/promises").FileHandle>;
+    };
+    const realOpenSafe = openTarget.openSafe.bind(v);
+    let swapOpens = 0;
+    const openSafeSpy = vi.spyOn(openTarget, "openSafe").mockImplementation(async (p, flags, mode) => {
+      if (p === canonicalSwap && ++swapOpens === 2) {
+        await fs.rename(canonicalSwap, canonicalMoved);
+        await fs.writeFile(canonicalSwap, "REPLACEMENT");
+      }
+      return mode === undefined ? realOpenSafe(p, flags) : realOpenSafe(p, flags, mode);
+    });
+    try {
+      await expect(v.appendNote("Swap.md", "\nMUST NOT APPEND")).rejects.toThrow(/target changed while waiting/);
+    } finally {
+      openSafeSpy.mockRestore();
+    }
+    expect(await fs.readFile(canonicalMoved, "utf8")).toBe("ORIGINAL");
+    expect(await fs.readFile(canonicalSwap, "utf8")).toBe("REPLACEMENT");
   });
 
   it("supports custom separator", async () => {

@@ -76,6 +76,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   }
   const jobs = yamlRecord(document?.jobs);
   const testJob = yamlRecord(jobs?.test);
+  const windowsJob = yamlRecord(jobs?.["test-windows"]);
+  const docsJob = yamlRecord(jobs?.docs);
   const smokeJob = yamlRecord(jobs?.smoke);
   if (!testJob) return ["missing test job"];
   if (major !== "22") {
@@ -152,9 +154,105 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     problems.push("test floor job missing npm test");
   }
 
+  if (!windowsJob) {
+    problems.push("missing blocking test-windows job");
+  } else {
+    if (windowsJob.name !== "test-windows" || windowsJob["runs-on"] !== "windows-2025") {
+      problems.push("test-windows must preserve its exact name and pinned windows-2025 runner");
+    }
+    if ("continue-on-error" in windowsJob || "if" in windowsJob || "needs" in windowsJob || "strategy" in windowsJob) {
+      problems.push("test-windows must be an unconditional fail-capable standalone job");
+    }
+    const windowsEnv = yamlRecord(windowsJob.env);
+    if (windowsEnv?.NPM_CONFIG_ENGINE_STRICT !== "true") {
+      problems.push("test-windows must enforce npm engine-strict");
+    }
+    if (windowsEnv?.NPM_CONFIG_SCRIPT_SHELL !== "C:\\Program Files\\Git\\bin\\bash.exe") {
+      problems.push("test-windows must run npm lifecycle scripts through pinned Git Bash");
+    }
+    if (yamlRecord(yamlRecord(windowsJob.defaults)?.run)?.shell !== "bash") {
+      problems.push("test-windows steps must run through Git Bash");
+    }
+
+    const windowsSteps = yamlSteps(windowsJob);
+    if (windowsSteps.some((step) => "continue-on-error" in step || "if" in step)) {
+      problems.push("test-windows steps must be unconditional and must not declare continue-on-error");
+    }
+    const windowsSetup = windowsSteps.find(
+      (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
+    );
+    if (yamlRecord(windowsSetup?.with)?.["node-version"] !== floor) {
+      problems.push(`test-windows must run exact engines.node floor ${floor}`);
+    }
+    const windowsAssertion = namedStep(windowsSteps, "Assert real case-insensitive Windows filesystem");
+    const windowsAssertionRun = runBody(windowsAssertion);
+    if (
+      !windowsAssertionRun.includes('process.platform !== "win32"') ||
+      !windowsAssertionRun.includes('"CaseProbe.md"') ||
+      !windowsAssertionRun.includes('"caseprobe.md"') ||
+      !windowsAssertionRun.includes("writeFileSync") ||
+      !windowsAssertionRun.includes("existsSync") ||
+      !windowsAssertionRun.includes('if (!existsSync(join(dir, "caseprobe.md")))') ||
+      !windowsAssertionRun.includes('throw new Error("Windows filesystem probe is not case-insensitive")') ||
+      !windowsAssertionRun.includes("finally") ||
+      !windowsAssertionRun.includes("rmSync")
+    ) {
+      problems.push("test-windows platform and case-insensitive filesystem assertion is missing");
+    }
+    const windowsInstall = namedStep(windowsSteps, "Install deps (npm ci with retry)");
+    if (!hasRunLine(windowsInstall, "npm ci && break")) {
+      problems.push("test-windows missing executable npm ci retry");
+    }
+    if (!windowsSteps.some((step) => step.run === "npm run build")) {
+      problems.push("test-windows missing npm run build");
+    }
+    const windowsProbeRun = runBody(namedStep(windowsSteps, "Probe native SQLite and FTS5 on Windows"));
+    if (
+      !windowsProbeRun.includes('new Database(":memory:")') ||
+      !windowsProbeRun.includes("CREATE VIRTUAL TABLE notes USING fts5") ||
+      !windowsProbeRun.includes("INSERT INTO notes(body) VALUES (?)") ||
+      !windowsProbeRun.includes("notes MATCH") ||
+      !windowsProbeRun.includes('row?.body !== "windows probe"') ||
+      !windowsProbeRun.includes('throw new Error("Windows SQLite FTS5 probe returned the wrong row")') ||
+      !windowsProbeRun.includes("db.close()")
+    ) {
+      problems.push("test-windows native SQLite/FTS probe is missing");
+    }
+    if (!windowsSteps.some((step) => step.run === "npm test -- tests/windows-path-safety.test.ts")) {
+      problems.push("test-windows missing the executable hostile-filesystem suite");
+    }
+  }
+
+  if (!docsJob) {
+    problems.push("missing docs job");
+  } else {
+    const docsSteps = yamlSteps(docsJob);
+    const previewRenderIndex = docsSteps.findIndex((step) => step.run === "npm run render:preview");
+    const previewDiffIndex = docsSteps.findIndex((step) => step.name === "Require committed social-preview bytes");
+    const previewRender = docsSteps[previewRenderIndex];
+    const previewDiff = docsSteps[previewDiffIndex];
+    if (
+      "if" in docsJob ||
+      "continue-on-error" in docsJob ||
+      !previewRender ||
+      "if" in previewRender ||
+      "continue-on-error" in previewRender ||
+      previewRenderIndex >= previewDiffIndex ||
+      previewDiff?.run !== "git diff --exit-code -- assets/social-preview.png" ||
+      "if" in (previewDiff ?? {}) ||
+      "continue-on-error" in (previewDiff ?? {})
+    ) {
+      problems.push("docs job must regenerate and fail closed on social-preview byte drift");
+    }
+  }
+
   if (!smokeJob) return [...problems, "missing smoke job"];
-  if (smokeJob.needs !== "test") {
-    problems.push("smoke must wait for the test matrix");
+  const smokeNeeds = Array.isArray(smokeJob.needs) ? smokeJob.needs.filter((item) => typeof item === "string") : [];
+  if (smokeNeeds.length !== 2 || !smokeNeeds.includes("test") || !smokeNeeds.includes("test-windows")) {
+    problems.push("smoke must wait for exactly the Linux matrix and blocking Windows job");
+  }
+  if (smokeJob.if !== `\${{ always() }}`) {
+    problems.push("smoke must run its prerequisite gate even after an upstream failure");
   }
   if ("continue-on-error" in smokeJob) {
     problems.push("smoke job must not declare continue-on-error");
@@ -163,6 +261,25 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     problems.push("smoke job must enforce npm engine-strict");
   }
   const smokeSteps = yamlSteps(smokeJob);
+  if (smokeSteps.slice(1).some((step) => "continue-on-error" in step || "if" in step)) {
+    problems.push("smoke functional steps must be unconditional and fail-capable");
+  }
+  const prerequisiteGate = smokeSteps[0];
+  const prerequisiteEnv = yamlRecord(prerequisiteGate?.env);
+  const prerequisiteRun = runBody(prerequisiteGate);
+  if (
+    prerequisiteGate?.name !== "Require Linux and Windows test prerequisites" ||
+    "continue-on-error" in (prerequisiteGate ?? {}) ||
+    "if" in (prerequisiteGate ?? {}) ||
+    prerequisiteEnv?.LINUX_TEST_RESULT !== `\${{ needs.test.result }}` ||
+    prerequisiteEnv?.WINDOWS_TEST_RESULT !== `\${{ needs['test-windows'].result }}` ||
+    !prerequisiteRun.includes('"$LINUX_TEST_RESULT" != "success"') ||
+    !prerequisiteRun.includes('"$WINDOWS_TEST_RESULT" != "success"') ||
+    !prerequisiteRun.includes("] || [") ||
+    !prerequisiteRun.includes("exit 1")
+  ) {
+    problems.push("smoke prerequisite gate must fail closed on either Linux or Windows failure");
+  }
   const smokeSetup = smokeSteps.find(
     (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
   );
@@ -305,5 +422,139 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("smoke must run exact engines.node floor 22.13.0");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          /(\n {2}test-windows:[\s\S]*?runs-on:) windows-2025/,
+          (_match, prefix: string) => `${prefix} ubuntu-latest`
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows must preserve its exact name and pinned windows-2025 runner");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          /(\n {2}test-windows:[\s\S]*?node-version:) "22\.13\.0"/,
+          (_match, prefix: string) => `${prefix} 22`
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows must run exact engines.node floor 22.13.0");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("      NPM_CONFIG_SCRIPT_SHELL: 'C:\\Program Files\\Git\\bin\\bash.exe'\n", ""),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows must run npm lifecycle scripts through pinned Git Bash");
+    expect(nodeFloorCiProblems(ci.replace('"caseprobe.md"', '"CaseProbe.md"'), pkg.engines?.node)).toContain(
+      "test-windows platform and case-insensitive filesystem assertion is missing"
+    );
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - name: Probe native SQLite and FTS5 on Windows\n",
+          "      - name: Probe native SQLite and FTS5 on Windows\n        if: false\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows steps must be unconditional and must not declare continue-on-error");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          '              throw new Error("Windows filesystem probe is not case-insensitive");',
+          "              return;"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows platform and case-insensitive filesystem assertion is missing");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace('if (row?.body !== "windows probe")', 'if (row?.body === "windows probe")'),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows native SQLite/FTS probe is missing");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - run: npm test -- tests/windows-path-safety.test.ts",
+          "      - run: echo npm test -- tests/windows-path-safety.test.ts"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows missing the executable hostile-filesystem suite");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("        run: npm run render:preview", "        run: echo npm run render:preview"),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("  docs:\n    runs-on: ubuntu-latest", "  docs:\n    if: false\n    runs-on: ubuntu-latest"),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - id: preview_render\n        run: npm run render:preview\n" +
+            "      - name: Require committed social-preview bytes\n" +
+            "        id: preview_diff\n" +
+            "        run: git diff --exit-code -- assets/social-preview.png\n",
+          "      - name: Require committed social-preview bytes\n" +
+            "        id: preview_diff\n" +
+            "        run: git diff --exit-code -- assets/social-preview.png\n" +
+            "      - id: preview_render\n" +
+            "        run: npm run render:preview\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - name: Require committed social-preview bytes\n",
+          "      - name: Require committed social-preview bytes\n        if: false\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    expect(
+      nodeFloorCiProblems(ci.replace("    needs: [test, test-windows]", "    needs: [test]"), pkg.engines?.node)
+    ).toContain("smoke must wait for exactly the Linux matrix and blocking Windows job");
+    expect(
+      nodeFloorCiProblems(ci.replace(`    if: \${{ always() }}`, "    if: success()"), pkg.engines?.node)
+    ).toContain("smoke must run its prerequisite gate even after an upstream failure");
+    expect(nodeFloorCiProblems(ci.replace(' ] || [ "', ' ] && [ "'), pkg.engines?.node)).toContain(
+      "smoke prerequisite gate must fail closed on either Linux or Windows failure"
+    );
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - name: Require Linux and Windows test prerequisites\n",
+          "      - name: Require Linux and Windows test prerequisites\n        if: false\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "      - name: JSON-RPC smoke test (scan path)\n",
+          "      - name: JSON-RPC smoke test (scan path)\n        if: false\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("smoke functional steps must be unconditional and fail-capable");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "            exit 1\n          fi\n      - uses: actions/checkout@",
+          "            exit 0\n          fi\n      - uses: actions/checkout@"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
+    expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
   });
 });

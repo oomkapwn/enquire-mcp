@@ -89,7 +89,7 @@ the same outcome?
 | **Live scan → FTS → ML → HNSW, fail-soft by layer** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **1740 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **1744 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
 combination was not documented on the reviewed public product surface; it does
@@ -152,7 +152,7 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **1740** |
+| Test count (public) | **1744** |
 | Release-required CI gates | **9** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |

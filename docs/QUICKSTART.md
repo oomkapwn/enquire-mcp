@@ -13,7 +13,7 @@ From `npm install` to a working **long-term memory layer for your AI agents**, b
 
 ## Prerequisites
 
-- **Node 22.13+ required** (since v3.7.13 the `engines.node` floor matches the CI matrix — `pdfjs-dist@6+` requires `>=22.13.0` and CI tests Node 22 + 24). On Node 20 the install will reject with `unsupported engine`; if you need Node 20 for non-PDF use cases, pin to v3.7.12 or earlier.
+- **Node 22.13+ required** (since v3.12.0-rc.22 the required `test (22)` and `smoke` jobs run on the literal `engines.node` floor, exactly 22.13.0, with strict engine checks; `test (24)` retains the newer-major control). On Node 20 npm reports `EBADENGINE` / an unsupported engine and the runtime is unsupported; if you must stay on Node 20, pin to v3.7.12 or earlier.
 - **An Obsidian vault folder** — any directory containing `.md` files. If you don't have one, `mkdir ~/TestVault && echo "# Hello" > ~/TestVault/note.md` is enough to follow this guide.
 - **An MCP client** — one of: Claude Desktop, Claude Code, Cursor, ChatGPT custom GPT (with remote MCP), Codex, OpenClaw, or any other MCP-compatible client.
 
@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.21` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, and evidence-complete benchmark provenance. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.22` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.21
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.22
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.21` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.22` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 For a client-specific install action, run `enquire-mcp configure --client <name> --vault /absolute/path`. The preview prints a native review URI only where the client officially accepts an arbitrary local definition (VS Code), a copy-and-run command where the client exposes one (Claude Code and Codex), and an explicit **copy-only** label where public one-click routes are limited to Marketplace/Registry entries. Every mode includes the exact generated config as the fallback.
 
@@ -154,7 +154,7 @@ The hybrid JSON in [`examples/claude-desktop-hybrid.json`](../examples/claude-de
 
 **`enquire-mcp: command not found`.** The npm global bin directory isn't on your `PATH`. Run `npm config get prefix` to find it, then add `<prefix>/bin` to your `PATH` — or switch to the `npx` form of the Claude Desktop config (see Step 3): `"command": "npx"`, `"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/abs/path"]`.
 
-**`ENOENT` or `unsupported engine` on install.** You're on Node < 22.13. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 22 && nvm use 22`). enquire-mcp's CI matrix tests Node 22 + 24, and since v3.7.13 the `engines.node` floor matches that matrix (`>=22.13.0` — `pdfjs-dist@6+` is the lowest common denominator). For non-PDF Node 20 users, pin to v3.7.12.
+**`ENOENT` or `unsupported engine` on install.** You're on Node < 22.13. Run `node --version` to confirm, then upgrade (e.g. via `nvm install 22 && nvm use 22`). enquire-mcp's required `test (22)` and `smoke` jobs run at exactly 22.13.0, matching `engines.node >=22.13.0`; `test (24)` is the newer-major control. For non-PDF Node 20 users, pin to v3.7.12.
 
 **`Error: vault path does not exist`.** Either the path is wrong, or you used `~` instead of the absolute form. MCP clients don't expand `~` — use `/Users/you/MyVault` on macOS/Linux or `C:\Users\you\MyVault` on Windows. Paths containing spaces are fine as long as the JSON string itself is well-formed; no shell escaping needed inside `claude_desktop_config.json`.
 

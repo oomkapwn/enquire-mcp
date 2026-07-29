@@ -729,9 +729,7 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
         expected
       );
       expect(expected(stable)).toBe(true);
-      expect(await fs.readFile(path.join(root, "Incoming", "Outside", "Secret.md"), "utf8")).toBe(
-        sentinelContent
-      );
+      expect(await fs.readFile(path.join(root, "Incoming", "Outside", "Secret.md"), "utf8")).toBe(sentinelContent);
       expect(await fs.readFile(sentinel, "utf8")).toBe(sentinelContent);
       await fixture.watcher.close();
       expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);

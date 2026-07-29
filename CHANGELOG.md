@@ -24,7 +24,7 @@ All notable changes to this project will be documented here. The format follows 
 - This RC proves the named operations on GitHub's default case-insensitive Windows filesystem. It does **not** claim exhaustive Unicode case folding, case-sensitive NTFS directories, MAX_PATH/8.3 aliases, SMB/ReFS/FAT/WSL behavior, concurrent junction retargeting, arbitrary multi-writer races, events arriving before late `attachEmbed`/`attachHnsw`, or one-generation FTS/embed consistency while a file changes during asynchronous extraction.
 - The result is a stronger regression and release contract for behavior the current implementation already satisfies; no speculative watcher reconciliation refactor is included.
 
-### Stats
+### Tests (1748)
 
 - Source tests: 1744 → 1748.
 - New Windows watcher scenarios: 4; each has one filesystem mutation, a pre-state negative control, bounded stable-state proof and post-close proof.

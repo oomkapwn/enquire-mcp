@@ -301,16 +301,6 @@ jobs:
       - name: Require committed social-preview bytes
         id: preview_diff
         run: git diff --exit-code -- assets/social-preview.png
-      # Temporary retrieval path for the first rc.24 candidate run. The final
-      # candidate removes this upload after committing the remote-rendered PNG.
-      - name: Upload regenerated social preview on drift
-        if: ${{ failure() && steps.preview_render.outcome == 'success' && steps.preview_diff.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: social-preview-render-${{ github.sha }}
-          path: assets/social-preview.png
-          if-no-files-found: error
-          retention-days: 1
       # TypeDoc warnings on PR — treat as failure so doc drift fails CI,
       # not silently lands on main. The shell pipe captures the output and
       # greps for the "Found N warnings" / "Found N errors" lines.

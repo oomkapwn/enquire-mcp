@@ -38,9 +38,7 @@ function allSuccessful(): CheckRun[] {
 type YamlRecord = Record<string, unknown>;
 
 function yamlRecord(value: unknown): YamlRecord | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as YamlRecord)
-    : null;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as YamlRecord) : null;
 }
 
 function yamlSteps(job: YamlRecord): YamlRecord[] {
@@ -64,8 +62,7 @@ function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
 }
 
 function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
-  const floorMatch =
-    typeof enginesNode === "string" ? /^>=(\d+\.\d+\.\d+)$/.exec(enginesNode) : null;
+  const floorMatch = typeof enginesNode === "string" ? /^>=(\d+\.\d+\.\d+)$/.exec(enginesNode) : null;
   if (!floorMatch) return ["engines.node must be one exact >=X.Y.Z floor"];
   const floor = floorMatch[1] ?? "";
   const major = floor.split(".")[0] ?? "";
@@ -84,7 +81,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   if (major !== "22") {
     problems.push("engines.node major changed; update the stable release-check inventory");
   }
-  if (testJob.name !== "test (${{ matrix.label }})") {
+  if (testJob.name !== `test (\${{ matrix.label }})`) {
     problems.push("test job must preserve stable matrix labels");
   }
   if ("continue-on-error" in testJob) {
@@ -116,7 +113,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   const testSetup = testSteps.find(
     (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
   );
-  if (yamlRecord(testSetup?.with)?.["node-version"] !== "${{ matrix.node-version }}") {
+  if (yamlRecord(testSetup?.with)?.["node-version"] !== `\${{ matrix.node-version }}`) {
     problems.push("test setup-node must consume matrix.node-version");
   }
   const assertion = namedStep(testSteps, "Assert exact declared Node floor");
@@ -183,9 +180,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   if (!scanRun.includes("node scripts/smoke.mjs") || scanRun.includes("--with-fts")) {
     problems.push("smoke job missing the scan-path command");
   }
-  const ftsRun = runBody(
-    namedStep(smokeSteps, "JSON-RPC smoke test (FTS5 --persistent-index path)")
-  );
+  const ftsRun = runBody(namedStep(smokeSteps, "JSON-RPC smoke test (FTS5 --persistent-index path)"));
   if (!ftsRun.includes("node scripts/smoke.mjs") || !ftsRun.includes("--with-fts")) {
     problems.push("smoke job missing the persistent-FTS command");
   }
@@ -266,30 +261,20 @@ describe("release identity and exact required-check gate", () => {
 
     // NEGATIVE controls: the invariant rejects both the old floating-22 leg
     // and a floor that no longer matches package.json.
-    expect(
-      nodeFloorCiProblems(ci.replace('node-version: "22.13.0"', "node-version: 22"), pkg.engines?.node)
-    ).toContain("test (22) must run exact engines.node floor 22.13.0");
-    expect(nodeFloorCiProblems(ci, ">=22.14.0")).toContain(
-      "test (22) must run exact engines.node floor 22.14.0"
+    expect(nodeFloorCiProblems(ci.replace('node-version: "22.13.0"', "node-version: 22"), pkg.engines?.node)).toContain(
+      "test (22) must run exact engines.node floor 22.13.0"
     );
-    expect(nodeFloorCiProblems(ci, "22.13.0")).toEqual([
-      "engines.node must be one exact >=X.Y.Z floor"
-    ]);
+    expect(nodeFloorCiProblems(ci, ">=22.14.0")).toContain("test (22) must run exact engines.node floor 22.14.0");
+    expect(nodeFloorCiProblems(ci, "22.13.0")).toEqual(["engines.node must be one exact >=X.Y.Z floor"]);
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          '      NPM_CONFIG_ENGINE_STRICT: "true"',
-          '      NPM_CONFIG_ENGINE_STRICT: "false"'
-        ),
+        ci.replace('      NPM_CONFIG_ENGINE_STRICT: "true"', '      NPM_CONFIG_ENGINE_STRICT: "false"'),
         pkg.engines?.node
       )
     ).toContain("test job must enforce npm engine-strict");
-    expect(
-      nodeFloorCiProblems(
-        ci.replace("if (declared !== expected)", "if (false)"),
-        pkg.engines?.node
-      )
-    ).toContain("test floor runtime assertion is missing");
+    expect(nodeFloorCiProblems(ci.replace("if (declared !== expected)", "if (false)"), pkg.engines?.node)).toContain(
+      "test floor runtime assertion is missing"
+    );
     expect(
       nodeFloorCiProblems(
         ci.replace(
@@ -316,10 +301,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test job must not declare continue-on-error");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          /(\n  smoke:[\s\S]*?node-version:) "22\.13\.0"/,
-          (_match, prefix: string) => `${prefix} 22`
-        ),
+        ci.replace(/(\n {2}smoke:[\s\S]*?node-version:) "22\.13\.0"/, (_match, prefix: string) => `${prefix} 22`),
         pkg.engines?.node
       )
     ).toContain("smoke must run exact engines.node floor 22.13.0");

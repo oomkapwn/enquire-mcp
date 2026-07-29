@@ -2,6 +2,8 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmbedDb } from "../src/embed-db.js";
+import { embedSingleNote } from "../src/embed-pipeline.js";
 import { FtsIndex } from "../src/fts5.js";
 import { renameNote } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
@@ -11,16 +13,146 @@ import { windowsRelativePathProblem } from "../src/windows-path.js";
 let root: string;
 let outside: string;
 
+const WATCHER_STATE_TIMEOUT_MS = 15_000;
+const WATCHER_STABLE_WINDOW_MS = 1_200;
+const WATCHER_POLL_MS = 75;
+
+const watcherEmbedder = {
+  model: {
+    alias: "windows-watcher-mock",
+    hfId: "local/test-only",
+    dim: 4,
+    multilingual: true,
+    maxTokens: 128
+  },
+  async embed(texts: readonly string[]): Promise<Float32Array[]> {
+    return texts.map(() => new Float32Array([1, 0, 0, 0]));
+  }
+};
+
+interface WindowsWatcherFixture {
+  vault: Vault;
+  fts: FtsIndex;
+  embedDb: EmbedDb;
+  watcher: VaultWatcher;
+}
+
+interface WindowsWatcherSnapshot {
+  diskNames: string[];
+  ftsByMarker: Record<string, string[]>;
+  embedByMarker: Record<string, string[]>;
+  embedPaths: string[];
+  ftsAudit: ReturnType<FtsIndex["auditKind"]>;
+  embedAudit: ReturnType<EmbedDb["auditKind"]>;
+}
+
+async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise<WindowsWatcherFixture> {
+  const vault = new Vault(root);
+  await vault.ensureExists();
+  const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: root });
+  await fts.open();
+  const embedDb = new EmbedDb({
+    file: path.join(outside, "watcher.embed.db"),
+    vaultRoot: root,
+    modelAlias: watcherEmbedder.model.alias,
+    dim: watcherEmbedder.model.dim,
+    quantization: "f32"
+  });
+  await embedDb.open();
+
+  for (const [relPath, content] of Object.entries(notes)) {
+    const absPath = path.join(root, ...relPath.split("/"));
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, content);
+    const stat = await fs.stat(absPath);
+    fts.reindexFile(relPath, stat.mtimeMs, content);
+    const embedded = await embedSingleNote(
+      vault,
+      watcherEmbedder,
+      { relPath, absPath, mtimeMs: stat.mtimeMs },
+      { lateChunkContext: 0 }
+    );
+    if (!embedded) throw new Error(`test fixture note unexpectedly produced no chunks: ${relPath}`);
+    embedDb.upsertNote(relPath, stat.mtimeMs, embedded.rows);
+  }
+
+  const watcher = new VaultWatcher({ vault, ftsIndex: fts, silent: true });
+  watcher.attachEmbed(embedDb, watcherEmbedder, 0);
+  return { vault, fts, embedDb, watcher };
+}
+
+async function snapshotWindowsWatcherState(
+  fixture: WindowsWatcherFixture,
+  markers: readonly string[]
+): Promise<WindowsWatcherSnapshot> {
+  const ftsByMarker: Record<string, string[]> = {};
+  const embedByMarker: Record<string, string[]> = {};
+  const embedRows = fixture.embedDb.getAllVectors();
+  for (const marker of markers) {
+    ftsByMarker[marker] = [
+      ...new Set(fixture.fts.search(marker, { limit: 50 }).map((result) => result.rel_path))
+    ].sort();
+    embedByMarker[marker] = [
+      ...new Set(
+        embedRows.filter((row) => row.text_preview.includes(marker)).map((row) => row.rel_path)
+      )
+    ].sort();
+  }
+  return {
+    diskNames: (await fs.readdir(root)).sort(),
+    ftsByMarker,
+    embedByMarker,
+    embedPaths: [...new Set(fixture.embedDb.getSourceStates("md").map((state) => state.rel_path))].sort(),
+    ftsAudit: fixture.fts.auditKind("md"),
+    embedAudit: fixture.embedDb.auditKind("md")
+  };
+}
+
+function markerPaths(paths: Record<string, string[]>, marker: string): string[] {
+  return paths[marker] ?? [];
+}
+
+async function waitForStableWindowsWatcherState(
+  observe: () => Promise<WindowsWatcherSnapshot>,
+  expected: (snapshot: WindowsWatcherSnapshot) => boolean
+): Promise<WindowsWatcherSnapshot> {
+  const deadline = Date.now() + WATCHER_STATE_TIMEOUT_MS;
+  let stableSince: number | null = null;
+  let last: WindowsWatcherSnapshot | undefined;
+  while (Date.now() < deadline) {
+    last = await observe();
+    if (expected(last)) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= WATCHER_STABLE_WINDOW_MS) return last;
+    } else {
+      stableSince = null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, WATCHER_POLL_MS));
+  }
+  throw new Error(`watcher state did not converge and remain stable: ${JSON.stringify(last)}`);
+}
+
+function watcherAuditsMatch(snapshot: WindowsWatcherSnapshot, expectedFiles: number): boolean {
+  return (
+    snapshot.ftsAudit.declared_files === expectedFiles &&
+    snapshot.ftsAudit.indexed_files === expectedFiles &&
+    snapshot.ftsAudit.mismatched_files === 0 &&
+    snapshot.embedAudit.indexed_files === expectedFiles &&
+    snapshot.embedAudit.mismatched_files === 0
+  );
+}
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-win-vault-"));
   outside = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-win-outside-"));
 });
 
 afterEach(async () => {
-  const junction = path.join(root, "Outside");
-  const junctionStat = await fs.lstat(junction).catch(() => null);
-  if (junctionStat?.isSymbolicLink()) {
-    await fs.unlink(junction);
+  for (const junction of [path.join(root, "Outside"), path.join(root, "Incoming", "Outside")]) {
+    const junctionStat = await fs.lstat(junction).catch(() => null);
+    if (junctionStat?.isSymbolicLink()) {
+      await fs.unlink(junction);
+    }
   }
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
@@ -357,5 +489,181 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
     expect(exactCase.total_links_rewritten).toBe(2);
     expect(await fs.readFile(path.join(root, "ExactNew.md"), "utf8")).toContain("[[ExactNew]]");
     expect(await fs.readFile(path.join(root, "ExactHub.md"), "utf8")).toContain("[[ExactNew]]");
+  });
+
+  it("watcher converges after an ordinary rename without stale FTS or embedding paths", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Old.md": "# Old\n\nordinarywatchermarker\n",
+      "Keep.md": "# Keep\n\nkeepwatchermarker\n"
+    });
+    const markers = ["ordinarywatchermarker", "keepwatchermarker"] as const;
+    const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
+      snapshot.diskNames.includes("New.md") &&
+      !snapshot.diskNames.includes("Old.md") &&
+      markerPaths(snapshot.ftsByMarker, markers[0]).join() === "New.md" &&
+      markerPaths(snapshot.embedByMarker, markers[0]).join() === "New.md" &&
+      markerPaths(snapshot.ftsByMarker, markers[1]).join() === "Keep.md" &&
+      markerPaths(snapshot.embedByMarker, markers[1]).join() === "Keep.md" &&
+      snapshot.embedPaths.join() === "Keep.md,New.md" &&
+      watcherAuditsMatch(snapshot, 2);
+
+    try {
+      await fixture.watcher.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = await snapshotWindowsWatcherState(fixture, markers);
+      expect(expected(before), "NEGATIVE control: pre-rename state must not satisfy the final predicate").toBe(
+        false
+      );
+      expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Old.md"]);
+      expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Old.md"]);
+
+      await fs.rename(path.join(root, "Old.md"), path.join(root, "New.md"));
+
+      const stable = await waitForStableWindowsWatcherState(
+        () => snapshotWindowsWatcherState(fixture, markers),
+        expected
+      );
+      expect(expected(stable)).toBe(true);
+      await fixture.watcher.close();
+      expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
+    } finally {
+      await fixture.watcher.close();
+      fixture.embedDb.close();
+      fixture.fts.close();
+    }
+  });
+
+  it("watcher converges to the exact on-disk casing after a case-only rename", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Foo.md": "# Foo\n\ncasewatchermarker\n"
+    });
+    const markers = ["casewatchermarker"] as const;
+    const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
+      snapshot.diskNames.filter((name) => name.toLowerCase() === "foo.md").join() === "foo.md" &&
+      markerPaths(snapshot.ftsByMarker, markers[0]).join() === "foo.md" &&
+      markerPaths(snapshot.embedByMarker, markers[0]).join() === "foo.md" &&
+      snapshot.embedPaths.join() === "foo.md" &&
+      watcherAuditsMatch(snapshot, 1);
+
+    try {
+      await fixture.watcher.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await fs.readFile(path.join(root, "foo.md"), "utf8")).toContain("casewatchermarker");
+      const before = await snapshotWindowsWatcherState(fixture, markers);
+      expect(expected(before), "NEGATIVE control: pre-rename casing must not satisfy the final predicate").toBe(
+        false
+      );
+      expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Foo.md"]);
+      expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Foo.md"]);
+
+      await fs.rename(path.join(root, "Foo.md"), path.join(root, "foo.md"));
+
+      const stable = await waitForStableWindowsWatcherState(
+        () => snapshotWindowsWatcherState(fixture, markers),
+        expected
+      );
+      expect(expected(stable)).toBe(true);
+      await fixture.watcher.close();
+      expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
+    } finally {
+      await fixture.watcher.close();
+      fixture.embedDb.close();
+      fixture.fts.close();
+    }
+  });
+
+  it("watcher converges after one same-path atomic replacement without stale content", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Atomic.md": "# Atomic\n\noldatomicwatchermarker\n"
+    });
+    const replacement = path.join(root, "Atomic.swap");
+    await fs.writeFile(replacement, "# Atomic\n\nnewatomicwatchermarker\n");
+    const markers = ["oldatomicwatchermarker", "newatomicwatchermarker"] as const;
+    const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
+      !snapshot.diskNames.includes("Atomic.swap") &&
+      snapshot.diskNames.includes("Atomic.md") &&
+      markerPaths(snapshot.ftsByMarker, markers[0]).length === 0 &&
+      markerPaths(snapshot.embedByMarker, markers[0]).length === 0 &&
+      markerPaths(snapshot.ftsByMarker, markers[1]).join() === "Atomic.md" &&
+      markerPaths(snapshot.embedByMarker, markers[1]).join() === "Atomic.md" &&
+      snapshot.embedPaths.join() === "Atomic.md" &&
+      watcherAuditsMatch(snapshot, 1);
+
+    try {
+      await fixture.watcher.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = await snapshotWindowsWatcherState(fixture, markers);
+      expect(expected(before), "NEGATIVE control: old bytes must not satisfy the replacement predicate").toBe(
+        false
+      );
+      expect(markerPaths(before.ftsByMarker, markers[0])).toEqual(["Atomic.md"]);
+      expect(markerPaths(before.embedByMarker, markers[0])).toEqual(["Atomic.md"]);
+
+      await fs.rename(replacement, path.join(root, "Atomic.md"));
+
+      const stable = await waitForStableWindowsWatcherState(
+        () => snapshotWindowsWatcherState(fixture, markers),
+        expected
+      );
+      expect(expected(stable)).toBe(true);
+      expect(await fs.readFile(path.join(root, "Atomic.md"), "utf8")).toContain("newatomicwatchermarker");
+      await fixture.watcher.close();
+      expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
+    } finally {
+      await fixture.watcher.close();
+      fixture.embedDb.close();
+      fixture.fts.close();
+    }
+  });
+
+  it("watcher indexes a moved-in directory but never follows its junction", async () => {
+    const fixture = await seedWindowsWatcherFixture({});
+    const sentinelDir = path.join(outside, "sentinel");
+    const sentinel = path.join(sentinelDir, "Secret.md");
+    const staging = path.join(outside, "Incoming.staging");
+    await fs.mkdir(sentinelDir, { recursive: true });
+    await fs.writeFile(sentinel, "# Secret\n\njunctionsecretwatchermarker\n");
+    await fs.mkdir(staging, { recursive: true });
+    await fs.writeFile(path.join(staging, "Visible.md"), "# Visible\n\njunctionvisiblewatchermarker\n");
+    await fs.symlink(sentinelDir, path.join(staging, "Outside"), "junction");
+    const markers = ["junctionvisiblewatchermarker", "junctionsecretwatchermarker"] as const;
+    const expected = (snapshot: WindowsWatcherSnapshot): boolean =>
+      snapshot.diskNames.includes("Incoming") &&
+      markerPaths(snapshot.ftsByMarker, markers[0]).join() === "Incoming/Visible.md" &&
+      markerPaths(snapshot.embedByMarker, markers[0]).join() === "Incoming/Visible.md" &&
+      markerPaths(snapshot.ftsByMarker, markers[1]).length === 0 &&
+      markerPaths(snapshot.embedByMarker, markers[1]).length === 0 &&
+      snapshot.embedPaths.join() === "Incoming/Visible.md" &&
+      watcherAuditsMatch(snapshot, 1);
+
+    try {
+      await fixture.watcher.start();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = await snapshotWindowsWatcherState(fixture, markers);
+      expect(
+        expected(before),
+        "NEGATIVE control: the empty index must not satisfy the moved-tree predicate"
+      ).toBe(false);
+
+      await fs.rename(staging, path.join(root, "Incoming"));
+
+      const stable = await waitForStableWindowsWatcherState(
+        () => snapshotWindowsWatcherState(fixture, markers),
+        expected
+      );
+      expect(expected(stable)).toBe(true);
+      expect(await fs.readFile(path.join(root, "Incoming", "Outside", "Secret.md"), "utf8")).toContain(
+        "junctionsecretwatchermarker"
+      );
+      expect(await fs.readFile(sentinel, "utf8")).toContain("junctionsecretwatchermarker");
+      await fixture.watcher.close();
+      expect(expected(await snapshotWindowsWatcherState(fixture, markers))).toBe(true);
+    } finally {
+      await fixture.watcher.close();
+      const junction = path.join(root, "Incoming", "Outside");
+      if ((await fs.lstat(junction).catch(() => null))?.isSymbolicLink()) await fs.unlink(junction);
+      fixture.embedDb.close();
+      fixture.fts.close();
+    }
   });
 });

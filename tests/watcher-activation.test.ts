@@ -637,6 +637,8 @@ describe("VaultWatcher startup activation barrier", () => {
       { "During.md": "# During\n\nduringoldmarker is the initial state.\n" },
       { embedder: blockingEmbedder }
     );
+    const readNoteSpy = vi.spyOn(fixture.vault, "readNote");
+    let readNoteCalls = 0;
     const duringPath = path.join(fixture.vault.root, "During.md");
     const acceptedPath = path.join(fixture.vault.root, "Accepted.md");
     const ignoredPath = path.join(fixture.vault.root, "Ignored.md");
@@ -692,6 +694,8 @@ describe("VaultWatcher startup activation barrier", () => {
       releaseReplay.resolve(undefined);
       await activation.catch(() => {});
       if (close) await close.catch(() => {});
+      readNoteCalls = readNoteSpy.mock.calls.length;
+      readNoteSpy.mockRestore();
     }
 
     expect(markerPathsInFts(fixture.fts, "duringoldmarker")).toEqual([]);
@@ -712,6 +716,9 @@ describe("VaultWatcher startup activation barrier", () => {
     expect(embedCalls[0]?.join("\n")).toContain("duringcandidate");
     expect(embedCalls[1]?.join("\n")).toContain("duringlatestmarker");
     expect(embedCalls[2]?.join("\n")).toContain("acceptedwhileactivatingmarker");
+    // One source read per attempt: stale During, its retry, then Accepted.
+    // The pre-rc.26 embed helper re-read every Markdown path and would record 6.
+    expect(readNoteCalls).toBe(3);
     expectHnswMatchesEmbedDb(fixture);
   });
 });

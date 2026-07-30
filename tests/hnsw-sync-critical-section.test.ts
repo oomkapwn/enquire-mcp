@@ -105,5 +105,14 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
     expect(containsAwait(sliceBetween(good, "for (const label of removeLabels)", "return { removed, added }"))).toBe(
       false
     );
+
+    // S-8d negative control: the same detector must fire for either complete
+    // generation-commit anchor pair, not only for the historical HNSW slice.
+    for (const start of ["this.ftsIndex?.reindexFile(", "this.ftsIndex?.reindexPdfFile("]) {
+      const badCommit = [start, "await remoteSink();", "return embedNote;"].join("\n");
+      expect(containsAwait(sliceBetween(badCommit, start, "return embedNote;"))).toBe(true);
+      const goodCommit = badCommit.replace("await remoteSink();", "this.embedDb?.totalChunks();");
+      expect(containsAwait(sliceBetween(goodCommit, start, "return embedNote;"))).toBe(false);
+    }
   });
 });

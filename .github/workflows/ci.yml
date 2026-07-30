@@ -34,14 +34,14 @@ jobs:
             echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
             sleep 15
           done
-      # Temporary D-45 handoff: generate the canonical Biome bytes on the
-      # disposable runner, then remove both steps after committing the artifact.
+      # Temporary D-45 handoff: generate canonical bytes on the disposable
+      # runner, then remove both steps after committing the artifact.
       - name: Format rc.27 candidate
         run: npm run format
       - name: Upload formatted rc.27 sources
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: formatted-rc27
+          name: formatted-rc27-final
           path: |
             src/watcher.ts
             tests/watcher.test.ts

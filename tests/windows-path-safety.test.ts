@@ -59,14 +59,14 @@ interface WindowsWatcherSnapshot {
 
 async function seedWindowsWatcherFixture(
   notes: Record<string, string>,
-  options: { activationPathLimit?: number } = {}
+  options: { activationPathLimit?: number; configuredRoot?: string } = {}
 ): Promise<WindowsWatcherFixture> {
-  const vault = new Vault(root);
+  const vault = new Vault(options.configuredRoot ?? root);
   await vault.ensureExists();
-  const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: root });
+  const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: vault.root });
   const embedDb = new EmbedDb({
     file: path.join(outside, "watcher.embed.db"),
-    vaultRoot: root,
+    vaultRoot: vault.root,
     modelAlias: watcherEmbedder.model.alias,
     dim: watcherEmbedder.model.dim,
     quantization: "f32"
@@ -76,7 +76,7 @@ async function seedWindowsWatcherFixture(
     await embedDb.open();
 
     for (const [relPath, content] of Object.entries(notes)) {
-      const absPath = path.join(root, ...relPath.split("/"));
+      const absPath = vault.resolveInside(relPath);
       await fs.mkdir(path.dirname(absPath), { recursive: true });
       await fs.writeFile(absPath, content);
       const stat = await fs.stat(absPath);
@@ -320,20 +320,38 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       await fs.unlink(probeSource).catch(() => {});
     }
 
-    const fixture = await seedWindowsWatcherFixture({
-      "Primary.md": "# Shared\n\nhardlinkoldmarker\n",
-      "Alias.md": "# Shared\n\nhardlinkoldmarker\n",
-      "Keep.md": "# Keep\n\nhardlinkkeepmarker\n"
-    });
+    const configuredRootAlias = path.join(outside, "ConfiguredWatcherVault");
+    await fs.symlink(root, configuredRootAlias, "junction");
+    const fixture = await seedWindowsWatcherFixture(
+      {
+        "Primary.md": "# Shared\n\nhardlinkoldmarker\n",
+        "Alias.md": "# Shared\n\nhardlinkoldmarker\n",
+        "Keep.md": "# Keep\n\nhardlinkkeepmarker\n"
+      },
+      { configuredRoot: configuredRootAlias }
+    );
     const primaryPath = path.join(root, "Primary.md");
     const aliasPath = path.join(root, "Alias.md");
+    const configuredPrimaryPath = path.join(configuredRootAlias, "Primary.md");
+    const configuredAliasPath = path.join(configuredRootAlias, "Alias.md");
+    const outsideEventPath = path.join(outside, "Outside.md");
     const markers = [
       "hardlinkoldmarker",
       "hardlinknewmarker",
       "hardlinklatestmarker",
       "hardlinkreplacementmarker",
-      "hardlinkkeepmarker"
+      "hardlinkkeepmarker",
+      "hardlinkoutsidemarker"
     ] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      enqueueFileTask(
+        absPath: string,
+        context: string,
+        task: () => Promise<void>,
+        propagateFailure?: boolean
+      ): Promise<void>;
+    };
+    const enqueueSpy = vi.spyOn(watcherInternals, "enqueueFileTask");
 
     try {
       await fs.unlink(aliasPath);
@@ -351,10 +369,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(primaryStat.nlink).toBeGreaterThanOrEqual(2n);
       if (process.platform === "linux") expect(primaryStat.ino).not.toBe(0n);
 
-      await writeWithLaterMtime(
-        primaryPath,
-        "# Shared\n\nhardlinknewmarker is visible through both physical names.\n"
-      );
+      await writeWithLaterMtime(primaryPath, "# Shared\n\nhardlinknewmarker is visible through both physical names.\n");
       await expect(fs.readFile(aliasPath, "utf8")).resolves.toContain("hardlinknewmarker");
 
       // NEGATIVE setup: both paths already expose the new bytes, but no watcher
@@ -364,17 +379,37 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expectMarkerPaths(beforeEvent, "hardlinknewmarker", []);
       expect(watcherAuditsMatch(beforeEvent, 3)).toBe(true);
 
-      await enqueueWatcherEvent(fixture.watcher, primaryPath, "change");
+      // NEGATIVE control: an outside path is rejected before it can acquire a
+      // per-file queue key or surface content in any derived sink.
+      await fs.writeFile(outsideEventPath, "# Outside\n\nhardlinkoutsidemarker\n");
+      const queueCallsBeforeOutside = enqueueSpy.mock.calls.length;
+      await enqueueWatcherEvent(fixture.watcher, outsideEventPath, "change");
+      expect(enqueueSpy.mock.calls).toHaveLength(queueCallsBeforeOutside);
+      expectMarkerPaths(await snapshotWindowsWatcherState(fixture, markers), "hardlinkoutsidemarker", []);
+      expect(fixture.reindexedPaths).toEqual([]);
+
+      // POSITIVE control: the event arrives through the configured junction,
+      // while queueing and every searchable identity use the canonical root.
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "change");
+      expect(enqueueSpy.mock.calls.at(-1)?.[0]).toBe(fixture.vault.resolveInside("Primary.md"));
 
       const afterSharedChange = await snapshotWindowsWatcherState(fixture, markers);
       expectMarkerPaths(afterSharedChange, "hardlinkoldmarker", []);
       expectMarkerPaths(afterSharedChange, "hardlinknewmarker", ["Alias.md", "Primary.md"]);
       expectMarkerPaths(afterSharedChange, "hardlinkkeepmarker", ["Keep.md"]);
-      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["Alias.md", "Primary.md"]);
+      const [currentPrimaryStat, currentAliasStat, keepStat] = await Promise.all(
+        [primaryPath, aliasPath, path.join(root, "Keep.md")].map((p) => fs.lstat(p, { bigint: true }))
+      );
+      const identityNarrowsToHardlinks =
+        [currentPrimaryStat, currentAliasStat, keepStat].every((stat) => stat.dev !== 0n && stat.ino !== 0n) &&
+        (keepStat.dev !== currentPrimaryStat.dev || keepStat.ino !== currentPrimaryStat.ino);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(
+        identityNarrowsToHardlinks ? ["Alias.md", "Primary.md"] : ["Alias.md", "Keep.md", "Primary.md"]
+      );
       expect(watcherAuditsMatch(afterSharedChange, 3)).toBe(true);
 
       await fs.unlink(primaryPath);
-      await enqueueWatcherEvent(fixture.watcher, primaryPath, "unlink");
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "unlink");
 
       const afterPrimaryUnlink = await snapshotWindowsWatcherState(fixture, markers);
       expect(afterPrimaryUnlink.diskNames).not.toContain("Primary.md");
@@ -388,12 +423,12 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
         primaryPath,
         "# Replacement\n\nhardlinkreplacementmarker belongs only to the replacement inode.\n"
       );
-      await enqueueWatcherEvent(fixture.watcher, primaryPath, "add");
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "add");
       await writeWithLaterMtime(
         aliasPath,
         "# Shared\n\nhardlinklatestmarker belongs only to the surviving hardlink inode.\n"
       );
-      await enqueueWatcherEvent(fixture.watcher, aliasPath, "change");
+      await enqueueWatcherEvent(fixture.watcher, configuredAliasPath, "change");
 
       const afterReplacement = await snapshotWindowsWatcherState(fixture, markers);
       expectMarkerPaths(afterReplacement, "hardlinknewmarker", []);
@@ -403,7 +438,8 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(afterReplacement.embedPaths).toEqual(["Alias.md", "Keep.md", "Primary.md"]);
       expect(watcherAuditsMatch(afterReplacement, 3)).toBe(true);
     } finally {
-      await closeWindowsWatcherFixture(fixture);
+      enqueueSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture, [configuredRootAlias]);
     }
   });
 
@@ -519,10 +555,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
 
       expect(createdC, "C must be created after the first inventory snapshot and before path locks").toBe(true);
       expect(inventorySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-      const [bStat, cStat] = await Promise.all([
-        fs.lstat(bPath, { bigint: true }),
-        fs.lstat(cPath, { bigint: true })
-      ]);
+      const [bStat, cStat] = await Promise.all([fs.lstat(bPath, { bigint: true }), fs.lstat(cPath, { bigint: true })]);
       expect(bStat.dev).toBe(cStat.dev);
       expect(bStat.ino).toBe(cStat.ino);
       expect(bStat.nlink).toBeGreaterThanOrEqual(2n);
@@ -602,10 +635,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       }
 
       expect(recreated, "the controlled origin recreation must execute during B staging").toBe(true);
-      const [aStat, bStat] = await Promise.all([
-        fs.lstat(aPath, { bigint: true }),
-        fs.lstat(bPath, { bigint: true })
-      ]);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
       expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
 
       const reconciled = await snapshotWindowsWatcherState(fixture, markers);
@@ -641,11 +671,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
     });
     const aPath = path.join(root, "A.md");
     const bPath = path.join(root, "B.md");
-    const markers = [
-      "prelockraceoldmarker",
-      "prelockracegroupmarker",
-      "prelockracereplacementmarker"
-    ] as const;
+    const markers = ["prelockraceoldmarker", "prelockracegroupmarker", "prelockracereplacementmarker"] as const;
     const watcherInternals = fixture.watcher as unknown as {
       inspectVisibleAliasInventoryInLane(): Promise<unknown>;
     };
@@ -683,10 +709,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
 
       expect(inventorySpy).toHaveBeenCalled();
       expect(replaced, "the controlled membership change must execute inside pre-lock planning").toBe(true);
-      const [aStat, bStat] = await Promise.all([
-        fs.lstat(aPath, { bigint: true }),
-        fs.lstat(bPath, { bigint: true })
-      ]);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
       expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
 
       const reconciled = await snapshotWindowsWatcherState(fixture, markers);
@@ -763,10 +786,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       await enqueueWatcherEvent(fixture.watcher, aPath, "change");
 
       expect(replaced, "the controlled non-origin replacement must execute during fan-out").toBe(true);
-      const [aStat, bStat] = await Promise.all([
-        fs.lstat(aPath, { bigint: true }),
-        fs.lstat(bPath, { bigint: true })
-      ]);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
       expect(aStat.isFile() && !aStat.isSymbolicLink()).toBe(true);
       expect(bStat.isFile() && !bStat.isSymbolicLink()).toBe(true);
       expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
@@ -809,10 +829,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
     const markers = ["aliaslockoldmarker", "aliaslocknewmarker"] as const;
     const watcherInternals = fixture.watcher as unknown as {
       stageAliasPath(live: { absPath: string; relPath: string }): Promise<unknown>;
-      withPhysicalAliasLocks(
-        keys: ReadonlyArray<string>,
-        task: () => Promise<unknown>
-      ): Promise<unknown>;
+      withPhysicalAliasLocks(keys: ReadonlyArray<string>, task: () => Promise<unknown>): Promise<unknown>;
       physicalAliasLockTails: Map<string, Promise<void>>;
       physicalIdentityByPath: Map<string, string>;
       physicalPathsByIdentity: Map<string, Set<string>>;
@@ -849,25 +866,23 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       }
       return originalStageAliasPath(live);
     });
-    const lockSpy = vi
-      .spyOn(watcherInternals, "withPhysicalAliasLocks")
-      .mockImplementation(async (keys, task) => {
-        const isAliasPlan = keys.some((key) => key.startsWith("path:"));
-        if (!isAliasPlan) return originalWithPhysicalAliasLocks(keys, task);
+    const lockSpy = vi.spyOn(watcherInternals, "withPhysicalAliasLocks").mockImplementation(async (keys, task) => {
+      const isAliasPlan = keys.some((key) => key.startsWith("path:"));
+      if (!isAliasPlan) return originalWithPhysicalAliasLocks(keys, task);
 
-        aliasPlanLockAttempts += 1;
-        if (aliasPlanLockAttempts === 2) markSecondLockAttempted?.();
-        return originalWithPhysicalAliasLocks(keys, async () => {
-          protectedPlansStarted += 1;
-          if (activeProtectedPlans > 0) protectedPlansOverlapped = true;
-          activeProtectedPlans += 1;
-          try {
-            return await task();
-          } finally {
-            activeProtectedPlans -= 1;
-          }
-        });
+      aliasPlanLockAttempts += 1;
+      if (aliasPlanLockAttempts === 2) markSecondLockAttempted?.();
+      return originalWithPhysicalAliasLocks(keys, async () => {
+        protectedPlansStarted += 1;
+        if (activeProtectedPlans > 0) protectedPlansOverlapped = true;
+        activeProtectedPlans += 1;
+        try {
+          return await task();
+        } finally {
+          activeProtectedPlans -= 1;
+        }
       });
+    });
 
     let eventA: Promise<void> | undefined;
     let eventB: Promise<void> | undefined;
@@ -1009,7 +1024,8 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       "Keep.md": "# Keep\n\nseedkeepmarker\n"
     });
     const aPath = path.join(root, "A.md");
-    const keepPath = path.join(root, "Keep.md");
+    const canonicalAPath = fixture.vault.resolveInside("A.md");
+    const canonicalKeepPath = fixture.vault.resolveInside("Keep.md");
     const markers = ["seedunlinkamarker", "seedkeepmarker"] as const;
     const watcherInternals = fixture.watcher as unknown as {
       seedPhysicalAliasRegistry(): Promise<void>;
@@ -1025,8 +1041,8 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
 
       // Identity-only means no lexical/semantic publication during seed.
       expect(inventorySpy).toHaveBeenCalled();
-      expect(watcherInternals.physicalIdentityByPath.has(aPath)).toBe(true);
-      expect(watcherInternals.physicalIdentityByPath.has(keepPath)).toBe(true);
+      expect(watcherInternals.physicalIdentityByPath.has(canonicalAPath)).toBe(true);
+      expect(watcherInternals.physicalIdentityByPath.has(canonicalKeepPath)).toBe(true);
       expect(fixture.reindexedPaths).toEqual([]);
       expect(embedSpy).not.toHaveBeenCalled();
       const afterSeed = await snapshotWindowsWatcherState(fixture, markers);
@@ -1221,6 +1237,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       "Gone.md": "# Gone\n\nadmissiongonemarker\n"
     });
     const protectedPath = path.join(root, "Protected.md");
+    const canonicalProtectedPath = fixture.vault.resolveInside("Protected.md");
     const gonePath = path.join(root, "Gone.md");
     const markers = ["admissionoldmarker", "admissionnewmarker", "admissiongonemarker"] as const;
     const watcherInternals = fixture.watcher as unknown as {
@@ -1252,15 +1269,13 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
 
       const originalCaptureFileGeneration = watcherInternals.captureFileGeneration.bind(fixture.watcher);
       let admissionAttempts = 0;
-      const admissionSpy = vi
-        .spyOn(watcherInternals, "captureFileGeneration")
-        .mockImplementation(async (absPath) => {
-          if (absPath === protectedPath) {
-            admissionAttempts += 1;
-            throw Object.assign(new Error("synthetic transient admission failure"), { code: "EACCES" });
-          }
-          return originalCaptureFileGeneration(absPath);
-        });
+      const admissionSpy = vi.spyOn(watcherInternals, "captureFileGeneration").mockImplementation(async (absPath) => {
+        if (absPath === canonicalProtectedPath) {
+          admissionAttempts += 1;
+          throw Object.assign(new Error("synthetic transient admission failure"), { code: "EACCES" });
+        }
+        return originalCaptureFileGeneration(absPath);
+      });
       try {
         await enqueueWatcherEvent(fixture.watcher, protectedPath, "change");
       } finally {

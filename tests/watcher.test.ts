@@ -328,9 +328,7 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
 
     const readiness = internals.waitForWatcherReady(nativeWatcher);
     const readinessAssertion = expect(readiness).rejects.toThrow(/closing or closed/);
-    const postReadySeed = readiness
-      .then(() => internals.runTrackedPhysicalAliasSeed())
-      .catch(() => undefined);
+    const postReadySeed = readiness.then(() => internals.runTrackedPhysicalAliasSeed()).catch(() => undefined);
 
     let closeSettled = false;
     let closeTask: Promise<void> | undefined;

@@ -39,6 +39,9 @@ Prefer `enquire-mcp configure` over hand-editing client JSON. A manual template 
 
 Writes are absent unless the server starts with `--enable-write`. Destructive write tools support preview or dry-run flows. `--enabled-tools` and `--disabled-tools` can reduce the registered surface further.
 
+For client-neutral prompt-host and direct-tool variants of this loop, use the
+[agent lifecycle recipes](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/README.md#agent-lifecycle-recipes).
+
 ## Capability map
 
 - Search: `obsidian_search` is the umbrella path for Markdown/PDF hybrid recall; BM25, TF-IDF, embeddings, HNSW, reranking, recency, graph boost, multi-query fusion, HyDE, and sub-question decomposition are composable.

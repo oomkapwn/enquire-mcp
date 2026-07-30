@@ -243,7 +243,7 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     name: "obsidian_context_pack",
     kind: "read",
     gating: "always",
-    summary: "Token-budgeted context bundle for an AI question."
+    summary: "Token-budgeted Markdown context bundle plus PDF follow-up paths for an AI question."
   },
   {
     name: "obsidian_frontmatter_get",
@@ -327,7 +327,8 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
 
   // --- Closed-loop feedback (1 entry) — registered by registerFeedbackTool(),
   //     opt-in via --feedback-weight > 0. Mutates a per-vault feedback cache
-  //     sidecar (paths + counts only), NOT the vault, so it's NOT --enable-write.
+  //     sidecar (absolute vault root + relative path keys/counts/timestamps), NOT
+  //     the vault, so it's NOT --enable-write.
   {
     name: "obsidian_mark_useful",
     kind: "feedback",

@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.29 candidate: evidence-led positioning, an explicit privacy boundary, crawlable product metadata, and a remotely rendered social preview on top of rc.28 exact-Origin admission).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.30 candidate: client-neutral agent lifecycle recipes, a copy-ready launch kit, stricter prompt confidence/write semantics, and corrected freshness documentation on top of the rc.29 acquisition rebuild).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -97,14 +97,17 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
   129-project scan into a freshness/citation/read-only wedge, publishes the
   exact privacy boundary, refreshes AI/search metadata and high-intent GitHub
   discovery terms, and adds a remote-only social-preview artifact loop.
-- [ ] **Agent lifecycle recipes** — package short, client-neutral playbooks for
-  first recall, evidence follow-up, stale-fact revalidation, weekly synthesis,
-  research capture, and safe write escalation. Reuse the 19 MCP prompts and
-  `initialize.instructions`; do not add a parallel orchestration engine.
-- [ ] **Directory/community cadence** — keep Glama and the official MCP
-  Registry current; prepare one evidence-backed launch kit for Obsidian Forum,
-  PulseMCP/mcp.so/Smithery and client marketplaces. External posting remains a
-  maintainer action; the reusable copy/evidence bundle is autonomous.
+- [x] **Agent lifecycle recipes** — v3.12.0-rc.30 packages client-neutral
+  playbooks for first recall, evidence follow-up, stale-fact revalidation,
+  weekly synthesis, research capture, and safe write escalation. They reuse
+  the 19 MCP prompts, live `tools/list`, and `initialize.instructions`; no
+  parallel orchestration engine or automatic hook is introduced.
+- [x] **Directory/community launch preparation** — v3.12.0-rc.30 packages one
+  evidence-backed directory card, community post, stable install CTA, privacy
+  boundary, proof links, and bounded claim rules. Channel-specific submission
+  operations stay in the private maintainer backlog. External posting, account
+  use, paid submission, and listing acceptance remain maintainer-gated actions
+  below.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
@@ -146,7 +149,14 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
   indexing blocker. Claim only if the maintainer wants dashboard/community
   controls.
 - **Keep the official MCP Registry entry tracking stable releases** via `mcp-publisher`. Verified 2026-07-24: `io.github.oomkapwn/enquire-mcp` is active and stable v3.11.6 is `isLatest`; prereleases intentionally remain npm/GitHub-only.
-- **Post to the Obsidian forum thread** (81.2k views — the primary organic discovery surface) with the comparison table; submit to **PulseMCP**, **mcp.so**, **smithery.ai**, **Cursor MCP marketplace**; update the awesome-mcp-servers PR with the Glama badge.
+- **Publish the prepared community post** from the maintainer account.
+- **Directory and marketplace publication.** Search by exact repository,
+  package, and Registry identity before correcting or submitting a card; paid
+  routes, account attestations, and external acceptance remain maintainer
+  actions. Local-marketplace publication stays gated on the Basic read-only
+  MCPB plus remote cross-platform evidence. Never submit a user-hosted
+  `serve-http` URL as project-operated infrastructure or invent an install
+  URI before a listing is accepted.
 - **Pin the repo on your GitHub profile.** Discussions are already enabled and linked from `SUPPORT.md`.
 
 ## Explicit non-goals

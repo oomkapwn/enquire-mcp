@@ -107,7 +107,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.30      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

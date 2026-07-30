@@ -22,7 +22,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 **Write — gated by `--enable-write` (7):** `obsidian_create_note`, `obsidian_append_to_note`, `obsidian_rename_note`, `obsidian_replace_in_notes`, `obsidian_archive_note`, `obsidian_frontmatter_set`, `obsidian_chat_thread_append`.
 
-**Feedback — opt-in via `--feedback-weight` (1):** `obsidian_mark_useful`. Records which recalled notes helped a query (closed-loop retrieval feedback); the recorded usefulness boosts those notes in subsequent `obsidian_search` results. Mutates a per-vault feedback cache sidecar (relative paths + counts only), NOT the vault — so it is gated by `--feedback-weight`, not `--enable-write`.
+**Feedback — opt-in via `--feedback-weight` (1):** `obsidian_mark_useful`. Records which recalled notes helped a query (closed-loop retrieval feedback); the recorded usefulness boosts those notes in subsequent `obsidian_search` results. Mutates a per-vault feedback cache sidecar (canonical absolute vault root + relative path keys + counts + ISO timestamps; no note content/query text), NOT the vault — so it is gated by `--feedback-weight`, not `--enable-write`.
 
 ### MCP resource URIs
 

@@ -122,12 +122,14 @@ export const DEFENSES = [
       "docs/COMPARISON.md",
       "docs/api.md",
       "package.json",
-      "ROADMAP.md"
+      "ROADMAP.md",
+      "examples/README.md"
     ],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
-      "Canonical: 19 MCP prompts. docs-consistency.test.ts pins every current README/ROADMAP claim. " +
-      "v3.8.0-rc.14 M-2 added llms.txt + AGENTS.md coverage; v3.12.0-rc.29 added ROADMAP.md."
+      "Canonical: 19 MCP prompts. docs-consistency.test.ts pins every current README/ROADMAP/recipe claim. " +
+      "v3.8.0-rc.14 M-2 added llms.txt + AGENTS.md coverage; v3.12.0-rc.29 added ROADMAP.md; " +
+      "v3.12.0-rc.30 added examples/README.md."
   },
   {
     id: "ci-gate-count",

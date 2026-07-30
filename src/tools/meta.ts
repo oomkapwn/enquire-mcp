@@ -2051,6 +2051,12 @@ export interface ContextPackResult {
   /** Top-K hit paths included in the bundle. */
   included_notes: string[];
   /**
+   * Ranked PDF candidates deliberately not parsed as Markdown. Follow up with
+   * `obsidian_read_pdf` on the smallest useful page range before treating
+   * them as inspected evidence.
+   */
+  skipped_pdf_candidates: string[];
+  /**
    * Present only when at least one distinct `subqueries[]` entry was searched.
    * This is a candidate trace, not a claim that a concept is proven.
    */
@@ -2067,12 +2073,14 @@ export interface ContextPackResult {
 }
 
 /**
- * Token-budgeted vault context export — runs hybrid retrieval, gathers note
- * bodies + backlinks + recent dailies, packs to a token budget, and returns one
- * ready-to-paste markdown blob. With `subqueries[]`, it executes at most
- * `MAX_RESEARCH_SUBQUERIES` extra searches sequentially, reserves the best
- * available unique evidence candidate per atomic sub-question, then fills
- * remaining slots with RRF. The default single-query path is unchanged.
+ * Token-budgeted vault context export — runs hybrid retrieval, gathers Markdown
+ * note bodies + backlinks + recent dailies, packs them to a token budget, and
+ * returns one ready-to-paste markdown blob. Ranked PDF candidates are returned
+ * separately for bounded `obsidian_read_pdf` follow-up. With `subqueries[]`, it
+ * executes at most `MAX_RESEARCH_SUBQUERIES` extra searches sequentially,
+ * reserves the best available unique evidence candidate per atomic
+ * sub-question, then fills remaining slots with RRF. The default single-query
+ * ranking path is unchanged.
  *
  * The MCP-native answer to Smart Connections' "Send to Smart Context"
  * pattern, but works in any chat (Claude / Cursor / Codex / web UI) by
@@ -2163,6 +2171,10 @@ export async function contextPack(
 
   const sections: string[] = [`# Context for: ${args.query}\n`];
   const includedNotes: string[] = [];
+  // PDF follow-up paths are metadata, not bundle body bytes, so expose every
+  // bounded ranked PDF candidate even when the Markdown token budget is already
+  // exhausted by the header or an earlier note.
+  const skippedPdfCandidates = searchMatches.filter((match) => match.kind === "pdf").map((match) => match.path);
   let charsUsed = sections[0]?.length ?? 0;
   let notesBytes = 0;
   let backlinksBytes = 0;
@@ -2171,6 +2183,12 @@ export async function contextPack(
   // 2) Pack note bodies until budget exhausted
   sections.push("## Top notes");
   for (const m of searchMatches) {
+    // PDF hits share the hybrid ranker but are not Markdown notes. Feeding a
+    // .pdf path to Vault.readNote() can parse binary bytes as note text rather
+    // than throwing, so skipping only on error is not a safe discriminator.
+    // Surface the ranked path separately and let the agent request a bounded
+    // page range through obsidian_read_pdf.
+    if (m.kind === "pdf") continue;
     if (charsUsed >= charBudget) break;
     try {
       const note = await vault.readNote(vault.resolveInside(m.path), undefined);
@@ -2251,6 +2269,7 @@ export async function contextPack(
     budget_tokens: budget,
     sections: { notes: notesBytes, backlinks: backlinksBytes, dailies: dailiesBytes },
     included_notes: includedNotes,
+    skipped_pdf_candidates: skippedPdfCandidates,
     ...(research ? { research } : {})
   };
 }

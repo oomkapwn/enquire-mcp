@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.29` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.30` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.30
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.29` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.30` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 For a client-specific install action, run `enquire-mcp configure --client <name> --vault /absolute/path`. The preview prints a native review URI only where the client officially accepts an arbitrary local definition (VS Code), a copy-and-run command where the client exposes one (Claude Code and Codex), and an explicit **copy-only** label where public one-click routes are limited to Marketplace/Registry entries. Every mode includes the exact generated config as the fallback.
 
@@ -135,6 +135,10 @@ Want to test from the terminal instead? Once you've built the FTS5 index via `se
 
 You now have working TF-IDF search. To unlock the full hybrid stack:
 
+- **Give your agent a repeatable operating loop** — use the
+  [agent lifecycle recipes](../examples/README.md#agent-lifecycle-recipes) for
+  first recall, evidence follow-up, stale-fact revalidation, weekly synthesis,
+  research capture, and exact-confirmation safe writes.
 - **Prepare hybrid (`v3.12.0-rc.2+`)** — first preview `enquire-mcp first-run --tier hybrid --client claude-desktop --vault /absolute/path/to/your/vault`; inspect its generated config and planned effects, then repeat with `--apply`. It runs the same physical package's idempotent `setup`, verified `rerank-bge` acquisition, and tier-aware `doctor`, stopping at the first failure with an exact resume command. The manual equivalent remains `setup` → `install-model rerank-bge` → `doctor --tier hybrid` → `configure`; use it when you need to drive individual steps.
 
 The physical pin deliberately prioritizes exact package/cache coherence over automatic upgrades. Re-run `configure` after moving or upgrading Node/enquire-mcp, changing installation method, or clearing an npx cache; a config whose pinned executable was removed cannot update itself.

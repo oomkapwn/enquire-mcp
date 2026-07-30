@@ -23,7 +23,7 @@ import type { EmbedDb } from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
 import { deriveFtsTitle, extractAliases, type FtsIndex } from "./fts5.js";
 import type { HnswIndex } from "./hnsw.js";
-import type { Vault } from "./vault.js";
+import type { CachedNote, Vault } from "./vault.js";
 
 /**
  * v3.9.0-rc.2 — shape of the row-metadata entries the HNSW index keeps
@@ -41,10 +41,24 @@ export interface HnswRowMeta {
   kind: "md" | "pdf";
 }
 
+/**
+ * Mutable search-route health shared with the prepared server generation.
+ *
+ * A staged watcher preparation failure leaves the prior generation intact and
+ * does not change these flags. A sink mutation failure is different: the
+ * current route can no longer prove it matches the other enabled sinks, so the
+ * affected optimization is quarantined until restart.
+ */
+export interface WatcherSearchHealth {
+  semanticUsable: boolean;
+  hnswUsable: boolean;
+}
+
 const SKIP_DIRS = [".git", ".obsidian", ".trash", "node_modules", ".DS_Store"];
 const DEFAULT_ACTIVATION_PATH_LIMIT = 50_000;
 const ACTIVATION_REPLAY_CONCURRENCY = 4;
 const ACTIVATION_MAX_GENERATIONS = 16;
+const FILE_GENERATION_ATTEMPTS = 2;
 
 export interface WatcherOptions {
   /** Vault to watch — must already be ensureExists()'d. */
@@ -153,6 +167,47 @@ interface EmbedRowLike {
   textPreview: string;
 }
 
+/** Filesystem identity captured around one staged watcher update. */
+interface FileGeneration {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  mtimeMs: number;
+}
+
+interface StagedEmbedResult {
+  chunks: number;
+  rows: EmbedRowLike[];
+}
+
+interface StagedMarkdownGeneration {
+  note: CachedNote;
+  embedResult: StagedEmbedResult | null | undefined;
+}
+
+interface StagedPdfGeneration {
+  pages: ReadonlyArray<{ pageNumber: number; text: string }>;
+  embedResult: StagedEmbedResult | null | undefined;
+  embedSource: "OCR" | "pdfjs" | null;
+}
+
+/**
+ * Convert nanoseconds to the same millisecond shape as ordinary `fs.Stats`.
+ *
+ * Splitting seconds from the sub-second remainder before either BigInt becomes
+ * a Number avoids losing low nanosecond bits at epoch-scale magnitudes.
+ *
+ * @param mtimeNs - Filesystem modification time in nanoseconds.
+ * @returns Milliseconds compatible with `Stats.mtimeMs`.
+ */
+export function statsMtimeMsFromNs(mtimeNs: bigint): number {
+  const wholeSeconds = mtimeNs / 1_000_000_000n;
+  const remainderNs = mtimeNs % 1_000_000_000n;
+  return Number(wholeSeconds) * 1000 + Number(remainderNs) / 1_000_000;
+}
+
 /**
  * v3.9.0-rc.11 (audit) — zip embed-db rows with their freshly-assigned row ids
  * for an HNSW add-diff. `EmbedDb.upsertNote` returns exactly one id per row in
@@ -201,6 +256,11 @@ export function zipHnswAddPoints(
 }
 
 export class VaultWatcher {
+  /** Live route-health object shared by reference with search handlers. */
+  readonly searchHealth: WatcherSearchHealth = {
+    semanticUsable: true,
+    hnswUsable: true
+  };
   private watcher: FSWatcher | null = null;
   private readonly vault: Vault;
   private readonly ftsIndex: FtsIndex | null;
@@ -443,6 +503,7 @@ export class VaultWatcher {
     this.hnsw = hnsw;
     this.hnswRowsByLabel = rowsByLabel;
     this.hnswPersistFile = persistFile ?? null;
+    this.searchHealth.hnswUsable = true;
   }
 
   /**
@@ -512,12 +573,9 @@ export class VaultWatcher {
    * v3.9.0-rc.2 — internal helper. Apply an embed-db {oldIds, newIds}
    * diff to the wired HNSW index + rowsByLabel map. Called by both the
    * md and pdf event handlers after upsertNote / deleteNote returns.
-   * Fail-soft: on any error, logs to stderr and returns. The embed-db is already
-   * updated, so persistence is permanently disabled for this watcher
-   * generation; the older sidecar signature then mismatches on restart and
-   * forces a rebuild instead of laundering the partial graph as current. (Same
-   * current-session mixed-state boundary as the watcher's existing embed-db
-   * fail-soft behavior.)
+   * Live events remain fail-soft: on any error, log and return. Activation
+   * replay rethrows after arming the persistence latch so the startup interlock
+   * cannot release a process with an uncertain in-memory graph.
    *
    * CONCURRENCY CONTRACT (v3.11.0-rc.9, external audit T-MED-1 re-verify): this
    * method and the `HnswIndex.applyDiff` it calls are FULLY SYNCHRONOUS — there is
@@ -575,11 +633,13 @@ export class VaultWatcher {
       // dirty, never save this uncertain graph with the current EmbedDb
       // signature: that would defeat the restart signature guard.
       this.hnswPersistUnsafe = true;
+      this.searchHealth.hnswUsable = false;
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher HNSW live-update failed for ${relPath} — ${err instanceof Error ? err.message : String(err)} (search results may be stale until next serve restart)\n`
+          `enquire: watcher HNSW live-update failed for ${relPath} — ${err instanceof Error ? err.message : String(err)} (HNSW quarantined; semantic search falls back to EmbedDb until restart)\n`
         );
       }
+      if (this.activationState === "activating") throw err;
       return null;
     }
   }
@@ -590,26 +650,36 @@ export class VaultWatcher {
    * @param absPath - Absolute path supplied by chokidar or activation replay.
    * @param context - Short diagnostic context appended to watcher errors.
    * @param task - Filesystem reconciliation task to serialize.
-   * @returns The resolving tail for this path. Handler failures are logged and
-   *   absorbed so one bad file cannot reject shutdown or activation drains.
+   * @param propagateFailure - Reject the tail instead of absorbing a handler
+   *   error. Activation replay uses this to keep the startup interlock armed.
+   * @returns The per-path queue tail.
    */
-  private enqueueFileTask(absPath: string, context: string, task: () => Promise<void>): Promise<void> {
+  private enqueueFileTask(
+    absPath: string,
+    context: string,
+    task: () => Promise<void>,
+    propagateFailure = false
+  ): Promise<void> {
     const prev = this.fileQueues.get(absPath) ?? Promise.resolve();
-    const tail = prev.then(task).catch((err) => {
-      if (!this.silent) {
-        process.stderr.write(
-          `enquire: watcher error on ${this.vault.toRel(absPath)} ${context} — ${
-            err instanceof Error ? err.message : String(err)
-          }\n`
-        );
-      }
-    });
+    const run = prev.then(task);
+    const tail = propagateFailure
+      ? run
+      : run.catch((err) => {
+          if (!this.silent) {
+            process.stderr.write(
+              `enquire: watcher error on ${this.vault.toRel(absPath)} ${context} — ${
+                err instanceof Error ? err.message : String(err)
+              }\n`
+            );
+          }
+        });
     this.fileQueues.set(absPath, tail);
     // Self-evict once this is the last queued event for the file so the map
     // stays bounded. If a newer event chained after us it owns the entry.
-    void tail.finally(() => {
+    const evict = () => {
       if (this.fileQueues.get(absPath) === tail) this.fileQueues.delete(absPath);
-    });
+    };
+    void tail.then(evict, evict);
     return tail;
   }
 
@@ -618,10 +688,15 @@ export class VaultWatcher {
    *
    * @param absPath - Absolute path supplied by chokidar.
    * @param kind - Filesystem event kind to apply.
-   * @returns The resolving per-path queue tail.
+   * @param propagateFailure - Reject activation replay on reconciliation error.
+   * @returns The per-path queue tail.
    */
-  private enqueueFileEvent(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
-    return this.enqueueFileTask(absPath, `(${kind})`, () => this.handle(absPath, kind));
+  private enqueueFileEvent(
+    absPath: string,
+    kind: "add" | "change" | "unlink",
+    propagateFailure = false
+  ): Promise<void> {
+    return this.enqueueFileTask(absPath, `(${kind})`, () => this.handle(absPath, kind), propagateFailure);
   }
 
   /**
@@ -673,9 +748,7 @@ export class VaultWatcher {
         }
       }
     } catch (err) {
-      // S-8d remains separate: activation preserves the existing live watcher's
-      // fail-soft sink semantics. The startup barrier orders accepted work; it
-      // does not stage a transaction across FTS5, EmbedDb and HNSW.
+      this.searchHealth.semanticUsable = false;
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher stored-identity purge failed for ${relPath} — ${
@@ -683,6 +756,7 @@ export class VaultWatcher {
           }\n`
         );
       }
+      throw err;
     }
   }
 
@@ -785,7 +859,7 @@ export class VaultWatcher {
     for (let offset = 0; offset < paths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
       if (this.activationOverflowed) return;
       const chunk = paths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
-      await Promise.all(chunk.map((absPath) => this.enqueueFileEvent(absPath, kind)));
+      await Promise.all(chunk.map((absPath) => this.enqueueFileEvent(absPath, kind, true)));
     }
   }
 
@@ -915,6 +989,322 @@ export class VaultWatcher {
     });
   }
 
+  /**
+   * Capture the physical file generation that brackets staged watcher work.
+   *
+   * Nanosecond timestamps plus device/inode/size distinguish in-place writes
+   * and same-path atomic replacement without folding path identities. The
+   * public source-state mtime remains a millisecond number for schema
+   * compatibility.
+   *
+   * @param absPath - Canonical in-vault file path.
+   * @returns A regular, non-symlink leaf generation.
+   * @throws {Error} If the leaf is missing, not a regular file, or a symlink.
+   */
+  private async captureFileGeneration(absPath: string): Promise<FileGeneration> {
+    const stat = await lstat(absPath, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`watcher source is not a regular file: ${this.vault.toRel(absPath)}`);
+    }
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+      mtimeMs: statsMtimeMsFromNs(stat.mtimeNs)
+    };
+  }
+
+  /**
+   * Compare two filesystem generations without normalizing their path.
+   *
+   * @param left - Generation captured before staged work.
+   * @param right - Generation captured immediately before synchronous commit.
+   * @returns True only when every physical generation field is unchanged.
+   */
+  private sameFileGeneration(left: FileGeneration, right: FileGeneration): boolean {
+    return (
+      left.dev === right.dev &&
+      left.ino === right.ino &&
+      left.size === right.size &&
+      left.mtimeNs === right.mtimeNs &&
+      left.ctimeNs === right.ctimeNs
+    );
+  }
+
+  /**
+   * Revalidate a staged generation. A missing/replaced/inaccessible leaf is a
+   * mismatch, not a commit error: the bounded retry derives latest disk state.
+   *
+   * @param absPath - Canonical in-vault path.
+   * @param expected - Generation used for staged lexical/semantic work.
+   * @returns True when the leaf is still exactly the staged generation.
+   */
+  private async fileGenerationIsCurrent(absPath: string, expected: FileGeneration): Promise<boolean> {
+    try {
+      return this.sameFileGeneration(expected, await this.captureFileGeneration(absPath));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Derive markdown lexical input and optional embeddings from one note
+   * snapshot. No index mutation happens here.
+   *
+   * @param absPath - Canonical note path.
+   * @param relPath - Public vault-relative note path.
+   * @param generation - Captured filesystem generation.
+   * @returns Staged work, or undefined when embedding preparation failed.
+   */
+  private async stageMarkdownGeneration(
+    absPath: string,
+    relPath: string,
+    generation: FileGeneration
+  ): Promise<StagedMarkdownGeneration | undefined> {
+    this.vault.invalidateOne(absPath);
+    const note = await this.vault.readNote(absPath, generation.mtimeMs);
+    let embedResult: StagedEmbedResult | null | undefined;
+    if (this.embedDb && this.embedder) {
+      try {
+        const { embedSingleNote } = await import("./embed-pipeline.js");
+        embedResult = await embedSingleNote(
+          this.vault,
+          this.embedder,
+          { relPath, absPath, mtimeMs: generation.mtimeMs },
+          { lateChunkContext: this.lateChunkContext, preReadNote: note }
+        );
+      } catch (err) {
+        // Keep the previous lexical + semantic generation together when
+        // embedding preparation fails. The watcher remains fail-soft: it logs
+        // and waits for the next event/bulk reconciliation instead of throwing.
+        if (!this.silent) {
+          process.stderr.write(
+            `enquire: watcher embed-db sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+        }
+        if (this.activationState === "activating") throw err;
+        return undefined;
+      }
+    }
+    return { note, embedResult };
+  }
+
+  /**
+   * Derive PDF lexical pages and optional embeddings from one binary snapshot.
+   * OCR, when enabled, consumes the same captured bytes. No index mutation
+   * happens here.
+   *
+   * @param absPath - Canonical PDF path.
+   * @param relPath - Public vault-relative PDF path.
+   * @param generation - Captured filesystem generation.
+   * @returns Staged work, or undefined when embedding preparation failed.
+   */
+  private async stagePdfGeneration(
+    absPath: string,
+    relPath: string,
+    generation: FileGeneration
+  ): Promise<StagedPdfGeneration | undefined> {
+    const buf = await this.vault.readBinaryFile(absPath);
+    const { extractPdfText } = await import("./pdf.js");
+    const extracted = await extractPdfText(buf);
+    const pages = extracted.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
+    let embedResult: StagedEmbedResult | null | undefined;
+    let embedSource: "OCR" | "pdfjs" | null = null;
+
+    if (this.embedDb && this.embedder) {
+      try {
+        let pagesForEmbed: ReadonlyArray<{ pageNumber: number; text: string }> = extracted.hasText ? pages : [];
+        if (this.ocrPdfs && !extracted.hasText) {
+          try {
+            const { extractPdfWithOcr } = await import("./ocr.js");
+            const ocrResult = await extractPdfWithOcr(buf, {
+              langs: this.ocrLangs,
+              ...(this.ocrMaxPages !== undefined ? { maxPages: this.ocrMaxPages } : {})
+            });
+            pagesForEmbed = ocrResult.pages
+              .filter((page) => !page.isEmpty)
+              .map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
+          } catch (ocrErr) {
+            // OCR remains fail-soft. The same captured pdfjs pages still feed
+            // FTS, while an image-only semantic generation is staged as empty.
+            if (!this.silent) {
+              process.stderr.write(
+                `enquire: watcher PDF OCR failed for ${relPath} — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
+              );
+            }
+            pagesForEmbed = [];
+          }
+        }
+
+        if (pagesForEmbed.length === 0) {
+          embedResult = null;
+        } else {
+          const { embedSinglePdf } = await import("./embed-pipeline.js");
+          embedResult = await embedSinglePdf(
+            this.vault,
+            this.embedder,
+            { relPath, absPath, mtimeMs: generation.mtimeMs },
+            {
+              lateChunkContext: this.lateChunkContext,
+              preExtractedPages: pagesForEmbed
+            }
+          );
+          embedSource = extracted.hasText ? "pdfjs" : "OCR";
+        }
+      } catch (err) {
+        if (!this.silent) {
+          process.stderr.write(
+            `enquire: watcher embed-db PDF sync failed for ${relPath} — ${
+              err instanceof Error ? err.message : String(err)
+            }\n`
+          );
+        }
+        if (this.activationState === "activating") throw err;
+        return undefined;
+      }
+    }
+
+    return { pages, embedResult, embedSource };
+  }
+
+  /**
+   * Commit one staged markdown generation synchronously. There is no await
+   * between the independent SQLite/HNSW mutations, so a tool request cannot
+   * observe an ordinary successful commit halfway through.
+   *
+   * @param relPath - Public vault-relative note path.
+   * @param generation - Revalidated source generation.
+   * @param staged - Lexical and optional semantic work from that generation.
+   * @returns A log suffix on success, or undefined after a fail-soft error.
+   */
+  private commitMarkdownGeneration(
+    relPath: string,
+    generation: FileGeneration,
+    staged: StagedMarkdownGeneration
+  ): string | undefined {
+    try {
+      const wikilinkTargets = staged.note.parsed.wikilinks
+        .map((link) => link.target)
+        .filter((target) => target.length > 0);
+      this.ftsIndex?.reindexFile(
+        relPath,
+        generation.mtimeMs,
+        staged.note.content,
+        wikilinkTargets,
+        staged.note.parsed.tags,
+        deriveFtsTitle(relPath),
+        extractAliases(staged.note.parsed.frontmatter)
+      );
+
+      let embedNote = "";
+      if (this.embedDb && staged.embedResult !== undefined) {
+        if (staged.embedResult === null) {
+          const deletedIds = this.embedDb.deleteNote(relPath);
+          embedNote = " + embed-db cleared (empty note)";
+          if (deletedIds.length > 0 && this.hnsw) {
+            const hnswResult = this.syncHnswForFile(relPath, "md", deletedIds, []);
+            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
+          }
+        } else {
+          const { oldIds, newIds } = this.embedDb.upsertNote(
+            relPath,
+            generation.mtimeMs,
+            staged.embedResult.rows
+          );
+          embedNote = ` + embed-db upserted (${staged.embedResult.chunks} chunks)`;
+          if (this.hnsw) {
+            const hnswResult = this.syncHnswForFile(
+              relPath,
+              "md",
+              oldIds,
+              zipHnswAddPoints(staged.embedResult.rows, newIds)
+            );
+            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+          }
+        }
+      }
+      return embedNote;
+    } catch (err) {
+      this.searchHealth.semanticUsable = false;
+      if (this.hnsw) this.hnswPersistUnsafe = true;
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher generation commit failed for ${relPath} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+      if (this.activationState === "activating") throw err;
+      return undefined;
+    }
+  }
+
+  /**
+   * Commit one staged PDF generation synchronously.
+   *
+   * @param relPath - Public vault-relative PDF path.
+   * @param generation - Revalidated source generation.
+   * @param staged - PDF pages and optional semantic work from that generation.
+   * @returns A log suffix on success, or undefined after a fail-soft error.
+   */
+  private commitPdfGeneration(
+    relPath: string,
+    generation: FileGeneration,
+    staged: StagedPdfGeneration
+  ): string | undefined {
+    try {
+      this.ftsIndex?.reindexPdfFile(relPath, generation.mtimeMs, staged.pages);
+      let embedNote = "";
+      if (this.embedDb && staged.embedResult !== undefined) {
+        if (staged.embedResult === null) {
+          const deletedIds = this.embedDb.deleteNote(relPath);
+          embedNote =
+            staged.embedSource === "OCR"
+              ? " + embed-db cleared (OCR also empty)"
+              : " + embed-db cleared (image-only or empty)";
+          if (deletedIds.length > 0 && this.hnsw) {
+            const hnswResult = this.syncHnswForFile(relPath, "pdf", deletedIds, []);
+            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
+          }
+        } else {
+          const { oldIds, newIds } = this.embedDb.upsertNote(
+            relPath,
+            generation.mtimeMs,
+            staged.embedResult.rows,
+            "pdf"
+          );
+          embedNote = ` + embed-db upserted (${staged.embedResult.chunks} chunks, kind=pdf, src=${
+            staged.embedSource ?? "pdfjs"
+          })`;
+          if (this.hnsw) {
+            const hnswResult = this.syncHnswForFile(
+              relPath,
+              "pdf",
+              oldIds,
+              zipHnswAddPoints(staged.embedResult.rows, newIds)
+            );
+            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+          }
+        }
+      }
+      return embedNote;
+    } catch (err) {
+      this.searchHealth.semanticUsable = false;
+      if (this.hnsw) this.hnswPersistUnsafe = true;
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher PDF generation commit failed for ${relPath} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+      if (this.activationState === "activating") throw err;
+      return undefined;
+    }
+  }
+
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
     // v3.10.0-rc.40 (#6) — a chokidar event that slipped through after close() began
     // must not mutate embed-db/HNSW post-drain (belt-and-suspenders to the onChange
@@ -975,9 +1365,11 @@ export class VaultWatcher {
       // serve restart; semantic-search results would surface vectors
       // for files no longer in the vault.
       let unlinkHnswNote = "";
+      let embedDeleteSucceeded = this.embedDb === null;
       if (this.embedDb) {
         try {
           const deletedIds = this.embedDb.deleteNote(relPath);
+          embedDeleteSucceeded = true;
           if (deletedIds.length > 0 && this.hnsw) {
             // v3.9.0-rc.11 (L2) — pass the correct kind for PDF unlinks (was
             // hardcoded "md"). Cosmetic on a pure-delete diff today since no
@@ -987,209 +1379,76 @@ export class VaultWatcher {
             if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
           }
         } catch (err) {
+          this.searchHealth.semanticUsable = false;
           if (!this.silent) {
             process.stderr.write(
               `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
             );
           }
+          if (this.activationState === "activating") throw err;
         }
       }
       if (!this.silent) {
-        const embedNote = this.embedDb ? " + embed-db dropped" : "";
+        const embedNote = this.embedDb
+          ? embedDeleteSucceeded
+            ? " + embed-db dropped"
+            : " + embed-db QUARANTINED (delete failed)"
+          : "";
         process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote}${unlinkHnswNote})\n`);
       }
       return;
     }
 
-    // add / change: re-read + reindex this single file.
+    // Add/change: derive every enabled sink from one physical generation.
+    // All awaited preparation finishes before any store mutation; a final
+    // lstat revalidation either authorizes one run-to-completion commit or
+    // retries the latest disk generation once.
     try {
-      const stat = await this.vault.stat(absPath);
-      if (isPdf) {
-        // v3.7.16 P1-5 — extract text and re-index PDF pages. Lazy
-        // import to keep markdown-only deployments zero-cost.
-        // v3.8.0-rc.3 R-7 — PDF embedding sync (rc.2 was md-only).
-        const buf = await this.vault.readBinaryFile(absPath);
-        const { extractPdfText } = await import("./pdf.js");
-        const result = await extractPdfText(buf);
-        const pages = result.pages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
-        this.ftsIndex?.reindexPdfFile(relPath, stat.mtimeMs, pages);
-        // v3.8.0-rc.3 — embed-db sync for PDFs. Uses embedSinglePdf helper
-        // to match syncPdfEmbedDb's chunking + page-marker logic exactly.
-        // Image-only PDFs (hasText === false) get embed-db rows DROPPED
-        // because they have no useful embedding content (same v3.7.6 H-4
-        // staleness fix as bulk sync). Fail-soft: embed-db errors don't
-        // fail the watcher event.
-        //
-        // v3.9.0-rc.1 — when `ocrPdfs` is on AND the cheap pdfjs path
-        // returns hasText=false, fall back to Tesseract OCR + feed
-        // OCR-derived pages through embedSinglePdf's new preExtractedPages
-        // mode. Without this, scanned PDFs that change during a serve
-        // session lose their embed rows + slowly degrade hybrid recall
-        // until the next manual `enquire-mcp build-embeddings` run.
-        let pdfEmbedNote = "";
-        if (this.embedDb && this.embedder) {
-          try {
-            let preExtractedPages: ReadonlyArray<{ pageNumber: number; text: string }> | undefined;
-            // OCR fallback path. The cheap pdfjs result already lives in
-            // `result` (from the FTS5 reindex above); if it's image-only,
-            // we run Tesseract + use the OCR pages directly.
-            if (this.ocrPdfs && !result.hasText) {
-              try {
-                const { extractPdfWithOcr } = await import("./ocr.js");
-                const ocrResult = await extractPdfWithOcr(buf, {
-                  langs: this.ocrLangs,
-                  ...(this.ocrMaxPages !== undefined ? { maxPages: this.ocrMaxPages } : {})
-                });
-                // Filter empty pages so we don't emit `[page: N]\n` blocks
-                // that the chunker would otherwise group with surrounding
-                // text. (Tesseract returns isEmpty=true for blank pages.)
-                preExtractedPages = ocrResult.pages
-                  .filter((p) => !p.isEmpty)
-                  .map((p) => ({ pageNumber: p.pageNumber, text: p.text }));
-                if (preExtractedPages.length === 0) {
-                  // OCR returned zero pages with text — treat as image-only
-                  // (drop rows). Don't pass empty preExtractedPages; that
-                  // would short-circuit to null on the embed-pipeline side.
-                  preExtractedPages = undefined;
-                }
-              } catch (ocrErr) {
-                // OCR fails-soft. Log, then fall through to the default
-                // path (which will treat the PDF as image-only and drop
-                // stale rows). Common failure: tesseract.js / canvas not
-                // installed, or language file missing.
-                if (!this.silent) {
-                  process.stderr.write(
-                    `enquire: watcher PDF OCR failed for ${relPath} — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
-                  );
-                }
-              }
-            }
-            const { embedSinglePdf } = await import("./embed-pipeline.js");
-            const pdfResult = await embedSinglePdf(
-              this.vault,
-              this.embedder,
-              { relPath, absPath, mtimeMs: stat.mtimeMs },
-              {
-                lateChunkContext: this.lateChunkContext,
-                ...(preExtractedPages ? { preExtractedPages } : {})
-              }
+      for (let attempt = 0; attempt < FILE_GENERATION_ATTEMPTS; attempt += 1) {
+        const generation = await this.captureFileGeneration(absPath);
+        const staged = isPdf
+          ? await this.stagePdfGeneration(absPath, relPath, generation)
+          : await this.stageMarkdownGeneration(absPath, relPath, generation);
+        if (staged === undefined) return;
+
+        if (!(await this.fileGenerationIsCurrent(absPath, generation))) {
+          if (attempt + 1 < FILE_GENERATION_ATTEMPTS) continue;
+          const error = new Error(
+            `source changed during both preparation attempts; keeping the previous indexed generation`
+          );
+          if (this.activationState === "activating") throw error;
+          if (!this.silent) {
+            process.stderr.write(
+              `enquire: watcher skip ${relPath} (${kind}) — ${error.message}\n`
             );
-            if (pdfResult === null) {
-              // Image-only or zero chunks — drop any stale embed-db rows.
-              const deletedIds = this.embedDb.deleteNote(relPath);
-              pdfEmbedNote = preExtractedPages
-                ? " + embed-db cleared (OCR also empty)"
-                : " + embed-db cleared (image-only or empty)";
-              // v3.9.0-rc.2 — propagate cleared rows to HNSW live update.
-              if (deletedIds.length > 0 && this.hnsw) {
-                const hnswResult = this.syncHnswForFile(relPath, "pdf", deletedIds, []);
-                if (hnswResult) pdfEmbedNote += ` + hnsw -${hnswResult.removed}`;
-              }
-            } else {
-              const { oldIds, newIds } = this.embedDb.upsertNote(relPath, stat.mtimeMs, pdfResult.rows, "pdf");
-              const sourceLabel = preExtractedPages ? "OCR" : "pdfjs";
-              pdfEmbedNote = ` + embed-db upserted (${pdfResult.chunks} chunks, kind=pdf, src=${sourceLabel})`;
-              // v3.9.0-rc.2 — keep HNSW in sync with the embed-db change.
-              // The newIds array runs parallel to pdfResult.rows (same order)
-              // so we can zip them into HNSW add-points by index.
-              if (this.hnsw) {
-                const hnswResult = this.syncHnswForFile(
-                  relPath,
-                  "pdf",
-                  oldIds,
-                  zipHnswAddPoints(pdfResult.rows, newIds)
-                );
-                if (hnswResult) pdfEmbedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
-              }
-            }
-          } catch (err) {
-            // This catch spans both pre-upsert work and post-upsert HNSW
-            // preparation (including zipHnswAddPoints). Once an attached HNSW
-            // may have missed a committed EmbedDb mutation, conservatively
-            // forbid sidecar persistence for the whole watcher generation.
-            if (this.hnsw) this.hnswPersistUnsafe = true;
-            if (!this.silent) {
-              process.stderr.write(
-                `enquire: watcher embed-db PDF sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
-              );
-            }
-            pdfEmbedNote = " + embed-db FAILED (see above)";
           }
+          return;
         }
+
+        const commitNote = isPdf
+          ? this.commitPdfGeneration(relPath, generation, staged as StagedPdfGeneration)
+          : this.commitMarkdownGeneration(relPath, generation, staged as StagedMarkdownGeneration);
+        if (commitNote === undefined) return;
+
         if (!this.silent) {
+          const sinkLabel = isPdf
+            ? `fts5 PDF reindexed, ${(staged as StagedPdfGeneration).pages.length} pages`
+            : "fts5 reindexed";
           process.stderr.write(
-            `enquire: watcher ${kind} ${relPath} (fts5 PDF reindexed, ${pages.length} pages${pdfEmbedNote})\n`
+            `enquire: watcher ${kind} ${relPath} (${sinkLabel}${commitNote})\n`
           );
         }
         return;
       }
-      const note = await this.vault.readNote(absPath, stat.mtimeMs);
-      const wikilinkTargets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
-      this.ftsIndex?.reindexFile(
-        relPath,
-        stat.mtimeMs,
-        note.content,
-        wikilinkTargets,
-        note.parsed.tags,
-        deriveFtsTitle(relPath),
-        extractAliases(note.parsed.frontmatter)
-      );
-      // v3.8.0-rc.2 R-7 — re-embed + upsert if embed-db is wired.
-      // Failures here are logged but DON'T fail the whole watcher event
-      // (FTS5 update already succeeded; embed-db will resync on next bulk
-      // build). Same fail-soft posture as the existing FTS5 path.
-      let embedNote = "";
-      if (this.embedDb && this.embedder) {
-        try {
-          const { embedSingleNote } = await import("./embed-pipeline.js");
-          const result = await embedSingleNote(
-            this.vault,
-            this.embedder,
-            { relPath, absPath, mtimeMs: stat.mtimeMs },
-            { lateChunkContext: this.lateChunkContext }
-          );
-          if (result === null) {
-            const deletedIds = this.embedDb.deleteNote(relPath);
-            embedNote = " + embed-db cleared (empty note)";
-            // v3.9.0-rc.2 — propagate cleared rows to HNSW live update.
-            if (deletedIds.length > 0 && this.hnsw) {
-              const hnswResult = this.syncHnswForFile(relPath, "md", deletedIds, []);
-              if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
-            }
-          } else {
-            const { oldIds, newIds } = this.embedDb.upsertNote(relPath, stat.mtimeMs, result.rows);
-            embedNote = ` + embed-db upserted (${result.chunks} chunks)`;
-            // v3.9.0-rc.2 — keep HNSW in sync. newIds and result.rows run
-            // parallel (same order), so we zip them into HNSW add-points.
-            if (this.hnsw) {
-              const hnswResult = this.syncHnswForFile(relPath, "md", oldIds, zipHnswAddPoints(result.rows, newIds));
-              if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
-            }
-          }
-        } catch (err) {
-          // Same class-level latch as the PDF path: a zip/invariant exception
-          // after upsert must not bless a stale graph with the fresh DB
-          // signature. Pre-upsert failures may disable an optimization, but
-          // never weaken correctness.
-          if (this.hnsw) this.hnswPersistUnsafe = true;
-          if (!this.silent) {
-            process.stderr.write(
-              `enquire: watcher embed-db sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
-            );
-          }
-          embedNote = " + embed-db FAILED (see above)";
-        }
-      }
-      if (!this.silent) {
-        process.stderr.write(`enquire: watcher ${kind} ${relPath} (fts5 reindexed${embedNote})\n`);
-      }
     } catch (err) {
-      // File may have been deleted between event and our stat — drop it.
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher skip ${relPath} (${kind}) — ${err instanceof Error ? err.message : String(err)}\n`
+          `enquire: watcher skip ${relPath} (${kind}) — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
         );
       }
+      if (this.activationState === "activating") throw err;
     }
   }
 

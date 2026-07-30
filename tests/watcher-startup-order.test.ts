@@ -549,15 +549,19 @@ function frozenEmbedCapabilityViolations(source: string): string[] {
     violations.push(`expected exactly one registerReadTools() call, found ${registerReadCalls.length}`);
   }
   const registerReadCall = registerReadCalls[0]?.call;
-  const finalArgument = registerReadCall?.arguments[(registerReadCall?.arguments.length ?? 0) - 1];
-  if (
-    !finalArgument ||
-    !ts.isPropertyAccessExpression(finalArgument) ||
-    !ts.isIdentifier(finalArgument.expression) ||
-    finalArgument.expression.text !== "deps" ||
-    finalArgument.name.text !== "embedDbFile"
-  ) {
+  const forwardedDep = (name: string): boolean =>
+    registerReadCall?.arguments.some(
+      (argument) =>
+        ts.isPropertyAccessExpression(argument) &&
+        ts.isIdentifier(argument.expression) &&
+        argument.expression.text === "deps" &&
+        argument.name.text === name
+    ) === true;
+  if (!forwardedDep("embedDbFile")) {
     violations.push("buildMcpServer must forward deps.embedDbFile without a late disk probe");
+  }
+  if (!forwardedDep("watcherHealth")) {
+    violations.push("buildMcpServer must forward deps.watcherHealth to read tools");
   }
 
   return violations;
@@ -738,11 +742,12 @@ export async function prepareServerDeps(opts) {
   return {
     ...(opts.watch
       ? { embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null }
-      : {})
+      : {}),
+    watcherHealth: null
   };
 }
 export function buildMcpServer(deps) {
-  registerReadTools(server, vault, deps.embedDbFile);
+  registerReadTools(server, vault, deps.embedDbFile, deps.watcherHealth);
 }
 `;
 
@@ -900,19 +905,24 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const omittedFrozenCapability = GOOD_FROZEN_CAPABILITY.replace(
-      "  registerReadTools(server, vault, deps.embedDbFile);",
-      "  registerReadTools(server, vault);"
+      "  registerReadTools(server, vault, deps.embedDbFile, deps.watcherHealth);",
+      "  registerReadTools(server, vault, deps.watcherHealth);"
     );
     expect(frozenEmbedCapabilityViolations(omittedFrozenCapability)).toContain(
       "buildMcpServer must forward deps.embedDbFile without a late disk probe"
     );
 
     const dynamicLateCapability = GOOD_FROZEN_CAPABILITY.replace(
-      "  registerReadTools(server, vault, deps.embedDbFile);",
-      "  registerReadTools(server, vault, existsSync(embedDbPath(deps.vault.root)) ? embedDbPath(deps.vault.root) : null);"
+      "  registerReadTools(server, vault, deps.embedDbFile, deps.watcherHealth);",
+      "  registerReadTools(server, vault, existsSync(embedDbPath(deps.vault.root)) ? embedDbPath(deps.vault.root) : null, deps.watcherHealth);"
     );
     expect(frozenEmbedCapabilityViolations(dynamicLateCapability)).toContain(
       "buildMcpServer must forward deps.embedDbFile without a late disk probe"
+    );
+
+    const omittedWatcherHealth = GOOD_FROZEN_CAPABILITY.replace(", deps.watcherHealth", "");
+    expect(frozenEmbedCapabilityViolations(omittedWatcherHealth)).toContain(
+      "buildMcpServer must forward deps.watcherHealth to read tools"
     );
 
     const resampledCapability = GOOD_FROZEN_CAPABILITY.replace(

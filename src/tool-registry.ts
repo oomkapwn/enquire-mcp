@@ -216,7 +216,12 @@ export function registerReadTools(
    * keeps embedding arms disabled until restart even if a DB appears later.
    * `undefined` preserves the historical dynamic path for direct API callers.
    */
-  embeddingDbFile: string | null | undefined = undefined
+  embeddingDbFile: string | null | undefined = undefined,
+  /**
+   * Mutable watcher route health. A sink-commit failure quarantines the
+   * affected semantic route for this prepared server generation.
+   */
+  watcherHealth: Readonly<import("./watcher.js").WatcherSearchHealth> | null = null
 ): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
   const preparedEmbedFile = embeddingDbFile === undefined ? embedDbPath(vault.root) : embeddingDbFile;
@@ -990,7 +995,7 @@ export function registerReadTools(
         }
       },
       async (args) => {
-        return textResult(await embeddingsSearch(vault, args, preparedEmbedFile));
+        return textResult(await embeddingsSearch(vault, args, preparedEmbedFile, undefined, watcherHealth));
       }
     );
 
@@ -1029,7 +1034,7 @@ export function registerReadTools(
       }
     },
     async (args) => {
-      return textResult(await embeddingsSearch(vault, args, preparedEmbedFile, hnswContext));
+      return textResult(await embeddingsSearch(vault, args, preparedEmbedFile, hnswContext, watcherHealth));
     }
   );
 
@@ -1117,6 +1122,7 @@ export function registerReadTools(
         embedFile: preparedEmbedFile,
         ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
         ...(hnswContext ? { hnsw: hnswContext } : {}),
+        ...(watcherHealth ? { watcherHealth } : {}),
         ...(recencyConfig ? { recency: recencyConfig } : {}),
         ...(feedbackContext
           ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }
@@ -1199,6 +1205,7 @@ export function registerReadTools(
           embedFile: preparedEmbedFile,
           ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
           ...(hnswContext ? { hnsw: hnswContext } : {}),
+          ...(watcherHealth ? { watcherHealth } : {}),
           ...(recencyConfig ? { recency: recencyConfig } : {}),
           ...(feedbackContext
             ? { feedback: { weight: feedbackContext.weight, scores: feedbackContext.store.scores() } }

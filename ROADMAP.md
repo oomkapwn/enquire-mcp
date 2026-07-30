@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.25 candidate: bounded final-state watcher activation, pre-ready drift audit, frozen watched embedding capability, and fail-closed process-restart interlock).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.26 candidate: bounded final-state startup activation plus one-generation live Markdown/PDF staging, synchronous sink commit, and semantic-route quarantine after uncertainty).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -13,15 +13,15 @@ This is the *public* roadmap. Per-release detail lives in [`CHANGELOG.md`](./CHA
 Already shipped and differentiating:
 
 - **Full hybrid retrieval** — BM25 + TF-IDF + multilingual ML embeddings, RRF-fused, with optional BGE cross-encoder reranking (**+15.5 NDCG@10 / +24.7 MRR** measured on a 60-query ablation).
-- **HNSW vector index** with **in-memory live update** on file changes (search reflects edits within ~250 ms) + close-time disk persistence + int8 quantization + adaptive refill under heavy privacy filtering.
+- **HNSW vector index** with **in-memory live update** on file changes (search reflects edits within ~250 ms), automatic EmbedDb fallback after an uncertain graph diff, close-time disk persistence, int8 quantization and adaptive refill under heavy privacy filtering.
 - **Agentic RAG** — HyDE (Gao et al 2023) + sub-question decomposition.
 - **GraphRAG-light** — Louvain community detection over the wikilink graph.
 - **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1773 tests, 9 release-required CI checks (7 currently branch-protected), plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1776 tests, 9 release-required CI checks (7 currently branch-protected), plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
-Current **v3.12.0 `@rc` preview** closes the activation path: `first-run` validates and renders config in non-destructive preview mode, then requires explicit `--apply` before package-coherent setup/model acquisition and tier-aware doctor verification. The manual commands remain available independently; the orchestrator stops on failure and emits an exact idempotent resume command.
+Current **v3.12.0 `@rc` preview** closes both activation and ordinary watcher-generation gaps: `first-run` remains non-destructive until explicit `--apply`; watched startup holds a guarded final-state activation barrier; and live Markdown/PDF changes stage every enabled retrieval sink from one revalidated source generation before synchronous publication. Preparation failures retain the previous generation, while sink-mutation uncertainty is quarantined until restart. The manual activation commands remain available independently and emit an exact idempotent resume path on failure.
 
 ## Leadership plan (why the roadmap is shaped this way)
 

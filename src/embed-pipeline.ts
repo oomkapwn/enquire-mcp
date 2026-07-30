@@ -34,7 +34,7 @@ import * as path from "node:path";
 import type { loadEmbedder } from "./embeddings.js";
 import { chunkContent } from "./fts5.js";
 import { lookupFoldedAny } from "./name-fold.js";
-import type { Vault } from "./vault.js";
+import type { CachedNote, Vault } from "./vault.js";
 
 /**
  * v3.9.0-rc.28 (external-audit M-2) — hard upper bound on the assembled
@@ -165,10 +165,23 @@ export async function embedSingleNote(
   vault: Vault,
   embedder: Awaited<ReturnType<typeof loadEmbedder>>,
   entry: { relPath: string; absPath: string; mtimeMs: number },
-  opts: { lateChunkContext?: number } = {}
+  opts: {
+    lateChunkContext?: number;
+    /**
+     * Optional note snapshot already read by the caller. The watcher uses this
+     * to derive lexical and semantic rows from one captured file generation
+     * instead of re-reading the path after an awaited embedding boundary.
+     */
+    preReadNote?: CachedNote;
+  } = {}
 ): Promise<{ chunks: number; rows: EmbedRow[] } | null> {
   const contextChars = opts.lateChunkContext ?? 0;
-  const note = await vault.readNote(entry.absPath, entry.mtimeMs);
+  const note = opts.preReadNote ?? (await vault.readNote(entry.absPath, entry.mtimeMs));
+  if (note.mtimeMs !== entry.mtimeMs) {
+    throw new Error(
+      `pre-read note generation mismatch for ${entry.relPath}: snapshot mtime ${note.mtimeMs}, expected ${entry.mtimeMs}`
+    );
+  }
   const chunks = chunkContent(note.parsed.body);
   if (chunks.length === 0) return null;
   // v3.10.0-rc.17 (audit M1) — we chunk the BODY (frontmatter stripped) to keep

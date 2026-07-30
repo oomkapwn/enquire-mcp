@@ -8,7 +8,8 @@ import type { Embedder } from "../src/embeddings.js";
 import { FtsIndex } from "../src/fts5.js";
 import type { HnswIndex } from "../src/hnsw.js";
 import { Vault } from "../src/vault.js";
-import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
+import { type HnswRowMeta, statsMtimeMsFromNs, VaultWatcher } from "../src/watcher.js";
+import { makePdf } from "./helpers/make-pdf.js";
 
 type NativeEventKind = "add" | "change" | "unlink";
 
@@ -67,6 +68,21 @@ function emit(watcher: VaultWatcher, absPath: string, kind: NativeEventKind): vo
       onFsEvent(pathToFile: string, eventKind: NativeEventKind): void;
     }
   ).onFsEvent(absPath, kind);
+}
+
+function enqueue(watcher: VaultWatcher, absPath: string, kind: NativeEventKind): Promise<void> {
+  return (
+    watcher as unknown as {
+      enqueueFileEvent(pathToFile: string, eventKind: NativeEventKind): Promise<void>;
+    }
+  ).enqueueFileEvent(absPath, kind);
+}
+
+async function writeWithLaterMtime(absPath: string, content: string | Uint8Array): Promise<void> {
+  const before = await fs.stat(absPath);
+  await fs.writeFile(absPath, content);
+  const nextMtime = new Date(Math.max(Date.now(), before.mtimeMs) + 60_000);
+  await fs.utimes(absPath, nextMtime, nextMtime);
 }
 
 function capturedPathCount(watcher: VaultWatcher): number {
@@ -209,6 +225,7 @@ async function createFixture(
     embedder?: Embedder;
     deferHnswSnapshot?: boolean;
     deferActivation?: boolean;
+    includePdfs?: boolean;
   } = {}
 ): Promise<ActivationFixture> {
   const vault = new Vault(vaultRoot);
@@ -238,6 +255,7 @@ async function createFixture(
       ftsIndex: fts,
       silent: true,
       deferActivation: opts.deferActivation ?? true,
+      includePdfs: opts.includePdfs ?? false,
       ...(opts.activationPathLimit === undefined ? {} : { activationPathLimit: opts.activationPathLimit })
     });
     if (opts.attachSinks !== false) {
@@ -600,14 +618,18 @@ describe("VaultWatcher startup activation barrier", () => {
     await expect(fixture.watcher.activate()).rejects.toThrow(/closed/);
   });
 
-  it("close during activation drains a subsequent generation and rejects later events", async () => {
+  it("close during activation drains a stale markdown stage, its retry, and a subsequent generation", async () => {
     const replayEntered = deferred<void>();
     const releaseReplay = deferred<void>();
+    const embedCalls: string[][] = [];
     const blockingEmbedder: Embedder = {
       model: deterministicEmbedder.model,
       async embed(texts: readonly string[]): Promise<Float32Array[]> {
-        replayEntered.resolve(undefined);
-        await releaseReplay.promise;
+        embedCalls.push([...texts]);
+        if (embedCalls.length === 1) {
+          replayEntered.resolve(undefined);
+          await releaseReplay.promise;
+        }
         return deterministicEmbedder.embed(texts);
       }
     };
@@ -619,31 +641,196 @@ describe("VaultWatcher startup activation barrier", () => {
     const acceptedPath = path.join(fixture.vault.root, "Accepted.md");
     const ignoredPath = path.join(fixture.vault.root, "Ignored.md");
 
-    await fs.writeFile(duringPath, "# During\n\nduringfinalmarker must finish before close resolves.\n");
+    await fs.writeFile(duringPath, "# During\n\nduringcandidate marker is staged but must never be published.\n");
     emit(fixture.watcher, duringPath, "change");
     const activation = fixture.watcher.activate();
-    await replayEntered.promise;
+    let close: Promise<void> | null = null;
+    try {
+      await replayEntered.promise;
 
-    await fs.writeFile(acceptedPath, "# Accepted\n\nacceptedwhileactivatingmarker must drain before close.\n");
-    emit(fixture.watcher, acceptedPath, "add");
-    expect(capturedPathCount(fixture.watcher)).toBe(1);
-    const close = fixture.watcher.close();
-    await fs.writeFile(ignoredPath, "# Ignored\n\nafterclosingmarker must never enter a sink.\n");
-    emit(fixture.watcher, ignoredPath, "add");
-    releaseReplay.resolve(undefined);
-    await Promise.all([activation, close]);
+      // S-8d POSITIVE + old-failure NEGATIVE control: the async embedding
+      // barrier is still preparation. No configured sink may publish the
+      // candidate before every awaited stage has completed.
+      expect(markerPathsInFts(fixture.fts, "duringoldmarker")).toEqual(["During.md"]);
+      expect(markerPathsInEmbedDb(fixture.embedDb, "duringoldmarker")).toEqual(["During.md"]);
+      expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "duringoldmarker")).toEqual(["During.md"]);
+      expect(markerPathsInFts(fixture.fts, "duringcandidate")).toEqual([]);
+      expect(markerPathsInEmbedDb(fixture.embedDb, "duringcandidate")).toEqual([]);
+      expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "duringcandidate")).toEqual([]);
+
+      // Mutate the SAME path while its first embed is blocked, without a second
+      // native event. Revalidation must discard the candidate and spend the one
+      // bounded retry on this latest physical generation.
+      await writeWithLaterMtime(
+        duringPath,
+        "# During\n\nduringlatestmarker is the authoritative generation that close must drain.\n"
+      );
+
+      await fs.writeFile(acceptedPath, "# Accepted\n\nacceptedwhileactivatingmarker must drain before close.\n");
+      emit(fixture.watcher, acceptedPath, "add");
+      expect(capturedPathCount(fixture.watcher)).toBe(1);
+      close = fixture.watcher.close();
+      let closeSettled = false;
+      void close.then(
+        () => {
+          closeSettled = true;
+        },
+        () => {
+          closeSettled = true;
+        }
+      );
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+
+      await fs.writeFile(ignoredPath, "# Ignored\n\nafterclosingmarker must never enter a sink.\n");
+      emit(fixture.watcher, ignoredPath, "add");
+      releaseReplay.resolve(undefined);
+      await Promise.all([activation, close]);
+    } finally {
+      // A deliberately failing pre-release assertion must never strand the
+      // activation queue or afterEach behind the controlled embed barrier.
+      releaseReplay.resolve(undefined);
+      await activation.catch(() => {});
+      if (close) await close.catch(() => {});
+    }
 
     expect(markerPathsInFts(fixture.fts, "duringoldmarker")).toEqual([]);
-    expect(markerPathsInFts(fixture.fts, "duringfinalmarker")).toEqual(["During.md"]);
+    expect(markerPathsInFts(fixture.fts, "duringcandidate")).toEqual([]);
+    expect(markerPathsInFts(fixture.fts, "duringlatestmarker")).toEqual(["During.md"]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "duringoldmarker")).toEqual([]);
-    expect(markerPathsInEmbedDb(fixture.embedDb, "duringfinalmarker")).toEqual(["During.md"]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "duringfinalmarker")).toEqual(["During.md"]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "duringcandidate")).toEqual([]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "duringlatestmarker")).toEqual(["During.md"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "duringcandidate")).toEqual([]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "duringlatestmarker")).toEqual(["During.md"]);
     expect(markerPathsInFts(fixture.fts, "acceptedwhileactivatingmarker")).toEqual(["Accepted.md"]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "acceptedwhileactivatingmarker")).toEqual(["Accepted.md"]);
     expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "acceptedwhileactivatingmarker")).toEqual(["Accepted.md"]);
     expect(markerPathsInFts(fixture.fts, "afterclosingmarker")).toEqual([]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "afterclosingmarker")).toEqual([]);
     expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "afterclosingmarker")).toEqual([]);
+    expect(embedCalls).toHaveLength(3);
+    expect(embedCalls[0]?.join("\n")).toContain("duringcandidate");
+    expect(embedCalls[1]?.join("\n")).toContain("duringlatestmarker");
+    expect(embedCalls[2]?.join("\n")).toContain("acceptedwhileactivatingmarker");
+    expectHnswMatchesEmbedDb(fixture);
+  });
+});
+
+describe("VaultWatcher single-generation staging", () => {
+  it("(NEGATIVE control) reuses one PDF snapshot per attempt and commits only the revalidated retry", async () => {
+    const epochScaleNs = 2_000_000_000_111_222_333n;
+    expect(statsMtimeMsFromNs(epochScaleNs)).toBe(2_000_000_000_111.2224);
+    expect(statsMtimeMsFromNs(epochScaleNs)).not.toBe(Number(epochScaleNs) / 1_000_000);
+
+    const embedCalls: string[][] = [];
+    const recordingEmbedder: Embedder = {
+      model: deterministicEmbedder.model,
+      async embed(texts: readonly string[]): Promise<Float32Array[]> {
+        embedCalls.push([...texts]);
+        return deterministicEmbedder.embed(texts);
+      }
+    };
+    const fixture = await createFixture({}, { embedder: recordingEmbedder, includePdfs: true });
+    const pdfPath = path.join(fixture.vault.root, "Generation.pdf");
+    const capturedPdf = makePdf({ pages: ["pdfcapturemarker belongs only to the discarded snapshot"] });
+    const latestPdf = makePdf({ pages: ["pdflatestmarker is the only generation safe to publish"] });
+    await fs.writeFile(pdfPath, capturedPdf);
+
+    const readBinaryFile = fixture.vault.readBinaryFile.bind(fixture.vault);
+    let binaryReads = 0;
+    const readSpy = vi.spyOn(fixture.vault, "readBinaryFile").mockImplementation(async (relOrAbs: string) => {
+      const captured = await readBinaryFile(relOrAbs);
+      binaryReads += 1;
+      if (binaryReads === 1) {
+        // The first attempt has already captured PDF-A. Replace the physical
+        // file before returning those bytes so a second independent read inside
+        // the same attempt would see PDF-B (the historical FTS=A/embed=B bug).
+        await writeWithLaterMtime(pdfPath, latestPdf);
+      }
+      return captured;
+    });
+
+    emit(fixture.watcher, pdfPath, "add");
+    const activation = fixture.watcher.activate();
+    try {
+      await activation;
+    } finally {
+      readSpy.mockRestore();
+      await activation.catch(() => {});
+    }
+
+    // Exactly one binary read + one embed call per physical attempt: discarded
+    // PDF-A, then the bounded latest-state retry over PDF-B.
+    expect(binaryReads).toBe(2);
+    expect(embedCalls).toHaveLength(2);
+    expect(embedCalls[0]?.join("\n")).toContain("pdfcapturemarker");
+    expect(embedCalls[1]?.join("\n")).toContain("pdflatestmarker");
+    expect(markerPathsInFts(fixture.fts, "pdfcapturemarker")).toEqual([]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "pdfcapturemarker")).toEqual([]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "pdfcapturemarker")).toEqual([]);
+    expect(markerPathsInFts(fixture.fts, "pdflatestmarker")).toEqual(["Generation.pdf"]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "pdflatestmarker")).toEqual(["Generation.pdf"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "pdflatestmarker")).toEqual(["Generation.pdf"]);
+    expectHnswMatchesEmbedDb(fixture);
+  });
+
+  it("(NEGATIVE control) bounds one live event to one latest-state retry and lets a later event recover", async () => {
+    let churnPath = "";
+    let embedCalls = 0;
+    const churningEmbedder: Embedder = {
+      model: deterministicEmbedder.model,
+      async embed(texts: readonly string[]): Promise<Float32Array[]> {
+        embedCalls += 1;
+        if (embedCalls === 1) {
+          await writeWithLaterMtime(
+            churnPath,
+            "# Churn\n\nchurnsecondmarker replaces the first staged generation during embed.\n"
+          );
+        } else if (embedCalls === 2) {
+          await writeWithLaterMtime(
+            churnPath,
+            "# Churn\n\nchurnthirdmarker changes again and exhausts this event's retry budget.\n"
+          );
+        }
+        return deterministicEmbedder.embed(texts);
+      }
+    };
+    const fixture = await createFixture(
+      { "Churn.md": "# Churn\n\nchurnoldmarker is the last successfully indexed generation.\n" },
+      { embedder: churningEmbedder, deferActivation: false }
+    );
+    churnPath = path.join(fixture.vault.root, "Churn.md");
+    await writeWithLaterMtime(
+      churnPath,
+      "# Churn\n\nchurncandidate marker begins the continuously changing event.\n"
+    );
+
+    await enqueue(fixture.watcher, churnPath, "change");
+
+    // Both allowed attempts observed a different post-embed generation, so the
+    // event must stop without publishing any of its three transient states.
+    expect(embedCalls).toBe(2);
+    expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual(["Churn.md"]);
+    for (const marker of ["churncandidate", "churnsecondmarker", "churnthirdmarker"]) {
+      expect(markerPathsInFts(fixture.fts, marker)).toEqual([]);
+      expect(markerPathsInEmbedDb(fixture.embedDb, marker)).toEqual([]);
+      expect(markerPathsInHnsw(fixture.hnswRowsByLabel, marker)).toEqual([]);
+    }
+    expectHnswMatchesEmbedDb(fixture);
+
+    // Retry exhaustion is per accepted event, not a permanent poison pill. A
+    // later event sees the now-quiet third generation and commits it coherently.
+    await enqueue(fixture.watcher, churnPath, "change");
+    await fixture.watcher.close();
+    expect(embedCalls).toBe(3);
+    expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual([]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual([]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual([]);
+    expect(markerPathsInFts(fixture.fts, "churnthirdmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "churnthirdmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnthirdmarker")).toEqual(["Churn.md"]);
     expectHnswMatchesEmbedDb(fixture);
   });
 });

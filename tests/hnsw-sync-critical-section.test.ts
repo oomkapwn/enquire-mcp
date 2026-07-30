@@ -75,6 +75,18 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
     expect(containsAwait(core), "syncHnswForFile critical section must be synchronous").toBe(false);
     // syncHnswForFile must not be declared async.
     expect(watcherSrc).not.toMatch(/private\s+async\s+syncHnswForFile\b/);
+
+    // S-8d extends the same run-to-completion contract across each prepared
+    // FTS5 → EmbedDb → HNSW generation commit. All awaited parsing/embedding
+    // must stay in the staging helpers above these methods.
+    for (const [name, start] of [
+      ["commitMarkdownGeneration", "this.ftsIndex?.reindexFile("],
+      ["commitPdfGeneration", "this.ftsIndex?.reindexPdfFile("]
+    ] as const) {
+      const commit = sliceBetween(watcherSrc, start, "return embedNote;");
+      expect(containsAwait(commit), `${name} must remain synchronous`).toBe(false);
+      expect(watcherSrc).not.toMatch(new RegExp(`private\\s+async\\s+${name}\\b`));
+    }
   });
 
   it("detector fires on an await inside the critical section so the gate is not vacuous (NEGATIVE control)", () => {

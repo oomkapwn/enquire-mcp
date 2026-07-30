@@ -17,7 +17,11 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
-import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder } from "../src/tools/search.js";
+import {
+  adaptiveHnswRefill,
+  assertHnswModelMatchesEmbedder,
+  selectUsableHnswContext
+} from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
 function l2(v: Float32Array): Float32Array {
@@ -615,6 +619,20 @@ describe("EmbedDb.computeSignature (v2.16.0)", () => {
 // search-time guard that prevents returning garbage similarities when the
 // HNSW index and the query embedder come from different vector spaces.
 describe("assertHnswModelMatchesEmbedder (v3.6.2 HN-4)", () => {
+  it("routes a quarantined live graph to EmbedDb while preserving a healthy HNSW route", () => {
+    const health = { hnswUsable: true };
+    const context = {
+      index: { searchKnn: () => ({ labels: [], distances: [] }) },
+      rowByLabel: new Map(),
+      modelAlias: "multilingual",
+      health
+    };
+    expect(selectUsableHnswContext(context)).toBe(context);
+    health.hnswUsable = false;
+    expect(selectUsableHnswContext(context)).toBeNull();
+    expect(selectUsableHnswContext(null)).toBeNull();
+  });
+
   it("passes silently when aliases match (multilingual = multilingual)", () => {
     expect(() => assertHnswModelMatchesEmbedder("multilingual", "multilingual")).not.toThrow();
   });

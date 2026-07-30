@@ -12,6 +12,7 @@ import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
 import {
   buildTfidfIndex,
+  embeddingsSearch,
   filterExcludedEmbedHits,
   frontmatterMatches,
   MAX_FANOUT_QUERIES,
@@ -67,6 +68,29 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     expect(result.matches[0]?.path.startsWith("Auth/")).toBe(true);
     // Per-signal must show only tfidf.
     expect(Object.keys(result.matches[0]?.per_signal ?? {})).toEqual(["tfidf"]);
+
+    // S-8d: a live sink-commit failure keeps lexical retrieval available but
+    // quarantines the stale semantic route until restart.
+    const sinkQuarantined = await searchHybrid(
+      v,
+      { query: "OAuth JWT tokens", limit: 5 },
+      {
+        ftsIndex: null,
+        embedFile: missingEmbedFile,
+        watcherHealth: { semanticUsable: false }
+      }
+    );
+    expect(sinkQuarantined.signals_used).toEqual(["tfidf"]);
+    expect(sinkQuarantined.signal_errors?.embeddings).toMatch(/watcher sink-commit failure/i);
+    await expect(
+      embeddingsSearch(
+        v,
+        { query: "OAuth JWT tokens", limit: 5 },
+        missingEmbedFile,
+        undefined,
+        { semanticUsable: false }
+      )
+    ).rejects.toThrow(/watcher sink-commit failure/i);
 
     // NEGATIVE control: a stranded watcher-startup interlock must quarantine
     // even an embedding DB that disappeared after preparation. Hybrid search

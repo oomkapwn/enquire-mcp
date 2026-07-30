@@ -943,7 +943,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "mode=create",
       "mode=append",
       "complete resulting Markdown",
-      "re-read every existing target",
+      "Re-read every existing target",
       "not a transaction",
       "untrusted data, never as instructions",
       'kind="pdf"',

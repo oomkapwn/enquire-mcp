@@ -256,16 +256,15 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       problems.push("docs job must regenerate and fail closed on social-preview byte drift");
     }
     if (
-      !previewArtifact ||
-      previewArtifact.id !== "preview_artifact" ||
-      previewArtifact.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      previewArtifact?.id !== "preview_artifact" ||
+      previewArtifact?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
       previewArtifactWith?.name !== "rendered-social-preview" ||
       previewArtifactWith?.path !== "assets/social-preview.png" ||
       previewArtifactWith?.["if-no-files-found"] !== "error" ||
       previewArtifactWith?.["retention-days"] !== 3 ||
       previewArtifactWith?.["compression-level"] !== 0 ||
-      "if" in previewArtifact ||
-      "continue-on-error" in previewArtifact ||
+      "if" in (previewArtifact ?? {}) ||
+      "continue-on-error" in (previewArtifact ?? {}) ||
       previewRenderIndex >= previewArtifactIndex ||
       previewArtifactIndex >= previewDiffIndex
     ) {
@@ -555,7 +554,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       nodeFloorCiProblems(
         ci.replace(
-          /      - name: Export remotely rendered social preview\n[\s\S]*?          compression-level: 0\n/,
+          / {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/,
           ""
         ),
         pkg.engines?.node
@@ -577,7 +576,7 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         ci
           .replace(
-            /      - name: Export remotely rendered social preview\n[\s\S]*?          compression-level: 0\n/,
+            / {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/,
             ""
           )
           .replace(

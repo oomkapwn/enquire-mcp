@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -83,9 +83,8 @@ describe("GitHub Pages artifact", () => {
     const stableApiSymbol = await readFile(join(outDir, "api/functions/tools.searchHybrid.html"), "utf8");
     const manifest = JSON.parse(await readFile(join(outDir, "manifest.webmanifest"), "utf8"));
     const promptSource = await readFile(join(repoRoot, "src/prompts.ts"), "utf8");
-    const promptCount = new Set(
-      [...promptSource.matchAll(/registerPrompt\(\s*"([^"]+)"/g)].map((match) => match[1])
-    ).size;
+    const promptCount = new Set([...promptSource.matchAll(/registerPrompt\(\s*"([^"]+)"/g)].map((match) => match[1]))
+      .size;
     const testFiles = (await readdir(join(repoRoot, "tests"))).filter((file) => file.endsWith(".test.ts"));
     let testCount = 0;
     for (const file of testFiles) {

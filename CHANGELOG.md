@@ -32,6 +32,7 @@ All notable changes to this project will be documented here. The format follows 
 - Existing site and JSON-LD tests now reject stale counts, fake confidence/timing, inaccurate retrieval ladders, absolute privacy answers, missing download commands and missing high-intent metadata.
 - Existing release-integrity tests reject an absent, late, conditional, warning-only or wrong-path remote preview artifact step.
 - Existing GitHub metadata tests require the exact homepage, About acquisition tokens and the exact 20-topic discovery set, with synthetic drift controls.
+- The existing prompt-count invariant now covers every current README and ROADMAP claim, and the scope-completeness manifest admits `ROADMAP.md` only behind that positive/negative-control guard.
 
 **1795 → 1795 source tests.**
 

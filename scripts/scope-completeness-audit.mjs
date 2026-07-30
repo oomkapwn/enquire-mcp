@@ -114,11 +114,20 @@ export const DEFENSES = [
   {
     id: "prompt-count",
     pattern: /\b(\d{2})\s+(?:MCP\s+)?prompts\b/,
-    scope: ["README.md", "llms.txt", "llms-ctx.txt", "AGENTS.md", "docs/COMPARISON.md", "docs/api.md", "package.json"],
+    scope: [
+      "README.md",
+      "llms.txt",
+      "llms-ctx.txt",
+      "AGENTS.md",
+      "docs/COMPARISON.md",
+      "docs/api.md",
+      "package.json",
+      "ROADMAP.md"
+    ],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
-      "Canonical: 19 MCP prompts. docs-consistency.test.ts pins. " +
-      "v3.8.0-rc.14 M-2 added llms.txt + AGENTS.md coverage."
+      "Canonical: 19 MCP prompts. docs-consistency.test.ts pins every current README/ROADMAP claim. " +
+      "v3.8.0-rc.14 M-2 added llms.txt + AGENTS.md coverage; v3.12.0-rc.29 added ROADMAP.md."
   },
   {
     id: "ci-gate-count",

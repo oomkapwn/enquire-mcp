@@ -645,12 +645,19 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.writes);
   });
 
-  it("README prompt-count claim matches actual prompt count (where claimed)", async () => {
-    const readme = await read("README.md");
+  it("README and ROADMAP prompt-count claims match the actual prompt count", async () => {
     const counts = await getActualCounts();
-    // The first occurrence of "N **MCP prompts**" — that's the canonical claim.
-    const m = /\b(\d+) \*\*MCP prompts\*\*/.exec(readme);
-    if (m) expect(Number.parseInt(m[1] ?? "0", 10)).toBe(counts.prompts);
+    const promptCountProblems = (text: string): string[] => {
+      const claims = [...text.matchAll(/\b(\d+)\s+(?:\*\*)?MCP prompts(?:\*\*)?/g)];
+      if (claims.length === 0) return ["missing MCP prompt-count claim"];
+      return claims
+        .filter((match) => Number.parseInt(match[1] ?? "0", 10) !== counts.prompts)
+        .map((match) => `stale prompt count: ${match[0]}`);
+    };
+    for (const file of ["README.md", "ROADMAP.md"]) {
+      expect(promptCountProblems(await read(file)), `${file} prompt-count drift`).toEqual([]);
+    }
+    expect(promptCountProblems("Reuse the 20 MCP prompts.")).toContain("stale prompt count: 20 MCP prompts");
   });
 
   it("STABILITY.md tool-count header matches actual registered tool count", async () => {

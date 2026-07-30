@@ -985,7 +985,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "mode=create",
       "mode=overwrite",
       "same complete final document",
-      "re-read the exact target",
+      "Re-read the exact target",
       "overwrite=true",
       'kind="pdf"',
       "obsidian_read_pdf",

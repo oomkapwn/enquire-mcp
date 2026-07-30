@@ -637,8 +637,13 @@ describe("VaultWatcher startup activation barrier", () => {
       { "During.md": "# During\n\nduringoldmarker is the initial state.\n" },
       { embedder: blockingEmbedder }
     );
+    const watcherInternals = fixture.watcher as unknown as {
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+    };
+    const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
     const readNoteSpy = vi.spyOn(fixture.vault, "readNote");
     let readNoteCalls = 0;
+    let inventoryCalls = 0;
     const duringPath = path.join(fixture.vault.root, "During.md");
     const acceptedPath = path.join(fixture.vault.root, "Accepted.md");
     const ignoredPath = path.join(fixture.vault.root, "Ignored.md");
@@ -695,7 +700,9 @@ describe("VaultWatcher startup activation barrier", () => {
       await activation.catch(() => {});
       if (close) await close.catch(() => {});
       readNoteCalls = readNoteSpy.mock.calls.length;
+      inventoryCalls = inventorySpy.mock.calls.length;
       readNoteSpy.mockRestore();
+      inventorySpy.mockRestore();
     }
 
     expect(markerPathsInFts(fixture.fts, "duringoldmarker")).toEqual([]);
@@ -719,6 +726,10 @@ describe("VaultWatcher startup activation barrier", () => {
     // One source read per attempt: stale During, its retry, then Accepted.
     // The pre-rc.26 embed helper re-read every Markdown path and would record 6.
     expect(readNoteCalls).toBe(3);
+    // Content-only drift keeps its bounded exact-path retry. The pre-fix
+    // membership classification forced a whole-vault inventory after close
+    // began and admitted the otherwise-rejected Ignored.md.
+    expect(inventoryCalls).toBe(0);
     expectHnswMatchesEmbedDb(fixture);
   });
 });

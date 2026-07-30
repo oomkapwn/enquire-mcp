@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **serve 期间零云端调用。** q8 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 118 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**46 个工具 · 19 个 MCP 提示词 · 1776+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**46 个工具 · 19 个 MCP 提示词 · 1795+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -67,7 +67,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **完整的 Obsidian 知识面** | ✅ Markdown、双向链接、frontmatter、Canvas、Bases、PDF 和 OCR |
 | **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个工作流提示词 |
 | **扩展性能而不放弃控制** | ✅ HNSW 实时更新、持久化、自适应补充和 int8 量化 |
-| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1776 项测试、9 个发布门禁、SLSA L2 来源证明 |
+| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1795 项测试、9 个发布门禁、SLSA L2 来源证明 |
 
 **一个仓库。所有智能体。完整检索栈。没有云端锁定。**
 
@@ -100,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.26      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.27      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -272,7 +272,7 @@ graph LR
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
 | **缓存 + 索引文件** | chmod 0600，父目录 0700 |
-| **1776 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
+| **1795 单元测试 · 每个 PR 9 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
 | **CI** | `release.yml` 直接列出 **9 项发布门禁**，且每个 PR 都会运行：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs` 和 `oia`。固定的 Windows hostile-filesystem job `test-windows` 是一个额外的具名 check-run，并作为 `smoke` 的阻断性前置条件被间接强制，而不是由发布 workflow 直接列为第十项门禁。当前分支保护仅强制其中 **7 项**；`docs` 与 `oia` 是发布必需项，但未受保护（在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验其直接列出的全部 9 项门禁。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |
 | **构建发布** | 每个 tag 发布到 npm + GitHub Release · 语义化版本 · **签名构建溯源**（npm + Sigstore，SLSA Build L2；L3 生成器在路线图中） |
@@ -313,7 +313,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 完整套件（1776 个测试）
+npm test       # 完整套件（1795 个测试）
 npm run lint   # 零警告
 npm run build  # tsc → dist/
 ```

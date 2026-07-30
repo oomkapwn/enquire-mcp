@@ -60,6 +60,19 @@ const DEFAULT_ACTIVATION_PATH_LIMIT = 50_000;
 const ACTIVATION_REPLAY_CONCURRENCY = 4;
 const ACTIVATION_MAX_GENERATIONS = 16;
 const FILE_GENERATION_ATTEMPTS = 2;
+const PHYSICAL_ALIAS_ATTEMPTS = 2;
+const PHYSICAL_ALIAS_INVENTORY_LOCK = "inventory:physical-alias";
+const PHYSICAL_ALIAS_UNKNOWN_LOCK = "identity:unavailable";
+
+class PhysicalAliasInventoryLimitError extends Error {
+  constructor(
+    readonly count: number,
+    readonly limit: number
+  ) {
+    super(`watcher physical-alias inventory/plan found ${count} paths (limit ${limit})`);
+    this.name = "PhysicalAliasInventoryLimitError";
+  }
+}
 
 export interface WatcherOptions {
   /** Vault to watch — must already be ensureExists()'d. */
@@ -151,10 +164,12 @@ export interface WatcherOptions {
    */
   deferActivation?: boolean;
   /**
-   * Maximum number of distinct paths retained while activation is deferred.
-   * Repeated events for one path coalesce and do not consume another slot.
-   * Exceeding the limit fails activation closed instead of silently dropping
-   * a boot-window change. Primarily configurable for deterministic tests.
+   * Maximum distinct paths retained by deferred activation or admitted by one
+   * physical-alias inventory/plan. Repeated activation events for one path
+   * coalesce. Exceeding the limit fails guarded activation closed; an ordinary
+   * live alias event preserves the historical exact/previously-known-group
+   * reconciliation and logs that unobserved aliases could not be discovered.
+   * Primarily configurable for deterministic tests.
    */
   activationPathLimit?: number;
 }
@@ -172,10 +187,44 @@ interface EmbedRowLike {
 interface FileGeneration {
   dev: bigint;
   ino: bigint;
+  nlink: bigint;
   size: bigint;
   mtimeNs: bigint;
   ctimeNs: bigint;
   mtimeMs: number;
+}
+
+interface LiveAliasPath {
+  absPath: string;
+  relPath: string;
+  isPdf: boolean;
+  generation: FileGeneration;
+  physicalIdentity: string | null;
+}
+
+type AliasPathInspection = { state: "live"; live: LiveAliasPath } | { state: "purge" } | { state: "retry" };
+
+interface VisibleAliasInventoryEntry {
+  absPath: string;
+  inspection: AliasPathInspection;
+}
+
+interface StagedAliasPath {
+  live: LiveAliasPath;
+  staged: StagedMarkdownGeneration | StagedPdfGeneration;
+}
+
+function aliasAdmissionFailure(error: unknown): "purge" | "retry" {
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : undefined;
+  if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return "purge";
+  if (code !== undefined) return "retry";
+  if (error instanceof Error && /(?:refusing|outside (?:the )?vault|escapes (?:the )?vault)/iu.test(error.message)) {
+    return "purge";
+  }
+  return "retry";
 }
 
 interface StagedEmbedResult {
@@ -339,6 +388,28 @@ export class VaultWatcher {
   // keep independent chains and stay parallel. Keyed by absolute path; entries
   // self-evict when a file's chain drains (bounded memory over a long serve).
   private readonly fileQueues = new Map<string, Promise<void>>();
+  // v3.12.0-rc.27 — regular-file hardlinks remain distinct searchable paths,
+  // but all currently-visible aliases of one physical identity reconcile under
+  // one multi-key critical section. Exact strings are retained: storage
+  // identity never case-folds or Unicode-normalizes a path.
+  private readonly physicalIdentityByPath = new Map<string, string>();
+  private readonly physicalPathsByIdentity = new Map<string, Set<string>>();
+  private readonly physicalKnownPaths = new Set<string>();
+  private readonly physicalAliasLockTails = new Map<string, Promise<void>>();
+  private physicalAliasSeedPromise: Promise<void> | null = null;
+  private watcherReadyReject: ((reason: Error) => void) | null = null;
+  private readonly handleNativeWatcherError = (error: unknown): void => {
+    // The readiness waiter owns startup errors and rejects start(). Once ready,
+    // keep a lifetime listener installed so a later chokidar error has an
+    // explicit fail-stop policy. Continuing after a root/subtree watch loss
+    // would serve derived indexes whose future freshness is no longer proven.
+    if (this.watcherReadyReject !== null) return;
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (!this.silent) {
+      process.stderr.write(`enquire: native watcher error — ${normalized.message}\n`);
+    }
+    throw normalized;
+  };
 
   constructor(opts: WatcherOptions) {
     this.vault = opts.vault;
@@ -697,7 +768,41 @@ export class VaultWatcher {
     kind: "add" | "change" | "unlink",
     propagateFailure = false
   ): Promise<void> {
-    return this.enqueueFileTask(absPath, `(${kind})`, () => this.handle(absPath, kind), propagateFailure);
+    const canonicalAbsPath = this.canonicalWatcherEventPath(absPath);
+    if (canonicalAbsPath === null) return Promise.resolve();
+    return this.enqueueFileTask(
+      canonicalAbsPath,
+      `(${kind})`,
+      () => this.handle(canonicalAbsPath, kind),
+      propagateFailure
+    );
+  }
+
+  /**
+   * Map an accepted configured-root spelling onto the canonical vault root.
+   *
+   * `Vault.ensureExists()` replaces `vault.root` with `realpath()`, while a
+   * native event or deterministic test may still carry the configured spelling
+   * (`/var` vs `/private/var`, or a Windows alias). `resolveInside()` preserves
+   * that compatibility without following the event leaf and rejects lexical
+   * escapes before they can acquire a queue identity.
+   *
+   * @param absPath - Absolute path supplied by chokidar or activation replay.
+   * @returns Canonical in-vault spelling, or null for an unsafe/outside path.
+   */
+  private canonicalWatcherEventPath(absPath: string): string | null {
+    try {
+      const admitted = this.vault.resolveInside(absPath);
+      const relPath = path.relative(this.vault.root, admitted);
+      if (relPath.startsWith("..") || path.isAbsolute(relPath)) return null;
+      // `path.relative()` on Windows treats the root prefix case-insensitively
+      // and preserves the child spelling. Re-anchor that child to the canonical
+      // root so configured-root casing/8.3 aliases cannot split queue identity,
+      // while exact case/Unicode below the root remains untouched.
+      return path.resolve(this.vault.root, relPath);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -784,11 +889,13 @@ export class VaultWatcher {
    */
   private onFsEvent(absPath: string, kind: "add" | "change" | "unlink"): void {
     if (this.closing || this.closed) return;
+    const canonicalAbsPath = this.canonicalWatcherEventPath(absPath);
+    if (canonicalAbsPath === null) return;
     if (this.activationState !== "live") {
-      this.captureActivationPath(absPath);
+      this.captureActivationPath(canonicalAbsPath);
       return;
     }
-    void this.enqueueFileEvent(absPath, kind);
+    void this.enqueueFileEvent(canonicalAbsPath, kind);
   }
 
   /**
@@ -944,8 +1051,50 @@ export class VaultWatcher {
     return this.activationPromise;
   }
 
+  /**
+   * Await chokidar readiness as watcher-owned work.
+   *
+   * close() rejects this wait before closing the native watcher, so a start
+   * racing shutdown cannot remain pending after shutdown has completed.
+   *
+   * @param watcher - Native watcher created for this start attempt.
+   * @returns A promise that resolves on ready and rejects on error or close.
+   */
+  private waitForWatcherReady(watcher: FSWatcher): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        watcher.off("ready", onReady);
+        watcher.off("error", onError);
+        this.watcherReadyReject = null;
+      };
+      const onReady = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: unknown) => {
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      this.watcherReadyReject = (error) => {
+        cleanup();
+        reject(error);
+      };
+      watcher.once("ready", onReady);
+      watcher.once("error", onError);
+      if (this.closing || this.closed) {
+        this.watcherReadyReject(new Error("VaultWatcher.start: watcher is closing or closed"));
+      }
+    });
+  }
+
   /** Start watching. Resolves once the watcher has reported `ready`. */
   async start(): Promise<void> {
+    if (this.closing || this.closed) {
+      throw new Error("VaultWatcher.start: watcher is closing or closed");
+    }
+    if (this.watcher) {
+      throw new Error("VaultWatcher.start: watcher is already started");
+    }
     const root = this.vault.root;
     this.watcher = chokidar.watch(root, {
       ignored: (p: string, stats?: import("node:fs").Stats) => {
@@ -984,10 +1133,19 @@ export class VaultWatcher {
     this.watcher.on("add", (p: string) => this.onFsEvent(p, "add"));
     this.watcher.on("change", (p: string) => this.onFsEvent(p, "change"));
     this.watcher.on("unlink", (p: string) => this.onFsEvent(p, "unlink"));
+    this.watcher.on("error", this.handleNativeWatcherError);
 
-    await new Promise<void>((resolve) => {
-      this.watcher?.once("ready", () => resolve());
-    });
+    await this.waitForWatcherReady(this.watcher);
+    if (this.closing || this.closed) {
+      throw new Error("VaultWatcher.start: watcher is closing or closed");
+    }
+    // Production uses deferred activation. Chokidar is now listening, so any
+    // membership change that races this identity-only scan is captured for the
+    // activation replay; handlers cannot concurrently publish registry state.
+    if (this.deferredActivation) await this.runTrackedPhysicalAliasSeed();
+    if (this.closing || this.closed) {
+      throw new Error("VaultWatcher.start: watcher is closing or closed");
+    }
   }
 
   /**
@@ -1010,6 +1168,7 @@ export class VaultWatcher {
     return {
       dev: stat.dev,
       ino: stat.ino,
+      nlink: stat.nlink,
       size: stat.size,
       mtimeNs: stat.mtimeNs,
       ctimeNs: stat.ctimeNs,
@@ -1028,6 +1187,7 @@ export class VaultWatcher {
     return (
       left.dev === right.dev &&
       left.ino === right.ino &&
+      left.nlink === right.nlink &&
       left.size === right.size &&
       left.mtimeNs === right.mtimeNs &&
       left.ctimeNs === right.ctimeNs
@@ -1047,6 +1207,320 @@ export class VaultWatcher {
       return this.sameFileGeneration(expected, await this.captureFileGeneration(absPath));
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Resolve the watcher-private physical identity for one regular-file leaf.
+   *
+   * This method is deliberately separate from the generation guard so tests
+   * can force the conservative unavailable-identity path without weakening
+   * the `lstat → stage → lstat` proof. The identity is process-local only:
+   * zero-valued device/inode fields are not treated as a shared alias key.
+   *
+   * @param absPath - Exact admitted filesystem path.
+   * @returns A BigInt-preserving device/inode key, or null when unavailable.
+   */
+  private async physicalAliasIdentity(absPath: string): Promise<string | null> {
+    const stat = await lstat(absPath, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.dev === 0n || stat.ino === 0n) return null;
+    return `inode:${stat.dev}:${stat.ino}`;
+  }
+
+  /**
+   * Admit one live regular Markdown/PDF path for physical reconciliation.
+   *
+   * Leaf `lstat` rejects symlinks. Canonical privacy resolution additionally
+   * rejects an intermediate symlink/junction that escapes the vault. The
+   * returned path spelling is exact and is never case- or Unicode-folded.
+   *
+   * @param absPath - Exact path supplied by chokidar, activation, or inventory.
+   * @returns Live evidence, a definite purge decision, or transient retry.
+   */
+  private async inspectAliasPath(absPath: string): Promise<AliasPathInspection> {
+    const nativeRelPath = path.relative(this.vault.root, absPath);
+    if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) {
+      return { state: "purge" };
+    }
+
+    let generation: FileGeneration;
+    try {
+      generation = await this.captureFileGeneration(absPath);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("watcher source is not a regular file:")) {
+        return { state: "purge" };
+      }
+      return { state: aliasAdmissionFailure(error) };
+    }
+
+    let canonicalRel: string;
+    let canonicalAbs: string;
+    try {
+      canonicalRel = await this.vault.canonicalRelForPrivacyCheckPublic(absPath);
+      canonicalAbs = this.vault.resolveInside(canonicalRel);
+    } catch (error) {
+      return { state: aliasAdmissionFailure(error) };
+    }
+    if (this.vault.isExcluded(canonicalRel)) return { state: "purge" };
+
+    const lower = canonicalRel.toLowerCase();
+    const isPdf = lower.endsWith(".pdf");
+    if (!lower.endsWith(".md") && !(this.includePdfs && isPdf)) return { state: "purge" };
+
+    if (canonicalAbs !== absPath) {
+      try {
+        generation = await this.captureFileGeneration(canonicalAbs);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("watcher source is not a regular file:")) {
+          return { state: "purge" };
+        }
+        return { state: aliasAdmissionFailure(error) };
+      }
+    }
+
+    let physicalIdentity: string | null;
+    try {
+      physicalIdentity = await this.physicalAliasIdentity(canonicalAbs);
+    } catch {
+      // Within the configured path bound, inaccessible identity takes the
+      // serialized global fallback. Over the bound, live work logs and retains
+      // only exact/previously-known-group behavior.
+      physicalIdentity = null;
+    }
+
+    return {
+      state: "live",
+      live: {
+        absPath: canonicalAbs,
+        relPath: canonicalRel,
+        isPdf,
+        generation,
+        physicalIdentity
+      }
+    };
+  }
+
+  /**
+   * Compare two admission snapshots without normalizing path identity.
+   *
+   * @param left - Earlier planning evidence.
+   * @param right - Evidence captured under the final alias locks.
+   * @returns True only when state and every live generation field match.
+   */
+  private sameAliasInspection(left: AliasPathInspection, right: AliasPathInspection): boolean {
+    if (left.state !== right.state) return false;
+    if (left.state !== "live") return true;
+    if (right.state !== "live") return false;
+    return (
+      left.live.absPath === right.live.absPath &&
+      left.live.relPath === right.live.relPath &&
+      left.live.isPdf === right.live.isPdf &&
+      left.live.physicalIdentity === right.live.physicalIdentity &&
+      this.sameFileGeneration(left.live.generation, right.live.generation)
+    );
+  }
+
+  /**
+   * Distinguish ordinary content churn from a physical alias-membership change.
+   *
+   * Size/timestamp drift on the same path, inode, and link count needs only the
+   * caller's bounded same-mode retry. A state/path/inode/link-count change can
+   * alter which exact aliases belong to the plan and therefore requires the
+   * serialized global inventory.
+   *
+   * @param left - Earlier admission evidence.
+   * @param right - Later admission evidence.
+   * @returns No drift, generation-only drift, or membership drift.
+   */
+  private classifyAliasInspectionDrift(
+    left: AliasPathInspection,
+    right: AliasPathInspection
+  ): "none" | "generation" | "membership" {
+    if (this.sameAliasInspection(left, right)) return "none";
+    if (left.state !== "live" || right.state !== "live") return "membership";
+    return left.live.absPath === right.live.absPath &&
+      left.live.relPath === right.live.relPath &&
+      left.live.isPdf === right.live.isPdf &&
+      left.live.physicalIdentity === right.live.physicalIdentity &&
+      left.live.generation.dev === right.live.generation.dev &&
+      left.live.generation.ino === right.live.generation.ino &&
+      left.live.generation.nlink === right.live.generation.nlink
+      ? "generation"
+      : "membership";
+  }
+
+  /**
+   * Detach one exact path from its remembered physical identity.
+   *
+   * @param absPath - Exact canonical absolute path.
+   */
+  private forgetPhysicalAlias(absPath: string): void {
+    const previous = this.physicalIdentityByPath.get(absPath);
+    if (!previous) return;
+    this.physicalIdentityByPath.delete(absPath);
+    const paths = this.physicalPathsByIdentity.get(previous);
+    paths?.delete(absPath);
+    if (paths?.size === 0) this.physicalPathsByIdentity.delete(previous);
+  }
+
+  /**
+   * Attach one exact path to its latest non-null physical identity.
+   *
+   * @param absPath - Exact canonical absolute path.
+   * @param physicalIdentity - BigInt-preserving device/inode key.
+   */
+  private rememberPhysicalAlias(absPath: string, physicalIdentity: string): void {
+    this.physicalKnownPaths.add(absPath);
+    if (this.physicalIdentityByPath.get(absPath) !== physicalIdentity) {
+      this.forgetPhysicalAlias(absPath);
+      this.physicalIdentityByPath.set(absPath, physicalIdentity);
+      const paths = this.physicalPathsByIdentity.get(physicalIdentity) ?? new Set<string>();
+      paths.add(absPath);
+      this.physicalPathsByIdentity.set(physicalIdentity, paths);
+    }
+  }
+
+  /**
+   * List every currently admitted watcher path with a bounded fan-out.
+   *
+   * The vault walkers already exclude hidden/private paths and refuse
+   * directory symlinks. Each entry is still independently re-admitted here to
+   * close leaf/intermediate replacement gaps before it reaches the registry.
+   *
+   * A listed path is retained even when its second admission does not produce
+   * live evidence. A definite inadmissible result drives exact-key purge via a
+   * global plan; a transient I/O result aborts and retries without mutation.
+   *
+   * @returns Listed paths plus their independently admitted live evidence.
+   * @throws {Error} When the configured activation bound would be exceeded.
+   */
+  private async inspectVisibleAliasInventory(): Promise<VisibleAliasInventoryEntry[]> {
+    const entries = [
+      ...(await this.vault.listMarkdown()),
+      ...(this.includePdfs ? await this.vault.listFilesByExtension(".pdf") : [])
+    ];
+    if (entries.length > this.activationPathLimit) {
+      throw new PhysicalAliasInventoryLimitError(entries.length, this.activationPathLimit);
+    }
+
+    const inspected: VisibleAliasInventoryEntry[] = [];
+    for (let offset = 0; offset < entries.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      const chunk = entries.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      const results = await Promise.all(chunk.map((entry) => this.inspectAliasPath(entry.absPath)));
+      for (let index = 0; index < chunk.length; index += 1) {
+        const entry = chunk[index];
+        if (entry) {
+          inspected.push({
+            absPath: entry.absPath,
+            inspection: results[index] ?? { state: "retry" }
+          });
+        }
+      }
+    }
+    return inspected;
+  }
+
+  /**
+   * Serialize full-vault identity inventories without serializing ordinary
+   * single-link file updates.
+   *
+   * Registry membership is deliberately not mutated here: the inventory is a
+   * local planning snapshot and may be stale before the later path/group locks
+   * are acquired.
+   *
+   * @returns One bounded privacy-filtered planning snapshot.
+   */
+  private async inspectVisibleAliasInventoryInLane(): Promise<VisibleAliasInventoryEntry[]> {
+    return this.withPhysicalAliasLocks([PHYSICAL_ALIAS_INVENTORY_LOCK], () => this.inspectVisibleAliasInventory());
+  }
+
+  /**
+   * Seed process-local physical membership before live handlers can publish.
+   *
+   * This is identity-only preparation: it never reads note/PDF content and
+   * never mutates FTS5, EmbedDb, or HNSW. Production's deferred watcher is
+   * already listening and capturing paths before this scan. A stale or partial
+   * seed is only a narrowing hint because every missing origin runs a fresh
+   * bounded inventory and every later plan re-admits paths under its final
+   * locks. Failure leaves event-time bounded/degraded reconciliation intact.
+   */
+  private async seedPhysicalAliasRegistry(): Promise<void> {
+    if (!this.deferredActivation && !this.ftsIndex && !this.embedDb) return;
+    let inventory: VisibleAliasInventoryEntry[];
+    try {
+      inventory = await this.inspectVisibleAliasInventoryInLane();
+    } catch (error) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher physical-alias seed skipped — ${error instanceof Error ? error.message : String(error)}\n`
+        );
+      }
+      return;
+    }
+    if (this.closing || this.closed) return;
+
+    // No await below: close() either observes all seeded hints and clears them,
+    // or sets `closing` before this publication and the guard above returns.
+    for (const entry of inventory) {
+      if (entry.inspection.state !== "live") continue;
+      const { live } = entry.inspection;
+      this.physicalKnownPaths.add(live.absPath);
+      if (live.physicalIdentity) {
+        this.rememberPhysicalAlias(live.absPath, live.physicalIdentity);
+      }
+    }
+  }
+
+  /**
+   * Own the identity-only seed as accepted watcher work.
+   *
+   * Concurrent callers share one scan. close() waits for the same promise
+   * before clearing registry and lock state, so no filesystem work outlives
+   * the watcher lifecycle.
+   *
+   * @returns The current seed operation.
+   */
+  private async runTrackedPhysicalAliasSeed(): Promise<void> {
+    if (this.physicalAliasSeedPromise) return this.physicalAliasSeedPromise;
+    const seed = this.seedPhysicalAliasRegistry();
+    this.physicalAliasSeedPromise = seed;
+    try {
+      await seed;
+    } finally {
+      if (this.physicalAliasSeedPromise === seed) this.physicalAliasSeedPromise = null;
+    }
+  }
+
+  /**
+   * Reserve a set of physical/path locks in one synchronous event-loop turn.
+   *
+   * Every key receives the same tail before this method awaits any predecessor,
+   * so overlapping alias groups cannot partially reserve each other. Entries
+   * self-evict after the final waiter releases.
+   *
+   * @param keys - Exact path and/or physical identity lock keys.
+   * @param task - Reconciliation work protected by all keys.
+   * @returns The task result.
+   */
+  private async withPhysicalAliasLocks<T>(keys: ReadonlyArray<string>, task: () => Promise<T>): Promise<T> {
+    const uniqueKeys = [...new Set(keys)].sort();
+    const predecessors = uniqueKeys.map((key) => this.physicalAliasLockTails.get(key) ?? Promise.resolve());
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ready = Promise.all(predecessors.map((previous) => previous.catch(() => {})));
+    const tail = ready.then(() => gate);
+    for (const key of uniqueKeys) this.physicalAliasLockTails.set(key, tail);
+
+    await ready;
+    try {
+      return await task();
+    } finally {
+      release?.();
+      for (const key of uniqueKeys) {
+        if (this.physicalAliasLockTails.get(key) === tail) this.physicalAliasLockTails.delete(key);
+      }
     }
   }
 
@@ -1302,7 +1776,416 @@ export class VaultWatcher {
     }
   }
 
+  /**
+   * Drop one exact searchable path from every configured derived sink.
+   *
+   * Hardlink siblings are deliberately untouched: each directory entry is a
+   * distinct public document identity. A caller may separately refresh the
+   * remaining physical group after this synchronous purge.
+   *
+   * @param relPath - Exact public vault-relative identity to remove.
+   * @param isPdf - Whether HNSW metadata uses the PDF kind.
+   */
+  private commitUnlinkPath(relPath: string, isPdf: boolean): void {
+    this.ftsIndex?.dropFile(relPath);
+    let unlinkHnswNote = "";
+    let embedDeleteSucceeded = this.embedDb === null;
+    if (this.embedDb) {
+      try {
+        const deletedIds = this.embedDb.deleteNote(relPath);
+        embedDeleteSucceeded = true;
+        if (deletedIds.length > 0 && this.hnsw) {
+          const result = this.syncHnswForFile(relPath, isPdf ? "pdf" : "md", deletedIds, []);
+          if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
+        }
+      } catch (err) {
+        this.searchHealth.semanticUsable = false;
+        if (!this.silent) {
+          process.stderr.write(
+            `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+        }
+        if (this.activationState === "activating") throw err;
+      }
+    }
+    if (!this.silent) {
+      const embedNote = this.embedDb
+        ? embedDeleteSucceeded
+          ? " + embed-db dropped"
+          : " + embed-db QUARANTINED (delete failed)"
+        : "";
+      process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote}${unlinkHnswNote})\n`);
+    }
+  }
+
+  /**
+   * Stage one exact alias without mutating any sink.
+   *
+   * @param live - Re-admitted live path and captured generation.
+   * @returns Staged path work, or undefined after a fail-soft preparation error.
+   */
+  private async stageAliasPath(live: LiveAliasPath): Promise<StagedAliasPath | undefined> {
+    const staged = live.isPdf
+      ? await this.stagePdfGeneration(live.absPath, live.relPath, live.generation)
+      : await this.stageMarkdownGeneration(live.absPath, live.relPath, live.generation);
+    return staged === undefined ? undefined : { live, staged };
+  }
+
+  /**
+   * Commit one already-revalidated exact alias synchronously.
+   *
+   * @param prepared - Exact path plus its staged lexical/semantic work.
+   * @param kind - Diagnostic event label.
+   * @returns True after a successful sink commit.
+   */
+  private commitAliasPath(prepared: StagedAliasPath, kind: "add" | "change"): boolean {
+    const { live, staged } = prepared;
+    const commitNote = live.isPdf
+      ? this.commitPdfGeneration(live.relPath, live.generation, staged as StagedPdfGeneration)
+      : this.commitMarkdownGeneration(live.relPath, live.generation, staged as StagedMarkdownGeneration);
+    if (commitNote === undefined) return false;
+
+    if (!this.silent) {
+      const sinkLabel = live.isPdf
+        ? `fts5 PDF reindexed, ${(staged as StagedPdfGeneration).pages.length} pages`
+        : "fts5 reindexed";
+      process.stderr.write(`enquire: watcher ${kind} ${live.relPath} (${sinkLabel}${commitNote})\n`);
+    }
+    return true;
+  }
+
+  /**
+   * Reconcile one locked physical-alias plan.
+   *
+   * Every live exact path is independently admitted, staged, and revalidated.
+   * Only after all awaited work succeeds are inadmissible/stale-key purges and
+   * live-path commits performed in one no-await section. Membership drift asks
+   * the caller for a global replan; generation-only drift and transient
+   * admission failure retry without mutating any sink.
+   *
+   * @param originAbsPath - Exact event path.
+   * @param plannedEvidence - Latest pre-lock admission for every inspected path.
+   * @param paths - Exact path identities reserved by the multi-key lock.
+   * @param physicalIdentity - Stable group key, or null for bounded global fallback.
+   * @param kind - Native event kind, used only for the origin log label.
+   * @returns Terminal success, global replan, or same-mode transient retry.
+   */
+  private async applyPhysicalAliasPlan(
+    originAbsPath: string,
+    plannedEvidence: ReadonlyMap<string, AliasPathInspection>,
+    paths: ReadonlyArray<string>,
+    physicalIdentity: string | null,
+    kind: "add" | "change" | "unlink"
+  ): Promise<"done" | "global" | "retry"> {
+    const uniquePaths = [...new Set(paths)];
+    const initialEvidence = new Map<string, AliasPathInspection>();
+    const liveByCanonicalPath = new Map<string, LiveAliasPath>();
+    const inadmissiblePaths = new Set<string>();
+    const staleStoredPaths = new Set<string>();
+
+    for (let offset = 0; offset < uniquePaths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      const chunk = uniquePaths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      const inspected = await Promise.all(chunk.map((candidatePath) => this.inspectAliasPath(candidatePath)));
+      for (let index = 0; index < chunk.length; index += 1) {
+        const candidatePath = chunk[index];
+        if (!candidatePath) continue;
+        const inspection = inspected[index] ?? { state: "retry" as const };
+        initialEvidence.set(candidatePath, inspection);
+        if (inspection.state === "retry") return "retry";
+        const planned = plannedEvidence.get(candidatePath);
+        if (planned?.state === "retry") return "retry";
+        if (planned) {
+          const drift = this.classifyAliasInspectionDrift(planned, inspection);
+          if (drift === "generation") return "retry";
+          if (drift === "membership") return "global";
+        }
+        if (inspection.state === "purge") {
+          inadmissiblePaths.add(candidatePath);
+          continue;
+        }
+        const { live } = inspection;
+
+        // A stable group plan may not silently drop an unavailable or replaced
+        // sibling. Replan the complete visible set under the global lane.
+        if (physicalIdentity !== null && live.physicalIdentity !== physicalIdentity) return "global";
+
+        if (candidatePath !== live.absPath) staleStoredPaths.add(candidatePath);
+        const existing = liveByCanonicalPath.get(live.absPath);
+        if (existing) {
+          const drift = this.classifyAliasInspectionDrift({ state: "live", live: existing }, { state: "live", live });
+          if (drift === "generation") return "retry";
+          if (drift === "membership") return "global";
+        }
+        liveByCanonicalPath.set(live.absPath, live);
+      }
+    }
+
+    const stagedPaths: StagedAliasPath[] = [];
+    for (const live of liveByCanonicalPath.values()) {
+      const staged = await this.stageAliasPath(live);
+      if (!staged) return "done";
+      stagedPaths.push(staged);
+    }
+
+    // Revalidate every originally-reserved spelling, including paths that were
+    // missing during preparation. This closes stale-unlink recreation and
+    // case-only canonicalization gaps before the no-await publication block.
+    for (let offset = 0; offset < uniquePaths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      const chunk = uniquePaths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      const inspected = await Promise.all(chunk.map((candidatePath) => this.inspectAliasPath(candidatePath)));
+      for (let index = 0; index < chunk.length; index += 1) {
+        const candidatePath = chunk[index];
+        if (!candidatePath) continue;
+        const expected = initialEvidence.get(candidatePath) ?? { state: "retry" as const };
+        const current = inspected[index] ?? { state: "retry" as const };
+        if (current.state === "retry") return "retry";
+        if (expected.state === "retry") return "retry";
+        const drift = this.classifyAliasInspectionDrift(expected, current);
+        if (drift === "generation") return "retry";
+        if (drift === "membership") return "global";
+      }
+    }
+
+    // Successful publication begins here. Keep this block free of await: every
+    // alias has completed preparation and final generation validation.
+    for (const purgePath of new Set([...inadmissiblePaths, ...staleStoredPaths])) {
+      const relPath = this.vault.toRel(purgePath);
+      const isPdf = relPath.toLowerCase().endsWith(".pdf");
+      if (!isPdf) this.vault.invalidateOne(purgePath);
+      this.commitUnlinkPath(relPath, isPdf);
+      this.forgetPhysicalAlias(purgePath);
+      this.physicalKnownPaths.delete(purgePath);
+    }
+    for (const prepared of stagedPaths) {
+      const eventKind = prepared.live.absPath === originAbsPath && kind !== "unlink" ? kind : ("change" as const);
+      if (!this.commitAliasPath(prepared, eventKind)) return "done";
+      if (prepared.live.physicalIdentity) {
+        this.rememberPhysicalAlias(prepared.live.absPath, prepared.live.physicalIdentity);
+      } else {
+        this.forgetPhysicalAlias(prepared.live.absPath);
+        this.physicalKnownPaths.add(prepared.live.absPath);
+      }
+    }
+    return "done";
+  }
+
+  /**
+   * Preserve exact/previously-known watcher behavior when a live vault exceeds
+   * the configured full-inventory bound.
+   *
+   * This is an explicitly degraded path, not proof that every unobserved
+   * hardlink converged. Guarded activation never uses it.
+   *
+   * @param originAbsPath - Exact event path.
+   * @param plannedEvidence - Admission evidence already captured this attempt.
+   * @param knownGroup - Previously observed members of the same physical key.
+   * @param origin - Current live origin, when present.
+   * @param physicalIdentity - Stable scheduling key, or null when unavailable.
+   * @param kind - Native event kind.
+   * @param observedCount - Inventory or planned path count that exceeded the cap.
+   * @returns Terminal success, global retry, or transient retry.
+   */
+  private async applyBoundedPhysicalAliasFallback(
+    originAbsPath: string,
+    plannedEvidence: ReadonlyMap<string, AliasPathInspection>,
+    knownGroup: ReadonlySet<string> | undefined,
+    origin: LiveAliasPath | null,
+    physicalIdentity: string | null,
+    kind: "add" | "change" | "unlink",
+    observedCount: number
+  ): Promise<"done" | "global" | "retry"> {
+    const boundedPaths = [...new Set([...(knownGroup ?? []), originAbsPath, ...(origin ? [origin.absPath] : [])])];
+    if (boundedPaths.length > this.activationPathLimit) {
+      throw new PhysicalAliasInventoryLimitError(observedCount, this.activationPathLimit);
+    }
+    const lockIdentity = physicalIdentity ?? PHYSICAL_ALIAS_UNKNOWN_LOCK;
+    const lockKeys = [lockIdentity, ...boundedPaths.map((candidatePath) => `path:${candidatePath}`)];
+    const result = await this.withPhysicalAliasLocks(lockKeys, () =>
+      this.applyPhysicalAliasPlan(originAbsPath, plannedEvidence, boundedPaths, physicalIdentity, kind)
+    );
+    if (result === "done" && !this.silent) {
+      process.stderr.write(
+        `enquire: watcher physical-alias inventory/plan exceeded ${this.activationPathLimit} paths (${observedCount} observed); full alias discovery was skipped and this event was limited to the exact/previously-known group\n`
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Reconcile one native event through physical-alias scheduling.
+   *
+   * Stable `dev+ino` identities fan out only to independently re-admitted
+   * exact paths. A multi-link source triggers a complete privacy-filtered
+   * inventory because filesystems provide no reverse inode-to-path lookup.
+   * Within the configured path bound, unknown identity takes one serialized
+   * global lane and reconciles every visible watcher path. Above the bound,
+   * ordinary live work logs and preserves only exact/previously-known-group
+   * behavior; guarded activation rejects an over-limit required plan.
+   *
+   * @param absPath - Exact event path.
+   * @param kind - Native event kind; final disk state remains authoritative.
+   */
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
+    if (this.closed) return;
+    const eventPath = this.canonicalWatcherEventPath(absPath);
+    if (eventPath === null) return;
+    const nativeRelPath = path.relative(this.vault.root, eventPath);
+    if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) return;
+    const lower = nativeRelPath.toLowerCase();
+    if (!lower.endsWith(".md") && !(this.includePdfs && lower.endsWith(".pdf"))) return;
+
+    // Preserve the historical cache-only/logging path without paying for a
+    // physical inventory when no derived sink exists.
+    if (!this.ftsIndex && !this.embedDb) {
+      await this.handleExactPath(eventPath, kind);
+      return;
+    }
+
+    try {
+      let forceGlobal = false;
+      for (let attempt = 0; attempt < PHYSICAL_ALIAS_ATTEMPTS; attempt += 1) {
+        const originInspection = await this.inspectAliasPath(eventPath);
+        if (originInspection.state === "retry") {
+          if (attempt + 1 < PHYSICAL_ALIAS_ATTEMPTS) continue;
+          throw new Error("physical alias admission remained uncertain during both reconciliation attempts");
+        }
+        const origin = originInspection.state === "live" ? originInspection.live : null;
+        const rememberedIdentity =
+          this.physicalIdentityByPath.get(eventPath) ??
+          (origin && origin.absPath !== eventPath ? this.physicalIdentityByPath.get(origin.absPath) : undefined);
+        let physicalIdentity = origin?.physicalIdentity ?? rememberedIdentity ?? null;
+        let paths: string[];
+        const plannedEvidence = new Map<string, AliasPathInspection>([[eventPath, originInspection]]);
+
+        const knownGroup = physicalIdentity === null ? undefined : this.physicalPathsByIdentity.get(physicalIdentity);
+        const needsInventory =
+          forceGlobal ||
+          origin === null ||
+          origin.physicalIdentity === null ||
+          origin.generation.nlink > 1n ||
+          (knownGroup?.size ?? 0) > 1;
+
+        if (needsInventory) {
+          let inventory: VisibleAliasInventoryEntry[];
+          try {
+            inventory = await this.inspectVisibleAliasInventoryInLane();
+          } catch (error) {
+            if (!(error instanceof PhysicalAliasInventoryLimitError) || this.activationState === "activating") {
+              throw error;
+            }
+            const fallbackResult = await this.applyBoundedPhysicalAliasFallback(
+              eventPath,
+              plannedEvidence,
+              knownGroup,
+              origin,
+              physicalIdentity,
+              kind,
+              error.count
+            );
+            if (fallbackResult === "done") {
+              return;
+            }
+            if (fallbackResult === "global") forceGlobal = true;
+            continue;
+          }
+          if (inventory.some((entry) => entry.inspection.state === "retry")) {
+            if (attempt + 1 < PHYSICAL_ALIAS_ATTEMPTS) continue;
+            throw new Error("physical alias inventory remained uncertain during both reconciliation attempts");
+          }
+          let planningGenerationDrifted = false;
+          let planningMembershipDrifted = false;
+          for (const entry of inventory) {
+            const previous = plannedEvidence.get(entry.absPath);
+            if (previous) {
+              const drift = this.classifyAliasInspectionDrift(previous, entry.inspection);
+              if (drift === "generation") planningGenerationDrifted = true;
+              if (drift === "membership") planningMembershipDrifted = true;
+            }
+            plannedEvidence.set(entry.absPath, entry.inspection);
+          }
+          if (planningMembershipDrifted) {
+            forceGlobal = true;
+            continue;
+          }
+          if (planningGenerationDrifted) continue;
+          const uncertainInventory = inventory.some(
+            (entry) => entry.inspection.state !== "live" || entry.inspection.live.physicalIdentity === null
+          );
+          if (forceGlobal || origin?.physicalIdentity === null || physicalIdentity === null || uncertainInventory) {
+            physicalIdentity = null;
+            paths = [
+              ...new Set([
+                ...inventory.map((entry) => entry.absPath),
+                ...this.physicalKnownPaths,
+                ...this.physicalIdentityByPath.keys(),
+                eventPath,
+                ...(origin ? [origin.absPath] : [])
+              ])
+            ];
+          } else {
+            paths = [
+              ...new Set([
+                ...(knownGroup ?? []),
+                ...inventory
+                  .filter(
+                    (entry) =>
+                      entry.inspection.state === "live" && entry.inspection.live.physicalIdentity === physicalIdentity
+                  )
+                  .map((entry) => entry.absPath),
+                eventPath,
+                ...(origin ? [origin.absPath] : [])
+              ])
+            ];
+          }
+        } else if (physicalIdentity !== null) {
+          paths = [...new Set([...(knownGroup ?? []), eventPath, ...(origin ? [origin.absPath] : [])])];
+        } else {
+          // Defensive fallback: needsInventory is true for every missing or
+          // null-identity origin, so a null identity should not reach here.
+          forceGlobal = true;
+          continue;
+        }
+
+        if (paths.length > this.activationPathLimit) {
+          if (this.activationState === "activating") {
+            throw new PhysicalAliasInventoryLimitError(paths.length, this.activationPathLimit);
+          }
+          const fallbackResult = await this.applyBoundedPhysicalAliasFallback(
+            eventPath,
+            plannedEvidence,
+            knownGroup,
+            origin,
+            physicalIdentity,
+            kind,
+            paths.length
+          );
+          if (fallbackResult === "done") return;
+          if (fallbackResult === "global") forceGlobal = true;
+          continue;
+        }
+        const lockIdentity = physicalIdentity ?? PHYSICAL_ALIAS_UNKNOWN_LOCK;
+        const lockKeys = [lockIdentity, ...paths.map((candidatePath) => `path:${candidatePath}`)];
+        const result = await this.withPhysicalAliasLocks(lockKeys, () =>
+          this.applyPhysicalAliasPlan(eventPath, plannedEvidence, paths, physicalIdentity, kind)
+        );
+        if (result === "done") return;
+        if (result === "global") forceGlobal = true;
+      }
+
+      throw new Error("physical alias membership or source generation changed during both reconciliation attempts");
+    } catch (err) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher physical-alias reconciliation failed for ${this.vault.toRel(eventPath)} (${kind}) — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+      if (this.activationState === "activating") throw err;
+    }
+  }
+
+  private async handleExactPath(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
     // v3.10.0-rc.40 (#6) — a chokidar event that slipped through after close() began
     // must not mutate embed-db/HNSW post-drain (belt-and-suspenders to the onChange
     // guard + the watcher being stopped first in close()).
@@ -1352,47 +2235,7 @@ export class VaultWatcher {
     }
 
     if (kind === "unlink") {
-      this.ftsIndex?.dropFile(relPath);
-      // v3.8.0-rc.2 R-7 — also drop embed-db rows so search results
-      // don't surface vectors for deleted notes.
-      // v3.8.0-rc.3 R-7 — extended to PDFs (rc.2 was md-only).
-      // v3.9.0-rc.2 — propagate the deletion to the in-memory HNSW
-      // index too via syncHnswForFile (with empty newRows = pure-delete
-      // diff). Pre-3.9.0 HNSW retained deleted-file labels until next
-      // serve restart; semantic-search results would surface vectors
-      // for files no longer in the vault.
-      let unlinkHnswNote = "";
-      let embedDeleteSucceeded = this.embedDb === null;
-      if (this.embedDb) {
-        try {
-          const deletedIds = this.embedDb.deleteNote(relPath);
-          embedDeleteSucceeded = true;
-          if (deletedIds.length > 0 && this.hnsw) {
-            // v3.9.0-rc.11 (L2) — pass the correct kind for PDF unlinks (was
-            // hardcoded "md"). Cosmetic on a pure-delete diff today since no
-            // new rows are set, but correct + future-proof if the delete path
-            // ever records kind.
-            const result = this.syncHnswForFile(relPath, isPdf ? "pdf" : "md", deletedIds, []);
-            if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
-          }
-        } catch (err) {
-          this.searchHealth.semanticUsable = false;
-          if (!this.silent) {
-            process.stderr.write(
-              `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
-            );
-          }
-          if (this.activationState === "activating") throw err;
-        }
-      }
-      if (!this.silent) {
-        const embedNote = this.embedDb
-          ? embedDeleteSucceeded
-            ? " + embed-db dropped"
-            : " + embed-db QUARANTINED (delete failed)"
-          : "";
-        process.stderr.write(`enquire: watcher unlink ${relPath} (fts5 dropped${embedNote}${unlinkHnswNote})\n`);
-      }
+      this.commitUnlinkPath(relPath, isPdf);
       return;
     }
 
@@ -1458,6 +2301,7 @@ export class VaultWatcher {
     // Reject new native events synchronously. Accepted handlers deliberately
     // keep running while `closing` is true; only `closed` makes handle() stop.
     this.closing = true;
+    this.watcherReadyReject?.(new Error("VaultWatcher.start: watcher is closing or closed"));
     this.closePromise = (async () => {
       let watcherCloseError: unknown;
       let watcherCloseFailed = false;
@@ -1465,15 +2309,25 @@ export class VaultWatcher {
         // v3.10.0-rc.40 (#6) — stop chokidar before draining so no new
         // event can enter the queue during the flush window.
         if (this.watcher) {
+          const nativeWatcher = this.watcher;
           try {
-            await this.watcher.close();
+            await nativeWatcher.close();
           } catch (err) {
             // Keep draining accepted work even if the native watcher reports
             // a close failure; surface that failure only after cleanup.
             watcherCloseError = err;
             watcherCloseFailed = true;
           }
+          nativeWatcher.off("error", this.handleNativeWatcherError);
           this.watcher = null;
+        }
+        let seedError: unknown;
+        if (this.physicalAliasSeedPromise) {
+          try {
+            await this.physicalAliasSeedPromise;
+          } catch (err) {
+            seedError = err;
+          }
         }
         let activationError: unknown;
         if (this.activationPromise) {
@@ -1493,9 +2347,16 @@ export class VaultWatcher {
           await this.flushHnswToDisk();
         }
         if (activationError !== undefined) throw activationError;
+        if (seedError !== undefined) throw seedError;
       } finally {
         this.activationPaths.clear();
         this.activationStoredIdentities.clear();
+        this.physicalIdentityByPath.clear();
+        this.physicalPathsByIdentity.clear();
+        this.physicalKnownPaths.clear();
+        this.physicalAliasLockTails.clear();
+        this.physicalAliasSeedPromise = null;
+        this.watcherReadyReject = null;
         this.closed = true;
       }
       if (watcherCloseFailed) throw watcherCloseError;

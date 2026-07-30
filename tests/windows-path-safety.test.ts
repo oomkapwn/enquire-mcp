@@ -18,6 +18,7 @@ let outside: string;
 const WATCHER_STATE_TIMEOUT_MS = 10_000;
 const WATCHER_STABLE_WINDOW_MS = 1_200;
 const WATCHER_POLL_MS = 75;
+const DEFERRED_BARRIER_TIMEOUT_MS = 5_000;
 
 const watcherEmbedder = {
   model: {
@@ -56,13 +57,16 @@ interface WindowsWatcherSnapshot {
   embedAudit: ReturnType<EmbedDb["auditKind"]>;
 }
 
-async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise<WindowsWatcherFixture> {
-  const vault = new Vault(root);
+async function seedWindowsWatcherFixture(
+  notes: Record<string, string>,
+  options: { activationPathLimit?: number; configuredRoot?: string } = {}
+): Promise<WindowsWatcherFixture> {
+  const vault = new Vault(options.configuredRoot ?? root);
   await vault.ensureExists();
-  const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: root });
+  const fts = new FtsIndex({ file: path.join(outside, "watcher.fts5.db"), vaultRoot: vault.root });
   const embedDb = new EmbedDb({
     file: path.join(outside, "watcher.embed.db"),
-    vaultRoot: root,
+    vaultRoot: vault.root,
     modelAlias: watcherEmbedder.model.alias,
     dim: watcherEmbedder.model.dim,
     quantization: "f32"
@@ -72,7 +76,7 @@ async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise
     await embedDb.open();
 
     for (const [relPath, content] of Object.entries(notes)) {
-      const absPath = path.join(root, ...relPath.split("/"));
+      const absPath = vault.resolveInside(relPath);
       await fs.mkdir(path.dirname(absPath), { recursive: true });
       await fs.writeFile(absPath, content);
       const stat = await fs.stat(absPath);
@@ -126,7 +130,12 @@ async function seedWindowsWatcherFixture(notes: Record<string, string>): Promise
       resize: () => {},
       capacity: () => ({ currentCount: hnswLabels.size, maxElements: Number.MAX_SAFE_INTEGER })
     };
-    const watcher = new VaultWatcher({ vault, ftsIndex: fts, silent: true });
+    const watcher = new VaultWatcher({
+      vault,
+      ftsIndex: fts,
+      silent: true,
+      ...(options.activationPathLimit !== undefined ? { activationPathLimit: options.activationPathLimit } : {})
+    });
     watcher.attachEmbed(embedDb, watcherEmbedder, 0);
     watcher.attachHnsw(hnsw, hnswRowsByLabel);
     return { vault, fts, embedDb, watcher, reindexedPaths, hnswLabels, hnswRowsByLabel };
@@ -176,6 +185,18 @@ function markerPaths(paths: Record<string, string[]>, marker: string): string[] 
   return paths[marker] ?? [];
 }
 
+function markerPathsInHnsw(snapshot: WindowsWatcherSnapshot, marker: string): string[] {
+  return [
+    ...new Set(snapshot.hnswRows.filter((row) => row.textPreview.includes(marker)).map((row) => row.relPath))
+  ].sort();
+}
+
+function expectMarkerPaths(snapshot: WindowsWatcherSnapshot, marker: string, expected: readonly string[]): void {
+  expect(markerPaths(snapshot.ftsByMarker, marker), `FTS paths for ${marker}`).toEqual(expected);
+  expect(markerPaths(snapshot.embedByMarker, marker), `EmbedDb paths for ${marker}`).toEqual(expected);
+  expect(markerPathsInHnsw(snapshot, marker), `HNSW paths for ${marker}`).toEqual(expected);
+}
+
 async function waitForStableWindowsWatcherState(
   observe: () => Promise<WindowsWatcherSnapshot>,
   expected: (snapshot: WindowsWatcherSnapshot) => boolean
@@ -206,6 +227,42 @@ function watcherAuditsMatch(snapshot: WindowsWatcherSnapshot, expectedFiles: num
     JSON.stringify(snapshot.hnswLabels) === JSON.stringify(snapshot.embedRows.map((row) => row.label)) &&
     JSON.stringify(snapshot.hnswRows) === JSON.stringify(snapshot.embedRows)
   );
+}
+
+async function enqueueWatcherEvent(
+  watcher: VaultWatcher,
+  absPath: string,
+  kind: "add" | "change" | "unlink"
+): Promise<void> {
+  await (
+    watcher as unknown as {
+      enqueueFileEvent(pathToFile: string, eventKind: "add" | "change" | "unlink"): Promise<void>;
+    }
+  ).enqueueFileEvent(absPath, kind);
+}
+
+async function writeWithLaterMtime(absPath: string, content: string): Promise<void> {
+  const before = await fs.stat(absPath);
+  await fs.writeFile(absPath, content);
+  const nextMtime = new Date(Math.max(Date.now(), before.mtimeMs) + 60_000);
+  await fs.utimes(absPath, nextMtime, nextMtime);
+}
+
+async function awaitDeferredBarrier(barrier: Promise<void>, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      barrier,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out waiting for deterministic test barrier: ${label}`)),
+          DEFERRED_BARRIER_TIMEOUT_MS
+        );
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function closeWindowsWatcherFixture(
@@ -244,6 +301,1112 @@ afterEach(async () => {
   }
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(outside, { recursive: true, force: true });
+});
+
+describe("VaultWatcher physical-alias convergence (S-8e)", () => {
+  it("fans out a hardlink event, unlinks one name, and separates a replacement inode", async (ctx) => {
+    const probeSource = path.join(root, ".hardlink-probe-source");
+    const probeAlias = path.join(root, ".hardlink-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const configuredRootAlias = path.join(outside, "ConfiguredWatcherVault");
+    await fs.symlink(root, configuredRootAlias, "junction");
+    const fixture = await seedWindowsWatcherFixture(
+      {
+        "Primary.md": "# Shared\n\nhardlinkoldmarker\n",
+        "Alias.md": "# Shared\n\nhardlinkoldmarker\n",
+        "Keep.md": "# Keep\n\nhardlinkkeepmarker\n"
+      },
+      { configuredRoot: configuredRootAlias }
+    );
+    const primaryPath = path.join(root, "Primary.md");
+    const aliasPath = path.join(root, "Alias.md");
+    const configuredPrimaryPath = path.join(configuredRootAlias, "Primary.md");
+    const configuredAliasPath = path.join(configuredRootAlias, "Alias.md");
+    const outsideEventPath = path.join(outside, "Outside.md");
+    const markers = [
+      "hardlinkoldmarker",
+      "hardlinknewmarker",
+      "hardlinklatestmarker",
+      "hardlinkreplacementmarker",
+      "hardlinkkeepmarker",
+      "hardlinkoutsidemarker"
+    ] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      enqueueFileTask(
+        absPath: string,
+        context: string,
+        task: () => Promise<void>,
+        propagateFailure?: boolean
+      ): Promise<void>;
+    };
+    const enqueueSpy = vi.spyOn(watcherInternals, "enqueueFileTask");
+
+    try {
+      await fs.unlink(aliasPath);
+      await fs.link(primaryPath, aliasPath);
+      const [primaryStat, aliasStat] = await Promise.all([
+        fs.lstat(primaryPath, { bigint: true }),
+        fs.lstat(aliasPath, { bigint: true })
+      ]);
+      expect(primaryStat.isFile()).toBe(true);
+      expect(aliasStat.isFile()).toBe(true);
+      expect(primaryStat.isSymbolicLink()).toBe(false);
+      expect(aliasStat.isSymbolicLink()).toBe(false);
+      expect(aliasStat.dev).toBe(primaryStat.dev);
+      expect(aliasStat.ino).toBe(primaryStat.ino);
+      expect(primaryStat.nlink).toBeGreaterThanOrEqual(2n);
+      if (process.platform === "linux") expect(primaryStat.ino).not.toBe(0n);
+
+      await writeWithLaterMtime(primaryPath, "# Shared\n\nhardlinknewmarker is visible through both physical names.\n");
+      await expect(fs.readFile(aliasPath, "utf8")).resolves.toContain("hardlinknewmarker");
+
+      // NEGATIVE setup: both paths already expose the new bytes, but no watcher
+      // event has run, so every derived sink must still hold the old generation.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(beforeEvent, "hardlinkoldmarker", ["Alias.md", "Primary.md"]);
+      expectMarkerPaths(beforeEvent, "hardlinknewmarker", []);
+      expect(watcherAuditsMatch(beforeEvent, 3)).toBe(true);
+
+      // NEGATIVE control: an outside path is rejected before it can acquire a
+      // per-file queue key or surface content in any derived sink.
+      await fs.writeFile(outsideEventPath, "# Outside\n\nhardlinkoutsidemarker\n");
+      const queueCallsBeforeOutside = enqueueSpy.mock.calls.length;
+      await enqueueWatcherEvent(fixture.watcher, outsideEventPath, "change");
+      expect(enqueueSpy.mock.calls).toHaveLength(queueCallsBeforeOutside);
+      expectMarkerPaths(await snapshotWindowsWatcherState(fixture, markers), "hardlinkoutsidemarker", []);
+      expect(fixture.reindexedPaths).toEqual([]);
+
+      // POSITIVE control: the event arrives through the configured junction,
+      // while queueing and every searchable identity use the canonical root.
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "change");
+      expect(enqueueSpy.mock.calls.at(-1)?.[0]).toBe(fixture.vault.resolveInside("Primary.md"));
+      if (process.platform === "win32") {
+        const rootPrefix = path.parse(fixture.vault.root).root;
+        const rootRemainder = fixture.vault.root.slice(rootPrefix.length);
+        const caseVariantRoot = `${rootPrefix}${rootRemainder.replace(/[A-Za-z]/u, (letter) =>
+          letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase()
+        )}`;
+        expect(caseVariantRoot).not.toBe(fixture.vault.root);
+        const queueCallsBeforeCaseVariant = enqueueSpy.mock.calls.length;
+        await enqueueWatcherEvent(fixture.watcher, path.join(caseVariantRoot, "Primary.md"), "change");
+        expect(enqueueSpy.mock.calls).toHaveLength(queueCallsBeforeCaseVariant + 1);
+        expect(enqueueSpy.mock.calls.at(-1)?.[0]).toBe(fixture.vault.resolveInside("Primary.md"));
+      }
+
+      const afterSharedChange = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(afterSharedChange, "hardlinkoldmarker", []);
+      expectMarkerPaths(afterSharedChange, "hardlinknewmarker", ["Alias.md", "Primary.md"]);
+      expectMarkerPaths(afterSharedChange, "hardlinkkeepmarker", ["Keep.md"]);
+      const [currentPrimaryStat, currentAliasStat, keepStat] = await Promise.all(
+        [primaryPath, aliasPath, path.join(root, "Keep.md")].map((p) => fs.lstat(p, { bigint: true }))
+      );
+      const identityNarrowsToHardlinks =
+        [currentPrimaryStat, currentAliasStat, keepStat].every((stat) => stat.dev !== 0n && stat.ino !== 0n) &&
+        (keepStat.dev !== currentPrimaryStat.dev || keepStat.ino !== currentPrimaryStat.ino);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(
+        identityNarrowsToHardlinks ? ["Alias.md", "Primary.md"] : ["Alias.md", "Keep.md", "Primary.md"]
+      );
+      expect(watcherAuditsMatch(afterSharedChange, 3)).toBe(true);
+
+      await fs.unlink(primaryPath);
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "unlink");
+
+      const afterPrimaryUnlink = await snapshotWindowsWatcherState(fixture, markers);
+      expect(afterPrimaryUnlink.diskNames).not.toContain("Primary.md");
+      expectMarkerPaths(afterPrimaryUnlink, "hardlinknewmarker", ["Alias.md"]);
+      expect(afterPrimaryUnlink.embedPaths).toEqual(["Alias.md", "Keep.md"]);
+      expect(watcherAuditsMatch(afterPrimaryUnlink, 2)).toBe(true);
+
+      // Reusing the exact pathname creates a new inode. The old Alias.md group
+      // must not pull this replacement into later physical-alias fan-out.
+      await fs.writeFile(
+        primaryPath,
+        "# Replacement\n\nhardlinkreplacementmarker belongs only to the replacement inode.\n"
+      );
+      await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "add");
+      await writeWithLaterMtime(
+        aliasPath,
+        "# Shared\n\nhardlinklatestmarker belongs only to the surviving hardlink inode.\n"
+      );
+      await enqueueWatcherEvent(fixture.watcher, configuredAliasPath, "change");
+
+      const afterReplacement = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(afterReplacement, "hardlinknewmarker", []);
+      expectMarkerPaths(afterReplacement, "hardlinklatestmarker", ["Alias.md"]);
+      expectMarkerPaths(afterReplacement, "hardlinkreplacementmarker", ["Primary.md"]);
+      expectMarkerPaths(afterReplacement, "hardlinkkeepmarker", ["Keep.md"]);
+      expect(afterReplacement.embedPaths).toEqual(["Alias.md", "Keep.md", "Primary.md"]);
+      expect(watcherAuditsMatch(afterReplacement, 3)).toBe(true);
+    } finally {
+      enqueueSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture, [configuredRootAlias]);
+    }
+  });
+
+  it("refreshes the surviving alias when the first observed event is unlink", async (ctx) => {
+    const probeSource = path.join(root, ".unlink-first-probe-source");
+    const probeAlias = path.join(root, ".unlink-first-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\nunlinkfirstoldmarker\n",
+      "B.md": "# Shared\n\nunlinkfirstoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = ["unlinkfirstoldmarker", "unlinkfirstnewmarker"] as const;
+
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      await writeWithLaterMtime(aPath, "# Shared\n\nunlinkfirstnewmarker survives through B.\n");
+      await fs.unlink(aPath);
+      await expect(fs.readFile(bPath, "utf8")).resolves.toContain("unlinkfirstnewmarker");
+
+      // NEGATIVE control: the only surviving directory entry already exposes
+      // the new bytes, while all three derived sinks still expose both old rows.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expect(beforeEvent.diskNames).toEqual(["B.md"]);
+      expectMarkerPaths(beforeEvent, "unlinkfirstoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvent, "unlinkfirstnewmarker", []);
+
+      // Model a coalesced native stream whose first and only observation is the
+      // unlink. No earlier change event may prime the physical-alias registry.
+      await enqueueWatcherEvent(fixture.watcher, aPath, "unlink");
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "unlinkfirstoldmarker", []);
+      expectMarkerPaths(reconciled, "unlinkfirstnewmarker", ["B.md"]);
+      expect(reconciled.embedPaths).toEqual(["B.md"]);
+      expect([...new Set(fixture.reindexedPaths)]).toEqual(["B.md"]);
+      expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
+    } finally {
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("replans when a new hardlink appears after missing-origin inventory", async (ctx) => {
+    const probeSource = path.join(root, ".post-inventory-link-probe-source");
+    const probeAlias = path.join(root, ".post-inventory-link-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\npostinventoryoldmarker\n",
+      "B.md": "# Shared\n\npostinventoryoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const cPath = path.join(root, "C.md");
+    const markers = ["postinventoryoldmarker", "postinventorynewmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+    };
+    const originalInventory = watcherInternals.inspectVisibleAliasInventoryInLane.bind(fixture.watcher);
+    let createdC = false;
+    const inventorySpy = vi
+      .spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane")
+      .mockImplementation(async () => {
+        const inventory = await originalInventory();
+        if (!createdC) {
+          await fs.link(bPath, cPath);
+          createdC = true;
+        }
+        return inventory;
+      });
+
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      await writeWithLaterMtime(aPath, "# Shared\n\npostinventorynewmarker\n");
+      await fs.unlink(aPath);
+
+      // NEGATIVE control: the first missing-origin inventory can only observe
+      // B. C does not exist until that exact snapshot has resolved, while the
+      // sinks still retain the old A/B generation.
+      expect(await fs.stat(cPath).catch(() => null)).toBeNull();
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expect(beforeEvent.diskNames).toEqual(["B.md"]);
+      expectMarkerPaths(beforeEvent, "postinventoryoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvent, "postinventorynewmarker", []);
+
+      await enqueueWatcherEvent(fixture.watcher, aPath, "unlink");
+
+      expect(createdC, "C must be created after the first inventory snapshot and before path locks").toBe(true);
+      expect(inventorySpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      const [bStat, cStat] = await Promise.all([fs.lstat(bPath, { bigint: true }), fs.lstat(cPath, { bigint: true })]);
+      expect(bStat.dev).toBe(cStat.dev);
+      expect(bStat.ino).toBe(cStat.ino);
+      expect(bStat.nlink).toBeGreaterThanOrEqual(2n);
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "postinventoryoldmarker", []);
+      expectMarkerPaths(reconciled, "postinventorynewmarker", ["B.md", "C.md"]);
+      expect(reconciled.embedPaths).toEqual(["B.md", "C.md"]);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["B.md", "C.md"]);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+    } finally {
+      inventorySpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("upserts a missing origin recreated while its surviving alias is staged", async (ctx) => {
+    const probeSource = path.join(root, ".recreated-origin-probe-source");
+    const probeAlias = path.join(root, ".recreated-origin-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\nrecreatedoriginoldmarker\n",
+      "B.md": "# Shared\n\nrecreatedoriginoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = ["recreatedoriginoldmarker", "recreatedoriginnewmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      stageAliasPath(live: { absPath: string; relPath: string }): Promise<unknown>;
+    };
+
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      // Prime the physical group before A disappears. The tested event below
+      // remains a single unlink whose plan includes surviving B.
+      await enqueueWatcherEvent(fixture.watcher, aPath, "change");
+      fixture.reindexedPaths.length = 0;
+      await fs.unlink(aPath);
+
+      // NEGATIVE control: A is absent on disk but still present in every sink;
+      // the replacement generation does not exist before the unlink handler.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expect(beforeEvent.diskNames).toEqual(["B.md"]);
+      expectMarkerPaths(beforeEvent, "recreatedoriginoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvent, "recreatedoriginnewmarker", []);
+
+      const originalStageAliasPath = watcherInternals.stageAliasPath.bind(fixture.watcher);
+      let recreated = false;
+      const stageSpy = vi.spyOn(watcherInternals, "stageAliasPath").mockImplementation(async (live) => {
+        const staged = await originalStageAliasPath(live);
+        if (!recreated && live.relPath === "B.md") {
+          const survivingStat = await fs.stat(bPath);
+          await fs.writeFile(aPath, "# Replacement\n\nrecreatedoriginnewmarker\n");
+          const replacementMtime = new Date(Math.max(Date.now(), survivingStat.mtimeMs) + 180_000);
+          await fs.utimes(aPath, replacementMtime, replacementMtime);
+          recreated = true;
+        }
+        return staged;
+      });
+      try {
+        await enqueueWatcherEvent(fixture.watcher, aPath, "unlink");
+      } finally {
+        stageSpy.mockRestore();
+      }
+
+      expect(recreated, "the controlled origin recreation must execute during B staging").toBe(true);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
+      expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "recreatedoriginoldmarker", ["B.md"]);
+      expectMarkerPaths(reconciled, "recreatedoriginnewmarker", ["A.md"]);
+      expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
+      expect(fixture.reindexedPaths).toContain("A.md");
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+    } finally {
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("replans when alias membership changes before the plan lock", async (ctx) => {
+    const probeSource = path.join(root, ".prelock-race-probe-source");
+    const probeAlias = path.join(root, ".prelock-race-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\nprelockraceoldmarker\n",
+      "B.md": "# Shared\n\nprelockraceoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = ["prelockraceoldmarker", "prelockracegroupmarker", "prelockracereplacementmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+    };
+    const originalInventory = watcherInternals.inspectVisibleAliasInventoryInLane.bind(fixture.watcher);
+    let replaced = false;
+    const inventorySpy = vi
+      .spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane")
+      .mockImplementation(async () => {
+        if (!replaced) {
+          const oldBStat = await fs.stat(bPath);
+          await fs.unlink(bPath);
+          await fs.writeFile(bPath, "# Replacement\n\nprelockracereplacementmarker\n");
+          const replacementMtime = new Date(Math.max(Date.now(), oldBStat.mtimeMs) + 120_000);
+          await fs.utimes(bPath, replacementMtime, replacementMtime);
+          replaced = true;
+        }
+        return originalInventory();
+      });
+
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      await writeWithLaterMtime(aPath, "# Shared\n\nprelockracegroupmarker\n");
+      await expect(fs.readFile(bPath, "utf8")).resolves.toContain("prelockracegroupmarker");
+
+      // NEGATIVE control: origin inspection will observe the two-link
+      // generation, while every sink still holds the old bytes. The spy changes
+      // B only after handle() enters the pre-lock inventory seam.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(beforeEvent, "prelockraceoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvent, "prelockracegroupmarker", []);
+      expectMarkerPaths(beforeEvent, "prelockracereplacementmarker", []);
+
+      await enqueueWatcherEvent(fixture.watcher, aPath, "change");
+
+      expect(inventorySpy).toHaveBeenCalled();
+      expect(replaced, "the controlled membership change must execute inside pre-lock planning").toBe(true);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
+      expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "prelockraceoldmarker", []);
+      expectMarkerPaths(reconciled, "prelockracegroupmarker", ["A.md"]);
+      expectMarkerPaths(reconciled, "prelockracereplacementmarker", ["B.md"]);
+      expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+    } finally {
+      inventorySpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("reconciles a non-origin alias replaced during fan-out", async (ctx) => {
+    const probeSource = path.join(root, ".replacement-race-probe-source");
+    const probeAlias = path.join(root, ".replacement-race-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\nreplacementraceoldmarker\n",
+      "B.md": "# Shared\n\nreplacementraceoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = [
+      "replacementraceoldmarker",
+      "replacementracegroupmarker",
+      "replacementracenewinodemarker"
+    ] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      stageAliasPath(live: { absPath: string; relPath: string }): Promise<unknown>;
+    };
+    const originalStageAliasPath = watcherInternals.stageAliasPath.bind(fixture.watcher);
+    let replaced = false;
+    const stageSpy = vi.spyOn(watcherInternals, "stageAliasPath").mockImplementation(async (live) => {
+      const staged = await originalStageAliasPath(live);
+      if (!replaced && live.relPath === "A.md") {
+        const oldBStat = await fs.stat(bPath);
+        await fs.unlink(bPath);
+        await fs.writeFile(bPath, "# Replacement\n\nreplacementracenewinodemarker\n");
+        const replacementMtime = new Date(Math.max(Date.now(), oldBStat.mtimeMs) + 120_000);
+        await fs.utimes(bPath, replacementMtime, replacementMtime);
+        replaced = true;
+      }
+      return staged;
+    });
+
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      await writeWithLaterMtime(aPath, "# Shared\n\nreplacementracegroupmarker\n");
+      await expect(fs.readFile(bPath, "utf8")).resolves.toContain("replacementracegroupmarker");
+
+      // NEGATIVE control: both physical names expose the changed hardlink
+      // generation, but every sink still holds the old generation.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(beforeEvent, "replacementraceoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvent, "replacementracegroupmarker", []);
+      expectMarkerPaths(beforeEvent, "replacementracenewinodemarker", []);
+
+      await enqueueWatcherEvent(fixture.watcher, aPath, "change");
+
+      expect(replaced, "the controlled non-origin replacement must execute during fan-out").toBe(true);
+      const [aStat, bStat] = await Promise.all([fs.lstat(aPath, { bigint: true }), fs.lstat(bPath, { bigint: true })]);
+      expect(aStat.isFile() && !aStat.isSymbolicLink()).toBe(true);
+      expect(bStat.isFile() && !bStat.isSymbolicLink()).toBe(true);
+      expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "replacementraceoldmarker", []);
+      expectMarkerPaths(reconciled, "replacementracegroupmarker", ["A.md"]);
+      expectMarkerPaths(reconciled, "replacementracenewinodemarker", ["B.md"]);
+      expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+    } finally {
+      stageSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("serializes overlapping alias events and makes close drain the locked work", async (ctx) => {
+    const probeSource = path.join(root, ".alias-lock-probe-source");
+    const probeAlias = path.join(root, ".alias-lock-probe-alias");
+    await fs.writeFile(probeSource, "probe");
+    try {
+      await fs.link(probeSource, probeAlias);
+    } catch (error) {
+      if (process.env.CI && process.platform === "linux") {
+        throw new Error(`mandatory Linux hardlink precondition failed: ${String(error)}`);
+      }
+      return ctx.skip();
+    } finally {
+      await fs.unlink(probeAlias).catch(() => {});
+      await fs.unlink(probeSource).catch(() => {});
+    }
+
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# Shared\n\naliaslockoldmarker\n",
+      "B.md": "# Shared\n\naliaslockoldmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = ["aliaslockoldmarker", "aliaslocknewmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      stageAliasPath(live: { absPath: string; relPath: string }): Promise<unknown>;
+      withPhysicalAliasLocks(keys: ReadonlyArray<string>, task: () => Promise<unknown>): Promise<unknown>;
+      physicalAliasLockTails: Map<string, Promise<void>>;
+      physicalIdentityByPath: Map<string, string>;
+      physicalPathsByIdentity: Map<string, Set<string>>;
+      physicalKnownPaths: Set<string>;
+    };
+
+    let markFirstStageEntered: (() => void) | undefined;
+    const firstStageEntered = new Promise<void>((resolve) => {
+      markFirstStageEntered = resolve;
+    });
+    let releaseFirstStage: (() => void) | undefined;
+    const firstStageRelease = new Promise<void>((resolve) => {
+      releaseFirstStage = resolve;
+    });
+    let markSecondLockAttempted: (() => void) | undefined;
+    const secondLockAttempted = new Promise<void>((resolve) => {
+      markSecondLockAttempted = resolve;
+    });
+
+    const originalStageAliasPath = watcherInternals.stageAliasPath.bind(fixture.watcher);
+    const originalWithPhysicalAliasLocks = watcherInternals.withPhysicalAliasLocks.bind(fixture.watcher);
+    const stageCalls: string[] = [];
+    let firstStageBlocked = false;
+    let aliasPlanLockAttempts = 0;
+    let protectedPlansStarted = 0;
+    let activeProtectedPlans = 0;
+    let protectedPlansOverlapped = false;
+    const stageSpy = vi.spyOn(watcherInternals, "stageAliasPath").mockImplementation(async (live) => {
+      stageCalls.push(live.relPath);
+      if (!firstStageBlocked) {
+        firstStageBlocked = true;
+        markFirstStageEntered?.();
+        await firstStageRelease;
+      }
+      return originalStageAliasPath(live);
+    });
+    const lockSpy = vi.spyOn(watcherInternals, "withPhysicalAliasLocks").mockImplementation(async (keys, task) => {
+      const isAliasPlan = keys.some((key) => key.startsWith("path:"));
+      if (!isAliasPlan) return originalWithPhysicalAliasLocks(keys, task);
+
+      aliasPlanLockAttempts += 1;
+      if (aliasPlanLockAttempts === 2) markSecondLockAttempted?.();
+      return originalWithPhysicalAliasLocks(keys, async () => {
+        protectedPlansStarted += 1;
+        if (activeProtectedPlans > 0) protectedPlansOverlapped = true;
+        activeProtectedPlans += 1;
+        try {
+          return await task();
+        } finally {
+          activeProtectedPlans -= 1;
+        }
+      });
+    });
+
+    let eventA: Promise<void> | undefined;
+    let eventB: Promise<void> | undefined;
+    let closeTask: Promise<void> | undefined;
+    try {
+      await fs.unlink(bPath);
+      await fs.link(aPath, bPath);
+      await writeWithLaterMtime(aPath, "# Shared\n\naliaslocknewmarker\n");
+      await expect(fs.readFile(bPath, "utf8")).resolves.toContain("aliaslocknewmarker");
+
+      // NEGATIVE setup: both aliases expose the changed bytes, but all sinks
+      // still hold the old generation before either concurrent event commits.
+      const beforeEvents = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(beforeEvents, "aliaslockoldmarker", ["A.md", "B.md"]);
+      expectMarkerPaths(beforeEvents, "aliaslocknewmarker", []);
+
+      eventA = enqueueWatcherEvent(fixture.watcher, aPath, "change");
+      await awaitDeferredBarrier(firstStageEntered, "first alias stage");
+      eventB = enqueueWatcherEvent(fixture.watcher, bPath, "change");
+      await awaitDeferredBarrier(secondLockAttempted, "second overlapping alias-lock attempt");
+
+      // NEGATIVE control: the second handler has demonstrably reached lock
+      // reservation, but its protected task/stage cannot enter while the first
+      // plan owns the overlapping physical/path locks.
+      expect(aliasPlanLockAttempts).toBe(2);
+      expect(protectedPlansStarted).toBe(1);
+      expect(activeProtectedPlans).toBe(1);
+      expect(protectedPlansOverlapped).toBe(false);
+      expect(stageCalls).toHaveLength(1);
+      expect(stageCalls[0]).toMatch(/^(?:A|B)\.md$/);
+      expect(watcherInternals.physicalAliasLockTails.size).toBeGreaterThan(0);
+
+      let closeSettled = false;
+      closeTask = fixture.watcher.close().then(() => {
+        closeSettled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closeSettled, "close must remain pending while accepted alias work holds the barrier").toBe(false);
+
+      releaseFirstStage?.();
+      await Promise.all([eventA, eventB, closeTask]);
+
+      expect(protectedPlansOverlapped).toBe(false);
+      expect(activeProtectedPlans).toBe(0);
+      expect(protectedPlansStarted).toBeGreaterThanOrEqual(2);
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "aliaslockoldmarker", []);
+      expectMarkerPaths(reconciled, "aliaslocknewmarker", ["A.md", "B.md"]);
+      expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+      expect(watcherInternals.physicalAliasLockTails.size).toBe(0);
+      expect(watcherInternals.physicalIdentityByPath.size).toBe(0);
+      expect(watcherInternals.physicalPathsByIdentity.size).toBe(0);
+      expect(watcherInternals.physicalKnownPaths.size).toBe(0);
+    } finally {
+      releaseFirstStage?.();
+      if (eventA) await eventA.catch(() => {});
+      if (eventB) await eventB.catch(() => {});
+      if (closeTask) await closeTask.catch(() => {});
+      stageSpy.mockRestore();
+      lockSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("makes close drain a tracked physical-alias seed", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Seeded.md": "# Seeded\n\ntrackedseedmarker\n"
+    });
+    const markers = ["trackedseedmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      runTrackedPhysicalAliasSeed(): Promise<void>;
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+      physicalAliasLockTails: Map<string, Promise<void>>;
+      physicalIdentityByPath: Map<string, string>;
+      physicalPathsByIdentity: Map<string, Set<string>>;
+      physicalKnownPaths: Set<string>;
+    };
+
+    let markInventoryEntered: (() => void) | undefined;
+    const inventoryEntered = new Promise<void>((resolve) => {
+      markInventoryEntered = resolve;
+    });
+    let releaseInventory: (() => void) | undefined;
+    const inventoryRelease = new Promise<void>((resolve) => {
+      releaseInventory = resolve;
+    });
+    const originalInventory = watcherInternals.inspectVisibleAliasInventoryInLane.bind(fixture.watcher);
+    const inventorySpy = vi
+      .spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane")
+      .mockImplementation(async () => {
+        markInventoryEntered?.();
+        await inventoryRelease;
+        return originalInventory();
+      });
+
+    let seedTask: Promise<void> | undefined;
+    let closeTask: Promise<void> | undefined;
+    try {
+      const beforeSeed = await snapshotWindowsWatcherState(fixture, markers);
+      seedTask = watcherInternals.runTrackedPhysicalAliasSeed();
+      await awaitDeferredBarrier(inventoryEntered, "tracked seed inventory");
+
+      // NEGATIVE control: the tracked seed is accepted and demonstrably blocked
+      // inside inventory. close must not resolve or clear ownership underneath
+      // it; otherwise the released seed could repopulate registries post-close.
+      expect(watcherInternals.physicalIdentityByPath.size).toBe(0);
+      let closeSettled = false;
+      closeTask = fixture.watcher.close().then(() => {
+        closeSettled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closeSettled, "close must remain pending while the tracked seed holds inventory").toBe(false);
+
+      releaseInventory?.();
+      await Promise.all([seedTask, closeTask]);
+
+      const afterClose = await snapshotWindowsWatcherState(fixture, markers);
+      expect(afterClose.embedRows).toEqual(beforeSeed.embedRows);
+      expect(afterClose.hnswRows).toEqual(beforeSeed.hnswRows);
+      expectMarkerPaths(afterClose, "trackedseedmarker", ["Seeded.md"]);
+      expect(watcherInternals.physicalAliasLockTails.size).toBe(0);
+      expect(watcherInternals.physicalIdentityByPath.size).toBe(0);
+      expect(watcherInternals.physicalPathsByIdentity.size).toBe(0);
+      expect(watcherInternals.physicalKnownPaths.size).toBe(0);
+    } finally {
+      releaseInventory?.();
+      if (seedTask) await seedTask.catch(() => {});
+      if (closeTask) await closeTask.catch(() => {});
+      inventorySpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("uses seeded identity to narrow a missing-origin commit without touching unrelated notes", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# A\n\nseedunlinkamarker\n",
+      "Keep.md": "# Keep\n\nseedkeepmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const canonicalAPath = fixture.vault.resolveInside("A.md");
+    const canonicalKeepPath = fixture.vault.resolveInside("Keep.md");
+    const markers = ["seedunlinkamarker", "seedkeepmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      seedPhysicalAliasRegistry(): Promise<void>;
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+      physicalAliasIdentity(absPath: string): Promise<string | null>;
+      physicalIdentityByPath: Map<string, string>;
+    };
+    const identitySpy = vi.spyOn(watcherInternals, "physicalAliasIdentity").mockImplementation(async (absPath) => {
+      if (absPath === canonicalAPath) return "inode:fixture:a";
+      if (absPath === canonicalKeepPath) return "inode:fixture:keep";
+      return null;
+    });
+    const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
+    const embedSpy = vi.spyOn(watcherEmbedder, "embed");
+
+    try {
+      const beforeSeed = await snapshotWindowsWatcherState(fixture, markers);
+      await watcherInternals.seedPhysicalAliasRegistry();
+
+      // Identity-only means no lexical/semantic publication during seed.
+      expect(inventorySpy).toHaveBeenCalled();
+      expect(watcherInternals.physicalIdentityByPath.has(canonicalAPath)).toBe(true);
+      expect(watcherInternals.physicalIdentityByPath.has(canonicalKeepPath)).toBe(true);
+      expect(fixture.reindexedPaths).toEqual([]);
+      expect(embedSpy).not.toHaveBeenCalled();
+      const afterSeed = await snapshotWindowsWatcherState(fixture, markers);
+      expect(afterSeed.embedRows).toEqual(beforeSeed.embedRows);
+      expect(afterSeed.hnswRows).toEqual(beforeSeed.hnswRows);
+
+      inventorySpy.mockClear();
+      embedSpy.mockClear();
+      await fs.unlink(aPath);
+
+      // NEGATIVE control: missing-origin handling must inventory before it can
+      // trust prior membership. The seeded identity is only a commit-group hint:
+      // planning may see Keep.md, but must not reindex or re-embed it.
+      await enqueueWatcherEvent(fixture.watcher, aPath, "unlink");
+
+      expect(inventorySpy).toHaveBeenCalled();
+      expect(embedSpy).not.toHaveBeenCalled();
+      expect(fixture.reindexedPaths).toEqual([]);
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "seedunlinkamarker", []);
+      expectMarkerPaths(reconciled, "seedkeepmarker", ["Keep.md"]);
+      expect(reconciled.embedPaths).toEqual(["Keep.md"]);
+      expect(reconciled.embedRows.filter((row) => row.relPath === "Keep.md")).toEqual(
+        beforeSeed.embedRows.filter((row) => row.relPath === "Keep.md")
+      );
+      expect(reconciled.hnswRows.filter((row) => row.relPath === "Keep.md")).toEqual(
+        beforeSeed.hnswRows.filter((row) => row.relPath === "Keep.md")
+      );
+      expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
+    } finally {
+      identitySpy.mockRestore();
+      inventorySpy.mockRestore();
+      embedSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("purges the exact missing origin when live inventory exceeds its bound", async () => {
+    const fixture = await seedWindowsWatcherFixture(
+      {
+        "A.md": "# A\n\noverflowaoldmarker\n",
+        "Keep.md": "# Keep\n\noverflowkeepmarker\n"
+      },
+      { activationPathLimit: 1 }
+    );
+    const aPath = path.join(root, "A.md");
+    const keepPath = path.join(root, "Keep.md");
+    const unseenPath = path.join(root, "Unseen.md");
+    const markers = ["overflowaoldmarker", "overflowkeepmarker", "overflowunseenmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+    };
+    const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
+    const embedSpy = vi.spyOn(watcherEmbedder, "embed");
+
+    try {
+      const beforeUnlink = await snapshotWindowsWatcherState(fixture, markers);
+      const keepBytes = await fs.readFile(keepPath);
+      expectMarkerPaths(beforeUnlink, "overflowaoldmarker", ["A.md"]);
+      expectMarkerPaths(beforeUnlink, "overflowkeepmarker", ["Keep.md"]);
+      expectMarkerPaths(beforeUnlink, "overflowunseenmarker", []);
+
+      inventorySpy.mockClear();
+      embedSpy.mockClear();
+      await fs.writeFile(unseenPath, "# Unseen\n\noverflowunseenmarker\n");
+      await fs.unlink(aPath);
+
+      // Keep + Unseen exceed the one-path live-inventory bound. The fallback
+      // must still purge the exact missing origin, while refusing to publish
+      // either the prior unrelated row or the newly appeared unseen path.
+      await enqueueWatcherEvent(fixture.watcher, aPath, "unlink");
+
+      expect(inventorySpy).toHaveBeenCalled();
+      expect(embedSpy).not.toHaveBeenCalled();
+      expect(fixture.reindexedPaths).toEqual([]);
+      expect(await fs.readFile(keepPath)).toEqual(keepBytes);
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "overflowaoldmarker", []);
+      expectMarkerPaths(reconciled, "overflowkeepmarker", ["Keep.md"]);
+      expectMarkerPaths(reconciled, "overflowunseenmarker", []);
+      expect(reconciled.embedPaths).toEqual(["Keep.md"]);
+      expect(reconciled.embedRows.filter((row) => row.relPath === "Keep.md")).toEqual(
+        beforeUnlink.embedRows.filter((row) => row.relPath === "Keep.md")
+      );
+      expect(reconciled.hnswRows.filter((row) => row.relPath === "Keep.md")).toEqual(
+        beforeUnlink.hnswRows.filter((row) => row.relPath === "Keep.md")
+      );
+      expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
+    } finally {
+      inventorySpy.mockRestore();
+      embedSpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("uses one bounded global reconciliation when physical identity is unavailable", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# A\n\nunavailableaoldmarker\n",
+      "B.md": "# B\n\nunavailableboldmarker\n"
+    });
+    const watcherInternals = fixture.watcher as unknown as {
+      physicalAliasIdentity(absPath: string): Promise<unknown>;
+    };
+    const identitySpy = vi.spyOn(watcherInternals, "physicalAliasIdentity").mockResolvedValue(null);
+    const markers = [
+      "unavailableaoldmarker",
+      "unavailableboldmarker",
+      "unavailableanewmarker",
+      "unavailablebnewmarker"
+    ] as const;
+
+    try {
+      await writeWithLaterMtime(path.join(root, "A.md"), "# A\n\nunavailableanewmarker\n");
+      await writeWithLaterMtime(path.join(root, "B.md"), "# B\n\nunavailablebnewmarker\n");
+
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(beforeEvent, "unavailableaoldmarker", ["A.md"]);
+      expectMarkerPaths(beforeEvent, "unavailableboldmarker", ["B.md"]);
+      expectMarkerPaths(beforeEvent, "unavailableanewmarker", []);
+      expectMarkerPaths(beforeEvent, "unavailablebnewmarker", []);
+
+      // Only A receives a native event. With no trustworthy inode identity,
+      // correctness requires a bounded reconciliation of all known regular
+      // paths; an exact-path-only fallback would leave B stale.
+      await enqueueWatcherEvent(fixture.watcher, path.join(root, "A.md"), "change");
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "unavailableaoldmarker", []);
+      expectMarkerPaths(reconciled, "unavailableboldmarker", []);
+      expectMarkerPaths(reconciled, "unavailableanewmarker", ["A.md"]);
+      expectMarkerPaths(reconciled, "unavailablebnewmarker", ["B.md"]);
+      expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+    } finally {
+      identitySpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("purges a previously known missing path during unknown-identity fallback", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "A.md": "# A\n\nunknownknownaoldmarker\n",
+      "B.md": "# B\n\nunknownknownbmarker\n"
+    });
+    const aPath = path.join(root, "A.md");
+    const bPath = path.join(root, "B.md");
+    const markers = ["unknownknownaoldmarker", "unknownknownanewmarker", "unknownknownbmarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      physicalAliasIdentity(absPath: string): Promise<unknown>;
+    };
+
+    try {
+      // Establish B as a path observed by the physical-identity machinery,
+      // then remove it without delivering its unlink event.
+      await enqueueWatcherEvent(fixture.watcher, bPath, "change");
+      fixture.reindexedPaths.length = 0;
+      await fs.unlink(bPath);
+      await writeWithLaterMtime(aPath, "# A\n\nunknownknownanewmarker\n");
+
+      // NEGATIVE control: B is gone and A has new bytes, but the sinks still
+      // retain B and A's old generation until the one global fallback event.
+      const beforeEvent = await snapshotWindowsWatcherState(fixture, markers);
+      expect(beforeEvent.diskNames).toEqual(["A.md"]);
+      expectMarkerPaths(beforeEvent, "unknownknownaoldmarker", ["A.md"]);
+      expectMarkerPaths(beforeEvent, "unknownknownanewmarker", []);
+      expectMarkerPaths(beforeEvent, "unknownknownbmarker", ["B.md"]);
+
+      const identitySpy = vi.spyOn(watcherInternals, "physicalAliasIdentity").mockResolvedValue(null);
+      try {
+        await enqueueWatcherEvent(fixture.watcher, aPath, "change");
+        expect(identitySpy).toHaveBeenCalled();
+      } finally {
+        identitySpy.mockRestore();
+      }
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "unknownknownaoldmarker", []);
+      expectMarkerPaths(reconciled, "unknownknownanewmarker", ["A.md"]);
+      expectMarkerPaths(reconciled, "unknownknownbmarker", []);
+      expect(reconciled.embedPaths).toEqual(["A.md"]);
+      expect([...new Set(fixture.reindexedPaths)]).toEqual(["A.md"]);
+      expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
+    } finally {
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("retains prior rows when admission is transiently unavailable", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Protected.md": "# Protected\n\nadmissionoldmarker\n",
+      "Gone.md": "# Gone\n\nadmissiongonemarker\n"
+    });
+    const protectedPath = path.join(root, "Protected.md");
+    const canonicalProtectedPath = fixture.vault.resolveInside("Protected.md");
+    const gonePath = path.join(root, "Gone.md");
+    const markers = ["admissionoldmarker", "admissionnewmarker", "admissiongonemarker"] as const;
+    const watcherInternals = fixture.watcher as unknown as {
+      captureFileGeneration(absPath: string): Promise<unknown>;
+    };
+
+    try {
+      // Prime both exact paths, then prove a genuinely missing path still takes
+      // the destructive unlink branch. The unavailable-admission case below
+      // must not inherit that classification merely because lstat failed.
+      await enqueueWatcherEvent(fixture.watcher, protectedPath, "change");
+      await enqueueWatcherEvent(fixture.watcher, gonePath, "change");
+      await fs.unlink(gonePath);
+      await enqueueWatcherEvent(fixture.watcher, gonePath, "unlink");
+      const afterRealUnlink = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(afterRealUnlink, "admissiongonemarker", []);
+      expectMarkerPaths(afterRealUnlink, "admissionoldmarker", ["Protected.md"]);
+      expect(watcherAuditsMatch(afterRealUnlink, 1)).toBe(true);
+      fixture.reindexedPaths.length = 0;
+
+      await writeWithLaterMtime(protectedPath, "# Protected\n\nadmissionnewmarker\n");
+
+      // NEGATIVE control: disk already has the new generation, while every
+      // derived sink still holds the prior one before admission starts failing.
+      const beforeFailure = await snapshotWindowsWatcherState(fixture, markers);
+      await expect(fs.readFile(protectedPath, "utf8")).resolves.toContain("admissionnewmarker");
+      expectMarkerPaths(beforeFailure, "admissionoldmarker", ["Protected.md"]);
+      expectMarkerPaths(beforeFailure, "admissionnewmarker", []);
+
+      const originalCaptureFileGeneration = watcherInternals.captureFileGeneration.bind(fixture.watcher);
+      let admissionAttempts = 0;
+      const admissionSpy = vi.spyOn(watcherInternals, "captureFileGeneration").mockImplementation(async (absPath) => {
+        if (absPath === canonicalProtectedPath) {
+          admissionAttempts += 1;
+          throw Object.assign(new Error("synthetic transient admission failure"), { code: "EACCES" });
+        }
+        return originalCaptureFileGeneration(absPath);
+      });
+      try {
+        await enqueueWatcherEvent(fixture.watcher, protectedPath, "change");
+      } finally {
+        admissionSpy.mockRestore();
+      }
+
+      expect(admissionAttempts).toBeGreaterThan(0);
+      expect(admissionAttempts).toBeLessThanOrEqual(8);
+      const retained = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(retained, "admissionoldmarker", ["Protected.md"]);
+      expectMarkerPaths(retained, "admissionnewmarker", []);
+      expectMarkerPaths(retained, "admissiongonemarker", []);
+      expect(retained.embedPaths).toEqual(["Protected.md"]);
+      expect(fixture.reindexedPaths).toEqual([]);
+      expect(watcherAuditsMatch(retained, 1)).toBe(true);
+    } finally {
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("never folds distinct case or NFC/NFD storage identities on a case-sensitive filesystem", async (ctx) => {
+    if (process.platform !== "linux") return ctx.skip();
+
+    const nfcName = `Caf${String.fromCodePoint(0xe9)}.md`;
+    const nfdName = `Cafe${String.fromCodePoint(0x301)}.md`;
+    expect(nfcName).not.toBe(nfdName);
+    const fixture = await seedWindowsWatcherFixture({
+      "Case.md": "# Upper\n\ncaseupperoldmarker\n",
+      "case.md": "# Lower\n\ncaseloweroldmarker\n",
+      [nfcName]: "# NFC\n\nnfcoldmarker\n",
+      [nfdName]: "# NFD\n\nnfdoldmarker\n"
+    });
+    const markers = [
+      "caseupperoldmarker",
+      "caseuppernewmarker",
+      "caseloweroldmarker",
+      "nfcoldmarker",
+      "nfcnewmarker",
+      "nfdoldmarker"
+    ] as const;
+
+    try {
+      const diskNames = await fs.readdir(root);
+      for (const exactName of ["Case.md", "case.md", nfcName, nfdName]) {
+        expect(diskNames).toContain(exactName);
+      }
+      const stats = await Promise.all(
+        ["Case.md", "case.md", nfcName, nfdName].map((name) => fs.lstat(path.join(root, name), { bigint: true }))
+      );
+      expect(stats.every((stat) => stat.isFile() && !stat.isSymbolicLink() && stat.ino !== 0n)).toBe(true);
+      expect(new Set(stats.map((stat) => `${stat.dev}:${stat.ino}`)).size).toBe(4);
+
+      await writeWithLaterMtime(path.join(root, "Case.md"), "# Upper\n\ncaseuppernewmarker\n");
+      await enqueueWatcherEvent(fixture.watcher, path.join(root, "Case.md"), "change");
+
+      const afterCase = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(afterCase, "caseupperoldmarker", []);
+      expectMarkerPaths(afterCase, "caseuppernewmarker", ["Case.md"]);
+      expectMarkerPaths(afterCase, "caseloweroldmarker", ["case.md"]);
+      expect(watcherAuditsMatch(afterCase, 4)).toBe(true);
+
+      await writeWithLaterMtime(path.join(root, nfcName), "# NFC\n\nnfcnewmarker\n");
+      await enqueueWatcherEvent(fixture.watcher, path.join(root, nfcName), "change");
+
+      const afterUnicode = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(afterUnicode, "nfcoldmarker", []);
+      expectMarkerPaths(afterUnicode, "nfcnewmarker", [nfcName]);
+      expectMarkerPaths(afterUnicode, "nfdoldmarker", [nfdName]);
+      expect(afterUnicode.embedPaths).toEqual(["Case.md", nfcName, nfdName, "case.md"].sort());
+      expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["Case.md", nfcName].sort());
+      expect(watcherAuditsMatch(afterUnicode, 4)).toBe(true);
+    } finally {
+      await closeWindowsWatcherFixture(fixture);
+    }
+  });
+
+  it("does not follow a junction or accept an outside event during unavailable-identity fallback", async () => {
+    const fixture = await seedWindowsWatcherFixture({
+      "Visible.md": "# Visible\n\njunctionvisibleoldmarker\n"
+    });
+    const watcherInternals = fixture.watcher as unknown as {
+      physicalAliasIdentity(absPath: string): Promise<unknown>;
+    };
+    const identitySpy = vi.spyOn(watcherInternals, "physicalAliasIdentity").mockResolvedValue(null);
+    const junction = path.join(root, "Outside");
+    const secretPath = path.join(outside, "Secret.md");
+    const junctionSecretPath = path.join(junction, "Secret.md");
+    const secretBytes = "# Secret\n\njunctionsecretmarker must remain outside every index.\n";
+    const markers = ["junctionvisibleoldmarker", "junctionvisiblenewmarker", "junctionsecretmarker"] as const;
+
+    try {
+      await fs.writeFile(secretPath, secretBytes);
+      await fs.symlink(outside, junction, process.platform === "win32" ? "junction" : "dir");
+      await expect(fs.readFile(junctionSecretPath, "utf8")).resolves.toBe(secretBytes);
+
+      await writeWithLaterMtime(path.join(root, "Visible.md"), "# Visible\n\njunctionvisiblenewmarker\n");
+      await enqueueWatcherEvent(fixture.watcher, path.join(root, "Visible.md"), "change");
+      await enqueueWatcherEvent(fixture.watcher, secretPath, "change");
+      await enqueueWatcherEvent(fixture.watcher, junctionSecretPath, "change");
+
+      const reconciled = await snapshotWindowsWatcherState(fixture, markers);
+      expectMarkerPaths(reconciled, "junctionvisibleoldmarker", []);
+      expectMarkerPaths(reconciled, "junctionvisiblenewmarker", ["Visible.md"]);
+      expectMarkerPaths(reconciled, "junctionsecretmarker", []);
+      expect(reconciled.embedPaths).toEqual(["Visible.md"]);
+      expect(await fs.readFile(secretPath, "utf8")).toBe(secretBytes);
+      expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
+    } finally {
+      identitySpy.mockRestore();
+      await closeWindowsWatcherFixture(fixture, [junction]);
+    }
+  });
 });
 
 const windowsDescribe = process.platform === "win32" ? describe : describe.skip;

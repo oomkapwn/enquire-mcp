@@ -553,10 +553,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          / {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/,
-          ""
-        ),
+        ci.replace(/ {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/, ""),
         pkg.engines?.node
       )
     ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
@@ -575,10 +572,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       nodeFloorCiProblems(
         ci
-          .replace(
-            / {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/,
-            ""
-          )
+          .replace(/ {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/, "")
           .replace(
             "        run: git diff --exit-code -- assets/social-preview.png\n",
             "        run: git diff --exit-code -- assets/social-preview.png\n" +

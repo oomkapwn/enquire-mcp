@@ -210,9 +210,16 @@ export function registerReadTools(
    * relevance rank and each note's recorded usefulness (live `store.scores()`
    * snapshot, computed per call). `null` (default) keeps ranking relevance-pure.
    */
-  feedbackContext: { weight: number; store: import("./feedback.js").FeedbackStore } | null = null
+  feedbackContext: { weight: number; store: import("./feedback.js").FeedbackStore } | null = null,
+  /**
+   * Embedding capability frozen for one prepared server generation. `null`
+   * keeps embedding arms disabled until restart even if a DB appears later.
+   * `undefined` preserves the historical dynamic path for direct API callers.
+   */
+  embeddingDbFile: string | null | undefined = undefined
 ): void {
   const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false } as const;
+  const preparedEmbedFile = embeddingDbFile === undefined ? embedDbPath(vault.root) : embeddingDbFile;
 
   server.registerTool(
     "obsidian_list_notes",
@@ -983,8 +990,7 @@ export function registerReadTools(
         }
       },
       async (args) => {
-        const embedFile = embedDbPath(vault.root);
-        return textResult(await embeddingsSearch(vault, args, embedFile));
+        return textResult(await embeddingsSearch(vault, args, preparedEmbedFile));
       }
     );
 
@@ -1023,8 +1029,7 @@ export function registerReadTools(
       }
     },
     async (args) => {
-      const embedFile = embedDbPath(vault.root);
-      return textResult(await embeddingsSearch(vault, args, embedFile, hnswContext));
+      return textResult(await embeddingsSearch(vault, args, preparedEmbedFile, hnswContext));
     }
   );
 
@@ -1107,10 +1112,9 @@ export function registerReadTools(
       }
     },
     async (args) => {
-      const embedFile = embedDbPath(vault.root);
       const searchCtx = {
         ftsIndex,
-        embedFile,
+        embedFile: preparedEmbedFile,
         ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
         ...(hnswContext ? { hnsw: hnswContext } : {}),
         ...(recencyConfig ? { recency: recencyConfig } : {}),
@@ -1185,7 +1189,6 @@ export function registerReadTools(
       }
     },
     async (args) => {
-      const embedFile = embedDbPath(vault.root);
       // rc.14 — pass the SAME full search context obsidian_search uses, so the
       // pack's inner retrieval honors --enable-reranker / --use-hnsw /
       // --recency-weight / --feedback-weight (pre-rc.14 it silently ranked
@@ -1193,7 +1196,7 @@ export function registerReadTools(
       return textResult(
         await contextPack(vault, args, {
           ftsIndex,
-          embedFile,
+          embedFile: preparedEmbedFile,
           ...(rerankerConfig ? { reranker: rerankerConfig } : {}),
           ...(hnswContext ? { hnsw: hnswContext } : {}),
           ...(recencyConfig ? { recency: recencyConfig } : {}),

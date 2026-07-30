@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,6 +7,22 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
 import { peekFtsMetaSafe } from "../src/fts5.js";
 import { parsePositiveInt, parseQuantizationMode } from "../src/index.js";
+import {
+  armWatcherActivationGuard,
+  releaseWatcherActivationGuard,
+  watcherActivationGuardPath
+} from "../src/watcher-activation-guard.js";
+
+function mutationFingerprint(stat: Stats) {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  };
+}
 
 describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => {
   it("accepts a positive integer string", () => {
@@ -725,7 +741,10 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // realpath.
     const realVault = await fs.realpath(vault);
     const { defaultIndexFile } = await import("../src/fts5.js");
+    const { embedDbPath } = await import("../src/tool-registry.js");
     const indexFile = defaultIndexFile(realVault);
+    const embedFile = embedDbPath(realVault);
+    const guardPath = watcherActivationGuardPath(embedFile);
     await fs.mkdir(path.dirname(indexFile), { recursive: true });
     // Build FTS5 with trigram at the default location.
     execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--tokenize", "trigram"], {
@@ -734,6 +753,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // Sanity: peek shows trigram before setup runs.
     const metaBefore = await peekFtsMetaSafe(indexFile);
     expect(metaBefore?.tokenize_mode).toBe("trigram");
+    await expect(fs.lstat(guardPath)).rejects.toThrow();
     // Re-run `setup --skip-embeddings`. Pre-v3.6.4 this would silently
     // destroy trigram and rebuild as unicode61. Post-v3.6.4: preservation.
     const setupResult = spawnSync(
@@ -762,6 +782,77 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     const metaAfter = await peekFtsMetaSafe(indexFile);
     expect(metaAfter?.tokenize_mode).toBe("trigram");
     expect(setupResult.status).toBe(0);
+    await expect(fs.lstat(guardPath)).rejects.toThrow();
+
+    // NEGATIVE control: setup must inspect the embedding-generation interlock
+    // before opening or syncing FTS5, even with --skip-embeddings. A new vault
+    // note makes any accidental Step 1 execution byte-observable.
+    await fs.writeFile(path.join(vault, "Blocked.md"), "# Must not be indexed\n\nsetupguardmarker\n");
+    const guard = await armWatcherActivationGuard(embedFile);
+    try {
+      const ftsBytesBeforeRefusal = await fs.readFile(indexFile);
+      const ftsStatBeforeRefusal = mutationFingerprint(await fs.stat(indexFile));
+      const cacheEntriesBeforeRefusal = (await fs.readdir(path.dirname(indexFile))).sort();
+      const registerFixture = path.resolve(__dirname, "fixtures", "transformers-test-loader", "register.mjs");
+      const networkMarker = path.join(tmpdir, "setup-guard.network");
+      const modelMarker = path.join(tmpdir, "setup-guard.model");
+      const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(registerFixture).href}`]
+        .filter(Boolean)
+        .join(" ");
+      const guardedSetup = spawnSync(
+        process.execPath,
+        [
+          distEntry,
+          "setup",
+          "--vault",
+          vault,
+          "--skip-embeddings",
+          "--exclude-glob",
+          "Private/**",
+          "--read-paths",
+          "*.md"
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            NODE_OPTIONS: nodeOptions,
+            ENQUIRE_TEST_MODEL_STATE: "missing",
+            ENQUIRE_TEST_MODEL_MARKER: modelMarker,
+            ENQUIRE_TEST_NETWORK_MARKER: networkMarker
+          },
+          timeout: 10_000
+        }
+      );
+      const refusal = `${guardedSetup.stdout ?? ""}${guardedSetup.stderr ?? ""}`;
+
+      expect(guardedSetup.error, guardedSetup.stderr).toBeUndefined();
+      expect(guardedSetup.status).not.toBe(0);
+      expect(refusal).toMatch(/enquire setup:.*incomplete watcher startup quarantined/is);
+      expect(refusal).toMatch(/strict.*clear-embeddings --vault <vault>/is);
+      expect(refusal).toMatch(/refuses unsafe or foreign interlock shapes/i);
+      expect(refusal).toMatch(/If FTS setup is needed.*--skip-embeddings/is);
+      expect(refusal).toMatch(
+        /rebuild embeddings separately.*build-embeddings --vault <vault>.*same model, quantization, late-chunk, privacy and PDF settings/is
+      );
+      expect(refusal).not.toMatch(/rerun this setup command.*late-chunk/is);
+      expect(refusal).not.toContain("Step 1/3");
+      for (const sensitivePath of [vault, realVault, indexFile, embedFile, guardPath]) {
+        expect(refusal).not.toContain(sensitivePath);
+      }
+
+      expect(await fs.readFile(indexFile)).toEqual(ftsBytesBeforeRefusal);
+      expect(mutationFingerprint(await fs.stat(indexFile))).toEqual(ftsStatBeforeRefusal);
+      expect((await fs.readdir(path.dirname(indexFile))).sort()).toEqual(cacheEntriesBeforeRefusal);
+      expect((await peekFtsMetaSafe(indexFile))?.tokenize_mode).toBe("trigram");
+      await expect(fs.stat(embedFile)).rejects.toThrow();
+      await expect(fs.stat(modelMarker)).rejects.toThrow();
+      await expect(fs.stat(networkMarker)).rejects.toThrow();
+      expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+    } finally {
+      await releaseWatcherActivationGuard(guard);
+    }
+    await expect(fs.lstat(guardPath)).rejects.toThrow();
   });
 
   it("`enquire-mcp eval --persistent-index` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async (ctx) => {
@@ -803,9 +894,16 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     if (!canRunFts5) return ctx.skip();
     // build-embeddings uses embedDbPath(vault.root) — same realpath concern.
     const realVault = await fs.realpath(vault);
+    const { defaultIndexFile } = await import("../src/fts5.js");
     const { embedDbPath } = await import("../src/tool-registry.js");
     const embedFile = embedDbPath(realVault);
+    const indexFile = defaultIndexFile(realVault);
+    const guardPath = watcherActivationGuardPath(embedFile);
+    const customEmbedFile = path.join(tmpdir, "guarded-custom.embed.db");
+    const customGuardPath = watcherActivationGuardPath(customEmbedFile);
     await fs.mkdir(path.dirname(embedFile), { recursive: true });
+    await expect(fs.lstat(guardPath)).rejects.toThrow();
+    await expect(fs.lstat(customGuardPath)).rejects.toThrow();
     // Pre-create a meta-only embed-db via direct EmbedDb construction (no
     // embedder load required — EmbedDb writes only the meta row at open
     // time; vectors would come from a later syncEmbedDb call which we skip).
@@ -845,6 +943,73 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     // been silently rewritten to "multilingual".
     const metaAfter = await peekEmbedDbMeta(embedFile);
     expect(metaAfter?.model_alias).toBe("bge");
+    await expect(fs.lstat(guardPath)).rejects.toThrow();
+
+    // Guard refusal must happen before embed-db open/model load/network access.
+    // Snapshot both bytes and source metadata after the successful positive
+    // control, then prove the failed child leaves every observable surface
+    // unchanged while retaining the exact interlock.
+    const guard = await armWatcherActivationGuard(customEmbedFile);
+    try {
+      const embedBytesBeforeRefusal = await fs.readFile(embedFile);
+      const embedStatBeforeRefusal = mutationFingerprint(await fs.stat(embedFile));
+      const cacheEntriesBeforeRefusal = (await fs.readdir(path.dirname(embedFile))).sort();
+      const guardedNetworkMarker = path.join(tmpdir, "build-embeddings-guard.network");
+      const guardedModelMarker = path.join(tmpdir, "build-embeddings-guard.model");
+      const guardedBuild = spawnSync(
+        process.execPath,
+        [distEntry, "build-embeddings", "--vault", vault, "--embed-file", customEmbedFile],
+        {
+          encoding: "utf8",
+          env: {
+            ...hermeticEnv,
+            ENQUIRE_TEST_MODEL_STATE: "missing",
+            ENQUIRE_TEST_MODEL_MARKER: guardedModelMarker,
+            ENQUIRE_TEST_NETWORK_MARKER: guardedNetworkMarker
+          },
+          timeout: 10_000
+        }
+      );
+      const refusal = `${guardedBuild.stdout ?? ""}${guardedBuild.stderr ?? ""}`;
+
+      expect(guardedBuild.error, guardedBuild.stderr).toBeUndefined();
+      expect(guardedBuild.status).not.toBe(0);
+      expect(refusal).toMatch(/enquire build-embeddings:.*incomplete watcher startup quarantined/is);
+      expect(refusal).toMatch(/strict.*clear-embeddings --vault <vault>/is);
+      expect(refusal).toMatch(/refuses unsafe or foreign interlock shapes/i);
+      expect(refusal).toMatch(
+        /custom embedding index.*same `--embed-file` option.*`clear-embeddings`.*rebuild command/is
+      );
+      expect(refusal).toMatch(/absolute path is intentionally omitted/i);
+      expect(refusal).toMatch(
+        /rerun this build-embeddings command.*same model, quantization, late-chunk, privacy and PDF settings/is
+      );
+      expect(refusal).not.toMatch(/honoring existing model_alias|loading embedder|fixture model/i);
+      for (const sensitivePath of [
+        vault,
+        realVault,
+        indexFile,
+        embedFile,
+        guardPath,
+        customEmbedFile,
+        customGuardPath
+      ]) {
+        expect(refusal).not.toContain(sensitivePath);
+      }
+
+      expect(await fs.readFile(embedFile)).toEqual(embedBytesBeforeRefusal);
+      expect(mutationFingerprint(await fs.stat(embedFile))).toEqual(embedStatBeforeRefusal);
+      expect((await fs.readdir(path.dirname(embedFile))).sort()).toEqual(cacheEntriesBeforeRefusal);
+      await expect(fs.stat(customEmbedFile)).rejects.toThrow();
+      await expect(fs.stat(indexFile)).rejects.toThrow();
+      await expect(fs.stat(guardedModelMarker)).rejects.toThrow();
+      await expect(fs.stat(guardedNetworkMarker)).rejects.toThrow();
+      expect((await fs.lstat(customGuardPath)).isDirectory()).toBe(true);
+      expect((await peekEmbedDbMeta(embedFile))?.model_alias).toBe("bge");
+    } finally {
+      await releaseWatcherActivationGuard(guard);
+    }
+    await expect(fs.lstat(customGuardPath)).rejects.toThrow();
 
     // NEGATIVE control: prove the same child-process tripwire would record
     // and reject a real outbound attempt instead of merely leaving no marker.

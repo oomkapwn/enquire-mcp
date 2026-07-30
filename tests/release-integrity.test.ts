@@ -221,6 +221,14 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     if (!windowsSteps.some((step) => step.run === "npm test -- tests/windows-path-safety.test.ts")) {
       problems.push("test-windows missing the executable hostile-filesystem suite");
     }
+    const watcherGuardSuite = namedStep(windowsSteps, "Test watcher startup interlock on Windows");
+    if (
+      watcherGuardSuite?.run !== "npm test -- tests/watcher-activation-guard.test.ts" ||
+      "if" in (watcherGuardSuite ?? {}) ||
+      "continue-on-error" in (watcherGuardSuite ?? {})
+    ) {
+      problems.push("test-windows missing the exact watcher activation-guard suite");
+    }
   }
 
   if (!docsJob) {
@@ -482,6 +490,15 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("test-windows missing the executable hostile-filesystem suite");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "        run: npm test -- tests/watcher-activation-guard.test.ts",
+          "        run: echo npm test -- tests/watcher-activation-guard.test.ts"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("test-windows missing the exact watcher activation-guard suite");
     expect(
       nodeFloorCiProblems(
         ci.replace("        run: npm run render:preview", "        run: echo npm run render:preview"),

@@ -3,6 +3,7 @@ import type { FtsIndex } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { assertWatcherActivationGuardClear } from "../watcher-activation-guard.js";
 import { foldForMatch, splitLines, stripTrailingSlashes } from "../wildcard-match.js";
 import { capScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
@@ -867,6 +868,30 @@ export interface HnswSearchContext {
 }
 
 /**
+ * Refuse every embedding-search route while the watched index is quarantined
+ * after an incomplete startup activation.
+ *
+ * @param embedFile - Prepared embedding database path.
+ * @returns A promise that resolves only when no activation guard exists.
+ */
+async function assertEmbeddingIndexNotQuarantined(embedFile: string): Promise<void> {
+  try {
+    await assertWatcherActivationGuardClear(embedFile);
+  } catch (error) {
+    throw new Error(
+      "Embedding index is quarantined after an incomplete watcher startup. Stop every enquire-mcp process " +
+        "for this vault, then run the strict `enquire-mcp clear-embeddings --vault <your-vault>` recovery. " +
+        "If this search uses a custom embedding index, repeat its exact `--embed-file` option during recovery " +
+        "and rebuild; the absolute path is intentionally omitted here. " +
+        "It refuses unsafe or foreign interlock shapes before deleting indexes; if it refuses, ask the server " +
+        "operator to inspect the guard without following it and remove it only after a manual ownership audit. " +
+        "Rebuild with the same model, quantization, late-chunk, privacy and PDF settings, then restart.",
+      { cause: error }
+    );
+  }
+}
+
+/**
  * v3.6.2 HN-4 — assert that the query-time embedder model matches the
  * HNSW index's build-time model. Standalone helper so the check is
  * unit-testable in isolation from `embeddingsSearch` (which depends on
@@ -998,8 +1023,9 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   `min_score` to 0.3 (relatively high cosine floor — embeddings cosine
  *   has a tighter distribution than TF-IDF). `model` overrides the
  *   embedder alias. `hypothetical_answer` enables HyDE.
- * @param embedFile - Absolute path to the `.embed.db`. Existence is checked
- *   before any model load so the error message is fast and clear.
+ * @param embedFile - Absolute path to the `.embed.db`, or `null` when this
+ *   prepared server generation froze embeddings as unavailable. Existence is
+ *   checked before any model load so the error message is fast and clear.
  * @param hnsw - Optional HNSW index context. When passed, k-NN routes
  *   through HNSW instead of brute-force cosine.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
@@ -1040,11 +1066,18 @@ export async function embeddingsSearch(
      */
     hypothetical_answer?: string;
   },
-  embedFile: string,
+  embedFile: string | null,
   hnsw?: HnswSearchContext | null
 ): Promise<EmbedSearchResponse> {
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
+  if (embedFile === null) {
+    throw new Error(
+      "Embedding index was unavailable when this server started. Build it with " +
+        "`enquire-mcp build-embeddings --vault <your-vault>`, then restart the server."
+    );
+  }
+  await assertEmbeddingIndexNotQuarantined(embedFile);
   // v3.1.0 — pick the actual text to embed. HyDE prefers the
   // hypothetical answer when present; otherwise fall back to the query.
   const { text: embedText, usedHyde } = pickEmbedTextForHyde(args);
@@ -1391,7 +1424,7 @@ export interface SearchHybridResponse {
  *   prefer the default `note` granularity for frontmatter-heavy vaults (audit M1).
  *   `graph_boost` defaults to `true`.
  * @param ctx - Server-side context: `ftsIndex` (nullable), `embedFile`
- *   (path may not exist), optional `reranker` config, optional
+ *   (prepared startup path or `null` when unavailable), optional `reranker` config, optional
  *   `rerankerOverride` (test injection point), optional `hnsw` context for
  *   accelerated k-NN.
  * @returns A {@link SearchHybridResponse} with sorted `matches`, observability
@@ -1577,8 +1610,11 @@ export async function searchHybrid(
   ctx: {
     /** FTS5 index, if `--persistent-index` is enabled at server start. */
     ftsIndex: FtsIndex | null;
-    /** Path to the `.embed.db` (file may or may not exist — checked at call time). */
-    embedFile: string;
+    /**
+     * Path to the `.embed.db`, or `null` when capability was unavailable at
+     * server preparation time and remains disabled until restart.
+     */
+    embedFile: string | null;
     /**
      * v2.9.0 — optional cross-encoder reranker config. When set, the top-N
      * hits from RRF (default 50) are re-scored by a BGE-style cross-encoder
@@ -1796,7 +1832,7 @@ export async function searchHybrid(
     /** v2.8.0: content-source kind ("md" | "pdf"). */
     kind: "md" | "pdf";
   }> = [];
-  if (existsSync(ctx.embedFile)) {
+  if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {
     try {
       // v2.0.0-beta.1 P1 fix: pass `min_score: 0` to fan-out the embeddings
       // ranker uniformly with BM25 (no floor) and TF-IDF (0.05 floor). The
@@ -1866,6 +1902,14 @@ export async function searchHybrid(
         }
       }
       if (embedRanked.length > 0) signalsUsed.push("embeddings");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      signalErrors.embeddings = msg;
+      process.stderr.write(`obsidian_search: embeddings ranker failed — ${msg}\n`);
+    }
+  } else if (ctx.embedFile !== null) {
+    try {
+      await assertEmbeddingIndexNotQuarantined(ctx.embedFile);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       signalErrors.embeddings = msg;

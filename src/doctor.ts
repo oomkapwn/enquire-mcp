@@ -25,6 +25,7 @@ import { defaultIndexFile, type TokenizeMode } from "./fts5.js";
 import { buildPrivacyArgs, CONFIG_TIERS, type ConfigTier, isConfigTier, shellQuote } from "./mcp-config.js";
 import { EMBED_DB_SCHEMA_VERSION, FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { Vault } from "./vault.js";
+import { watcherActivationGuardPath } from "./watcher-activation-guard.js";
 
 /** Severity buckets surfaced in the diagnostic UI. */
 export type CheckStatus = "ok" | "warn" | "missing" | "error" | "unverified";
@@ -999,7 +1000,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       subcommand,
       "--vault",
       vault.root,
-      ...(fileOverride ? [fileFlag, path.resolve(fileOverride)] : []),
+      ...(fileOverride !== undefined ? [fileFlag, path.resolve(fileOverride)] : []),
       ...buildPrivacyArgs({
         ...(opts.excludeGlobs ? { excludeGlobs: opts.excludeGlobs } : {}),
         ...(opts.readPaths ? { readPaths: opts.readPaths } : {})
@@ -1037,6 +1038,100 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       detail: msg,
       hint: "Check the path exists and is a directory"
     });
+  }
+
+  // Every serve path checks the default embedding database even when the
+  // caller selected a custom file: prepareServerDeps enforces that default
+  // restart interlock before registering tools. A custom embedding file owns
+  // an independent guard as well, so doctor reports a second, tier-aware check
+  // whenever the resolved override differs from the default.
+  if (vaultExists) {
+    const defaultEmbedFile = defaultEmbedDbFile(vault.root);
+    const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
+    const appendWatcherActivationGuardCheck = async ({
+      embedFile,
+      id,
+      label,
+      required,
+      blockedDetail
+    }: {
+      embedFile: string;
+      id: string;
+      label: string;
+      required: boolean;
+      blockedDetail: string;
+    }): Promise<void> => {
+      const guardPath = watcherActivationGuardPath(embedFile);
+      const recoveryArgs = [
+        "clear-embeddings",
+        "--vault",
+        vault.root,
+        ...(embedFile === defaultEmbedFile ? [] : ["--embed-file", embedFile])
+      ];
+      const recoveryCommand = `${repairPrefix} ${recoveryArgs.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ")}`;
+      const manualAudit =
+        `The strict recovery preflights the interlock before deleting indexes and refuses unsafe or foreign ` +
+        `shapes. If it refuses, inspect ${shellQuote(guardPath, opts.repairCommandPlatform)} without following ` +
+        "it and remove it only after a manual ownership audit; then rerun the same recovery command and rebuild " +
+        "with the same model, quantization, late-chunk, privacy and PDF settings.";
+
+      try {
+        const guardStat = await fs.lstat(guardPath);
+        const objectKind = guardStat.isSymbolicLink()
+          ? "symlink"
+          : guardStat.isDirectory()
+            ? "directory"
+            : guardStat.isFile()
+              ? "file"
+              : "special object";
+        checks.push({
+          id,
+          label,
+          status: required ? "error" : "warn",
+          required,
+          detail: `stranded ${objectKind} ${blockedDetail}`,
+          hint: `Stop every enquire-mcp process using this vault; run ${recoveryCommand}. ${manualAudit}`
+        });
+      } catch (error) {
+        if (isMissingPathError(error)) {
+          checks.push({
+            id,
+            label,
+            status: "ok",
+            required,
+            detail: "no incomplete watcher generation is quarantined"
+          });
+        } else {
+          checks.push({
+            id,
+            label,
+            status: required ? "error" : "warn",
+            required,
+            detail: `cannot verify interlock state: ${error instanceof Error ? error.message : String(error)}`,
+            hint:
+              `Inspect ${shellQuote(guardPath, opts.repairCommandPlatform)} without following or deleting it. ` +
+              "Do not run destructive recovery until permissions and ownership have been audited manually."
+          });
+        }
+      }
+    };
+
+    await appendWatcherActivationGuardCheck({
+      embedFile: defaultEmbedFile,
+      id: "watcher:activation-guard",
+      label: "Watcher startup interlock clear",
+      required: true,
+      blockedDetail: "blocks every server start"
+    });
+    if (selectedEmbedFile !== defaultEmbedFile) {
+      await appendWatcherActivationGuardCheck({
+        embedFile: selectedEmbedFile,
+        id: "watcher:selected-activation-guard",
+        label: "Selected embedding interlock clear",
+        required: capabilityRequired(tier, "hybrid"),
+        blockedDetail: "quarantines the selected embedding index"
+      });
+    }
   }
 
   // 2. Capability dependencies. Probe concurrently: transformers.js and the
@@ -1192,7 +1287,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // 4. Embedding index — validate schema + vault/model/quantization metadata
   // from the same immutable snapshot mechanism.
   if (vaultExists) {
-    const embedFile = opts.embedFile ?? defaultEmbedDbFile(vault.root);
+    const embedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedDbFile(vault.root);
     if (hasSqlite) {
       const inspection = await inspectEmbedSnapshot(embedFile);
       if (inspection.ok) {

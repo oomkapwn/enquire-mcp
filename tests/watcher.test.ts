@@ -239,8 +239,8 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     // Construct + close without start — this.watcher remains null, so
     // the inner branch at line 137 (if (this.watcher)) is skipped.
     const w = new VaultWatcher({ vault: v, silent: true });
-    await w.close(); // closed=false → set closed=true; no watcher to close
-    await w.close(); // closed=true → early return
+    await w.close(); // creates + resolves the shared close promise
+    await w.close(); // joins the same resolved promise
   });
 
   // v3.6.2 branch-coverage uplift: exercise the silent=false stderr paths
@@ -819,17 +819,89 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
     return { w, embedDb, index, rowsByLabel, persistFile, v, fts };
   }
 
-  it("flushHnswToDisk is a no-op when no live update occurred (not dirty)", async () => {
-    const { w, embedDb, persistFile, fts } = await setup(true);
+  it("flushHnswToDisk skips a clean index and every generation with an uncertain live graph", async () => {
+    const { w, embedDb, index, persistFile, v, fts } = await setup(true);
     try {
       const flushed = await w.flushHnswToDisk();
       expect(flushed).toBe(false);
       // No sidecar should be written.
-      const binExists = await fs
-        .access(`${persistFile}.bin`)
-        .then(() => true)
-        .catch(() => false);
-      expect(binExists).toBe(false);
+      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
+      const watcherSource = await fs.readFile(new URL("../src/watcher.ts", import.meta.url), "utf8");
+      for (const failureLog of ["watcher embed-db PDF sync failed", "watcher embed-db sync failed"]) {
+        const logPosition = watcherSource.indexOf(failureLog);
+        expect(logPosition, `${failureLog} catch must exist`).toBeGreaterThanOrEqual(0);
+        expect(watcherSource.slice(Math.max(0, logPosition - 700), logPosition)).toMatch(
+          /if\s*\(this\.hnsw\)\s*this\.hnswPersistUnsafe\s*=\s*true;/
+        );
+      }
+
+      const watcherInternals = w as unknown as {
+        hnswPersistUnsafe: boolean;
+        handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void>;
+        syncHnswForFile(
+          relPath: string,
+          kind: "md" | "pdf",
+          oldIds: ReadonlyArray<number>,
+          newRows: ReadonlyArray<{
+            id: number;
+            vector: Float32Array;
+            chunkIndex: number;
+            lineStart: number;
+            lineEnd: number;
+            textPreview: string;
+          }>
+        ): { removed: number; added: number } | null;
+      };
+      const syncHnswForFile = watcherInternals.syncHnswForFile.bind(w);
+      const row = {
+        vector: new Float32Array([1, 0, 0, 0]),
+        chunkIndex: 0,
+        lineStart: 1,
+        lineEnd: 1,
+        textPreview: "persistence safety control"
+      };
+
+      // First prove the index is dirty and would ordinarily persist.
+      expect(syncHnswForFile("safe.md", "md", [], [{ id: 10_001, ...row }])).toEqual({
+        removed: 0,
+        added: 1
+      });
+      // Then model a native applyDiff that throws after the EmbedDb-side
+      // mutation. The permanent unsafe latch must dominate the earlier dirty
+      // state, otherwise close would stamp a partial graph with a fresh
+      // EmbedDb signature and the next serve would trust it.
+      (
+        index as unknown as {
+          applyDiff(): { removed: number; added: number };
+        }
+      ).applyDiff = () => {
+        throw new Error("synthetic partial HNSW diff");
+      };
+      expect(syncHnswForFile("unsafe.md", "md", [], [{ id: 10_002, ...row }])).toBeNull();
+      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+
+      // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
+      // before syncHnswForFile. Prove the surrounding markdown catch sets the
+      // same permanent latch instead of laundering that stale graph on close.
+      watcherInternals.hnswPersistUnsafe = false;
+      const originalUpsertNote = embedDb.upsertNote.bind(embedDb);
+      let mismatchInjectedAfterCommit = false;
+      embedDb.upsertNote = (...args: Parameters<typeof embedDb.upsertNote>) => {
+        const result = originalUpsertNote(...args);
+        mismatchInjectedAfterCommit = args[2].length > 0 && result.newIds.length === args[2].length;
+        return { ...result, newIds: result.newIds.slice(1) };
+      };
+      try {
+        await watcherInternals.handle(v.resolveInside("a.md"), "change");
+      } finally {
+        embedDb.upsertNote = originalUpsertNote;
+      }
+      expect(mismatchInjectedAfterCommit).toBe(true);
+      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+
+      await expect(w.flushHnswToDisk()).resolves.toBe(false);
+      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await w.close();
       embedDb.close();

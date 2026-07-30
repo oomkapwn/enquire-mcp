@@ -186,6 +186,8 @@ jobs:
             }
           '
       - run: npm test -- tests/windows-path-safety.test.ts
+      - name: Test watcher startup interlock on Windows
+        run: npm test -- tests/watcher-activation-guard.test.ts
 
   test-macos:
     # v2.0.0-beta.3: cross-platform advisory job (not required by branch

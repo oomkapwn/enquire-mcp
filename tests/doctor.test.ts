@@ -29,9 +29,10 @@ import {
   resolveRerankerModel,
   resolveTransformersCacheDir
 } from "../src/embeddings.js";
-import { FtsIndex } from "../src/fts5.js";
+import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { EMBED_DB_SCHEMA_VERSION, FTS_SCHEMA_VERSION } from "../src/schema-contract.js";
 import { Vault } from "../src/vault.js";
+import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 let root: string;
 let cacheRoot: string;
@@ -202,6 +203,10 @@ describe("runDoctor — tiers and readiness", () => {
     const result = await diagnose({ tier: "basic", dependencyProbe: async () => false });
     expect(result.ready).toBe(true);
     expect(result.summary.missing).toBe(0);
+    expect(result.checks.find((check) => check.id === "watcher:activation-guard")).toMatchObject({
+      status: "ok",
+      required: true
+    });
     expect(result.checks.find((check) => check.id === "dep:better-sqlite3")?.status).toBe("warn");
     expect(result.checks.find((check) => check.id === "index:fts5")?.status).toBe("warn");
     expect(result.checks.find((check) => check.id === "model:embedding-cache")?.status).toBe("warn");
@@ -249,7 +254,7 @@ describe("runDoctor — tiers and readiness", () => {
         .map((check) => check.id)
         .sort();
 
-    expect(requiredIds(basic)).toEqual(["vault"]);
+    expect(requiredIds(basic)).toEqual(["vault", "watcher:activation-guard"]);
     expect(requiredIds(hybrid)).toEqual([
       "dep:better-sqlite3",
       "dep:hnsw",
@@ -258,9 +263,132 @@ describe("runDoctor — tiers and readiness", () => {
       "index:fts5",
       "model:embedding-cache",
       "model:reranker-cache",
-      "vault"
+      "vault",
+      "watcher:activation-guard"
     ]);
     expect(requiredIds(live)).toEqual([...requiredIds(hybrid), "dep:pdfjs"].sort());
+
+    for (const result of [basic, hybrid, live]) {
+      expect(result.checks.find((check) => check.id === "watcher:activation-guard")).toMatchObject({
+        status: "ok",
+        required: true
+      });
+    }
+
+    const guardedEmbedFile = defaultIndexFile(await fs.realpath(root)).replace(/\.fts5\.db$/, ".embed.db");
+    const guardPath = watcherActivationGuardPath(guardedEmbedFile);
+    await fs.mkdir(path.dirname(guardPath), { recursive: true });
+    const assertBlockedForEveryTier = async () => {
+      for (const tier of ["basic", "hybrid", "hybrid-live"] as const) {
+        const result = await diagnose({
+          tier,
+          dependencyProbe: async () => false
+        });
+        expect(
+          result.checks.find((check) => check.id === "watcher:activation-guard"),
+          tier
+        ).toMatchObject({
+          status: "error",
+          required: true
+        });
+        expect(result.ready, tier).toBe(false);
+      }
+    };
+    const removeExactGuardObject = async () => {
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(guardPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      if (stat.isDirectory() && !stat.isSymbolicLink()) {
+        await fs.rmdir(guardPath);
+      } else {
+        await fs.unlink(guardPath);
+      }
+    };
+
+    // NEGATIVE controls: an authentic-shape directory, a foreign regular
+    // object, and a dangling symlink all fail closed. Doctor must not inspect
+    // through or remove any of them.
+    try {
+      await fs.mkdir(guardPath);
+      await assertBlockedForEveryTier();
+      const directoryResult = await diagnose({
+        tier: "hybrid",
+        dependencyProbe: async () => false
+      });
+      const directoryHint = directoryResult.checks.find((check) => check.id === "watcher:activation-guard")?.hint;
+      expect(directoryHint).toMatch(/strict recovery preflights/i);
+      expect(directoryHint).toMatch(/manual ownership audit/i);
+      expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+      await fs.rmdir(guardPath);
+
+      await fs.writeFile(guardPath, "foreign guard object");
+      await assertBlockedForEveryTier();
+      expect(await fs.readFile(guardPath, "utf8")).toBe("foreign guard object");
+      await fs.unlink(guardPath);
+
+      if (process.platform !== "win32") {
+        const missingTarget = path.join(cacheRoot, "missing-guard-target");
+        await fs.symlink(missingTarget, guardPath);
+        await assertBlockedForEveryTier();
+        expect((await fs.lstat(guardPath)).isSymbolicLink()).toBe(true);
+        await fs.unlink(guardPath);
+      }
+    } finally {
+      await removeExactGuardObject();
+    }
+
+    // A selected custom embedding DB has its own guard. It is advisory for
+    // basic, required for both hybrid tiers, and its recovery hint must retain
+    // the exact --embed-file override. The default guard check remains present
+    // and required because server startup always checks it too.
+    const customEmbedFile = path.join(cacheRoot, "selected custom.embed.db");
+    const customGuardPath = watcherActivationGuardPath(customEmbedFile);
+    await fs.mkdir(customGuardPath);
+    try {
+      for (const tier of ["basic", "hybrid", "hybrid-live"] as const) {
+        const result = await diagnose({
+          tier,
+          embedFile: customEmbedFile,
+          dependencyProbe: async () => false
+        });
+        expect(
+          result.checks.find((check) => check.id === "watcher:activation-guard"),
+          tier
+        ).toMatchObject({
+          required: true,
+          status: "ok"
+        });
+        const customCheck = result.checks.find((check) => check.id === "watcher:selected-activation-guard");
+        expect(customCheck, tier).toMatchObject({
+          required: tier !== "basic",
+          status: tier === "basic" ? "warn" : "error"
+        });
+        expect(customCheck?.hint, tier).toContain("--embed-file");
+        expect(customCheck?.hint, tier).toContain(customEmbedFile);
+        expect(customCheck?.hint, tier).toMatch(/strict recovery preflights/i);
+        expect(customCheck?.hint, tier).toMatch(/manual ownership audit/i);
+        expect(result.ready, tier).toBe(tier === "basic");
+      }
+      expect((await fs.lstat(customGuardPath)).isDirectory()).toBe(true);
+    } finally {
+      await fs.rmdir(customGuardPath);
+    }
+
+    // Positive control: the conditional custom check still exists and clears
+    // when the exact custom guard is absent.
+    const clearCustom = await diagnose({
+      tier: "hybrid",
+      embedFile: customEmbedFile,
+      dependencyProbe: async () => false
+    });
+    expect(clearCustom.checks.find((check) => check.id === "watcher:selected-activation-guard")).toMatchObject({
+      status: "ok",
+      required: true
+    });
   });
 
   it("NEGATIVE control — hybrid is not ready without its models and indexes", async () => {

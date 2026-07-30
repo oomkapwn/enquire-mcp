@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
+import { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
 import { resolveModel, setEmbeddingsOffline } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, syncFtsIndex } from "./fts5.js";
@@ -21,12 +23,18 @@ import {
 } from "./tool-registry.js";
 import { Vault } from "./vault.js";
 import { VaultWatcher } from "./watcher.js";
+import {
+  armWatcherActivationGuard,
+  assertWatcherActivationGuardClear,
+  releaseWatcherActivationGuard,
+  type WatcherActivationGuard
+} from "./watcher-activation-guard.js";
 import type { WriteRequestTracker } from "./write-lifecycle.js";
 
+export { syncFtsIndex } from "./fts5.js";
 // v3.12.0-rc.20 — bulk embedding sync moved to a testable leaf module.
 // Re-export the historical server.js paths so CLI/scripts keep working.
-export { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
-export { syncFtsIndex } from "./fts5.js";
+export { syncEmbedDb, syncPdfEmbedDb };
 
 /**
  * Configuration for {@link startServer} / {@link prepareServerDeps}.
@@ -163,6 +171,15 @@ export interface ServerDeps {
    */
   watcherEmbedDb: EmbedDb | null;
   /**
+   * Embedding capability frozen for this prepared server generation.
+   *
+   * With `--watch`, `null` means no EmbedDb existed at preparation time, so
+   * search remains lexical until restart even if another process builds a DB
+   * later. `undefined` preserves historical dynamic discovery for non-watcher
+   * and backward-compatible caller-constructed dependencies.
+   */
+  embedDbFile?: string | null;
+  /**
    * v3.11.0 — opt-in closed-loop feedback store, opened once on serve start when
    * `--feedback-weight > 0`. Shared across every per-session `McpServer` (HTTP)
    * so a `mark_useful` in one session influences the search boost in all of them.
@@ -206,11 +223,37 @@ export interface ServerDeps {
   } | null;
 }
 
+function watcherActivationRecoveryError(cause: unknown): Error {
+  return new Error(
+    "enquire: a watcher startup generation did not complete, so its embedding-derived indexes are quarantined. " +
+      "Stop every enquire-mcp process using this vault, then run the strict " +
+      "`enquire-mcp clear-embeddings --vault <vault>` recovery. It refuses unsafe or foreign interlock " +
+      "shapes before deleting indexes; if it refuses, inspect the guard without following it and remove it " +
+      "only after a manual ownership audit. Then rebuild successfully with the SAME embedding model, " +
+      "quantization, late-chunk, privacy (`--exclude-glob` / `--read-paths`) and PDF settings previously " +
+      "used for this vault before restarting.",
+    { cause }
+  );
+}
+
+function closeWatcherEmbedDbAfterFailure(db: EmbedDb | null, phase: string): void {
+  if (!db) return;
+  try {
+    db.close();
+  } catch (error) {
+    process.stderr.write(
+      `enquire: watcher EmbedDb cleanup after ${phase} failure also failed — ${
+        error instanceof Error ? error.message : String(error)
+      }\n`
+    );
+  }
+}
+
 /**
  * One-time bootstrap of the heavy deps (vault open + FTS5 sync + watcher).
  * Idempotent on a per-call basis but NOT designed to be called multiple
- * times in one process — the FTS5 sync would double-index. Stdio + HTTP
- * each call this exactly once at startup.
+ * times in one process — it would acquire duplicate live watcher/SQLite
+ * resources. Stdio + HTTP each call this exactly once at startup.
  */
 export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps> {
   // Programmatic stdio/HTTP consumers bypass src/cli.ts, so the privacy
@@ -234,6 +277,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   if (opts.enableReranker && opts.rerankerTopN !== undefined) {
     parsePositiveInt(opts.rerankerTopN, "--reranker-top-n");
   }
+  if (opts.watch && opts.ocrPdfs && !opts.includePdfs) {
+    throw new Error("enquire: --ocr-pdfs requires --include-pdfs when --watch is enabled");
+  }
+  const validatedLateChunkContext =
+    opts.watch && opts.lateChunkContext !== undefined
+      ? parsePositiveInt(opts.lateChunkContext, "--late-chunk-context")
+      : 0;
+  const validatedOcrMaxPages =
+    opts.watch && opts.ocrPdfs && opts.ocrMaxPages !== undefined
+      ? parsePositiveInt(opts.ocrMaxPages, "--ocr-max-pages")
+      : undefined;
+  const validatedHnswEf =
+    opts.useHnsw && opts.hnswEf !== undefined ? parsePositiveInt(opts.hnswEf, "--hnsw-ef") : undefined;
 
   const vault = new Vault(opts.vault, {
     enableWrite: !!opts.enableWrite,
@@ -245,6 +301,16 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     readPaths: opts.readPaths
   });
   await vault.ensureExists();
+  const startupEmbedFile = embedDbPath(vault.root);
+  try {
+    await assertWatcherActivationGuardClear(startupEmbedFile);
+  } catch (error) {
+    throw watcherActivationRecoveryError(error);
+  }
+  // Freeze the embedding capability once for this server generation. A DB
+  // created after this point is intentionally ignored until restart; otherwise
+  // search could publish it while this watcher remains FTS-only and unarmed.
+  const startupEmbedDbAvailable = existsSync(startupEmbedFile);
 
   // Optional FTS5 index. Sync on boot so the first MCP call sees a fresh
   // index. For typical vault sizes this is sub-second; cold-build of a fresh
@@ -316,8 +382,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     }
   }
 
-  // Optional watcher — only when --watch is passed. Starts AFTER the initial
-  // FTS5 sync so we don't double-index files during boot.
+  // Optional watcher — only when --watch is passed. Starts after the initial
+  // FTS5 sync, then performs one post-ready incremental diff to close
+  // chokidar's `ignoreInitial` pre-capture window.
   //
   // v3.7.16 P1-5 — when --include-pdfs is also set, the watcher tracks
   // PDF lifecycle events too, keeping the FTS5 PDF chunks in sync with
@@ -328,6 +395,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // init's short-lived handle). Opened below if `--watch` + the embed-db
   // file exists; closed by startServer's shutdown handler.
   let watcherEmbedDb: EmbedDb | null = null;
+  let watcherActivationGuard: WatcherActivationGuard | null = null;
   // v3.9.0-rc.16 — `--ocr-pdfs` only takes effect on the watcher path (it
   // re-OCRs scanned PDFs as they change and feeds the embed pipeline). Warn
   // if it was passed without `--watch` so the flag isn't a silent no-op.
@@ -343,25 +411,52 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     // events would be filtered out before the OCR codepath runs). Note
     // we DON'T pass `ocrPdfs` at this point — the watcher's constructor
     // also requires an `embedDb`, which we wire below via attachEmbed()
-    // because the embed-db open happens AFTER watcher start so file
-    // events from boot-time edits aren't dropped. The ocrPdfs flag is
-    // therefore set during attachEmbed (passed as a synthetic constructor
-    // option once the embed handle is ready). Until attachEmbed runs,
-    // PDF events take the no-embed-db path (FTS5 reindex + skip).
-    watcher = new VaultWatcher({ vault, ftsIndex, includePdfs: opts.includePdfs === true });
-    await watcher.start();
-    // v3.8.0-rc.2 R-7 — wire embed-db sync. Pre-3.8.0 the watcher only
-    // updated FTS5 on .md edits; embed-db drifted silently until manual
-    // `enquire-mcp build-embeddings` ran. Users on `--use-hnsw` or
-    // semantic search saw retrieval quality slowly degrade across a
-    // session. Now: if the embed-db file exists, open a watcher-owned
-    // handle (WAL mode safe alongside HNSW init's separate handle),
-    // load the embedder lazily, attach to the watcher. Failures are
-    // logged as warnings — the FTS5-only watcher continues working.
+    // because the embed-db open happens AFTER watcher start. The watcher
+    // captures (but does not process) boot-window events until the optional
+    // embed + HNSW sinks reach their terminal startup state below. The
+    // ocrPdfs flag is therefore set during attachEmbed, once that handle is
+    // ready; activate() later reconciles every captured path across all
+    // successfully attached sinks.
+    watcher = new VaultWatcher({
+      vault,
+      ftsIndex,
+      includePdfs: opts.includePdfs === true,
+      deferActivation: true
+    });
     try {
-      const embedFile = embedDbPath(vault.root);
-      const fsMod = await import("node:fs");
-      if (fsMod.existsSync(embedFile)) {
+      // Arm before chokidar can receive its first event. Any crash, attachment
+      // failure, overflow, or non-quiescing activation leaves this exact
+      // interlock behind; every later serve then refuses to publish the
+      // potentially stale embedding index until explicit recovery.
+      if (startupEmbedDbAvailable) {
+        watcherActivationGuard = await armWatcherActivationGuard(startupEmbedFile);
+      }
+      await watcher.start();
+
+      // `ignoreInitial:true` suppresses the initial add stream. Repeat the
+      // incremental FTS diff after ready so a file created during chokidar's
+      // first scan cannot remain in a pre-capture gap.
+      if (ftsIndex) {
+        await syncFtsIndex(vault, ftsIndex);
+        if (opts.includePdfs) {
+          try {
+            await syncPdfFtsIndex(vault, ftsIndex);
+          } catch (error) {
+            process.stderr.write(
+              `enquire: post-ready pdf-fts5 reconciliation skipped — ${
+                error instanceof Error ? error.message : String(error)
+              }\n`
+            );
+          }
+        }
+      }
+
+      // v3.8.0-rc.2 R-7 — wire embed-db sync. When an existing EmbedDb
+      // cannot be attached, startup now fails closed: the same file would
+      // otherwise remain lazily available to search tools while no watcher
+      // could keep it fresh.
+      const embedFile = startupEmbedFile;
+      if (startupEmbedDbAvailable) {
         // Peek the existing embed-db meta to match the model alias +
         // dim + quantization the file was built with. Same posture as
         // HNSW init (CRIT-1 v3.6.1) — never DROP TABLE on mismatch.
@@ -379,11 +474,11 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         await watcherEmbedDb.open();
         // Load the already-cached embedder (~2-5s warm for the default
         // multilingual model); subsequent calls reuse the transformers.js
-        // pipeline. Done synchronously here so a cache/load failure surfaces
-        // BEFORE watcher events start arriving.
+        // pipeline. The watcher is already capturing events, but none can
+        // mutate FTS/embed state until the startup activation barrier.
         const { loadEmbedder } = await import("./embeddings.js");
         const embedder = await loadEmbedder(model.alias);
-        const lateChunk = opts.lateChunkContext ? parsePositiveInt(opts.lateChunkContext, "--late-chunk-context") : 0;
+        const lateChunk = validatedLateChunkContext;
         watcher.attachEmbed(watcherEmbedDb, embedder, lateChunk);
         process.stderr.write(
           `enquire: watcher embed-db sync enabled (model=${model.alias}, dim=${model.dim}, quantization=${quantization}, late-chunk-context=${lateChunk})\n`
@@ -395,8 +490,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         // value; opts.ocrLangs + opts.ocrMaxPages cascade through.
         if (opts.ocrPdfs) {
           try {
-            const maxPages =
-              opts.ocrMaxPages !== undefined ? parsePositiveInt(opts.ocrMaxPages, "--ocr-max-pages") : undefined;
+            const maxPages = validatedOcrMaxPages;
             watcher.setOcrPdfs(true, opts.ocrLangs, maxPages);
             process.stderr.write(
               `enquire: watcher OCR-on-watch enabled (langs=${opts.ocrLangs ?? "eng"}${
@@ -404,30 +498,49 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               })\n`
             );
           } catch (ocrErr) {
-            // Fail-loud-but-soft: the error is logged + the rest of
-            // watcher startup continues. This matches the existing
-            // attachEmbed catch above.
             process.stderr.write(
-              `enquire: watcher OCR-on-watch DISABLED — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
+              `enquire: watcher OCR-on-watch attachment FAILED — ${
+                ocrErr instanceof Error ? ocrErr.message : String(ocrErr)
+              }\n`
             );
+            throw ocrErr;
           }
         }
+        // `ignoreInitial:true` can suppress a file created during chokidar's
+        // first scan. Diff attached EmbedDb declarations against the current
+        // privacy-filtered vault and capture every mismatch. PDF replay then
+        // follows this watcher's configured OCR policy.
+        await watcher.captureAttachedSinkDrift();
       } else if (opts.ocrPdfs) {
         // v3.9.0-rc.16 — `--ocr-pdfs` needs an embed-db to index the OCR'd
         // text; without one the flag is a silent no-op. Warn + continue
-        // FTS5-only instead of failing the whole watcher.
+        // FTS5-only instead of failing the whole watcher. This server
+        // generation intentionally cannot adopt a DB built after startup.
         process.stderr.write(
-          "enquire: --ocr-pdfs requested but no embed-db found — OCR-on-watch needs an embed-db to index scanned-PDF text. Run `enquire-mcp build-embeddings` first; continuing with FTS5-only watch.\n"
+          "enquire: --ocr-pdfs requested but no embed-db found — this generation remains FTS5-only. " +
+            "Stop this server, run `enquire-mcp build-embeddings`, then restart to enable OCR-on-watch.\n"
         );
       }
     } catch (err) {
       process.stderr.write(
-        `enquire: watcher embed-db sync DISABLED (will continue with fts5-only) — ${err instanceof Error ? err.message : String(err)}\n`
+        `enquire: watcher startup FAILED before activation — ${err instanceof Error ? err.message : String(err)}\n`
       );
-      if (watcherEmbedDb) {
-        watcherEmbedDb.close();
-        watcherEmbedDb = null;
+      await watcher.close().catch((closeErr) => {
+        process.stderr.write(
+          `enquire: watcher cleanup after startup failure also failed — ${
+            closeErr instanceof Error ? closeErr.message : String(closeErr)
+          }\n`
+        );
+      });
+      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");
+      watcherEmbedDb = null;
+      try {
+        ftsIndex?.close();
+      } catch {
+        // Preserve the watcher startup error below.
       }
+      if (startupEmbedDbAvailable) throw watcherActivationRecoveryError(err);
+      throw err;
     }
   }
 
@@ -437,11 +550,11 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   let hnswContext: ServerDeps["hnswContext"] = null;
   if (opts.useHnsw) {
     try {
-      const embedFile = embedDbPath(vault.root);
-      const fsMod = await import("node:fs");
-      if (!fsMod.existsSync(embedFile)) {
+      const embedFile = startupEmbedFile;
+      if (!startupEmbedDbAvailable) {
         process.stderr.write(
-          `enquire: --use-hnsw passed but ${embedFile} doesn't exist; skipping HNSW build. Run \`enquire-mcp build-embeddings --vault ${vault.root}\` first.\n`
+          `enquire: --use-hnsw passed but ${embedFile} doesn't exist; this generation remains lexical. ` +
+            `Stop this server, run \`enquire-mcp build-embeddings --vault ${vault.root}\`, then restart.\n`
         );
       } else {
         // v3.6.1 CRIT-1 — peek the existing embed-db's meta to discover
@@ -486,7 +599,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
           // sidecars can never drift (right-to-erasure completeness).
           const persistFile = hnswPersistBase(embedFile);
           const signature = db.computeSignature();
-          const efOverride = opts.hnswEf ? parsePositiveInt(opts.hnswEf, "--hnsw-ef") : undefined;
+          const efOverride = validatedHnswEf;
           let loaded: {
             index: import("./hnsw.js").HnswIndex;
             rowByLabel: Map<
@@ -532,6 +645,10 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                 );
                 process.stderr.write(`enquire: watcher HNSW live-update enabled (loaded-from-disk index)\n`);
               } catch (err) {
+                // A static HNSW context without live watcher attachment
+                // would become stale on the first edit. Fall back to the
+                // brute-force path instead of publishing that candidate.
+                hnswContext = null;
                 process.stderr.write(
                   `enquire: watcher HNSW live-update DISABLED — ${err instanceof Error ? err.message : String(err)}\n`
                 );
@@ -615,6 +732,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   process.stderr.write(`enquire: watcher HNSW live-update enabled\n`);
                 } catch (err) {
                   // Fail-soft. Log + continue; watcher still does embed-db sync.
+                  // Do not publish a static HNSW context that cannot receive
+                  // the activation replay or later live updates.
+                  hnswContext = null;
                   process.stderr.write(
                     `enquire: watcher HNSW live-update DISABLED — ${err instanceof Error ? err.message : String(err)}\n`
                   );
@@ -633,6 +753,45 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
         `enquire: HNSW build failed; falling back to brute-force semantic search — ${err instanceof Error ? err.message : String(err)}\n`
       );
       hnswContext = null;
+    }
+  }
+
+  // v3.12.0-rc.25 — the one startup linearization point for watcher
+  // correctness. Until now, edits received while the embedder or HNSW index
+  // initialized could update only the sinks already attached at that moment,
+  // permanently splitting FTS, EmbedDb, and HNSW generations. Activation
+  // replays every captured exact path only after all optional sink attempts
+  // have terminated. Per-sink handlers remain fail-soft by the documented
+  // S-8d boundary; activation itself never converts overflow or churn failure
+  // into startup success.
+  if (watcher) {
+    try {
+      await watcher.activate();
+      if (watcherActivationGuard) {
+        await releaseWatcherActivationGuard(watcherActivationGuard);
+        watcherActivationGuard = null;
+      }
+    } catch (err) {
+      // Activation overflow/churn or an interlock-release failure means we
+      // cannot prove index convergence. Fail startup closed and deliberately
+      // leave the durable guard in place so an automatic restart cannot publish
+      // the stale EmbedDb through a non-watcher search path.
+      await watcher.close().catch((closeErr) => {
+        process.stderr.write(
+          `enquire: watcher cleanup after activation failure also failed — ${
+            closeErr instanceof Error ? closeErr.message : String(closeErr)
+          }\n`
+        );
+      });
+      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");
+      watcherEmbedDb = null;
+      try {
+        ftsIndex?.close();
+      } catch {
+        // Best-effort cleanup; the activation failure below remains primary.
+      }
+      if (watcherActivationGuard) throw watcherActivationRecoveryError(err);
+      throw err;
     }
   }
 
@@ -656,6 +815,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     ftsIndex,
     watcher,
     watcherEmbedDb,
+    ...(opts.watch ? { embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null } : {}),
     feedbackStore,
     disabledTools: new Set(opts.disabledTools ?? []),
     enabledTools: new Set(opts.enabledTools ?? []),
@@ -776,7 +936,8 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
     rerankerConfig,
     deps.hnswContext,
     recencyConfig,
-    feedbackContext
+    feedbackContext,
+    deps.embedDbFile
   );
   if (deps.feedbackStore) registerFeedbackTool(server, deps.feedbackStore, writeTracker);
   if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault, writeTracker);

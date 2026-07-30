@@ -807,10 +807,7 @@ describe("VaultWatcher single-generation staging", () => {
       { embedder: churningEmbedder, deferActivation: false }
     );
     churnPath = path.join(fixture.vault.root, "Churn.md");
-    await writeWithLaterMtime(
-      churnPath,
-      "# Churn\n\nchurncandidate marker begins the continuously changing event.\n"
-    );
+    await writeWithLaterMtime(churnPath, "# Churn\n\nchurncandidate marker begins the continuously changing event.\n");
 
     await enqueue(fixture.watcher, churnPath, "change");
 

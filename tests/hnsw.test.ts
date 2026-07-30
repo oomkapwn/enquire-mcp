@@ -17,11 +17,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
-import {
-  adaptiveHnswRefill,
-  assertHnswModelMatchesEmbedder,
-  selectUsableHnswContext
-} from "../src/tools/search.js";
+import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder, selectUsableHnswContext } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
 function l2(v: Float32Array): Float32Array {

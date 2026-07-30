@@ -883,9 +883,7 @@ export function selectUsableHnswContext(hnsw?: HnswSearchContext | null): HnswSe
   return hnsw?.health?.hnswUsable === false ? null : (hnsw ?? null);
 }
 
-function watcherSemanticRouteIsQuarantined(
-  health?: Readonly<{ semanticUsable: boolean }> | null
-): boolean {
+function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: boolean }> | null): boolean {
   return health?.semanticUsable === false;
 }
 
@@ -1256,11 +1254,7 @@ export async function embeddingsSearch(
         maxLabels,
         limit,
         searchKnn: (k) =>
-          usableHnsw.index.searchKnn(
-            qVec,
-            k,
-            usableHnsw.ef !== undefined ? { ef: usableHnsw.ef } : undefined
-          ),
+          usableHnsw.index.searchKnn(qVec, k, usableHnsw.ef !== undefined ? { ef: usableHnsw.ef } : undefined),
         filter: (labels, distances) => {
           let h = hnswResultsToHits({ labels, distances }, usableHnsw.rowByLabel);
           if (folderPrefix) h = h.filter((row) => row.rel_path.startsWith(folderPrefix));

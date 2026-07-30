@@ -83,13 +83,9 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     expect(sinkQuarantined.signals_used).toEqual(["tfidf"]);
     expect(sinkQuarantined.signal_errors?.embeddings).toMatch(/watcher sink-commit failure/i);
     await expect(
-      embeddingsSearch(
-        v,
-        { query: "OAuth JWT tokens", limit: 5 },
-        missingEmbedFile,
-        undefined,
-        { semanticUsable: false }
-      )
+      embeddingsSearch(v, { query: "OAuth JWT tokens", limit: 5 }, missingEmbedFile, undefined, {
+        semanticUsable: false
+      })
     ).rejects.toThrow(/watcher sink-commit failure/i);
 
     // NEGATIVE control: a stranded watcher-startup interlock must quarantine

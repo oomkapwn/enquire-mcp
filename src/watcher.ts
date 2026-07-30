@@ -1209,11 +1209,7 @@ export class VaultWatcher {
             if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
           }
         } else {
-          const { oldIds, newIds } = this.embedDb.upsertNote(
-            relPath,
-            generation.mtimeMs,
-            staged.embedResult.rows
-          );
+          const { oldIds, newIds } = this.embedDb.upsertNote(relPath, generation.mtimeMs, staged.embedResult.rows);
           embedNote = ` + embed-db upserted (${staged.embedResult.chunks} chunks)`;
           if (this.hnsw) {
             const hnswResult = this.syncHnswForFile(
@@ -1420,9 +1416,7 @@ export class VaultWatcher {
           );
           if (this.activationState === "activating") throw error;
           if (!this.silent) {
-            process.stderr.write(
-              `enquire: watcher skip ${relPath} (${kind}) — ${error.message}\n`
-            );
+            process.stderr.write(`enquire: watcher skip ${relPath} (${kind}) — ${error.message}\n`);
           }
           return;
         }
@@ -1436,18 +1430,14 @@ export class VaultWatcher {
           const sinkLabel = isPdf
             ? `fts5 PDF reindexed, ${(staged as StagedPdfGeneration).pages.length} pages`
             : "fts5 reindexed";
-          process.stderr.write(
-            `enquire: watcher ${kind} ${relPath} (${sinkLabel}${commitNote})\n`
-          );
+          process.stderr.write(`enquire: watcher ${kind} ${relPath} (${sinkLabel}${commitNote})\n`);
         }
         return;
       }
     } catch (err) {
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher skip ${relPath} (${kind}) — ${
-            err instanceof Error ? err.message : String(err)
-          }\n`
+          `enquire: watcher skip ${relPath} (${kind}) — ${err instanceof Error ? err.message : String(err)}\n`
         );
       }
       if (this.activationState === "activating") throw err;

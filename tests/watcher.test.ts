@@ -619,9 +619,9 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await handle(filePath, "add");
 
       expect(embedCalls).toBe(1);
-      expect(
-        captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))
-      ).toBe(true);
+      expect(captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))).toBe(
+        true
+      );
       expect(fts.totalFiles()).toBe(0);
       expect(embedDb.totalChunks()).toBe(0);
       expect(w.searchHealth.semanticUsable).toBe(true);

@@ -883,6 +883,12 @@ export function selectUsableHnswContext(hnsw?: HnswSearchContext | null): HnswSe
   return hnsw?.health?.hnswUsable === false ? null : (hnsw ?? null);
 }
 
+function watcherSemanticRouteIsQuarantined(
+  health?: Readonly<{ semanticUsable: boolean }> | null
+): boolean {
+  return health?.semanticUsable === false;
+}
+
 /**
  * Refuse every embedding-search route while the watched index is quarantined
  * after an incomplete startup activation.
@@ -1086,7 +1092,7 @@ export async function embeddingsSearch(
   },
   embedFile: string | null,
   hnsw?: HnswSearchContext | null,
-  watcherHealth?: Readonly<{ semanticUsable: boolean }>
+  watcherHealth?: Readonly<{ semanticUsable: boolean }> | null
 ): Promise<EmbedSearchResponse> {
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
@@ -1096,7 +1102,7 @@ export async function embeddingsSearch(
         "`enquire-mcp build-embeddings --vault <your-vault>`, then restart the server."
     );
   }
-  if (watcherHealth?.semanticUsable === false) {
+  if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
     throw new Error(
       "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
     );
@@ -1183,7 +1189,7 @@ export async function embeddingsSearch(
   try {
     const total = db.totalChunks();
     if (total === 0) {
-      if (watcherHealth?.semanticUsable === false) {
+      if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
         throw new Error(
           "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
         );
@@ -1218,7 +1224,7 @@ export async function embeddingsSearch(
     if (hnsw && hnsw.health?.hnswUsable !== false) {
       ({ hnswResultsToHits } = await import("../hnsw.js"));
     }
-    if (watcherHealth?.semanticUsable === false) {
+    if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
       throw new Error(
         "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
       );
@@ -1884,7 +1890,7 @@ export async function searchHybrid(
     /** v2.8.0: content-source kind ("md" | "pdf"). */
     kind: "md" | "pdf";
   }> = [];
-  if (ctx.watcherHealth?.semanticUsable === false) {
+  if (watcherSemanticRouteIsQuarantined(ctx.watcherHealth)) {
     signalErrors.embeddings =
       "Embedding search is quarantined after a watcher sink-commit failure; restart the server to reconcile indexes.";
   } else if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {

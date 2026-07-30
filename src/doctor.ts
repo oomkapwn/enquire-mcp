@@ -1069,7 +1069,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         ...(embedFile === defaultEmbedFile ? [] : ["--embed-file", embedFile])
       ];
       const recoveryCommand =
-        `${repairPrefix} ` + recoveryArgs.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ");
+        `${repairPrefix} ${recoveryArgs.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ")}`;
       const manualAudit =
         `The strict recovery preflights the interlock before deleting indexes and refuses unsafe or foreign ` +
         `shapes. If it refuses, inspect ${shellQuote(guardPath, opts.repairCommandPlatform)} without following ` +

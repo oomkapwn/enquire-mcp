@@ -384,10 +384,10 @@ function watcherStartupOrderViolations(source: string): string[] {
       visitFailurePath(failureCatch.block);
 
       const rethrow = caughtName
-          ? throws.find(
-              (statement) => statement.parent === failureCatch.block && isActivationRecoveryRethrow(statement, caughtName)
-            )
-          : undefined;
+        ? throws.find(
+            (statement) => statement.parent === failureCatch.block && isActivationRecoveryRethrow(statement, caughtName)
+          )
+        : undefined;
       if (!rethrow) {
         violations.push("watcher.activate() failure must rethrow the caught error after cleanup");
       } else {
@@ -964,10 +964,7 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}`
       "watcher.activate() must run after every attachEmbed()/setOcrPdfs()/attachHnsw() branch"
     );
 
-    const lateOcr = GOOD_STARTUP.replace(
-      "        watcher.setOcrPdfs(true, opts.ocrLangs);\n",
-      ""
-    ).replace(
+    const lateOcr = GOOD_STARTUP.replace("        watcher.setOcrPdfs(true, opts.ocrLangs);\n", "").replace(
       "  const feedbackStore = await openFeedback();",
       "  watcher.setOcrPdfs(true, opts.ocrLangs);\n  const feedbackStore = await openFeedback();"
     );

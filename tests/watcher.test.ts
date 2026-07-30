@@ -235,6 +235,38 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     await w.close(); // second close — must not throw
   });
 
+  it("start() is one-shot and cannot orphan an already-running native watcher", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    await w.start();
+    try {
+      const nativeWatcher = (w as unknown as { watcher: FSWatcher | null }).watcher;
+      expect(nativeWatcher).not.toBeNull();
+      await expect(w.start()).rejects.toThrow(/already started/);
+      expect((w as unknown as { watcher: FSWatcher | null }).watcher).toBe(nativeWatcher);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("fails stop on a native error after ready and removes the listener on close", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    await w.start();
+    const nativeWatcher = (w as unknown as { watcher: FSWatcher | null }).watcher;
+    expect(nativeWatcher).not.toBeNull();
+    if (!nativeWatcher) throw new Error("expected a started native watcher");
+
+    expect(nativeWatcher.listenerCount("error")).toBeGreaterThanOrEqual(1);
+    expect(() => nativeWatcher.emit("error", new Error("late native watch failure"))).toThrow(
+      /late native watch failure/
+    );
+    await w.close();
+    expect(nativeWatcher.listenerCount("error")).toBe(0);
+  });
+
   it("native ready resolves its owned wait and removes lifecycle listeners", async () => {
     const v = new Vault(root);
     await v.ensureExists();

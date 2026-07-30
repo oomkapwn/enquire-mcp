@@ -47,7 +47,7 @@
 - **v3.9.0-rc.2+:** HNSW in-memory live update — semantic search reflects vault edits within the watcher debounce window (~250ms); pre-3.9.0 needed serve restart
 - **v3.9.0-rc.3+:** R-10 adaptive HNSW refill — auto-doubles k up to 3 attempts when post-filter hits < limit, closing the >66% excluded under-return class
 - **v3.12.0-rc.25–rc.26:** watched startup freezes embedding capability for one server generation, audits/replays final state after late sinks attach, and uses a process-restart interlock after interrupted guarded startup. Each ordinary live Markdown/PDF attempt then stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once and commits without yielding. Fatal staging/embedding failure keeps the prior generation; optional OCR failure instead publishes the coherent PDF.js/empty generation and clears stale semantic rows. Sink-mutation uncertainty quarantines semantic routing until restart, while an HNSW-only failure falls back to EmbedDb and disables sidecar persistence.
-- **v3.12.0-rc.27:** an admitted regular-file event discovers and independently refreshes every current in-vault hardlink path across FTS5, EmbedDb and live HNSW metadata. Exact case/Unicode path identities remain separate; missing origins always inventory; unavailable identity uses one serialized, 50,000-path-count-capped lane. Writes visible only through unadmitted aliases and alias completeness above the configured cap are not claimed.
+- **v3.12.0-rc.27:** an admitted regular-file event discovers and independently refreshes every admitted current in-vault hardlink path within the configured inventory bound across FTS5, EmbedDb and live HNSW metadata. Exact case/Unicode path identities remain separate; missing origins always inventory; unavailable identity uses one serialized, 50,000-path-count-capped lane. Above the cap, live events reconcile only the exact/previously-known group; writes visible only through unadmitted aliases and universal alias completeness are not claimed.
 - **v3.10+ stable:** forgetting-aware freshness — every search hit carries `age_days` + a `stale` flag from the note's live mtime; the `obsidian_stale_notes` tool surfaces aged notes; opt-in `--recency-weight` re-ranking (default off) prefers fresher knowledge. Plus frontmatter-aware `obsidian_search` (`filter_frontmatter` scopes hybrid search by YAML)
 
 ## What enquire-mcp is NOT
@@ -69,7 +69,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1793 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only path contracts and a 12-contract startup-interlock rerun in the pinned Windows lane
+- 1795 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only path contracts and a 12-contract startup-interlock rerun in the pinned Windows lane
 - 9 release-required CI checks are directly enumerated by `release.yml` and run per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - Pinned `test-windows` is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, beyond the direct inventory above
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses

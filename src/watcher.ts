@@ -404,6 +404,18 @@ export class VaultWatcher {
   private readonly physicalAliasLockTails = new Map<string, Promise<void>>();
   private physicalAliasSeedPromise: Promise<void> | null = null;
   private watcherReadyReject: ((reason: Error) => void) | null = null;
+  private readonly handleNativeWatcherError = (error: unknown): void => {
+    // The readiness waiter owns startup errors and rejects start(). Once ready,
+    // keep a lifetime listener installed so a later chokidar error has an
+    // explicit fail-stop policy. Continuing after a root/subtree watch loss
+    // would serve derived indexes whose future freshness is no longer proven.
+    if (this.watcherReadyReject !== null) return;
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (!this.silent) {
+      process.stderr.write(`enquire: native watcher error — ${normalized.message}\n`);
+    }
+    throw normalized;
+  };
 
   constructor(opts: WatcherOptions) {
     this.vault = opts.vault;
@@ -1029,9 +1041,9 @@ export class VaultWatcher {
         cleanup();
         resolve();
       };
-      const onError = (error: Error) => {
+      const onError = (error: unknown) => {
         cleanup();
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       };
       this.watcherReadyReject = (error) => {
         cleanup();
@@ -1049,6 +1061,9 @@ export class VaultWatcher {
   async start(): Promise<void> {
     if (this.closing || this.closed) {
       throw new Error("VaultWatcher.start: watcher is closing or closed");
+    }
+    if (this.watcher) {
+      throw new Error("VaultWatcher.start: watcher is already started");
     }
     const root = this.vault.root;
     this.watcher = chokidar.watch(root, {
@@ -1088,6 +1103,7 @@ export class VaultWatcher {
     this.watcher.on("add", (p: string) => this.onFsEvent(p, "add"));
     this.watcher.on("change", (p: string) => this.onFsEvent(p, "change"));
     this.watcher.on("unlink", (p: string) => this.onFsEvent(p, "unlink"));
+    this.watcher.on("error", this.handleNativeWatcherError);
 
     await this.waitForWatcherReady(this.watcher);
     if (this.closing || this.closed) {
@@ -2256,14 +2272,16 @@ export class VaultWatcher {
         // v3.10.0-rc.40 (#6) — stop chokidar before draining so no new
         // event can enter the queue during the flush window.
         if (this.watcher) {
+          const nativeWatcher = this.watcher;
           try {
-            await this.watcher.close();
+            await nativeWatcher.close();
           } catch (err) {
             // Keep draining accepted work even if the native watcher reports
             // a close failure; surface that failure only after cleanup.
             watcherCloseError = err;
             watcherCloseFailed = true;
           }
+          nativeWatcher.off("error", this.handleNativeWatcherError);
           this.watcher = null;
         }
         let seedError: unknown;

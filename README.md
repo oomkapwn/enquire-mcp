@@ -21,7 +21,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1793%20contracts-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1795%20contracts-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -67,7 +67,7 @@ One install turns your existing vault into a **persistent, queryable knowledge d
 > 3. **Zero cloud calls during serve.** The q8 embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~118 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
 > 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
 
-**46 tools · 19 MCP prompts · 1793 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1795 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -89,7 +89,7 @@ Most alternatives solve one layer: an in-app similarity panel, a capable search 
 | **One-generation live scan → FTS → ML → HNSW + quarantine** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **1793 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **1795 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 <sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-25. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
 
@@ -327,8 +327,8 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
-| **Watcher consistency** | Final-state startup activation waits for late sinks; each ordinary live Markdown/PDF attempt stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once, commits without yielding, and quarantines an uncertain semantic route instead of serving mixed state. The v3.12 RC also discovers and independently refreshes every admitted hardlink path without folding case or Unicode identities |
-| **1793 tests · 9 release-required CI checks · 7 branch-protected** | Current verified release posture; the operational breakdown is pinned below. |
+| **Watcher consistency** | Final-state startup activation waits for late sinks; each ordinary live Markdown/PDF attempt stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once, commits without yielding, and quarantines an uncertain semantic route instead of serving mixed state. Within the configured inventory bound, the v3.12 RC also discovers and independently refreshes every admitted hardlink path without folding case or Unicode identities; above it, live events reconcile only the exact/previously-known group and say so explicitly |
+| **1795 tests · 9 release-required CI checks · 7 branch-protected** | Current verified release posture; the operational breakdown is pinned below. |
 | **CI** | `release.yml` directly enumerates **9 release gate contexts**, all run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, and `oia`. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, rather than a tenth gate directly listed by the release workflow. Branch protection currently enforces **7** contexts; `docs` and `oia` are release-required but unprotected (live-verified 2026-07-23). `test-macos` is the only `continue-on-error` advisory job. `docker` can fail the CI workflow but is unprotected; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 9 directly listed gates on the tagged SHA. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
@@ -369,7 +369,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1793 tests)
+npm test       # full suite (1795 tests)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

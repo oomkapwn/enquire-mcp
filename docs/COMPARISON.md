@@ -1,17 +1,18 @@
 # Why enquire-mcp is the #1 Obsidian MCP
 
-**Your vault. Every agent. One private intelligence layer.**
+**Your vault. Every agent. Fresh, cited memory.**
 
-enquire-mcp turns the knowledge you already trust into a complete local memory
-and document-intelligence backend for Claude, Cursor, ChatGPT, Codex, OpenClaw,
-and every MCP-compatible agent. Notes, PDFs, Canvas, and Bases go in; cited,
-freshness-aware context comes out.
+enquire-mcp turns the knowledge you already trust into a freshness-aware,
+cited memory and document-intelligence backend for Claude, Cursor, ChatGPT,
+Codex, OpenClaw, and every MCP-compatible agent. Hybrid retrieval covers
+Markdown and PDFs/OCR; structured tools parse Canvas, run Dataview-style
+LIST/TABLE queries, and execute supported Obsidian Base filters.
 
 > **The category leader for people who want their own knowledge to compound
 > across agents without moving it into a vendor cloud or rebuilding context
 > for every new chat.**
 
-[Install in 30 seconds](../README.md#-quick-start) ·
+[Install with one command](../README.md#-quick-start) ·
 [See the retrieval evidence](./benchmarks.md) ·
 [Read the security model](../SECURITY.md) ·
 [Browse all 46 tools](./api.md)
@@ -31,8 +32,10 @@ starts from your real knowledge base:
   context, and an optional BGE reranker are fused into one retrieval path.
 - **Freshness is visible.** Results expose note age and stale-state metadata;
   optional recency weighting can prefer newer knowledge.
-- **Privacy is the default architecture.** Serve makes zero cloud calls, models
-  run locally, reads can be path-filtered, and writes are disabled by default.
+- **Privacy is the default architecture.** enquire initiates zero outbound
+  calls during serve, models run locally, reads can be path-filtered, and
+  writes are disabled by default. The connected MCP client remains a separate
+  trust boundary.
 
 That is why enquire-mcp is positioned as **the #1 Obsidian MCP**: it is not
 merely a file connector, an in-app similarity panel, or a search box. It is the
@@ -82,13 +85,12 @@ the same outcome?
 | **MCP-native memory shared by every agent** | ✅ | ✕ | ✅ | ✅ |
 | **BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8** | ✅ | ✕ | ✕ | ✕ |
 | **HyDE + bounded multi-query + context packs** | ✅ | ✕ | ✕ | ✕ |
-| **Freshness metadata + optional recency ranking** | ✅ | ✕ | ✕ | ✕ |
-| **Markdown + PDF/OCR + Canvas + executable Bases** | ✅ | ✕ | ✕ | ✕ |
-| **PDF page citations inside unified retrieval** | ✅ | ✕ | ✕ | ✕ |
+| **Source paths + PDF pages + `age_days`/`stale` + recency ranking** | ✅ | ✕ | ✕ | ✕ |
+| **Markdown/PDF hybrid + Canvas + Dataview LIST/TABLE + Base filters** | ✅ | ✕ | ✕ | ✕ |
 | **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
-| **Live scan → FTS → ML → HNSW, fail-soft by layer** | ✅ | ✕ | ✕ | ✕ |
+| **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
-| **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
 | **1795 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
@@ -97,15 +99,15 @@ not claim that every sub-feature is absent.
 
 ### Dated competitive evidence
 
-Reviewed 2026-07-25 against pinned public README snapshots:
+Reviewed and repinned **2026-07-30** against public README snapshots:
 
 - **Smart Connections** at
-  [`3f07d51a3a5e08f724c8e62719ac75ff675eee13`](https://github.com/brianpetro/obsidian-smart-connections/tree/3f07d51a3a5e08f724c8e62719ac75ff675eee13):
+  [`55bd2d66a318596b91996a61405f4172d6d1f001`](https://github.com/brianpetro/obsidian-smart-connections/tree/55bd2d66a318596b91996a61405f4172d6d1f001):
   a polished Obsidian-native local semantic-connections plugin with optional
   reranking and a Pro Bases integration; its reviewed surface is not a
   standalone MCP memory backend.
 - **Obsidian Hybrid Search** at
-  [`c0922d955f5bf5abaad14a11cbb3e11303cd6036`](https://github.com/flowing-abyss/obsidian-hybrid-search/tree/c0922d955f5bf5abaad14a11cbb3e11303cd6036):
+  [`5f97a11850eaf196c0dc5a537b781091e03ba13f`](https://github.com/flowing-abyss/obsidian-hybrid-search/tree/5f97a11850eaf196c0dc5a537b781091e03ba13f):
   a strong local search engine with BM25, embeddings, RRF, a BGE reranker,
   graph traversal, CLI, plugin, and MCP access. It earns the MCP row but does
   not document the complete combinations in the remaining rows.
@@ -117,12 +119,13 @@ Reviewed 2026-07-25 against pinned public README snapshots:
   freshness, orchestration, and release combinations.
 
 The audit also checked the emerging **Vault Cortex** surface at
-[`9f344557ab4137cbba694e4955d6a5294c535885`](https://github.com/aliasunder/vault-cortex/tree/9f344557ab4137cbba694e4955d6a5294c535885).
+[`7681b59ca6eab49c531bc7ae388af007907c98a1`](https://github.com/aliasunder/vault-cortex/tree/7681b59ca6eab49c531bc7ae388af007907c98a1).
 It documents a credible standalone hybrid MCP, remote OAuth, structured memory,
 write-back, prompts, and broad file reading. That makes it a serious adjacent
 peer—not evidence against the matrix: the reviewed snapshot still does not
-document the complete retrieval ladder, freshness contract, executable Bases,
-stage explanations, or release-chain combination used in the rows above.
+document the complete retrieval ladder, freshness contract, supported
+Base-filter execution, stage explanations, or release-chain combination used
+in the rows above.
 
 The matrix is intentionally easy to re-audit: change a source snapshot or row
 boundary and the evidence date must change with it. It is not a claim about
@@ -135,10 +138,10 @@ private branches, future releases, or unadvertised behavior.
 | **Knowledge ownership** | Plain Markdown remains the source of truth | No proprietary memory format or provider lock-in |
 | **Conceptual recall** | BM25 + TF-IDF + multilingual embeddings, RRF-fused | Finds the right note when the wording changes |
 | **Precision on hard queries** | Optional BGE cross-encoder reranking | Measured **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid in the published ablation |
-| **Citable answers** | Verbatim snippets, paths, line spans, PDF pages, and per-signal scores | Agents can show where every answer came from |
+| **Citable answers** | Source paths on search hits, PDF page markers, read-time line spans, and per-signal scores | Agents can show where grounded evidence came from |
 | **Freshness-aware memory** | `age_days`, `stale`, and optional recency weighting | Old facts are visible instead of silently reused as current |
-| **Document intelligence** | Markdown, wikilinks, frontmatter, Canvas, executable Bases, PDFs, and OCR | One backend covers the knowledge you actually keep |
-| **Agentic retrieval** | HyDE, bounded subqueries, context packs, GraphRAG-light, and 19 prompts | Complex questions get a workflow, not just a search result |
+| **Document intelligence** | Hybrid Markdown/PDF recall with OCR, Canvas parsing, Dataview-style LIST/TABLE, and supported Base-filter execution | One backend covers the knowledge you actually keep |
+| **Agentic retrieval** | HyDE, bounded subqueries, context packs, GraphRAG-light, and 19 MCP prompts | Complex questions get a repeatable operating path, not just a search result |
 | **Local scale controls** | HNSW, int8 vectors, persistence, live watcher updates, and adaptive refill | Dense retrieval stays practical as a real vault grows |
 | **Remote-agent readiness** | Streamable HTTP, exact-Origin admission, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
 | **Safe defaults** | Read-only by default, explicit write gate, privacy filters, dry-run support | Agents receive the minimum authority they need |
@@ -156,7 +159,7 @@ These numbers are derived from the current repository and guarded by CI:
 | Release-required CI gates | **9** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |
-| Serve-time cloud calls | **Zero** |
+| Outbound calls initiated by enquire during serve | **Zero** |
 | Package provenance | **Sigstore / SLSA Build L2** |
 
 Retrieval quality is measured separately from feature inventory. The
@@ -176,19 +179,21 @@ or delete them without asking enquire-mcp or an AI vendor for permission.
 
 Start instantly with TF-IDF, add SQLite FTS5 for BM25, add local multilingual
 embeddings for semantic recall, then enable the verified BGE reranker and HNSW
-when the vault needs them. Missing optional layers degrade gracefully instead
-of taking the whole memory backend down.
+when the vault needs them. The umbrella `obsidian_search` path continues with
+the retrieval signals that are available; direct diagnostic tools keep their
+own explicit readiness errors.
 
 ### 3. Evidence an agent can cite
 
-Every retrieval result preserves its source. Markdown returns note paths and
-spans; PDFs return page citations; fused search exposes `per_signal` evidence
-so the caller can inspect why a hit ranked.
+Search hits preserve their source paths and freshness metadata. PDF snippets
+carry page markers, read surfaces can return line spans, and fused search
+exposes `per_signal` evidence so the caller can inspect why a hit ranked.
 
 ### 4. Obsidian-native knowledge coverage
 
-Wikilinks, backlinks, unresolved links, frontmatter, tags, Canvas, Bases,
-daily notes, PDFs, OCR, and graph communities are first-class data—not opaque
+Wikilinks, backlinks, unresolved links, frontmatter, tags, Canvas parsing,
+Dataview-style LIST/TABLE queries, supported Base-filter execution, daily
+notes, PDFs/OCR, and graph communities are first-class data—not opaque
 attachments around a generic vector store.
 
 ### 5. Workflows for real questions
@@ -199,9 +204,12 @@ and GraphRAG-light discovery. The agent gets a repeatable operating model.
 
 ### 6. Local-first operations
 
-The runtime is offline after explicit model installation. Persistent indexes,
-watch mode, HNSW sidecars, cache diagnostics, health checks, and bounded HTTP
-resources make the system operable instead of merely demonstrable.
+enquire initiates zero outbound calls during serve after explicit model and OCR
+asset installation. Persistent indexes, watch mode, HNSW sidecars, cache
+diagnostics, health checks, and bounded HTTP resources make the system operable
+instead of merely demonstrable. Returned context still crosses into the
+connected MCP client, whose privacy policy and any tunnel are separate trust
+boundaries.
 
 ### 7. A verifiable release chain
 
@@ -219,7 +227,8 @@ Choose enquire-mcp when you want:
 - the **best complete local memory package** for an existing Obsidian vault;
 - one durable memory layer across several AI agents and model providers;
 - conceptual and multilingual recall with citations;
-- Markdown, PDFs, OCR, Bases, Canvas, and graph context in one server;
+- hybrid Markdown/PDF/OCR recall plus Canvas, Dataview LIST/TABLE, supported
+  Base filters, and graph context in one server;
 - read-first security with explicit, bounded writes;
 - reproducible retrieval evidence and a signed release chain;
 - local ownership without giving up remote MCP access.

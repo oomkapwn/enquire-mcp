@@ -22,31 +22,29 @@ import { execSync, spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const REPO = "oomkapwn/enquire-mcp";
-// v3.12.0-rc.6 — GitHub allows 20 topics, so the full set is now intentional
-// and exact rather than a required subset plus eight unguarded extras. Rebalanced
-// four narrow client topics (aider/windsurf/zed/gemini-cli remain npm keywords)
-// into the adjacent categories the product actually leads in: context engineering,
-// agentic RAG, hybrid search, and semantic search. Client-neutral MCP positioning
-// plus the five primary agent communities remain represented.
+// v3.12.0-rc.29 — the exact 20-topic set favors high-intent product discovery
+// over redundant synonyms. Dataview, Bases, document intelligence, local-first,
+// and read-only are verified differentiators surfaced by the 129-project
+// competitive scan; broad memory, MCP, Obsidian, and primary-client routes remain.
 const EXPECTED_TOPICS = [
   "agent-memory",
-  "agentic-rag",
   "ai-memory",
   "chatgpt",
   "claude-code",
-  "claude-memory",
   "codex",
   "context-engineering",
   "cursor",
+  "dataview",
+  "document-intelligence",
   "hybrid-search",
-  "llm-memory",
+  "local-first",
   "long-term-memory",
   "mcp-server",
   "model-context-protocol",
   "obsidian",
+  "obsidian-bases",
   "obsidian-mcp",
-  "openclaw",
-  "rag",
+  "read-only",
   "second-brain",
   "semantic-search"
 ];
@@ -54,6 +52,8 @@ const EXPECTED_TOPICS = [
 // by the value prop. This is the live-metadata counterpart to the README,
 // package and social-card positioning surfaces.
 const ABOUT_LEADS_WITH = /^The #1 Obsidian MCP for AI memory\b/i;
+const ABOUT_REQUIRED_TOKENS = ["freshness-aware", "cited", "local-first", "read-only", "dataview", "bases", "pdfs"];
+const EXPECTED_HOMEPAGE = "https://oomkapwn.github.io/enquire-mcp/";
 
 // v3.11.0-rc.7 — flake hardening for the (network-y) gh auth/API calls. On
 // 2026-06-23 the CI-GUARD below flaked: `gh auth status` makes a network call to
@@ -125,11 +125,12 @@ function ghIsAvailable(): boolean {
 
 interface RepoMeta {
   description: string;
+  homepage: string;
   topics: string[];
 }
 
 function fetchRepoMetaOnce(): RepoMeta | null {
-  const res = spawnSync("gh", ["api", `repos/${REPO}`, "--jq", "{description, topics}"], {
+  const res = spawnSync("gh", ["api", `repos/${REPO}`, "--jq", "{description, homepage, topics}"], {
     encoding: "utf8",
     timeout: 15_000
   });
@@ -164,6 +165,10 @@ function fetchRepoMeta(): RepoMeta | null {
  */
 function validateAboutLeadsWith(description: string): boolean {
   return ABOUT_LEADS_WITH.test(description ?? "");
+}
+function findAboutTokenDrift(description: string): string[] {
+  const normalized = (description ?? "").toLowerCase();
+  return ABOUT_REQUIRED_TOKENS.filter((token) => !normalized.includes(token));
 }
 function findTopicDrift(topics: string[]): { missing: string[]; unexpected: string[] } {
   const set = new Set(topics ?? []);
@@ -243,6 +248,11 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
     ).not.toBeNull();
     if (!meta) return;
     expect(meta.description ?? "").toMatch(ABOUT_LEADS_WITH);
+    expect(
+      findAboutTokenDrift(meta.description ?? ""),
+      "repo About must expose the freshness, evidence, local-first, read-only, and Obsidian-native acquisition wedge"
+    ).toEqual([]);
+    expect(meta.homepage).toBe(EXPECTED_HOMEPAGE);
     // v3.9.0-rc.31 — the About string must not carry a SLSA-level overclaim
     // (release.yml earns SLSA Build L2; "SLSA-3"/L3 would be unenforced).
     const slsa = findSlsaOverclaim(meta.description ?? "");
@@ -283,7 +293,10 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   describe("NEGATIVE-CONTROL: analyzers detect drift on synthetic bad inputs (v3.7.4)", () => {
     it("validateAboutLeadsWith rejects descriptions that don't lead with the canonical phrase", () => {
       // v3.12.0-rc.5 — canonical About lead is now the explicit TOP-1 phrase.
-      expect(validateAboutLeadsWith("The #1 Obsidian MCP for AI memory — one vault, every agent")).toBe(true);
+      const canonical =
+        "The #1 Obsidian MCP for AI memory — freshness-aware, cited, local-first and read-only. Dataview, Bases, PDFs.";
+      expect(validateAboutLeadsWith(canonical)).toBe(true);
+      expect(findAboutTokenDrift(canonical)).toEqual([]);
       // Case-insensitive — same canonical phrase, lowercase.
       expect(validateAboutLeadsWith("the #1 obsidian mcp for ai memory — built")).toBe(true);
       // Negative cases — analyzer MUST flag these.
@@ -292,6 +305,14 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(validateAboutLeadsWith("The most advanced MCP server for Obsidian vaults.")).toBe(false); // "MCP server for Obsidian" ≠ "Obsidian MCP"
       expect(validateAboutLeadsWith("")).toBe(false);
       expect(validateAboutLeadsWith("Long-term memory for AI agents")).toBe(false);
+      expect(findAboutTokenDrift("The #1 Obsidian MCP for AI memory — cited.")).toEqual([
+        "freshness-aware",
+        "local-first",
+        "read-only",
+        "dataview",
+        "bases",
+        "pdfs"
+      ]);
     });
 
     it("findTopicDrift returns all expected topics when given empty input", () => {

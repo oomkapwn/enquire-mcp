@@ -6,7 +6,7 @@
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · **Русский** · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR для AI-агентов** — MCP-сервер, открывающий локальное Obsidian-хранилище из markdown-файлов для Claude Code, Claude Desktop, Cursor, ChatGPT, Codex и OpenClaw как постоянную поисковую память. Гибридный поиск (BM25 + ML-эмбеддинги + BGE-реранкер, объединённые через RRF), HNSW + int8-квантизация, агентный RAG (HyDE + декомпозиция на подвопросы), GraphRAG-light, PDF + OCR, автономные Bases. Нейтральность к вендору, MIT, ноль обращений в облако в режиме serve. Установка: `npm i -g @oomkapwn/enquire-mcp`. Документация: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**TL;DR для AI-агентов** — Obsidian MCP №1 для AI-памяти с учётом свежести и проверяемыми источниками. Гибридный поиск охватывает Markdown и PDF/OCR; структурные инструменты разбирают Canvas, выполняют LIST/TABLE-запросы в стиле Dataview и поддерживаемые фильтры Obsidian Bases. Нейтральность к вендору, MIT, read-only по умолчанию; в режиме `serve` enquire не инициирует исходящих сетевых вызовов. Установка: `npm i -g @oomkapwn/enquire-mcp`. Документация: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
 ### 🏆 Obsidian MCP №1 для памяти AI-агентов.
 
@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > **Что отличает enquire-mcp**:
 > 1. **Нейтральность к вендору.** Ваша память живёт в `.md`-файлах. Переключитесь с Claude на Cursor — ваша память переезжает с вами.
 > 2. **Полный локальный retrieval-стек.** BM25 + TF-IDF + мультиязычные эмбеддинги объединяются через RRF, опциональный BGE-реранкер добавляет оценки по каждому сигналу, а HNSW + int8-квантизация масштабируют dense-путь.
-> 3. **Ноль обращений в облако в режиме serve.** Модели кешируются локально (однократная загрузка с HuggingFace). Содержимое вашего хранилища никогда не покидает вашу машину. По умолчанию безопасно для изолированных сред.
+> 3. **Ноль исходящих сетевых вызовов, инициированных enquire в режиме `serve`.** Модели кешируются локально после явной однократной загрузки с HuggingFace. Содержимое возвращается только подключённому MCP-клиенту; обработка данных этим клиентом или туннелем находится в его собственной границе доверия.
 > 4. **Поиск с учётом свежести.** Каждый результат сообщает, насколько стара заметка; опциональное переранжирование по давности позволяет агенту предпочитать свежие знания и помечать устаревшие факты для повторной проверки — рубеж «осознания забывания», построенный на `mtime`, который ваши файлы уже имеют.
 
 **46 инструментов · 19 MCP-промптов · 1795+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
@@ -70,7 +70,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Проверяемые ответы** | ✅ Дословный текст, пути заметок, страницы PDF, оценки сигналов и метаданные свежести |
 | **Знания действительно принадлежат вам** | ✅ Обычный markdown — источник истины; индексы локальны; ноль облачных вызовов в serve |
 | **Вся поверхность знаний Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF и OCR |
-| **Агентный поиск для сложных вопросов** | ✅ HyDE, декомпозиция на подвопросы, context packs, GraphRAG-light и 19 workflow-промптов |
+| **Агентный поиск для сложных вопросов** | ✅ HyDE, декомпозиция на подвопросы, context packs, GraphRAG-light и 19 MCP-промптов |
 | **Масштаб без потери контроля** | ✅ Live-update HNSW, персистентность, адаптивное дозаполнение и int8-квантизация |
 | **Продакшен-доверие** | ✅ Read-only по умолчанию, privacy-фильтры, авторизованный HTTP, semver-контракты, 1795 тестов, 9 релизных гейтов и SLSA L2 provenance |
 
@@ -105,7 +105,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -293,7 +293,7 @@ graph LR
 
 **Будет ли он писать в моё хранилище?** Нет, если только вы не передадите `--enable-write`. Все 7 инструментов записи управляемы; деструктивные поддерживают `dry_run`.
 
-**Куда-нибудь отправляются данные?** Исходящие загрузки выполняются только явными командами получения данных: `enquire-mcp setup`, `enquire-mcp build-embeddings` и `enquire-mcp install-model` могут загрузить ONNX-веса с HuggingFace, а `enquire-mcp install-ocr-lang` — языковой пакет Tesseract для OCR. Режим serve никогда не делает исходящих HTTP-запросов. Эмбеддинги + реранкер работают на CPU локально.
+**Куда-нибудь отправляются данные?** enquire не отправляет телеметрию и не инициирует исходящие HTTP-запросы во время `serve`. При этом запрошенный контекст хранилища возвращается подключённому MCP-клиенту; облачный клиент может обработать его по собственной политике конфиденциальности, а любой туннель или обратный прокси представляет собой отдельную границу доверия. `setup`, `build-embeddings`, `install-model` и для гибридных уровней `first-run --apply` могут получить ONNX-веса с Hugging Face; `install-ocr-lang` загружает языковой пакет Tesseract.
 
 **Производительность?** Зависит от размера vault, железа, модели и включённых слоёв поиска. Публичные данные включают production-отчёт **50–100 мс** для BM25 top-10 на 1 771 чанке / 368 файлах и воспроизводимый синтетический benchmark с ускорением FTS5 в **37–103×** против линейного сканирования на 100–1 000 заметок. Перед фиксацией latency SLO запустите встроенную оценку на своём vault.
 

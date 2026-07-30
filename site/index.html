@@ -7,11 +7,11 @@
     <meta name="color-scheme" content="dark">
     <meta
       name="description"
-      content="The #1 Obsidian MCP. Turn notes, PDFs, Canvas, and Bases into private AI memory and cited document intelligence for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP agent."
+      content="The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid Markdown/PDF recall plus Canvas, Dataview, and Bases tools. Read-only by default."
     >
     <meta
       name="keywords"
-      content="Obsidian MCP, AI memory, agent memory, document intelligence, local document search, Obsidian PDF search, Obsidian Bases, long-term memory, local RAG, Claude memory, Cursor memory, Codex MCP, Model Context Protocol"
+      content="Obsidian MCP, freshness-aware AI memory, cited AI memory, agent memory, local-first RAG, read-only MCP, hybrid search, PDF citations, Dataview MCP, Obsidian Bases, Canvas parser, document intelligence, Model Context Protocol"
     >
     <meta name="author" content="Alex (@OomkaBear)">
     <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
@@ -23,25 +23,26 @@
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="enquire-mcp">
     <meta property="og:url" content="https://oomkapwn.github.io/enquire-mcp/">
-    <meta property="og:title" content="enquire-mcp — Your vault. Every agent. One memory.">
+    <meta property="og:title" content="enquire-mcp — Fresh, cited memory for every agent">
     <meta
       property="og:description"
-      content="The #1 Obsidian MCP: private AI memory and cited document intelligence from the vault you own."
+      content="Freshness-aware hybrid recall with cited paths, PDF pages, and age signals. Local-first and read-only by default."
     >
     <meta property="og:image" content="https://oomkapwn.github.io/enquire-mcp/social-preview.png">
     <meta property="og:image:width" content="1280">
     <meta property="og:image:height" content="640">
-    <meta property="og:image:alt" content="enquire-mcp — your vault becomes private memory and document intelligence for every AI agent">
+    <meta property="og:image:alt" content="enquire-mcp — freshness-aware, cited Obsidian memory for every AI agent">
 
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="enquire-mcp — Your vault. Every agent. One memory.">
+    <meta name="twitter:title" content="enquire-mcp — Fresh, cited memory for every agent">
     <meta
       name="twitter:description"
-      content="The #1 Obsidian MCP: notes, PDFs, Canvas, and Bases become private, cited context for every AI agent."
+      content="The #1 Obsidian MCP for freshness-aware, cited AI memory. Local-first and read-only by default."
     >
     <meta name="twitter:image" content="https://oomkapwn.github.io/enquire-mcp/social-preview.png">
+    <meta name="twitter:image:alt" content="enquire-mcp — freshness-aware, cited Obsidian memory for every AI agent">
 
-    <title>enquire-mcp — #1 Obsidian MCP for AI memory</title>
+    <title>enquire-mcp — #1 Obsidian MCP for freshness-aware AI memory</title>
     <!-- ENQUIRE_JSONLD -->
     <script defer src="./site.js"></script>
   </head>
@@ -72,20 +73,21 @@
     <main id="main">
       <section class="hero shell" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span>The #1 Obsidian MCP</p>
-          <h1 id="hero-title">Your vault.<br>Every agent.<br><em>One memory.</em></h1>
+          <p class="eyebrow"><span class="pulse-dot" aria-hidden="true"></span>The #1 Obsidian MCP · freshness-aware</p>
+          <h1 id="hero-title">Your vault.<br>Every agent.<br><em>Fresh, cited memory.</em></h1>
           <p class="hero-lede">
-            Turn notes, PDFs, Canvas, and Bases into private AI memory and cited document
-            intelligence for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent.
+            Hybrid search covers Markdown and PDFs/OCR; structured tools parse Canvas, run Dataview-style
+            LIST/TABLE queries, and execute supported Base filters. Read-only by default, with source and
+            freshness evidence your agent can audit.
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#install">Install in 30 seconds <span aria-hidden="true">→</span></a>
+            <a class="button button-primary" href="#install">Install and connect <span aria-hidden="true">→</span></a>
             <a class="button button-secondary" href="#proof">See the evidence</a>
           </div>
           <div class="trust-line" aria-label="Core guarantees">
             <span>Local-first</span>
             <span>Read-only by default</span>
-            <span>Zero cloud calls during serve</span>
+            <span>enquire outbound during serve: 0</span>
           </div>
         </div>
 
@@ -103,10 +105,10 @@
             </div>
             <div class="flow-arrow" aria-hidden="true">→</div>
             <div class="system-card engine-card">
-              <span class="system-kicker">LOCAL INTELLIGENCE LAYER</span>
+              <span class="system-kicker">LOCAL MARKDOWN + PDF RETRIEVAL</span>
               <strong>enquire-mcp</strong>
               <span class="engine-signals">
-                <i>BM25</i><i>ML</i><i>RRF</i><i>BGE</i>
+                <i>BM25</i><i>TF-IDF</i><i>ML</i><i>RRF</i><i>BGE</i><i>HNSW/int8</i>
               </span>
             </div>
           </div>
@@ -120,7 +122,7 @@
           <article class="answer-card">
             <div class="answer-head">
               <span class="answer-status"><i aria-hidden="true"></i> Grounded answer</span>
-              <span>0.94 confidence</span>
+              <span>cited source</span>
             </div>
             <p>“You worked on Apollo and logged an idea about velocity.”</p>
             <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/scripts/synthetic-vault.mjs">
@@ -133,10 +135,10 @@
       <section class="proof-bar" aria-label="Project proof">
         <div class="shell proof-grid">
           <div><strong>46</strong><span>MCP tools</span></div>
-          <div><strong>19</strong><span>agent workflows</span></div>
-          <div><strong>1,720</strong><span>public tests</span></div>
+          <div><strong>19</strong><span>MCP prompts</span></div>
+          <div><strong>1,795</strong><span>public tests</span></div>
           <div><strong>9</strong><span>release gates</span></div>
-          <div><strong>50+</strong><span>languages</span></div>
+          <div><strong>50+</strong><span>embedder languages</span></div>
         </div>
       </section>
 
@@ -156,10 +158,10 @@
           <article class="feature-card feature-card-wide">
             <span class="card-index">01</span>
             <div>
-              <h3>Recall beyond keyword overlap</h3>
+              <h3>Freshness-aware recall beyond keyword overlap</h3>
               <p>
-                BM25, TF-IDF, and multilingual embeddings are RRF-fused, graph-boosted, and optionally
-                reranked by a local BGE cross-encoder.
+                Local Markdown/PDF retrieval combines BM25 + TF-IDF + multilingual ML embeddings + RRF,
+                with local BGE reranking and HNSW/int8 vector search.
               </p>
             </div>
             <div class="signal-visual" aria-hidden="true">
@@ -180,21 +182,25 @@
           <article class="feature-card">
             <span class="card-index">03</span>
             <h3>Answers you can audit</h3>
-            <p>Verbatim snippets, paths, line spans, PDF pages, freshness, and per-signal scores travel with every hit.</p>
+            <p>Depending on result type, tools expose source paths and line spans, PDF pages, age_days/stale freshness signals, and per-signal scores.</p>
             <div class="citation-chip">research/RAG.md <span>¶ 44–51</span></div>
           </article>
 
           <article class="feature-card">
             <span class="card-index">04</span>
             <h3>Your files stay yours</h3>
-            <p>Plain Markdown remains the source of truth. Local indexes are rebuildable. Serve mode is offline by default.</p>
-            <div class="privacy-state"><span aria-hidden="true">●</span> outbound network: 0</div>
+            <p>
+              enquire has no telemetry and initiates zero outbound HTTP during serve. Requested context is returned
+              to the connected MCP client; cloud clients and tunnels remain a separate
+              <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md#privacy-policy">privacy boundary</a>.
+            </p>
+            <div class="privacy-state"><span aria-hidden="true">●</span> enquire outbound during serve: 0</div>
           </article>
 
           <article class="feature-card">
             <span class="card-index">05</span>
-            <h3>The whole Obsidian surface</h3>
-            <p>Markdown, wikilinks, frontmatter, Canvas, Bases, PDFs, OCR, tags, daily notes, and graph communities.</p>
+            <h3>Hybrid recall plus Obsidian-native tools</h3>
+            <p>Hybrid retrieval covers Markdown and PDFs/OCR. Structured tools parse Canvas, run Dataview-style LIST/TABLE queries, and execute supported Base filters.</p>
             <div class="format-list" aria-label="Supported formats"><span>MD</span><span>PDF</span><span>BASE</span><span>CANVAS</span></div>
           </article>
         </div>
@@ -226,10 +232,10 @@
               </thead>
               <tbody>
                 <tr><th scope="row">MCP memory shared by every agent</th><td class="wins">✓</td><td>×</td><td class="partial">✓</td><td class="partial">✓</td></tr>
-                <tr><th scope="row">Full BM25 → BGE → HNSW retrieval ladder</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
+                <tr><th scope="row">BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
                 <tr><th scope="row">HyDE + bounded multi-query + context packs</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
-                <tr><th scope="row">Freshness-aware memory and recency ranking</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
-                <tr><th scope="row">Markdown + PDF/OCR + Canvas + executable Bases</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
+                <tr><th scope="row">Cited paths/PDF pages + age_days/stale freshness</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
+                <tr><th scope="row">Markdown/PDF hybrid + Canvas, Dataview, Base-filter tools</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
                 <tr><th scope="row">Per-signal scores and stage explanations</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
                 <tr><th scope="row">Read-only default + write gate + privacy filters</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
                 <tr><th scope="row">Signed release + 9 gates + semver contract</th><td class="wins">✓</td><td>×</td><td>×</td><td>×</td></tr>
@@ -237,7 +243,7 @@
             </table>
           </div>
           <div class="compare-foot">
-            <p>Reviewed 2026-07-25. ✓ = complete row built in; × = complete combination not documented. Partial sub-features may exist.</p>
+            <p>Reviewed 2026-07-30. ✓ = complete row built in; × = complete combination not documented. Partial sub-features may exist.</p>
             <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/docs/COMPARISON.md#dated-competitive-evidence">Review pinned evidence <span aria-hidden="true">→</span></a>
           </div>
         </div>
@@ -252,13 +258,13 @@
           </div>
           <div class="metric-grid">
             <article class="metric-card metric-primary">
-              <span class="metric-label">BGE RERANKER · NDCG@10</span>
+              <span class="metric-label">BGE RERANKER · NDCG@10 POINTS</span>
               <strong>+15.5</strong>
               <p>Measured over plain hybrid retrieval in the public 60-query within-project ablation.</p>
               <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/docs/benchmarks.md">Read the methodology <span aria-hidden="true">→</span></a>
             </article>
             <article class="metric-card">
-              <span class="metric-label">BGE RERANKER · MRR</span>
+              <span class="metric-label">BGE RERANKER · MRR POINTS</span>
               <strong>+24.7</strong>
               <p>The same reproducible corpus, query set, relevance judgments, and comparison protocol.</p>
               <a href="https://github.com/oomkapwn/enquire-mcp/tree/main/bench">Inspect the artifacts <span aria-hidden="true">→</span></a>
@@ -309,7 +315,7 @@
         <div class="shell install-shell">
           <div class="install-copy">
             <p class="eyebrow">No account. No API key. No migration.</p>
-            <h2 id="install-title">Your vault can become memory <em>in 30 seconds.</em></h2>
+            <h2 id="install-title">Start with live scan.<br><em>Add depth when you need it.</em></h2>
             <ol class="install-steps">
               <li><span>1</span><div><strong>Install</strong><p>One npm package. Node 22.13+.</p></div></li>
               <li><span>2</span><div><strong>Point at your vault</strong><p>Keep Markdown where it already lives.</p></div></li>
@@ -416,7 +422,7 @@
             <span class="brand-mark" aria-hidden="true"><span></span></span>
             <span>enquire<span class="brand-accent">-mcp</span></span>
           </a>
-          <p>Private, cited long-term memory from the Markdown you own.</p>
+          <p>Freshness-aware, cited memory from the vault you own.</p>
         </div>
         <nav aria-label="Product links">
           <strong>Product</strong>
@@ -430,6 +436,7 @@
           <a href="https://github.com/oomkapwn/enquire-mcp">GitHub</a>
           <a href="https://www.npmjs.com/package/@oomkapwn/enquire-mcp">npm</a>
           <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md">Security</a>
+          <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md#privacy-policy">Privacy</a>
           <a href="https://github.com/oomkapwn/enquire-mcp/blob/main/LICENSE">MIT license</a>
         </nav>
       </div>

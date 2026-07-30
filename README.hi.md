@@ -8,7 +8,7 @@
 
 ### 🏆 AI मेमोरी के लिए #1 Obsidian MCP।
 
-**हर सत्र में Claude, Cursor, ChatGPT, Codex, OpenClaw को संदर्भ दोबारा समझाना बंद करें। आपके Obsidian नोट्स हर MCP-संगत एजेंट के बीच साझा, खोजने-योग्य स्मृति बन जाते हैं — आपका ज्ञान, हर मॉडल, हमेशा आपका अपना।**
+**हर सत्र में संदर्भ दोबारा समझाना बंद करें। enquire-mcp Markdown और PDF/OCR पर hybrid search करता है; इसके structured tools Canvas को parse करते हैं, Dataview-style LIST/TABLE queries चलाते हैं और समर्थित Obsidian Base फ़िल्टर निष्पादित करते हैं। आपका ज्ञान हर MCP-संगत एजेंट के लिए cited, खोजने-योग्य memory बनता है।**
 
 *मापा गया: BGE cross-encoder reranker एक [पुनरुत्पादनीय 60-क्वेरी ablation](./docs/benchmarks.md) पर सादे हाइब्रिड की तुलना में **+15.5 NDCG@10 / +24.7 MRR** जोड़ता है — पूरा आधुनिक IR स्टैक, जो उसी markdown को याद करता है जो **आपने** लिखी (उद्धृत, संपादन-योग्य), कभी कोई क्लाउड पैराफ़्रेज़ नहीं।*
 
@@ -47,7 +47,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > **enquire-mcp को अलग क्या बनाता है**:
 > 1. **विक्रेता-तटस्थ।** आपकी स्मृति `.md` फ़ाइलों में रहती है। Claude से Cursor पर जाएँ — आपकी स्मृति आपके साथ आती है।
 > 2. **पूरा local retrieval stack।** BM25 + TF-IDF + multilingual embeddings को RRF से fuse किया जाता है, optional BGE cross-encoder reranker और per-signal scores के साथ; HNSW + int8 quantization dense path को scale करते हैं।
-> 3. **serve के दौरान शून्य क्लाउड कॉल।** q8 embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक-बार का स्थानीय डाउनलोड (~118 MB) है, न कि कोई क्लाउड API key। मूल-आधारित + निजी होना मुफ़्त नहीं है, और हम इसका दिखावा नहीं करते: आपके vault की सामग्री कभी आपकी मशीन नहीं छोड़ती, डिफ़ॉल्ट रूप से एयर-गैप-सुरक्षित ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
+> 3. **`serve` के दौरान enquire द्वारा शुरू की गई outbound network calls शून्य।** q8 embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक स्पष्ट, एक-बार का स्थानीय डाउनलोड (~118 MB) है, न कि कोई क्लाउड API key। सामग्री केवल आपके जोड़े हुए MCP client को लौटाई जाती है; उस client या tunnel की data handling उसकी अपनी trust boundary है ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
 **46 टूल · 19 MCP प्रॉम्प्ट · 1795+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
@@ -67,7 +67,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **जाँच योग्य उत्तर** | ✅ मूल पाठ, note paths, PDF page citations, per-signal scores और freshness metadata |
 | **वास्तव में आपका ज्ञान** | ✅ plain markdown source of truth, local indexes और serve के दौरान zero cloud calls |
 | **पूरा Obsidian knowledge surface** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF और OCR |
-| **कठिन सवालों के लिए agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light और 19 workflow prompts |
+| **कठिन सवालों के लिए agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light और 19 MCP prompts |
 | **नियंत्रण छोड़े बिना scale** | ✅ HNSW live updates, persistence, adaptive refill और int8 quantization |
 | **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 1795 tests, 9 release gates और SLSA L2 provenance |
 
@@ -102,7 +102,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -292,7 +292,7 @@ graph LR
 
 **क्या यह मेरे vault में लिखेगा?** नहीं, जब तक आप `--enable-write` न दें। सभी 7 लेखन टूल gated हैं; विनाशकारी टूल `dry_run` का समर्थन करते हैं।
 
-**डेटा कहीं भेजा जाता है?** बाहरी डाउनलोड केवल स्पष्ट acquisition कमांड पर होते हैं: `enquire-mcp setup`, `enquire-mcp build-embeddings` और `enquire-mcp install-model` HuggingFace से ONNX weights ला सकते हैं; `enquire-mcp install-ocr-lang` OCR के लिए Tesseract भाषा पैक लाता है। serve मोड कभी बाहरी HTTP नहीं करता। Embeddings + reranker स्थानीय CPU पर चलते हैं।
+**डेटा कहीं भेजा जाता है?** enquire कोई telemetry नहीं भेजता और `serve` के दौरान कोई outbound HTTP शुरू नहीं करता। फिर भी, माँगा गया vault context आपके जोड़े हुए MCP client को लौटाया जाता है; cloud client उसे अपनी privacy policy के अनुसार process कर सकता है, और कोई भी tunnel या reverse proxy एक अलग trust boundary है। `setup`, `build-embeddings`, `install-model` और hybrid tiers के लिए `first-run --apply` Hugging Face से ONNX weights प्राप्त कर सकते हैं; `install-ocr-lang` Tesseract language pack डाउनलोड करता है।
 
 **प्रदर्शन?** यह vault के आकार, हार्डवेयर, मॉडल और चालू retrieval layers पर निर्भर करता है। सार्वजनिक प्रमाण में 1,771 chunks / 368 files पर BM25 top-10 का **50–100ms** production report और 100–1,000 notes पर linear scan से FTS5 की **37–103×** reproducible speedup शामिल है। latency SLO तय करने से पहले अपने vault पर built-in eval चलाएँ।
 

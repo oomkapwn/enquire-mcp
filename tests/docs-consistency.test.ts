@@ -400,17 +400,16 @@ function rerankerLanguagePostureProblems(markdown: string, defaultAlias: string)
   return problems;
 }
 
-/** Every localized network FAQ must disclose both explicit downloader commands. */
+/** Every localized network FAQ must disclose the client boundary and every explicit acquisition surface. */
 function networkFaqPostureProblems(markdown: string): string[] {
-  const lines = markdown
-    .split("\n")
-    .filter((line) => line.includes("enquire-mcp install-model") && /\bserve\b/i.test(line));
+  const lines = markdown.split("\n").filter((line) => line.includes("install-model") && /\bserve\b/i.test(line));
   const problems: string[] = [];
   if (lines.length !== 1) problems.push(`expected one install/network FAQ line, found ${lines.length}`);
   const line = lines[0] ?? "";
-  for (const command of ["setup", "build-embeddings", "install-model", "install-ocr-lang"]) {
-    if (!line.includes(`enquire-mcp ${command}`)) problems.push(`network FAQ omits ${command}`);
+  for (const command of ["setup", "build-embeddings", "install-model", "first-run --apply", "install-ocr-lang"]) {
+    if (!line.includes(`\`${command}\``)) problems.push(`network FAQ omits ${command}`);
   }
+  if (!line.includes("MCP")) problems.push("network FAQ omits the connected MCP-client boundary");
   return problems;
 }
 
@@ -646,12 +645,19 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(Number.parseInt(m?.[1] ?? "0", 10)).toBe(counts.writes);
   });
 
-  it("README prompt-count claim matches actual prompt count (where claimed)", async () => {
-    const readme = await read("README.md");
+  it("README and ROADMAP prompt-count claims match the actual prompt count", async () => {
     const counts = await getActualCounts();
-    // The first occurrence of "N **MCP prompts**" — that's the canonical claim.
-    const m = /\b(\d+) \*\*MCP prompts\*\*/.exec(readme);
-    if (m) expect(Number.parseInt(m[1] ?? "0", 10)).toBe(counts.prompts);
+    const promptCountProblems = (text: string): string[] => {
+      const claims = [...text.matchAll(/\b(\d+)\s+(?:\*\*)?MCP prompts(?:\*\*)?/g)];
+      if (claims.length === 0) return ["missing MCP prompt-count claim"];
+      return claims
+        .filter((match) => Number.parseInt(match[1] ?? "0", 10) !== counts.prompts)
+        .map((match) => `stale prompt count: ${match[0]}`);
+    };
+    for (const file of ["README.md", "ROADMAP.md"]) {
+      expect(promptCountProblems(await read(file)), `${file} prompt-count drift`).toEqual([]);
+    }
+    expect(promptCountProblems("Reuse the 20 MCP prompts.")).toContain("stale prompt count: 20 MCP prompts");
   });
 
   it("STABILITY.md tool-count header matches actual registered tool count", async () => {
@@ -996,27 +1002,47 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   it("social-preview composition keeps the TOP-1 message and exact proof count", async () => {
     const svg = await read("assets/social-preview.svg");
     const actual = await countActualTests();
+    const actualTools = manifestToolNames().size;
+    const actualPrompts = registeredNames(await read("src/prompts.ts"), "registerPrompt").size;
     const previewProblems = (candidate: string): string[] => {
       const problems: string[] = [];
       for (const marker of [
         "#1 OBSIDIAN MCP",
         "YOUR VAULT.",
         "EVERY AGENT.",
-        "Private AI memory + document intelligence.",
-        "Notes, PDFs, Canvas, and Bases in. Cited context out."
+        "Fresh, cited AI memory. Read-only by default.",
+        "Hybrid Markdown/PDF recall · Dataview/Bases tools.",
+        "FRESHNESS-AWARE",
+        "READ-ONLY DEFAULT"
       ]) {
         if (!candidate.includes(marker)) problems.push(`missing ${marker}`);
       }
-      const near = /TESTS<\/text>\s*<text[^>]*>(\d+)<\/text>/i.exec(candidate);
-      if (!near) problems.push("missing test proof");
-      else if (Number.parseInt(near[1] ?? "0", 10) !== actual) problems.push(`stale test count ${near[1]}`);
+      if (candidate.includes("WORKFLOWS")) problems.push("stale WORKFLOWS label");
+      for (const [label, expected] of [
+        ["MCP TOOLS", actualTools],
+        ["MCP PROMPTS", actualPrompts],
+        ["TESTS", actual]
+      ] as const) {
+        const near = new RegExp(`${label}<\\/text>\\s*<text[^>]*>(\\d+)<\\/text>`, "i").exec(candidate);
+        if (!near) problems.push(`missing ${label} proof`);
+        else if (Number.parseInt(near[1] ?? "0", 10) !== expected) {
+          problems.push(`stale ${label} count ${near[1]}`);
+        }
+      }
       return problems;
     };
     expect(previewProblems(svg)).toEqual([]);
     expect(previewProblems(svg.replace("EVERY AGENT.", "ONE AGENT."))).toContain("missing EVERY AGENT.");
     expect(previewProblems(svg.replace(`>${actual}</text>`, `>${actual + 1}</text>`))).toContain(
-      `stale test count ${actual + 1}`
+      `stale TESTS count ${actual + 1}`
     );
+    expect(previewProblems(svg.replace(`>${actualTools}</text>`, `>${actualTools + 1}</text>`))).toContain(
+      `stale MCP TOOLS count ${actualTools + 1}`
+    );
+    expect(previewProblems(svg.replace(`>${actualPrompts}</text>`, `>${actualPrompts + 1}</text>`))).toContain(
+      `stale MCP PROMPTS count ${actualPrompts + 1}`
+    );
+    expect(previewProblems(svg.replace("MCP PROMPTS", "WORKFLOWS"))).toContain("stale WORKFLOWS label");
 
     const renderer = await read("scripts/render-social-preview.mjs");
     expect(renderer).toContain('"social-preview-art.png"');
@@ -1259,12 +1285,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     expect(comparisonMd).toContain("# Why enquire-mcp is the #1 Obsidian MCP");
     expect(comparisonMd).toContain("### Dated competitive evidence");
-    expect(comparisonMd).toContain("Reviewed 2026-07-25 against pinned public README snapshots:");
+    expect(comparisonMd).toContain("Reviewed and repinned **2026-07-30** against public README snapshots:");
     for (const sha of [
-      "3f07d51a3a5e08f724c8e62719ac75ff675eee13",
-      "c0922d955f5bf5abaad14a11cbb3e11303cd6036",
+      "55bd2d66a318596b91996a61405f4172d6d1f001",
+      "5f97a11850eaf196c0dc5a537b781091e03ba13f",
       "9e9861be17395e942ee7aac3b3607cf9dc4d97b2",
-      "9f344557ab4137cbba694e4955d6a5294c535885"
+      "7681b59ca6eab49c531bc7ae388af007907c98a1"
     ]) {
       expect(comparisonMd, `COMPARISON.md is missing pinned competitor snapshot ${sha}`).toContain(sha);
     }

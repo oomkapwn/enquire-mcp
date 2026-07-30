@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.12.0-rc.28",
+  "version": "3.12.0-rc.29",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "The #1 Obsidian MCP for AI memory and local document intelligence: turn Markdown, PDFs + OCR, Canvas, and executable Bases into persistent, cited context for Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. Full hybrid retrieval (BM25 + TF-IDF + ML + RRF + BGE), HNSW + int8, freshness-aware recall, agentic RAG, GraphRAG-light. 46 tools, 19 MCP prompts, 1795 tests, signed npm build provenance (SLSA L2), semver-bound, MIT, zero cloud calls during serve.",
+  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid search over Markdown and PDFs/OCR, plus Canvas parsing, Dataview-style LIST/TABLE queries, and supported Obsidian Base-filter execution. Read-only by default; zero outbound calls initiated by enquire during serve. 46 tools, 19 MCP prompts, 1795 tests, signed npm build provenance (SLSA L2), semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -149,6 +149,10 @@
     "backlinks",
     "frontmatter",
     "dataview",
+    "document-intelligence",
+    "freshness-aware-retrieval",
+    "cited-search",
+    "local-first",
     "canvas",
     "bases",
     "obsidian-bases",

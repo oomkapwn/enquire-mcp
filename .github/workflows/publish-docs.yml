@@ -58,6 +58,11 @@ jobs:
       # lint+build ensures the publish path is at least as strict as PR.
       - run: npm run lint
       - run: npm run build
+      # Reproduce the same committed social-card bytes checked on PRs before
+      # Pages can publish them. This also protects workflow_dispatch/bypass
+      # paths from deploying a stale PNG.
+      - run: npm run render:preview
+      - run: git diff --exit-code -- assets/social-preview.png
       - run: npm run docs:api
       # Builds and fail-closed validates the crawlable landing root, Schema.org
       # graph + FAQ, llms.txt/llms-ctx.txt, social metadata, stable /api/ copy,

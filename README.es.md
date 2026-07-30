@@ -8,7 +8,7 @@
 
 ### 🏆 El Obsidian MCP n.º 1 para memoria de IA.
 
-**Deja de reexplicarle el contexto a Claude, Cursor, ChatGPT, Codex y OpenClaw en cada sesión. Tus notas de Obsidian se convierten en una memoria compartida y consultable entre todos los agentes compatibles con MCP: tu conocimiento, cualquier modelo, tuyo para siempre.**
+**Deja de reexplicar el contexto en cada sesión. enquire-mcp aplica búsqueda híbrida a Markdown y PDF/OCR; sus herramientas estructuradas analizan Canvas, ejecutan consultas LIST/TABLE al estilo Dataview y los filtros compatibles de Obsidian Bases. Tu conocimiento se convierte en memoria citada y consultable para cualquier agente compatible con MCP.**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
@@ -45,7 +45,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > **Lo que hace diferente a enquire-mcp**:
 > 1. **Neutral respecto al proveedor.** Tu memoria vive en archivos `.md`. Cambia de Claude a Cursor: tu memoria viaja contigo.
 > 2. **Pila local de recuperación completa.** BM25 + TF-IDF + embeddings multilingües fusionados mediante RRF, con reranking BGE opcional y puntuaciones por señal; HNSW + cuantización int8 escalan la ruta densa.
-> 3. **Cero llamadas a la nube durante el servicio.** El modelo de embeddings q8 se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local única (~118 MB), no una clave de API en la nube. Estar anclado y ser privado no sale gratis, y no fingimos que sí: el contenido de tu bóveda nunca sale de tu máquina, seguro para entornos aislados por defecto ([garantizado](./SECURITY.md), no aspiracional).
+> 3. **Cero llamadas de red salientes iniciadas por enquire durante `serve`.** El modelo de embeddings q8 se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local explícita y única (~118 MB), no una clave de API en la nube. El contenido solo se devuelve al cliente MCP que conectas; el tratamiento que haga ese cliente o túnel de los datos es su propio límite de confianza ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
 **46 herramientas · 19 prompts MCP · 1795+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
@@ -65,7 +65,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **Respuestas verificables** | ✅ Texto literal, rutas de notas, citas de páginas PDF, puntuaciones por señal y metadatos de frescura |
 | **Conocimiento que realmente posees** | ✅ Markdown como fuente de verdad, índices locales y cero llamadas a la nube durante el servicio |
 | **Toda la superficie de conocimiento de Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF y OCR |
-| **Recuperación agéntica para preguntas difíciles** | ✅ HyDE, descomposición en subpreguntas, paquetes de contexto, GraphRAG-light y 19 prompts de flujo |
+| **Recuperación agéntica para preguntas difíciles** | ✅ HyDE, descomposición en subpreguntas, paquetes de contexto, GraphRAG-light y 19 prompts MCP |
 | **Escala sin ceder el control** | ✅ Actualizaciones HNSW en vivo, persistencia, relleno adaptativo y cuantización int8 |
 | **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 1795 pruebas, 9 gates de publicación y procedencia SLSA L2 |
 
@@ -100,7 +100,7 @@ Conéctalo a cualquier cliente MCP:
 **¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -288,7 +288,7 @@ Postura completa: **[SECURITY.md](./SECURITY.md)** · Superficie de estabilidad:
 
 **¿Escribirá en mi bóveda?** No, a menos que pases `--enable-write`. Las 7 herramientas de escritura están restringidas; las destructivas admiten `dry_run`.
 
-**¿Se envían datos a algún sitio?** Las descargas salientes solo ocurren con comandos explícitos de adquisición: `enquire-mcp setup`, `enquire-mcp build-embeddings` y `enquire-mcp install-model` pueden descargar pesos ONNX de HuggingFace; `enquire-mcp install-ocr-lang` descarga un paquete de idioma Tesseract para OCR. El modo serve nunca realiza HTTP saliente. Los embeddings y el reranker se ejecutan localmente en la CPU.
+**¿Se envían datos a algún sitio?** enquire no envía telemetría ni inicia HTTP saliente durante `serve`. Sin embargo, devuelve el contexto solicitado de la bóveda al cliente MCP que conectas; un cliente en la nube puede procesarlo conforme a su propia política de privacidad, y cualquier túnel o proxy inverso constituye otra frontera de confianza. `setup`, `build-embeddings`, `install-model` y, para los niveles híbridos, `first-run --apply` pueden obtener pesos ONNX de Hugging Face; `install-ocr-lang` descarga un paquete de idioma Tesseract.
 
 **¿Rendimiento?** Depende del tamaño del vault, el hardware, el modelo y las capas activadas. La evidencia pública incluye un informe de producción de **50–100 ms** para BM25 top-10 con 1.771 chunks / 368 archivos y un benchmark sintético reproducible donde FTS5 supera al escaneo lineal en **37–103×** con 100–1.000 notas. Ejecuta la evaluación integrada sobre tu vault antes de fijar un SLO de latencia.
 

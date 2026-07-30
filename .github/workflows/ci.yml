@@ -300,6 +300,18 @@ jobs:
       # binary asset cannot silently lag its reviewable source.
       - id: preview_render
         run: npm run render:preview
+      # D-45 remote-only validation: preserve the runner-generated PNG before
+      # the expected byte-drift failure so maintainers never need Sharp/node
+      # execution on a local workstation to refresh this committed asset.
+      - name: Export remotely rendered social preview
+        id: preview_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rendered-social-preview
+          path: assets/social-preview.png
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
       - name: Require committed social-preview bytes
         id: preview_diff
         run: git diff --exit-code -- assets/social-preview.png

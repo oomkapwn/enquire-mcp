@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.28` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.29` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.28` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.29` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 For a client-specific install action, run `enquire-mcp configure --client <name> --vault /absolute/path`. The preview prints a native review URI only where the client officially accepts an arbitrary local definition (VS Code), a copy-and-run command where the client exposes one (Claude Code and Codex), and an explicit **copy-only** label where public one-click routes are limited to Marketplace/Registry entries. Every mode includes the exact generated config as the fallback.
 

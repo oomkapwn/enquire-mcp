@@ -9,6 +9,58 @@ If you've found a security issue in enquire, **please don't open a public GitHub
 
 Either channel: expect an acknowledgement within **72 hours**. I work on a fix in private, cut a patch release, and then publicly disclose with credit (or anonymously, your call).
 
+## Privacy policy
+
+Effective **2026-07-30**.
+
+enquire is local-first software, not a hosted service. The project operates no
+user accounts, telemetry, analytics collector, or hosted vault backend. The
+selected vault and each request are processed on the machine where enquire is
+running.
+
+- **Serve-time network boundary.** `serve` and `serve-http` initiate zero
+  outbound HTTP calls. enquire returns requested context to the MCP client you
+  connect, so that client is a separate trust boundary: a cloud-hosted client
+  may process or retain returned note/PDF content under its own privacy policy,
+  and an HTTP tunnel or reverse proxy can observe traffic unless it is
+  appropriately secured. “Local-first” describes enquire's processing; it
+  does not turn a connected cloud client into a local one.
+- **Explicit downloads.** `install-model`, `build-embeddings`, and `setup` may
+  explicitly download model weights from Hugging Face. A hybrid-tier
+  `first-run --apply` orchestrates those same explicit acquisition steps.
+  `install-ocr-lang` downloads a selected Tesseract language pack from the
+  `tesseract-ocr/tessdata_fast` GitHub repository. Runtime/read commands do not
+  silently acquire those assets; missing local assets fail closed with an
+  installation hint.
+- **Local data at rest.** Depending on enabled options, enquire can store a
+  parsed-note cache, a content-bearing FTS5 index, an embedding database,
+  HNSW sidecars, and an opt-in feedback file in the local cache directory.
+  The detailed sections below document their contents, permissions, and threat
+  boundaries. Treat the cache, FTS5, embedding, and HNSW artifacts with the
+  same sensitivity as the vault.
+- **Retention and erasure.** `clear-cache --vault <path>` removes the current
+  vault's parsed-note cache only. `clear-index --vault <path>` removes its FTS5
+  database plus WAL/SHM sidecars. `clear-embeddings --vault <path>` removes its
+  embedding database, WAL/SHM files, HNSW sidecars, and the exact
+  watcher-startup interlock after a strict shape preflight. Feedback is
+  intentionally preserved by `clear-cache`; `prune --vault <vault-to-keep>`
+  is dry-run by default and, with `--yes`, removes enquire-owned artifacts
+  (including feedback) for **other**, decommissioned vault hashes while keeping
+  the named vault. None of these commands recursively deletes arbitrary files.
+- **Filters are not retroactive erasure.** `--exclude-glob` and `--read-paths`
+  immediately hide filtered content from tool results, but copies created
+  before the filter can remain in local cache/index artifacts. Clear the
+  applicable cache, FTS5, and embedding/HNSW stores, then rebuild with the
+  filter in place.
+- **Third parties.** npm/GitHub package distribution, Hugging Face model
+  acquisition, the Tesseract language-pack repository, any connected MCP
+  client, and any tunnel/proxy are independent services governed by their own
+  privacy terms.
+
+Privacy or security questions can use the same private channels above:
+[GitHub Private Vulnerability Reporting](https://github.com/oomkapwn/enquire-mcp/security/advisories/new)
+or `oomkapwn@gmail.com`.
+
 ## Scope
 
 In scope:
@@ -148,7 +200,7 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 
 ### Model download (`install-model`)
 
-- **Explicit, opt-in model acquisition.** `enquire-mcp install-model [alias]`, `build-embeddings`, and `setup` are the network-enabled model paths (one-time HuggingFace downloads). Runtime/read commands — `serve`, `serve-http`, `query`, and `eval` — call `setEmbeddingsOffline()` before search → transformers.js `env.allowRemoteModels = false`, so embedder/reranker loads use ONLY the local cache. A cache miss **fails closed** with an `install-model` hint instead of silently downloading. TF-IDF/FTS5-only operation remains local. Air-gap-safe by default. **OIA Check 4f** (`scripts/oia-walk.mjs`) enforces all four runtime call sites plus the transformers.js guard.
+- **Explicit, opt-in model acquisition.** `enquire-mcp install-model [alias]`, `build-embeddings`, and `setup` are the network-enabled model paths (one-time HuggingFace downloads); a non-basic `first-run --apply` invokes those existing paths as an onboarding orchestrator. Runtime/read commands — `serve`, `serve-http`, `query`, and `eval` — call `setEmbeddingsOffline()` before search → transformers.js `env.allowRemoteModels = false`, so embedder/reranker loads use ONLY the local cache. A cache miss **fails closed** with an `install-model` hint instead of silently downloading. TF-IDF/FTS5-only operation remains local. Air-gap-safe by default. **OIA Check 4f** (`scripts/oia-walk.mjs`) enforces all four runtime call sites plus the transformers.js guard.
 - **Source: HuggingFace Hub.** Model weights ship as ONNX from the `Xenova/*` org. `@huggingface/transformers` handles explicit downloads and caches them inside its installed package directory. Tiered doctor is a v3.12 preview. Run `enquire-mcp configure --tier hybrid --vault <path>` from the selected installation and use its physically pinned setup/doctor/runtime commands; package version alone does not identify one npx installation. Doctor reports that installation's resolved cache root; legacy `~/.cache/huggingface` paths are not assumed.
 - **Reusable across vaults within one installation identity.** Vaults served by the same installed package copy share its model files. A global install and a project-local/npx install can resolve to different package directories and therefore different caches; keep setup, install-model, doctor, and runtime on one exact package identity.
 - **Manual purge.** Delete the exact package-local cache root reported by `doctor` to remove cached models. Global and project-local installs can resolve to different directories.
@@ -167,14 +219,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.28)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.29)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of v3.12.0-rc.28, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
+As of v3.12.0-rc.29, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
 
 - [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
 - [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).

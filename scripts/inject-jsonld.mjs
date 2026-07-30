@@ -3,8 +3,8 @@
 // v3.9.0-rc.17 — expanded from a single SoftwareApplication node to a
 // Schema.org `@graph` with three nodes: SoftwareApplication (enriched with
 // featureList + maintainer), SoftwareSourceCode (repo/runtime/targetProduct),
-// and FAQPage (the README FAQ Q&A — the highest AI-citation structured-data
-// type for Google AI Overviews / Perplexity / Bing Copilot).
+// and FAQPage (the README FAQ Q&A — a widely understood structured-data
+// surface for search engines and AI answer systems).
 //
 // Goal: make AI search engines recognize enquire-mcp as a SoftwareApplication
 // with proper metadata AND surface the FAQ answers directly. v3.12.0-rc.15's
@@ -34,6 +34,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
 
 /**
+ * Deliberately curated discovery terms. Keeping this independent from npm's
+ * package keywords lets the landing page describe the product's current wedge
+ * without inheriting registry-oriented or historical terms.
+ */
+export const SEO_KEYWORDS = [
+  "Obsidian MCP",
+  "freshness-aware AI memory",
+  "cited AI memory",
+  "agent memory",
+  "local-first RAG",
+  "read-only MCP",
+  "hybrid search",
+  "PDF citations",
+  "Dataview MCP",
+  "Obsidian Bases",
+  "Canvas parser",
+  "document intelligence",
+  "Model Context Protocol"
+];
+
+/**
  * FAQ Q&A pairs for the FAQPage node. These mirror the README "## ❓ FAQ"
  * section — README is the canonical source, and
  * `tests/docs-consistency.test.ts` asserts every question here appears in
@@ -50,7 +71,7 @@ export const FAQ_ENTRIES = [
   },
   {
     q: "Is my data sent anywhere?",
-    a: "Only on `enquire-mcp install-model`, which downloads ONNX model weights from HuggingFace one time. Serve mode makes zero outbound HTTP calls — embeddings and the reranker run on CPU locally, so your vault content never leaves your machine."
+    a: "enquire itself sends no telemetry and makes zero outbound HTTP calls during serve. It returns requested vault context to the MCP client you connect; cloud clients may process that context under their own privacy policy. setup, build-embeddings, and install-model may explicitly download ONNX weights from Hugging Face; a hybrid-tier first-run --apply orchestrates those same acquisitions, while install-ocr-lang downloads a Tesseract language pack."
   },
   {
     q: "What is the query performance?",
@@ -79,6 +100,7 @@ export function buildJsonLdGraph(pkg) {
     .replace(/^git\+/, "")
     .replace(/\.git$/, "");
   const docsUrl = "https://oomkapwn.github.io/enquire-mcp/";
+  const npmUrl = `https://www.npmjs.com/package/${pkg.name}`;
   const author = {
     "@type": "Person",
     name: typeof pkg.author === "string" ? pkg.author : (pkg.author?.name ?? "Alex"),
@@ -92,22 +114,27 @@ export function buildJsonLdGraph(pkg) {
     operatingSystem: "macOS, Linux, Windows",
     name: "enquire-mcp",
     description: pkg.description,
+    url: docsUrl,
+    sameAs: [repoUrl, npmUrl],
+    isAccessibleForFree: true,
     softwareVersion: pkg.version,
-    downloadUrl: `https://www.npmjs.com/package/${pkg.name}`,
+    downloadUrl: npmUrl,
     softwareHelp: { "@type": "CreativeWork", url: docsUrl },
     license: "https://spdx.org/licenses/MIT.html",
     author,
     maintainer: author,
-    keywords: Array.isArray(pkg.keywords) ? pkg.keywords.slice(0, 20).join(", ") : "",
+    keywords: SEO_KEYWORDS.join(", "),
     featureList: [
-      "Hybrid retrieval: BM25 + TF-IDF + multilingual ML embeddings, RRF-fused",
-      "BGE cross-encoder reranking (+15.5 NDCG@10 / +24.7 MRR measured)",
-      "HNSW vector index with int8 quantization + in-memory live update",
+      "Freshness-aware cited recall with source paths plus age_days and stale metadata",
+      "Read-only by default with explicit write gating and privacy filters",
+      "Local Markdown/PDF retrieval: BM25 + TF-IDF + multilingual ML embeddings + RRF + BGE reranking + HNSW/int8 vector search",
+      "PDF page citations and optional local Tesseract OCR",
+      "Structured Obsidian tools for Canvas, Dataview-style LIST/TABLE queries, and supported Base-filter execution",
+      "46 MCP tools and 19 MCP prompts for agent workflows",
+      "Zero outbound HTTP initiated by enquire during serve; requested context is returned to the connected MCP client",
       "Agentic RAG: HyDE + sub-question decomposition",
       "GraphRAG-light: Louvain community detection over the wikilink graph",
-      "Standalone Obsidian Bases (.base) query execution",
-      "PDFs blended into search with [page: N] citations + Tesseract OCR",
-      "Streamable HTTP transport with bearer auth, rate-limit, CORS"
+      "Streamable HTTP transport with bearer auth, exact Origin allowlisting, rate limiting, and CORS"
     ],
     codeRepository: repoUrl,
     programmingLanguage: "TypeScript",

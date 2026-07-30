@@ -8,7 +8,7 @@
 
 ### 🏆 AI メモリのための #1 Obsidian MCP。
 
-**セッションのたびに Claude、Cursor、ChatGPT、Codex、OpenClaw へコンテキストを説明し直すのはもう終わりです。あなたの Obsidian ノートが、すべての MCP 対応エージェント間で共有・検索可能な記憶になります——あなたの知識を、あらゆるモデルで、永遠にあなたのものに。**
+**セッションのたびにコンテキストを説明し直すのはもう終わりです。enquire-mcp は Markdown と PDF/OCR をハイブリッド検索し、構造化ツールで Canvas を解析し、Dataview 形式の LIST/TABLE クエリと対応する Obsidian Base フィルターを実行します。あなたの知識が、すべての MCP 対応エージェントで使える出典付きの検索可能な記憶になります。**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
@@ -45,7 +45,7 @@ AI セッションは毎回ゼロから始まり、プロジェクトや設計�
 > **enquire-mcp が違う理由**：
 > 1. **ベンダー中立。** あなたの記憶は `.md` ファイルの中にあります。Claude から Cursor に乗り換えても——記憶は一緒についてきます。
 > 2. **完全なローカル検索スタック。** BM25 + TF-IDF + 多言語埋め込みを RRF で融合し、任意の BGE クロスエンコーダ・リランカーと信号別スコアを提供。HNSW + int8 量子化で dense path をスケールします。
-> 3. **serve 中はクラウド呼び出しがゼロ。** モデルはローカルにキャッシュ（HuggingFace から一度だけダウンロード）。あなたのボールトの内容はマシンから決して出ていきません。デフォルトでエアギャップ安全。
+> 3. **`serve` 中に enquire が開始する外向きネットワーク呼び出しはゼロ。** モデルはローカルにキャッシュされます（HuggingFace から明示的に一度ダウンロード）。内容は接続した MCP クライアントにのみ返され、そのクライアントやトンネルによるデータ処理は、それぞれの信頼境界です。
 > 4. **鮮度を意識した呼び戻し。** すべてのヒットが、そのノートがどれくらい古いかを報告します。オプトインの鮮度リランキングにより、エージェントは新しい知識を優先し、古くなった事実を再検証対象としてフラグ付けできます——これは忘却を意識したフロンティアであり、あなたのファイルがもともと持っている `mtime` の上に構築されています。
 
 **46 ツール · 19 MCP プロンプト · 1795+ ユニットテスト · 50+ 言語 · v3.11.x 安定版 · semver 準拠 · MIT · npm ビルドプロベナンス（SLSA L2）。**
@@ -65,7 +65,7 @@ AI セッションは毎回ゼロから始まり、プロジェクトや設計�
 | **検証できる回答** | ✅ 原文、ノートパス、PDF ページ引用、信号別スコア、鮮度メタデータ |
 | **本当に所有できる知識** | ✅ プレーン markdown が正本、インデックスはローカル、serve 中のクラウド呼び出しはゼロ |
 | **Obsidian の知識面を網羅** | ✅ Markdown、wikilink、frontmatter、Canvas、Bases、PDF、OCR |
-| **難問向けのエージェント検索** | ✅ HyDE、サブ質問分解、context packs、GraphRAG-light、19 の workflow prompt |
+| **難問向けのエージェント検索** | ✅ HyDE、サブ質問分解、context packs、GraphRAG-light、19 の MCP プロンプト |
 | **制御を失わないスケール** | ✅ HNSW ライブ更新、永続化、adaptive refill、int8 量子化 |
 | **プロダクションの信頼性** | ✅ 既定で read-only、privacy filter、認証 HTTP、semver 契約、1795 tests、9 release gates、SLSA L2 provenance |
 
@@ -100,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -288,7 +288,7 @@ graph LR
 
 **私のボールトに書き込む？** `--enable-write` を渡さない限り、書き込みません。7 個の書き込みツールはすべてゲート付きで、破壊的なものは `dry_run` をサポートします。
 
-**データはどこかに送信される？** 外向きのダウンロードは明示的な取得コマンドだけです。`enquire-mcp setup`、`enquire-mcp build-embeddings`、`enquire-mcp install-model` は HuggingFace から ONNX の重みを取得する場合があり、`enquire-mcp install-ocr-lang` は OCR 用 Tesseract 言語パックを取得します。serve モードは外向きの HTTP を一切行いません。埋め込みとリランカーはローカルの CPU で実行されます。
+**データはどこかに送信される？** enquire はテレメトリを送信せず、`serve` 中に外向きの HTTP を開始しません。ただし、要求された Vault のコンテキストは接続した MCP クライアントへ返されます。クラウドクライアントは独自のプライバシーポリシーに従ってそのコンテキストを処理する場合があり、トンネルやリバースプロキシも別の信頼境界です。`setup`、`build-embeddings`、`install-model`、およびハイブリッド Tier の `first-run --apply` は Hugging Face から ONNX の重みを取得する場合があります。`install-ocr-lang` は Tesseract 言語パックを取得します。
 
 **パフォーマンスは？** Vault の規模、ハードウェア、モデル、有効な検索レイヤーによって変わります。公開されている根拠は、1,771 chunks / 368 files で BM25 top-10 が **50–100ms** だった本番報告と、100–1,000 notes で FTS5 が線形スキャンより **37–103×** 高速だった再現可能な合成ベンチマークです。レイテンシ SLO を決める前に自分の Vault で内蔵評価を実行してください。
 

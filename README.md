@@ -1,20 +1,20 @@
 <div align="center">
 
-<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the #1 Obsidian MCP. Your vault becomes private AI memory and document intelligence for every agent. Markdown, PDFs, Canvas, and Bases in; cited context out." width="100%"></a>
+<a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — the #1 Obsidian MCP for freshness-aware, cited AI memory. Hybrid Markdown and PDF recall plus structured Canvas, Dataview, and Bases tools; read-only by default." width="100%"></a>
 
 # enquire-mcp
 
 <sub>**English** · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR for AI agents** — enquire-mcp is the #1 Obsidian MCP: a local memory and document-intelligence layer that makes one vault persistently searchable from Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and any MCP client. It returns cited source context across Markdown, PDFs + OCR, Canvas, and executable Bases using hybrid retrieval, local BGE reranking, HNSW, freshness signals, and bounded agentic RAG. Vendor-neutral, MIT, read-only by default, zero cloud calls during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Agent index: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [deep context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt) · [contributor map](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**TL;DR for AI agents** — enquire-mcp is the #1 Obsidian MCP for freshness-aware, cited AI memory. Hybrid search covers Markdown and PDFs/OCR; structured tools parse Canvas, run Dataview-style LIST/TABLE queries, and execute supported Obsidian Base filters. `obsidian_search` preserves source paths plus `age_days`/`stale`, while PDF hits retain page citations. Vendor-neutral, MIT, read-only by default, and zero outbound calls initiated by enquire during serve. Install: `npm i -g @oomkapwn/enquire-mcp`. Agent index: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [deep context](https://github.com/oomkapwn/enquire-mcp/blob/main/llms-ctx.txt) · [contributor map](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
-### 🏆 The #1 Obsidian MCP.
+### 🏆 The #1 Obsidian MCP for freshness-aware, cited AI memory.
 
-<h2>Your vault. Every agent. One private intelligence layer.</h2>
+<h2>Your vault. Every agent. Fresh, cited memory.</h2>
 
-**Turn the notes, PDFs, canvases, and Bases you already own into durable AI memory and cited document intelligence. Stop rebuilding context every session — and stop locking it inside one model vendor.**
+**Turn the notes and documents you already own into durable agent memory that keeps its sources, exposes its age, and helps agents re-check stale facts — without locking context inside one model vendor.**
 
-**Markdown · PDF/OCR · Canvas · Bases → local retrieval + reranking → cited context for Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP agent.**
+**Markdown + PDF/OCR → local hybrid retrieval → paths, pages, age, and signal scores. Canvas + Dataview + Bases → precise structured tools. One vault → Claude, Cursor, ChatGPT, Codex, OpenClaw, and every MCP agent.**
 
 *Proof, not vibes: local BGE reranking adds **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid on the [reproducible 60-query ablation](./docs/benchmarks.md).*
 
@@ -27,7 +27,7 @@
 [![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
-**[⚡ 30-second install](#-quick-start) · [🏆 Why #1](#why-number-one) · [🧠 Use cases](#-use-cases) · [📊 Proof](./docs/benchmarks.md) · [🤖 AI index](./llms.txt) · [📖 API](https://oomkapwn.github.io/enquire-mcp/api/)**
+**[⚡ One-command install](#-quick-start) · [🏆 Why #1](#why-number-one) · [🧠 Use cases](#-use-cases) · [📊 Proof](./docs/benchmarks.md) · [🤖 AI index](./llms.txt) · [📖 API](https://oomkapwn.github.io/enquire-mcp/api/)**
 
 **Claude Code — one line:**
 
@@ -57,15 +57,17 @@ One install turns your existing vault into a **persistent, queryable knowledge d
 
 **Memory you own.** Most conversation-memory products extract facts from chats into a separate store. enquire-mcp starts from the knowledge you deliberately kept: Markdown, frontmatter, wikilinks, PDFs, Canvas, and Bases. Recall is grounded in source material rather than a hidden paraphrase.
 
-**Document intelligence without a data migration.** PDFs enter the same local search path as notes and return page citations. OCR can recover scanned pages. Canvas becomes a typed graph. Bases becomes an executable query surface instead of an opaque attachment.
+**Document intelligence without a data migration.** PDFs enter the same local hybrid-search path as Markdown and return page citations; OCR can recover scanned pages. Canvas becomes a typed graph. Dedicated tools run the supported Dataview LIST/TABLE subset and supported Obsidian Base filters instead of treating those formats as opaque attachments.
 
 **Freshness, not timeless recall.** Every search hit can carry `age_days` and `stale`; optional recency weighting helps agents prefer newer knowledge and re-check old facts instead of confidently repeating them.
 
 > **What makes enquire-mcp different**:
-> 1. **Vendor-neutral.** Your memory lives in `.md` files. Switch from Claude to Cursor — your memory comes with you.
-> 2. **Full-stack local retrieval.** Hybrid BM25 + TF-IDF + multilingual embeddings fused via RRF, with an optional BGE cross-encoder reranker and per-signal scores; HNSW + int8 quantization scale the dense path.
-> 3. **Zero cloud calls during serve.** The q8 embedding model runs **on your machine** and indexes the markdown **you** wrote — that's why it's a one-time local download (~118 MB), not a cloud API key. Grounded + private isn't free, and we don't pretend it is: your vault content never leaves your machine, air-gap-safe by default ([enforced](./SECURITY.md), not aspirational).
-> 4. **Freshness-aware recall.** Every hit reports how old the note is; opt-in recency re-ranking lets an agent prefer fresh knowledge and flag stale facts for re-verification — the forgetting-aware frontier, built on the `mtime` your files already have.
+> 1. **Freshness-aware, cited recall.** Search results retain source paths and expose age/staleness; PDF hits keep page citations. Optional recency re-ranking helps agents prefer fresh knowledge and re-verify old facts.
+> 2. **Read-only by default.** Seven write tools stay invisible until `--enable-write`; privacy filters and exact-Origin HTTP admission reduce the exposed surface.
+> 3. **Obsidian-native document intelligence.** Markdown/PDF hybrid recall is complemented by typed Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution.
+> 4. **Full-stack local retrieval.** Hybrid BM25 + TF-IDF + multilingual embeddings fused via RRF, with an optional BGE cross-encoder reranker and per-signal scores; HNSW + int8 quantization scale the dense path.
+> 5. **A clear data boundary.** enquire initiates zero outbound calls during serve and sends no telemetry. It returns requested context only to the MCP client you connect; that client's own privacy terms govern any later cloud processing. See the exact [privacy policy](./SECURITY.md#privacy-policy).
+> 6. **Vendor-neutral memory.** Your source knowledge remains in portable files. Switch agents or model providers without rebuilding a proprietary memory silo.
 
 **46 tools · 19 MCP prompts · 1795 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
 
@@ -79,19 +81,19 @@ Most alternatives solve one layer: an in-app similarity panel, a capable search 
 
 | Complete leadership standard | **enquire-mcp** | Smart Connections | Obsidian Hybrid Search | Typical file-wrapper MCP |
 |---|:---:|:---:|:---:|:---:|
+| **Source paths/PDF pages + age/stale metadata** | ✅ | ✕ | ✕ | ✕ |
+| **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
+| **Dataview LIST/TABLE + supported Base-filter execution** | ✅ | ✕ | ✕ | ✕ |
 | **MCP-native memory shared by every agent** | ✅ | ✕ | ✅ | ✅ |
 | **BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8** | ✅ | ✕ | ✕ | ✕ |
 | **HyDE + bounded multi-query + context packs** | ✅ | ✕ | ✕ | ✕ |
-| **Freshness metadata + optional recency ranking** | ✅ | ✕ | ✕ | ✕ |
-| **Markdown + PDF/OCR + Canvas + executable Bases** | ✅ | ✕ | ✕ | ✕ |
-| **PDF page citations inside unified retrieval** | ✅ | ✕ | ✕ | ✕ |
+| **Markdown/PDF hybrid recall + Canvas structured tools** | ✅ | ✕ | ✕ | ✕ |
 | **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
 | **One-generation live scan → FTS → ML → HNSW + quarantine** | ✅ | ✕ | ✕ | ✕ |
-| **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
-| **46 tools + 19 workflows + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
 | **1795 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
-<sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-25. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
+<sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-30. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
 
 **That is the TOP-1 thesis:** one source of truth, one local intelligence layer, every agent — without reducing your knowledge to a cloud memory blob.
 
@@ -133,7 +135,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -254,7 +256,7 @@ Choose enquire-mcp when you want:
 - **One memory layer across many AI agents** so switching models never means starting over.
 - **Conceptual and multilingual recall** that survives different wording, not only exact string matches.
 - **Cited, inspectable answers** with note paths, PDF pages, signal scores, and freshness metadata.
-- **Local-first privacy** with read-only defaults, explicit write gates, and zero cloud calls during serve.
+- **Local-first privacy** with read-only defaults, explicit write gates, zero outbound calls initiated by enquire during serve, and a documented MCP-client trust boundary.
 - **A complete retrieval backend** spanning hybrid search, reranking, graph context, agentic expansion, rich Obsidian formats, and remote MCP.
 
 **Clear scope:** enquire-mcp is a headless MCP server / CLI for Markdown, Canvas, Bases, and PDF knowledge. Use exact-search tools alongside it for literal tokens; use the built-in HTTP transport when agents need remote access.
@@ -334,7 +336,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
 | **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
 
-Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILITY.md](./STABILITY.md)** · Vulns: `oomkapwn@gmail.com`.
+Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILITY.md](./STABILITY.md)** · Vulns: `oomkapwn@gmail.com`.
 
 ---
 
@@ -344,7 +346,7 @@ Full posture: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILIT
 
 **Will it write to my vault?** Not unless you pass `--enable-write`. All 7 write tools are gated; destructive ones support `dry_run`.
 
-**Data sent anywhere?** Outbound downloads occur only on explicit acquisition commands: `enquire-mcp setup`, `enquire-mcp build-embeddings`, and `enquire-mcp install-model` may fetch ONNX weights from HuggingFace; `enquire-mcp install-ocr-lang` fetches a Tesseract language pack. Serve mode never makes outbound HTTP ([enforced](./SECURITY.md), not aspirational). Embeddings + reranker run on CPU locally.
+**Data sent anywhere?** enquire sends no telemetry and initiates no outbound HTTP during serve. It does return requested vault context to the MCP client you connect; a cloud client may process that context under its own privacy policy, and any tunnel/proxy is another trust boundary. Explicit acquisition commands—`setup`, `build-embeddings`, and `install-model`—may fetch ONNX weights from Hugging Face; a hybrid-tier `first-run --apply` orchestrates those same acquisitions, while `install-ocr-lang` fetches a Tesseract language pack. Exact policy: [SECURITY.md](./SECURITY.md#privacy-policy).
 
 **Performance?** It depends on vault size, hardware, model, and enabled retrieval layers. The public evidence includes a production report of **50–100ms BM25 top-10 at 1,771 chunks / 368 files** plus a reproducible synthetic benchmark showing **37–103×** FTS5 speedup over linear scan at 100–1,000 notes. Run the built-in eval and benchmark commands on your vault before setting a latency SLO; see [benchmarks](./docs/benchmarks.md) and the [FTS5 implementation note](./docs/api.md#obsidian_full_text_search).
 

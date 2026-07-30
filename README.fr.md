@@ -6,7 +6,7 @@
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · **Français** · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)</sub>
 
-<sub>**TL;DR pour les agents IA** — Serveur MCP qui expose un coffre markdown Obsidian local à Claude Code, Claude Desktop, Cursor, ChatGPT, Codex et OpenClaw comme une mémoire persistante interrogeable. Récupération hybride (BM25 + embeddings ML + reranker BGE, fusionnés par RRF), HNSW + quantification int8, RAG agentique (HyDE + sous-questions), GraphRAG-light, PDF + OCR, Bases autonomes. Neutre vis-à-vis des fournisseurs, MIT, zéro appel au cloud pendant le service. Installation : `npm i -g @oomkapwn/enquire-mcp`. Docs : [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**TL;DR pour les agents IA** — Le MCP Obsidian n° 1 pour une mémoire IA fraîche et citable. La recherche hybride couvre Markdown et PDF/OCR ; des outils structurés analysent Canvas, exécutent des requêtes LIST/TABLE de style Dataview et les filtres Obsidian Bases pris en charge. Neutre vis-à-vis des fournisseurs, MIT, lecture seule par défaut ; enquire n’initie aucun appel réseau sortant pendant `serve`. Installation : `npm i -g @oomkapwn/enquire-mcp`. Docs : [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
 ### 🏆 Le MCP Obsidian n° 1 pour la mémoire IA.
 
@@ -50,7 +50,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > **Ce qui rend enquire-mcp différent** :
 > 1. **Neutre vis-à-vis des fournisseurs.** Votre mémoire vit dans des fichiers `.md`. Passez de Claude à Cursor — votre mémoire vous suit.
 > 2. **Pile locale de récupération complète.** BM25 + TF-IDF + embeddings multilingues fusionnés par RRF, avec reranking BGE optionnel et scores par signal ; HNSW + quantification int8 font évoluer le chemin dense.
-> 3. **Zéro appel au cloud pendant le service.** Modèles mis en cache localement (téléchargement unique depuis HuggingFace). Le contenu de votre coffre ne quitte jamais votre machine. Sûr en environnement isolé par défaut.
+> 3. **Aucun appel réseau sortant initié par enquire pendant `serve`.** Les modèles sont mis en cache localement après un téléchargement explicite et unique depuis HuggingFace. Le contenu est renvoyé uniquement au client MCP connecté ; le traitement des données par ce client ou tunnel constitue sa propre frontière de confiance.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
 **46 outils · 19 prompts MCP · 1795+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
@@ -70,7 +70,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 | **Réponses vérifiables** | ✅ Texte littéral, chemins de notes, pages PDF citées, scores par signal et métadonnées de fraîcheur |
 | **Un savoir qui vous appartient vraiment** | ✅ Markdown comme source de vérité, index locaux et zéro appel cloud pendant le service |
 | **Toute la surface de connaissance Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF et OCR |
-| **Récupération agentique pour les questions difficiles** | ✅ HyDE, décomposition en sous-questions, context packs, GraphRAG-light et 19 prompts de workflow |
+| **Récupération agentique pour les questions difficiles** | ✅ HyDE, décomposition en sous-questions, context packs, GraphRAG-light et 19 prompts MCP |
 | **Passage à l'échelle sans perdre le contrôle** | ✅ Mises à jour HNSW en direct, persistance, refill adaptatif et quantification int8 |
 | **Confiance en production** | ✅ Lecture seule par défaut, filtres de confidentialité, HTTP authentifié, contrats semver, 1795 tests, 9 gates de publication et provenance SLSA L2 |
 
@@ -105,7 +105,7 @@ Connectez-le à n'importe quel client MCP :
 **Vous voulez toute la puissance hybride ?** Exécutez le preflight hybride, puis démarrez le serveur :
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -293,7 +293,7 @@ Posture complète : **[SECURITY.md](./SECURITY.md)** · Surface de stabilité : 
 
 **Va-t-il écrire dans mon coffre ?** Pas sauf si vous passez `--enable-write`. Les 7 outils d'écriture sont restreints ; les outils destructifs prennent en charge `dry_run`.
 
-**Des données envoyées quelque part ?** Les téléchargements sortants n'ont lieu qu'avec des commandes d'acquisition explicites : `enquire-mcp setup`, `enquire-mcp build-embeddings` et `enquire-mcp install-model` peuvent télécharger les poids ONNX depuis HuggingFace ; `enquire-mcp install-ocr-lang` télécharge un pack de langue Tesseract pour l'OCR. Le mode serve ne fait jamais d'HTTP sortant. Les embeddings + le reranker s'exécutent localement sur le CPU.
+**Des données envoyées quelque part ?** enquire n'envoie aucune télémétrie et n'initie aucun appel HTTP sortant pendant `serve`. Il renvoie toutefois le contexte demandé du coffre au client MCP connecté ; un client cloud peut traiter ce contexte selon sa propre politique de confidentialité, et tout tunnel ou proxy inverse constitue une autre frontière de confiance. `setup`, `build-embeddings`, `install-model` et, pour les niveaux hybrides, `first-run --apply` peuvent récupérer des poids ONNX depuis Hugging Face ; `install-ocr-lang` télécharge un pack de langue Tesseract.
 
 **Performances ?** Elles dépendent de la taille du vault, du matériel, du modèle et des couches activées. Les preuves publiques incluent un retour de production de **50–100 ms** pour BM25 top-10 sur 1 771 chunks / 368 fichiers et un benchmark synthétique reproductible où FTS5 accélère la recherche de **37–103×** face au scan linéaire sur 100–1 000 notes. Exécutez l'évaluation intégrée sur votre vault avant de fixer un SLO de latence.
 

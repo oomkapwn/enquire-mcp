@@ -57,7 +57,11 @@ const GUARANTEES: Array<{ label: string; marker: string; symbol: string }> = [
     symbol: "js-yaml"
   },
   { label: "HTTP session idle eviction (memory bound)", marker: "Idle eviction", symbol: "sweepIdle" },
-  { label: "CORS omits credentials on wildcard", marker: "Allow-Credentials", symbol: "Allow-Credentials" }
+  {
+    label: "invalid HTTP Origin rejected before request handling",
+    marker: "present invalid Origin",
+    symbol: "isRequestOriginAllowed"
+  }
 ];
 
 /** null = OK; else an explanation of the broken claim↔guard link. */

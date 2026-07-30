@@ -5,8 +5,8 @@
 //     resistance (timingSafeEqual), no Bearer prefix.
 //   • RateLimiter: under-budget passes, over-budget rejects, sliding window
 //     trims old entries, perMinute=0 disables.
-//   • startHttpServer end-to-end: 401 missing, 401 wrong, 200 init, 429
-//     rate-limit, OPTIONS preflight, /health probe, 405 GET on /mcp.
+//   • startHttpServer end-to-end: Origin admission, 401 missing, 401 wrong,
+//     200 init, 429 rate-limit, OPTIONS preflight, /health, 405 GET on /mcp.
 //
 // We bind to 127.0.0.1:0 (kernel-assigned port) to avoid collisions when
 // running tests in parallel. Each test cleans up its server with
@@ -996,25 +996,31 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
     }
   });
 
-  it("OPTIONS preflight with wildcard origin reflects '*' and OMITS Allow-Credentials (CodeQL cors-credential-leak guard)", async () => {
-    const s = await spawn({ corsOrigins: ["*"] });
-    try {
-      const res = await fetch(`${s.url}/mcp`, {
-        method: "OPTIONS",
-        headers: {
-          Origin: "https://anything.example.com",
-          "Access-Control-Request-Method": "POST"
-        }
-      });
-      expect(res.status).toBe(204);
-      // Wildcard reflects literal "*", NOT the request's origin (avoids
-      // credential-bearing CORS grant to attacker-controlled origins).
-      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
-      // Allow-Credentials must be absent under wildcard (browsers reject
-      // the combo, and we want it absent in headers regardless).
-      expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
-    } finally {
-      await s.close();
+  it("refuses wildcard, opaque, malformed, and non-origin CORS configuration before opening the vault", async () => {
+    const invalidConfigs = [
+      ["*"],
+      ["https://claude.ai", "*"],
+      ["null"],
+      ["https://claude.ai/path"],
+      ["https://claude.ai?query=1"],
+      ["https://claude.ai#fragment"],
+      [" https://claude.ai"],
+      ["ftp://claude.ai"],
+      ["not-an-origin"]
+    ];
+    for (const corsOrigins of invalidConfigs) {
+      await expect(
+        startHttpServer({
+          // The missing path is a negative control for startup order: an
+          // Origin-policy error must win before vault preparation can fail.
+          vault: path.join(root, "missing-vault"),
+          port: 0,
+          host: "127.0.0.1",
+          bearerToken: TOKEN,
+          corsOrigins,
+          installSignalHandlers: false
+        })
+      ).rejects.toThrow(/--cors-origin/);
     }
   });
 
@@ -1036,20 +1042,82 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
     }
   });
 
-  it("OPTIONS preflight with disallowed origin gets 204 but NO CORS headers", async () => {
-    const s = await spawn({ corsOrigins: ["https://claude.ai"] });
+  it("rejects every disallowed Origin with 403 before routes, auth, body parsing, rate-limit, or MCP dispatch", async () => {
+    const s = await spawn({ corsOrigins: ["https://claude.ai"], rateLimitPerMinute: 1 });
     try {
-      const res = await fetch(`${s.url}/mcp`, {
+      const initBody = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "vitest-origin", version: "0.0.0" }
+        }
+      });
+
+      const preflight = await fetch(`${s.url}/mcp`, {
         method: "OPTIONS",
         headers: {
           Origin: "https://evil.example.com",
           "Access-Control-Request-Method": "POST"
         }
       });
-      expect(res.status).toBe(204);
-      // Browsers will block the actual request because the preflight didn't
-      // include Access-Control-Allow-Origin for the requesting origin.
-      expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+      expect(preflight.status).toBe(403);
+      expect(preflight.headers.get("Access-Control-Allow-Origin")).toBeNull();
+      expect(await preflight.text()).not.toContain("evil.example.com");
+
+      const health = await fetch(`${s.url}/health`, {
+        headers: { Origin: "https://evil.example.com" }
+      });
+      expect(health.status).toBe(403);
+
+      for (const origin of ["null", "not an origin", "https://evil.example.com, https://other.example.com"]) {
+        const malformed = await fetch(`${s.url}/mcp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Origin: origin },
+          body: "{"
+        });
+        // 403 instead of 401/400 proves Origin admission precedes auth and
+        // body parsing. Opaque/malformed/multiple values cannot be admitted.
+        expect(malformed.status, origin).toBe(403);
+      }
+
+      const hostilePost = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          Origin: "https://evil.example.com"
+        },
+        body: initBody
+      });
+      expect(hostilePost.status).toBe(403);
+
+      const allowedHeaders = {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${TOKEN}`,
+        Origin: "https://claude.ai"
+      };
+      const allowed = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: allowedHeaders,
+        body: initBody
+      });
+      expect(allowed.status).toBe(200);
+      expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe("https://claude.ai");
+      await allowed.text();
+
+      const overBudget = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: allowedHeaders,
+        body: initBody
+      });
+      // The single admitted request consumed the one-request budget; all
+      // rejected Origin probes above consumed none.
+      expect(overBudget.status).toBe(429);
     } finally {
       await s.close();
     }

@@ -167,14 +167,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.27)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.28)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of v3.12.0-rc.27, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
+As of v3.12.0-rc.28, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
 
 - [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
 - [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).
@@ -251,7 +251,8 @@ The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Str
 - **Token timing leaks.** Bearer compare hashes both presented and expected token with SHA-256 first, then `crypto.timingSafeEqual` on the equal-length 32-byte digests. No length oracle; equal-length compare is constant-time.
 - **Token logging.** Stderr / log output uses the SHA-256 prefix as the rate-limit key — the raw bearer token never appears in logs, error messages, or rate-limit state.
 - **Rate-limit abuse.** Per-token sliding 60-second window, default 120 requests/minute. Tunable via `--rate-limit` (`0` disables for trusted private LANs). 429 + `Retry-After: 60` on overflow.
-- **CORS-based credential leakage.** `--cors-origin` is a strict allowlist. Default empty (no `Access-Control-Allow-Origin` sent — same-origin works regardless). With explicit origins, we send `Access-Control-Allow-Credentials: true` so cookies + bearer requests work cross-origin. With the `*` wildcard, we deliberately OMIT `Allow-Credentials` (browsers reject the combo anyway, and reflecting credentialed CORS to attacker-controlled origins is the [CodeQL `js/cors-misconfiguration-for-credentials` class of bug](https://codeql.github.com/codeql-query-help/javascript/js-cors-misconfiguration-for-credentials/)). The response value is sourced from the allowlist itself, not from `req.headers.origin`, so static-analysis taint flows from a server-controlled root.
+- **DNS-rebinding / Origin admission.** A request without `Origin` is accepted for native MCP clients. Every **present invalid Origin**—unlisted, opaque `null`, malformed, duplicated/comma-joined, or otherwise not an exact configured HTTP(S) origin—gets `403` before OPTIONS, health, routing, auth, rate-limit, body parsing, session allocation, or MCP dispatch. `--cors-origin '*'` is rejected at startup because wildcard admission cannot enforce the [MCP Streamable HTTP Origin requirement](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#security--endpoint).
+- **CORS-based credential leakage.** After Origin admission, the exact matched server-controlled allowlist value is used for `Access-Control-Allow-Origin`, with `Vary: Origin` and `Access-Control-Allow-Credentials: true`. Hostile input is never reflected. A browser client—including a same-origin page—must be listed explicitly; default empty admits only clients that omit the `Origin` header.
 - **Body bombs.** Per-request body size cap derived from `--max-file-bytes` as `max(4 MB, max-file-bytes × 1.5)` (7.5 MB at the default 5 MB file cap), enforced as we accumulate chunks. Bigger requests get `400 Parse error` before we attempt JSON.parse.
 - **Privacy filter (`--exclude-glob` / `--read-paths`)** applies identically to HTTP and stdio paths. The same audit-tested filter runs at every search/read/walker boundary; there are no HTTP-specific shortcuts. v2.0.0-beta.2 P0 fixes for FTS5 + embed-index search apply here.
 - **Tag-deletion / write-tool gating.** All write tools (chat-thread-append, frontmatter-set, create/append/rename/replace/archive) remain gated by `--enable-write` regardless of transport. HTTP doesn't lower the bar.
@@ -287,7 +288,7 @@ Out of scope (stateful mode specifically):
 - Ready banner on stderr: `enquire <version> ready (read-only|WRITE-ENABLED, vault=…) (transport=http, bound=…)`.
 - Transport errors written to stderr with no token / no credential leakage.
 - `/health` endpoint (`GET /health → 200 ok`) is **unauthenticated** and exists specifically for tunnel/uptime monitors. It returns the literal string `ok` — no version info, no vault path, no operational metadata. Health probes can't be used to fingerprint the deployment.
-- `OPTIONS` preflight requests are unauthenticated (per CORS spec) but only emit CORS headers when the request's `Origin` is in the allowlist.
+- `OPTIONS` preflight requests are unauthenticated (per CORS spec) but still cross the outer Origin-admission guard: an exact allowlist match can receive CORS headers, while any other present Origin gets `403`.
 
 ## Obsidian Bases (`.base`) execution (v3.2.0+): parser + DSL posture
 

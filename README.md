@@ -133,7 +133,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.27      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -324,7 +324,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **Least privilege** | `--disabled-tools` / `--enabled-tools` expose a minimal surface (e.g. a read-only research agent gets only `obsidian_search` + `obsidian_read_note`) |
 | **Path safety** | Realpath check on every read+write; symlinks-out-of-vault rejected |
 | **Privacy filter** | Verified at FTS5 + embed-db + chunk resource paths; fail-closed on empty allow-/deny-lists |
-| **HTTP transport** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
+| **HTTP transport** | Exact-Origin admission (`403` before handling), bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
 | **Watcher consistency** | Final-state startup activation waits for late sinks; each ordinary live Markdown/PDF attempt stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once, commits without yielding, and quarantines an uncertain semantic route instead of serving mixed state. Within the configured inventory bound, the v3.12 RC also discovers and independently refreshes every admitted hardlink path without folding case or Unicode identities; above it, live events reconcile only the exact/previously-known group and say so explicitly |

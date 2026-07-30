@@ -56,7 +56,7 @@ curl http://127.0.0.1:3000/health
 | `--host <host>` | `127.0.0.1` | Bind host. **Keep on `127.0.0.1`** unless you've thought hard about exposing the server directly — `0.0.0.0` is opt-in because remote-MCP must front a tunnel. |
 | `--mcp-path <path>` | `/mcp` | URL path for the MCP endpoint. |
 | `--rate-limit <n>` | `120` | Max requests per minute per bearer token. `0` disables. Sliding 60-second window, in-memory (single process). |
-| `--cors-origin <origin...>` | (empty) | CORS allowlist. Repeatable. Required when a browser-based agent (claude.ai, ChatGPT) hits the endpoint cross-origin. With explicit origins (`https://claude.ai https://chatgpt.com`) we send `Access-Control-Allow-Credentials: true` so cookies + credentialed Bearer requests work cross-origin. The single-entry wildcard `*` is also supported but **deliberately omits** `Allow-Credentials: true` (because browsers reject that combo anyway, and reflecting credentialed CORS to arbitrary origins is the [CodeQL-flagged cors-credential-leak class of bug](https://codeql.github.com/codeql-query-help/javascript/js-cors-misconfiguration-for-credentials/)). With `*` the endpoint is still bearer-gated server-side; you just lose the cookie path. |
+| `--cors-origin <origin...>` | (empty) | Exact browser Origin allowlist. Repeatable. A request without `Origin` (the ordinary native MCP path) is accepted. Every present value must exactly match a configured HTTP(S) origin such as `https://claude.ai` or gets `403` before any route/auth/body/MCP handling. Wildcard `*`, opaque `null`, paths, queries and malformed origins are rejected at startup. An admitted origin receives `Access-Control-Allow-Credentials: true`; list every browser origin explicitly. |
 | `--health-path <path>` | `/health` | Unauthenticated probe path that returns `ok`. Useful for tunnel/uptime monitors. |
 | `--enable-write` | off | Same as `serve` — gates the write tools. |
 | `--persistent-index`, `--watch`, `--exclude-glob`, `--read-paths`, `--disabled-tools`, `--enabled-tools`, `--diagnostic-search-tools`, `--max-file-bytes`, `--cache-size`, `--persistent-cache`, `--cache-file` | — | Identical semantics to `serve`. |
@@ -79,7 +79,7 @@ We protect against:
 - **Token timing leaks.** Bearer compare hashes both sides with SHA-256 first, then `crypto.timingSafeEqual` on equal-length buffers. No length oracle.
 - **Token logging.** Logs use the SHA-256 prefix as the rate-limit key — the raw token never appears in stderr or rate-limit state.
 - **Rate-limit abuse.** Default 120 req/min per token; tunable via `--rate-limit`.
-- **CORS-based origin spoofing.** No `Access-Control-Allow-Origin` header is sent unless the origin matches `--cors-origin`. Default deny.
+- **DNS rebinding / Origin spoofing.** Every present Origin must exactly match `--cors-origin` or receives `403` before OPTIONS, health, auth, rate limiting, body parsing, session allocation, or MCP dispatch. Missing Origin remains valid for native clients. Browser CORS response headers are applied only after that admission decision.
 - **Body bombs.** Per-request body cap is derived from `--max-file-bytes` (default 5 MB) as `max(4 MB, max-file-bytes × 1.5)` — gives the JSON-RPC envelope and string-escaping enough headroom that a `create_note` payload at the file-size limit doesn't bounce at the HTTP layer with a misleading 413. v3.7.12 made this derivation explicit; pre-3.7.12 the cap was a hardcoded 4 MB which was BELOW the 5 MB file cap.
 
 We do **not** protect against:
@@ -299,7 +299,7 @@ curl -sX POST "$URL" \
 Remote access keeps the same local-first retrieval engine and source-grounded
 results while adding an explicit network trust boundary. Choose stateless mode
 for independent requests or stateful mode when the client needs session reuse,
-SSE, and explicit termination. Bearer auth, CORS, rate/session/connection
+SSE, and explicit termination. Exact-Origin admission, bearer auth, CORS, rate/session/connection
 bounds, readiness, and rollback-aware session shutdown are part of the same
 server instead of an external compatibility layer.
 
@@ -317,7 +317,10 @@ You passed something that's not a non-negative integer. Use `0` for ephemeral, `
 Double-check there's no leading/trailing whitespace in your env var. `--bearer-token "$(cat token)"` includes a trailing newline — use `--bearer-token-env` and `printf` (no trailing `\n`) instead, or trim with `tr -d '\n'`.
 
 **Browser client gets CORS errors**
-Add the origin explicitly with `--cors-origin https://claude.ai` (or whichever domain). `*` doesn't work with credentialed Bearer requests.
+Add the browser page's exact serialized origin with `--cors-origin https://claude.ai` (or whichever domain), without a trailing slash or path. Wildcard `*` is intentionally rejected: it cannot protect a local MCP endpoint from DNS rebinding.
+
+**Browser request gets `403 Forbidden: Origin is not allowed`**
+The request included an Origin that was not an exact `--cors-origin` entry. Compare scheme, hostname and optional port exactly; `https://example.com` and `https://example.com:8443` are different origins. Do not add a path, query, trailing slash, `null`, or `*`.
 
 **Initialize succeeds but `tools/list` returns nothing**
 You probably set `--enabled-tools` to a name that doesn't match. Check stderr — the warning `--enabled-tools "<name>" did not match any tool` lists every registered tool name.

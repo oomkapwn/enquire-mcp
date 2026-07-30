@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.26] — 2026-07-30
+
+> **TL;DR:** **An ordinary watched Markdown/PDF update is now prepared from one captured and revalidated path generation before any derived index is mutated.** The watcher captures `dev`, `ino`, `size`, and nanosecond mtime/ctime with BigInt stats, reads the source once, stages FTS5 plus optional embedding/HNSW work, then revalidates the generation once after all awaited preparation. If the file changed, one bounded retry starts from the new generation; if it changes again, a live event keeps the previous indexed state and guarded activation rejects. A successful FTS5 → EmbedDb → HNSW mutation is synchronous. Fatal staging/embedding failures preserve the previous live generation, while a mutation failure quarantines semantic routing until restart; an HNSW-only failure falls back to EmbedDb and disables persistence of the uncertain graph. Optional OCR remains deliberately fail-soft: an unreadable image-only PDF publishes its PDF.js/empty generation and clears stale semantic rows rather than retaining old OCR text. **1773 → 1776 source tests.**
+>
+> **Method note:** this closes the ordinary watcher-event S-8d window identified after rc.25 without claiming a transaction that the three independent stores cannot provide. The review traced every awaited boundary and every activation/live failure path, added deterministic mutation barriers and negative controls, and independently re-audited the final source/test diff. Executable validation remains GitHub-hosted under the current policy: no install, build, lint, tests, coverage, smoke, OIA, package-consumer, benchmark or evaluation workload runs on the maintainer MacBook.
+
+### Fixed — one captured generation feeds every watcher sink
+
+- **Nanosecond physical-generation identity:** add/change attempts use `lstat(..., { bigint: true })`, require an ordinary non-symlink file, and compare device, inode, size, mtime and ctime. Epoch-scale nanoseconds are converted to the `Stats.mtimeMs` shape by splitting whole seconds from the remainder before conversion, avoiding the low-bit loss of `Number(mtimeNs) / 1e6`.
+- **Markdown is read once per attempt:** the parsed-note snapshot used for FTS5 is passed into `embedSingleNote`; the embedding pipeline rejects a supplied snapshot whose mtime does not match the captured generation instead of silently re-reading the path after model work.
+- **PDF is read once per attempt:** PDF.js extraction, optional OCR, FTS5 page rows and `embedSinglePdf` all consume the same binary buffer/pages. The former “FTS from read A, embeddings from read B” race is removed.
+- **Stage, revalidate, commit:** parsing, PDF/OCR extraction, dynamic imports and embedding inference finish before any FTS5/EmbedDb/HNSW mutation. The generation is then revalidated; one drift retries from the latest source, while a second drift is bounded and leaves the prior live generation intact.
+- **No awaited partial-success window:** once revalidation succeeds, FTS5 → EmbedDb → HNSW mutation runs synchronously. An ordinary tool request cannot interleave between those successful sink calls.
+
+### Fixed — failure propagation and coherent search fallback
+
+- **Fatal staging/embedding failure has no partial publish:** live events log and retain the prior generation; guarded startup activation rejects so rc.25's interlock cannot be released around an unapplied generation. The existing optional-OCR exception remains intentional: if OCR fails after PDF.js proves the new PDF has no extractable text, the coherent PDF.js/empty generation is published and stale semantic rows are cleared.
+- **Mutation uncertainty is quarantined:** because a later independent SQLite/native sink can fail after an earlier one committed, the watcher conservatively marks semantic routing unusable until restart. Hybrid search continues on lexical signals and reports the embeddings signal error; direct embeddings search fails with an explicit restart/reconciliation diagnostic.
+- **HNSW-only uncertainty falls back:** a failed live graph diff marks HNSW unusable, suppresses sidecar persistence and routes subsequent semantic queries through EmbedDb rather than serving the partial in-memory graph.
+- **Post-await route check:** embeddings search rechecks the shared watcher health after model/helper imports and before synchronous vector search, so a failure that lands during an await cannot be bypassed by an earlier healthy decision.
+- **Activation queue rejects correctly:** guarded replay tails propagate handler failures, cleanup observes both fulfilled and rejected tails without manufacturing an unhandled rejected `finally()` promise, and `close()` continues to drain accepted work.
+- **Unlink diagnostics no longer claim success after failure:** an EmbedDb delete error quarantines the semantic route and is logged as such; the success suffix is emitted only after deletion really completed.
+
+### Structural and behavioral defenses
+
+- A controlled Markdown embedding barrier proves that FTS5 is not updated early, a mid-inference mutation causes exactly one generation retry, and `close()` drains the accepted tail.
+- A PDF barrier proves that extraction and embedding consume the same attempt buffer rather than two path reads.
+- A churn contract proves the initial attempt plus one retry is the hard limit, preserves prior state after repeated drift, and allows a later ordinary event to recover.
+- Existing preparation-failure, startup-order, HNSW persistence and hybrid-search tests now assert no partial FTS publish, activation rejection, semantic quarantine, HNSW fallback and health wiring.
+- A synthetic epoch-scale timestamp is the negative control for BigInt conversion precision. The HNSW selector has healthy, quarantined and absent-route controls.
+
+### Explicit boundary
+
+- The separate FTS5, EmbedDb and HNSW implementations still have no common rollback or durable write-ahead transaction. If a process dies or a later sink throws after an earlier mutation, rc.26 prevents that uncertain state from being queried in the surviving process but does not reconstruct the previous bytes in place; restart reconciliation remains the recovery boundary.
+- Hybrid rankers are independently awaited. A query can begin its lexical arm before a successful watcher commit and its semantic arm afterward; a query-level generation snapshot is a separate hardening item, not a claim of this RC.
+- The startup audit still keys ordinary no-event drift by exact path + mtime. A deliberate byte replacement preserving that evidence across a crash needs a stronger durable/content identity.
+- Live capture/read/revalidation is path-based rather than one open file descriptor. A same-account writer that deliberately performs A → B for the read and restores an indistinguishable A identity before final `lstat` is outside this proof; an fd-bound `open`/`fstat`/read/`fstat` protocol is the stronger follow-up. Ordinary atomic replacement without the deliberate ABA is detected.
+- Physical hardlink/alias convergence remains S-8e. No case-fold, Unicode-fold or physical-alias aggregation is introduced.
+- No benchmark or evaluation was run or claimed.
+
+### Tests (1776)
+
+- Source tests: 1773 → 1776.
+- New declarations: 3 (PDF same-buffer mutation, bounded churn/recovery, HNSW quarantine selector); existing declarations were strengthened for Markdown staging, activation propagation, search fallback and nanosecond precision.
+- Runtime dependencies, MCP tools/prompts, persisted schema versions, release-required gate names and branch-protected names: unchanged.
+
+**Lesson:** asynchronous preparation and synchronous publication are different phases. Capture once, finish every await, revalidate once, then mutate without yielding; when independent sinks still cannot roll back together, quarantine the uncertain route instead of pretending fail-soft means coherent.
+
 ## [3.12.0-rc.25] — 2026-07-30
 
 > **TL;DR:** **Watcher startup now has one bounded activation barrier, closing the dependency-attachment window that could leave FTS5, EmbedDb and HNSW on different generations before the server began serving.** Native events are coalesced by exact path and replayed from final disk state only after late EmbedDb/OCR/HNSW attachment has finished. A post-ready FTS rediff plus an exact path/mtime EmbedDb audit covers chokidar's `ignoreInitial` window; stale stored path spellings are purged without global case/Unicode folding. A private process-restart interlock blocks every later serve after an interrupted guarded startup until strict explicit recovery, while `--watch` freezes an absent EmbedDb as unavailable until restart. Planning/replay concurrency is four, admission is capped at 50,000 exact identities, activation is capped at 16 generations, and shutdown drains accepted work while surfacing activation failure. **1748 → 1773 source tests.**

@@ -563,12 +563,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     }
   });
 
-  // v3.8.0-rc.10 — watcher embed-db sync error path: silent=false branch
-  // (lines 314-319 in watcher.ts). When the embedder throws, the watcher
-  // MUST: (a) still update FTS5 (fail-soft), (b) log the error to stderr
-  // when silent=false, (c) NOT update embed-db chunks. Tests the uncovered
-  // `if (!this.silent)` branch in the embed-db sync catch block.
-  it("attachEmbed: embed-db sync failure is logged to stderr (silent=false) and FTS5 still updates — NEGATIVE control", async () => {
+  // S-8d — embedding is preparation for a cross-index generation, not a
+  // post-FTS best-effort tail. If preparation rejects, the event stays
+  // fail-soft (log + return) but neither FTS5 nor EmbedDb may publish it.
+  it("attachEmbed: embed preparation failure is logged and no configured sink publishes it — NEGATIVE control", async () => {
     const { EmbedDb } = await import("../src/embed-db.js");
     const v = new Vault(root);
     await v.ensureExists();
@@ -576,9 +574,11 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     await fts.open();
 
     // An embedder that always throws — simulates embed pipeline failure.
+    let embedCalls = 0;
     const throwingEmbedder = {
       model: { alias: "throwing-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
       async embed(_texts: readonly string[]): Promise<Float32Array[]> {
+        embedCalls += 1;
         throw new Error("synthetic embed failure for watcher test");
       }
     };
@@ -601,34 +601,58 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       return true;
     }) as unknown as typeof process.stderr.write;
 
+    let w: VaultWatcher | null = null;
+    let activationWatcher: VaultWatcher | null = null;
     try {
-      const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: false });
+      w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: false });
       w.attachEmbed(embedDb, throwingEmbedder, 0);
-      await w.start();
-      try {
-        await new Promise((r) => setTimeout(r, 50)); // chokidar FSEvents warmup
-        const filePath = path.join(root, "embed-error.md");
-        // FTS5 must still be updated (fail-soft) even though embed-db throws.
-        const ftsOk = await writeAndWaitFor(
-          filePath,
-          "# Heading\n\nBody for embed error test.\n",
-          () => fts.totalFiles() >= 1
-        );
-        expect(ftsOk).toBe(true);
-        // v3.10.0-rc.15 — the embed-db sync error is logged JUST AFTER the fts5
-        // reindex within the SAME handler, so it can lag the totalFiles() check by
-        // a tick. The rc.13 release flaked here (`:505`) because the test asserted
-        // `hasEmbedError` IMMEDIATELY after `ftsOk`. Poll for the log instead.
-        const hasEmbedError = await waitFor(() =>
-          captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))
-        );
-        expect(hasEmbedError).toBe(true);
-        // Embed-db must NOT have been updated (the sync failed).
-        expect(embedDb.totalChunks()).toBe(0);
-      } finally {
-        await w.close();
-      }
+      const filePath = v.resolveInside("embed-error.md");
+      await fs.writeFile(filePath, "# Heading\n\nBody for embed error test.\n");
+      const handle = (
+        w as unknown as {
+          handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void>;
+        }
+      ).handle.bind(w);
+
+      // Directly drive the deterministic handler seam: no chokidar polling or
+      // re-touch can hide the first failed generation behind a later event.
+      await handle(filePath, "add");
+
+      expect(embedCalls).toBe(1);
+      expect(captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))).toBe(
+        true
+      );
+      expect(fts.totalFiles()).toBe(0);
+      expect(embedDb.totalChunks()).toBe(0);
+      expect(w.searchHealth.semanticUsable).toBe(true);
+
+      await w.close();
+      w = null;
+
+      // The same preparation failure during startup replay is not absorbable:
+      // activation must reject so production keeps its restart interlock armed.
+      const activationPath = v.resolveInside("activation-embed-error.md");
+      await fs.writeFile(activationPath, "# Activation\n\nMust not publish after a failed startup replay.\n");
+      activationWatcher = new VaultWatcher({
+        vault: v,
+        ftsIndex: fts,
+        silent: false,
+        deferActivation: true
+      });
+      activationWatcher.attachEmbed(embedDb, throwingEmbedder, 0);
+      (
+        activationWatcher as unknown as {
+          onFsEvent(absPath: string, kind: "add" | "change" | "unlink"): void;
+        }
+      ).onFsEvent(activationPath, "add");
+      await expect(activationWatcher.activate()).rejects.toThrow(/synthetic embed failure/);
+      await expect(activationWatcher.close()).rejects.toThrow(/synthetic embed failure/);
+      expect(embedCalls).toBe(2);
+      expect(fts.totalFiles()).toBe(0);
+      expect(embedDb.totalChunks()).toBe(0);
     } finally {
+      if (w) await w.close().catch(() => {});
+      if (activationWatcher) await activationWatcher.close().catch(() => {});
       process.stderr.write = origWrite;
       embedDb.close();
       fts.close();
@@ -826,14 +850,6 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(flushed).toBe(false);
       // No sidecar should be written.
       await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
-      const watcherSource = await fs.readFile(new URL("../src/watcher.ts", import.meta.url), "utf8");
-      for (const failureLog of ["watcher embed-db PDF sync failed", "watcher embed-db sync failed"]) {
-        const logPosition = watcherSource.indexOf(failureLog);
-        expect(logPosition, `${failureLog} catch must exist`).toBeGreaterThanOrEqual(0);
-        expect(watcherSource.slice(Math.max(0, logPosition - 700), logPosition)).toMatch(
-          /if\s*\(this\.hnsw\)\s*this\.hnswPersistUnsafe\s*=\s*true;/
-        );
-      }
 
       const watcherInternals = w as unknown as {
         hnswPersistUnsafe: boolean;
@@ -866,6 +882,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         removed: 0,
         added: 1
       });
+      expect(w.searchHealth.hnswUsable).toBe(true);
       // Then model a native applyDiff that throws after the EmbedDb-side
       // mutation. The permanent unsafe latch must dominate the earlier dirty
       // state, otherwise close would stamp a partial graph with a fresh
@@ -879,6 +896,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       };
       expect(syncHnswForFile("unsafe.md", "md", [], [{ id: 10_002, ...row }])).toBeNull();
       expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+      expect(w.searchHealth.hnswUsable).toBe(false);
 
       // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
       // before syncHnswForFile. Prove the surrounding markdown catch sets the
@@ -898,6 +916,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       }
       expect(mismatchInjectedAfterCommit).toBe(true);
       expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+      expect(w.searchHealth.semanticUsable).toBe(false);
 
       await expect(w.flushHnswToDisk()).resolves.toBe(false);
       await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });

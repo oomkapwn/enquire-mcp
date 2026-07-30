@@ -220,7 +220,11 @@ export interface ServerDeps {
      * fixed the build-side destruction; this seals the search side.
      */
     modelAlias: string;
+    /** Shared watcher route health; HNSW falls back after an uncertain diff. */
+    health?: Readonly<import("./watcher.js").WatcherSearchHealth>;
   } | null;
+  /** Shared watcher semantic-route health, or null when watching is disabled. */
+  watcherHealth?: Readonly<import("./watcher.js").WatcherSearchHealth> | null;
 }
 
 function watcherActivationRecoveryError(cause: unknown): Error {
@@ -629,6 +633,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               index: loaded.index,
               rowByLabel: loaded.rowByLabel,
               modelAlias: model.alias,
+              ...(watcher ? { health: watcher.searchHealth } : {}),
               ...(efOverride !== undefined ? { ef: efOverride } : {})
             };
             // v3.9.0-rc.2 — wire HNSW live-update on the disk-loaded path
@@ -701,6 +706,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                 index,
                 rowByLabel,
                 modelAlias: model.alias,
+                ...(watcher ? { health: watcher.searchHealth } : {}),
                 ...(efOverride !== undefined ? { ef: efOverride } : {})
               };
               process.stderr.write(
@@ -761,9 +767,11 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // initialized could update only the sinks already attached at that moment,
   // permanently splitting FTS, EmbedDb, and HNSW generations. Activation
   // replays every captured exact path only after all optional sink attempts
-  // have terminated. Per-sink handlers remain fail-soft by the documented
-  // S-8d boundary; activation itself never converts overflow or churn failure
-  // into startup success.
+  // have terminated. rc.26 propagates fatal staging/commit failures during
+  // activation; ordinary live events remain fail-soft by retaining the prior
+  // pre-mutation generation or quarantining an uncertain semantic route
+  // (optional OCR keeps its explicit empty-generation fallback). Activation
+  // never converts overflow or churn failure into startup success.
   if (watcher) {
     try {
       await watcher.activate();
@@ -820,7 +828,8 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     disabledTools: new Set(opts.disabledTools ?? []),
     enabledTools: new Set(opts.enabledTools ?? []),
     warningTracker: { printed: false },
-    hnswContext
+    hnswContext,
+    watcherHealth: watcher?.searchHealth ?? null
   };
 }
 
@@ -937,7 +946,8 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
     deps.hnswContext,
     recencyConfig,
     feedbackContext,
-    deps.embedDbFile
+    deps.embedDbFile,
+    deps.watcherHealth
   );
   if (deps.feedbackStore) registerFeedbackTool(server, deps.feedbackStore, writeTracker);
   if (deps.vault.writeEnabled) registerWriteTools(server, deps.vault, writeTracker);

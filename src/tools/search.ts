@@ -865,6 +865,26 @@ export interface HnswSearchContext {
    * `--embedding-model` flag and retry.
    */
   modelAlias: string;
+  /**
+   * Mutable watcher health shared by reference. A false HNSW flag routes the
+   * request through the authoritative EmbedDb brute-force path after an
+   * uncertain native live-update instead of querying a partial graph.
+   */
+  health?: Readonly<{ hnswUsable: boolean }>;
+}
+
+/**
+ * Select the HNSW route only while its live graph remains trustworthy.
+ *
+ * @param hnsw - Optional prepared HNSW context.
+ * @returns The context while healthy; otherwise null for EmbedDb fallback.
+ */
+export function selectUsableHnswContext(hnsw?: HnswSearchContext | null): HnswSearchContext | null {
+  return hnsw?.health?.hnswUsable === false ? null : (hnsw ?? null);
+}
+
+function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: boolean }> | null): boolean {
+  return health?.semanticUsable === false;
 }
 
 /**
@@ -1028,6 +1048,8 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   checked before any model load so the error message is fast and clear.
  * @param hnsw - Optional HNSW index context. When passed, k-NN routes
  *   through HNSW instead of brute-force cosine.
+ * @param watcherHealth - Optional live watcher route health. A quarantined
+ *   semantic route rejects instead of returning a stale post-failure index.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
  *   `hyde: true` marker iff HyDE actually fired.
  * @throws {Error} If `query` is empty, the embed db doesn't exist, the
@@ -1067,7 +1089,8 @@ export async function embeddingsSearch(
     hypothetical_answer?: string;
   },
   embedFile: string | null,
-  hnsw?: HnswSearchContext | null
+  hnsw?: HnswSearchContext | null,
+  watcherHealth?: Readonly<{ semanticUsable: boolean }> | null
 ): Promise<EmbedSearchResponse> {
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
@@ -1075,6 +1098,11 @@ export async function embeddingsSearch(
     throw new Error(
       "Embedding index was unavailable when this server started. Build it with " +
         "`enquire-mcp build-embeddings --vault <your-vault>`, then restart the server."
+    );
+  }
+  if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
+    throw new Error(
+      "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
     );
   }
   await assertEmbeddingIndexNotQuarantined(embedFile);
@@ -1159,6 +1187,11 @@ export async function embeddingsSearch(
   try {
     const total = db.totalChunks();
     if (total === 0) {
+      if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
+        throw new Error(
+          "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
+        );
+      }
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
     }
     // v3.7.5 CRITICAL — external-audit caught embedder/db model mismatch
@@ -1185,12 +1218,22 @@ export async function embeddingsSearch(
     // We over-fetch by 2× to keep top-K stable when many hits get filtered.
     const overFetch = limit * 2;
     let rawHits: import("../embed-db.js").EmbedSearchHit[];
-    if (hnsw) {
+    let hnswResultsToHits: typeof import("../hnsw.js").hnswResultsToHits | null = null;
+    if (hnsw && hnsw.health?.hnswUsable !== false) {
+      ({ hnswResultsToHits } = await import("../hnsw.js"));
+    }
+    if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
+      throw new Error(
+        "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
+      );
+    }
+    const usableHnsw = selectUsableHnswContext(hnsw);
+    if (usableHnsw) {
       // v3.6.2 HN-4 — verify the search-time embedder model matches the
       // model the HNSW index was built with. Different models → different
       // vector spaces → cosine returns garbage. CRIT-1 fixed the build
       // side; this is the corresponding search-side guard.
-      assertHnswModelMatchesEmbedder(embedder.model.alias, hnsw.modelAlias);
+      assertHnswModelMatchesEmbedder(embedder.model.alias, usableHnsw.modelAlias);
       // v2.13.0 — HNSW approximate nearest-neighbor path. We over-fetch more
       // than brute-force because HNSW can occasionally miss a true
       // nearest neighbor AND because the privacy filter pares down the pool.
@@ -1200,17 +1243,20 @@ export async function embeddingsSearch(
       // v3.9.0-rc.3 R-10 — adaptive refill loop. Closes the ">66% excluded"
       // under-return class that rc.9's static multiplier could not fully
       // solve. See `adaptiveHnswRefill` for the algorithm.
-      const maxLabels = Math.max(hnsw.rowByLabel.size, 1);
+      const maxLabels = Math.max(usableHnsw.rowByLabel.size, 1);
       const initialK = Math.min(Math.max(overFetch * 3, 50), maxLabels);
-      const { hnswResultsToHits } = await import("../hnsw.js");
+      if (!hnswResultsToHits) {
+        throw new Error("HNSW helper unavailable for a healthy prepared route");
+      }
       const folderPrefix = args.folder ? `${stripTrailingSlashes(args.folder)}/` : null;
       rawHits = adaptiveHnswRefill({
         initialK,
         maxLabels,
         limit,
-        searchKnn: (k) => hnsw.index.searchKnn(qVec, k, hnsw.ef !== undefined ? { ef: hnsw.ef } : undefined),
+        searchKnn: (k) =>
+          usableHnsw.index.searchKnn(qVec, k, usableHnsw.ef !== undefined ? { ef: usableHnsw.ef } : undefined),
         filter: (labels, distances) => {
-          let h = hnswResultsToHits({ labels, distances }, hnsw.rowByLabel);
+          let h = hnswResultsToHits({ labels, distances }, usableHnsw.rowByLabel);
           if (folderPrefix) h = h.filter((row) => row.rel_path.startsWith(folderPrefix));
           h = h.filter((row) => row.score >= minScore);
           // Privacy filter applied here too so the refill loop's "did we
@@ -1645,6 +1691,12 @@ export async function searchHybrid(
      */
     hnsw?: HnswSearchContext | null;
     /**
+     * Mutable route health for a watcher-enabled prepared server generation.
+     * A sink-commit failure quarantines embeddings until restart so hybrid
+     * search degrades to its coherent lexical signals.
+     */
+    watcherHealth?: Readonly<{ semanticUsable: boolean }>;
+    /**
      * v3.10 (rc.5) — optional opt-in recency re-ranking. When `weight > 0`,
      * the final fused order is re-sorted by a blend of relevance rank and the
      * note's live-mtime recency (see `recencyScore` in staleness.ts). `weight = 0` (or
@@ -1832,7 +1884,10 @@ export async function searchHybrid(
     /** v2.8.0: content-source kind ("md" | "pdf"). */
     kind: "md" | "pdf";
   }> = [];
-  if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {
+  if (watcherSemanticRouteIsQuarantined(ctx.watcherHealth)) {
+    signalErrors.embeddings =
+      "Embedding search is quarantined after a watcher sink-commit failure; restart the server to reconcile indexes.";
+  } else if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {
     try {
       // v2.0.0-beta.1 P1 fix: pass `min_score: 0` to fan-out the embeddings
       // ranker uniformly with BM25 (no floor) and TF-IDF (0.05 floor). The
@@ -1844,7 +1899,8 @@ export async function searchHybrid(
         vault,
         { query: args.query, folder: args.folder, limit: fanOutK, model: args.embedding_model, min_score: 0 },
         ctx.embedFile,
-        ctx.hnsw
+        ctx.hnsw,
+        ctx.watcherHealth
       );
       // v2.2.0: granularity branch — same shape as BM25 above.
       if (granularity === "block") {

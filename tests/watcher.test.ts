@@ -1,6 +1,8 @@
+import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { FSWatcher } from "chokidar";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { Vault } from "../src/vault.js";
@@ -231,6 +233,105 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     await w.start();
     await w.close();
     await w.close(); // second close — must not throw
+  });
+
+  it("native ready resolves its owned wait and removes lifecycle listeners", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    const internals = w as unknown as {
+      waitForWatcherReady(watcher: FSWatcher): Promise<void>;
+      watcherReadyReject: ((reason: Error) => void) | null;
+    };
+    const nativeEmitter = new EventEmitter();
+    const nativeWatcher = nativeEmitter as unknown as FSWatcher;
+    const readiness = internals.waitForWatcherReady(nativeWatcher);
+    const readinessHandled = readiness.catch(() => undefined);
+
+    try {
+      expect(nativeEmitter.listenerCount("ready")).toBe(1);
+      expect(nativeEmitter.listenerCount("error")).toBe(1);
+      expect(internals.watcherReadyReject).not.toBeNull();
+
+      nativeEmitter.emit("ready");
+      await readiness;
+
+      expect(nativeEmitter.listenerCount("ready")).toBe(0);
+      expect(nativeEmitter.listenerCount("error")).toBe(0);
+      expect(internals.watcherReadyReject).toBeNull();
+    } finally {
+      await w.close().catch(() => {});
+      await readinessHandled;
+    }
+  });
+
+  it("close() rejects a pending native-ready wait and prevents post-close seeding", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const w = new VaultWatcher({ vault: v, silent: true });
+    const internals = w as unknown as {
+      watcher: FSWatcher | null;
+      waitForWatcherReady(watcher: FSWatcher): Promise<void>;
+      runTrackedPhysicalAliasSeed(): Promise<void>;
+      watcherReadyReject: ((reason: Error) => void) | null;
+    };
+
+    let releaseNativeClose: (() => void) | undefined;
+    const nativeCloseRelease = new Promise<void>((resolve) => {
+      releaseNativeClose = resolve;
+    });
+    let nativeCloseCalls = 0;
+    const nativeEmitter = new EventEmitter() as EventEmitter & { close(): Promise<void> };
+    nativeEmitter.close = async () => {
+      nativeCloseCalls += 1;
+      await nativeCloseRelease;
+    };
+    const nativeWatcher = nativeEmitter as unknown as FSWatcher;
+    internals.watcher = nativeWatcher;
+
+    let seedCalls = 0;
+    internals.runTrackedPhysicalAliasSeed = async () => {
+      seedCalls += 1;
+    };
+
+    const readiness = internals.waitForWatcherReady(nativeWatcher);
+    const readinessAssertion = expect(readiness).rejects.toThrow(/closing or closed/);
+    const postReadySeed = readiness
+      .then(() => internals.runTrackedPhysicalAliasSeed())
+      .catch(() => undefined);
+
+    let closeSettled = false;
+    let closeTask: Promise<void> | undefined;
+    try {
+      expect(nativeEmitter.listenerCount("ready")).toBe(1);
+      expect(nativeEmitter.listenerCount("error")).toBe(1);
+      expect(internals.watcherReadyReject).not.toBeNull();
+
+      closeTask = w.close().then(() => {
+        closeSettled = true;
+      });
+      expect(nativeCloseCalls).toBe(1);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closeSettled, "close must await the native watcher's asynchronous close").toBe(false);
+
+      releaseNativeClose?.();
+      await closeTask;
+      await readinessAssertion;
+      await postReadySeed;
+
+      expect(closeSettled).toBe(true);
+      expect(nativeEmitter.listenerCount("ready")).toBe(0);
+      expect(nativeEmitter.listenerCount("error")).toBe(0);
+      expect(internals.watcherReadyReject).toBeNull();
+      expect(internals.watcher).toBeNull();
+      nativeEmitter.emit("ready");
+      await Promise.resolve();
+      expect(seedCalls).toBe(0);
+    } finally {
+      releaseNativeClose?.();
+      if (closeTask) await closeTask.catch(() => {});
+      else await w.close().catch(() => {});
+    }
   });
 
   it("close() before start() is a no-op (idempotent)", async () => {

@@ -392,6 +392,18 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       // while queueing and every searchable identity use the canonical root.
       await enqueueWatcherEvent(fixture.watcher, configuredPrimaryPath, "change");
       expect(enqueueSpy.mock.calls.at(-1)?.[0]).toBe(fixture.vault.resolveInside("Primary.md"));
+      if (process.platform === "win32") {
+        const rootPrefix = path.parse(fixture.vault.root).root;
+        const rootRemainder = fixture.vault.root.slice(rootPrefix.length);
+        const caseVariantRoot = `${rootPrefix}${rootRemainder.replace(/[A-Za-z]/u, (letter) =>
+          letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase()
+        )}`;
+        expect(caseVariantRoot).not.toBe(fixture.vault.root);
+        const queueCallsBeforeCaseVariant = enqueueSpy.mock.calls.length;
+        await enqueueWatcherEvent(fixture.watcher, path.join(caseVariantRoot, "Primary.md"), "change");
+        expect(enqueueSpy.mock.calls).toHaveLength(queueCallsBeforeCaseVariant + 1);
+        expect(enqueueSpy.mock.calls.at(-1)?.[0]).toBe(fixture.vault.resolveInside("Primary.md"));
+      }
 
       const afterSharedChange = await snapshotWindowsWatcherState(fixture, markers);
       expectMarkerPaths(afterSharedChange, "hardlinkoldmarker", []);
@@ -1030,8 +1042,14 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
     const watcherInternals = fixture.watcher as unknown as {
       seedPhysicalAliasRegistry(): Promise<void>;
       inspectVisibleAliasInventoryInLane(): Promise<unknown>;
+      physicalAliasIdentity(absPath: string): Promise<string | null>;
       physicalIdentityByPath: Map<string, string>;
     };
+    const identitySpy = vi.spyOn(watcherInternals, "physicalAliasIdentity").mockImplementation(async (absPath) => {
+      if (absPath === canonicalAPath) return "inode:fixture:a";
+      if (absPath === canonicalKeepPath) return "inode:fixture:keep";
+      return null;
+    });
     const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
     const embedSpy = vi.spyOn(watcherEmbedder, "embed");
 
@@ -1073,6 +1091,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       );
       expect(watcherAuditsMatch(reconciled, 1)).toBe(true);
     } finally {
+      identitySpy.mockRestore();
       inventorySpy.mockRestore();
       embedSpy.mockRestore();
       await closeWindowsWatcherFixture(fixture);

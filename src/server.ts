@@ -767,9 +767,11 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // initialized could update only the sinks already attached at that moment,
   // permanently splitting FTS, EmbedDb, and HNSW generations. Activation
   // replays every captured exact path only after all optional sink attempts
-  // have terminated. Per-sink handlers remain fail-soft by the documented
-  // S-8d boundary; activation itself never converts overflow or churn failure
-  // into startup success.
+  // have terminated. rc.26 propagates fatal staging/commit failures during
+  // activation; ordinary live events remain fail-soft by retaining the prior
+  // pre-mutation generation or quarantining an uncertain semantic route
+  // (optional OCR keeps its explicit empty-generation fallback). Activation
+  // never converts overflow or churn failure into startup success.
   if (watcher) {
     try {
       await watcher.activate();

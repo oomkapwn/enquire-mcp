@@ -140,7 +140,7 @@ private branches, future releases, or unadvertised behavior.
 | **Document intelligence** | Markdown, wikilinks, frontmatter, Canvas, executable Bases, PDFs, and OCR | One backend covers the knowledge you actually keep |
 | **Agentic retrieval** | HyDE, bounded subqueries, context packs, GraphRAG-light, and 19 prompts | Complex questions get a workflow, not just a search result |
 | **Local scale controls** | HNSW, int8 vectors, persistence, live watcher updates, and adaptive refill | Dense retrieval stays practical as a real vault grows |
-| **Remote-agent readiness** | Streamable HTTP, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
+| **Remote-agent readiness** | Streamable HTTP, exact-Origin admission, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
 | **Safe defaults** | Read-only by default, explicit write gate, privacy filters, dry-run support | Agents receive the minimum authority they need |
 | **Release trust** | 9 release gates, signed npm provenance, semver contracts | Buyers can verify both behavior and package origin |
 

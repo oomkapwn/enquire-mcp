@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.27 candidate: bounded final-state startup activation, one-generation live Markdown/PDF staging, and exact-path hardlink convergence across FTS5/EmbedDb/HNSW).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.28 candidate: exact-Origin Streamable HTTP admission plus the bounded final-state watcher, one-generation Markdown/PDF staging, and exact-path hardlink convergence inherited from rc.25–rc.27).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

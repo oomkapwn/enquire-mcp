@@ -321,7 +321,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--rate-limit <n>", "Max requests per minute per bearer token (default 120). Pass 0 to disable.", "120")
     .option(
       "--cors-origin <origin...>",
-      "CORS allowlist (repeatable). Default empty — no Access-Control-Allow-Origin sent. Use '*' as a single entry to allow any origin (not compatible with credentialed Bearer requests; you almost always want explicit origins like https://claude.ai)."
+      "Exact browser Origin allowlist (repeatable). A present unlisted Origin gets 403 before request handling. Wildcard '*' is rejected; use exact origins like https://claude.ai."
     )
     .option("--health-path <path>", "URL path for the unauthenticated health probe (default /health)", "/health")
     .option(

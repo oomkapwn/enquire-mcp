@@ -236,8 +236,11 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   } else {
     const docsSteps = yamlSteps(docsJob);
     const previewRenderIndex = docsSteps.findIndex((step) => step.run === "npm run render:preview");
+    const previewArtifactIndex = docsSteps.findIndex((step) => step.name === "Export remotely rendered social preview");
     const previewDiffIndex = docsSteps.findIndex((step) => step.name === "Require committed social-preview bytes");
     const previewRender = docsSteps[previewRenderIndex];
+    const previewArtifact = docsSteps[previewArtifactIndex];
+    const previewArtifactWith = yamlRecord(previewArtifact?.with);
     const previewDiff = docsSteps[previewDiffIndex];
     if (
       "if" in docsJob ||
@@ -251,6 +254,22 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       "continue-on-error" in (previewDiff ?? {})
     ) {
       problems.push("docs job must regenerate and fail closed on social-preview byte drift");
+    }
+    if (
+      !previewArtifact ||
+      previewArtifact.id !== "preview_artifact" ||
+      previewArtifact.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      previewArtifactWith?.name !== "rendered-social-preview" ||
+      previewArtifactWith?.path !== "assets/social-preview.png" ||
+      previewArtifactWith?.["if-no-files-found"] !== "error" ||
+      previewArtifactWith?.["retention-days"] !== 3 ||
+      previewArtifactWith?.["compression-level"] !== 0 ||
+      "if" in previewArtifact ||
+      "continue-on-error" in previewArtifact ||
+      previewRenderIndex >= previewArtifactIndex ||
+      previewArtifactIndex >= previewDiffIndex
+    ) {
+      problems.push("docs job must export the remotely rendered social preview before byte-drift enforcement");
     }
   }
 
@@ -513,17 +532,14 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          "      - id: preview_render\n        run: npm run render:preview\n" +
-            "      - name: Require committed social-preview bytes\n" +
-            "        id: preview_diff\n" +
+        ci
+          .replace("      - id: preview_render\n        run: npm run render:preview\n", "")
+          .replace(
             "        run: git diff --exit-code -- assets/social-preview.png\n",
-          "      - name: Require committed social-preview bytes\n" +
-            "        id: preview_diff\n" +
             "        run: git diff --exit-code -- assets/social-preview.png\n" +
-            "      - id: preview_render\n" +
-            "        run: npm run render:preview\n"
-        ),
+              "      - id: preview_render\n" +
+              "        run: npm run render:preview\n"
+          ),
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
@@ -536,6 +552,50 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          /      - name: Export remotely rendered social preview\n[\s\S]*?          compression-level: 0\n/,
+          ""
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("          path: assets/social-preview.png", "          path: assets/stale-preview.png"),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("          if-no-files-found: error", "          if-no-files-found: warn"),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
+    expect(
+      nodeFloorCiProblems(
+        ci
+          .replace(
+            /      - name: Export remotely rendered social preview\n[\s\S]*?          compression-level: 0\n/,
+            ""
+          )
+          .replace(
+            "        run: git diff --exit-code -- assets/social-preview.png\n",
+            "        run: git diff --exit-code -- assets/social-preview.png\n" +
+              "      - name: Export remotely rendered social preview\n" +
+              "        id: preview_artifact\n" +
+              "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\n" +
+              "        with:\n" +
+              "          name: rendered-social-preview\n" +
+              "          path: assets/social-preview.png\n" +
+              "          if-no-files-found: error\n" +
+              "          retention-days: 3\n" +
+              "          compression-level: 0\n"
+          ),
+        pkg.engines?.node
+      )
+    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
     expect(
       nodeFloorCiProblems(ci.replace("    needs: [test, test-windows]", "    needs: [test]"), pkg.engines?.node)
     ).toContain("smoke must wait for exactly the Linux matrix and blocking Windows job");

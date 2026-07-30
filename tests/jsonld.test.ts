@@ -14,7 +14,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs build script, no type declarations (CLI guarded by isEntrypoint).
-import { buildJsonLdGraph, FAQ_ENTRIES } from "../scripts/inject-jsonld.mjs";
+import { buildJsonLdGraph, FAQ_ENTRIES, SEO_KEYWORDS } from "../scripts/inject-jsonld.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
@@ -33,13 +33,38 @@ describe("buildJsonLdGraph (v3.9.0-rc.17)", () => {
     expect(types).toHaveLength(3);
   });
 
-  it("SoftwareApplication carries version (from package.json), featureList, maintainer", () => {
+  it("SoftwareApplication carries version, discovery metadata, factual features, and maintainer", () => {
     const app = nodes.find((n) => n["@type"] === "SoftwareApplication") as Record<string, unknown>;
+    const features = app.featureList as string[];
+    const featureText = features.join("\n");
+
     expect(app.softwareVersion).toBe(pkg.version);
-    expect(Array.isArray(app.featureList)).toBe(true);
-    expect((app.featureList as string[]).length).toBeGreaterThanOrEqual(5);
+    expect(Array.isArray(features)).toBe(true);
+    expect(features.length).toBeGreaterThanOrEqual(5);
     expect(app.maintainer).toBeDefined();
     expect(app.name).toBe("enquire-mcp");
+    expect(app.url).toBe("https://oomkapwn.github.io/enquire-mcp/");
+    expect(app.sameAs).toEqual([
+      "https://github.com/oomkapwn/enquire-mcp",
+      "https://www.npmjs.com/package/@oomkapwn/enquire-mcp"
+    ]);
+    expect(app.isAccessibleForFree).toBe(true);
+    expect(app.keywords).toBe(SEO_KEYWORDS.join(", "));
+    expect(SEO_KEYWORDS).toContain("freshness-aware AI memory");
+    expect(SEO_KEYWORDS).toContain("Dataview MCP");
+    expect(featureText).toContain("age_days and stale");
+    expect(featureText).toContain("Read-only by default");
+    expect(featureText).toContain(
+      "BM25 + TF-IDF + multilingual ML embeddings + RRF + BGE reranking + HNSW/int8 vector search"
+    );
+    expect(featureText).toContain("Dataview-style LIST/TABLE queries");
+    expect(featureText).toContain("46 MCP tools and 19 MCP prompts");
+    expect(featureText).toContain("requested context is returned to the connected MCP client");
+    expect(featureText).toContain("exact Origin allowlisting");
+
+    // NEGATIVE controls: do not reintroduce the old scope/architecture shortcuts.
+    expect(featureText).not.toContain("Standalone Obsidian Bases");
+    expect(featureText).not.toContain("BM25 → BGE → HNSW");
   });
 
   it("SoftwareSourceCode.targetProduct cross-references the SoftwareApplication @id", () => {
@@ -64,6 +89,15 @@ describe("buildJsonLdGraph (v3.9.0-rc.17)", () => {
       // NEGATIVE control: an empty answer string must NOT slip through.
       expect((ans.text as string).trim().length).toBeGreaterThan(0);
     }
+    const privacy = entities.find((e) => e.name === "Is my data sent anywhere?");
+    const privacyAnswer = (privacy?.acceptedAnswer as Record<string, unknown>)?.text;
+    expect(privacyAnswer).toContain("zero outbound HTTP calls during serve");
+    expect(privacyAnswer).toContain("MCP client you connect");
+    expect(privacyAnswer).toContain("cloud clients may process that context under their own privacy policy");
+    expect(privacyAnswer).toContain("hybrid-tier first-run --apply orchestrates those same acquisitions");
+    expect(privacyAnswer).toContain("install-ocr-lang downloads a Tesseract language pack");
+    // NEGATIVE control: a connected cloud MCP client is a real, separate data boundary.
+    expect(privacyAnswer).not.toContain("your vault content never leaves your machine");
   });
 
   it("the JSON-LD is JSON-serializable (crawler-parseable)", () => {

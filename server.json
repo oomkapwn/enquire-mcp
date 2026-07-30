@@ -2,18 +2,18 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.oomkapwn/enquire-mcp",
   "title": "enquire-mcp — #1 Obsidian MCP for AI memory",
-  "description": "The #1 Obsidian MCP for AI memory and local document intelligence — one vault, every agent, persistent and cited.",
+  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory — local hybrid recall, Obsidian-native document tools, read-only by default.",
   "websiteUrl": "https://github.com/oomkapwn/enquire-mcp",
   "repository": {
     "url": "https://github.com/oomkapwn/enquire-mcp",
     "source": "github"
   },
-  "version": "3.12.0-rc.28",
+  "version": "3.12.0-rc.29",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@oomkapwn/enquire-mcp",
-      "version": "3.12.0-rc.28",
+      "version": "3.12.0-rc.29",
       "transport": {
         "type": "stdio"
       },

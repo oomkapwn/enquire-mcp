@@ -41,8 +41,8 @@
   <text x="58" y="245" font-size="69" font-weight="850" fill="#f7f8ff" letter-spacing="-2.5">YOUR VAULT.</text>
   <text x="58" y="322" font-size="69" font-weight="850" fill="#f7f8ff" letter-spacing="-2.5">EVERY AGENT.</text>
 
-  <text x="60" y="379" font-size="24" font-weight="650" fill="#cbd2e5">Private AI memory + document intelligence.</text>
-  <text x="60" y="413" font-size="19" font-weight="500" fill="#8f99b6">Notes, PDFs, Canvas, and Bases in. Cited context out.</text>
+  <text x="60" y="379" font-size="24" font-weight="650" fill="#cbd2e5">Fresh, cited AI memory. Read-only by default.</text>
+  <text x="60" y="413" font-size="19" font-weight="500" fill="#8f99b6">Hybrid Markdown/PDF recall · Dataview/Bases tools.</text>
 
   <g transform="translate(60,464)" font-size="12" font-weight="850" letter-spacing="0.8">
     <g>
@@ -52,7 +52,7 @@
     </g>
     <g transform="translate(132,0)">
       <rect width="139" height="49" rx="12" fill="#111625" stroke="#303854"/>
-      <text x="17" y="21" fill="#7d87a5">WORKFLOWS</text>
+      <text x="17" y="21" fill="#7d87a5">MCP PROMPTS</text>
       <text x="17" y="39" font-size="17" fill="#f0f2fb">19</text>
     </g>
     <g transform="translate(284,0)">
@@ -63,6 +63,6 @@
   </g>
 
   <line x1="60" y1="558" x2="614" y2="558" stroke="url(#rule)" stroke-width="2"/>
-  <text x="60" y="594" font-size="16" font-weight="650" fill="#8c96b2">LOCAL-FIRST  ·  CITED  ·  CROSS-MODEL  ·  MIT</text>
+  <text x="60" y="594" font-size="16" font-weight="650" fill="#8c96b2">FRESHNESS-AWARE  ·  CITED  ·  READ-ONLY DEFAULT  ·  MIT</text>
   <rect x="0" y="632" width="1280" height="8" fill="url(#accent)"/>
 </svg>

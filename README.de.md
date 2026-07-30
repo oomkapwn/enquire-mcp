@@ -6,7 +6,7 @@
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · **Deutsch**</sub>
 
-<sub>**TL;DR für KI-Agenten** — MCP-Server, der einen lokalen Obsidian-Markdown-Vault für Claude Code, Claude Desktop, Cursor, ChatGPT, Codex und OpenClaw als persistentes, durchsuchbares Gedächtnis bereitstellt. Hybrid-Retrieval (BM25 + ML-Embeddings + BGE-Reranker, per RRF fusioniert), HNSW + int8-Quantisierung, agentisches RAG (HyDE + Teilfragen), GraphRAG-light, PDFs + OCR, eigenständige Bases. Anbieterneutral, MIT, null Cloud-Aufrufe während des Servings. Installation: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**TL;DR für KI-Agenten** — Das #1 Obsidian-MCP für frischebewusstes, zitierbares KI-Gedächtnis. Die Hybrid-Suche umfasst Markdown und PDF/OCR; strukturierte Werkzeuge parsen Canvas, führen Dataview-artige LIST/TABLE-Abfragen und unterstützte Obsidian-Base-Filter aus. Anbieterneutral, MIT, standardmäßig read-only; während `serve` initiiert enquire keine ausgehenden Netzwerkaufrufe. Installation: `npm i -g @oomkapwn/enquire-mcp`. Docs: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
 ### 🏆 Das #1 Obsidian-MCP für KI-Gedächtnis.
 
@@ -52,7 +52,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > **Was enquire-mcp anders macht**:
 > 1. **Anbieterneutral.** Ihr Gedächtnis lebt in `.md`-Dateien. Wechseln Sie von Claude zu Cursor — Ihr Gedächtnis kommt mit.
 > 2. **Vollständiger lokaler Retrieval-Stack.** BM25 + TF-IDF + mehrsprachige Embeddings werden per RRF fusioniert, mit optionalem BGE-Cross-Encoder-Reranker und Signal-Scores; HNSW + int8-Quantisierung skalieren den dichten Pfad.
-> 3. **Null Cloud-Aufrufe während des Servings.** Das q8-Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein einmaliger lokaler Download (~118 MB), kein Cloud-API-Schlüssel. Verankert + privat gibt es nicht umsonst, und wir tun nicht so: Der Inhalt Ihres Vaults verlässt niemals Ihren Rechner, standardmäßig air-gap-sicher ([erzwungen](./SECURITY.md), nicht nur angestrebt).
+> 3. **Keine von enquire initiierten ausgehenden Netzwerkaufrufe während `serve`.** Das q8-Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein expliziter einmaliger lokaler Download (~118 MB), kein Cloud-API-Schlüssel. Inhalte werden nur an den verbundenen MCP-Client zurückgegeben; dessen oder eines Tunnels Umgang mit den Daten ist dessen eigene Vertrauensgrenze ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
 **46 Tools · 19 MCP-Prompts · 1795+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
@@ -72,7 +72,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **Prüfbare Antworten** | ✅ Wörtlicher Text, Notizpfade, PDF-Seitenzitate, Signal-Scores und Frische-Metadaten |
 | **Wissen, das Ihnen wirklich gehört** | ✅ Plain Markdown als Quelle der Wahrheit, lokale Indizes und null Cloud-Aufrufe während des Servings |
 | **Die gesamte Obsidian-Wissensoberfläche** | ✅ Markdown, Wikilinks, Frontmatter, Canvas, Bases, PDF und OCR |
-| **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 Workflow-Prompts |
+| **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 MCP-Prompts |
 | **Skalierung ohne Kontrollverlust** | ✅ HNSW-Live-Updates, Persistenz, adaptives Refill und int8-Quantisierung |
 | **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1795 Tests, 9 Release-Gates und SLSA-L2-Provenienz |
 
@@ -107,7 +107,7 @@ In jeden MCP-Client einklinken:
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -295,7 +295,7 @@ Vollständige Haltung: **[SECURITY.md](./SECURITY.md)** · Stabilitätsoberfläc
 
 **Schreibt es in meinen Vault?** Nur wenn Sie `--enable-write` übergeben. Alle 7 Schreib-Tools sind abgesichert; destruktive unterstützen `dry_run`.
 
-**Werden Daten irgendwohin gesendet?** Ausgehende Downloads erfolgen nur durch explizite Beschaffungsbefehle: `enquire-mcp setup`, `enquire-mcp build-embeddings` und `enquire-mcp install-model` können ONNX-Gewichte von HuggingFace laden; `enquire-mcp install-ocr-lang` lädt ein Tesseract-Sprachpaket für OCR. Der Serve-Modus stellt niemals ausgehende HTTP-Anfragen. Embeddings + Reranker laufen lokal auf der CPU.
+**Werden Daten irgendwohin gesendet?** enquire sendet keine Telemetrie und initiiert während `serve` keine ausgehenden HTTP-Anfragen. Angeforderter Vault-Kontext wird jedoch an den verbundenen MCP-Client zurückgegeben; ein Cloud-Client kann diesen Kontext nach seiner eigenen Datenschutzrichtlinie verarbeiten, und jeder Tunnel oder Reverse-Proxy ist eine weitere Vertrauensgrenze. `setup`, `build-embeddings`, `install-model` und bei Hybrid-Tiers `first-run --apply` können ONNX-Gewichte von Hugging Face beziehen; `install-ocr-lang` lädt ein Tesseract-Sprachpaket.
 
 **Performance?** Sie hängt von Vault-Größe, Hardware, Modell und aktivierten Retrieval-Schichten ab. Die öffentlichen Belege umfassen einen Produktionsbericht von **50–100 ms** für BM25 Top-10 bei 1.771 Chunks / 368 Dateien sowie einen reproduzierbaren synthetischen Benchmark mit **37–103×** FTS5-Speedup gegenüber linearem Scan bei 100–1.000 Notizen. Führe vor einem Latenz-SLO die integrierte Evaluation auf deinem Vault aus.
 

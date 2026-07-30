@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for AI memory and local document intelligence backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.28 candidate: exact-Origin Streamable HTTP admission plus the bounded final-state watcher, one-generation Markdown/PDF staging, and exact-path hardlink convergence inherited from rc.25–rc.27).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.29 candidate: evidence-led positioning, an explicit privacy boundary, crawlable product metadata, and a remotely rendered social preview on top of rc.28 exact-Origin admission).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -16,7 +16,7 @@ Already shipped and differentiating:
 - **HNSW vector index** with **in-memory live update** on file changes (search reflects edits within ~250 ms), automatic EmbedDb fallback after an uncertain graph diff, close-time disk persistence, int8 quantization and adaptive refill under heavy privacy filtering.
 - **Agentic RAG** — HyDE (Gao et al 2023) + sub-question decomposition.
 - **GraphRAG-light** — Louvain community detection over the wikilink graph.
-- **Standalone Obsidian Bases** `.base` query execution (no Obsidian process needed).
+- **Structured Obsidian documents** — Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
 - **Process maturity** — 1795 tests, 9 release-required CI checks (7 currently branch-protected), plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
@@ -25,10 +25,13 @@ Current **v3.12.0 `@rc` preview** closes activation, ordinary watcher-generation
 
 ## Leadership plan (why the roadmap is shaped this way)
 
-The 2026-07-25 full-surface audit confirms a broad, inspectable product lead:
-enquire combines the complete retrieval ladder, freshness-aware memory,
-Obsidian-native document coverage, agentic workflows, remote transport
-controls, and a verifiable release chain in one package.
+The 2026-07-30 competitive scan covered 129 adjacent projects (6 high-, 24
+medium-, 38 low-, and 61 negligible-relevance surfaces). Its clearest result:
+enquire's near-term gap is distribution, onboarding, and category
+communication—not retrieval depth. The product already combines the complete
+retrieval ladder, freshness-aware memory, Obsidian-native document coverage,
+agentic workflows, remote transport controls, and a verifiable release chain
+in one package.
 
 The remaining leverage is not another disconnected feature. It is making the
 lead immediately visible and independently reproducible:
@@ -40,12 +43,20 @@ lead immediately visible and independently reproducible:
   recommendations.
 - **Bind every number to evidence.** Absolute scale/latency promises are
   replaced by corpus-scoped observations, commands, and CI invariants.
-- **Publish a recognized memory benchmark.** The next major credibility asset
-  is a reproducible LongMemEval-S run with raw outputs, ablations,
-  latency/index-size measurements, and failure buckets.
+- **Own the sharp wedge.** Every acquisition surface now leads with
+  freshness-aware cited recall, read-only defaults, and exact Obsidian-native
+  scope instead of a generic “more search features” pitch.
 - **Shorten onboarding again.** Initialize instructions and verified
   client-specific install actions now lead into a benefit-led Pages landing;
-  external client marketplaces remain the conversion tail.
+  lifecycle recipes and a packageable one-click route are the next conversion
+  layer.
+- **Meet the modern MCP contract as a real major.** The final 2026-07-28
+  protocol and TypeScript SDK v2 migration is RFC-gated for `4.0.0-rc.1`;
+  no partial v1 shim will be marketed as compliance.
+- **Package only the safe install tier.** After the v4 migration, the first
+  MCPB target is Basic read-only, pure JavaScript, explicit-vault and
+  fixed-tool-allowlist. Native hybrid/model/OCR/index dependencies stay out of
+  that first bundle until a remote cross-platform evidence matrix proves them.
 
 The durable positioning is concrete: **the complete local-first long-term
 memory backend grounded in the vault you own**. The proof stack lives in
@@ -82,14 +93,44 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 - [x] **TOP-1 comparison battlecard** — rebuilt in v3.12.0-rc.12 as an enquire-first acquisition surface: buyer outcomes, a runnable cited-memory example, complete-stack proof, current CI-derived counts, and direct activation. Public competitor recommendations were removed; a positive/negative-control invariant keeps them out while preserving evidence-bound product claims.
 - [x] **GitHub Pages product front door** — rebuilt in v3.12.0-rc.15 as a dependency-free acquisition surface for humans, AI agents, and search indexers. TypeDoc remains complete at `/api/`; historical symbol URLs remain valid; a deterministic composite builder and structural workflow tests keep PR validation and deployment on the same artifact.
 - [x] **TOP-1 repository conversion rebuild** — v3.12.0-rc.16 reframes the front door around portable agent memory + local document intelligence, restores a dated evidence-bound ✓/✕ matrix, and replaces the social preview with a modern vault → local intelligence → agents composition.
+- [x] **Competitive-distribution rebuild** — v3.12.0-rc.29 converts the
+  129-project scan into a freshness/citation/read-only wedge, publishes the
+  exact privacy boundary, refreshes AI/search metadata and high-intent GitHub
+  discovery terms, and adds a remote-only social-preview artifact loop.
+- [ ] **Agent lifecycle recipes** — package short, client-neutral playbooks for
+  first recall, evidence follow-up, stale-fact revalidation, weekly synthesis,
+  research capture, and safe write escalation. Reuse the 19 MCP prompts and
+  `initialize.instructions`; do not add a parallel orchestration engine.
+- [ ] **Directory/community cadence** — keep Glama and the official MCP
+  Registry current; prepare one evidence-backed launch kit for Obsidian Forum,
+  PulseMCP/mcp.so/Smithery and client marketplaces. External posting remains a
+  maintainer action; the reusable copy/evidence bundle is autonomous.
 
 ## Tier 3 — Memory-layer credibility (v3.10)
 
-- [ ] **Publish a reproducible LongMemEval retrieval score** (THE #1 credibility lever, P0). v3.12.0-rc.17 closed the initial evidence-contract gap; rc.18 closed the O(N²) fresh-FTS blocker; rc.19 pinned q8 and completed the 470-query dense run. That result remains deliberately unpromoted because its temporary DB was removed before a literal physical row audit could be retained. rc.20 makes strict file/chunk/index/query completeness, the independent 500/470/30/22,419 cohort shape, exact release identity, source/`dist` fingerprints, and cached ONNX/tokenizer hashes publication gates. Remaining after rc.20 ships: run the full dense cohort from the exact tagged release, review the schema-v2 artifact, publish headline nDCG@5 plus MRR/Hit@1/Recall@10/AllRel@10 and failure slices in `docs/benchmarks.md`, then lead the README with the reviewed result.
-- [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of *every* competitor.
+- [ ] **LongMemEval publication is parked, not active.** The evidence tooling
+  shipped through rc.20, but the maintainer cancelled benchmark execution and
+  headline publication. Do not run local or remote benchmark/evaluation work
+  without a new explicit instruction; the current acquisition plan relies on
+  already-reviewed evidence.
+- [x] **"Forgetting-aware" note-staleness scoring** (shipped v3.10-rc.5; Memora frontier) — the opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) down-weights chunks from long-stale notes for preference/fact queries. Shipped as a post-fusion re-rank (functionally achieving the goal; an RRF-internal decay variant is a possible later refinement, not tracked). Same feature as "Forgetting-aware freshness" under **Already shipped** above — listed here too because it closes this Memora-frontier item. Addresses a documented failure mode of nearly every reviewed competitor; Engraph is the notable temporal-scoring exception in the 2026-07-30 scan.
 - [x] **Messaging reposition** — SHIPPED and strengthened in v3.12.0-rc.5: README ×11, npm/MCP/AI metadata, social preview and GitHub About now lead with the explicit “#1 Obsidian MCP for AI memory” credential. The project-page funnel proves enquire's own leadership across eight product outcomes and no longer routes visitors to alternatives; detailed competitive evidence remains available outside the conversion path. Measurable supporting claims stay current and inspectable, while the broad TOP-1 line remains deliberate promotional positioning.
 
-## Tier 4 — Extend the lead (pick after Tier 3)
+## Tier 4 — Major contract and safe distribution
+
+- [ ] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — RFC-gated
+  semver-major migration. Inventory protocol/SDK changes, preserve the stable
+  v3 contract where possible, publish an explicit compatibility matrix, and
+  validate every release gate remotely. A hand-built “modern MCP” shim on SDK
+  v1 is explicitly rejected.
+- [ ] **First MCPB after v4** — Basic read-only bundle only: pure JavaScript,
+  explicit vault, fixed minimal tool allowlist, no write/index/model/cache/OCR
+  preparation and no native optional dependencies. Require privacy notice,
+  third-party notices, SBOM, hash/provenance and remote OS/client validation
+  before distribution.
+- [ ] **Optional Obsidian companion** — RFC/demand-gated thin layer for
+  install/status/open-result/community discovery. The filesystem remains the
+  source of truth; no desktop/wiki-builder rewrite.
 
 - [ ] **Late chunking** opt-in at markdown-heading boundaries (GraLC-RAG, arXiv:2603.22633) — preserves cross-section context; measurable via structural-coverage metrics.
 - [ ] **GraphRAG-full** — local entity/relationship extraction from note *content* (not just wikilinks), strengthening the knowledge graph without cloud ingestion.
@@ -100,7 +141,10 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 ## Requires the maintainer (account / OAuth / external — I can't do these for you)
 
-- **Claim the Glama server** (GitHub OAuth) + deploy the Dockerfile + publish a Glama release → moves it from "withheld from search" (17% score) to indexed for 50k+ Glama users. (I'll add `glama.json` + the Dockerfile; you claim + deploy.)
+- **Optional Glama ownership claim.** The server is already auto-indexed and
+  discoverable at its public schema page; OAuth claiming is no longer an
+  indexing blocker. Claim only if the maintainer wants dashboard/community
+  controls.
 - **Keep the official MCP Registry entry tracking stable releases** via `mcp-publisher`. Verified 2026-07-24: `io.github.oomkapwn/enquire-mcp` is active and stable v3.11.6 is `isLatest`; prereleases intentionally remain npm/GitHub-only.
 - **Post to the Obsidian forum thread** (81.2k views — the primary organic discovery surface) with the comparison table; submit to **PulseMCP**, **mcp.so**, **smithery.ai**, **Cursor MCP marketplace**; update the awesome-mcp-servers PR with the Glama badge.
 - **Pin the repo on your GitHub profile.** Discussions are already enabled and linked from `SUPPORT.md`.

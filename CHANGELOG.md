@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.29] — 2026-07-30
+
+> **TL;DR:** **enquire now leads every acquisition surface with its sharpest defensible wedge: freshness-aware, cited AI memory for Obsidian, read-only by default.** The README, translated READMEs, product site, npm/server metadata, AI-reader files and social card now distinguish Markdown/PDF hybrid retrieval from Canvas parsing, Dataview-style LIST/TABLE queries and supported Base-filter execution. The TOP-1 ✓/✕ matrix remains prominent while its legend keeps partial competitor features distinct from the complete rows being compared. A new privacy policy states the exact boundary: enquire initiates zero outbound calls during serve, but requested context crosses into the connected MCP client and any tunnel/proxy. Site metadata and Schema.org JSON-LD now expose freshness, citations, read-only posture, precise network-enabled commands and high-intent Obsidian discovery terms. Runtime behavior, public API/schema, dependencies and the **1795** source-test declarations are unchanged.
+>
+> **Method note:** a 2026-07-30 public-surface scan of 129 adjacent projects showed that the largest near-term gap was distribution, onboarding and category communication—not another retrieval primitive. Each adopted idea was filtered through enquire's local-first/read-only architecture and re-verified against current implementation scope. No competitor code, metrics or unreviewed licensed asset was copied. Executable validation remains GitHub-hosted under D-45: no install, build, lint, test, coverage, smoke, OIA, package-consumer, renderer, benchmark or evaluation workload runs on the maintainer MacBook. The social PNG is generated and exported by remote CI before the byte-drift gate, then committed verbatim for the final green run.
+
+### Positioning — one sharp wedge, precise product scope
+
+- **Freshness and evidence lead.** The hero, package description, comparison and AI-agent summaries now start from cited paths/pages plus `age_days`/`stale`, then explain local hybrid retrieval and agent portability.
+- **Obsidian-native capabilities are no longer blurred together.** Hybrid retrieval is described for Markdown and PDFs/OCR. Canvas, Dataview LIST/TABLE and supported Base filters are presented as their actual structured-tool surfaces rather than an unsupported universal “executable documents” claim.
+- **The TOP-1 battlecard stays conversion-first.** Checkmarks and crosses compare complete product combinations, with an evidence-qualified legend and pinned public snapshots so a missing complete row is not misrepresented as proof that every sub-feature is absent.
+- **All eleven public READMEs stay aligned.** Localized heroes retain the 46-tool, 19-MCP-prompt and 1795-test proof while removing the absolute cloud/privacy phrasing and pinning the exact rc.29 install example.
+
+### Privacy and discoverability — explicit boundary, crawlable proof
+
+- **`SECURITY.md` now contains the privacy policy.** It documents accounts/telemetry absence, serve-time outbound behavior, the connected-client/tunnel boundary, explicit Hugging Face and Tesseract downloads, local at-rest artifacts, exact clear/prune retention semantics, non-retroactive filters, third parties and private contact routes.
+- **The product site and JSON-LD use the same contract.** Unsupported `0.94 confidence`, 30-second timing and “data never leaves” claims are gone. Search/AI metadata now names freshness-aware cited recall, read-only defaults, PDF citations, Dataview/Bases/Canvas scope, exact-Origin HTTP admission, every direct acquisition command and hybrid `first-run --apply` orchestration.
+- **GitHub discovery targets buyer intent.** About keeps the TOP-1 lead and adds freshness, citations, local-first/read-only, Dataview, Bases and PDFs. The exact 20-topic set favors those verified differentiators over redundant memory/RAG synonyms; the homepage remains pinned to the product front door.
+
+### Social preview and CI — remote-only asset handoff
+
+- **The social card now sells the wedge at a glance.** “YOUR VAULT. EVERY AGENT.” is paired with fresh/cited memory, read-only default, hybrid Markdown/PDF recall, Dataview/Bases tools, and exact 46-tool / 19-prompt / 1795-test proof.
+- **CI exports the remotely rendered PNG before enforcing byte identity.** The SHA-pinned artifact step provides a D-45-compliant handoff from the GitHub runner; a structural invariant requires render → exact artifact → byte-diff order, exact path, fail-closed missing-file behavior and no conditional bypass.
+- **Proof counts are source-bound.** The existing social-preview invariant now derives tool and prompt totals from registration sources, derives the test total from declarations, rejects the stale `WORKFLOWS` label, and keeps positive plus negative controls without adding an `it()` declaration.
+
+### Tests (1795)
+
+- Existing site and JSON-LD tests now reject stale counts, fake confidence/timing, inaccurate retrieval ladders, absolute privacy answers, missing download commands and missing high-intent metadata.
+- Existing release-integrity tests reject an absent, late, conditional, warning-only or wrong-path remote preview artifact step.
+- Existing GitHub metadata tests require the exact homepage, About acquisition tokens and the exact 20-topic discovery set, with synthetic drift controls.
+
+**1795 → 1795 source tests.**
+
+### Compatibility
+
+- Documentation, metadata, tests and CI only; runtime source behavior, MCP tools/prompts/resources, CLI flags, persistence formats and dependencies are unchanged.
+- npm `@latest` remains `3.11.6`. This prerelease does not resolve the two RC-only consumer-audit exceptions, the wildcard-Origin compatibility migration, or the RFC-gated MCP 2026-07-28 / TypeScript SDK v2 semver-major work.
+- No retrieval benchmark or evaluation result was produced or changed.
+
 ## [3.12.0-rc.28] — 2026-07-30
 
 > **TL;DR:** **Streamable HTTP now treats `Origin` as an admission boundary, not as response decoration.** A native MCP client that omits `Origin` remains accepted. Every present unlisted, opaque, malformed, duplicated/comma-joined, or otherwise non-exact Origin receives `403` before OPTIONS, health, routing, bearer auth, rate limiting, body parsing, session allocation, or MCP dispatch. The configured `--cors-origin` list now accepts only exact serialized HTTP(S) origins; wildcard `*`, opaque `null`, URL paths, queries, fragments, whitespace and malformed entries fail before the vault or indexes open. An admitted browser origin receives CORS headers sourced from the server-controlled allowlist, never reflected from hostile input. The source-test declaration count remains **1795**.

@@ -6,7 +6,7 @@
 
 <sub>[English](./README.md) · [中文](./README.zh.md) · [Español](./README.es.md) · [हिन्दी](./README.hi.md) · [العربية](./README.ar.md) · [Русский](./README.ru.md) · [Português](./README.pt.md) · [Français](./README.fr.md) · [日本語](./README.ja.md) · **한국어** · [Deutsch](./README.de.md)</sub>
 
-<sub>**AI 에이전트를 위한 요약(TL;DR)** — 로컬 Obsidian 마크다운 Vault를 Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw에 영속적이고 검색 가능한 기억으로 노출하는 MCP 서버. 하이브리드 검색(BM25 + ML 임베딩 + BGE 리랭커, RRF 융합), HNSW + int8 양자화, 에이전트형 RAG(HyDE + 하위 질문), GraphRAG-light, PDF + OCR, 독립 실행형 Bases. 벤더 중립, MIT, serve 중 클라우드 호출 0건. 설치: `npm i -g @oomkapwn/enquire-mcp`. 문서: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
+<sub>**AI 에이전트를 위한 요약(TL;DR)** — 신선도를 표시하고 출처를 인용하는 AI 기억을 위한 #1 Obsidian MCP. 하이브리드 검색은 Markdown과 PDF/OCR을 다루며, 구조화 도구는 Canvas를 파싱하고 Dataview 스타일 LIST/TABLE 쿼리와 지원되는 Obsidian Base 필터를 실행합니다. 벤더 중립, MIT, 기본 read-only이며 `serve` 중 enquire가 시작하는 외부 네트워크 호출은 0건입니다. 설치: `npm i -g @oomkapwn/enquire-mcp`. 문서: [llms.txt](https://github.com/oomkapwn/enquire-mcp/blob/main/llms.txt) · [AGENTS.md](https://github.com/oomkapwn/enquire-mcp/blob/main/AGENTS.md) · [API](https://oomkapwn.github.io/enquire-mcp/api/).</sub>
 
 ### 🏆 AI 메모리를 위한 #1 Obsidian MCP.
 
@@ -52,7 +52,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > **무엇이 enquire-mcp를 다르게 만드는가**:
 > 1. **벤더 중립.** 당신의 기억은 `.md` 파일에 존재합니다. Claude에서 Cursor로 전환해도 — 당신의 기억이 함께 따라옵니다.
 > 2. **완전한 로컬 검색 스택.** BM25 + TF-IDF + 다국어 임베딩을 RRF로 융합하고 선택형 BGE 크로스 인코더 리랭커와 신호별 점수를 제공합니다. HNSW + int8 양자화가 dense path를 확장합니다.
-> 3. **serve 중 클라우드 호출 0건.** q8 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 일회성 로컬 다운로드(~118 MB)입니다. 근거 기반 + 프라이버시는 공짜가 아니며, 우리는 그런 척하지 않습니다. 당신의 Vault 콘텐츠는 당신의 머신을 결코 떠나지 않으며, 기본적으로 에어갭(air-gap) 안전합니다([강제됨](./SECURITY.md), 희망 사항이 아님).
+> 3. **`serve` 중 enquire가 시작하는 외부 네트워크 호출 0건.** q8 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 명시적인 일회성 로컬 다운로드(~118 MB)입니다. 콘텐츠는 연결한 MCP 클라이언트에만 반환되며, 해당 클라이언트나 터널의 데이터 처리는 그 자체의 신뢰 경계입니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
 **도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1795+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
@@ -72,7 +72,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **검증 가능한 답변** | ✅ 원문, 노트 경로, PDF 페이지 인용, 신호별 점수, freshness metadata |
 | **실제로 소유하는 지식** | ✅ plain markdown이 source of truth, 인덱스는 로컬, serve 중 cloud call 0 |
 | **Obsidian 지식 표면 전체** | ✅ Markdown, wikilink, frontmatter, Canvas, Bases, PDF, OCR |
-| **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, 19 workflow prompts |
+| **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, MCP 프롬프트 19개 |
 | **통제권을 잃지 않는 확장성** | ✅ HNSW live update, persistence, adaptive refill, int8 quantization |
 | **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 1795 tests, 9 release gates, SLSA L2 provenance |
 
@@ -107,7 +107,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -295,7 +295,7 @@ graph LR
 
 **내 Vault에 쓰기를 하나요?** `--enable-write`를 전달하지 않는 한 안 합니다. 7개 쓰기 도구는 모두 게이트되어 있으며, 파괴적인 것들은 `dry_run`을 지원합니다.
 
-**데이터가 어딘가로 전송되나요?** 외부 다운로드는 명시적 획득 명령에서만 발생합니다. `enquire-mcp setup`, `enquire-mcp build-embeddings`, `enquire-mcp install-model`은 HuggingFace의 ONNX 가중치를 받을 수 있고, `enquire-mcp install-ocr-lang`은 OCR용 Tesseract 언어 팩을 받습니다. serve 모드는 절대 외부로 나가는 HTTP를 만들지 않습니다. 임베딩 + 리랭커는 로컬 CPU에서 실행됩니다.
+**데이터가 어딘가로 전송되나요?** enquire는 텔레메트리를 보내지 않으며 `serve` 중 외부 HTTP 요청을 시작하지 않습니다. 다만 요청된 Vault 컨텍스트는 연결한 MCP 클라이언트로 반환됩니다. 클라우드 클라이언트는 자체 개인정보 처리방침에 따라 그 컨텍스트를 처리할 수 있으며, 터널이나 리버스 프록시도 별도의 신뢰 경계입니다. `setup`, `build-embeddings`, `install-model`과 하이브리드 Tier의 `first-run --apply`는 Hugging Face에서 ONNX 가중치를 받을 수 있고, `install-ocr-lang`은 Tesseract 언어 팩을 받습니다.
 
 **성능은요?** Vault 크기, 하드웨어, 모델, 활성 검색 계층에 따라 달라집니다. 공개 근거에는 1,771 chunks / 368 files에서 BM25 top-10이 **50–100ms**였다는 운영 보고와 100–1,000 notes에서 FTS5가 선형 스캔보다 **37–103×** 빨랐다는 재현 가능한 합성 벤치마크가 포함됩니다. 지연 시간 SLO를 정하기 전에 자신의 Vault에서 내장 평가를 실행하세요.
 

@@ -8,7 +8,7 @@
 
 ### 🏆 面向 AI 记忆的 #1 Obsidian MCP。
 
-**别再每次会话都向 Claude、Cursor、ChatGPT、Codex、OpenClaw 重新解释上下文。你的 Obsidian 笔记成为所有 MCP 兼容智能体之间共享、可检索的记忆——你的知识，任何模型，永远属于你。**
+**别再每次会话都重新解释上下文。enquire-mcp 对 Markdown 与 PDF/OCR 进行混合检索；结构化工具解析 Canvas，执行 Dataview 风格的 LIST/TABLE 查询和受支持的 Obsidian Base 过滤器。你的知识由此成为所有 MCP 兼容智能体都可使用、带来源且可检索的记忆。**
 
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
@@ -45,7 +45,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > **enquire-mcp 的与众不同之处**：
 > 1. **厂商中立。** 你的记忆存在 `.md` 文件里。从 Claude 换到 Cursor——记忆随你而来。
 > 2. **完整的本地检索栈。** BM25 + TF-IDF + 多语言嵌入经 RRF 融合，可选 BGE 交叉编码器重排并提供分信号得分；HNSW + int8 量化负责扩展稠密检索。
-> 3. **serve 期间零云端调用。** q8 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它是一次性的本地下载（约 118 MB），而不是一个云端 API 密钥。扎根 + 隐私并非没有代价，我们也不假装它免费：你的仓库内容永不离开本机，默认即可隔离（air-gap）安全运行（[已强制执行](./SECURITY.md)，而非纸面承诺）。
+> 3. **`serve` 期间由 enquire 发起的对外网络调用为零。** q8 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它需要一次明确的本地下载（约 118 MB），而不是云端 API 密钥。内容只返回给你连接的 MCP 客户端；该客户端或隧道如何处理数据属于其自身的信任边界（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
 **46 个工具 · 19 个 MCP 提示词 · 1795+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
@@ -65,7 +65,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **答案可验证** | ✅ 原文、笔记路径、PDF 页码引用、分信号得分和新鲜度元数据 |
 | **知识真正归你所有** | ✅ 纯 markdown 是事实来源；索引保留在本地；serve 期间零云端调用 |
 | **完整的 Obsidian 知识面** | ✅ Markdown、双向链接、frontmatter、Canvas、Bases、PDF 和 OCR |
-| **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个工作流提示词 |
+| **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个 MCP 提示词 |
 | **扩展性能而不放弃控制** | ✅ HNSW 实时更新、持久化、自适应补充和 int8 量化 |
 | **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1795 项测试、9 个发布门禁、SLSA L2 来源证明 |
 
@@ -100,7 +100,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.28      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -288,7 +288,7 @@ graph LR
 
 **会写入我的仓库吗？** 除非你传 `--enable-write`，否则不会。全部 7 个写工具受控；破坏性操作支持 `dry_run`。
 
-**会把数据发到哪里吗？** 只有显式获取命令会对外下载：`enquire-mcp setup`、`enquire-mcp build-embeddings` 和 `enquire-mcp install-model` 可能从 HuggingFace 下载 ONNX 权重；`enquire-mcp install-ocr-lang` 下载用于 OCR 的 Tesseract 语言包。serve 模式从不发起对外 HTTP。向量嵌入与重排都在本地 CPU 运行。
+**会把数据发到哪里吗？** enquire 不发送遥测，也不会在 `serve` 期间主动发起对外 HTTP 请求。不过，请求的仓库上下文会返回给你连接的 MCP 客户端；云端客户端可能按其自身的隐私政策处理这些内容，任何隧道或反向代理也都是独立的信任边界。`setup`、`build-embeddings`、`install-model` 以及混合层级的 `first-run --apply` 可能从 Hugging Face 获取 ONNX 权重；`install-ocr-lang` 会下载 Tesseract 语言包。
 
 **性能如何？** 性能取决于知识库大小、硬件、模型和启用的检索层。公开证据包括：在 1,771 个 chunk / 368 个文件上的 BM25 top-10 生产报告为 **50–100ms**，以及在 100–1,000 篇笔记上 FTS5 相对线性扫描快 **37–103 倍**的可复现实验。设定延迟 SLO 前，请在自己的知识库上运行内置评测和基准。
 

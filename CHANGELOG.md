@@ -15,12 +15,14 @@ All notable changes to this project will be documented here. The format follows 
 - **Configuration fails closed before resources open.** `normalizeCorsOrigins` validates and de-duplicates the allowlist before `prepareServerDeps`. Wildcard, opaque, malformed and URL-with-path forms now fail startup instead of silently weakening DNS-rebinding protection.
 - **CORS remains a separate post-admission grant.** Only the exact matched server-controlled allowlist value becomes `Access-Control-Allow-Origin`; admitted origins retain credentials, preflight, session-header exposure and `Vary: Origin` behavior.
 
-### Regression and invariant coverage
+### Tests (1795)
 
 - The former negative control that expected a disallowed preflight to continue with `204` now requires `403`, no CORS grant and no hostile-origin reflection.
 - One end-to-end control proves hostile Origins cannot reach `/health`, auth, malformed-body parsing or authenticated MCP initialization, then proves the first admitted request still owns the first rate-limit slot.
 - Startup controls reject wildcard, opaque, path-bearing, query-bearing and malformed configured Origins before vault preparation. Existing exact-origin preflight and real-MCP controls preserve the positive path.
 - The HTTP enforcement invariant now maps the SECURITY claim to the explicit admission helper, preventing a future refactor from quietly reverting to CORS-header omission.
+
+**1795 → 1795 source tests.**
 
 ### Compatibility boundary
 

@@ -23,7 +23,17 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
+import {
+  clearWatcherActivationGuard,
+  preflightWatcherActivationGuardRecovery
+} from "./watcher-activation-guard.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
+
+function errnoCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
 
 // v2 added the `kind` column ("md" | "pdf") so PDF chunks live in the same
 // embedding index as markdown — `obsidian_search` returns blended hits with
@@ -341,10 +351,11 @@ export class EmbedDb {
   }
 
   /**
-   * Remove the embed db + WAL/SHM sidecars AND the HNSW persistence sidecars
-   * (`<base>.hnsw.bin` + `<base>.hnsw.meta.json`, where `<base>` is the embed
-   * file with its `.embed.db` suffix stripped — mirrors the persist path in
-   * server.ts). Idempotent.
+   * Remove the embed db + WAL/SHM sidecars, HNSW persistence sidecars, and the
+   * process-restart watcher interlock (`<embed-db>.watcher-activation.guard`).
+   * The guard contains no vault content, but `clear-embeddings` is the explicit
+   * recovery operation after a failed startup and therefore owns its removal.
+   * Idempotent.
    *
    * v3.9.0-rc.34 (deep-audit P-2) — the HNSW sidecars were previously NOT
    * removed by `clear-embeddings`, so a `--use-hnsw` user's vault content
@@ -356,20 +367,39 @@ export class EmbedDb {
   async clearOnDisk(): Promise<boolean> {
     this.close();
     let removed = false;
+    // Validate any stranded interlock BEFORE deleting the first artifact.
+    // Foreign files/symlinks/special objects and unexpected directory entries
+    // therefore fail closed without turning recovery into an unnecessary
+    // partial erase. The guard is validated again and removed last below.
+    await preflightWatcherActivationGuardRecovery(this.file);
     // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
     // `hnswPersistBase` helper (same one server.ts's writer uses), so the eraser
     // and the writer can never drift. The index writes `<base>.bin` + the
     // metadata writes `<base>.meta.json` (sidecars carry raw text_preview).
     const hnswBase = hnswPersistBase(this.file);
-    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
+    const targets = [
+      this.file,
+      `${this.file}-wal`,
+      `${this.file}-shm`,
+      `${hnswBase}.bin`,
+      `${hnswBase}.meta.json`
+    ];
     for (const p of targets) {
       try {
         await fs.unlink(p);
         removed = true;
-      } catch {
-        // missing is fine
+      } catch (err) {
+        if (errnoCode(err) !== "ENOENT") {
+          // Recovery must never report success while a permission/type/race
+          // error leaves a derived-data sidecar behind.
+          throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
+        }
       }
     }
+    // Remove the guard LAST. If any derived artifact could not be removed, the
+    // still-present guard keeps the next serve fail-closed. The helper accepts
+    // only its narrow directory shape and never recursively deletes content.
+    removed = (await clearWatcherActivationGuard(this.file)) || removed;
     return removed;
   }
 

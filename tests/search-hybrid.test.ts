@@ -19,6 +19,7 @@ import {
   searchHybridMulti
 } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
+import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 let root: string;
 
@@ -52,18 +53,41 @@ afterAll(async () => {
 describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
   it("TF-IDF-only path: no FTS5, no embeddings → returns TF-IDF-style ranking", async () => {
     const v = new Vault(root);
+    const missingEmbedFile = path.join(root, "nonexistent.embed.db");
     const result = await searchHybrid(
       v,
       { query: "OAuth JWT tokens", limit: 5 },
-      { ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") }
+      { ftsIndex: null, embedFile: missingEmbedFile }
     );
     expect(result.method).toBe("rrf");
     expect(result.signals_used).toEqual(["tfidf"]);
+    expect(result.signal_errors?.embeddings).toBeUndefined();
     expect(result.matches.length).toBeGreaterThan(0);
     // Top hit should be from Auth/, not Cooking/.
     expect(result.matches[0]?.path.startsWith("Auth/")).toBe(true);
     // Per-signal must show only tfidf.
     expect(Object.keys(result.matches[0]?.per_signal ?? {})).toEqual(["tfidf"]);
+
+    // NEGATIVE control: a stranded watcher-startup interlock must quarantine
+    // even an embedding DB that disappeared after preparation. Hybrid search
+    // still degrades to TF-IDF, but reports a path-free embedding-arm failure.
+    const guardPath = watcherActivationGuardPath(missingEmbedFile);
+    await fs.mkdir(guardPath);
+    try {
+      const quarantined = await searchHybrid(
+        v,
+        { query: "OAuth JWT tokens", limit: 5 },
+        { ftsIndex: null, embedFile: missingEmbedFile }
+      );
+      expect(quarantined.signals_used).toEqual(["tfidf"]);
+      expect(quarantined.matches.length).toBeGreaterThan(0);
+      expect(quarantined.signal_errors?.embeddings).toMatch(/quarantined after an incomplete watcher startup/i);
+      expect(quarantined.signal_errors?.embeddings).toMatch(/custom embedding index.*exact `--embed-file` option/is);
+      expect(quarantined.signal_errors?.embeddings).not.toContain(root);
+      expect(quarantined.signal_errors?.embeddings).not.toContain(missingEmbedFile);
+    } finally {
+      await fs.rmdir(guardPath);
+    }
   });
 
   it("respects min_signals filter (consensus search)", async () => {

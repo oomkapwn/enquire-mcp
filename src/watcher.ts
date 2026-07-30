@@ -16,6 +16,7 @@
 // Debouncing is delegated to chokidar's `awaitWriteFinish` so we don't
 // reindex five times during a single Obsidian save.
 
+import { lstat } from "node:fs/promises";
 import * as path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { EmbedDb } from "./embed-db.js";
@@ -41,6 +42,9 @@ export interface HnswRowMeta {
 }
 
 const SKIP_DIRS = [".git", ".obsidian", ".trash", "node_modules", ".DS_Store"];
+const DEFAULT_ACTIVATION_PATH_LIMIT = 50_000;
+const ACTIVATION_REPLAY_CONCURRENCY = 4;
+const ACTIVATION_MAX_GENERATIONS = 16;
 
 export interface WatcherOptions {
   /** Vault to watch — must already be ensureExists()'d. */
@@ -122,6 +126,22 @@ export interface WatcherOptions {
    * lift the cap when they trust their PDF set.
    */
   ocrMaxPages?: number;
+  /**
+   * Defer filesystem-event processing until {@link VaultWatcher.activate}.
+   * Production startup uses this while the embedder and optional HNSW index
+   * are still being attached: events coalesce by exact path, then activation
+   * derives the safe canonical final state from disk. Replay begins once every
+   * configured sink attempt has finished. Off by default so callers that
+   * already provide dependencies retain historical behavior.
+   */
+  deferActivation?: boolean;
+  /**
+   * Maximum number of distinct paths retained while activation is deferred.
+   * Repeated events for one path coalesce and do not consume another slot.
+   * Exceeding the limit fails activation closed instead of silently dropping
+   * a boot-window change. Primarily configurable for deterministic tests.
+   */
+  activationPathLimit?: number;
 }
 
 /** Row shape shared by `embedSingleNote` / `embedSinglePdf` results. */
@@ -142,8 +162,10 @@ interface EmbedRowLike {
  * `rowsByLabel` map, AND the persisted `.hnsw.bin` sidecar (a later
  * `markDelete(-1)` or a real row colliding on `-1` then scrambles results).
  * This throws (fail-closed) instead: the watcher's per-event try/catch logs it
- * and skips the HNSW update for that file, and the signature guard rebuilds a
- * correct index on the next serve. A corrupt sentinel label is never inserted.
+ * and skips the HNSW update for that file. The surrounding embed-sync catch
+ * permanently disables sidecar persistence for that watcher generation, so the
+ * next serve rebuilds instead of trusting a stale graph under a fresh database
+ * signature. A corrupt sentinel label is never inserted.
  *
  * @param rows - The embed rows (vector + chunk metadata), in insertion order.
  * @param newIds - The row ids `upsertNote` assigned, parallel to `rows`.
@@ -222,6 +244,30 @@ export class VaultWatcher {
   // `--no-hnsw-persist` was passed (no sidecar to keep current).
   private hnswPersistFile: string | null = null;
   private hnswDirty = false;
+  // Once an in-memory HNSW diff throws, its exact graph state is no longer
+  // provable. Never persist that graph with a fresh EmbedDb signature: doing so
+  // would make the next serve trust a partial sidecar instead of rebuilding.
+  // This latch is deliberately permanent for the watcher generation.
+  private hnswPersistUnsafe = false;
+  // v3.12.0-rc.25 — production starts chokidar before the embedder/HNSW
+  // startup path completes. While deferred, retain each exact absolute path
+  // whose FINAL on-disk state must be reconciled. Native event order is not an
+  // authority (replacement saves can deliver unlink after add/change). Exact
+  // identity matters: folding case or Unicode would merge genuinely distinct
+  // files on case-sensitive filesystems.
+  private activationState: "capturing" | "activating" | "live";
+  private readonly deferredActivation: boolean;
+  private readonly activationPathLimit: number;
+  private readonly activationPaths = new Set<string>();
+  // Exact source_state keys that no longer appear in the live listing. Keep
+  // these separate from filesystem paths: on Windows, legacy separators or
+  // normalized `.` aliases can resolve to the same absolute path as the new
+  // canonical spelling, while the old exact SQLite key still needs purging.
+  private readonly activationStoredIdentities = new Map<string, "md" | "pdf">();
+  private activationOverflowed = false;
+  private activationPromise: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
+  private closing = false;
   private closed = false;
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
@@ -250,6 +296,12 @@ export class VaultWatcher {
     this.ocrPdfs = opts.ocrPdfs ?? false;
     this.ocrLangs = opts.ocrLangs ?? "eng";
     this.ocrMaxPages = opts.ocrMaxPages;
+    this.deferredActivation = opts.deferActivation === true;
+    this.activationState = this.deferredActivation ? "capturing" : "live";
+    this.activationPathLimit = opts.activationPathLimit ?? DEFAULT_ACTIVATION_PATH_LIMIT;
+    if (!Number.isSafeInteger(this.activationPathLimit) || this.activationPathLimit < 1) {
+      throw new Error("VaultWatcher: activationPathLimit must be a positive safe integer");
+    }
     // v3.8.0-rc.2 R-7 — fail loud if embedDb is wired without embedder.
     // Pre-flight check vs silently no-op'ing the embed sync.
     if (this.embedDb && !this.embedder) {
@@ -272,6 +324,7 @@ export class VaultWatcher {
    * @param maxPages - Page cap for OCR runs. Default 200 (DEFAULT_OCR_MAX_PAGES).
    */
   setOcrPdfs(enabled: boolean, langs?: string, maxPages?: number): void {
+    this.assertLateAttachmentAllowed("setOcrPdfs");
     if (enabled && !this.includePdfs) {
       throw new Error("VaultWatcher.setOcrPdfs: enabling OCR requires includePdfs=true at construction time");
     }
@@ -299,12 +352,62 @@ export class VaultWatcher {
     embedder: Awaited<ReturnType<typeof loadEmbedder>> | null,
     lateChunkContext = 0
   ): void {
+    this.assertLateAttachmentAllowed("attachEmbed");
     if (embedDb && !embedder) {
       throw new Error("VaultWatcher.attachEmbed: embedDb passed without embedder");
     }
     this.embedDb = embedDb;
     this.embedder = embedder;
     this.lateChunkContext = lateChunkContext;
+  }
+
+  /**
+   * Capture source-state drift that predates chokidar's `ready` event.
+   *
+   * Chokidar runs with `ignoreInitial:true`, so a file created while its first
+   * scan is in progress can be classified as initial state and emit no native
+   * `add`. Once EmbedDb is attached, compare its exact path/mtime declarations
+   * with the current privacy-filtered vault listing and feed every mismatch
+   * through the same bounded final-state activation set. PDF mismatches are
+   * included only when PDF watching is enabled, so activation still uses the
+   * configured OCR path rather than a separate bulk-PDF implementation.
+   *
+   * @returns A promise that resolves after the current source-state snapshot
+   *   has been represented in the activation set.
+   * @throws {Error} If called after activation or while closing.
+   * @example
+   * watcher.attachEmbed(db, embedder);
+   * await watcher.captureAttachedSinkDrift();
+   * await watcher.activate();
+   */
+  async captureAttachedSinkDrift(): Promise<void> {
+    if (this.closing || this.closed || this.activationState !== "capturing") {
+      throw new Error("VaultWatcher.captureAttachedSinkDrift: activation is already live or watcher is closing");
+    }
+    const embedDb = this.embedDb;
+    if (!embedDb) return;
+
+    const captureKind = async (
+      kind: "md" | "pdf",
+      entries: ReadonlyArray<{ relPath: string; absPath: string; mtimeMs: number }>
+    ): Promise<void> => {
+      const known = new Map(embedDb.getSourceStates(kind).map((state) => [state.rel_path, state.mtime_ms]));
+      const live = new Set<string>();
+      for (const entry of entries) {
+        live.add(entry.relPath);
+        if (known.get(entry.relPath) !== entry.mtimeMs) {
+          this.captureActivationPath(entry.absPath);
+        }
+      }
+      for (const relPath of known.keys()) {
+        if (!live.has(relPath)) this.captureActivationStoredIdentity(relPath, kind);
+      }
+    };
+
+    await captureKind("md", await this.vault.listMarkdown());
+    if (this.includePdfs) {
+      await captureKind("pdf", await this.vault.listFilesByExtension(".pdf"));
+    }
   }
 
   /**
@@ -331,6 +434,7 @@ export class VaultWatcher {
    *   persistence — correctness is unaffected (signature guard).
    */
   attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>, persistFile?: string): void {
+    this.assertLateAttachmentAllowed("attachHnsw");
     if (!this.embedDb) {
       throw new Error(
         "VaultWatcher.attachHnsw: embedDb not attached — call attachEmbed first (HNSW live update requires it)"
@@ -342,19 +446,41 @@ export class VaultWatcher {
   }
 
   /**
+   * Keep deferred startup sinks immutable once activation has begun.
+   *
+   * Historical non-deferred watchers retain their late-binding behavior.
+   *
+   * @param method - Public attachment method used for the diagnostic.
+   */
+  private assertLateAttachmentAllowed(method: string): void {
+    if (this.deferredActivation && this.activationState !== "capturing") {
+      throw new Error(`VaultWatcher.${method}: deferred attachments are closed once activation begins`);
+    }
+  }
+
+  /**
    * v3.9.0-rc.6 — flush the live-updated HNSW index to its disk sidecar.
    * No-op unless ALL of: the index is dirty (had ≥1 applyDiff since the
    * last flush), an index + rowsByLabel + persistFile + embedDb are all
    * wired. Recomputes the embed-db signature so the persisted
    * `.meta.json` matches what `loadHnswFromDisk` will expect on the next
    * serve (any external embed-db change since then → signature mismatch
-   * → safe rebuild). Fail-soft: a save error is logged + swallowed (the
-   * signature guard means a stale/missing sidecar just triggers rebuild).
+   * → safe rebuild). Permanently skips persistence after any live HNSW diff
+   * failure, leaving the older signature behind so restart must rebuild rather
+   * than blessing a partial graph as current. Fail-soft: a save error is logged
+   * + swallowed (the signature guard means a stale/missing sidecar rebuilds).
    *
    * @returns true if a flush was performed, false if it was a no-op.
    */
   async flushHnswToDisk(): Promise<boolean> {
-    if (!this.hnswDirty || !this.hnsw || !this.hnswRowsByLabel || !this.hnswPersistFile || !this.embedDb) {
+    if (
+      this.hnswPersistUnsafe ||
+      !this.hnswDirty ||
+      !this.hnsw ||
+      !this.hnswRowsByLabel ||
+      !this.hnswPersistFile ||
+      !this.embedDb
+    ) {
       return false;
     }
     try {
@@ -386,10 +512,12 @@ export class VaultWatcher {
    * v3.9.0-rc.2 — internal helper. Apply an embed-db {oldIds, newIds}
    * diff to the wired HNSW index + rowsByLabel map. Called by both the
    * md and pdf event handlers after upsertNote / deleteNote returns.
-   * Fail-soft: on any error, logs to stderr and returns — the embed-db
-   * is already updated, so the next serve restart will rebuild HNSW
-   * from the correct state. (Same posture as the watcher's existing
-   * embed-db fail-soft.)
+   * Fail-soft: on any error, logs to stderr and returns. The embed-db is already
+   * updated, so persistence is permanently disabled for this watcher
+   * generation; the older sidecar signature then mismatches on restart and
+   * forces a rebuild instead of laundering the partial graph as current. (Same
+   * current-session mixed-state boundary as the watcher's existing embed-db
+   * fail-soft behavior.)
    *
    * CONCURRENCY CONTRACT (v3.11.0-rc.9, external audit T-MED-1 re-verify): this
    * method and the `HnswIndex.applyDiff` it calls are FULLY SYNCHRONOUS — there is
@@ -442,6 +570,11 @@ export class VaultWatcher {
       }
       return result;
     } catch (err) {
+      // applyDiff may have mutated only part of the native graph before
+      // throwing. Even if an earlier/later successful diff marked the index
+      // dirty, never save this uncertain graph with the current EmbedDb
+      // signature: that would defeat the restart signature guard.
+      this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher HNSW live-update failed for ${relPath} — ${err instanceof Error ? err.message : String(err)} (search results may be stale until next serve restart)\n`
@@ -449,6 +582,298 @@ export class VaultWatcher {
       }
       return null;
     }
+  }
+
+  /**
+   * Chain one task behind prior work for the same exact path.
+   *
+   * @param absPath - Absolute path supplied by chokidar or activation replay.
+   * @param context - Short diagnostic context appended to watcher errors.
+   * @param task - Filesystem reconciliation task to serialize.
+   * @returns The resolving tail for this path. Handler failures are logged and
+   *   absorbed so one bad file cannot reject shutdown or activation drains.
+   */
+  private enqueueFileTask(absPath: string, context: string, task: () => Promise<void>): Promise<void> {
+    const prev = this.fileQueues.get(absPath) ?? Promise.resolve();
+    const tail = prev.then(task).catch((err) => {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher error on ${this.vault.toRel(absPath)} ${context} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+    });
+    this.fileQueues.set(absPath, tail);
+    // Self-evict once this is the last queued event for the file so the map
+    // stays bounded. If a newer event chained after us it owns the entry.
+    void tail.finally(() => {
+      if (this.fileQueues.get(absPath) === tail) this.fileQueues.delete(absPath);
+    });
+    return tail;
+  }
+
+  /**
+   * Chain one native event behind prior work for the same exact path.
+   *
+   * @param absPath - Absolute path supplied by chokidar.
+   * @param kind - Filesystem event kind to apply.
+   * @returns The resolving per-path queue tail.
+   */
+  private enqueueFileEvent(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
+    return this.enqueueFileTask(absPath, `(${kind})`, () => this.handle(absPath, kind));
+  }
+
+  /**
+   * Record one boot-window path without preserving noisy native event order.
+   *
+   * @param absPath - Absolute path whose final state must be replayed.
+   */
+  private captureActivationPath(absPath: string): void {
+    if (this.activationPaths.has(absPath)) return;
+    if (this.activationPaths.size + this.activationStoredIdentities.size >= this.activationPathLimit) {
+      this.activationOverflowed = true;
+      return;
+    }
+    this.activationPaths.add(absPath);
+  }
+
+  /**
+   * Capture one exact stale source-state key without resolving it through the
+   * host filesystem's separator/case rules.
+   *
+   * @param relPath - Exact persisted EmbedDb source_state key.
+   * @param kind - Stored content-source kind.
+   */
+  private captureActivationStoredIdentity(relPath: string, kind: "md" | "pdf"): void {
+    if (this.activationStoredIdentities.has(relPath)) return;
+    if (this.activationPaths.size + this.activationStoredIdentities.size >= this.activationPathLimit) {
+      this.activationOverflowed = true;
+      return;
+    }
+    this.activationStoredIdentities.set(relPath, kind);
+  }
+
+  /**
+   * Purge an exact persisted key from every attached derived sink.
+   *
+   * This deliberately performs no filesystem resolution or read: the identity
+   * originates in EmbedDb source_state and may use a legacy path spelling.
+   *
+   * @param relPath - Exact stored identity to remove.
+   * @param kind - Stored content-source kind for HNSW metadata.
+   */
+  private async purgeStoredIdentity(relPath: string, kind: "md" | "pdf"): Promise<void> {
+    try {
+      this.ftsIndex?.dropFile(relPath);
+      if (this.embedDb) {
+        const deletedIds = this.embedDb.deleteNote(relPath);
+        if (deletedIds.length > 0 && this.hnsw) {
+          this.syncHnswForFile(relPath, kind, deletedIds, []);
+        }
+      }
+    } catch (err) {
+      // S-8d remains separate: activation preserves the existing live watcher's
+      // fail-soft sink semantics. The startup barrier orders accepted work; it
+      // does not stage a transaction across FTS5, EmbedDb and HNSW.
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher stored-identity purge failed for ${relPath} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+    }
+  }
+
+  /**
+   * Apply exact stored-key purges with the same startup concurrency bound.
+   *
+   * @param identities - Exact persisted keys and source kinds.
+   */
+  private async applyStoredIdentityPurges(
+    identities: ReadonlyArray<readonly [string, "md" | "pdf"]>
+  ): Promise<void> {
+    for (let offset = 0; offset < identities.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      if (this.activationOverflowed) return;
+      const chunk = identities.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      await Promise.all(chunk.map(([relPath, kind]) => this.purgeStoredIdentity(relPath, kind)));
+    }
+  }
+
+  /**
+   * Dispatch one native event into either the activation buffer or the live
+   * per-file queue. Kept as a method so deterministic tests can exercise the
+   * lifecycle without depending on chokidar delivery timing.
+   *
+   * @param absPath - Absolute event path.
+   * @param kind - Native event kind.
+   */
+  private onFsEvent(absPath: string, kind: "add" | "change" | "unlink"): void {
+    if (this.closing || this.closed) return;
+    if (this.activationState !== "live") {
+      this.captureActivationPath(absPath);
+      return;
+    }
+    void this.enqueueFileEvent(absPath, kind);
+  }
+
+  /**
+   * Resolve the safe final-state operations for one captured path.
+   *
+   * @param absPath - Absolute path captured during startup.
+   * @returns Exact stale identities to purge and, when present, the canonical
+   *   on-disk identity to upsert.
+   */
+  private async activationPlan(
+    absPath: string
+  ): Promise<{ purge: ReadonlyArray<string>; upsert: string | null }> {
+    const nativeRelPath = path.relative(this.vault.root, absPath);
+    if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) {
+      return { purge: [], upsert: null };
+    }
+    try {
+      // Never let final-state reconciliation follow a symlink or junction.
+      // lstat observes the captured leaf itself; canonicalization below is
+      // reached only for a regular file.
+      const stat = await lstat(absPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        return { purge: [absPath], upsert: null };
+      }
+      const canonicalRel = await this.vault.canonicalRelForPrivacyCheckPublic(absPath);
+      const canonicalAbs = this.vault.resolveInside(canonicalRel);
+      if (this.vault.isExcluded(canonicalRel)) {
+        return {
+          purge: canonicalAbs === absPath ? [absPath] : [absPath, canonicalAbs],
+          upsert: null
+        };
+      }
+      return {
+        purge: canonicalAbs === absPath ? [] : [absPath],
+        upsert: canonicalAbs
+      };
+    } catch {
+      // Missing, inaccessible, unsafe, or escaping paths must not retain stale
+      // searchable rows. The exact captured identity is safe to purge without
+      // reading or following the path.
+      return { purge: [absPath], upsert: null };
+    }
+  }
+
+  /**
+   * Resolve activation plans without launching one filesystem/realpath task per
+   * captured file at once.
+   *
+   * @param paths - Exact captured paths in deterministic insertion order.
+   * @returns One final-state plan per path, in the same order.
+   */
+  private async planActivationPaths(
+    paths: ReadonlyArray<string>
+  ): Promise<Array<{ purge: ReadonlyArray<string>; upsert: string | null }>> {
+    const plans: Array<{ purge: ReadonlyArray<string>; upsert: string | null }> = [];
+    for (let offset = 0; offset < paths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      if (this.activationOverflowed) break;
+      const chunk = paths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      plans.push(...(await Promise.all(chunk.map((absPath) => this.activationPlan(absPath)))));
+    }
+    return plans;
+  }
+
+  /**
+   * Apply one deduplicated activation phase with bounded concurrency.
+   *
+   * @param paths - Exact identities to reconcile.
+   * @param kind - Purge (`unlink`) or final-state upsert (`change`).
+   */
+  private async applyActivationPaths(
+    paths: ReadonlyArray<string>,
+    kind: "change" | "unlink"
+  ): Promise<void> {
+    for (let offset = 0; offset < paths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
+      if (this.activationOverflowed) return;
+      const chunk = paths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
+      await Promise.all(chunk.map((absPath) => this.enqueueFileEvent(absPath, kind)));
+    }
+  }
+
+  /**
+   * Activate live event processing and replay every path captured while
+   * production dependencies were attaching. Repeated events for one exact path
+   * coalesce, then each generation derives current disk state rather than
+   * trusting noisy native add/change/unlink ordering. Events received during a
+   * generation form the next generation. Canonical upserts are deduplicated so
+   * a case-only rename cannot race the same EmbedDb/HNSW identity through two
+   * different queue keys.
+   *
+   * Activation fails closed if the distinct-path bound was exceeded. The
+   * server must not begin serving from a potentially stale partial snapshot;
+   * production keeps its process-restart activation interlock armed so a later
+   * serve cannot publish the derived indexes until explicit recovery.
+   *
+   * @returns A promise that resolves after all captured paths and their
+   *   per-file queues drain. Repeated calls share the same activation.
+   */
+  async activate(): Promise<void> {
+    if (this.closed) {
+      throw new Error("VaultWatcher.activate: watcher is closing or closed");
+    }
+    if (this.activationPromise) return this.activationPromise;
+    if (this.closing) {
+      throw new Error("VaultWatcher.activate: watcher is closing or closed");
+    }
+    if (this.activationState === "live") return;
+
+    this.activationPromise = (async () => {
+      this.activationState = "activating";
+      let generation = 0;
+      while (true) {
+        if (this.activationOverflowed) {
+          throw new Error(
+            `VaultWatcher activation captured more than ${this.activationPathLimit} distinct paths — refusing to serve with potentially stale indexes; stop vault writers and rebuild the derived indexes before retrying`
+          );
+        }
+
+        // This empty-check + live assignment is the linearization point. There
+        // is no await between them, so every earlier event is in a completed
+        // generation and every later event enters the normal live queue.
+        if (this.activationPaths.size === 0 && this.activationStoredIdentities.size === 0) {
+          this.activationState = "live";
+          return;
+        }
+        if (generation >= ACTIVATION_MAX_GENERATIONS) {
+          throw new Error(
+            `VaultWatcher activation did not quiesce after ${ACTIVATION_MAX_GENERATIONS} generations — refusing to serve with potentially stale indexes; retry after the vault becomes quiet`
+          );
+        }
+        generation += 1;
+
+        const captured = [...this.activationPaths];
+        const storedIdentities = [...this.activationStoredIdentities.entries()];
+        this.activationPaths.clear();
+        this.activationStoredIdentities.clear();
+        const plans = await this.planActivationPaths(captured);
+        if (this.activationOverflowed) continue;
+
+        const purge = new Set<string>();
+        const upsert = new Set<string>();
+        for (const plan of plans) {
+          for (const absPath of plan.purge) purge.add(absPath);
+          if (plan.upsert) upsert.add(plan.upsert);
+        }
+        // A canonical identity that exists at planning time wins over a stale
+        // alias purge from another native event in the same generation.
+        for (const absPath of upsert) purge.delete(absPath);
+
+        // Purge exact legacy SQLite identities and stale physical spellings
+        // first, then upsert each canonical final identity once. Batches are
+        // awaited, keeping planning + replay bounded to four active tasks.
+        await this.applyStoredIdentityPurges(storedIdentities);
+        await this.applyActivationPaths([...purge], "unlink");
+        await this.applyActivationPaths([...upsert], "change");
+      }
+    })();
+
+    return this.activationPromise;
   }
 
   /** Start watching. Resolves once the watcher has reported `ready`. */
@@ -488,35 +913,9 @@ export class VaultWatcher {
       ignoreInitial: true
     });
 
-    const onChange = (absPath: string, kind: "add" | "change" | "unlink") => {
-      if (this.closed) return; // v3.10.0-rc.40 (#6) — no new work once close() began
-      // v3.9.0-rc.11 (H1) — serialize per file. Chain this event on the file's
-      // prior handle (which always resolves — it catches its own errors) so
-      // same-file events run sequentially and never interleave their embed-db
-      // + HNSW mutations; different files keep independent chains → parallel.
-      const prev = this.fileQueues.get(absPath) ?? Promise.resolve();
-      const tail = prev
-        .then(() => this.handle(absPath, kind))
-        .catch((err) => {
-          if (!this.silent) {
-            process.stderr.write(
-              `enquire: watcher error on ${this.vault.toRel(absPath)} (${kind}) — ${
-                err instanceof Error ? err.message : String(err)
-              }\n`
-            );
-          }
-        });
-      this.fileQueues.set(absPath, tail);
-      // Self-evict once this is the last queued event for the file so the map
-      // stays bounded. If a newer event chained after us it owns the entry.
-      void tail.finally(() => {
-        if (this.fileQueues.get(absPath) === tail) this.fileQueues.delete(absPath);
-      });
-    };
-
-    this.watcher.on("add", (p: string) => onChange(p, "add"));
-    this.watcher.on("change", (p: string) => onChange(p, "change"));
-    this.watcher.on("unlink", (p: string) => onChange(p, "unlink"));
+    this.watcher.on("add", (p: string) => this.onFsEvent(p, "add"));
+    this.watcher.on("change", (p: string) => this.onFsEvent(p, "change"));
+    this.watcher.on("unlink", (p: string) => this.onFsEvent(p, "unlink"));
 
     await new Promise<void>((resolve) => {
       this.watcher?.once("ready", () => resolve());
@@ -711,6 +1110,11 @@ export class VaultWatcher {
               }
             }
           } catch (err) {
+            // This catch spans both pre-upsert work and post-upsert HNSW
+            // preparation (including zipHnswAddPoints). Once an attached HNSW
+            // may have missed a committed EmbedDb mutation, conservatively
+            // forbid sidecar persistence for the whole watcher generation.
+            if (this.hnsw) this.hnswPersistUnsafe = true;
             if (!this.silent) {
               process.stderr.write(
                 `enquire: watcher embed-db PDF sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
@@ -770,6 +1174,11 @@ export class VaultWatcher {
             }
           }
         } catch (err) {
+          // Same class-level latch as the PDF path: a zip/invariant exception
+          // after upsert must not bless a stale graph with the fresh DB
+          // signature. Pre-upsert failures may disable an optimization, but
+          // never weaken correctness.
+          if (this.hnsw) this.hnswPersistUnsafe = true;
           if (!this.silent) {
             process.stderr.write(
               `enquire: watcher embed-db sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
@@ -792,24 +1201,61 @@ export class VaultWatcher {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    // v3.10.0-rc.40 (#6) — STOP the chokidar watcher FIRST so no new file event can
-    // enter the queue during the drain+flush window below (onChange + handle also
-    // early-return when `closed`). Pre-rc.40 the watcher stayed live until AFTER the
-    // flush, so an edit landing mid-flush could apply a live diff the just-persisted
-    // sidecar didn't reflect (a lost fast-reload — the signature-guard then rebuilt).
-    if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
+    if (this.closePromise) return this.closePromise;
+    // D-46: a normal close before the explicit server barrier still owns the
+    // work it accepted. Begin activation synchronously so its replay tails are
+    // installed before `closing` rejects any later event. An overflow already
+    // known at entry rejects before first replay; a later generation failure is
+    // still surfaced by close and remains quarantined by production's guard.
+    if (!this.activationPromise && this.activationState === "capturing") {
+      const activation = this.activate();
+      void activation.catch(() => {});
     }
-    // v3.9.0-rc.11 (H1) — drain in-flight per-file handlers so a pending upsert +
-    // applyDiff completes and the flushed sidecar reflects it. allSettled: a failed
-    // handler shouldn't block shutdown.
-    await Promise.allSettled([...this.fileQueues.values()]);
-    // v3.9.0-rc.6 — flush the live-updated HNSW index before shutting down so the
-    // next serve loads the up-to-date sidecar. No-op if no live updates occurred or
-    // persistence is disabled. Fail-soft.
-    await this.flushHnswToDisk();
+    // Reject new native events synchronously. Accepted handlers deliberately
+    // keep running while `closing` is true; only `closed` makes handle() stop.
+    this.closing = true;
+    this.closePromise = (async () => {
+      let watcherCloseError: unknown;
+      let watcherCloseFailed = false;
+      try {
+        // v3.10.0-rc.40 (#6) — stop chokidar before draining so no new
+        // event can enter the queue during the flush window.
+        if (this.watcher) {
+          try {
+            await this.watcher.close();
+          } catch (err) {
+            // Keep draining accepted work even if the native watcher reports
+            // a close failure; surface that failure only after cleanup.
+            watcherCloseError = err;
+            watcherCloseFailed = true;
+          }
+          this.watcher = null;
+        }
+        let activationError: unknown;
+        if (this.activationPromise) {
+          // Accepted activation work must finish before shutdown returns. Keep
+          // its rejection so overflow/churn cannot masquerade as a clean close.
+          try {
+            await this.activationPromise;
+          } catch (err) {
+            activationError = err;
+          }
+        }
+        // v3.9.0-rc.11 (H1) — drain every accepted per-file tail so a pending
+        // upsert + applyDiff completes before the sidecar flush.
+        await Promise.allSettled([...this.fileQueues.values()]);
+        // v3.9.0-rc.6 — persist the fully drained live-updated index.
+        if (activationError === undefined) {
+          await this.flushHnswToDisk();
+        }
+        if (activationError !== undefined) throw activationError;
+      } finally {
+        this.activationPaths.clear();
+        this.activationStoredIdentities.clear();
+        this.closed = true;
+      }
+      if (watcherCloseFailed) throw watcherCloseError;
+    })();
+    return this.closePromise;
   }
 }

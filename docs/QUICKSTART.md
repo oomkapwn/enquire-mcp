@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.24` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v3.12.0-rc.25` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.24
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.25
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.24` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.25` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 For a client-specific install action, run `enquire-mcp configure --client <name> --vault /absolute/path`. The preview prints a native review URI only where the client officially accepts an arbitrary local definition (VS Code), a copy-and-run command where the client exposes one (Claude Code and Codex), and an explicit **copy-only** label where public one-click routes are limited to Marketplace/Registry entries. Every mode includes the exact generated config as the fallback.
 
@@ -50,7 +50,7 @@ Default `first-run` is non-destructive: it validates the vault through `configur
 enquire-mcp first-run --tier basic --client claude-desktop --vault /absolute/path/to/your/vault --apply
 ```
 
-Expected output: the generated config followed by a `READY for basic` checklist with the vault path `OK`. Optional hybrid/PDF/OCR capabilities may show `WARN`; they do not block the basic live-scan tier. The underlying `doctor --tier basic` reads vault/index/cache state but does not write SQLite contents/schema or create SQLite sidecars (ordinary reads may update OS access-time metadata). A READY verdict covers structural/runtime prerequisites only: it does not certify index freshness, complete PDF coverage, watcher delivery, OCR language packs, or model artifact integrity/inference loadability.
+Expected output: the generated config followed by a `READY for basic` checklist with the vault path and watcher-startup interlock both `OK`. Optional hybrid/PDF/OCR capabilities may show `WARN`; they do not block the basic live-scan tier. The underlying `doctor --tier basic` reads vault/index/cache state but does not write SQLite contents/schema or create SQLite sidecars (ordinary reads may update OS access-time metadata). A stranded interlock is required-fail because every server start would refuse it; stop all enquire processes, clear it through strict recovery, and rebuild with the same model, quantization, late-chunk, privacy and PDF settings before retrying. A READY verdict covers structural/runtime prerequisites only: it does not certify index freshness, complete PDF coverage, watcher delivery, OCR language packs, or model artifact integrity/inference loadability.
 
 For machine-readable diagnostics, run `enquire-mcp doctor --tier basic --vault /absolute/path/to/your/vault --json`; each check includes `required`, and active/large/unstable SQLite sources report `unverified` rather than “missing.” If you stay on the current stable channel, skip this preview-only step and continue with the zero-setup config in Step 3.
 

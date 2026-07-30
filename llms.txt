@@ -46,6 +46,7 @@
 - **v3.9.0-rc.1+:** OCR'd PDF watcher embed-sync (`--ocr-pdfs`) — scanned PDFs that change during a session stay in semantic-search via Tesseract OCR feeding the embed pipeline
 - **v3.9.0-rc.2+:** HNSW in-memory live update — semantic search reflects vault edits within the watcher debounce window (~250ms); pre-3.9.0 needed serve restart
 - **v3.9.0-rc.3+:** R-10 adaptive HNSW refill — auto-doubles k up to 3 attempts when post-filter hits < limit, closing the >66% excluded under-return class
+- **v3.12.0-rc.25:** watched startup freezes embedding capability for one server generation, audits and replays final-state changes observed before late sinks attach, and uses a process-restart interlock to quarantine interrupted guarded startup. Per-file sink failures remain fail-soft in the current process; any uncertain HNSW synchronization disables sidecar persistence so restart recovery rebuilds instead of trusting a partial graph.
 - **v3.10+ stable:** forgetting-aware freshness — every search hit carries `age_days` + a `stale` flag from the note's live mtime; the `obsidian_stale_notes` tool surfaces aged notes; opt-in `--recency-weight` re-ranking (default off) prefers fresher knowledge. Plus frontmatter-aware `obsidian_search` (`filter_frontmatter` scopes hybrid search by YAML)
 
 ## What enquire-mcp is NOT
@@ -67,7 +68,7 @@ Auto-degrades gracefully: works with any subset of signals available. Returns `p
 
 ## Trust and stability
 
-- 1748 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only contracts in the pinned Windows lane
+- 1773 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only path contracts and a 12-contract startup-interlock rerun in the pinned Windows lane
 - 9 release-required CI checks are directly enumerated by `release.yml` and run per PR; 7 are currently branch-protected (`docs` + `oia` remain release-required but unprotected)
 - Pinned `test-windows` is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, beyond the direct inventory above
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable but unprotected; CodeQL runs 2 separate unprotected analyses
@@ -91,6 +92,7 @@ How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON 
 - **Embedding/reranker cache miss** → runtime commands are offline-enforced and do not download implicitly. Tiered doctor and preview-first `first-run` are v3.12 previews. Run `enquire-mcp first-run --tier hybrid --vault PATH` from the installed executable, review the non-destructive plan, then append `--apply`; it preserves that physical package/cache identity through setup, reranker acquisition and doctor. An equal npx package spec from another cwd can still resolve to a different installation/cache. Until repaired, `obsidian_search` preserves its available-signal/RRF fallback.
 - **Empty results on a fresh vault** → no ML index yet; TF-IDF + substring search still work. Run the complete hybrid preflight above. Doctor READY verifies structural/runtime prerequisites, not index freshness or complete corpus coverage.
 - **Very large vault** → whole-vault scanners apply a built-in safety cap; partial results are flagged in the response, never returned silently.
+- **Stranded watcher-startup interlock** → stop every enquire process for that vault, run the strict `enquire-mcp clear-embeddings --vault <vault>` recovery, rebuild embeddings with the same model/quantization/late-chunk/privacy/PDF settings, then restart. Recovery refuses unsafe or foreign interlock shapes rather than deleting around them; inspect ownership manually before changing such a shape.
 - **Remote (`serve-http`)** → requires a bearer token of at least 16 chars; HTTP 401 means the token is missing or too short (`enquire-mcp gen-token` mints a valid one).
 
 ## Optional

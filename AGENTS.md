@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1748+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1773+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. Local checks above must pass before pushing.
+`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 

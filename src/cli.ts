@@ -66,6 +66,7 @@ import {
 import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
 import { searchHybrid } from "./tools/index.js";
 import { Vault } from "./vault.js";
+import { assertWatcherActivationGuardClear } from "./watcher-activation-guard.js";
 
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
 interface HttpServeCli extends ServeOptions {
@@ -98,6 +99,36 @@ async function resolveConfiguredVault(
     throw new Error("Vault paths containing control characters cannot be rendered safely");
   }
   return vault;
+}
+
+async function assertEmbeddingWriterGuardClear(
+  embedFile: string,
+  commandName: "build-embeddings" | "setup",
+  customEmbedFile = false
+): Promise<void> {
+  try {
+    await assertWatcherActivationGuardClear(embedFile);
+  } catch (error) {
+    const customRecoveryGuidance = customEmbedFile
+      ? " Because this command selected a custom embedding index, repeat the exact same `--embed-file` option " +
+        "on both `clear-embeddings` and the rebuild command; the absolute path is intentionally omitted here."
+      : "";
+    const rebuildGuidance =
+      commandName === "setup"
+        ? "If FTS setup is needed, rerun setup with `--skip-embeddings`; rebuild embeddings separately with " +
+          "`enquire-mcp build-embeddings --vault <vault>` using the same model, quantization, late-chunk, " +
+          "privacy and PDF settings."
+        : "Then rerun this build-embeddings command with the same model, quantization, late-chunk, privacy " +
+          "and PDF settings.";
+    throw new Error(
+      `enquire ${commandName}: an incomplete watcher startup quarantined this embedding index. ` +
+        "Stop every enquire-mcp process using the vault, then run the strict " +
+        "`enquire-mcp clear-embeddings --vault <vault>` recovery. It refuses unsafe or foreign interlock " +
+        "shapes before deleting indexes; if it refuses, inspect the guard without following it and remove it " +
+        `only after a manual ownership audit.${customRecoveryGuidance} ${rebuildGuidance}`,
+      { cause: error }
+    );
+  }
 }
 
 /**
@@ -484,6 +515,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
           return;
         }
+        if (result.signal_errors?.embeddings) {
+          process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
+        }
         const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
         process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
         for (const m of result.matches) {
@@ -783,6 +817,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
+        await assertEmbeddingWriterGuardClear(embedFile, "build-embeddings", opts.embedFile !== undefined);
         // v3.6.4 K-1 closure: peek existing embed-db before constructing
         // EmbedDb. If user didn't explicitly pass --embedding-model /
         // --quantize-embeddings, honor the existing config to avoid silent
@@ -844,7 +879,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("clear-embeddings")
     .description(
-      "Delete the embedding index files (.embed.db + WAL/SHM sidecar + HNSW .hnsw.bin/.hnsw.meta.json sidecars) for a given vault"
+      "Delete the embedding index files (.embed.db + WAL/SHM, HNSW sidecars, and any stranded watcher-startup interlock) for a given vault"
     )
     .requiredOption("--vault <path>", "Vault whose embedding index to delete")
     .option("--embed-file <path>", EMBED_FILE_HELP)
@@ -871,7 +906,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("doctor")
     .description(
-      "Run a source-state-preserving health check for a capability tier: basic (live scan), hybrid (FTS5 + embeddings + reranker + HNSW), or hybrid-live (hybrid + PDFs/watch). SQLite indexes are inspected from in-memory snapshots: doctor does not write their contents/schema or create sidecars (ordinary reads may update OS access-time metadata). Structural/runtime READY does not certify index freshness or complete PDF coverage."
+      "Run a source-state-preserving health check for a capability tier: basic (live scan), hybrid (FTS5 + embeddings + reranker + HNSW), or hybrid-live (hybrid + PDFs/watch). Every tier verifies that no incomplete watcher startup interlock blocks serving. SQLite indexes are inspected from in-memory snapshots: doctor does not write their contents/schema or create sidecars (ordinary reads may update OS access-time metadata). Structural/runtime READY does not certify index freshness or complete PDF coverage."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--tier <tier>", CONFIG_TIER_HELP)
@@ -1228,6 +1263,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       ) => {
         const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
+        const embedFile = embedDbPath(v.root);
+        await assertEmbeddingWriterGuardClear(embedFile, "setup");
         process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
 
         // Step 1: FTS5 index.
@@ -1293,7 +1330,6 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         // `--embedding-model bge` must NOT silently rebuild as
         // multilingual. Honor existing model unless user passed
         // --embedding-model explicitly on the CLI.
-        const embedFile = embedDbPath(v.root);
         const explicitEmbedModel = command.getOptionValueSource("embeddingModel") === "cli";
         const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
         const peekedEmbed = await peekEmbedDbMeta(embedFile);

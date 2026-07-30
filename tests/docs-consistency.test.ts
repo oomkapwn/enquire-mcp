@@ -1800,10 +1800,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "personal author attestation",
       "Local-marketplace copy after the MCPB gate"
     ]) {
-      expect(
-        launchKit,
-        `public launch kit leaked private operation: ${privateOperation}`
-      ).not.toContain(privateOperation);
+      expect(launchKit, `public launch kit leaked private operation: ${privateOperation}`).not.toContain(
+        privateOperation
+      );
     }
 
     const findLaunchOverclaim = (text: string): string | null => {
@@ -1822,14 +1821,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       return null;
     };
     expect(findLaunchOverclaim(launchKit)).toBeNull();
-    expect(findLaunchOverclaim("Your data never leaves your machine.")).toBe(
-      "Your data never leaves your machine"
-    );
+    expect(findLaunchOverclaim("Your data never leaves your machine.")).toBe("Your data never leaves your machine");
     expect(findLaunchOverclaim("100% private.")).toBe("100% private");
     expect(findLaunchOverclaim("Full Dataview compatibility.")).toBe("Full Dataview compatibility");
-    expect(findLaunchOverclaim("Officially endorsed by Obsidian.")).toBe(
-      "Officially endorsed by Obsidian"
-    );
+    expect(findLaunchOverclaim("Officially endorsed by Obsidian.")).toBe("Officially endorsed by Obsidian");
     expect(findLaunchOverclaim("One-click install is available now.")).toBe("One-click install is available");
     expect(findLaunchOverclaim("Works with every AI agent.")).toBe("Works with every AI agent");
 

@@ -300,14 +300,6 @@ jobs:
       # binary asset cannot silently lag its reviewable source.
       - id: preview_render
         run: npm run render:preview
-      # Temporary rc.25 remote-only regeneration bridge. Remove after the
-      # rendered PNG is downloaded from this exact PR run and committed.
-      - name: Upload regenerated rc.25 social preview
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: social-preview-rc25
-          path: assets/social-preview.png
-          if-no-files-found: error
       - name: Require committed social-preview bytes
         id: preview_diff
         run: git diff --exit-code -- assets/social-preview.png

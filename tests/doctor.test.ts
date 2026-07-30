@@ -284,7 +284,10 @@ describe("runDoctor — tiers and readiness", () => {
           tier,
           dependencyProbe: async () => false
         });
-        expect(result.checks.find((check) => check.id === "watcher:activation-guard"), tier).toMatchObject({
+        expect(
+          result.checks.find((check) => check.id === "watcher:activation-guard"),
+          tier
+        ).toMatchObject({
           status: "error",
           required: true
         });
@@ -316,9 +319,7 @@ describe("runDoctor — tiers and readiness", () => {
         tier: "hybrid",
         dependencyProbe: async () => false
       });
-      const directoryHint = directoryResult.checks.find(
-        (check) => check.id === "watcher:activation-guard"
-      )?.hint;
+      const directoryHint = directoryResult.checks.find((check) => check.id === "watcher:activation-guard")?.hint;
       expect(directoryHint).toMatch(/strict recovery preflights/i);
       expect(directoryHint).toMatch(/manual ownership audit/i);
       expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
@@ -354,13 +355,14 @@ describe("runDoctor — tiers and readiness", () => {
           embedFile: customEmbedFile,
           dependencyProbe: async () => false
         });
-        expect(result.checks.find((check) => check.id === "watcher:activation-guard"), tier).toMatchObject({
+        expect(
+          result.checks.find((check) => check.id === "watcher:activation-guard"),
+          tier
+        ).toMatchObject({
           required: true,
           status: "ok"
         });
-        const customCheck = result.checks.find(
-          (check) => check.id === "watcher:selected-activation-guard"
-        );
+        const customCheck = result.checks.find((check) => check.id === "watcher:selected-activation-guard");
         expect(customCheck, tier).toMatchObject({
           required: tier !== "basic",
           status: tier === "basic" ? "warn" : "error"

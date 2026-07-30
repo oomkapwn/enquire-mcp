@@ -691,9 +691,7 @@ export class VaultWatcher {
    *
    * @param identities - Exact persisted keys and source kinds.
    */
-  private async applyStoredIdentityPurges(
-    identities: ReadonlyArray<readonly [string, "md" | "pdf"]>
-  ): Promise<void> {
+  private async applyStoredIdentityPurges(identities: ReadonlyArray<readonly [string, "md" | "pdf"]>): Promise<void> {
     for (let offset = 0; offset < identities.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
       if (this.activationOverflowed) return;
       const chunk = identities.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);
@@ -725,9 +723,7 @@ export class VaultWatcher {
    * @returns Exact stale identities to purge and, when present, the canonical
    *   on-disk identity to upsert.
    */
-  private async activationPlan(
-    absPath: string
-  ): Promise<{ purge: ReadonlyArray<string>; upsert: string | null }> {
+  private async activationPlan(absPath: string): Promise<{ purge: ReadonlyArray<string>; upsert: string | null }> {
     const nativeRelPath = path.relative(this.vault.root, absPath);
     if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) {
       return { purge: [], upsert: null };
@@ -785,10 +781,7 @@ export class VaultWatcher {
    * @param paths - Exact identities to reconcile.
    * @param kind - Purge (`unlink`) or final-state upsert (`change`).
    */
-  private async applyActivationPaths(
-    paths: ReadonlyArray<string>,
-    kind: "change" | "unlink"
-  ): Promise<void> {
+  private async applyActivationPaths(paths: ReadonlyArray<string>, kind: "change" | "unlink"): Promise<void> {
     for (let offset = 0; offset < paths.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
       if (this.activationOverflowed) return;
       const chunk = paths.slice(offset, offset + ACTIVATION_REPLAY_CONCURRENCY);

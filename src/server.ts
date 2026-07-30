@@ -22,19 +22,19 @@ import {
   registerWriteTools
 } from "./tool-registry.js";
 import { Vault } from "./vault.js";
+import { VaultWatcher } from "./watcher.js";
 import {
   armWatcherActivationGuard,
   assertWatcherActivationGuardClear,
   releaseWatcherActivationGuard,
   type WatcherActivationGuard
 } from "./watcher-activation-guard.js";
-import { VaultWatcher } from "./watcher.js";
 import type { WriteRequestTracker } from "./write-lifecycle.js";
 
+export { syncFtsIndex } from "./fts5.js";
 // v3.12.0-rc.20 — bulk embedding sync moved to a testable leaf module.
 // Re-export the historical server.js paths so CLI/scripts keep working.
 export { syncEmbedDb, syncPdfEmbedDb };
-export { syncFtsIndex } from "./fts5.js";
 
 /**
  * Configuration for {@link startServer} / {@link prepareServerDeps}.

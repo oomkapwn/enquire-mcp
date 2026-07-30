@@ -77,9 +77,7 @@ function capturedPathCount(watcher: VaultWatcher): number {
   ).activationPaths.size;
 }
 
-function capturedStoredIdentities(
-  watcher: VaultWatcher
-): Array<readonly [string, "md" | "pdf"]> {
+function capturedStoredIdentities(watcher: VaultWatcher): Array<readonly [string, "md" | "pdf"]> {
   return [
     ...(
       watcher as unknown as {
@@ -106,11 +104,7 @@ function markerPathsInEmbedDb(embedDb: EmbedDb, marker: string): string[] {
 
 function markerPathsInHnsw(rowsByLabel: ReadonlyMap<number, HnswRowMeta>, marker: string): string[] {
   return [
-    ...new Set(
-      [...rowsByLabel.values()]
-        .filter((row) => row.text_preview.includes(marker))
-        .map((row) => row.rel_path)
-    )
+    ...new Set([...rowsByLabel.values()].filter((row) => row.text_preview.includes(marker)).map((row) => row.rel_path))
   ].sort();
 }
 
@@ -326,17 +320,10 @@ describe("VaultWatcher startup activation barrier", () => {
     );
     expect(() => fixture.watcher.setOcrPdfs(false)).toThrow(/deferred attachments are closed/);
 
-    const compatible = await createFixture(
-      {},
-      { attachSinks: false, deferActivation: false }
-    );
+    const compatible = await createFixture({}, { attachSinks: false, deferActivation: false });
     await compatible.watcher.activate();
-    expect(() =>
-      compatible.watcher.attachEmbed(compatible.embedDb, deterministicEmbedder, 0)
-    ).not.toThrow();
-    expect(() =>
-      compatible.watcher.attachHnsw(compatible.hnswIndex, compatible.hnswRowsByLabel)
-    ).not.toThrow();
+    expect(() => compatible.watcher.attachEmbed(compatible.embedDb, deterministicEmbedder, 0)).not.toThrow();
+    expect(() => compatible.watcher.attachHnsw(compatible.hnswIndex, compatible.hnswRowsByLabel)).not.toThrow();
     expect(() => compatible.watcher.setOcrPdfs(false)).not.toThrow();
   });
 
@@ -367,19 +354,9 @@ describe("VaultWatcher startup activation barrier", () => {
     );
     if (!legacyStableEmbedding) throw new Error("legacy activation identity produced no chunks");
     fixture.fts.reindexFile(legacyStableIdentity, stableStat.mtimeMs, stableContent);
-    fixture.embedDb.upsertNote(
-      legacyStableIdentity,
-      stableStat.mtimeMs,
-      legacyStableEmbedding.rows
-    );
-    expect(markerPathsInFts(fixture.fts, "driftstablemarker")).toEqual([
-      legacyStableIdentity,
-      "Stable.md"
-    ]);
-    expect(markerPathsInEmbedDb(fixture.embedDb, "driftstablemarker")).toEqual([
-      legacyStableIdentity,
-      "Stable.md"
-    ]);
+    fixture.embedDb.upsertNote(legacyStableIdentity, stableStat.mtimeMs, legacyStableEmbedding.rows);
+    expect(markerPathsInFts(fixture.fts, "driftstablemarker")).toEqual([legacyStableIdentity, "Stable.md"]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "driftstablemarker")).toEqual([legacyStableIdentity, "Stable.md"]);
 
     fixture.watcher.attachEmbed(fixture.embedDb, deterministicEmbedder, 0);
     const deletedPath = path.join(fixture.vault.root, "DeletedWithoutEvent.md");
@@ -389,22 +366,14 @@ describe("VaultWatcher startup activation barrier", () => {
     // Deliberately do not emit any watcher event. This models ignoreInitial
     // swallowing source changes made while chokidar performs its first scan.
     await fs.unlink(deletedPath);
-    await fs.writeFile(
-      mutatedPath,
-      "# Mutated without event\n\ndriftmutatedfinalmarker is the final source state.\n"
-    );
+    await fs.writeFile(mutatedPath, "# Mutated without event\n\ndriftmutatedfinalmarker is the final source state.\n");
     const forcedMtime = new Date(Date.now() + 60_000);
     await fs.utimes(mutatedPath, forcedMtime, forcedMtime);
-    await fs.writeFile(
-      addedPath,
-      "# Added without event\n\ndriftaddedfinalmarker is the final source state.\n"
-    );
+    await fs.writeFile(addedPath, "# Added without event\n\ndriftaddedfinalmarker is the final source state.\n");
 
     await fixture.watcher.captureAttachedSinkDrift();
     expect(capturedPathCount(fixture.watcher)).toBe(2);
-    expect(
-      capturedStoredIdentities(fixture.watcher).sort(([left], [right]) => left.localeCompare(right))
-    ).toEqual(
+    expect(capturedStoredIdentities(fixture.watcher).sort(([left], [right]) => left.localeCompare(right))).toEqual(
       [
         ["DeletedWithoutEvent.md", "md"],
         [legacyStableIdentity, "md"]
@@ -435,9 +404,7 @@ describe("VaultWatcher startup activation barrier", () => {
       expect(markerPathsInEmbedDb(fixture.embedDb, marker)).toEqual([relPath]);
       expect(markerPathsInHnsw(fixture.hnswRowsByLabel, marker)).toEqual([relPath]);
     }
-    expect(fixture.embedDb.getSourceStates("md").map((state) => state.rel_path)).not.toContain(
-      legacyStableIdentity
-    );
+    expect(fixture.embedDb.getSourceStates("md").map((state) => state.rel_path)).not.toContain(legacyStableIdentity);
     expectHnswMatchesEmbedDb(fixture);
   });
 
@@ -477,12 +444,7 @@ describe("VaultWatcher startup activation barrier", () => {
     await fixture.watcher.activate();
     await expect(fs.stat(explicitUnlinkPath)).resolves.toBeDefined();
 
-    for (const marker of [
-      "deletedoldmarker",
-      "explicitunlinkoldmarker",
-      "intermediatemarker",
-      "recreatedoldmarker"
-    ]) {
+    for (const marker of ["deletedoldmarker", "explicitunlinkoldmarker", "intermediatemarker", "recreatedoldmarker"]) {
       expect(markerPathsInFts(fixture.fts, marker)).toEqual([]);
       expect(markerPathsInEmbedDb(fixture.embedDb, marker)).toEqual([]);
       expect(markerPathsInHnsw(fixture.hnswRowsByLabel, marker)).toEqual([]);
@@ -492,9 +454,7 @@ describe("VaultWatcher startup activation barrier", () => {
     expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "recreatedfinalmarker")).toEqual(["Recreated.md"]);
     expect(markerPathsInFts(fixture.fts, "explicitunlinkfinalmarker")).toEqual(["ExplicitUnlink.md"]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "explicitunlinkfinalmarker")).toEqual(["ExplicitUnlink.md"]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "explicitunlinkfinalmarker")).toEqual([
-      "ExplicitUnlink.md"
-    ]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "explicitunlinkfinalmarker")).toEqual(["ExplicitUnlink.md"]);
     expectHnswMatchesEmbedDb(fixture);
   });
 
@@ -524,10 +484,7 @@ describe("VaultWatcher startup activation barrier", () => {
     const relPaths = Array.from({ length: 9 }, (_, index) => `Concurrent-${index}.md`);
     const fixture = await createFixture(
       Object.fromEntries(
-        relPaths.map((relPath) => [
-          relPath,
-          `# Concurrent\n\nconcurrentoldmarker ${relPath} must be replaced.\n`
-        ])
+        relPaths.map((relPath) => [relPath, `# Concurrent\n\nconcurrentoldmarker ${relPath} must be replaced.\n`])
       ),
       { embedder: boundedEmbedder }
     );

@@ -23,10 +23,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { optionalDepDetail } from "./optional-dep.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
-import {
-  clearWatcherActivationGuard,
-  preflightWatcherActivationGuardRecovery
-} from "./watcher-activation-guard.js";
+import { clearWatcherActivationGuard, preflightWatcherActivationGuardRecovery } from "./watcher-activation-guard.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
 function errnoCode(err: unknown): string | undefined {
@@ -377,13 +374,7 @@ export class EmbedDb {
     // and the writer can never drift. The index writes `<base>.bin` + the
     // metadata writes `<base>.meta.json` (sidecars carry raw text_preview).
     const hnswBase = hnswPersistBase(this.file);
-    const targets = [
-      this.file,
-      `${this.file}-wal`,
-      `${this.file}-shm`,
-      `${hnswBase}.bin`,
-      `${hnswBase}.meta.json`
-    ];
+    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
     for (const p of targets) {
       try {
         await fs.unlink(p);

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
 
 const ACTIVATION_GUARD_VERSION = 1;
@@ -253,9 +253,7 @@ export async function clearWatcherActivationGuard(embedDbFile: string): Promise<
   return true;
 }
 
-async function inspectRecoverableActivationGuard(
-  embedDbFile: string
-): Promise<RecoverableActivationGuard | null> {
+async function inspectRecoverableActivationGuard(embedDbFile: string): Promise<RecoverableActivationGuard | null> {
   const guardPath = watcherActivationGuardPath(embedDbFile);
   let guardStat: import("node:fs").Stats;
   try {
@@ -327,13 +325,7 @@ async function assertExactGuardEntry(guardPath: string, expectedName: string): P
     });
   }
   const entry = entries[0];
-  if (
-    entries.length !== 1 ||
-    !entry ||
-    entry.name !== expectedName ||
-    !entry.isFile() ||
-    entry.isSymbolicLink()
-  ) {
+  if (entries.length !== 1 || !entry || entry.name !== expectedName || !entry.isFile() || entry.isSymbolicLink()) {
     throw new Error("Refusing to release watcher activation guard: unexpected guard directory entries");
   }
 }
@@ -433,15 +425,13 @@ async function syncParentAfterGuardRemoval(guardPath: string): Promise<void> {
       await fs.lstat(guardPath);
     } catch (verifyError) {
       if (errnoCode(verifyError) === "ENOENT") return;
-      throw new Error(
-        "Unable to verify watcher activation guard absence after parent-directory sync failure",
-        { cause: syncError }
-      );
+      throw new Error("Unable to verify watcher activation guard absence after parent-directory sync failure", {
+        cause: syncError
+      });
     }
-    throw new Error(
-      "Watcher activation guard still exists after its parent directory failed to sync",
-      { cause: syncError }
-    );
+    throw new Error("Watcher activation guard still exists after its parent directory failed to sync", {
+      cause: syncError
+    });
   }
 }
 

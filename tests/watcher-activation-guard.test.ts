@@ -162,9 +162,7 @@ describe("watcher activation guard", () => {
     const exactChild = path.join(guardPath, `${exactGuard.token}.active`);
     const foreignEntry = path.join(guardPath, "foreign-entry");
     await fs.writeFile(foreignEntry, "must survive");
-    await expect(releaseWatcherActivationGuard(exactGuard)).rejects.toThrow(
-      /unexpected guard directory entries/i
-    );
+    await expect(releaseWatcherActivationGuard(exactGuard)).rejects.toThrow(/unexpected guard directory entries/i);
     await expect(fs.lstat(exactChild)).resolves.toBeDefined();
     await expect(fs.readFile(foreignEntry, "utf8")).resolves.toBe("must survive");
     await fs.unlink(foreignEntry);
@@ -198,15 +196,10 @@ describe("watcher activation guard", () => {
       await fs.writeFile(path.join(symlinkTarget, "sentinel.txt"), "must survive");
       await fs.symlink(symlinkTarget, childPath, "junction");
     } else {
-      await fs.writeFile(
-        symlinkTarget,
-        `${JSON.stringify({ version: 1, token })}\n`
-      );
+      await fs.writeFile(symlinkTarget, `${JSON.stringify({ version: 1, token })}\n`);
       await fs.symlink(symlinkTarget, childPath, "file");
     }
-    await expect(releaseWatcherActivationGuard(guard)).rejects.toThrow(
-      /unexpected guard directory entries/i
-    );
+    await expect(releaseWatcherActivationGuard(guard)).rejects.toThrow(/unexpected guard directory entries/i);
     if (process.platform === "win32") {
       await expect(fs.readFile(path.join(symlinkTarget, "sentinel.txt"), "utf8")).resolves.toBe("must survive");
     } else {

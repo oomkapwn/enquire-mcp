@@ -820,7 +820,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
   }
 
   it("flushHnswToDisk skips a clean index and every generation with an uncertain live graph", async () => {
-    const { w, embedDb, index, persistFile, fts } = await setup(true);
+    const { w, embedDb, index, persistFile, v, fts } = await setup(true);
     try {
       const flushed = await w.flushHnswToDisk();
       expect(flushed).toBe(false);
@@ -892,7 +892,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         return { ...result, newIds: result.newIds.slice(1) };
       };
       try {
-        await watcherInternals.handle(path.join(root, "a.md"), "change");
+        await watcherInternals.handle(v.resolveInside("a.md"), "change");
       } finally {
         embedDb.upsertNote = originalUpsertNote;
       }

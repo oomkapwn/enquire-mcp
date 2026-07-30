@@ -1047,8 +1047,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // whenever the resolved override differs from the default.
   if (vaultExists) {
     const defaultEmbedFile = defaultEmbedDbFile(vault.root);
-    const selectedEmbedFile =
-      opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
+    const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
     const appendWatcherActivationGuardCheck = async ({
       embedFile,
       id,
@@ -1070,8 +1069,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         ...(embedFile === defaultEmbedFile ? [] : ["--embed-file", embedFile])
       ];
       const recoveryCommand =
-        `${repairPrefix} ` +
-        recoveryArgs.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ");
+        `${repairPrefix} ` + recoveryArgs.map((arg) => shellQuote(arg, opts.repairCommandPlatform)).join(" ");
       const manualAudit =
         `The strict recovery preflights the interlock before deleting indexes and refuses unsafe or foreign ` +
         `shapes. If it refuses, inspect ${shellQuote(guardPath, opts.repairCommandPlatform)} without following ` +
@@ -1290,8 +1288,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // 4. Embedding index — validate schema + vault/model/quantization metadata
   // from the same immutable snapshot mechanism.
   if (vaultExists) {
-    const embedFile =
-      opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedDbFile(vault.root);
+    const embedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedDbFile(vault.root);
     if (hasSqlite) {
       const inspection = await inspectEmbedSnapshot(embedFile);
       if (inspection.ok) {

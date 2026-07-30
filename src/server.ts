@@ -126,7 +126,8 @@ export interface ServeOptions {
    *  When > 0, registers `obsidian_mark_useful` and blends each note's recorded
    *  usefulness (`useful/(useful+notUseful+1)`) into the `obsidian_search` order:
    *  `(1-w)*relevanceRank + w*feedbackScore`. State persists in a per-vault cache
-   *  sidecar (`<hash>.feedback.json`; paths + counts only). */
+   *  sidecar (`<hash>.feedback.json`; canonical absolute vault root + relative
+   *  path keys + counts + ISO timestamps; no note content/query text). */
   feedbackWeight?: string;
   /** v2.15.0 — late-chunking context windowing for embeddings (default 0 chars). */
   lateChunkContext?: string;

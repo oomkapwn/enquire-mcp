@@ -5,9 +5,10 @@
 // mirroring the v3.10.0-rc.5 recency boost).
 //
 // PRIVACY (data-at-rest): state lives in a single per-vault JSON sidecar in the
-// cache dir (`<hash>.feedback.json`) holding ONLY relative note paths + integer
-// counts + an ISO timestamp — NO note content, NO query text. It is therefore
-// low-sensitivity, and it matches the `ENQUIRE_CACHE_ARTIFACT` pattern so a
+// cache dir (`<hash>.feedback.json`) holding the canonical absolute vault root
+// plus relative note-path keys, integer counts, and an ISO timestamp per entry
+// — NO note content, snippets, or query text. It is lower-sensitivity than the
+// content indexes, and it matches the `ENQUIRE_CACHE_ARTIFACT` pattern so a
 // cross-vault `prune` erases it (right-to-erasure on vault decommission) exactly
 // like the parse cache / FTS index / embed-db sidecars. The erasure-invariant
 // (`tests/erasure-invariant.test.ts`) pins that prune coverage. It is preserved

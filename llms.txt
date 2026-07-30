@@ -6,7 +6,7 @@
 
 - [One-command install](https://github.com/oomkapwn/enquire-mcp#-quick-start): `npm install -g @oomkapwn/enquire-mcp && enquire-mcp serve --vault <path>`
 - [Preview-first activation](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md): `enquire-mcp first-run --tier hybrid --client <client> --vault <path>` prints the config and exact plan without index/model writes; append `--apply` only after reviewing it
-- [MCP client config templates and recipes](https://github.com/oomkapwn/enquire-mcp/tree/main/examples): prefer `enquire-mcp configure`; manual templates require every executable and vault placeholder to be replaced
+- [MCP client config templates and agent lifecycle recipes](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/README.md#agent-lifecycle-recipes): prefer `enquire-mcp configure`; client-neutral playbooks cover recall, evidence, freshness, synthesis, and safe write escalation
 - [Recommended hybrid setup](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/claude-desktop-hybrid.json): full BM25 + TF-IDF + ML embeddings + BGE reranker + HNSW
 
 ## Documentation
@@ -26,6 +26,7 @@
 - [Claude Desktop (full hybrid stack)](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/claude-desktop-hybrid.json)
 - [Cursor MCP stdio config](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/cursor-mcp.json)
 - [ChatGPT custom GPT (remote MCP over HTTP with bearer auth + tunnel)](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/chatgpt-actions.md)
+- [Agent lifecycle recipes](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/README.md#agent-lifecycle-recipes): prompt-host and direct-tool paths for recall, evidence follow-up, stale-fact revalidation, weekly synthesis, research capture, and safe write escalation
 - [Sample query set for the eval harness](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/queries.jsonl)
 
 ## What enquire-mcp does
@@ -49,6 +50,8 @@
 - **v3.12.0-rc.25–rc.26:** watched startup freezes embedding capability for one server generation, audits/replays final state after late sinks attach, and uses a process-restart interlock after interrupted guarded startup. Each ordinary live Markdown/PDF attempt then stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once and commits without yielding. Fatal staging/embedding failure keeps the prior generation; optional OCR failure instead publishes the coherent PDF.js/empty generation and clears stale semantic rows. Sink-mutation uncertainty quarantines semantic routing until restart, while an HNSW-only failure falls back to EmbedDb and disables sidecar persistence.
 - **v3.12.0-rc.27:** an admitted regular-file event discovers and independently refreshes every admitted current in-vault hardlink path within the configured inventory bound across FTS5, EmbedDb and live HNSW metadata. Exact case/Unicode path identities remain separate; missing origins always inventory; unavailable identity uses one serialized, 50,000-path-count-capped lane. Above the cap, live events reconcile only the exact/previously-known group; writes visible only through unadmitted aliases and universal alias completeness are not claimed.
 - **v3.12.0-rc.28:** Streamable HTTP treats a present `Origin` as an admission boundary. Native MCP clients may omit it; every present value must exactly match a configured HTTP(S) `--cors-origin` or receives `403` before OPTIONS, health, auth, body, rate, session, or MCP work. Wildcard, opaque, malformed, path/query/fragment-bearing configuration fails before vault/index preparation.
+- **v3.12.0-rc.29:** public acquisition surfaces lead with freshness-aware cited recall, read-only defaults, precise Markdown/PDF versus Canvas/Dataview/Base scope, and the connected-client privacy boundary; the product site, JSON-LD, GitHub discovery metadata, and remote-rendered social preview share that contract.
+- **v3.12.0-rc.30:** six client-neutral lifecycle recipes cover recall, evidence verification, stale-fact revalidation, weekly synthesis, research capture, and safe writes. Prompt workflows no longer use universal raw-score confidence gates or false idempotence, and `extract_todos` has a default-surface fallback.
 - **v3.10+ stable:** forgetting-aware freshness — every search hit carries `age_days` + a `stale` flag from the note's live mtime; the `obsidian_stale_notes` tool surfaces aged notes; opt-in `--recency-weight` re-ranking (default off) prefers fresher knowledge. Plus frontmatter-aware `obsidian_search` (`filter_frontmatter` scopes hybrid search by YAML)
 
 ## What enquire-mcp is NOT
@@ -87,6 +90,7 @@ Only the umbrella `obsidian_search` path degrades by available signal: it can co
 How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON schema comes from `tools/list`):
 
 - **Handshake contract.** `initialize.instructions` gives each connection a deterministic, configuration-aware recall, evidence, freshness, write, feedback, and untrusted-content contract. It recommends only tools that survive live feature gates and exact-name filters; `tools/list` remains authoritative.
+- **Reusable workflows.** Follow the [agent lifecycle recipes](https://github.com/oomkapwn/enquire-mcp/blob/main/examples/README.md#agent-lifecycle-recipes) for bounded recall, source verification, stale-fact revalidation, synthesis, and exact-confirmation write escalation.
 - **Minimum loop.** `obsidian_search "<query>"` (umbrella; auto-fuses BM25 + TF-IDF + embeddings and reranks) → read top hits with `obsidian_read_note` (by path or title; `format: "map"` for a headings-only outline) → **cite the source note path on every fact** (and `[page: N]` for PDFs). If nothing relevant returns, say so — don't guess.
 - **When to prefer enquire.** Use it for *conceptual / cross-language / "what did I say about X"* recall. Use plain `grep` / `ripgrep` for exact literal strings — enquire is meaning-first, not a substring matcher.
 - **Observability.** Every hit carries `per_signal: { bm25, tfidf, embeddings }` (why it ranked) and, on the v3.10 line, `age_days` + a `stale` flag (freshness from live mtime). Scores sort *within one query* — don't compare across queries or reranker-on vs reranker-off runs.

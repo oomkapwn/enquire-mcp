@@ -1162,7 +1162,7 @@ export function registerReadTools(
     {
       title: "Pack vault context for an AI question (token-budgeted)",
       description:
-        "Given a question, retrieve the top relevant notes (via hybrid search), gather backlinks summaries + optionally recent dailies, deduplicate, pack to a token budget, return a single ready-to-paste markdown bundle. Optional `subqueries[]` adds bounded coverage-aware retrieval: reserve the best available unique candidate per atomic sub-question, then RRF-fill the remaining slots. Saves the agent ~5 separate tool calls; produces a coherent context blob you can paste into any AI chat.",
+        "Given a question, retrieve the top relevant Markdown notes (via hybrid search), gather backlink summaries + optionally recent dailies, deduplicate, pack to a token budget, and return a single ready-to-paste markdown bundle. Ranked PDF hits are never parsed as Markdown: their paths are returned in `skipped_pdf_candidates` for bounded follow-up with `obsidian_read_pdf`. Optional `subqueries[]` adds bounded coverage-aware retrieval: reserve the best available unique candidate per atomic sub-question, then RRF-fill the remaining slots. Saves the agent ~5 separate tool calls while keeping document-kind handling explicit.",
       annotations: { ...READ_ONLY, title: "Context pack" },
       inputSchema: {
         query: z.string().min(1).max(MAX_QUERY_LEN).describe("Topic or question to gather context for"),
@@ -1278,8 +1278,10 @@ export function registerReadTools(
  * `FeedbackStore`; the recorded usefulness then boosts those notes in subsequent
  * `obsidian_search` results (the "Karpathy loop"). NOT read-only — it mutates the
  * feedback store (a cache-dir sidecar, NOT the vault), so `enableWrite` does not
- * gate it; it never touches note files. The store holds only relative paths +
- * counts (no content), is erased by `prune`, and the boost is opt-in.
+ * gate it; it never touches note files. The store holds the canonical absolute
+ * vault root plus relative path keys, counts, and ISO timestamps (no note
+ * content, snippets, or query text), is erased by `prune`, and the boost is
+ * opt-in.
  */
 export function registerFeedbackTool(
   server: McpServer,
@@ -1298,7 +1300,7 @@ export function registerFeedbackTool(
     {
       title: "Mark recalled notes useful",
       description:
-        "Close the retrieval feedback loop: after using `obsidian_search` results, call this with the note path(s) that ACTUALLY helped answer the query (pass the `path` field of the useful hits). The recorded usefulness gently boosts those notes in future searches for this vault (active only when the server was started with `--feedback-weight`). Set `useful: false` to record a note that looked relevant but was NOT helpful (lowers its boost). Stores ONLY relative note paths + counts — never note content or your query — in a per-vault cache sidecar that `enquire-mcp prune` erases. Each call increments the tally (not idempotent).",
+        "Close the retrieval feedback loop: after using `obsidian_search` results, call this with the note path(s) that ACTUALLY helped answer the query (pass the `path` field of the useful hits). The recorded usefulness gently boosts those notes in future searches for this vault (active only when the server was started with `--feedback-weight`). Set `useful: false` to record a note that looked relevant but was NOT helpful (lowers its boost). The per-vault cache sidecar stores the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — never note content, snippets, or the query — and `enquire-mcp prune` erases it. Each call increments the tally (not idempotent).",
       annotations: { ...WRITE, title: "Mark useful" },
       inputSchema: {
         paths: z

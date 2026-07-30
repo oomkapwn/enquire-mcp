@@ -258,6 +258,199 @@ enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path> --apply
 ```
 
+<!-- launch-kit:start -->
+## Copy-ready launch and directory kit
+
+This is prepared acquisition copy, not evidence that a listing has already
+been submitted, accepted, or published. Keep `@oomkapwn/enquire-mcp@latest` in
+public install instructions; prereleases are for evaluation, not the default
+shown by directories. Do not add mutable tool, test, download, star, visitor,
+or directory-size counts to copied listings—link to the live proof surfaces
+instead.
+
+### Canonical directory card
+
+**Name**
+
+`enquire-mcp`
+
+**Listing title**
+
+`enquire-mcp — Fresh, cited AI memory from your vault`
+
+**Tagline**
+
+`Fresh, cited AI memory from your Obsidian vault`
+
+**Short description**
+
+> The #1 Obsidian MCP for freshness-aware, cited AI memory—local-first and
+> read-only by default.
+
+**Long description**
+
+> The #1 Obsidian MCP for freshness-aware, cited AI memory. enquire-mcp turns
+> the Markdown and documents already in your Obsidian vault into persistent,
+> queryable context for every MCP-compatible agent. Search results preserve
+> source paths plus `age_days` and `stale` freshness signals; PDF snippets keep
+> page markers so agents can cite evidence and re-check old facts. Optional
+> local hybrid retrieval combines BM25, TF-IDF, multilingual embeddings, RRF,
+> BGE reranking, and HNSW. Structured tools parse Canvas, run Dataview-style
+> LIST/TABLE queries, and execute supported Base filters. The server is
+> read-only by default; vault-note mutation tools remain hidden until
+> `--enable-write`.
+> enquire initiates no outbound HTTP during `serve`, while requested note or
+> PDF content is returned to the connected MCP client, which remains a
+> separate trust boundary. An optional usefulness-feedback sidecar is a
+> separate local mutation enabled only through `--feedback-weight`.
+
+**Identity and links**
+
+- Repository: https://github.com/oomkapwn/enquire-mcp
+- Package: https://www.npmjs.com/package/@oomkapwn/enquire-mcp
+- Product page: https://oomkapwn.github.io/enquire-mcp/
+- Documentation:
+  https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md
+- Privacy policy:
+  https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md#privacy-policy
+- Support:
+  https://github.com/oomkapwn/enquire-mcp/blob/main/SUPPORT.md
+- License: MIT
+- Transport: local stdio; optional user-hosted Streamable HTTP
+- Suggested tags: `obsidian`, `ai-memory`, `agent-memory`,
+  `freshness-aware-retrieval`, `cited-search`, `local-first`, `read-only`,
+  `hybrid-search`, `dataview`, `document-intelligence`
+
+### Install CTA
+
+For a guided, review-before-save client configuration:
+
+```bash
+npm install -g @oomkapwn/enquire-mcp@latest
+enquire-mcp configure --client claude-desktop --vault "/absolute/path/to/vault"
+```
+
+For a generic stdio MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "enquire": {
+      "command": "npx",
+      "args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/absolute/path/to/vault"]
+    }
+  }
+}
+```
+
+The vault path is required. The canonical shape keeps `serve` explicit for
+readability and portability, although the CLI defaults to `serve` when the
+subcommand is omitted; a configuration without `--vault` is not working.
+
+### Privacy boundary for listings
+
+> enquire runs on the machine where the user starts it. The project operates
+> no hosted vault backend, account system, telemetry, or analytics collector.
+> During `serve`, enquire initiates no outbound HTTP. It does return requested
+> note and PDF content to the connected MCP client; cloud clients, tunnels,
+> and proxies therefore remain separate trust boundaries. Installation and
+> explicit setup commands may download packages, model weights, or OCR assets.
+> Local cache, FTS5, embedding, and HNSW artifacts can contain vault-derived
+> content. Vault-note mutations are disabled by default and require an
+> explicit `--enable-write` opt-in. The optional usefulness-feedback sidecar
+> is instead enabled by `--feedback-weight`; it stores the canonical absolute
+> vault root plus relative path keys, counts, and ISO timestamps locally
+> without storing note bodies or query text and without modifying vault notes.
+
+### Proof links
+
+- [Dated TOP-1 capability matrix and claim boundaries](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/COMPARISON.md#the-top-1-capability-matrix)
+- [Runnable synthetic-vault result](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/COMPARISON.md#see-the-result-not-just-the-feature-list)
+- [Retrieval methodology and ablation](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/benchmarks.md)
+- [Security and privacy model](https://github.com/oomkapwn/enquire-mcp/blob/main/SECURITY.md)
+- [Release CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
+- [Signed npm package](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
+
+### Copy-ready community launch
+
+**Title**
+
+`enquire-mcp: fresh, cited AI memory from your vault (local-first MCP)`
+
+**Post**
+
+> Hi — I'm the maintainer of enquire-mcp, an independent MIT-licensed MCP
+> server and CLI for the notes and documents already in your vault. It
+> connects the same source of truth to Claude, Cursor, ChatGPT, Codex, and
+> other MCP-compatible agents instead of locking memory inside one chat
+> product.
+>
+> I built it around a simple problem: finding a relevant note is not enough.
+> An agent should also show where an answer came from and whether the source
+> may be stale. enquire keeps note paths, PDF page markers, and
+> `age_days`/`stale` metadata in retrieval results; optional recency weighting
+> helps agents re-check old facts.
+>
+> Why I position it as the #1 Obsidian MCP for AI memory:
+>
+> - freshness-aware, cited recall instead of an opaque memory summary;
+> - local hybrid retrieval across Markdown and PDFs/OCR;
+> - typed Canvas tools, Dataview-style LIST/TABLE queries, and supported Base
+>   filters;
+> - read-only defaults, explicit write enablement, and path-level privacy
+>   filters;
+> - one user-owned vault shared across MCP-compatible agents.
+>
+> The measurable parts of that claim are linked to a dated capability matrix,
+> a runnable synthetic-vault result, a disclosed retrieval ablation, release
+> CI, and signed npm packages:
+> https://github.com/oomkapwn/enquire-mcp/blob/main/docs/COMPARISON.md
+>
+> A minimal setup is:
+>
+> ```bash
+> npm install -g @oomkapwn/enquire-mcp@latest
+> enquire-mcp configure --client claude-desktop --vault "/absolute/path/to/vault"
+> ```
+>
+> Basic use starts read-only without a model or index build. Hybrid retrieval,
+> reranking, HNSW, PDFs, and OCR are optional layers.
+>
+> Privacy boundary: enquire initiates no outbound HTTP during `serve`, but the
+> note or PDF content requested by a connected cloud client is returned to
+> that client and is then governed by its privacy terms. Explicit hybrid/OCR
+> setup can download assets, and local indexes may contain vault-derived
+> content.
+>
+> enquire-mcp is independent software. It is not an Obsidian community plugin
+> and is not affiliated with Obsidian.
+>
+> I'd especially value feedback on three things: whether freshness metadata
+> changes how much you trust recalled facts, which client setup still feels
+> too manual, and which Dataview or Base query shapes matter most in real
+> vaults.
+>
+> Repository: https://github.com/oomkapwn/enquire-mcp
+>
+> Quickstart:
+> https://github.com/oomkapwn/enquire-mcp/blob/main/docs/QUICKSTART.md
+
+### Claim discipline for copied listings
+
+- Keep `#1` as the deliberate category position and link it to the dated proof
+  surface.
+- Do not turn local-first processing into a promise that all requested context
+  stays on-device; the connected client boundary must remain explicit.
+- Do not turn supported Dataview and Base subsets into complete compatibility.
+- Do not imply endorsement by Obsidian, Anthropic, or a marketplace.
+- Do not describe a one-click route as shipped before its bundle or listing is
+  accepted and independently verified.
+- Do not publish uncited cross-project quality, latency, adoption, star,
+  download, or directory-traffic claims.
+- Do not use “no Local REST API required” as the headline differentiator.
+- Say “every MCP-compatible agent” when making a compatibility statement.
+<!-- launch-kit:end -->
+
 ## Claim and evidence policy
 
 **“The #1 Obsidian MCP for AI memory” is the project’s deliberate category

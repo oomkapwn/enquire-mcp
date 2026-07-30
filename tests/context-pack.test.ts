@@ -85,7 +85,7 @@ describe("contextPack (v3.8.0-rc.8 T-1)", () => {
     await expect(contextPack(v, { query: "   " }, noIndex(root))).rejects.toThrow("query");
   });
 
-  it("returns empty included_notes when vault has no matching content", async () => {
+  it("returns empty included_notes for no match and never parses selected PDFs as Markdown", async () => {
     const v = new Vault(root);
     await v.ensureExists();
     // Write a note that won't match a very off-topic query.
@@ -97,6 +97,39 @@ describe("contextPack (v3.8.0-rc.8 T-1)", () => {
     expect(result.bundle).toContain("# Context for: quantum entanglement");
     expect(result.query).toBe("quantum entanglement");
     expect(Array.isArray(result.included_notes)).toBe(true);
+    expect(result.included_notes).toEqual([]);
+
+    // A PDF can be a first-class hybrid hit, but context_pack is a Markdown
+    // body packer. Pre-rc.30 it passed the .pdf path to Vault.readNote(); a
+    // binary payload can decode to text without throwing and leak garbage into
+    // the bundle. The kind branch must surface the path for read_pdf instead.
+    await fs.writeFile(path.join(root, "evidence.pdf"), "PDF_BINARY_SENTINEL evidence");
+    const pdfIndex = {
+      search: () => [
+        {
+          rel_path: "evidence.pdf",
+          chunk_index: 0,
+          line_start: 1,
+          line_end: 1,
+          snippet: "evidence",
+          score: 10,
+          kind: "pdf" as const
+        }
+      ]
+    };
+    const pdfResult = await contextPack(
+      v,
+      // The header alone exhausts this budget. PDF follow-up metadata must
+      // remain available because it does not consume Markdown bundle space.
+      { query: "evidence", budget_tokens: 1 },
+      {
+        ...noIndex(root),
+        ftsIndex: pdfIndex as unknown as NonNullable<Parameters<typeof contextPack>[2]["ftsIndex"]>
+      }
+    );
+    expect(pdfResult.included_notes).not.toContain("evidence.pdf");
+    expect(pdfResult.skipped_pdf_candidates).toEqual(["evidence.pdf"]);
+    expect(pdfResult.bundle).not.toContain("PDF_BINARY_SENTINEL");
   });
 });
 

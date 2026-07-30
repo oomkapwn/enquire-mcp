@@ -121,7 +121,7 @@ Drop into any MCP client:
 }
 ```
 
-📂 Config templates and recipes in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus a sample query set for the eval harness.
+📂 Config templates and [agent lifecycle recipes](./examples/README.md#agent-lifecycle-recipes) in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **ChatGPT custom GPT** (remote MCP over HTTP), plus client-neutral recall, evidence, freshness, synthesis, and safe-write playbooks.
 
 **Don't want to hand-assemble config?** Let the CLI print the exact snippet for *your* vault + client (non-destructive — it writes nothing). *Since v3.11.6:*
 
@@ -135,7 +135,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.29      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.30      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -44,10 +44,11 @@ export interface HnswRowMeta {
 /**
  * Mutable search-route health shared with the prepared server generation.
  *
- * A staged watcher preparation failure leaves the prior generation intact and
- * does not change these flags. A sink mutation failure is different: the
- * current route can no longer prove it matches the other enabled sinks, so the
- * affected optimization is quarantined until restart.
+ * A fatal staged watcher preparation failure leaves the prior generation
+ * intact and does not change these flags. Optional OCR failure retains its
+ * explicit fail-soft path. A sink mutation failure is different: the current
+ * route can no longer prove it matches the other enabled sinks, so the affected
+ * optimization is quarantined until restart.
  */
 export interface WatcherSearchHealth {
   semanticUsable: boolean;
@@ -1399,7 +1400,8 @@ export class VaultWatcher {
       return;
     }
 
-    // Add/change: derive every enabled sink from one physical generation.
+    // Add/change: derive every enabled sink from one captured path generation
+    // for an ordinary update.
     // All awaited preparation finishes before any store mutation; a final
     // lstat revalidation either authorizes one run-to-completion commit or
     // retries the latest disk generation once.

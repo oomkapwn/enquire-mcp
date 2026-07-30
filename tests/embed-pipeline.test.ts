@@ -82,6 +82,19 @@ describe("embedSingleNote", () => {
       expect(typeof row.lineStart).toBe("number");
       expect(typeof row.lineEnd).toBe("number");
     }
+
+    // rc.26 NEGATIVE control: a caller-supplied snapshot belongs to exactly
+    // the captured entry generation. Removing the guard would silently embed
+    // a stale snapshot under the newer mtime.
+    const preReadNote = await v.readNote(filePath, stat.mtimeMs);
+    await expect(
+      embedSingleNote(
+        v,
+        mockEmbedder,
+        { relPath: "note.md", absPath: filePath, mtimeMs: stat.mtimeMs + 1 },
+        { preReadNote }
+      )
+    ).rejects.toThrow(/pre-read note generation mismatch/);
   });
 
   it("returns null for an empty markdown note (no chunks)", async () => {

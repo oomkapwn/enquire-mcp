@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
-import { registerPrompts } from "../src/prompts.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
 
 // Static-analysis tests: every MCP surface declared in src/tool-manifest.ts
@@ -687,6 +686,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ]) {
       expect(lifecycle, `agent lifecycle recipes must mention ${prompt}`).toContain(`\`${prompt}\``);
     }
+    const normalizedLifecycle = lifecycle.replace(/\s+/g, " ");
     for (const contract of [
       "`tools/list` is authoritative",
       "indicate recency, not truth",
@@ -702,7 +702,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "Where a mutation tool supports `dry_run`",
       "Report exactly what the tool confirmed"
     ]) {
-      expect(lifecycle, `agent lifecycle contract missing: ${contract}`).toContain(contract);
+      expect(normalizedLifecycle, `agent lifecycle contract missing: ${contract}`).toContain(contract);
     }
 
     const findRecipeOverclaim = (text: string): string | null => {
@@ -721,21 +721,14 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       return null;
     };
     expect(findRecipeOverclaim(lifecycle)).toBeNull();
-    expect(findRecipeOverclaim("This automatically runs every session.")).toBe(
-      "automatically runs every session"
-    );
-    expect(findRecipeOverclaim("Your data never leaves your machine.")).toBe(
-      "Your data never leaves your machine"
-    );
+    expect(findRecipeOverclaim("This automatically runs every session.")).toBe("automatically runs every session");
+    expect(findRecipeOverclaim("Your data never leaves your machine.")).toBe("Your data never leaves your machine");
     expect(findRecipeOverclaim("RRF score is confidence.")).toBe("RRF score is confidence");
     expect(findRecipeOverclaim("Write tools are pre-approved.")).toBe("Write tools are pre-approved");
-    expect(findRecipeOverclaim("Every write tool supports dry-run.")).toBe(
-      "Every write tool supports dry-run"
-    );
-    expect(findRecipeOverclaim("Return a transactional proposal.")).toBe(
-      "transactional proposal"
-    );
+    expect(findRecipeOverclaim("Every write tool supports dry-run.")).toBe("Every write tool supports dry-run");
+    expect(findRecipeOverclaim("Return a transactional proposal.")).toBe("transactional proposal");
 
+    const { registerPrompts } = await import("../src/prompts.js");
     type RenderedPrompt = {
       messages: Array<{ content: { type: string; text?: string } }>;
     };
@@ -773,9 +766,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(renderedTaggedTodos).toContain("`limit=500`");
     expect(renderedTaggedTodos).toContain("tag scope hit its cap");
     expect(renderedTaggedTodos).toContain("with `folder=Projects` and `limit=200`");
-    expect(renderedTaggedTodos).toContain(
-      '`queries=["FIXME","QUESTION"]`, `folder=Projects`, and `limit=100`'
-    );
+    expect(renderedTaggedTodos).toContain('`queries=["FIXME","QUESTION"]`, `folder=Projects`, and `limit=100`');
 
     const prompts = await read("src/prompts.ts");
     const extractTodos = /=== extract_todos[\s\S]*?(?==== process_inbox)/.exec(prompts)?.[0] ?? "";
@@ -813,8 +804,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(findUniversalScoreGate("Use a score cutoff 0.05 for approval.")).not.toBeNull();
     expect(findUniversalScoreGate("The minimum score 0.05 permits append.")).not.toBeNull();
 
-    const compilePrompt =
-      /=== vault_wiki_compile[\s\S]*?(?==== vault_lint_extended)/.exec(prompts)?.[0] ?? "";
+    const compilePrompt = /=== vault_wiki_compile[\s\S]*?(?==== vault_lint_extended)/.exec(prompts)?.[0] ?? "";
     expect(compilePrompt, "vault_wiki_compile prompt boundary drifted").not.toBe("");
     const findFalseIdempotentClaim = (text: string): string | null => {
       const patterns = [
@@ -873,9 +863,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "Never retry blindly",
       "fresh user approval before every run"
     ]) {
-      expect(renderedCompile, `vault_wiki_compile missing runtime contract: ${contract}`).toContain(
-        contract
-      );
+      expect(renderedCompile, `vault_wiki_compile missing runtime contract: ${contract}`).toContain(contract);
     }
     expect(renderedCompile).not.toContain("Wiki//");
     expect(() =>
@@ -983,9 +971,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "do not call `obsidian_append_to_note` yet",
       "obsidian_create_note overwrite=false"
     ]) {
-      expect(renderedCapture, `vault_capture missing runtime contract: ${contract}`).toContain(
-        contract
-      );
+      expect(renderedCapture, `vault_capture missing runtime contract: ${contract}`).toContain(contract);
     }
 
     const renderedSynthesisPage = renderPrompt("vault_synthesis_page", {
@@ -1005,10 +991,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "obsidian_read_pdf",
       "PDF path plus the real returned page marker"
     ]) {
-      expect(
-        renderedSynthesisPage,
-        `vault_synthesis_page missing runtime contract: ${contract}`
-      ).toContain(contract);
+      expect(renderedSynthesisPage, `vault_synthesis_page missing runtime contract: ${contract}`).toContain(contract);
     }
 
     const renderedPersona = renderPrompt("vault_persona_search", {
@@ -1041,9 +1024,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "Never propose APPEND/overwrite against a PDF path",
       "scan receipt"
     ]) {
-      expect(renderedExtendedLint, `vault_lint_extended missing runtime contract: ${contract}`).toContain(
-        contract
-      );
+      expect(renderedExtendedLint, `vault_lint_extended missing runtime contract: ${contract}`).toContain(contract);
     }
 
     const pdfAwareSearchReaders = [
@@ -1065,11 +1046,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     for (const rendered of pdfAwareSearchReaders) {
       expect(findPdfBlindSearchReader(rendered)).toBeNull();
     }
-    expect(
-      findPdfBlindSearchReader(
-        "Call obsidian_search. For each hit, call obsidian_read_note on its path."
-      )
-    ).toBe("search-to-read workflow lacks a filtered-surface PDF branch");
+    expect(findPdfBlindSearchReader("Call obsidian_search. For each hit, call obsidian_read_note on its path.")).toBe(
+      "search-to-read workflow lacks a filtered-surface PDF branch"
+    );
     expect(
       findPdfBlindSearchReader(
         'Inspect tools/list. Call obsidian_search, then obsidian_read_note or obsidian_read_pdf for kind="pdf".'
@@ -1096,9 +1075,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(api).toContain("never parsed as Markdown");
     expect(api).toContain("preview it with `dry_run=true`");
     expect(api).toContain("Do not pass the object to `obsidian_append_to_note`");
-    expect(api).not.toContain(
-      "pass to `validate_note_proposal` and then `append_to_note` (or rewrite the YAML block)"
-    );
+    expect(api).not.toContain("pass to `validate_note_proposal` and then `append_to_note` (or rewrite the YAML block)");
     const freshnessContract =
       /\*\*v3\.10 — forgetting-aware freshness\.\*\*[\s\S]*?(?=\n\*\*Why prefer)/.exec(api)?.[0] ?? "";
     expect(freshnessContract).toContain("fixed `DEFAULT_STALE_DAYS` threshold of 365 days");
@@ -1107,9 +1084,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const findStaleFlagThresholdDrift = (text: string): string | null =>
       /`stale` flag \(true when `age_days` ≥ `--stale-days`/i.exec(text)?.[0] ?? null;
     expect(findStaleFlagThresholdDrift(freshnessContract)).toBeNull();
-    expect(
-      findStaleFlagThresholdDrift("`stale` flag (true when `age_days` ≥ `--stale-days`, default 365)")
-    ).toBe("`stale` flag (true when `age_days` ≥ `--stale-days`");
+    expect(findStaleFlagThresholdDrift("`stale` flag (true when `age_days` ≥ `--stale-days`, default 365)")).toBe(
+      "`stale` flag (true when `age_days` ≥ `--stale-days`"
+    );
 
     const findFeedbackStorageUnderclaim = (text: string): string | null =>
       /(?:stores?|holds?|sidecar)[^\n.]{0,80}(?:only\s+relative|relative\s+(?:note\s+)?paths?\s*\+\s*counts\s+only)/i.exec(
@@ -1125,21 +1102,13 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       ["docs/api.md", api]
     ] as const;
     for (const [file, surface] of feedbackTruthSurfaces) {
-      expect(surface, `${file} must disclose feedback vault identity`).toMatch(
-        /(?:canonical )?absolute vault root/i
-      );
+      expect(surface, `${file} must disclose feedback vault identity`).toMatch(/(?:canonical )?absolute vault root/i);
       expect(findFeedbackStorageUnderclaim(surface), `${file} understates feedback data at rest`).toBeNull();
     }
     expect(
-      findFeedbackStorageUnderclaim(
-        "The sidecar stores only relative note paths + counts and nothing else."
-      )
+      findFeedbackStorageUnderclaim("The sidecar stores only relative note paths + counts and nothing else.")
     ).not.toBeNull();
-    expect(
-      findFeedbackStorageUnderclaim(
-        "The feedback sidecar holds relative paths + counts only."
-      )
-    ).not.toBeNull();
+    expect(findFeedbackStorageUnderclaim("The feedback sidecar holds relative paths + counts only.")).not.toBeNull();
   });
 
   it("STABILITY.md tool-count header matches actual registered tool count", async () => {
@@ -1786,9 +1755,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(comparisonMd).toContain("The grounded answer is:");
     expect(comparisonMd).toContain("Source: 99_Daily/2026-05-02.md");
 
-    const launchMatch = /<!-- launch-kit:start -->([\s\S]*?)<!-- launch-kit:end -->/.exec(
-      comparisonMd
-    );
+    const launchMatch = /<!-- launch-kit:start -->([\s\S]*?)<!-- launch-kit:end -->/.exec(comparisonMd);
     expect(launchMatch, "COMPARISON.md must carry the bounded launch and directory kit").not.toBeNull();
     const launchKit = launchMatch?.[1] ?? "";
     for (const marker of [
@@ -1816,23 +1783,17 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "https://www.npmjs.com/package/@oomkapwn/enquire-mcp",
       "https://oomkapwn.github.io/enquire-mcp/"
     ]) {
-      expect(launchKit, `launch kit missing proof/activation link ${proofLink}`).toContain(
-        proofLink
-      );
+      expect(launchKit, `launch kit missing proof/activation link ${proofLink}`).toContain(proofLink);
     }
     const canonicalInstall =
       '"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/absolute/path/to/vault"]';
     const hasCanonicalInstall = (text: string): boolean => text.includes(canonicalInstall);
     expect(hasCanonicalInstall(launchKit)).toBe(true);
-    expect(hasCanonicalInstall(launchKit.replace(', "--vault", "/absolute/path/to/vault"', ""))).toBe(
-      false
-    );
+    expect(hasCanonicalInstall(launchKit.replace(', "--vault", "/absolute/path/to/vault"', ""))).toBe(false);
     expect(hasCanonicalInstall(canonicalInstall.replace("@latest", "@rc"))).toBe(false);
     expect(launchKit).not.toMatch(/@rc|-rc\.\d+/i);
     expect(launchKit).not.toContain("omits either `serve` or `--vault`");
-    expect(launchKit).not.toContain(
-      "Writes are disabled by default and require an explicit `--enable-write`"
-    );
+    expect(launchKit).not.toContain("Writes are disabled by default and require an explicit `--enable-write`");
     for (const privateOperation of [
       "$39",
       "Publisher checklist",
@@ -1869,9 +1830,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(findLaunchOverclaim("Officially endorsed by Obsidian.")).toBe(
       "Officially endorsed by Obsidian"
     );
-    expect(findLaunchOverclaim("One-click install is available now.")).toBe(
-      "One-click install is available now"
-    );
+    expect(findLaunchOverclaim("One-click install is available now.")).toBe("One-click install is available");
     expect(findLaunchOverclaim("Works with every AI agent.")).toBe("Works with every AI agent");
 
     const unsupportedPerformancePatterns = [

@@ -34,6 +34,20 @@ jobs:
             echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
             sleep 15
           done
+      # Temporary D-45 handoff: generate the canonical Biome bytes on the
+      # disposable runner, then remove both steps after committing the artifact.
+      - name: Format rc.27 candidate
+        run: npm run format
+      - name: Upload formatted rc.27 sources
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: formatted-rc27
+          path: |
+            src/watcher.ts
+            tests/watcher.test.ts
+            tests/watcher-activation.test.ts
+            tests/windows-path-safety.test.ts
+          if-no-files-found: error
       - run: npm run lint
 
   test:
@@ -300,15 +314,6 @@ jobs:
       # binary asset cannot silently lag its reviewable source.
       - id: preview_render
         run: npm run render:preview
-      # Temporary rc.27 handoff: render the binary only on GitHub-hosted CI
-      # because maintainer-machine execution is forbidden by D-45. Remove this
-      # artifact step once the generated PNG is committed to the candidate.
-      - name: Upload rc.27 social preview
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: social-preview-rc27
-          path: assets/social-preview.png
-          if-no-files-found: error
       - name: Require committed social-preview bytes
         id: preview_diff
         run: git diff --exit-code -- assets/social-preview.png

@@ -774,7 +774,34 @@ export class VaultWatcher {
     kind: "add" | "change" | "unlink",
     propagateFailure = false
   ): Promise<void> {
-    return this.enqueueFileTask(absPath, `(${kind})`, () => this.handle(absPath, kind), propagateFailure);
+    const canonicalAbsPath = this.canonicalWatcherEventPath(absPath);
+    if (canonicalAbsPath === null) return Promise.resolve();
+    return this.enqueueFileTask(
+      canonicalAbsPath,
+      `(${kind})`,
+      () => this.handle(canonicalAbsPath, kind),
+      propagateFailure
+    );
+  }
+
+  /**
+   * Map an accepted configured-root spelling onto the canonical vault root.
+   *
+   * `Vault.ensureExists()` replaces `vault.root` with `realpath()`, while a
+   * native event or deterministic test may still carry the configured spelling
+   * (`/var` vs `/private/var`, or a Windows alias). `resolveInside()` preserves
+   * that compatibility without following the event leaf and rejects lexical
+   * escapes before they can acquire a queue identity.
+   *
+   * @param absPath - Absolute path supplied by chokidar or activation replay.
+   * @returns Canonical in-vault spelling, or null for an unsafe/outside path.
+   */
+  private canonicalWatcherEventPath(absPath: string): string | null {
+    try {
+      return this.vault.resolveInside(absPath);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -861,11 +888,13 @@ export class VaultWatcher {
    */
   private onFsEvent(absPath: string, kind: "add" | "change" | "unlink"): void {
     if (this.closing || this.closed) return;
+    const canonicalAbsPath = this.canonicalWatcherEventPath(absPath);
+    if (canonicalAbsPath === null) return;
     if (this.activationState !== "live") {
-      this.captureActivationPath(absPath);
+      this.captureActivationPath(canonicalAbsPath);
       return;
     }
-    void this.enqueueFileEvent(absPath, kind);
+    void this.enqueueFileEvent(canonicalAbsPath, kind);
   }
 
   /**
@@ -1288,6 +1317,35 @@ export class VaultWatcher {
       left.live.physicalIdentity === right.live.physicalIdentity &&
       this.sameFileGeneration(left.live.generation, right.live.generation)
     );
+  }
+
+  /**
+   * Distinguish ordinary content churn from a physical alias-membership change.
+   *
+   * Size/timestamp drift on the same path, inode, and link count needs only the
+   * caller's bounded same-mode retry. A state/path/inode/link-count change can
+   * alter which exact aliases belong to the plan and therefore requires the
+   * serialized global inventory.
+   *
+   * @param left - Earlier admission evidence.
+   * @param right - Later admission evidence.
+   * @returns No drift, generation-only drift, or membership drift.
+   */
+  private classifyAliasInspectionDrift(
+    left: AliasPathInspection,
+    right: AliasPathInspection
+  ): "none" | "generation" | "membership" {
+    if (this.sameAliasInspection(left, right)) return "none";
+    if (left.state !== "live" || right.state !== "live") return "membership";
+    return left.live.absPath === right.live.absPath &&
+      left.live.relPath === right.live.relPath &&
+      left.live.isPdf === right.live.isPdf &&
+      left.live.physicalIdentity === right.live.physicalIdentity &&
+      left.live.generation.dev === right.live.generation.dev &&
+      left.live.generation.ino === right.live.generation.ino &&
+      left.live.generation.nlink === right.live.generation.nlink
+      ? "generation"
+      : "membership";
   }
 
   /**
@@ -1805,8 +1863,8 @@ export class VaultWatcher {
    * Every live exact path is independently admitted, staged, and revalidated.
    * Only after all awaited work succeeds are inadmissible/stale-key purges and
    * live-path commits performed in one no-await section. Membership drift asks
-   * the caller for a global replan; transient admission failure retries without
-   * mutating any sink.
+   * the caller for a global replan; generation-only drift and transient
+   * admission failure retry without mutating any sink.
    *
    * @param originAbsPath - Exact event path.
    * @param plannedEvidence - Latest pre-lock admission for every inspected path.
@@ -1839,7 +1897,11 @@ export class VaultWatcher {
         if (inspection.state === "retry") return "retry";
         const planned = plannedEvidence.get(candidatePath);
         if (planned?.state === "retry") return "retry";
-        if (planned && !this.sameAliasInspection(planned, inspection)) return "global";
+        if (planned) {
+          const drift = this.classifyAliasInspectionDrift(planned, inspection);
+          if (drift === "generation") return "retry";
+          if (drift === "membership") return "global";
+        }
         if (inspection.state === "purge") {
           inadmissiblePaths.add(candidatePath);
           continue;
@@ -1852,13 +1914,13 @@ export class VaultWatcher {
 
         if (candidatePath !== live.absPath) staleStoredPaths.add(candidatePath);
         const existing = liveByCanonicalPath.get(live.absPath);
-        if (
-          existing &&
-          (existing.relPath !== live.relPath ||
-            existing.physicalIdentity !== live.physicalIdentity ||
-            !this.sameFileGeneration(existing.generation, live.generation))
-        ) {
-          return "global";
+        if (existing) {
+          const drift = this.classifyAliasInspectionDrift(
+            { state: "live", live: existing },
+            { state: "live", live }
+          );
+          if (drift === "generation") return "retry";
+          if (drift === "membership") return "global";
         }
         liveByCanonicalPath.set(live.absPath, live);
       }
@@ -1884,19 +1946,9 @@ export class VaultWatcher {
         const current = inspected[index] ?? { state: "retry" as const };
         if (current.state === "retry") return "retry";
         if (expected.state === "retry") return "retry";
-        if (expected.state === "purge") {
-          if (current.state !== "purge") return "global";
-          continue;
-        }
-        if (current.state !== "live") return "global";
-        if (
-          current.live.absPath !== expected.live.absPath ||
-          current.live.relPath !== expected.live.relPath ||
-          current.live.physicalIdentity !== expected.live.physicalIdentity ||
-          !this.sameFileGeneration(current.live.generation, expected.live.generation)
-        ) {
-          return "global";
-        }
+        const drift = this.classifyAliasInspectionDrift(expected, current);
+        if (drift === "generation") return "retry";
+        if (drift === "membership") return "global";
       }
     }
 
@@ -1990,7 +2042,9 @@ export class VaultWatcher {
    */
   private async handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> {
     if (this.closed) return;
-    const nativeRelPath = path.relative(this.vault.root, absPath);
+    const eventPath = this.canonicalWatcherEventPath(absPath);
+    if (eventPath === null) return;
+    const nativeRelPath = path.relative(this.vault.root, eventPath);
     if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) return;
     const lower = nativeRelPath.toLowerCase();
     if (!lower.endsWith(".md") && !(this.includePdfs && lower.endsWith(".pdf"))) return;
@@ -1998,25 +2052,25 @@ export class VaultWatcher {
     // Preserve the historical cache-only/logging path without paying for a
     // physical inventory when no derived sink exists.
     if (!this.ftsIndex && !this.embedDb) {
-      await this.handleExactPath(absPath, kind);
+      await this.handleExactPath(eventPath, kind);
       return;
     }
 
     try {
       let forceGlobal = false;
       for (let attempt = 0; attempt < PHYSICAL_ALIAS_ATTEMPTS; attempt += 1) {
-        const originInspection = await this.inspectAliasPath(absPath);
+        const originInspection = await this.inspectAliasPath(eventPath);
         if (originInspection.state === "retry") {
           if (attempt + 1 < PHYSICAL_ALIAS_ATTEMPTS) continue;
           throw new Error("physical alias admission remained uncertain during both reconciliation attempts");
         }
         const origin = originInspection.state === "live" ? originInspection.live : null;
         const rememberedIdentity =
-          this.physicalIdentityByPath.get(absPath) ??
-          (origin && origin.absPath !== absPath ? this.physicalIdentityByPath.get(origin.absPath) : undefined);
+          this.physicalIdentityByPath.get(eventPath) ??
+          (origin && origin.absPath !== eventPath ? this.physicalIdentityByPath.get(origin.absPath) : undefined);
         let physicalIdentity = origin?.physicalIdentity ?? rememberedIdentity ?? null;
         let paths: string[];
-        const plannedEvidence = new Map<string, AliasPathInspection>([[absPath, originInspection]]);
+        const plannedEvidence = new Map<string, AliasPathInspection>([[eventPath, originInspection]]);
 
         const knownGroup =
           physicalIdentity === null ? undefined : this.physicalPathsByIdentity.get(physicalIdentity);
@@ -2039,7 +2093,7 @@ export class VaultWatcher {
               throw error;
             }
             const fallbackResult = await this.applyBoundedPhysicalAliasFallback(
-              absPath,
+              eventPath,
               plannedEvidence,
               knownGroup,
               origin,
@@ -2057,18 +2111,22 @@ export class VaultWatcher {
             if (attempt + 1 < PHYSICAL_ALIAS_ATTEMPTS) continue;
             throw new Error("physical alias inventory remained uncertain during both reconciliation attempts");
           }
-          let planningDrifted = false;
+          let planningGenerationDrifted = false;
+          let planningMembershipDrifted = false;
           for (const entry of inventory) {
             const previous = plannedEvidence.get(entry.absPath);
-            if (previous && !this.sameAliasInspection(previous, entry.inspection)) {
-              planningDrifted = true;
+            if (previous) {
+              const drift = this.classifyAliasInspectionDrift(previous, entry.inspection);
+              if (drift === "generation") planningGenerationDrifted = true;
+              if (drift === "membership") planningMembershipDrifted = true;
             }
             plannedEvidence.set(entry.absPath, entry.inspection);
           }
-          if (planningDrifted) {
+          if (planningMembershipDrifted) {
             forceGlobal = true;
             continue;
           }
+          if (planningGenerationDrifted) continue;
           const uncertainInventory = inventory.some(
             (entry) =>
               entry.inspection.state !== "live" || entry.inspection.live.physicalIdentity === null
@@ -2080,7 +2138,7 @@ export class VaultWatcher {
                 ...inventory.map((entry) => entry.absPath),
                 ...this.physicalKnownPaths,
                 ...this.physicalIdentityByPath.keys(),
-                absPath,
+                eventPath,
                 ...(origin ? [origin.absPath] : [])
               ])
             ];
@@ -2095,13 +2153,13 @@ export class VaultWatcher {
                       entry.inspection.live.physicalIdentity === physicalIdentity
                   )
                   .map((entry) => entry.absPath),
-                absPath,
+                eventPath,
                 ...(origin ? [origin.absPath] : [])
               ])
             ];
           }
         } else if (physicalIdentity !== null) {
-          paths = [...new Set([...(knownGroup ?? []), absPath, ...(origin ? [origin.absPath] : [])])];
+          paths = [...new Set([...(knownGroup ?? []), eventPath, ...(origin ? [origin.absPath] : [])])];
         } else {
           // Defensive fallback: needsInventory is true for every missing or
           // null-identity origin, so a null identity should not reach here.
@@ -2114,7 +2172,7 @@ export class VaultWatcher {
             throw new PhysicalAliasInventoryLimitError(paths.length, this.activationPathLimit);
           }
           const fallbackResult = await this.applyBoundedPhysicalAliasFallback(
-            absPath,
+            eventPath,
             plannedEvidence,
             knownGroup,
             origin,
@@ -2129,17 +2187,19 @@ export class VaultWatcher {
         const lockIdentity = physicalIdentity ?? PHYSICAL_ALIAS_UNKNOWN_LOCK;
         const lockKeys = [lockIdentity, ...paths.map((candidatePath) => `path:${candidatePath}`)];
         const result = await this.withPhysicalAliasLocks(lockKeys, () =>
-          this.applyPhysicalAliasPlan(absPath, plannedEvidence, paths, physicalIdentity, kind)
+          this.applyPhysicalAliasPlan(eventPath, plannedEvidence, paths, physicalIdentity, kind)
         );
         if (result === "done") return;
         if (result === "global") forceGlobal = true;
       }
 
-      throw new Error("physical alias membership changed during both reconciliation attempts");
+      throw new Error(
+        "physical alias membership or source generation changed during both reconciliation attempts"
+      );
     } catch (err) {
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher physical-alias reconciliation failed for ${this.vault.toRel(absPath)} (${kind}) — ${
+          `enquire: watcher physical-alias reconciliation failed for ${this.vault.toRel(eventPath)} (${kind}) — ${
             err instanceof Error ? err.message : String(err)
           }\n`
         );

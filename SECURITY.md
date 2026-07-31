@@ -186,7 +186,7 @@ Posture:
 
 ## `--enabled-tools` / `--disabled-tools`: per-tool gating posture
 
-`--disabled-tools` (added v1.10.0) and `--enabled-tools` (added v1.11.0) both gate which MCP tools the server registers, via a monkey-patched `server.registerTool()`:
+`--disabled-tools` (added v1.10.0) and `--enabled-tools` (added v1.11.0) both gate which MCP tools the server registers. Since `3.12.0-rc.31`, a project-owned composition adapter intercepts registration without overwriting the SDK server instance:
 
 - **`--disabled-tools` is a denylist.** Comma-separated list of tool names; matching tools are skipped at registration time. Useful for surface-area reduction without forking.
 - **`--enabled-tools` is an allowlist.** Comma-separated list; ONLY listed tools are registered. Combined with `--disabled-tools`, both predicates apply (a tool must be in the allowlist AND not in the denylist).
@@ -219,14 +219,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v3.12.0-rc.31)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v4.0.0-rc.1)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of v3.12.0-rc.31, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
+As of v4.0.0-rc.1, the clean consumer graph has exactly two temporary upstream exceptions. The former `GHSA-frvp-7c67-39w9` exception was removed as soon as the live audit proved that advisory had disappeared:
 
 - [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
 - [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).
@@ -295,7 +295,7 @@ When `--feedback-weight > 0`, the `obsidian_mark_useful` tool records which reca
 
 ## HTTP transport (v2.6.0): bearer auth + remote-MCP posture
 
-The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) so claude.ai web, ChatGPT, Cursor HTTP mode, and mobile MCP clients can reach a remote vault. It introduces a network-exposed endpoint that the default stdio path doesn't have. The threat model + deployment recipes are documented at length in [`docs/http-transport.md`](docs/http-transport.md); this section is the canonical security posture.
+The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http) so claude.ai web, ChatGPT, Cursor HTTP mode, and mobile MCP clients can reach a remote vault. Since v4 it serves strict modern `2026-07-28` requests and supported legacy 2025-era clients from the same registration factory. It introduces a network-exposed endpoint that the default stdio path doesn't have. The threat model + deployment recipes are documented at length in [`docs/http-transport.md`](docs/http-transport.md); this section is the canonical security posture.
 
 ### What we protect against
 
@@ -306,6 +306,7 @@ The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Str
 - **DNS-rebinding / Origin admission.** A request without `Origin` is accepted for native MCP clients. Every **present invalid Origin**—unlisted, opaque `null`, malformed, duplicated/comma-joined, or otherwise not an exact configured HTTP(S) origin—gets `403` before OPTIONS, health, routing, auth, rate-limit, body parsing, session allocation, or MCP dispatch. `--cors-origin '*'` is rejected at startup because wildcard admission cannot enforce the [MCP Streamable HTTP Origin requirement](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#security--endpoint).
 - **CORS-based credential leakage.** After Origin admission, the exact matched server-controlled allowlist value is used for `Access-Control-Allow-Origin`, with `Vary: Origin` and `Access-Control-Allow-Credentials: true`. Hostile input is never reflected. A browser client—including a same-origin page—must be listed explicitly; default empty admits only clients that omit the `Origin` header.
 - **Body bombs.** Per-request body size cap derived from `--max-file-bytes` as `max(4 MB, max-file-bytes × 1.5)` (7.5 MB at the default 5 MB file cap), enforced as we accumulate chunks. Bigger requests get `400 Parse error` before we attempt JSON.parse.
+- **Content-Type and protocol downgrade.** Every POST requires an unambiguous `application/json` media type before parsing. The official SDK v2 classifier routes claim-less legacy traffic; every malformed, mismatched, or unsupported modern claim remains on the strict modern error path and is never retried against the legacy session registry. A modern request carrying `Mcp-Session-Id` cannot attach to a legacy session.
 - **Privacy filter (`--exclude-glob` / `--read-paths`)** applies identically to HTTP and stdio paths. The same audit-tested filter runs at every search/read/walker boundary; there are no HTTP-specific shortcuts. v2.0.0-beta.2 P0 fixes for FTS5 + embed-index search apply here.
 - **Tag-deletion / write-tool gating.** All write tools (chat-thread-append, frontmatter-set, create/append/rename/replace/archive) remain gated by `--enable-write` regardless of transport. HTTP doesn't lower the bar.
 
@@ -317,9 +318,9 @@ The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Str
 - **Multi-tenant cross-token attacks.** This is a single-tenant tool. A small team should run **one process per user** (e.g. systemd template unit) and not share tokens. We don't do tenant isolation in-process beyond the per-token rate-limit.
 - **OAuth.** No OAuth flow, no token minting, no refresh logic. Static long-lived bearer is by design — generated with `enquire-mcp gen-token`, rotated manually. OAuth is tracked for v2.7+ if a user explicitly needs it.
 
-### Stateful sessions (v2.14.0+)
+### Legacy stateful sessions (v2.14.0+; preserved in v4)
 
-v2.6.0 initially shipped **stateless** mode only (fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles). v2.14.0 added an **opt-in stateful** mode via `--stateful` for clients that need persistent state across requests (notably ChatGPT custom GPT actions). Stateful posture:
+v2.6.0 initially shipped **stateless** mode only (fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles). v2.14.0 added an **opt-in stateful** mode via `--stateful` for legacy clients that need persistent state across requests (notably ChatGPT custom GPT actions). In v4, modern `2026-07-28` requests remain per-request and never enter this registry; `--stateful` preserves the established legacy initialize/session/SSE/DELETE path. Stateful posture:
 
 - **Off by default.** `--stateful` is explicit opt-in; stateless remains the default for minimum attack surface. Short-running tools (search, read, frontmatter ops) work fine stateless and don't need the persistence-aware shutdown complexity.
 - **Session ID generation.** `Mcp-Session-Id` is `randomBytes(16).toString("hex")` — 128 bits, allocated at `initialize` time, returned in response header. Clients must echo it on subsequent requests; unknown IDs return 404 (no info leak about whether the ID was ever valid).
@@ -330,6 +331,7 @@ v2.6.0 initially shipped **stateless** mode only (fresh `McpServer` per request 
 - **GET /mcp for persistent SSE.** A `GET /mcp` with a valid `Mcp-Session-Id` opens a server-sent-events stream for server-initiated notifications. Same auth + rate-limit predicates as POST. The stream closes on DELETE or process shutdown; while open it counts as active for the lazy sweep and is not evicted as idle.
 - **Privacy filter parity.** `--exclude-glob` / `--read-paths` apply identically to stateful and stateless paths. There is no codepath where a stateful session bypasses the privacy filter.
 - **Graceful shutdown.** SIGINT / SIGTERM / `beforeExit` close the initialize gate, remove the current session snapshot, and drain pending initializes + `inFlightCalls` under the same ordinary bound. Before transport teardown, rollback-safe batch writes are cancelled and restored while atomic/single-effect writes are allowed to finish; this integrity tail may exceed five seconds. Long-lived SSE streams and stuck reads are terminated rather than awaited.
+- **Per-request shutdown parity.** The strict v4 handler and legacy-stateless path share an aggregate write tracker across their fresh per-request server instances. Shutdown closes their admission synchronously, grants a bounded ordinary-request grace, rolls back cancellation-safe writes, waits for finish-only effects, and closes the official handler before shared vault/index dependencies.
 
 Out of scope (stateful mode specifically):
 - **Session takeover** if a bearer token leaks. The session-id is in a response header, not a secret — possession of the bearer token is sufficient to initialize new sessions OR (if the attacker captured a previous `Mcp-Session-Id`) re-attach to an existing one. Treat the bearer token as the trust boundary; don't share it.

@@ -26,7 +26,10 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The exact-SHA package-consumer matrix is allowed 30 minutes per lane;
+    # keep enough room to await it and still perform the independent release
+    # install/test/publish sequence afterward.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -60,7 +63,9 @@ jobs:
           # Verify the required CI checks passed on this exact SHA. We query
           # check-runs (per-job) rather than check-suites (per-workflow) so we
           # can name the contexts that branch protection requires. Tag pushes
-          # can race with CI on main starting — poll up to 5 minutes.
+          # can race with CI on main starting — poll for up to 60 minutes. The
+          # v4 package-consumer matrix alone has a 30-minute runner budget, so
+          # the former five-minute poll could reject a healthy immediate tag.
           # v3.5.11 — dropped `test (20)` from required checks because
           # pdfjs-dist v5+ requires Node `>=22.13` (Node 20 is EOL as of
           # 2026-04). Required count was 7 (lint, test×2, smoke, audit,
@@ -72,11 +77,15 @@ jobs:
           # v3.8.0-rc.6 — bumped to 9 by adding `oia` (Outside-In Audit;
           # promoted from advisory after one release cycle with 0 false
           # positives — round-23 audit response).
+          # v4.0.0-rc.1 — bumped to 11: `protocol-conformance` aggregates Linux
+          # + Windows official-v2-client modern/legacy stdio/HTTP lanes; the
+          # aggregated `package-consumer` context requires packed-artifact checks
+          # on Linux, Windows, and macOS (normal + --omit=optional installs).
           # Public gate-count mirror; tests pin this exact inventory to the
           # shared evaluator used below. Do not use a regex/count as readiness.
-          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia"
-          REQ_COUNT=9
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer"
+          REQ_COUNT=11
+          for (( attempt=1; attempt<=120; attempt++ )); do
             JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
             RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks)
             STATE=$(printf '%s' "$RESULT" | jq -r '.state')
@@ -90,13 +99,13 @@ jobs:
               echo "✓ All $REQ_COUNT distinct required checks passed on $SHA"
               break
             fi
-            if [ $attempt -eq 10 ]; then
+            if [ "$attempt" -eq 120 ]; then
               MISSING=$(printf '%s' "$RESULT" | jq -r '[.missing[], .pending[]] | join(", ")')
-              echo "::error::Timed out waiting for CI on $SHA after 5 minutes; unresolved: $MISSING"
+              echo "::error::Timed out waiting for CI on $SHA after 60 minutes; unresolved: $MISSING"
               exit 1
             fi
             UNRESOLVED=$(printf '%s' "$RESULT" | jq -r '[.missing[], .pending[]] | join(", ")')
-            echo "CI still running ($DONE/$REQ_COUNT distinct checks passed; unresolved: $UNRESOLVED; attempt $attempt/10) — waiting 30s..."
+            echo "CI still running ($DONE/$REQ_COUNT distinct checks passed; unresolved: $UNRESOLVED; attempt $attempt/120) — waiting 30s..."
             sleep 30
           done
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7

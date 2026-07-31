@@ -21,7 +21,9 @@ export const REQUIRED_RELEASE_CHECKS = Object.freeze([
   "coverage",
   "version-consistency",
   "docs",
-  "oia"
+  "oia",
+  "protocol-conformance",
+  "package-consumer"
 ]);
 
 /**

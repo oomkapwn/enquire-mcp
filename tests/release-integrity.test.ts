@@ -79,6 +79,10 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   const windowsJob = yamlRecord(jobs?.["test-windows"]);
   const docsJob = yamlRecord(jobs?.docs);
   const smokeJob = yamlRecord(jobs?.smoke);
+  const protocolMatrixJob = yamlRecord(jobs?.["protocol-conformance-matrix"]);
+  const protocolAggregateJob = yamlRecord(jobs?.["protocol-conformance"]);
+  const packageMatrixJob = yamlRecord(jobs?.["package-consumer-matrix"]);
+  const packageAggregateJob = yamlRecord(jobs?.["package-consumer"]);
   if (!testJob) return ["missing test job"];
   if (major !== "22") {
     problems.push("engines.node major changed; update the stable release-check inventory");
@@ -272,6 +276,101 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     }
   }
 
+  const matrixGateProblems = (
+    job: YamlRecord | null,
+    aggregate: YamlRecord | null,
+    id: "protocol-conformance" | "package-consumer",
+    expectedRows: Array<{ label: string; os: string; scriptShell: string }>,
+    script: string
+  ): void => {
+    const matrixId = `${id}-matrix`;
+    if (!job) {
+      problems.push(`missing ${matrixId} job`);
+      return;
+    }
+    const jobRowsValue = yamlRecord(yamlRecord(job.strategy)?.matrix)?.include;
+    const jobRows = Array.isArray(jobRowsValue)
+      ? jobRowsValue.map(yamlRecord).filter((row): row is YamlRecord => row !== null)
+      : [];
+    const actualRows = jobRows.map((row) => ({
+      label: row.label,
+      os: row.os,
+      scriptShell: row.script_shell
+    }));
+    if (JSON.stringify(actualRows) !== JSON.stringify(expectedRows)) {
+      problems.push(`${id} matrix must preserve its exact blocking platform inventory`);
+    }
+    const jobEnv = yamlRecord(job.env);
+    const jobSteps = yamlSteps(job);
+    const setup = jobSteps.find(
+      (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
+    );
+    const install = namedStep(jobSteps, "Install deps (npm ci with retry)");
+    if (
+      job.name !== `${id} (\${{ matrix.label }})` ||
+      job["runs-on"] !== `\${{ matrix.os }}` ||
+      "continue-on-error" in job ||
+      "if" in job ||
+      "needs" in job ||
+      yamlRecord(yamlRecord(job.defaults)?.run)?.shell !== "bash" ||
+      jobEnv?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
+      jobEnv?.NPM_CONFIG_SCRIPT_SHELL !== `\${{ matrix.script_shell }}` ||
+      yamlRecord(setup?.with)?.["node-version"] !== floor ||
+      !hasRunLine(install, "npm ci && break") ||
+      !jobSteps.some((step) => step.run === "npm run build") ||
+      !jobSteps.some((step) => step.run === script) ||
+      jobSteps.some((step) => "continue-on-error" in step || "if" in step)
+    ) {
+      problems.push(`${id} matrix must be exact-floor, unconditional, fail-capable, built, and executable`);
+    }
+
+    if (!aggregate) {
+      problems.push(`missing ${id} aggregate job`);
+      return;
+    }
+    const aggregateSteps = yamlSteps(aggregate);
+    const gate = aggregateSteps[0];
+    const gateEnv = yamlRecord(gate?.env);
+    const gateRun = runBody(gate);
+    if (
+      aggregate.name !== id ||
+      aggregate["runs-on"] !== "ubuntu-latest" ||
+      aggregate.needs !== matrixId ||
+      aggregate.if !== `\${{ always() }}` ||
+      "continue-on-error" in aggregate ||
+      aggregateSteps.length !== 1 ||
+      gateEnv?.MATRIX_RESULT !== `\${{ needs['${matrixId}'].result }}` ||
+      !gateRun.includes('"$MATRIX_RESULT" != "success"') ||
+      !gateRun.includes("exit 1") ||
+      "if" in (gate ?? {}) ||
+      "continue-on-error" in (gate ?? {})
+    ) {
+      problems.push(`${id} aggregate must fail closed over every matrix lane`);
+    }
+  };
+
+  matrixGateProblems(
+    protocolMatrixJob,
+    protocolAggregateJob,
+    "protocol-conformance",
+    [
+      { label: "linux", os: "ubuntu-latest", scriptShell: "/bin/bash" },
+      { label: "windows", os: "windows-2025", scriptShell: "C:\\Program Files\\Git\\bin\\bash.exe" }
+    ],
+    "node scripts/protocol-conformance.mjs"
+  );
+  matrixGateProblems(
+    packageMatrixJob,
+    packageAggregateJob,
+    "package-consumer",
+    [
+      { label: "linux", os: "ubuntu-latest", scriptShell: "/bin/bash" },
+      { label: "windows", os: "windows-2025", scriptShell: "C:\\Program Files\\Git\\bin\\bash.exe" },
+      { label: "macos", os: "macos-latest", scriptShell: "/bin/bash" }
+    ],
+    "node scripts/package-consumer.mjs"
+  );
+
   if (!smokeJob) return [...problems, "missing smoke job"];
   const smokeNeeds = Array.isArray(smokeJob.needs) ? smokeJob.needs.filter((item) => typeof item === "string") : [];
   if (smokeNeeds.length !== 2 || !smokeNeeds.includes("test") || !smokeNeeds.includes("test-windows")) {
@@ -329,6 +428,67 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   }
 
   return problems;
+}
+
+function remoteGateScriptProblems(packageConsumer: string, protocolConformance: string): string[] {
+  const problems: string[] = [];
+  if (
+    !packageConsumer.includes("function npmProcessSpec(") ||
+    !packageConsumer.includes("npm-cli.js") ||
+    !packageConsumer.includes("refusing to invoke a .cmd shim") ||
+    packageConsumer.includes('const NPM = process.platform === "win32" ? "npm.cmd"')
+  ) {
+    problems.push("package-consumer must execute npm through a cross-platform JavaScript entrypoint");
+  }
+  if (
+    !packageConsumer.includes('runNpm(["install", "--no-audit"') ||
+    packageConsumer.includes('runNpm(["install", "--ignore-scripts"')
+  ) {
+    problems.push("package-consumer normal installs must execute lifecycle and optional dependency paths");
+  }
+  if (!packageConsumer.includes("Object.keys(rootPackage.optionalDependencies ?? {})")) {
+    problems.push("package-consumer omit lane must derive the complete optional dependency inventory");
+  }
+  if (
+    !packageConsumer.includes("if (rejection === undefined)") ||
+    !packageConsumer.includes('assert.fail(blockedPath + " privacy negative control unexpectedly succeeded")')
+  ) {
+    problems.push("package-consumer privacy negative must not catch its own leak assertion");
+  }
+  if (
+    !protocolConformance.includes("failed through an unexpected transport/server error") ||
+    !protocolConformance.includes("server was not live after traversal refusal")
+  ) {
+    problems.push("protocol-conformance traversal negative must distinguish refusal from crash and prove liveness");
+  }
+  if (
+    !protocolConformance.includes('child.kill("SIGKILL")') ||
+    !protocolConformance.includes("await waitForChildExit(child, 5_000)")
+  ) {
+    problems.push("protocol-conformance cleanup must await hard-killed children before deleting fixtures");
+  }
+  return problems;
+}
+
+function releasePollProblems(workflow: string): string[] {
+  let document: YamlRecord | null = null;
+  try {
+    document = yamlRecord(load(workflow));
+  } catch {
+    return ["release.yml must be valid YAML"];
+  }
+  const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
+  const gate = namedStep(yamlSteps(publish ?? {}), "Assert tag is on main and required CI checks passed");
+  const body = runBody(gate);
+  if (
+    Number(publish?.["timeout-minutes"] ?? 0) < 90 ||
+    !body.includes("attempt<=120") ||
+    !body.includes('"$attempt" -eq 120') ||
+    !body.includes("after 60 minutes")
+  ) {
+    return ["release polling must outlive the blocking package-consumer matrix and leave publication headroom"];
+  }
+  return [];
 }
 
 describe("release identity and exact required-check gate", () => {
@@ -397,10 +557,30 @@ describe("release identity and exact required-check gate", () => {
     );
 
     const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    const packageConsumer = readFileSync(new URL("../scripts/package-consumer.mjs", import.meta.url), "utf8");
+    const protocolConformance = readFileSync(new URL("../scripts/protocol-conformance.mjs", import.meta.url), "utf8");
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
       engines?: { node?: unknown };
     };
     expect(nodeFloorCiProblems(ci, pkg.engines?.node)).toEqual([]);
+    expect(remoteGateScriptProblems(packageConsumer, protocolConformance)).toEqual([]);
+    expect(releasePollProblems(workflow)).toEqual([]);
+
+    expect(
+      remoteGateScriptProblems(
+        packageConsumer.replace("Object.keys(rootPackage.optionalDependencies ?? {})", '["better-sqlite3"]'),
+        protocolConformance
+      )
+    ).toContain("package-consumer omit lane must derive the complete optional dependency inventory");
+    expect(
+      remoteGateScriptProblems(
+        packageConsumer,
+        protocolConformance.replace("server was not live after traversal refusal", "traversal refusal finished")
+      )
+    ).toContain("protocol-conformance traversal negative must distinguish refusal from crash and prove liveness");
+    expect(releasePollProblems(workflow.replace("timeout-minutes: 90", "timeout-minutes: 15"))).toContain(
+      "release polling must outlive the blocking package-consumer matrix and leave publication headroom"
+    );
 
     // NEGATIVE controls: the invariant rejects both the old floating-22 leg
     // and a floor that no longer matches package.json.
@@ -625,6 +805,33 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace(
+          "          - label: windows\n            os: windows-2025\n            script_shell: 'C:\\Program Files\\Git\\bin\\bash.exe'",
+          "          - label: windows\n            os: ubuntu-latest\n            script_shell: /bin/bash"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain("protocol-conformance matrix must preserve its exact blocking platform inventory");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("          - label: macos\n            os: macos-latest", "          - label: macos\n            os: ubuntu-latest"),
+        pkg.engines?.node
+      )
+    ).toContain("package-consumer matrix must preserve its exact blocking platform inventory");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("    needs: protocol-conformance-matrix", "    needs: test"),
+        pkg.engines?.node
+      )
+    ).toContain("protocol-conformance aggregate must fail closed over every matrix lane");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("        run: node scripts/package-consumer.mjs", "        run: echo package-consumer-disabled"),
+        pkg.engines?.node
+      )
+    ).toContain("package-consumer matrix must be exact-floor, unconditional, fail-capable, built, and executable");
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
   });
 });

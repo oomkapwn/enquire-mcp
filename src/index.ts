@@ -30,7 +30,8 @@
 //   - `scripts/check-version-consistency.mjs` + `scripts/sync-version.mjs`
 //     can grep this file for the canonical version-constant declaration.
 //   - `src/http-transport.ts` and external consumers can keep importing from
-//     `./index.js` (no API break — same symbols, same shapes).
+//     `./index.js`. v4 preserves the symbol set while intentionally changing
+//     `buildMcpServer()`'s nominal return type from SDK v1 to SDK v2.
 //   - `tests/cli.test.ts` keeps importing `parsePositiveInt`, `parseQuantizationMode`
 //     and `tests/late-chunking.test.ts` keeps importing `buildEmbedText`.
 
@@ -46,17 +47,18 @@ import { main } from "./cli.js";
  * + `McpServer({version})`) and `src/tool-registry.ts` (used in the
  * `vault-info` resource payload).
  */
-export const VERSION = "3.12.0-rc.31";
+export const VERSION = "4.0.0-rc.1";
 
-// Re-exports — preserve the v3.5.x public surface so http-transport.ts and
-// tests don't need to know about the new module layout. The set below
+// Re-exports — preserve the v3.5.x symbol surface so http-transport.ts and
+// tests don't need to know about the module layout. The set below
 // exactly matches the v3.5.x `export` declarations: `main`,
 // `parsePositiveInt`, `parseQuantizationMode`, `startServer` (named-exported
 // at bottom-of-file), plus the named-on-declaration `buildMcpServer`,
 // `buildEmbedText`, `formatReadyBanner`, `prepareServerDeps`, and the
 // interface types `ServeOptions` / `ServerDeps`. `buildEmbedText` and the
 // sync* helpers are implemented in `embed-pipeline.ts` / `embed-sync.ts` and
-// re-exported by `server.ts`; they were file-private in v3.5.x.
+// re-exported by `server.ts`; they were file-private in v3.5.x. The v4 major
+// boundary is nominal: `buildMcpServer()` now returns SDK v2's `McpServer`.
 export { main } from "./cli.js";
 export {
   buildEmbedText,

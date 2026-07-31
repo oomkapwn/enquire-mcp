@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
 import { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
 import { resolveModel, setEmbeddingsOffline } from "./embeddings.js";
@@ -30,7 +30,7 @@ import {
   releaseWatcherActivationGuard,
   type WatcherActivationGuard
 } from "./watcher-activation-guard.js";
-import type { WriteRequestTracker } from "./write-lifecycle.js";
+import { WriteRequestTracker } from "./write-lifecycle.js";
 
 export { syncFtsIndex } from "./fts5.js";
 // v3.12.0-rc.20 — bulk embedding sync moved to a testable leaf module.
@@ -837,14 +837,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
 
 /**
  * Build a fresh `McpServer` over already-prepared deps. Cheap (just
- * registers tool handlers — no I/O, no SQLite open). Stdio calls this once;
- * HTTP calls it per session.
+ * registers tool handlers — no I/O, no SQLite open). The stdio entry calls
+ * this factory once for the selected era, except for the protocol-defined
+ * modern-probe-to-legacy-fallback path where it discards the probe instance
+ * and calls the same cheap factory again. HTTP also calls it per served
+ * request/session; neither path re-prepares the vault or persistence handles.
  *
  * @param deps - Shared prepared vault/index/model dependencies.
  * @param opts - Tool and retrieval configuration.
- * @param writeTracker - Optional per-session mutation lifecycle used by
- *   stateful HTTP DELETE/shutdown. Stdio and stateless HTTP rely directly on
- *   the MCP SDK request signal.
+ * @param writeTracker - Optional transport/session aggregate for persistent
+ *   mutation lifecycle. The stdio, modern + legacy-stateless HTTP, and legacy
+ *   stateful HTTP serving entrypoints supply an owning tracker so shared
+ *   dependencies outlive every finishing or rolling-back write; direct
+ *   programmatic consumers may omit it.
  * @returns A freshly registered MCP server.
  */
 export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracker?: WriteRequestTracker): McpServer {
@@ -988,27 +993,90 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
   return server;
 }
 
+/** Ordinary bound for closing the SDK-owned stdio protocol handle. */
+const STDIO_PROTOCOL_CLOSE_GRACE_MS = 3000;
+
+async function waitForStdioProtocolClose(
+  task: Promise<void>,
+  timeoutMs: number = STDIO_PROTOCOL_CLOSE_GRACE_MS
+): Promise<boolean> {
+  if (timeoutMs <= 0) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function startServer(opts: ServeOptions): Promise<void> {
   const deps = await prepareServerDeps(opts);
-  const server = buildMcpServer(deps, opts);
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const writeTracker = new WriteRequestTracker();
+  // SDK v2 owns the stdio transport and negotiates the 2026-07-28 vs legacy
+  // era from the connection's opening exchange. Keep the factory strictly
+  // registration-only: a probe followed by legacy fallback may invoke it
+  // twice, while the vault/index/watcher generation above remains singular.
+  const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {
+    onerror: (error) => {
+      process.stderr.write(`enquire: stdio transport error — ${error.message}\n`);
+    }
+  });
 
   process.stderr.write(`${formatReadyBanner(deps)} (transport=stdio)\n`);
 
   // v3.10.0-rc.19 (audit M3) — ONE graceful-shutdown orchestrator on signal,
-  // mirroring the HTTP path. `shutdownStdioDeps` closes watcher + embed-db,
-  // flushes the persistent cache, then closes the fts5 index, AWAITING each
-  // async step before `process.exit(0)`. Pre-rc.19 these were three separate
-  // SIGINT/SIGTERM handlers and the cache-flush handler called `process.exit(0)`
-  // the moment its flush resolved — racing the (async) `watcher.close()`. stdio
-  // has no installSignalHandlers escape hatch (it always owns its process).
-  let shuttingDown = false;
+  // mirroring the HTTP path. SDK protocol close starts immediately, the
+  // persistent-write integrity tail completes independently, and only then
+  // `shutdownStdioDeps` closes watcher + embed-db, flushes the persistent
+  // cache, and closes the fts5 index, AWAITING each async step before
+  // `process.exit(0)`. Pre-rc.19 these were three separate SIGINT/SIGTERM
+  // handlers and the cache-flush handler called `process.exit(0)` the moment
+  // its flush resolved — racing the (async) `watcher.close()`. stdio has no
+  // installSignalHandlers escape hatch (it always owns its process).
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      writeTracker.closeAdmission("Stdio shutdown closed persistent-write admission");
+      // Start protocol close immediately so no new read callback is admitted,
+      // but never put its potentially backpressured graceful flush in front of
+      // the persistent-write integrity tail. The tracker gate above rejects a
+      // write callback that dispatches late after the SDK close began.
+      const protocolClose = Promise.resolve()
+        .then(() => handle.close())
+        .catch((error) => {
+          process.stderr.write(
+            `enquire: stdio protocol close failed — ${error instanceof Error ? error.message : String(error)}\n`
+          );
+        });
+      try {
+        await writeTracker.abortRollbackSafe("Stdio shutdown exceeded the protocol-close boundary");
+        await writeTracker.waitForAll();
+      } finally {
+        // `serveStdio.close()` may flush a graceful subscriptions/listen
+        // result through a client-controlled stdout pipe. Bound that ordinary
+        // protocol courtesy after write integrity is settled; a client that
+        // stopped reading must not pin SIGTERM or shared dependency cleanup.
+        if (!(await waitForStdioProtocolClose(protocolClose))) {
+          process.stderr.write(
+            `enquire: stdio protocol close exceeded ${STDIO_PROTOCOL_CLOSE_GRACE_MS}ms; continuing teardown\n`
+          );
+        }
+        await shutdownStdioDeps(deps);
+      }
+    })();
+    return shutdownPromise;
+  };
+  let signalExitScheduled = false;
   const onSignal = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    void shutdownStdioDeps(deps).finally(() => process.exit(0));
+    if (signalExitScheduled) return;
+    signalExitScheduled = true;
+    void shutdown().finally(() => process.exit(0));
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
@@ -1016,9 +1084,9 @@ export async function startServer(opts: ServeOptions): Promise<void> {
   // exit. Guarded so the async work it schedules can't re-trigger beforeExit.
   let beforeExitRan = false;
   process.on("beforeExit", () => {
-    if (beforeExitRan || shuttingDown) return;
+    if (beforeExitRan) return;
     beforeExitRan = true;
-    void shutdownStdioDeps(deps);
+    void shutdown();
   });
 }
 

@@ -408,6 +408,132 @@ jobs:
       - name: JSON-RPC smoke test (FTS5 --persistent-index path)
         run: node scripts/smoke.mjs "${{ steps.vault.outputs.path }}" --with-fts
 
+  # v4.0.0-rc.1 — official MCP client v2 against the built public entries.
+  # Unlike the raw JSON-RPC smoke, this proves version negotiation, SDK
+  # serialization, transport adapters, inventory parity, and a real read-only
+  # call across modern/legacy × stdio/HTTP. The script creates only a synthetic
+  # runner vault and includes auth, traversal, and write-surface negative controls.
+  protocol-conformance-matrix:
+    name: protocol-conformance (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_SCRIPT_SHELL: ${{ matrix.script_shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+            script_shell: /bin/bash
+          - label: windows
+            os: windows-2025
+            script_shell: 'C:\Program Files\Git\bin\bash.exe'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install deps (npm ci with retry)
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed; retrying in 15s"
+            sleep 15
+          done
+      - run: npm run build
+      - name: Verify modern and legacy stdio/HTTP with official client v2
+        run: node scripts/protocol-conformance.mjs
+
+  protocol-conformance:
+    name: protocol-conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: protocol-conformance-matrix
+    if: ${{ always() }}
+    steps:
+      - name: Require every protocol-conformance platform
+        env:
+          MATRIX_RESULT: ${{ needs['protocol-conformance-matrix'].result }}
+        run: |
+          if [ "$MATRIX_RESULT" != "success" ]; then
+            echo "::error::protocol-conformance matrix result=$MATRIX_RESULT"
+            exit 1
+          fi
+          echo "All protocol-conformance platform lanes passed"
+
+  # v4.0.0-rc.1 — test the artifact users install, not only the checkout.
+  # Every OS packs the built tree, installs it normally and with
+  # --omit=optional, typechecks all public subpaths, executes the packaged CLI,
+  # and exercises Vault privacy/read-only defaults. Matrix legs have explicit
+  # names for diagnostics; the aggregate `package-consumer` job below is the
+  # single fail-closed release context.
+  package-consumer-matrix:
+    name: package-consumer (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_SCRIPT_SHELL: ${{ matrix.script_shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+            script_shell: /bin/bash
+          - label: windows
+            os: windows-2025
+            script_shell: 'C:\Program Files\Git\bin\bash.exe'
+          - label: macos
+            os: macos-latest
+            script_shell: /bin/bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install deps (npm ci with retry)
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed; retrying in 15s"
+            sleep 15
+          done
+      - run: npm run build
+      - name: Verify packed consumers with and without optional dependencies
+        run: node scripts/package-consumer.mjs
+
+  package-consumer:
+    name: package-consumer
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: package-consumer-matrix
+    if: ${{ always() }}
+    steps:
+      - name: Require every package-consumer platform
+        env:
+          MATRIX_RESULT: ${{ needs['package-consumer-matrix'].result }}
+        run: |
+          if [ "$MATRIX_RESULT" != "success" ]; then
+            echo "::error::package-consumer matrix result=$MATRIX_RESULT"
+            exit 1
+          fi
+          echo "All package-consumer platform lanes passed"
+
   audit:
     # v2.0.0-beta.3: elevate from --audit-level=high to moderate for prod
     # deps. Pre-fix, the ip-address moderate XSS advisory sat undetected

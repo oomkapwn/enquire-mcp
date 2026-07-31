@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0-rc.1] — 2026-07-31
+
+> **TL;DR:** **enquire now uses the official MCP TypeScript SDK v2 and serves the final MCP `2026-07-28` protocol without abandoning supported legacy clients.** One v2 registration factory exposes the same 46 tools, 19 prompts and resources over era-aware stdio, strict per-request modern HTTP, and the existing optional stateful legacy HTTP lifecycle. A malformed or unsupported modern claim cannot fall back to legacy. Persistent writes on stdio and every HTTP leg use explicit shutdown accounting, so shared indexes and vault resources cannot close ahead of accepted work. Two new fail-closed release contexts exercise the official v2 client across protocol eras and install the public tarball on Linux, Windows and macOS. Tool names/arguments, prompt/resource schemas, CLI behavior, privacy/write gates and on-disk formats remain compatible; the deliberate major break is the nominal TypeScript SDK type returned by `buildMcpServer()`.
+>
+> **Method note:** the migration was mapped against exact `main`, the pinned official SDK v2 `2.0.0` migration guide, its `2026-07-28` support contract, and its legacy-client serving guidance before edits began. The previously shipped rc.31 composition facade remained the rollback seam, then every registration schema, request context, stdio/HTTP lifecycle, package boundary and release gate was migrated as one explicit major candidate. Under D-45, no install, build, lint, test, coverage, smoke, OIA, package-consumer, client-runtime, benchmark or evaluation workload ran on the maintainer MacBook; all executable evidence is delegated to disposable GitHub-hosted runners.
+
+### Official SDK v2 boundary
+
+- **The monolithic SDK v1 package is gone.** Runtime dependencies are exact `@modelcontextprotocol/node@2.0.0` and `@modelcontextprotocol/server@2.0.0`; exact `@modelcontextprotocol/client@2.0.0` is development-only for conformance evidence. Source, public package metadata and the lockfile contain no `@modelcontextprotocol/sdk` dependency.
+- **All 46 tools and all 19 prompts use v2-native object schemas.** Registration keeps the project-owned allowlist-first/denylist-second facade, but every public input/output contract is a `z.object(...)` and the nine handlers that inspect transport metadata read it through v2's `ctx.mcpReq` boundary.
+- **One cheap server factory feeds every transport.** Dependency preparation still occurs once per process. Each protocol connection/request gets a fresh `McpServer` registration surface over those shared prepared dependencies, preserving the existing tool/prompt/resource inventory without private SDK state reuse.
+- **The programmatic break is explicit and narrow.** `buildMcpServer()` retains its name and parameters but now returns `McpServer` from `@modelcontextprotocol/server@2.0.0`. A TypeScript consumer that names the old v1 nominal class must change its import/type expectation; the exported enquire symbol set is otherwise unchanged.
+
+### Dual-era transports and shutdown integrity
+
+- **stdio is era-aware through the official v2 Node entrypoint.** One process-level aggregate `WriteRequestTracker` is passed into every registered handler. Shutdown closes admission, closes the SDK handle, requests rollback for cancellation-safe batches, waits for accepted writes, and only then shuts shared persistence dependencies.
+- **Modern HTTP is strict and per-request.** The official SDK v2 modern handler owns MCP `2026-07-28` exchanges. Each accepted request gets a fresh registered server; aggregate write accounting is shared with legacy-stateless traffic and remains process-wide. Modern traffic does not allocate or attach to a legacy session.
+- **Supported legacy HTTP keeps the established lifecycle.** Default legacy POST remains stateless. `--stateful` preserves bounded sticky sessions, GET/SSE and idempotent DELETE through the official v2 legacy Node transport and the existing session registry/write tracker.
+- **Protocol confusion fails closed.** A POST must carry an unambiguous `application/json` media type and is parsed exactly once before the official classifier selects its era. Every non-legacy result stays on the modern path; malformed/unsupported modern input is never retried as legacy, and a modern request carrying a legacy session id cannot bind to that session. Exact-Origin admission, authentication, rate limiting and body bounds remain ahead of both legs.
+- **All accepted write paths share the same close ordering.** Modern and legacy-stateless HTTP share an aggregate tracker; legacy stateful sessions keep their session trackers. Shutdown stops admission, grants bounded ordinary-request grace, rolls back safe batches, drains finish-only writes, closes transports, and then releases the vault/index dependencies. Concurrent programmatic HTTP shutdown calls join one memoized teardown rather than racing the integrity tail with an early TCP close.
+
+### Remote release evidence
+
+- **`protocol-conformance` is a required aggregate.** Blocking Linux and Windows lanes build on GitHub, then drive the exact official client v2 through legacy and modern stdio, legacy and modern HTTP (stateless and stateful), exact inventories, real resource/prompt/read calls, traversal/auth/media-type/session negatives, and shutdown. Unsupported or malformed modern claims must fail without legacy fallback.
+- **`package-consumer` is a required three-OS aggregate.** Linux, Windows and macOS install the packed public tarball both normally and with optional dependencies omitted, validate every public export/subpath, prove the v2 nominal server type, exercise CLI/version and read-only vault behavior, and fail if source/private coordination material or SDK v1 leaks into the package.
+- **Release publication now names 11 direct required contexts.** Both new matrix aggregates are `always()`/fail-closed prerequisites of the release workflow. Existing protected Linux/Node, Windows hostile-filesystem/startup-interlock, smoke, audit, coverage, docs, OIA, Docker and CodeQL evidence remains additive rather than weakened.
+
+### Tests (1807)
+
+- Twelve new HTTP transport declarations cover strict modern routing, supported legacy routing, stateful compatibility, quote-aware JSON media types, explicit `415`, one-body parsing, no-downgrade negatives, modern CORS, protocol/session isolation and aggregate write shutdown.
+- Existing lifecycle and release-integrity declarations now structurally pin stdio's aggregate tracker/order, the exact protocol/package OS matrices, every aggregate dependency/result expression, exact scripts and retry/floor requirements, plus negative mutations that remove a platform, disable a gate or weaken fail-closed aggregation.
+- No benchmark or evaluation result changed, and no new retrieval-quality claim is made.
+
+**1795 → 1807 source tests. 9 → 11 directly enumerated release-required contexts. npm `@latest` remains v3.11.6 until an explicit stable-promotion decision.**
+
 ## [3.12.0-rc.31] — 2026-07-31
 
 > **TL;DR:** **tool allow/deny registration is now composition-based instead of overwriting the MCP SDK server during adapter construction.** A gated facade intercepts `registerTool`, invokes forwarded methods against the original raw server, and remains the returned runtime facade so programmatic late registrations preserve their v3 filter semantics. The 46-tool, 19-prompt and resource surface, emitted schemas, dependencies, transports, CLI and persistence formats are unchanged. This is the deliberately contract-preserving rollback seam before the separately approved SDK v2 / MCP `2026-07-28` major migration.

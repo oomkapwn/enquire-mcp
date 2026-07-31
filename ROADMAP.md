@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-31 (v3.12.0-rc.31 candidate: a non-monkey-patching MCP registration seam ahead of the approved SDK v2 major migration, on top of rc.30's agent lifecycle recipes and launch kit).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-31 (`v4.0.0-rc.1` candidate: official TypeScript SDK v2, strict MCP `2026-07-28` plus supported legacy serving, and remote protocol/package evidence; the published v3 registration seam remains the rollback boundary).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,9 +19,9 @@ Already shipped and differentiating:
 - **Structured Obsidian documents** — Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1795 tests, 9 release-required CI checks (7 currently branch-protected), plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1807 tests, 11 release-required CI checks (7 currently branch-protected), including official-client protocol conformance and a three-OS packed-consumer aggregate, plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
 
-Current **v3.12.0 `@rc` preview** closes activation, ordinary watcher-generation and mainstream local-filesystem hardlink gaps: `first-run` remains non-destructive until explicit `--apply`; watched startup holds a guarded final-state activation barrier; and live Markdown/PDF changes stage every enabled retrieval sink from one captured/revalidated path generation before synchronous publication. An admitted hardlink event inventories and independently refreshes every discovered exact in-vault alias without case/Unicode folding; every missing origin inventories, while unavailable identity uses a serialized count-capped fallback. Fatal staging/embedding failures retain the previous generation, while sink-mutation uncertainty is quarantined until restart. Optional OCR stays fail-soft and clears stale semantic rows when a new image-only PDF cannot be read. Deliberate same-account A → B → A path swaps, unadmitted-only alias events and alias completeness above the configured inventory cap remain explicit follow-ups/boundaries. The manual activation commands remain available independently and emit an exact idempotent resume path on failure.
+The **v4.0.0 `@rc` preview** keeps those v3 activation, watcher-generation and mainstream local-filesystem hardlink guarantees while moving the public transports to official MCP SDK v2. Era-aware stdio and strict modern HTTP (`2026-07-28`) coexist with supported legacy clients from one registration factory; malformed modern claims never downgrade. Aggregate write tracking keeps shared persistence behind active modern/stdio work, and new remote gates exercise the official client plus the packed public package across Linux, Windows and macOS. The single intentional programmatic break is the nominal SDK type returned by `buildMcpServer()`; tool/prompt/resource, CLI, privacy, write-gate and storage behavior remain compatible. npm `@latest` remains stable v3 pending the explicit stable-promotion decision.
 
 ## Leadership plan (why the roadmap is shaped this way)
 
@@ -50,9 +50,10 @@ lead immediately visible and independently reproducible:
   client-specific install actions now lead into a benefit-led Pages landing;
   lifecycle recipes and a packageable one-click route are the next conversion
   layer.
-- **Meet the modern MCP contract as a real major.** The final 2026-07-28
-  protocol and TypeScript SDK v2 migration is RFC-gated for `4.0.0-rc.1`;
-  no partial v1 shim will be marketed as compliance.
+- **Meet the modern MCP contract as a real major.** The approved `4.0.0-rc.1`
+  candidate moves the final 2026-07-28 protocol boundary to TypeScript SDK v2,
+  with separate strict-modern and supported-legacy paths rather than a partial
+  v1 compatibility claim.
 - **Package only the safe install tier.** After the v4 migration, the first
   MCPB target is Basic read-only, pure JavaScript, explicit-vault and
   fixed-tool-allowlist. Native hybrid/model/OCR/index dependencies stay out of
@@ -61,7 +62,7 @@ lead immediately visible and independently reproducible:
 The durable positioning is concrete: **the complete local-first long-term
 memory backend grounded in the vault you own**. The proof stack lives in
 [`docs/COMPARISON.md`](./docs/COMPARISON.md), [`docs/benchmarks.md`](./docs/benchmarks.md),
-and the 9-gate release chain.
+and the 11-gate release chain.
 
 ---
 
@@ -121,7 +122,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 ## Tier 4 — Major contract and safe distribution
 
-- [ ] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — RFC-gated
+- [x] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — approved major candidate; official modern/legacy handlers, no-downgrade routing, write-drain parity, protocol-conformance and packed-consumer gates
   semver-major migration. Inventory protocol/SDK changes, preserve the stable
   v3 contract where possible, publish an explicit compatibility matrix, and
   validate every release gate remotely. A hand-built “modern MCP” shim on SDK

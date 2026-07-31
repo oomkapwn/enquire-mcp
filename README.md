@@ -21,10 +21,10 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1795%20contracts-brightgreen.svg)](#️-trust)
+[![tests](https://img.shields.io/badge/tests-1807%20contracts-brightgreen.svg)](#️-trust)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
-[![MCP](https://img.shields.io/badge/MCP-1.29-8A2BE2.svg)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 
 **[⚡ One-command install](#-quick-start) · [🏆 Why #1](#why-number-one) · [🧠 Use cases](#-use-cases) · [📊 Proof](./docs/benchmarks.md) · [🤖 AI index](./llms.txt) · [📖 API](https://oomkapwn.github.io/enquire-mcp/api/)**
@@ -69,7 +69,7 @@ One install turns your existing vault into a **persistent, queryable knowledge d
 > 5. **A clear data boundary.** enquire initiates zero outbound calls during serve and sends no telemetry. It returns requested context only to the MCP client you connect; that client's own privacy terms govern any later cloud processing. See the exact [privacy policy](./SECURITY.md#privacy-policy).
 > 6. **Vendor-neutral memory.** Your source knowledge remains in portable files. Switch agents or model providers without rebuilding a proprietary memory silo.
 
-**46 tools · 19 MCP prompts · 1795 unit tests · 50+ languages · v3.11.x stable · semver-bound · MIT · npm build provenance (SLSA L2).**
+**46 tools · 19 MCP prompts · 1807 unit tests · 50+ languages · v3.11.x stable + v4 SDK-v2 preview · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -91,7 +91,7 @@ Most alternatives solve one layer: an in-app similarity panel, a capable search 
 | **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
 | **One-generation live scan → FTS → ML → HNSW + quarantine** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **1795 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **1807 tests + 11 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 <sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-30. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
 
@@ -135,7 +135,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.31      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -326,15 +326,15 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **Least privilege** | `--disabled-tools` / `--enabled-tools` expose a minimal surface (e.g. a read-only research agent gets only `obsidian_search` + `obsidian_read_note`) |
 | **Path safety** | Realpath check on every read+write; symlinks-out-of-vault rejected |
 | **Privacy filter** | Verified at FTS5 + embed-db + chunk resource paths; fail-closed on empty allow-/deny-lists |
-| **HTTP transport** | Exact-Origin admission (`403` before handling), bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, strict CORS |
+| **HTTP transport** | v4 routes strict MCP `2026-07-28` requests and supported legacy clients through official SDK v2 handlers; malformed modern claims never downgrade. Exact-Origin admission (`403` before handling), bearer auth (constant-time SHA-256 + `timingSafeEqual`), per-token rate-limit, and strict CORS run before either protocol leg |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, safe-by-default) — no code execution |
 | **Cache + index files** | chmod 0600, parent dir 0700 |
 | **Watcher consistency** | Final-state startup activation waits for late sinks; each ordinary live Markdown/PDF attempt stages FTS5 + embeddings from one captured/revalidated path generation, retries one drift once, commits without yielding, and quarantines an uncertain semantic route instead of serving mixed state. Within the configured inventory bound, the v3.12 RC also discovers and independently refreshes every admitted hardlink path without folding case or Unicode identities; above it, live events reconcile only the exact/previously-known group and say so explicitly |
-| **1795 tests · 9 release-required CI checks · 7 branch-protected** | Current verified release posture; the operational breakdown is pinned below. |
-| **CI** | `release.yml` directly enumerates **9 release gate contexts**, all run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, and `oia`. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, rather than a tenth gate directly listed by the release workflow. Branch protection currently enforces **7** contexts; `docs` and `oia` are release-required but unprotected (live-verified 2026-07-23). `test-macos` is the only `continue-on-error` advisory job. `docker` can fail the CI workflow but is unprotected; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 9 directly listed gates on the tagged SHA. |
+| **1807 tests · 11 release-required CI checks · 7 branch-protected** | Current verified release posture; the operational breakdown is pinned below. |
+| **CI** | `release.yml` directly enumerates **11 release gate contexts**, all run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, and `package-consumer`. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`; `protocol-conformance` aggregates blocking Linux + Windows official-client lanes, and `package-consumer` aggregates blocking Linux, Windows, and macOS packed-install lanes. Branch protection currently enforces **7** contexts; `docs`, `oia`, `protocol-conformance`, and `package-consumer` are release-required but unprotected (live-verified 2026-07-23 for the branch-protection snapshot). `test-macos` is the only `continue-on-error` advisory job. `docker` can fail the CI workflow but is unprotected; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 11 directly listed gates on the tagged SHA. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
-| **Stability** | v3.0+ semver-bound — every CLI flag, tool name, MCP resource, prompt, exported symbol is contract |
+| **Stability** | v3 remains the `@latest` semver-bound stable line. The `v4.0.0-rc.1` preview preserves tool/prompt/resource, CLI, privacy, write-gate and storage behavior while intentionally changing `buildMcpServer()`'s nominal SDK type; see [STABILITY.md](./STABILITY.md) |
 
 Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILITY.md](./STABILITY.md)** · Vulns: `oomkapwn@gmail.com`.
 
@@ -352,7 +352,7 @@ Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY
 
 **Languages?** The default embedder is `paraphrase-multilingual-MiniLM-L12-v2` (50+ languages), validated end-to-end on Russian + English bilingual vaults. The default cross-encoder reranker is `rerank-bge` (English-only; the only catalog alias verified end-to-end); multilingual reranker aliases currently fail their transformers.js tokenizer compatibility check. CJK/Thai/Khmer tokenization uses `Intl.Segmenter`.
 
-**Run remotely?** Yes — `serve-http` exposes the same server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http). Front with Tailscale Funnel or Cloudflare Tunnel for HTTPS. Works with claude.ai web, ChatGPT custom GPT, Cursor HTTP mode, mobile MCP clients. See **[docs/http-transport.md](./docs/http-transport.md)**.
+**Run remotely?** Yes — `serve-http` exposes the same server over [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http). In the v4 preview, strict modern `2026-07-28` traffic and supported legacy clients use separate official SDK v2 paths backed by one registered surface; malformed or unsupported modern claims never fall back to legacy. Front with Tailscale Funnel or Cloudflare Tunnel for HTTPS. Works with claude.ai web, ChatGPT custom GPT, Cursor HTTP mode, and mobile MCP clients. See **[docs/http-transport.md](./docs/http-transport.md)**.
 
 ---
 
@@ -362,7 +362,7 @@ Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY
 
 `v2.0` hybrid retrieval (BM25+TF-IDF+embeddings via RRF) · `v2.6` remote MCP · `v2.7-2.8` PDFs blended · `v2.9` BGE reranker · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` eval harness · `v2.13` HNSW · `v2.14` stateful sessions · `v2.15` late-chunking · `v2.16` HNSW persistence · `v2.17` int8 quantization · `v3.8.0` stable · `v3.8.7` HTTP transport hardening · **`v3.9.0` stable**: OCR'd PDF watcher embed-sync, HNSW in-memory live update on file changes, R-10 adaptive HNSW refill (closes the >66% excluded under-return). · **`v3.10` stable**: forgetting-aware freshness — `age_days` + `stale` flag + opt-in `--recency-weight` re-ranking + frontmatter-aware `obsidian_search`.
 
-Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.11.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` (the latest release candidate — see [CHANGELOG.md](./CHANGELOG.md)). Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.11.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` → the v4 SDK-v2 candidate; pin `@4.0.0-rc.1` for an exact preview install. Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 
@@ -371,7 +371,7 @@ Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.1
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # full suite (1795 tests)
+npm test       # full suite (1807 tests)
 npm run lint   # zero warnings
 npm run build  # tsc → dist/
 ```

@@ -28,9 +28,9 @@ node scripts/smoke.mjs ~/Documents/MyVault
 ## What we don't accept
 
 - Lockstep cross-cutting refactors (e.g. swapping the tool registration pattern). Open an issue first.
-- New runtime dependencies unless the case is overwhelming. We currently ship **5 mandatory** and **6 optional** (each opt-in via a CLI flag and lazy-loaded — markdown-only path stays zero-cost):
+- New runtime dependencies unless the case is overwhelming. We currently ship **6 mandatory** and **6 optional** (each optional dependency is feature-gated and lazy-loaded — the markdown-only path stays zero-cost):
 
-  **Mandatory:** `@modelcontextprotocol/sdk`, `chokidar`, `commander`, `js-yaml`, `zod`.
+  **Mandatory:** exact `@modelcontextprotocol/server@2.0.0`, exact `@modelcontextprotocol/node@2.0.0`, `chokidar`, `commander`, `js-yaml`, `zod`. `@modelcontextprotocol/client@2.0.0` is dev/test-only and powers the remote protocol-conformance gate.
 
   **Optional (feature-gated):**
   - `better-sqlite3` — required by `--persistent-index` (FTS5) and `build-embeddings` (embed-db).

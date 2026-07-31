@@ -27,6 +27,7 @@ import {
   generateBearerToken,
   type HttpServeOptions,
   isInitializeRequest,
+  isJsonContentType,
   isPersistentWriteRequest,
   makeHttpShutdownHandler,
   parseMaxFileBytes,
@@ -41,6 +42,99 @@ import { DEFAULT_MAX_FILE_BYTES, Vault } from "../src/vault.js";
 import { WriteRequestTracker } from "../src/write-lifecycle.js";
 
 let root: string;
+
+const MODERN_PROTOCOL_VERSION = "2026-07-28";
+const MODERN_ENVELOPE = {
+  "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+  "io.modelcontextprotocol/clientInfo": { name: "enquire-http-test", version: "1.0.0" },
+  "io.modelcontextprotocol/clientCapabilities": {}
+};
+
+function modernDiscoverBody(id: string | number = 1): Record<string, unknown> {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "server/discover",
+    params: { _meta: MODERN_ENVELOPE }
+  };
+}
+
+function modernHttpV2Problems(source: string): string[] {
+  const problems: string[] = [];
+  const lifecycleStart = source.indexOf("function createModernHttpLifecycle(");
+  const handlerStart = source.indexOf("export function createHttpHandler(");
+  const shutdownStart = source.indexOf("export async function shutdownHttpServer(");
+  const shutdownEnd = source.indexOf("export function makeHttpShutdownHandler(", Math.max(0, shutdownStart));
+  const lifecycle =
+    lifecycleStart >= 0 && handlerStart > lifecycleStart ? source.slice(lifecycleStart, handlerStart) : "";
+  const handler = handlerStart >= 0 && shutdownStart > handlerStart ? source.slice(handlerStart, shutdownStart) : "";
+  const shutdown = shutdownStart >= 0 && shutdownEnd > shutdownStart ? source.slice(shutdownStart, shutdownEnd) : "";
+
+  if (!lifecycle.includes('createMcpHandler(() => buildMcpServer(deps, opts, writeTracker), {')) {
+    problems.push("modern: factory does not attach the aggregate write tracker");
+  }
+  if (!lifecycle.includes('legacy: "reject"')) {
+    problems.push("modern: handler is not strict against legacy fallback");
+  }
+  const closeAdmission = lifecycle.indexOf("writeTracker.closeAdmission(");
+  const abortRollback = lifecycle.indexOf("await writeTracker.abortRollbackSafe(");
+  const waitForWrites = lifecycle.indexOf("await writeTracker.waitForAll();");
+  const closeHandler = lifecycle.indexOf("const closeTask = Promise.resolve()");
+  const boundedClose = lifecycle.indexOf("await waitForBoundedSettlement(closeTask, closeMs)");
+  if (
+    !(
+      closeAdmission >= 0 &&
+      closeAdmission < abortRollback &&
+      abortRollback < waitForWrites &&
+      waitForWrites < closeHandler &&
+      closeHandler < boundedClose
+    )
+  ) {
+    problems.push("modern: write integrity tail does not precede bounded handler close");
+  }
+  if (!lifecycle.includes("handleStatelessRequest(req, res, deps, opts, body, writeTracker)")) {
+    problems.push("legacy stateless: dispatch is not owned by the shared write tracker");
+  }
+  if (!handler.includes("const server = buildMcpServer(deps, opts, writeTracker);")) {
+    problems.push("legacy stateless: server factory bypasses the shared write tracker");
+  }
+  const contentGuard = handler.indexOf(
+    'if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {'
+  );
+  const bodyRead = handler.indexOf("body = await readJsonBody(req, maxBodyBytes);");
+  const classifier = handler.indexOf("if (!(await isLegacyRequest(probe, body))) {");
+  const legacySessions = handler.indexOf("registry.sweepIdle();");
+  if (!(contentGuard >= 0 && contentGuard < bodyRead)) {
+    problems.push("routing: Content-Type 415 guard does not precede JSON parsing");
+  }
+  if ((handler.match(/readJsonBody\(req, maxBodyBytes\)/g) ?? []).length !== 1) {
+    problems.push("routing: Node request body is not read exactly once");
+  }
+  if (
+    !handler.includes("const probe = await toWebRequest(req, body);") ||
+    !handler.includes("await modern.serve(req, res, body);")
+  ) {
+    problems.push("routing: parsed body is not forwarded to modern classification and dispatch");
+  }
+  if (!(classifier >= 0 && classifier < legacySessions)) {
+    problems.push("routing: official classifier does not precede legacy session requirements");
+  }
+  const awaitProtocolOwners = shutdown.indexOf("await Promise.all([modernClose, legacyClose]);");
+  const closeSharedDeps = shutdown.indexOf("await extras.deps.watcher?.close();");
+  if (!(awaitProtocolOwners >= 0 && awaitProtocolOwners < closeSharedDeps)) {
+    problems.push("shutdown: protocol owners do not close before shared dependencies");
+  }
+  if (
+    !source.includes("const httpServerShutdowns = new WeakMap<HttpServer, Promise<void>>();") ||
+    !shutdown.includes("const existingShutdown = httpServerShutdowns.get(server);") ||
+    !shutdown.includes("if (existingShutdown) return existingShutdown;") ||
+    !shutdown.includes("httpServerShutdowns.set(server, shutdownTask);") ||
+    !shutdown.includes("return shutdownTask;")
+  ) {
+    problems.push("shutdown: concurrent callers do not join one memoized teardown");
+  }
+  return problems;
+}
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-http-"));
@@ -474,6 +568,141 @@ describe("SessionRegistry (v2.14.0)", () => {
   });
 });
 
+describe("modern HTTP lifecycle (SDK v2)", () => {
+  function makeLifecycle(writeTracker: WriteRequestTracker, handlerClose?: () => Promise<void>) {
+    const out: NonNullable<Parameters<typeof createHttpHandler>[2]> = { registry: null };
+    createHttpHandler(
+      {} as Parameters<typeof createHttpHandler>[0],
+      {
+        vault: "/unused-modern-lifecycle-test",
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: "modern-lifecycle-test-token-1234567890",
+        rateLimitPerMinute: 0,
+        installSignalHandlers: false
+      },
+      out,
+      {
+        modernDrainMs: 0,
+        modernWriteTracker: writeTracker,
+        ...(handlerClose ? { modernCloseMs: 0, modernHandlerClose: handlerClose } : {})
+      }
+    );
+    if (!out.modern) throw new Error("modern lifecycle was not published");
+    return out.modern;
+  }
+
+  it("waits for an owned finish-only write before closing the SDK handler", async () => {
+    const tracker = new WriteRequestTracker();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const activeWrite = tracker.run("modern-write", new AbortController().signal, "finish", async () => gate);
+    expect(tracker.activeCount).toBe(1);
+
+    const lifecycle = makeLifecycle(tracker);
+    let closeSettled = false;
+    const firstClose = lifecycle.close();
+    expect(lifecycle.close()).toBe(firstClose);
+    const closing = firstClose.then(() => {
+      closeSettled = true;
+    });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(closeSettled, "finish-only mutation must outlive the ordinary zero-ms grace").toBe(false);
+
+    release?.();
+    await activeWrite;
+    await closing;
+    expect(tracker.activeCount).toBe(0);
+    await expect(
+      tracker.run("late-write", new AbortController().signal, "finish", async () => undefined)
+    ).rejects.toThrow(/cancelled before mutation/);
+  });
+
+  it("negative control: does not mistake an unrelated tracker for an owned modern write", async () => {
+    const owned = new WriteRequestTracker();
+    const unrelated = new WriteRequestTracker();
+    let release: (() => void) | undefined;
+    const activeWrite = unrelated.run("foreign-write", new AbortController().signal, "finish", async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    expect(unrelated.activeCount).toBe(1);
+
+    await makeLifecycle(owned).close();
+    expect(unrelated.activeCount).toBe(1);
+    release?.();
+    await activeWrite;
+
+    // A protocol close that never settles must not pin the lifecycle after
+    // persistent-write integrity is already complete.
+    let closeCalls = 0;
+    const neverClosing = new Promise<void>(() => {});
+    const bounded = makeLifecycle(new WriteRequestTracker(), () => {
+      closeCalls += 1;
+      return neverClosing;
+    });
+    await bounded.close();
+    expect(closeCalls).toBe(1);
+  });
+});
+
+describe("modern HTTP dual-era structural invariant", () => {
+  it("keeps official routing and write-safe shutdown in the production path", async () => {
+    const source = await fs.readFile(path.resolve("src/http-transport.ts"), "utf8");
+    expect(modernHttpV2Problems(source)).toEqual([]);
+  });
+
+  it("negative control: detects tracker bypass, unsafe close order, and routing downgrade", async () => {
+    const source = await fs.readFile(path.resolve("src/http-transport.ts"), "utf8");
+    const broken = source
+      .replace("buildMcpServer(deps, opts, writeTracker)", "buildMcpServer(deps, opts)")
+      .replace(
+        'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
+          "        await writeTracker.waitForAll();",
+        'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
+          "        void writeTracker.waitForAll();"
+      )
+      .replace(
+        "handleStatelessRequest(req, res, deps, opts, body, writeTracker)",
+        "handleStatelessRequest(req, res, deps, opts, body)"
+      )
+      .replace(
+        "const server = buildMcpServer(deps, opts, writeTracker);",
+        "const server = buildMcpServer(deps, opts);"
+      )
+      .replace("await waitForBoundedSettlement(closeTask, closeMs)", "await closeTask")
+      .replace(
+        'if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {',
+        'if (req.method === "POST") {'
+      )
+      .replace("if (!(await isLegacyRequest(probe, body))) {", "if (false) {")
+      .replace(
+        "const probe = await toWebRequest(req, body);",
+        "await readJsonBody(req, maxBodyBytes);\n          const probe = await toWebRequest(req);"
+      )
+      .replace("await Promise.all([modernClose, legacyClose]);", "void modernClose; void legacyClose;")
+      .replace("httpServerShutdowns.set(server, shutdownTask);", "void shutdownTask;");
+
+    expect(modernHttpV2Problems(broken)).toEqual(
+      expect.arrayContaining([
+        "modern: factory does not attach the aggregate write tracker",
+        "modern: write integrity tail does not precede bounded handler close",
+        "legacy stateless: dispatch is not owned by the shared write tracker",
+        "legacy stateless: server factory bypasses the shared write tracker",
+        "routing: Content-Type 415 guard does not precede JSON parsing",
+        "routing: Node request body is not read exactly once",
+        "routing: parsed body is not forwarded to modern classification and dispatch",
+        "routing: official classifier does not precede legacy session requirements",
+        "shutdown: protocol owners do not close before shared dependencies",
+        "shutdown: concurrent callers do not join one memoized teardown"
+      ])
+    );
+  });
+});
+
 describe("RateLimiter (v2.6.0)", () => {
   it("allows requests under budget", () => {
     const lim = new RateLimiter(5);
@@ -525,6 +754,31 @@ describe("RateLimiter (v2.6.0)", () => {
     // After reset, the bucket is fresh: 2 more should succeed.
     expect(lim.consume("k", 200)).toBe(true);
     expect(lim.consume("k", 201)).toBe(true);
+  });
+});
+
+describe("isJsonContentType (SDK v2 HTTP admission)", () => {
+  it("accepts the JSON essence with case variants and parameters", () => {
+    expect(isJsonContentType("application/json")).toBe(true);
+    expect(isJsonContentType("Application/JSON; charset=utf-8")).toBe(true);
+    expect(isJsonContentType("application/json;")).toBe(true);
+    expect(isJsonContentType('application/json; note="a,b"')).toBe(true);
+    expect(isJsonContentType('application/json; note="a\\\",b"')).toBe(true);
+    // Match the SDK parser fallback: a malformed parameter tail does not
+    // obscure an otherwise unambiguous JSON media-type essence.
+    expect(isJsonContentType("application/json; charset=")).toBe(true);
+    expect(isJsonContentType('application/json; note="unfinished')).toBe(true);
+  });
+
+  it("rejects missing, misleading, duplicate, and non-JSON media types", () => {
+    expect(isJsonContentType(undefined)).toBe(false);
+    expect(isJsonContentType("")).toBe(false);
+    expect(isJsonContentType(["application/json", "text/plain"])).toBe(false);
+    expect(isJsonContentType("text/plain; example=application/json")).toBe(false);
+    expect(isJsonContentType("application/json; charset=utf-8, text/plain")).toBe(false);
+    expect(isJsonContentType('application/json; note="a,b", text/plain')).toBe(false);
+    expect(isJsonContentType('application/json; note="a,b')).toBe(false);
+    expect(isJsonContentType("application/problem+json")).toBe(false);
   });
 });
 
@@ -852,6 +1106,29 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
     }
   });
 
+  it("serves modern server/discover without initialize or a session id", async () => {
+    const s = await spawn();
+    try {
+      const response = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+          "Mcp-Method": "server/discover"
+        },
+        body: JSON.stringify(modernDiscoverBody("discover-1"))
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Mcp-Session-Id")).toBeNull();
+      const body = (await response.json()) as { result: { supportedVersions: string[] } };
+      expect(body.result.supportedVersions).toContain(MODERN_PROTOCOL_VERSION);
+    } finally {
+      await s.close();
+    }
+  });
+
   it("handles many sequential stateless requests cleanly (v3.9.0-rc.16 — per-request cleanup)", async () => {
     // Each stateless POST builds a fresh McpServer + transport and must close
     // both on response 'close'. Pre-rc.16 the cleanup was wired only on the
@@ -974,9 +1251,15 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://claude.ai");
       expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
       expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+      expect(res.headers.get("Access-Control-Allow-Headers")).toContain("MCP-Protocol-Version");
+      expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Mcp-Method");
+      expect(res.headers.get("Access-Control-Allow-Headers")).toContain("Mcp-Name");
       // v3.10.0-rc.62 (HTTP-CORS-EXPOSE-SESSION-ID) — a browser MCP client must be able to READ
       // the Mcp-Session-Id the server returns on `initialize`; that requires it in Expose-Headers.
       expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Mcp-Session-Id");
+      expect(res.headers.get("Access-Control-Expose-Headers")).toContain("WWW-Authenticate");
+      expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Last-Event-ID");
+      expect(res.headers.get("Access-Control-Expose-Headers")).toContain("MCP-Protocol-Version");
     } finally {
       await s.close();
     }
@@ -990,7 +1273,9 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
         method: "OPTIONS",
         headers: { Origin: "https://claude.ai", "Access-Control-Request-Method": "POST" }
       });
-      expect(res.headers.get("Access-Control-Expose-Headers")).toBe("Mcp-Session-Id");
+      expect(res.headers.get("Access-Control-Expose-Headers")).toBe(
+        "Mcp-Session-Id, WWW-Authenticate, Last-Event-ID, MCP-Protocol-Version"
+      );
     } finally {
       await s.close();
     }
@@ -1147,6 +1432,31 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
 
   // v3.6 — branches coverage. Exercise stateless-mode body-parse error
   // (sendJsonRpcError -32700) + the DELETE-method-on-stateless 405 branch.
+  it("returns 415 before parsing or era fallback for an invalid Content-Type", async () => {
+    const s = await spawn();
+    try {
+      const res = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain; example=application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+          "Mcp-Method": "tools/list"
+        },
+        // Malformed bytes are deliberate: 415 must win over JSON parse 400,
+        // and the modern header must not send this request to legacy routing.
+        body: "{not valid json"
+      });
+      expect(res.status).toBe(415);
+      const body = (await res.json()) as { error: { code: number; message: string } };
+      expect(body.error.code).toBe(-32000);
+      expect(body.error.message).toContain("Content-Type must be application/json");
+    } finally {
+      await s.close();
+    }
+  });
+
   it("returns 400 + -32700 parse error on malformed JSON (stateless)", async () => {
     const s = await spawn();
     try {
@@ -1246,6 +1556,64 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       expect(sessionId).toMatch(/^[0-9a-f]{32}$/i);
       // Drain so the connection closes cleanly.
       await rawResponse.text();
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("routes modern traffic before legacy session lookup even when a legacy session id is supplied", async () => {
+    const s = await spawnStateful();
+    try {
+      const response = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": "bogus-legacy-session",
+          "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+          "Mcp-Method": "server/discover"
+        },
+        body: JSON.stringify(modernDiscoverBody("stateful-modern"))
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Mcp-Session-Id")).toBeNull();
+      const body = (await response.json()) as { result: { supportedVersions: string[] } };
+      expect(body.result.supportedVersions).toContain(MODERN_PROTOCOL_VERSION);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("does not downgrade a malformed modern claim into legacy session routing", async () => {
+    const s = await spawnStateful();
+    try {
+      const response = await fetch(`${s.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": "bogus-legacy-session",
+          "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+          "Mcp-Method": "tools/list"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 7,
+          method: "tools/list",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+              "io.modelcontextprotocol/clientCapabilities": "malformed-on-purpose"
+            }
+          }
+        })
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: { code: number; data?: unknown } };
+      expect(body.error.code).toBe(-32602);
+      expect(JSON.stringify(body.error.data)).toContain("_meta");
     } finally {
       await s.close();
     }
@@ -1470,6 +1838,120 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     }
   });
 
+  it("gives an admitted modern exchange a bounded grace before handler close", async () => {
+    let markAdmitted: (() => void) | undefined;
+    const admitted = new Promise<void>((resolve) => {
+      markAdmitted = resolve;
+    });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const httpServer = await startHttpServer(
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: TOKEN,
+        mcpPath: "/mcp",
+        rateLimitPerMinute: 0,
+        stateful: true,
+        installSignalHandlers: false
+      },
+      {
+        modernDrainMs: 1000,
+        afterModernRequestAdmitted: async () => {
+          markAdmitted?.();
+          await gate;
+        }
+      }
+    );
+    const addr = httpServer.address() as AddressInfo;
+    const responsePromise = fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${TOKEN}`,
+        "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+        "Mcp-Method": "server/discover"
+      },
+      body: JSON.stringify(modernDiscoverBody("grace-positive"))
+    });
+    await admitted;
+    let shutdownSettled = false;
+    const shutdown = shutdownHttpServer(httpServer).then(() => {
+      shutdownSettled = true;
+    });
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(shutdownSettled).toBe(false);
+      release?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      await response.text();
+      await shutdown;
+    } finally {
+      release?.();
+      await shutdown.catch(() => {});
+    }
+  });
+
+  it("negative control: zero modern grace closes an admitted exchange before dispatch", async () => {
+    let markAdmitted: (() => void) | undefined;
+    const admitted = new Promise<void>((resolve) => {
+      markAdmitted = resolve;
+    });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const httpServer = await startHttpServer(
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: TOKEN,
+        mcpPath: "/mcp",
+        rateLimitPerMinute: 0,
+        stateful: true,
+        installSignalHandlers: false
+      },
+      {
+        modernDrainMs: 0,
+        afterModernRequestAdmitted: async () => {
+          markAdmitted?.();
+          await gate;
+        }
+      }
+    );
+    const addr = httpServer.address() as AddressInfo;
+    const responsePromise = fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${TOKEN}`,
+        "MCP-Protocol-Version": MODERN_PROTOCOL_VERSION,
+        "Mcp-Method": "server/discover"
+      },
+      body: JSON.stringify(modernDiscoverBody("grace-negative"))
+    });
+    await admitted;
+    const shutdown = shutdownHttpServer(httpServer);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      release?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(500);
+      await response.text();
+      await shutdown;
+    } finally {
+      release?.();
+      await shutdown.catch(() => {});
+    }
+  });
+
   // v3.8.7 P2-11 — shutdownHttpServer drains the registry. After the
   // call returns, a subsequent fetch to the bound address should fail
   // (TCP listener closed).
@@ -1540,8 +2022,8 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     expect(addr).toBeNull();
   });
 
-  // v3.8.7 P2-11 — second call to shutdownHttpServer is a no-op + safe.
-  it("shutdownHttpServer is idempotent — second call is a safe no-op", async () => {
+  // v3.8.7 P2-11 + v4 — concurrent/later shutdown calls join one safe task.
+  it("shutdownHttpServer is idempotent across concurrent and later calls", async () => {
     const httpServer = await startHttpServer({
       vault: root,
       port: 0,
@@ -1550,8 +2032,12 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       stateful: true,
       installSignalHandlers: false
     });
-    await shutdownHttpServer(httpServer);
-    // Second call should not throw.
+    // Concurrent callers must join the same teardown rather than letting the
+    // second call close TCP while the first still drains protocol/write owners.
+    const first = shutdownHttpServer(httpServer);
+    const concurrent = shutdownHttpServer(httpServer);
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([undefined, undefined]);
+    // A later call must remain a safe no-op over the completed memoized task.
     await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
   });
 

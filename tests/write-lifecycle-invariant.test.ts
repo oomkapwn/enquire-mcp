@@ -79,8 +79,72 @@ function registrationSeamProblems(serverSource: string): string[] {
   return problems;
 }
 
+function stdioV2ServingProblems(serverSource: string): string[] {
+  const problems: string[] = [];
+  if (!serverSource.includes('import { McpServer } from "@modelcontextprotocol/server";')) {
+    problems.push("server: McpServer is not imported from the SDK v2 server package");
+  }
+  if (!serverSource.includes('import { serveStdio } from "@modelcontextprotocol/server/stdio";')) {
+    problems.push("server: SDK v2 serveStdio entry is missing");
+  }
+  if (!serverSource.includes('import { WriteRequestTracker } from "./write-lifecycle.js";')) {
+    problems.push("server: stdio persistent-write tracker import is missing");
+  }
+  if (serverSource.includes("StdioServerTransport")) {
+    problems.push("server: legacy hand-wired stdio transport remains");
+  }
+
+  const start = serverSource.indexOf("export async function startServer(");
+  const end = serverSource.indexOf("\n/**\n * Shared \"ready\" banner", Math.max(0, start));
+  const starter = start >= 0 && end > start ? serverSource.slice(start, end) : "";
+  if ((starter.match(/prepareServerDeps\(opts\)/g) ?? []).length !== 1) {
+    problems.push("server: stdio must prepare one shared dependency generation");
+  }
+  if ((starter.match(/new WriteRequestTracker\(\)/g) ?? []).length !== 1) {
+    problems.push("server: stdio must own exactly one aggregate persistent-write tracker");
+  }
+  if (!starter.includes("serveStdio(() => buildMcpServer(deps, opts, writeTracker), {")) {
+    problems.push("server: stdio factory must build only a fresh server over shared deps");
+  }
+  if (starter.includes(".connect(")) {
+    problems.push("server: legacy direct server.connect wiring remains");
+  }
+  if (
+    !starter.includes("let shutdownPromise: Promise<void> | undefined;") ||
+    !starter.includes("if (shutdownPromise) return shutdownPromise;") ||
+    !starter.includes("shutdownPromise = (async () => {")
+  ) {
+    problems.push("server: stdio shutdown is not memoized across every exit path");
+  }
+  if (
+    !starter.includes("let signalExitScheduled = false;") ||
+    !starter.includes("if (signalExitScheduled) return;")
+  ) {
+    problems.push("server: stdio signal and beforeExit paths do not share one shutdown latch");
+  }
+  const closeAdmission = starter.indexOf("writeTracker.closeAdmission(");
+  const startProtocolClose = starter.indexOf("const protocolClose = Promise.resolve()");
+  const abortRollback = starter.indexOf("await writeTracker.abortRollbackSafe(");
+  const waitForWrites = starter.indexOf("await writeTracker.waitForAll();");
+  const boundedProtocolClose = starter.indexOf("await waitForStdioProtocolClose(protocolClose)");
+  const closeDeps = starter.indexOf("await shutdownStdioDeps(deps);");
+  if (
+    !(
+      closeAdmission >= 0 &&
+      closeAdmission < startProtocolClose &&
+      startProtocolClose < abortRollback &&
+      abortRollback < waitForWrites &&
+      waitForWrites < boundedProtocolClose &&
+      boundedProtocolClose < closeDeps
+    )
+  ) {
+    problems.push("server: stdio write integrity and bounded protocol close must precede shared dependency close");
+  }
+  return problems;
+}
+
 describe("write lifecycle inventory invariant", () => {
-  it("serializes persistent MCP mutators and preserves registration-seam receivers", async () => {
+  it("serializes persistent mutators and preserves registration/stdio factory seams", async () => {
     const [registrySource, serverSource, manifestSource] = await Promise.all([
       fs.readFile(path.resolve("src/tool-registry.ts"), "utf8"),
       fs.readFile(path.resolve("src/server.ts"), "utf8"),
@@ -88,6 +152,7 @@ describe("write lifecycle inventory invariant", () => {
     ]);
     expect(writeLifecycleProblems(registrySource, serverSource, manifestSource)).toEqual([]);
     expect(registrationSeamProblems(serverSource)).toEqual([]);
+    expect(stdioV2ServingProblems(serverSource)).toEqual([]);
 
     // Behavioral positive + negative control: allowed calls reach the raw
     // target with its original `this`; denied calls do not, and the original
@@ -150,7 +215,7 @@ describe("write lifecycle inventory invariant", () => {
     );
   });
 
-  it("(negative-control) detects lifecycle bypasses and mutable registration seams", async () => {
+  it("(negative-control) detects lifecycle, registration, and stdio seam regressions", async () => {
     const [registrySource, serverSource, manifestSource] = await Promise.all([
       fs.readFile(path.resolve("src/tool-registry.ts"), "utf8"),
       fs.readFile(path.resolve("src/server.ts"), "utf8"),
@@ -174,6 +239,58 @@ describe("write lifecycle inventory invariant", () => {
       "server: gated facade is not returned after registration",
       "server: SDK registerTool is overwritten in place"
     ]);
+
+    const legacyStdio = serverSource
+      .replace(
+        'import { McpServer } from "@modelcontextprotocol/server";',
+        'import { McpServer } from "legacy-sdk";'
+      )
+      .replace('import { serveStdio } from "@modelcontextprotocol/server/stdio";', "")
+      .replace('import { WriteRequestTracker } from "./write-lifecycle.js";', "")
+      .replace(
+        "const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
+        "const transport = new StdioServerTransport();"
+      )
+      .replace("const writeTracker = new WriteRequestTracker();", "")
+      .replace("writeTracker.closeAdmission(\"Stdio shutdown closed persistent-write admission\");", "")
+      .replace(/\s*await writeTracker\.abortRollbackSafe\([^\n]+\);/, "")
+      .replace("        await writeTracker.waitForAll();", "");
+    expect(stdioV2ServingProblems(legacyStdio)).toEqual(
+      expect.arrayContaining([
+        "server: McpServer is not imported from the SDK v2 server package",
+        "server: SDK v2 serveStdio entry is missing",
+        "server: stdio persistent-write tracker import is missing",
+        "server: legacy hand-wired stdio transport remains",
+        "server: stdio must own exactly one aggregate persistent-write tracker",
+        "server: stdio factory must build only a fresh server over shared deps",
+        "server: legacy direct server.connect wiring remains",
+        "server: stdio write integrity and bounded protocol close must precede shared dependency close"
+      ])
+    );
+
+    const racyStdio = serverSource
+      .replace("if (shutdownPromise) return shutdownPromise;", "")
+      .replace("let signalExitScheduled = false;", "")
+      .replace("if (signalExitScheduled) return;", "")
+      .replace("await waitForStdioProtocolClose(protocolClose)", "await protocolClose.then(() => true)");
+    expect(stdioV2ServingProblems(racyStdio)).toEqual(
+      expect.arrayContaining([
+        "server: stdio shutdown is not memoized across every exit path",
+        "server: stdio signal and beforeExit paths do not share one shutdown latch",
+        "server: stdio write integrity and bounded protocol close must precede shared dependency close"
+      ])
+    );
+
+    const duplicatedDeps = serverSource.replace(
+      "serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
+      "serveStdio(async () => buildMcpServer(await prepareServerDeps(opts), opts, writeTracker), {"
+    );
+    expect(stdioV2ServingProblems(duplicatedDeps)).toEqual(
+      expect.arrayContaining([
+        "server: stdio must prepare one shared dependency generation",
+        "server: stdio factory must build only a fresh server over shared deps"
+      ])
+    );
   });
 
   it("(negative-control) detects a batch mutator misclassified as finish-only", async () => {

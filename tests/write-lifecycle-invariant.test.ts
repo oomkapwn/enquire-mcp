@@ -114,7 +114,7 @@ describe("write lifecycle inventory invariant", () => {
     expect(registrar.registerTool).toBe(firstToolMethod);
     expect(registrar.registerTool("allowed")).toBe("allowed");
     expect(registrar.registerTool("blocked")).toBeUndefined();
-    registrar.registerTool = registrar.registerTool;
+    registrar.registerTool = firstToolMethod;
     expect(registrar.registerTool).toBe(firstToolMethod);
     expect(registrar.registerTool("after-self-assignment")).toBe("after-self-assignment");
     expect(registrar.registerTool("blocked")).toBeUndefined();

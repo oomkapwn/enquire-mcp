@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createToolRegistrationAdapter } from "../src/mcp-registration.js";
 
 const TOOL_MODES = new Map<string, "finish" | "rollback">([
   ["obsidian_mark_useful", "finish"],
@@ -61,17 +62,95 @@ function writeLifecycleProblems(registrySource: string, serverSource: string, ma
   return problems;
 }
 
+function registrationSeamProblems(serverSource: string): string[] {
+  const problems: string[] = [];
+  const start = serverSource.indexOf("export function buildMcpServer(");
+  const end = serverSource.indexOf("\nexport async function startServer(", Math.max(0, start));
+  const builder = start >= 0 && end > start ? serverSource.slice(start, end).trimEnd() : "";
+  if (!builder.includes("server = createToolRegistrationAdapter(mcpServer,")) {
+    problems.push("server: project-owned tool registration adapter is missing");
+  }
+  if (!builder.endsWith("return server;\n}")) {
+    problems.push("server: gated facade is not returned after registration");
+  }
+  if (/\.registerTool\s*=/.test(builder)) {
+    problems.push("server: SDK registerTool is overwritten in place");
+  }
+  return problems;
+}
+
 describe("write lifecycle inventory invariant", () => {
-  it("every persistent MCP mutator is serialized and classified for DELETE cancellation", async () => {
+  it("serializes persistent MCP mutators and preserves registration-seam receivers", async () => {
     const [registrySource, serverSource, manifestSource] = await Promise.all([
       fs.readFile(path.resolve("src/tool-registry.ts"), "utf8"),
       fs.readFile(path.resolve("src/server.ts"), "utf8"),
       fs.readFile(path.resolve("src/tool-manifest.ts"), "utf8")
     ]);
     expect(writeLifecycleProblems(registrySource, serverSource, manifestSource)).toEqual([]);
+    expect(registrationSeamProblems(serverSource)).toEqual([]);
+
+    // Behavioral positive + negative control: allowed calls reach the raw
+    // target with its original `this`; denied calls do not, and the original
+    // object remains independently callable (the adapter never patches it).
+    const calls: string[] = [];
+    class RegistrationTarget {
+      readonly #prefix = "raw";
+
+      registerTool(name: string) {
+        calls.push(`${this.#prefix}:${name}`);
+        return name;
+      }
+
+      registerPrompt(name: string) {
+        calls.push(`${this.#prefix}:prompt:${name}`);
+      }
+    }
+    const target = new RegistrationTarget();
+    const originalRegisterTool = target.registerTool;
+    const registrar = createToolRegistrationAdapter(target, (name) => name !== "blocked");
+    expect(registrar).not.toBe(target);
+    expect(registrar).toBeInstanceOf(RegistrationTarget);
+    const firstToolMethod = registrar.registerTool;
+    expect(registrar.registerTool).toBe(firstToolMethod);
+    expect(registrar.registerTool("allowed")).toBe("allowed");
+    expect(registrar.registerTool("blocked")).toBeUndefined();
+    registrar.registerTool = registrar.registerTool;
+    expect(registrar.registerTool).toBe(firstToolMethod);
+    expect(registrar.registerTool("after-self-assignment")).toBe("after-self-assignment");
+    expect(registrar.registerTool("blocked")).toBeUndefined();
+    expect(registrar.valueOf()).toBe(registrar);
+    expect(registrar.constructor).toBe(target.constructor);
+    expect(registrar.registerPrompt).toBe(registrar.registerPrompt);
+    const firstPromptMethod = registrar.registerPrompt;
+    registrar.registerPrompt("bounded");
+    expect(calls).toEqual(["raw:allowed", "raw:after-self-assignment", "raw:prompt:bounded"]);
+    registrar.registerPrompt = function replacement(name: string) {
+      calls.push(`replacement:${name}`);
+    };
+    expect(registrar.registerPrompt).not.toBe(firstPromptMethod);
+    registrar.registerPrompt("fresh");
+    expect(target.registerTool).toBe(originalRegisterTool);
+    expect(target.registerTool("direct")).toBe("direct");
+    registrar.registerTool = function replacementTool(name: string) {
+      calls.push(`replacement-tool:${name}`);
+      return name;
+    };
+    expect(registrar.registerTool("blocked")).toBeUndefined();
+    expect(registrar.registerTool("allowed-again")).toBe("allowed-again");
+    expect(calls).toEqual([
+      "raw:allowed",
+      "raw:after-self-assignment",
+      "raw:prompt:bounded",
+      "replacement:fresh",
+      "raw:direct",
+      "replacement-tool:allowed-again"
+    ]);
+    expect(() => createToolRegistrationAdapter({}, () => true)).toThrow(
+      "MCP registration target must expose registerTool()"
+    );
   });
 
-  it("(negative-control) detects a write callback that bypasses the shared lifecycle lane", async () => {
+  it("(negative-control) detects lifecycle bypasses and mutable registration seams", async () => {
     const [registrySource, serverSource, manifestSource] = await Promise.all([
       fs.readFile(path.resolve("src/tool-registry.ts"), "utf8"),
       fs.readFile(path.resolve("src/server.ts"), "utf8"),
@@ -86,6 +165,15 @@ describe("write lifecycle inventory invariant", () => {
     expect(writeLifecycleProblems(mutated, serverSource, manifestSource)).toContain(
       "obsidian_append_to_note: callback bypasses runTrackedWrite"
     );
+
+    const monkeyPatched = serverSource
+      .replace("server = createToolRegistrationAdapter(mcpServer, (name) => {", "mcpServer.registerTool = (name) => {")
+      .replace("return server;", "return mcpServer;");
+    expect(registrationSeamProblems(monkeyPatched)).toEqual([
+      "server: project-owned tool registration adapter is missing",
+      "server: gated facade is not returned after registration",
+      "server: SDK registerTool is overwritten in place"
+    ]);
   });
 
   it("(negative-control) detects a batch mutator misclassified as finish-only", async () => {

@@ -105,7 +105,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.30      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.31      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

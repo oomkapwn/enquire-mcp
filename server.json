@@ -8,12 +8,12 @@
     "url": "https://github.com/oomkapwn/enquire-mcp",
     "source": "github"
   },
-  "version": "3.12.0-rc.30",
+  "version": "3.12.0-rc.31",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@oomkapwn/enquire-mcp",
-      "version": "3.12.0-rc.30",
+      "version": "3.12.0-rc.31",
       "transport": {
         "type": "stdio"
       },

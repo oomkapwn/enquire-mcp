@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.12.0-rc.31] — 2026-07-31
+
+> **TL;DR:** **tool allow/deny registration is now composition-based instead of overwriting the MCP SDK server during adapter construction.** A gated facade intercepts `registerTool`, invokes forwarded methods against the original raw server, and remains the returned runtime facade so programmatic late registrations preserve their v3 filter semantics. The 46-tool, 19-prompt and resource surface, emitted schemas, dependencies, transports, CLI and persistence formats are unchanged. This is the deliberately contract-preserving rollback seam before the separately approved SDK v2 / MCP `2026-07-28` major migration.
+>
+> **Method note:** the change follows a static impact map of exact `main` plus the official TypeScript SDK v2 `2.0.0` migration and dual-era serving contracts. Under D-45, no install, build, lint, test, coverage, smoke, OIA, packed-consumer, client-runtime, benchmark or evaluation workload ran on the maintainer MacBook. The existing write-lifecycle invariant now exercises allowed forwarding, denied non-forwarding, original-method preservation and non-tool method binding, and mutation-checks that an in-place `registerTool` assignment or raw-server return regression is detected. Candidate execution is delegated to GitHub-hosted CI.
+
+### SDK boundary — isolate registration without changing the wire
+
+- **The SDK server is no longer monkey-patched.** `buildMcpServer()` constructs the raw `McpServer`, creates a composition facade only when tool filters are active, registers tools/resources/prompts through that facade and returns it for connection and lifecycle operations.
+- **Private SDK state keeps the correct receiver without a direct fluent escape.** The facade forwards an allowed `registerTool` call with the original target as `this` and invokes every other function-valued property against that same target. Native private fields therefore remain valid, while direct synchronous `valueOf()`/fluent returns of `this` are normalized back to the facade. `constructor` and `instanceof` remain stable; repeated facade reads preserve method identity, and later assignments take effect. The adapter is an API seam, not a same-process security membrane over reflective SDK internals.
+- **Late-registration compatibility is preserved.** A programmatic consumer that calls `registerTool` after `buildMcpServer()` is still subject to the configured allowlist/denylist, matching the historical overridden-instance behavior. Adapter construction never overwrites the raw instance; ordinary consumer assignments remain forwarded, and assigning the facade method back to itself is safely unwrapped instead of creating a recursive wrapper.
+- **Filter semantics and warning accounting stay identical.** Allowlist first, denylist second, one-time skip messages, unknown-name warnings and the shared HTTP warning latch retain their existing order and messages.
+- **The seam is SDK-agnostic.** The adapter imports no SDK class or protocol type; the v4 migration can replace the upstream nominal server without pushing transport concerns into the 46 tool registrations.
+
+### Tests (1795)
+
+- The existing persistent-write lifecycle test now runs the registration adapter against a class with native `#private` state: an allowed tool reaches the raw receiver, a blocked tool does not, direct `valueOf()` cannot expose the raw target, `constructor`/`instanceof` remain stable, method-cache entries refresh after replacement, reassigned `registerTool` implementations stay gated, self-assignment cannot recurse, and direct calls prove the original method was never overwritten during construction.
+- The existing negative-control test mutates the production source back toward an in-place assignment and wrong return object; the structural check reports all three missing seam guarantees. No top-level `it()` declaration was added.
+
+**1795 → 1795 source tests.**
+
+### Compatibility
+
+- No MCP wire behavior, SDK dependency, tool/prompt/resource schema, public export, CLI flag/default, retrieval result, write behavior or on-disk format changes.
+- npm `@latest` remains `3.11.6`. This RC does not claim MCP `2026-07-28` support; the approved complete dual-era implementation begins only after this rollback seam is remotely proven.
+- No benchmark or evaluation result was produced or changed.
+
 ## [3.12.0-rc.30] — 2026-07-30
 
 > **TL;DR:** **The competitive scan now ships as an operating and distribution system, not just a sharper homepage.** Six client-neutral agent lifecycle recipes turn the existing 19 MCP prompts and live tool surface into bounded recall, source verification, stale-fact revalidation, weekly synthesis, research capture, and exact-confirmation write escalation. A copy-ready directory/community kit packages the stable install CTA, product/privacy copy, proof links, and community post without pretending any external listing is already accepted. Agent-facing instructions and prompts now make the connected-client privacy boundary explicit, avoid hidden-tool dead ends, reject universal RRF-score confidence gates, label capped scans honestly, route PDF evidence through the PDF reader, and turn multi-write workflows into previewed, revalidated, explicitly non-atomic operations. `obsidian_context_pack` no longer parses selected PDFs as Markdown. The source-test declaration count remains **1795**.

@@ -8,6 +8,7 @@ import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, syncFtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
 import { buildInitializeInstructions, resolveInitializeToolProfile } from "./initialize-instructions.js";
+import { createToolRegistrationAdapter } from "./mcp-registration.js";
 import { registerPrompts } from "./prompts.js";
 import { parseFeedbackConfig, parseRecencyConfig } from "./retrieval-opts.js";
 import { shutdownStdioDeps } from "./shutdown.js";
@@ -860,7 +861,7 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
     enabledTools: deps.enabledTools,
     disabledTools: deps.disabledTools
   });
-  const server = new McpServer(
+  const mcpServer = new McpServer(
     {
       name: "enquire",
       version: VERSION
@@ -870,8 +871,9 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
     }
   );
 
-  // v1.10/v1.11 — per-tool gating. Monkey-patch registerTool ONCE so every
-  // register* function below transparently honors the gating rules.
+  // v1.10/v1.11 — per-tool gating. A composition adapter intercepts
+  // registerTool so every register* function below transparently honors the
+  // gating rules without mutating the SDK server instance.
   //
   // Rules:
   //   • --enabled-tools (allowlist): if set, ONLY listed tools register.
@@ -892,28 +894,25 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
   // HTTP: once on first session). Subsequent HTTP sessions reuse the same
   // gating decisions silently — no need to spam logs per request.
   const verbose = !deps.warningTracker.printed;
+  let server = mcpServer;
   if (deps.disabledTools.size > 0 || deps.enabledTools.size > 0) {
-    const origRegisterTool = server.registerTool.bind(server) as (name: string, ...rest: unknown[]) => unknown;
-    (server as unknown as { registerTool: (name: string, ...rest: unknown[]) => unknown }).registerTool = (
-      name: string,
-      ...rest: unknown[]
-    ) => {
+    server = createToolRegistrationAdapter(mcpServer, (name) => {
       registeredNames.add(name);
       if (deps.enabledTools.size > 0) {
         if (deps.enabledTools.has(name)) {
           usedEnabled.add(name);
         } else {
           if (verbose) process.stderr.write(`enquire: skipping tool ${name} (not in --enabled-tools allowlist)\n`);
-          return undefined;
+          return false;
         }
       }
       if (deps.disabledTools.has(name)) {
         usedDisabled.add(name);
         if (verbose) process.stderr.write(`enquire: skipping tool ${name} (disabled by --disabled-tools)\n`);
-        return undefined;
+        return false;
       }
-      return origRegisterTool(name, ...rest);
-    };
+      return true;
+    });
   }
 
   // v2.9.0: build reranker config from CLI opts. Off when `--enable-reranker`
@@ -982,6 +981,10 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
     deps.warningTracker.printed = true;
   }
 
+  // Return the facade when filters are active so programmatic consumers that
+  // register a tool after buildMcpServer() retain the same gating semantics as
+  // the historical in-place override. Every lifecycle method stays bound to
+  // the untouched raw SDK target inside the adapter.
   return server;
 }
 

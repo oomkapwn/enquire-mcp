@@ -105,7 +105,7 @@ async function exerciseClient(label, client, transport, expectedEra, sessionExpe
     );
     assert.ok(
       inventory.resources.includes("obsidian://note/01_Projects/Hermes.md"),
-      `${label}: synthetic note resource is missing`
+      `${label}: synthetic note resource is missing; observed=${JSON.stringify(inventory.resources)}`
     );
     assert.ok(
       inventory.resourceTemplates.includes("obsidian://note/{+notePath}"),

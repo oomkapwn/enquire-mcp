@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { MAX_DQL_QUERY_LEN } from "./dql.js";
@@ -1676,10 +1675,25 @@ export function parseQuantizationMode(raw: string | undefined): "f32" | "int8" |
   );
 }
 
+/**
+ * Encode a normalized vault-relative path for a slash-preserving note URI.
+ *
+ * Vault entries use forward slashes on every host, including Windows. Split
+ * that canonical representation rather than the host filesystem separator.
+ *
+ * @param relPath - Canonical forward-slash vault-relative note path.
+ * @returns A component-encoded path whose directory separators remain `/`.
+ */
 export function encodeNotePath(relPath: string): string {
-  return relPath.split(path.sep).map(encodeURIComponent).join("/");
+  return relPath.split("/").map(encodeURIComponent).join("/");
 }
 
+/**
+ * Decode the path portion of an Obsidian note resource URI.
+ *
+ * @param uriPath - Slash-separated, component-encoded URI path.
+ * @returns A normalized forward-slash vault-relative path.
+ */
 export function decodeNotePath(uriPath: string): string {
   return uriPath.split("/").map(decodeURIComponent).join("/");
 }

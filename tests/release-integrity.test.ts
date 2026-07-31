@@ -495,6 +495,12 @@ function remoteGateScriptProblems(packageConsumer: string, protocolConformance: 
   ) {
     problems.push("protocol-conformance cleanup must await hard-killed children before deleting fixtures");
   }
+  if (
+    !protocolConformance.includes('inventory.resources.includes("obsidian://note/01_Projects/Hermes.md")') ||
+    !protocolConformance.includes("synthetic note resource is missing; observed=")
+  ) {
+    problems.push("protocol-conformance must pin slash-preserving note resource URIs on every host");
+  }
   return problems;
 }
 
@@ -606,6 +612,15 @@ describe("release identity and exact required-check gate", () => {
         protocolConformance.replace("server was not live after traversal refusal", "traversal refusal finished")
       )
     ).toContain("protocol-conformance traversal negative must distinguish refusal from crash and prove liveness");
+    expect(
+      remoteGateScriptProblems(
+        packageConsumer,
+        protocolConformance.replace(
+          'inventory.resources.includes("obsidian://note/01_Projects/Hermes.md")',
+          'inventory.resources.includes("obsidian://note/01_Projects%2FHermes.md")'
+        )
+      )
+    ).toContain("protocol-conformance must pin slash-preserving note resource URIs on every host");
     expect(releasePollProblems(workflow.replace("timeout-minutes: 90", "timeout-minutes: 15"))).toContain(
       "release polling must outlive the blocking package-consumer matrix and leave publication headroom"
     );
@@ -773,7 +788,14 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
     expect(
       nodeFloorCiProblems(
-        ci.replace("          if-no-files-found: error", "          if-no-files-found: warn"),
+        ci.replace(
+          "          name: rendered-social-preview\n" +
+            "          path: assets/social-preview.png\n" +
+            "          if-no-files-found: error",
+          "          name: rendered-social-preview\n" +
+            "          path: assets/social-preview.png\n" +
+            "          if-no-files-found: warn"
+        ),
         pkg.engines?.node
       )
     ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");

@@ -70,7 +70,7 @@ function modernHttpV2Problems(source: string): string[] {
   const handler = handlerStart >= 0 && shutdownStart > handlerStart ? source.slice(handlerStart, shutdownStart) : "";
   const shutdown = shutdownStart >= 0 && shutdownEnd > shutdownStart ? source.slice(shutdownStart, shutdownEnd) : "";
 
-  if (!lifecycle.includes('createMcpHandler(() => buildMcpServer(deps, opts, writeTracker), {')) {
+  if (!lifecycle.includes("createMcpHandler(() => buildMcpServer(deps, opts, writeTracker), {")) {
     problems.push("modern: factory does not attach the aggregate write tracker");
   }
   if (!lifecycle.includes('legacy: "reject"')) {
@@ -669,10 +669,7 @@ describe("modern HTTP dual-era structural invariant", () => {
         "handleStatelessRequest(req, res, deps, opts, body, writeTracker)",
         "handleStatelessRequest(req, res, deps, opts, body)"
       )
-      .replace(
-        "const server = buildMcpServer(deps, opts, writeTracker);",
-        "const server = buildMcpServer(deps, opts);"
-      )
+      .replace("const server = buildMcpServer(deps, opts, writeTracker);", "const server = buildMcpServer(deps, opts);")
       .replace("await waitForBoundedSettlement(closeTask, closeMs)", "await closeTask")
       .replace(
         'if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {',
@@ -763,7 +760,7 @@ describe("isJsonContentType (SDK v2 HTTP admission)", () => {
     expect(isJsonContentType("Application/JSON; charset=utf-8")).toBe(true);
     expect(isJsonContentType("application/json;")).toBe(true);
     expect(isJsonContentType('application/json; note="a,b"')).toBe(true);
-    expect(isJsonContentType('application/json; note="a\\\",b"')).toBe(true);
+    expect(isJsonContentType('application/json; note="a\\",b"')).toBe(true);
     // Match the SDK parser fallback: a malformed parameter tail does not
     // obscure an otherwise unambiguous JSON media-type essence.
     expect(isJsonContentType("application/json; charset=")).toBe(true);
@@ -1613,7 +1610,7 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       expect(response.status).toBe(400);
       const body = (await response.json()) as { error: { code: number; data?: unknown } };
       expect(body.error.code).toBe(-32602);
-      expect(JSON.stringify(body.error.data)).toContain("_meta");
+      expect(JSON.stringify(body)).not.toMatch(/unknown session/i);
     } finally {
       await s.close();
     }

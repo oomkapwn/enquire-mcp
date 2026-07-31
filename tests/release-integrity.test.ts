@@ -239,6 +239,15 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     problems.push("missing docs job");
   } else {
     const docsSteps = yamlSteps(docsJob);
+    const schemaCaptureIndex = docsSteps.findIndex((step) => step.run === "npm run schema:inventory -- --write");
+    const schemaArtifactIndex = docsSteps.findIndex(
+      (step) => step.name === "Export remotely captured MCP schema inventory"
+    );
+    const schemaDiffIndex = docsSteps.findIndex((step) => step.name === "Require committed MCP schema inventory");
+    const schemaCapture = docsSteps[schemaCaptureIndex];
+    const schemaArtifact = docsSteps[schemaArtifactIndex];
+    const schemaArtifactWith = yamlRecord(schemaArtifact?.with);
+    const schemaDiff = docsSteps[schemaDiffIndex];
     const previewRenderIndex = docsSteps.findIndex((step) => step.run === "npm run render:preview");
     const previewArtifactIndex = docsSteps.findIndex((step) => step.name === "Export remotely rendered social preview");
     const previewDiffIndex = docsSteps.findIndex((step) => step.name === "Require committed social-preview bytes");
@@ -246,6 +255,27 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     const previewArtifact = docsSteps[previewArtifactIndex];
     const previewArtifactWith = yamlRecord(previewArtifact?.with);
     const previewDiff = docsSteps[previewDiffIndex];
+    if (
+      !schemaCapture ||
+      "if" in schemaCapture ||
+      "continue-on-error" in schemaCapture ||
+      schemaArtifact?.id !== "schema_inventory_artifact" ||
+      schemaArtifact?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      schemaArtifactWith?.name !== "emitted-mcp-schema-inventory" ||
+      schemaArtifactWith?.path !== "tests/fixtures/mcp-schema-inventory.v1.json" ||
+      schemaArtifactWith?.["if-no-files-found"] !== "error" ||
+      schemaArtifactWith?.["retention-days"] !== 3 ||
+      schemaArtifactWith?.["compression-level"] !== 0 ||
+      "if" in (schemaArtifact ?? {}) ||
+      "continue-on-error" in (schemaArtifact ?? {}) ||
+      schemaDiff?.run !== "git diff --exit-code -- tests/fixtures/mcp-schema-inventory.v1.json" ||
+      "if" in (schemaDiff ?? {}) ||
+      "continue-on-error" in (schemaDiff ?? {}) ||
+      !(schemaCaptureIndex < schemaArtifactIndex && schemaArtifactIndex < schemaDiffIndex) ||
+      schemaDiffIndex >= previewRenderIndex
+    ) {
+      problems.push("docs job must export and fail closed on remotely captured MCP schema drift");
+    }
     if (
       "if" in docsJob ||
       "continue-on-error" in docsJob ||
@@ -302,9 +332,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     }
     const jobEnv = yamlRecord(job.env);
     const jobSteps = yamlSteps(job);
-    const setup = jobSteps.find(
-      (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
-    );
+    const setup = jobSteps.find((step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@"));
     const install = namedStep(jobSteps, "Install deps (npm ci with retry)");
     if (
       job.name !== `${id} (\${{ matrix.label }})` ||
@@ -816,16 +844,22 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("protocol-conformance matrix must preserve its exact blocking platform inventory");
     expect(
       nodeFloorCiProblems(
-        ci.replace("          - label: macos\n            os: macos-latest", "          - label: macos\n            os: ubuntu-latest"),
+        ci.replace(
+          "          - label: macos\n            os: macos-latest",
+          "          - label: macos\n            os: ubuntu-latest"
+        ),
         pkg.engines?.node
       )
     ).toContain("package-consumer matrix must preserve its exact blocking platform inventory");
     expect(
+      nodeFloorCiProblems(ci.replace("    needs: protocol-conformance-matrix", "    needs: test"), pkg.engines?.node)
+    ).toContain("protocol-conformance aggregate must fail closed over every matrix lane");
+    expect(
       nodeFloorCiProblems(
-        ci.replace("    needs: protocol-conformance-matrix", "    needs: test"),
+        ci.replace("npm run schema:inventory -- --write", "echo schema inventory disabled"),
         pkg.engines?.node
       )
-    ).toContain("protocol-conformance aggregate must fail closed over every matrix lane");
+    ).toContain("docs job must export and fail closed on remotely captured MCP schema drift");
     expect(
       nodeFloorCiProblems(
         ci.replace("        run: node scripts/package-consumer.mjs", "        run: echo package-consumer-disabled"),

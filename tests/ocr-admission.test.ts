@@ -37,7 +37,7 @@ function hasOcrSignalWiring(source: string): boolean {
   const start = source.indexOf('"obsidian_ocr_pdf"');
   if (start < 0) return false;
   const tail = source.slice(start, source.indexOf("\n  );", start) + 5);
-  return /async \(args, extra\)/.test(tail) && /\{ signal: extra\.signal \}/.test(tail);
+  return /async \(args, ctx\)/.test(tail) && /\{ signal: ctx\.mcpReq\.signal \}/.test(tail);
 }
 
 function ocrResourceClaimProblems(security: string): string[] {
@@ -196,7 +196,7 @@ describe("OCR request cancellation wiring", () => {
 
   it("NEGATIVE control: detects a handler that drops the SDK signal", async () => {
     const source = await fs.readFile(new URL("../src/tool-registry.ts", import.meta.url), "utf8");
-    const mutated = source.replace(", { signal: extra.signal }", "");
+    const mutated = source.replace(", { signal: ctx.mcpReq.signal }", "");
     expect(hasOcrSignalWiring(mutated)).toBe(false);
     const security = await fs.readFile(new URL("../SECURITY.md", import.meta.url), "utf8");
     expect(

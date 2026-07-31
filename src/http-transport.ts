@@ -1009,7 +1009,7 @@ export function createHttpHandler(
       // Every POST is bounded and parsed exactly once before protocol-era
       // classification. `toWebRequest` and the selected SDK handler receive
       // this parsed value, so neither re-reads the consumed Node stream.
-      let body: unknown = undefined;
+      let body: unknown;
       if (req.method === "POST") {
         try {
           body = await readJsonBody(req, maxBodyBytes);

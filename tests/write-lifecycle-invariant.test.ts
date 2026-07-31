@@ -70,7 +70,7 @@ function registrationSeamProblems(serverSource: string): string[] {
   if (!builder.includes("server = createToolRegistrationAdapter(mcpServer,")) {
     problems.push("server: project-owned tool registration adapter is missing");
   }
-  if (!builder.endsWith("return server;\n}")) {
+  if (!builder.includes("\n  return server;\n}")) {
     problems.push("server: gated facade is not returned after registration");
   }
   if (/\.registerTool\s*=/.test(builder)) {
@@ -95,7 +95,7 @@ function stdioV2ServingProblems(serverSource: string): string[] {
   }
 
   const start = serverSource.indexOf("export async function startServer(");
-  const end = serverSource.indexOf("\n/**\n * Shared \"ready\" banner", Math.max(0, start));
+  const end = serverSource.indexOf('\n/**\n * Shared "ready" banner', Math.max(0, start));
   const starter = start >= 0 && end > start ? serverSource.slice(start, end) : "";
   if ((starter.match(/prepareServerDeps\(opts\)/g) ?? []).length !== 1) {
     problems.push("server: stdio must prepare one shared dependency generation");
@@ -116,10 +116,7 @@ function stdioV2ServingProblems(serverSource: string): string[] {
   ) {
     problems.push("server: stdio shutdown is not memoized across every exit path");
   }
-  if (
-    !starter.includes("let signalExitScheduled = false;") ||
-    !starter.includes("if (signalExitScheduled) return;")
-  ) {
+  if (!starter.includes("let signalExitScheduled = false;") || !starter.includes("if (signalExitScheduled) return;")) {
     problems.push("server: stdio signal and beforeExit paths do not share one shutdown latch");
   }
   const closeAdmission = starter.indexOf("writeTracker.closeAdmission(");
@@ -241,18 +238,15 @@ describe("write lifecycle inventory invariant", () => {
     ]);
 
     const legacyStdio = serverSource
-      .replace(
-        'import { McpServer } from "@modelcontextprotocol/server";',
-        'import { McpServer } from "legacy-sdk";'
-      )
+      .replace('import { McpServer } from "@modelcontextprotocol/server";', 'import { McpServer } from "legacy-sdk";')
       .replace('import { serveStdio } from "@modelcontextprotocol/server/stdio";', "")
       .replace('import { WriteRequestTracker } from "./write-lifecycle.js";', "")
       .replace(
         "const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
-        "const transport = new StdioServerTransport();"
+        "const transport = new StdioServerTransport();\n  await buildMcpServer(deps, opts, writeTracker).connect(transport);"
       )
       .replace("const writeTracker = new WriteRequestTracker();", "")
-      .replace("writeTracker.closeAdmission(\"Stdio shutdown closed persistent-write admission\");", "")
+      .replace('writeTracker.closeAdmission("Stdio shutdown closed persistent-write admission");', "")
       .replace(/\s*await writeTracker\.abortRollbackSafe\([^\n]+\);/, "")
       .replace("        await writeTracker.waitForAll();", "");
     expect(stdioV2ServingProblems(legacyStdio)).toEqual(

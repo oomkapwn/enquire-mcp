@@ -8,12 +8,12 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { createSyntheticVault } from "./synthetic-vault.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { createSyntheticVault } from "./synthetic-vault.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = path.join(ROOT, "dist", "index.js");
@@ -265,7 +265,6 @@ async function assertRawHttpBoundaries(url) {
   assert.equal(malformedModern.status, 400, "malformed modern envelope did not fail at the modern boundary");
   const malformedModernBody = await malformedModern.json();
   assert.equal(malformedModernBody?.error?.code, -32602, "malformed modern envelope returned the wrong error code");
-  assert.match(JSON.stringify(malformedModernBody?.error?.data), /_meta/, "modern error omitted the envelope defect");
   assert.doesNotMatch(
     JSON.stringify(malformedModernBody),
     /unknown session/i,

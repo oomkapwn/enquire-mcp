@@ -295,6 +295,24 @@ jobs:
             sleep 15
           done
       - run: npm run build
+      # D-45 remote-only validation: SDK migrations may intentionally change
+      # the exact tools/list JSON Schema dialect. Capture the runner-observed
+      # inventory, export it before the fail-closed diff, and let maintainers
+      # review/commit those protocol bytes without executing a server locally.
+      - id: schema_inventory
+        run: npm run schema:inventory -- --write
+      - name: Export remotely captured MCP schema inventory
+        id: schema_inventory_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: emitted-mcp-schema-inventory
+          path: tests/fixtures/mcp-schema-inventory.v1.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Require committed MCP schema inventory
+        id: schema_inventory_diff
+        run: git diff --exit-code -- tests/fixtures/mcp-schema-inventory.v1.json
       # The SVG carries exact proof counts used in the README/social card.
       # Regenerate the committed PNG remotely and fail on byte drift so the
       # binary asset cannot silently lag its reviewable source.

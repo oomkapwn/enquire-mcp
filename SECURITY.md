@@ -318,7 +318,7 @@ The `serve-http` subcommand (added v2.6.0) exposes the same MCP server over [Str
 - **Multi-tenant cross-token attacks.** This is a single-tenant tool. A small team should run **one process per user** (e.g. systemd template unit) and not share tokens. We don't do tenant isolation in-process beyond the per-token rate-limit.
 - **OAuth.** No OAuth flow, no token minting, no refresh logic. Static long-lived bearer is by design — generated with `enquire-mcp gen-token`, rotated manually. OAuth is tracked for v2.7+ if a user explicitly needs it.
 
-### Legacy stateful sessions (v2.14.0+; preserved in v4)
+### Stateful sessions — legacy lifecycle (v2.14.0+; preserved in v4)
 
 v2.6.0 initially shipped **stateless** mode only (fresh `McpServer` per request over the SHARED vault + FTS5 + embedding handles). v2.14.0 added an **opt-in stateful** mode via `--stateful` for legacy clients that need persistent state across requests (notably ChatGPT custom GPT actions). In v4, modern `2026-07-28` requests remain per-request and never enter this registry; `--stateful` preserves the established legacy initialize/session/SSE/DELETE path. Stateful posture:
 

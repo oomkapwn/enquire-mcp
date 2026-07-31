@@ -69,7 +69,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **पूरा Obsidian knowledge surface** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF और OCR |
 | **कठिन सवालों के लिए agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light और 19 MCP prompts |
 | **नियंत्रण छोड़े बिना scale** | ✅ HNSW live updates, persistence, adaptive refill और int8 quantization |
-| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 1807 tests, 11 release gates और SLSA L2 provenance |
+| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 1807 tests, 12 release gates और SLSA L2 provenance |
 
 **एक vault। हर agent। पूरा retrieval stack। कोई cloud lock-in नहीं।**
 
@@ -97,12 +97,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 }
 ```
 
+### समीक्षा योग्य डेस्कटॉप बंडल चाहिए? MCPB Basic
+
+[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) में `enquire-mcp-basic-4.0.0-rc.2.mcpb` उसके checksum, inventory, SBOM, notices और provenance के साथ उपलब्ध है। बंडल में server JavaScript और सामान्य dependencies हैं; संगत MCPB host को Node.js 22.13 या नया संस्करण देना होगा।
+
+Basic में ठीक **13 read-only tools** और **0 prompts** हैं: कोई write, persistent index, model, PDF/OCR या watcher नहीं। वास्तविक desktop GUI, signing, directory approval और catalog की maintainer validation अभी बाकी है। serve करते समय enquire कोई outbound call शुरू नहीं करता, लेकिन मांगा गया note text जुड़े MCP client तक जाता है और उसकी privacy terms के अधीन होता है।
+
 📂 तैयार कॉन्फ़िग [`examples/`](./examples/) में — **Claude Desktop**, **Cursor**, **ChatGPT कस्टम GPT** (HTTP पर रिमोट MCP), साथ ही eval harness के लिए एक नमूना क्वेरी सेट।
 
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -276,8 +282,8 @@ graph LR
 | **HTTP ट्रांसपोर्ट** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), प्रति-token rate-limit, सख़्त CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, डिफ़ॉल्ट रूप से सुरक्षित) — कोई कोड निष्पादन नहीं |
 | **कैश + इंडेक्स फ़ाइलें** | chmod 0600, पैरेंट डायरेक्टरी 0700 |
-| **1807 यूनिट टेस्ट · 11 release-required CI जाँच · वर्तमान में 7 branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
-| **CI** | `release.yml` सीधे **11 release gates** सूचीबद्ध करता है, और हर PR पर ये सभी चलते हैं: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, और `package-consumer`। Pinned Windows hostile-filesystem job `test-windows` एक अतिरिक्त named check-run है, जिसे `smoke` की blocking prerequisite के रूप में transitively लागू किया जाता है। Branch protection अभी इनमें से केवल **7** को लागू करता है; `docs`, `oia`, `protocol-conformance`, और `package-consumer` release के लिए आवश्यक हैं, पर protected नहीं (branch-protection snapshot 2026-07-23 को live-verified)। `test-macos` `continue-on-error` वाला एकमात्र सलाहकारी job है। `docker` CI workflow को विफल कर सकता है, पर protected नहीं है; CodeQL [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के जरिए दो अलग unprotected analysis चलाता है। npm publish से पहले `release.yml` tagged SHA पर सीधे सूचीबद्ध सभी 11 gates की फिर जाँच करता है। |
+| **1807 यूनिट टेस्ट · 12 release-required CI जाँच · वर्तमान में 7 branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
+| **CI** | `release.yml` सीधे **12 release gates** सूचीबद्ध करता है, और हर PR पर ये सभी चलते हैं: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, और `mcpb-basic`। Pinned Windows hostile-filesystem job `test-windows` एक अतिरिक्त named check-run है, जिसे `smoke` की blocking prerequisite के रूप में transitively लागू किया जाता है। Branch protection अभी इनमें से केवल **7** को लागू करता है; `docs`, `oia`, `protocol-conformance`, `package-consumer`, और `mcpb-basic` release के लिए आवश्यक हैं, पर protected नहीं (branch-protection snapshot 2026-07-23 को live-verified)। `test-macos` `continue-on-error` वाला एकमात्र सलाहकारी job है। `docker` CI workflow को विफल कर सकता है, पर protected नहीं है; CodeQL [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के जरिए दो अलग unprotected analysis चलाता है। npm publish से पहले `release.yml` tagged SHA पर सीधे सूचीबद्ध सभी 12 gates की फिर जाँच करता है। |
 | **कवरेज** | लाइनें ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **रिलीज़** | प्रति tag npm + GitHub release · semver · **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2; L3 जनरेटर रोडमैप पर) |
 | **स्थिरता** | v3.0+ semver-बाध्य — हर CLI flag, टूल नाम, MCP resource, prompt, निर्यातित symbol एक अनुबंध है |

@@ -463,15 +463,22 @@ function frozenEmbedCapabilityViolations(source: string): string[] {
   }
   const existsCall = existsCalls[0]?.call;
   const existsArgument = existsCall?.arguments[0];
-  const snapshotDeclaration = existsCall?.parent;
+  const snapshotExpression = existsCall?.parent;
+  const snapshotDeclaration = snapshotExpression?.parent;
   if (
     !existsCall ||
     !existsArgument ||
     !ts.isIdentifier(existsArgument) ||
     existsArgument.text !== "startupEmbedFile" ||
+    !snapshotExpression ||
+    !ts.isBinaryExpression(snapshotExpression) ||
+    snapshotExpression.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken ||
+    !ts.isIdentifier(snapshotExpression.left) ||
+    snapshotExpression.left.text !== "embeddingIndexEnabled" ||
+    snapshotExpression.right !== existsCall ||
     !snapshotDeclaration ||
     !ts.isVariableDeclaration(snapshotDeclaration) ||
-    snapshotDeclaration.initializer !== existsCall ||
+    snapshotDeclaration.initializer !== snapshotExpression ||
     !ts.isIdentifier(snapshotDeclaration.name) ||
     snapshotDeclaration.name.text !== "startupEmbedDbAvailable"
   ) {
@@ -500,48 +507,13 @@ function frozenEmbedCapabilityViolations(source: string): string[] {
   visitPrepare(prepare.body);
   const embedDbFileProperty = embedDbFileProperties[0];
   const frozenReturn = embedDbFileProperty?.initializer;
+  const frozenText = frozenReturn?.getText(sourceFile).replace(/\s+/g, "");
   if (
     embedDbFileProperties.length !== 1 ||
-    !frozenReturn ||
-    !ts.isConditionalExpression(frozenReturn) ||
-    !ts.isIdentifier(frozenReturn.condition) ||
-    frozenReturn.condition.text !== "startupEmbedDbAvailable" ||
-    !ts.isIdentifier(frozenReturn.whenTrue) ||
-    frozenReturn.whenTrue.text !== "startupEmbedFile" ||
-    frozenReturn.whenFalse.kind !== ts.SyntaxKind.NullKeyword
+    frozenText !==
+      "opts.embeddingIndex===false?null:opts.watch?startupEmbedDbAvailable?startupEmbedFile:null:undefined"
   ) {
-    violations.push("prepareServerDeps must return the frozen embedDbFile capability");
-  }
-  if (embedDbFileProperty) {
-    const capabilityObject = embedDbFileProperty.parent;
-    const watchConditional = capabilityObject.parent;
-    let spread: ts.Node = watchConditional.parent;
-    while (ts.isParenthesizedExpression(spread)) spread = spread.parent;
-    const returnedObject = spread.parent;
-    const watchCondition =
-      ts.isConditionalExpression(watchConditional) &&
-      watchConditional.whenTrue === capabilityObject &&
-      ts.isPropertyAccessExpression(watchConditional.condition) &&
-      ts.isIdentifier(watchConditional.condition.expression) &&
-      watchConditional.condition.expression.text === "opts" &&
-      watchConditional.condition.name.text === "watch";
-    const emptyNonWatchBranch =
-      ts.isConditionalExpression(watchConditional) &&
-      ts.isObjectLiteralExpression(watchConditional.whenFalse) &&
-      watchConditional.whenFalse.properties.length === 0;
-    if (
-      !ts.isObjectLiteralExpression(capabilityObject) ||
-      !watchCondition ||
-      !emptyNonWatchBranch ||
-      !ts.isSpreadAssignment(spread) ||
-      (spread.expression !== watchConditional &&
-        (!ts.isParenthesizedExpression(spread.expression) || spread.expression.expression !== watchConditional)) ||
-      !ts.isObjectLiteralExpression(returnedObject) ||
-      spread.parent !== returnedObject ||
-      !ts.isReturnStatement(returnedObject.parent)
-    ) {
-      violations.push("prepareServerDeps must expose embedDbFile only through the opts.watch return spread");
-    }
+    violations.push("prepareServerDeps must return the isolated and frozen embedDbFile capability");
   }
 
   const registerReadCalls = collectIdentifierCalls(build, sourceFile, "registerReadTools");
@@ -738,11 +710,17 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}
 const GOOD_FROZEN_CAPABILITY = `
 export async function prepareServerDeps(opts) {
   const startupEmbedFile = embedDbPath(opts.vault);
-  const startupEmbedDbAvailable = existsSync(startupEmbedFile);
+  const embeddingIndexEnabled = opts.embeddingIndex !== false;
+  const startupEmbedDbAvailable = embeddingIndexEnabled && existsSync(startupEmbedFile);
   return {
-    ...(opts.watch
-      ? { embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null }
-      : {}),
+    embedDbFile:
+      opts.embeddingIndex === false
+        ? null
+        : opts.watch
+          ? startupEmbedDbAvailable
+            ? startupEmbedFile
+            : null
+          : undefined,
     watcherHealth: null
   };
 }
@@ -926,21 +904,26 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const resampledCapability = GOOD_FROZEN_CAPABILITY.replace(
-      "startupEmbedDbAvailable ? startupEmbedFile : null",
-      "existsSync(startupEmbedFile) ? startupEmbedFile : null"
+      "embeddingIndexEnabled && existsSync(startupEmbedFile)",
+      "embeddingIndexEnabled && existsSync(startupEmbedFile) && existsSync(startupEmbedFile)"
     );
     expect(frozenEmbedCapabilityViolations(resampledCapability)).toContain(
       "expected exactly one frozen EmbedDb existsSync snapshot, found 2"
     );
 
-    const unconditionalFrozenCapability = GOOD_FROZEN_CAPABILITY.replace(
-      `    ...(opts.watch
-      ? { embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null }
-      : {})`,
-      "    embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null"
+    const unisolatedFrozenCapability = GOOD_FROZEN_CAPABILITY.replace(
+      `    embedDbFile:
+      opts.embeddingIndex === false
+        ? null
+        : opts.watch
+          ? startupEmbedDbAvailable
+            ? startupEmbedFile
+            : null
+          : undefined,`,
+      "    embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : undefined,"
     );
-    expect(frozenEmbedCapabilityViolations(unconditionalFrozenCapability)).toContain(
-      "prepareServerDeps must expose embedDbFile only through the opts.watch return spread"
+    expect(frozenEmbedCapabilityViolations(unisolatedFrozenCapability)).toContain(
+      "prepareServerDeps must return the isolated and frozen embedDbFile capability"
     );
 
     const latePureValidation = GOOD_STARTUP.replace(REQUIRED_PURE_VALIDATION_BLOCK, "").replace(

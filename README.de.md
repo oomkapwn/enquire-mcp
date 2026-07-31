@@ -74,7 +74,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **Die gesamte Obsidian-Wissensoberfläche** | ✅ Markdown, Wikilinks, Frontmatter, Canvas, Bases, PDF und OCR |
 | **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 MCP-Prompts |
 | **Skalierung ohne Kontrollverlust** | ✅ HNSW-Live-Updates, Persistenz, adaptives Refill und int8-Quantisierung |
-| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1807 Tests, 11 Release-Gates und SLSA-L2-Provenienz |
+| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1807 Tests, 12 Release-Gates und SLSA-L2-Provenienz |
 
 **Ein Vault. Alle Agenten. Der vollständige Stack. Kein Cloud-Lock-in.**
 
@@ -102,12 +102,18 @@ In jeden MCP-Client einklinken:
 }
 ```
 
+### Ein prüfbares Desktop-Bundle? MCPB Basic
+
+Das [GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) stellt `enquire-mcp-basic-4.0.0-rc.2.mcpb` samt Prüfsumme, Inventar, SBOM, Hinweisen und Herkunftsnachweis bereit. Das Bundle enthält Server-JavaScript und gewöhnliche Abhängigkeiten; ein kompatibler MCPB-Host muss Node.js 22.13 oder neuer bereitstellen.
+
+Basic ist auf **13 schreibgeschützte Tools** und **0 Prompts** festgelegt: keine Schreibzugriffe, persistenten Indizes, Modelle, PDF/OCR oder Watcher. Reale Desktop-GUI-, Signatur-, Verzeichnisfreigabe- und Katalogtests durch den Maintainer stehen noch aus. enquire führt beim Serving keine ausgehenden Aufrufe aus; angeforderter Notiztext gelangt jedoch zum verbundenen MCP-Client und unterliegt dessen Datenschutzbedingungen.
+
 📂 Sofort einsetzbare Konfigurationen in [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **benutzerdefiniertes GPT von ChatGPT** (Remote-MCP über HTTP), plus ein Beispiel-Abfragesatz für das Eval-Harness.
 
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -279,8 +285,8 @@ Plus 3 MCP-Ressourcen (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **HTTP-Transport** | Bearer-Auth (konstantzeitiges SHA-256 + `timingSafeEqual`), Rate-Limit pro Token, striktes CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML-1.2-Core-Schema, standardmäßig sicher) — keine Code-Ausführung |
 | **Cache- + Indexdateien** | chmod 0600, übergeordnetes Verzeichnis 0700 |
-| **1807 Unit-Tests · 11 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
-| **CI** | `release.yml` zählt direkt **11 Release-Gates** auf, die alle auf jedem PR laufen: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance` und `package-consumer`. Der gepinnte Windows-Hostile-Filesystem-Job `test-windows` ist ein zusätzlicher benannter Check-Run, der transitiv als blockierende Voraussetzung von `smoke` erzwungen wird. Die Branch-Protection erzwingt derzeit nur **7** davon; `docs`, `oia`, `protocol-conformance` und `package-consumer` sind für Releases erforderlich, aber ungeschützt (Branch-Protection-Snapshot live verifiziert am 2026-07-23). `test-macos` ist der einzige beratende Job mit `continue-on-error`. `docker` kann den CI-Workflow fehlschlagen lassen, ist aber ungeschützt; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` die 11 direkt aufgezählten Gates auf dem getaggten SHA erneut. |
+| **1807 Unit-Tests · 12 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
+| **CI** | `release.yml` zählt direkt **12 Release-Gates** auf, die alle auf jedem PR laufen: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer` und `mcpb-basic`. Der gepinnte Windows-Hostile-Filesystem-Job `test-windows` ist ein zusätzlicher benannter Check-Run, der transitiv als blockierende Voraussetzung von `smoke` erzwungen wird. Die Branch-Protection erzwingt derzeit nur **7** davon; `docs`, `oia`, `protocol-conformance`, `package-consumer` und `mcpb-basic` sind für Releases erforderlich, aber ungeschützt (Branch-Protection-Snapshot live verifiziert am 2026-07-23). `test-macos` ist der einzige beratende Job mit `continue-on-error`. `docker` kann den CI-Workflow fehlschlagen lassen, ist aber ungeschützt; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` die 12 direkt aufgezählten Gates auf dem getaggten SHA erneut. |
 | **Coverage** | Zeilen ≥86 % · Statements ≥82 % · Funktionen ≥75 % · Branches ≥74 % (abgesichert) |
 | **Releases** | npm + GitHub-Release pro Tag · semver · **signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2; L3-Generator auf der Roadmap) |
 | **Stabilität** | v3.0+ semver-gebunden — jedes CLI-Flag, jeder Tool-Name, jede MCP-Ressource, jeder Prompt und jedes exportierte Symbol ist Vertrag |

@@ -80,6 +80,14 @@ export interface ServeOptions {
   enabledTools?: string[];
   /** Expose diagnostic / debug tools (`obsidian_full_text_search` etc.). */
   diagnosticSearchTools?: boolean;
+  /** Register the 19 MCP prompts. Default true; `--no-prompts` sets false. */
+  prompts?: boolean;
+  /**
+   * Discover and use the per-vault persistent embedding index. Default true;
+   * `--no-embedding-index` freezes the capability to null and also skips the
+   * embedding watcher's durable startup guard.
+   */
+  embeddingIndex?: boolean;
   /** v2.8.0 — also index PDFs into FTS5 (and embeddings, if a build-embeddings
    *  with --include-pdfs ran). Off by default; opt-in because PDF extraction
    *  is slower than markdown. */
@@ -308,15 +316,18 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   });
   await vault.ensureExists();
   const startupEmbedFile = embedDbPath(vault.root);
-  try {
-    await assertWatcherActivationGuardClear(startupEmbedFile);
-  } catch (error) {
-    throw watcherActivationRecoveryError(error);
+  const embeddingIndexEnabled = opts.embeddingIndex !== false;
+  if (embeddingIndexEnabled) {
+    try {
+      await assertWatcherActivationGuardClear(startupEmbedFile);
+    } catch (error) {
+      throw watcherActivationRecoveryError(error);
+    }
   }
   // Freeze the embedding capability once for this server generation. A DB
   // created after this point is intentionally ignored until restart; otherwise
   // search could publish it while this watcher remains FTS-only and unarmed.
-  const startupEmbedDbAvailable = existsSync(startupEmbedFile);
+  const startupEmbedDbAvailable = embeddingIndexEnabled && existsSync(startupEmbedFile);
 
   // Optional FTS5 index. Sync on boot so the first MCP call sees a fresh
   // index. For typical vault sizes this is sub-second; cold-build of a fresh
@@ -825,7 +836,14 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     ftsIndex,
     watcher,
     watcherEmbedDb,
-    ...(opts.watch ? { embedDbFile: startupEmbedDbAvailable ? startupEmbedFile : null } : {}),
+    embedDbFile:
+      opts.embeddingIndex === false
+        ? null
+        : opts.watch
+          ? startupEmbedDbAvailable
+            ? startupEmbedFile
+            : null
+          : undefined,
     feedbackStore,
     disabledTools: new Set(opts.disabledTools ?? []),
     enabledTools: new Set(opts.enabledTools ?? []),
@@ -959,7 +977,7 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
   registerResources(server, deps.vault);
   if (deps.ftsIndex) registerChunkResource(server, deps.ftsIndex, deps.vault);
-  registerPrompts(server);
+  if (opts.prompts !== false) registerPrompts(server);
 
   // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.
   // We can't validate at parse time because the canonical list depends on

@@ -11,7 +11,9 @@
 // regression-proofed structurally by OIA Check 4f. Positive + NEGATIVE controls per the
 // CLAUDE.md rule since v3.6.4.
 
-import { readFileSync } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectEmbeddingsOfflineGuards } from "../scripts/lib/oia-offline-guard.mjs";
 import {
@@ -20,6 +22,8 @@ import {
   offlineModelLoadError,
   setEmbeddingsOffline
 } from "../src/embeddings.js";
+import { defaultIndexFile } from "../src/fts5.js";
+import { armWatcherActivationGuard, watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 afterEach(() => {
   setEmbeddingsOffline(false); // module-global flag — reset so it can't leak across tests
@@ -67,6 +71,29 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
     );
     expect(isEmbeddingsOffline()).toBe(true);
     await server.close();
+
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-basic-embedding-isolation-"));
+    const previousCacheHome = process.env.XDG_CACHE_HOME;
+    try {
+      const vault = path.join(scratch, "vault");
+      const cache = path.join(scratch, "cache");
+      await fs.mkdir(vault);
+      process.env.XDG_CACHE_HOME = cache;
+      const embedFile = defaultIndexFile(vault).replace(/\.fts5\.db$/u, ".embed.db");
+      await fs.mkdir(path.dirname(embedFile), { recursive: true });
+      await fs.writeFile(embedFile, "stranded full-edition embedding index");
+      await armWatcherActivationGuard(embedFile);
+
+      await expect(prepareServerDeps({ vault })).rejects.toThrow(/embedding-derived indexes are quarantined/);
+      const isolated = await prepareServerDeps({ vault, embeddingIndex: false });
+      expect(isolated.embedDbFile).toBeNull();
+      await expect(fs.readFile(embedFile, "utf8")).resolves.toBe("stranded full-edition embedding index");
+      expect((await fs.lstat(watcherActivationGuardPath(embedFile))).isDirectory()).toBe(true);
+    } finally {
+      if (previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previousCacheHome;
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it("offlineModelLoadError is a fail-closed error naming the model without misclassifying corruption (POSITIVE)", () => {

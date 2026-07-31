@@ -552,6 +552,123 @@ jobs:
           fi
           echo "All package-consumer platform lanes passed"
 
+  # v4.0.0-rc.2 — one canonical Linux build produces the exact candidate that
+  # release.yml will later download, re-verify, and publish. It is verified before export,
+  # and its bundle, logical inventory, CycloneDX SBOM, and third-party notices
+  # remain downloadable for pre-merge inspection under the no-local-workload
+  # policy. The real Claude Desktop install UI remains maintainer-gated.
+  mcpb-basic-package:
+    name: mcpb-basic-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact_name: ${{ steps.artifact_identity.outputs.name }}
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_SCRIPT_SHELL: /bin/bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install deps (npm ci with retry)
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed; retrying in 15s"
+            sleep 15
+          done
+      - run: npm run build
+      - name: Build Basic read-only MCPB with pinned packer
+        run: npm run mcpb:build
+      - name: Verify canonical Linux MCPB before export
+        run: npm run mcpb:verify
+      - name: Bind artifact identity to the producer attempt
+        id: artifact_identity
+        run: echo "name=mcpb-basic-candidate-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Export inspectable canonical MCPB candidate and transparency records
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.artifact_identity.outputs.name }}
+          path: |
+            artifacts/enquire-mcp-basic-*.mcpb
+            artifacts/enquire-mcp-basic-*.content-manifest.json
+            artifacts/enquire-mcp-basic-*.sbom.cdx.json
+            artifacts/enquire-mcp-basic-*.third-party-licenses.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # Every supported OS consumes those same canonical Linux-built bytes. This
+  # catches extraction/path/runtime drift without letting per-OS assembly hide
+  # a problem in the artifact users will actually download.
+  mcpb-basic-matrix:
+    name: mcpb-basic (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: mcpb-basic-package
+    defaults:
+      run:
+        shell: bash
+    env:
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_SCRIPT_SHELL: ${{ matrix.script_shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+            script_shell: /bin/bash
+          - label: windows
+            os: windows-2025
+            script_shell: 'C:\Program Files\Git\bin\bash.exe'
+          - label: macos
+            os: macos-latest
+            script_shell: /bin/bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install deps (npm ci with retry)
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
+            echo "::warning::npm ci attempt $n failed; retrying in 15s"
+            sleep 15
+          done
+      - name: Download canonical Linux MCPB candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs['mcpb-basic-package'].outputs.artifact_name }}
+          path: artifacts
+      - name: Verify canonical MCPB content and official-client contract
+        run: npm run mcpb:verify
+
+  mcpb-basic:
+    name: mcpb-basic
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: mcpb-basic-matrix
+    if: ${{ always() }}
+    steps:
+      - name: Require every Basic MCPB platform
+        env:
+          MATRIX_RESULT: ${{ needs['mcpb-basic-matrix'].result }}
+        run: |
+          if [ "$MATRIX_RESULT" != "success" ]; then
+            echo "::error::mcpb-basic matrix result=$MATRIX_RESULT"
+            exit 1
+          fi
+          echo "All Basic MCPB platform lanes passed"
+
   audit:
     # v2.0.0-beta.3: elevate from --audit-level=high to moderate for prod
     # deps. Pre-fix, the ip-address moderate XSS advisory sat undetected

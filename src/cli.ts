@@ -13,12 +13,14 @@ import {
   DIAGNOSTIC_SEARCH_TOOLS_HELP,
   DISABLED_TOOLS_HELP,
   EMBED_FILE_HELP,
+  EMBEDDING_INDEX_HELP,
   ENABLE_WRITE_HELP,
   ENABLED_TOOLS_HELP,
   INDEX_FILE_HELP,
   MAX_FILE_BYTES_HELP,
   PERSISTENT_CACHE_HELP,
   PERSISTENT_INDEX_HELP,
+  PROMPTS_HELP,
   QUANTIZE_EMBEDDINGS_HELP,
   TOKENIZE_HELP,
   WATCH_HELP
@@ -275,6 +277,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--watch", WATCH_HELP)
     .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
     .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
+    .option("--no-prompts", PROMPTS_HELP)
+    .option("--no-embedding-index", EMBEDDING_INDEX_HELP)
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
   addAdvancedRetrievalOptions(serveCmd)
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
@@ -349,6 +353,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--watch", WATCH_HELP)
     .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
     .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
+    .option("--no-prompts", PROMPTS_HELP)
+    .option("--no-embedding-index", EMBEDDING_INDEX_HELP)
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
   // v3.8.0-rc.1 R-3 — apply the same advanced-retrieval flag set as
   // `serve` so HTTP-mode users can enable reranker / HNSW / PDF indexing /

@@ -8,7 +8,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 ## v4.x prerelease compatibility boundary
 
-`4.0.0-rc.1` is a deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
+`4.0.0-rc.2` is a deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
 
 - The 46 tool names and argument shapes, 19 prompt names and schemas, resources, CLI flags/defaults, privacy controls, write gates, and vault/index/cache formats remain compatible with v3.
 - `serve` now uses SDK v2's era-aware stdio entrypoint. `serve-http` accepts strict modern `2026-07-28` exchanges and supported legacy 2025-era clients from the same registered surface; `--stateful` continues to provide sticky sessions, GET/SSE, and DELETE lifecycle for the legacy leg. Malformed or unsupported modern claims are never retried as legacy.
@@ -16,6 +16,8 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 - Modern HTTP and legacy-stateless HTTP are per-request. Legacy stateful HTTP retains its session lifecycle. Persistent writes on stdio and every HTTP leg are drained or rolled back before shared persistence resources close.
 
 Because this is an `@rc`, the v4 contract is not a stable-channel promise yet. Stable v4 promotion additionally requires real-client evidence and an explicit maintainer decision; installing `@latest` continues to select v3.
+
+The `enquire-mcp-basic-4.0.0-rc.2.mcpb` asset is a deliberately narrower preview profile, not a replacement for the full npm/CLI surface. It fixes one vault, exactly 13 read-only tools, zero prompts, and no writes, watcher controls, persistent/on-disk index, embedding model, PDF, or OCR surface; its compatible host must provide Node.js 22.13 or newer. Its release is remotely gated and provenance-bound, but real desktop UI acceptance, signing, and directory/catalog approval remain outside this RC's claims.
 
 ## v3.x stable surfaces
 

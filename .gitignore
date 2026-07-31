@@ -34,6 +34,16 @@ docs/api-reference/
 # never commit. Guards against an accidental `git add .`.
 false/
 
+# Remote-CI-only MCPB assembly output. The checked-in manifest/icon source is
+# under mcpb/; staged dependencies and timestamped bundle bytes are artifacts.
+.mcpb-stage/
+artifacts/*.mcpb
+artifacts/*.content-manifest.json
+artifacts/*.sbom.cdx.json
+artifacts/*.third-party-licenses.json
+artifacts/*.mcpb.sha256
+artifacts/*.mcpb.provenance.json
+
 # LongMemEval dataset (downloaded by the maintainer for bench:longmemeval; not committed — size + licensing)
 longmemeval*.json
 longmemeval_*/

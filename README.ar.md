@@ -73,7 +73,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **سطح معرفة Obsidian الكامل** | ✅ ‏Markdown والروابط وfrontmatter وCanvas وBases وPDF وOCR |
 | **استرجاع وكيلي للأسئلة الصعبة** | ✅ ‏HyDE وتقسيم الأسئلة وحزم السياق وGraphRAG-light و19 موجِّه MCP |
 | **توسّع من دون التنازل عن التحكم** | ✅ تحديثات HNSW الحية والاستمرارية والملء التكيفي وتكميم int8 |
-| **ثقة الإنتاج** | ✅ قراءة فقط افتراضياً ومرشحات خصوصية وHTTP موثّق وعقود semver و1807 اختباراً و11 بوابة إصدار ومصدر SLSA L2 |
+| **ثقة الإنتاج** | ✅ قراءة فقط افتراضياً ومرشحات خصوصية وHTTP موثّق وعقود semver و1807 اختباراً و12 بوابة إصدار ومصدر SLSA L2 |
 
 **مكتبة واحدة. كل الوكلاء. الحزمة الكاملة. بلا ارتهان للسحابة.**
 
@@ -107,6 +107,12 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 <div dir="rtl" align="right">
 
+### حزمة سطح مكتب قابلة للمراجعة؟ MCPB Basic
+
+يوفّر [GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) ملف `enquire-mcp-basic-4.0.0-rc.2.mcpb` مع checksum والجرد وSBOM والإشعارات وإثبات المصدر. تتضمن الحزمة JavaScript الخاص بالخادم والاعتماديات العادية، وعلى مضيف MCPB المتوافق توفير Node.js 22.13 أو أحدث.
+
+Basic مقيد بـ **13 أداة للقراءة فقط** و**0 موجّهات**: بلا كتابة أو فهارس دائمة أو نماذج أو PDF/OCR أو watcher. ما زال اختبار واجهة سطح المكتب الفعلية والتوقيع وموافقة المجلد والدليل بيد المشرف. لا يبدأ enquire اتصالات خارجية أثناء الخدمة، لكن نص الملاحظات المطلوب ينتقل إلى عميل MCP المتصل ويخضع لشروط خصوصيته.
+
 📂 إعدادات جاهزة للاستخدام في [`examples/`](./examples/) — **Claude Desktop** و**Cursor** و**ChatGPT custom GPT** (MCP بعيد عبر HTTP)، إضافةً إلى مجموعة استعلامات نموذجية لأداة التقييم.
 
 **تريد القوة الكاملة للاسترجاع الهجين؟** أكمل فحص الإعداد الهجين ثم شغّل الخادم:
@@ -114,7 +120,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 </div>
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -340,8 +346,8 @@ graph LR
 | **نقل HTTP** | مصادقة Bearer (SHA-256 بزمن ثابت + `timingSafeEqual`)، تحديد معدّل لكل token، وCORS صارم |
 | **Frontmatter** | `js-yaml@5` `load` (مخطط YAML 1.2 الأساسي، آمن افتراضياً) — لا تنفيذ للكود |
 | **ملفات الكاش + الفهرس** | chmod 0600، والمجلد الأب 0700 |
-| **1807 اختبار وحدة · 11 فحص CI مطلوباً للإصدار · 7 محمية حالياً على الفرع** | وضع إصدار متحقق منه؛ والتفاصيل التشغيلية مثبتة أدناه. |
-| **CI** | يسرد `release.yml` مباشرة **11 بوابة للإصدار** وتعمل كلها في كل PR: `lint` و`test (22)` و`test (24)` و`smoke` و`audit` و`coverage` و`version-consistency` و`docs` و`oia` و`protocol-conformance` و`package-consumer`. إن job ‏Windows hostile-filesystem المثبت `test-windows` هو check-run إضافي مسمى يُفرض انتقالياً كمتطلب حاجب لـ`smoke`. تفرض حماية الفرع حالياً **7** منها فقط؛ `docs` و`oia` و`protocol-conformance` و`package-consumer` مطلوبة للإصدار لكنها غير محمية (لقطة حماية الفرع متحقق منها مباشرة في 2026-07-23). ‏`test-macos` هو الـ job الإرشادي الوحيد الذي يحمل `continue-on-error`. يمكن لـ`docker` أن يُفشل CI workflow لكنه غير محمي؛ ويشغّل CodeQL تحليلين منفصلين غير محميين عبر [إعداد GitHub الافتراضي](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). قبل npm publish يعيد `release.yml` التحقق من البوابات الإحدى عشرة التي يسردها مباشرة على SHA الموسوم. |
+| **1807 اختبار وحدة · 12 فحص CI مطلوباً للإصدار · 7 محمية حالياً على الفرع** | وضع إصدار متحقق منه؛ والتفاصيل التشغيلية مثبتة أدناه. |
+| **CI** | يسرد `release.yml` مباشرة **12 بوابة للإصدار** وتعمل كلها في كل PR: `lint` و`test (22)` و`test (24)` و`smoke` و`audit` و`coverage` و`version-consistency` و`docs` و`oia` و`protocol-conformance` و`package-consumer` و`mcpb-basic`. إن job ‏Windows hostile-filesystem المثبت `test-windows` هو check-run إضافي مسمى يُفرض انتقالياً كمتطلب حاجب لـ`smoke`. تفرض حماية الفرع حالياً **7** منها فقط؛ `docs` و`oia` و`protocol-conformance` و`package-consumer` و`mcpb-basic` مطلوبة للإصدار لكنها غير محمية (لقطة حماية الفرع متحقق منها مباشرة في 2026-07-23). ‏`test-macos` هو الـ job الإرشادي الوحيد الذي يحمل `continue-on-error`. يمكن لـ`docker` أن يُفشل CI workflow لكنه غير محمي؛ ويشغّل CodeQL تحليلين منفصلين غير محميين عبر [إعداد GitHub الافتراضي](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). قبل npm publish يعيد `release.yml` التحقق من البوابات الاثنتي عشرة التي يسردها مباشرة على SHA الموسوم. |
 | **التغطية** | الأسطر ≥86% · العبارات ≥82% · الدوال ≥75% · الفروع ≥74% (محكومة) |
 | **البناء والإصدار** | نشر على npm + GitHub Release لكل tag · semver · **إثبات بناء موقَّع** (npm + Sigstore، SLSA Build L2؛ مُولِّد L3 على خارطة الطريق) |
 | **الاستقرار** | الإصدار v3.0+ مُقيَّد بالـ semver — كل flag CLI واسم أداة ومورد MCP وموجِّه ورمز مُصدَّر هو عقد |

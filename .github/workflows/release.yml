@@ -11,7 +11,17 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
 permissions:
+  # Read the exact-SHA CI artifact that already passed the cross-platform
+  # mcpb-basic gate; explicit maps otherwise default omitted scopes to none.
+  actions: read
+  # The first release gate reads the exact commit's check-runs. Once a
+  # permissions map is explicit, this scope must also be explicit.
+  checks: read
   # `contents: write` (was `read` pre-3.7.15) — required for the
   # "Create GitHub Release" step (v3.7.14 F5) to call the GitHub Releases
   # API. The first end-to-end test of F5 (v3.7.14 tag push) failed with
@@ -81,12 +91,17 @@ jobs:
           # + Windows official-v2-client modern/legacy stdio/HTTP lanes; the
           # aggregated `package-consumer` context requires packed-artifact checks
           # on Linux, Windows, and macOS (normal + --omit=optional installs).
+          # v4.0.0-rc.2 — bumped to 12: `mcpb-basic` aggregates three-OS
+          # canonical Linux bundle assembly plus three-OS logical-content and
+          # official-client read-only verification of those same exact bytes.
           # Public gate-count mirror; tests pin this exact inventory to the
           # shared evaluator used below. Do not use a regex/count as readiness.
-          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer"
-          REQ_COUNT=11
+          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer|mcpb-basic"
+          REQ_COUNT=12
           for (( attempt=1; attempt<=120; attempt++ )); do
-            JSON=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
+            CHECK_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
+            JSON=$(printf '%s' "$CHECK_PAGES" | jq '{check_runs: [.[].check_runs[]]}')
             RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks)
             STATE=$(printf '%s' "$RESULT" | jq -r '.state')
             if [ "$STATE" = "failed" ]; then
@@ -110,7 +125,7 @@ jobs:
           done
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: "22.13.0"
           registry-url: "https://registry.npmjs.org"
           cache: npm
           cache-dependency-path: package-lock.json
@@ -148,6 +163,145 @@ jobs:
           VAULT="$(node scripts/synthetic-vault.mjs)"
           node scripts/smoke.mjs "$VAULT"
           node scripts/smoke.mjs "$VAULT" --with-fts
+      - name: Download exact CI-gated Basic MCPB release asset
+        id: mcpb_candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA=$(git rev-parse HEAD)
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          PROVENANCE_NAME="enquire-mcp-basic-$VERSION.mcpb.provenance.json"
+          if [ -e artifacts ]; then
+            echo "::error::artifacts path already exists before canonical MCPB download"
+            exit 1
+          fi
+          RESUME_DIR=".mcpb-release-resume-$GITHUB_RUN_ID"
+          if [ -e "$RESUME_DIR" ]; then
+            echo "::error::release-resume identity path already exists: $RESUME_DIR"
+            exit 1
+          fi
+          mkdir "$RESUME_DIR"
+
+          # If a prior attempt already attached deterministic provenance, it
+          # pins the canonical build run for every later retry. Otherwise the
+          # oldest successful exact-SHA main-push candidate is canonical.
+          CI_RUN_ID=""
+          PROVENANCE_RUN_ID=""
+          PINNED_RUN_ATTEMPT=""
+          PINNED_ARTIFACT_ID=""
+          PINNED_ARTIFACT_DIGEST=""
+          RELEASE_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '[.[] | select(.tag_name == $tag)] | length')
+          if [ "$RELEASE_COUNT" -gt 1 ]; then
+            echo "::error::GitHub returned duplicate draft/published releases for $TAG"
+            exit 1
+          fi
+          if [ "$RELEASE_COUNT" -eq 1 ]; then
+            RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+              '.[] | select(.tag_name == $tag)')
+            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+            RELEASE_ASSET_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+            RELEASE_ASSETS=$(printf '%s' "$RELEASE_ASSET_PAGES" | jq 'add // []')
+            PROVENANCE_COUNT=$(printf '%s' "$RELEASE_ASSETS" | jq --arg name "$PROVENANCE_NAME" \
+              '[.[] | select(.name == $name)] | length')
+            if [ "$PROVENANCE_COUNT" -gt 1 ]; then
+              echo "::error::Release $TAG contains duplicate provenance assets"
+              exit 1
+            fi
+            if [ "$PROVENANCE_COUNT" -eq 1 ]; then
+              RESUME_PROVENANCE="$RESUME_DIR/$PROVENANCE_NAME"
+              PROVENANCE_ID=$(printf '%s' "$RELEASE_ASSETS" | jq -r --arg name "$PROVENANCE_NAME" \
+                '.[] | select(.name == $name) | .id')
+              gh api -H "Accept: application/octet-stream" \
+                "repos/${{ github.repository }}/releases/assets/$PROVENANCE_ID" > "$RESUME_PROVENANCE"
+              PROVENANCE_SOURCE=$(jq -r '.source_sha // empty' "$RESUME_PROVENANCE")
+              PROVENANCE_ARTIFACT=$(jq -r '.artifact // empty' "$RESUME_PROVENANCE")
+              BUILD_URL=$(jq -r '.build_workflow_run // empty' "$RESUME_PROVENANCE")
+              PROVENANCE_RUN_ID="${BUILD_URL##*/}"
+              PINNED_RUN_ATTEMPT=$(jq -r '.build_run_attempt // empty' "$RESUME_PROVENANCE")
+              PINNED_ARTIFACT_ID=$(jq -r '.build_artifact_id // empty' "$RESUME_PROVENANCE")
+              PINNED_ARTIFACT_DIGEST=$(jq -r '.build_artifact_digest // empty' "$RESUME_PROVENANCE")
+              if [ "$PROVENANCE_SOURCE" != "$SOURCE_SHA" ] || \
+                 [ "$PROVENANCE_ARTIFACT" != "enquire-mcp-basic-$VERSION.mcpb" ] || \
+                 ! [[ "$PROVENANCE_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$PINNED_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || \
+                 ! [[ "$PINNED_ARTIFACT_ID" =~ ^[0-9]+$ ]] || \
+                 ! [[ "$PINNED_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::Existing release provenance does not identify this source/artifact"
+                exit 1
+              fi
+            fi
+          fi
+
+          RUN_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SOURCE_SHA&per_page=100")
+          RUNS=$(printf '%s' "$RUN_PAGES" | jq '[.[].workflow_runs[]]')
+          while IFS= read -r CANDIDATE_RUN_ID; do
+            if [ -n "$PROVENANCE_RUN_ID" ] && [ "$CANDIDATE_RUN_ID" != "$PROVENANCE_RUN_ID" ]; then
+              continue
+            fi
+            JOB_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/jobs?filter=all&per_page=100")
+            JOBS=$(printf '%s' "$JOB_PAGES" | jq '[.[].jobs[]]')
+            ARTIFACT_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100")
+            CANDIDATE_ARTIFACTS=$(printf '%s' "$ARTIFACT_PAGES" | jq '[.[].artifacts[]]')
+            CANDIDATE_PAYLOAD=$(jq -n --argjson jobs "$JOBS" --argjson artifacts "$CANDIDATE_ARTIFACTS" \
+              '{jobs: $jobs, artifacts: $artifacts}')
+            CANDIDATE_RESULT=$(printf '%s' "$CANDIDATE_PAYLOAD" | node scripts/check-release-integrity.mjs \
+              candidate "$CANDIDATE_RUN_ID" "${PINNED_RUN_ATTEMPT:--}" \
+              "${PINNED_ARTIFACT_ID:--}" "${PINNED_ARTIFACT_DIGEST:--}")
+            if [ "$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.state')" = "skip" ]; then continue; fi
+            CI_RUN_ID="$CANDIDATE_RUN_ID"
+            PINNED_RUN_ATTEMPT=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.runAttempt')
+            PINNED_ARTIFACT_ID=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.artifactId')
+            PINNED_ARTIFACT_DIGEST=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.digest')
+            break
+          done < <(printf '%s' "$RUNS" | node scripts/check-release-integrity.mjs candidate-runs "$SOURCE_SHA" | \
+            jq -r '.[]')
+          if [ -z "$CI_RUN_ID" ]; then
+            echo "::error::No exact-SHA main push CI run has both a successful mcpb-basic job and live candidate artifact"
+            exit 1
+          fi
+          CANDIDATE_ZIP="$RESUME_DIR/mcpb-basic-candidate-$PINNED_RUN_ATTEMPT-$PINNED_ARTIFACT_ID.zip"
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"
+          ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP" | awk '{print $1}')"
+          if [ "$ACTUAL_ARTIFACT_DIGEST" != "$PINNED_ARTIFACT_DIGEST" ]; then
+            echo "::error::Downloaded Actions artifact digest differs from the selected API identity"
+            exit 1
+          fi
+          mkdir artifacts
+          CANDIDATE_ZIP="$CANDIDATE_ZIP" VERSION="$VERSION" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            import { unzipSync } from "fflate";
+            import { portableArchivePath } from "./scripts/lib/mcpb-safety.mjs";
+            const expected = new Set([
+              `enquire-mcp-basic-${process.env.VERSION}.mcpb`,
+              `enquire-mcp-basic-${process.env.VERSION}.content-manifest.json`,
+              `enquire-mcp-basic-${process.env.VERSION}.sbom.cdx.json`,
+              `enquire-mcp-basic-${process.env.VERSION}.third-party-licenses.json`
+            ]);
+            const entries = unzipSync(readFileSync(process.env.CANDIDATE_ZIP));
+            if (Object.keys(entries).length !== expected.size) process.exit(2);
+            for (const [rawName, data] of Object.entries(entries)) {
+              const name = portableArchivePath(rawName);
+              if (name !== rawName || !expected.delete(name)) process.exit(3);
+              writeFileSync(`artifacts/${name}`, data, { flag: "wx" });
+            }
+            if (expected.size !== 0) process.exit(4);
+          '
+          echo "build_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "build_run_attempt=$PINNED_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$PINNED_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$PINNED_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Re-verify exact CI-gated Basic MCPB release asset
+        run: npm run mcpb:verify
       - name: Resolve npm dist-tag from version
         id: dist_tag
         # v2.0.0-beta.2 P0 fix: resolve the complete prerelease shape instead
@@ -169,8 +323,292 @@ jobs:
           ")
           echo "tag=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Publishing $VERSION under dist-tag '$CHANNEL'"
-      - name: Publish with provenance
-        run: npm publish --provenance --access public --tag "${{ steps.dist_tag.outputs.tag }}"
+      - name: Prepare deterministic Basic release records
+        env:
+          BUILD_CI_RUN_ID: ${{ steps.mcpb_candidate.outputs.build_run_id }}
+          BUILD_RUN_ATTEMPT: ${{ steps.mcpb_candidate.outputs.build_run_attempt }}
+          BUILD_ARTIFACT_ID: ${{ steps.mcpb_candidate.outputs.artifact_id }}
+          BUILD_ARTIFACT_DIGEST: ${{ steps.mcpb_candidate.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/check-release-integrity.mjs asset-version "$VERSION"
+          TAG="v$VERSION"
+          ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
+          CONTENT="artifacts/enquire-mcp-basic-$VERSION.content-manifest.json"
+          SBOM="artifacts/enquire-mcp-basic-$VERSION.sbom.cdx.json"
+          LICENSES="artifacts/enquire-mcp-basic-$VERSION.third-party-licenses.json"
+          SOURCE_SHA=$(git rev-parse HEAD)
+          SHA256=$(sha256sum "$ASSET" | awk '{print $1}')
+          CONTENT_SHA256=$(sha256sum "$CONTENT" | awk '{print $1}')
+          SBOM_SHA256=$(sha256sum "$SBOM" | awk '{print $1}')
+          LICENSES_SHA256=$(sha256sum "$LICENSES" | awk '{print $1}')
+          printf '%s  %s\n' "$SHA256" "$(basename "$ASSET")" > "$ASSET.sha256"
+          ASSET="$ASSET" CONTENT="$CONTENT" SBOM="$SBOM" LICENSES="$LICENSES" TAG="$TAG" \
+            SHA256="$SHA256" CONTENT_SHA256="$CONTENT_SHA256" SBOM_SHA256="$SBOM_SHA256" \
+            LICENSES_SHA256="$LICENSES_SHA256" SOURCE_SHA="$SOURCE_SHA" node --input-type=module -e '
+            import { writeFileSync } from "node:fs";
+            const output = `${process.env.ASSET}.provenance.json`;
+            const provenance = {
+              artifact: process.env.ASSET.split("/").at(-1),
+              sha256: process.env.SHA256,
+              checksum: `${process.env.ASSET.split("/").at(-1)}.sha256`,
+              content_manifest: process.env.CONTENT.split("/").at(-1),
+              content_manifest_sha256: process.env.CONTENT_SHA256,
+              sbom: process.env.SBOM.split("/").at(-1),
+              sbom_sha256: process.env.SBOM_SHA256,
+              third_party_licenses: process.env.LICENSES.split("/").at(-1),
+              third_party_licenses_sha256: process.env.LICENSES_SHA256,
+              source_sha: process.env.SOURCE_SHA,
+              build_workflow_run: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.BUILD_CI_RUN_ID}`,
+              build_run_attempt: Number(process.env.BUILD_RUN_ATTEMPT),
+              build_artifact_id: process.env.BUILD_ARTIFACT_ID,
+              build_artifact_digest: process.env.BUILD_ARTIFACT_DIGEST,
+              release: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/releases/tag/${process.env.TAG}`,
+              mcpb_spec_commit: "70fe3b34cd6dff1b3bba046638edc72a6467a4fb",
+              packer: "@anthropic-ai/mcpb@2.1.2",
+              reproducibility: "deterministic content inventory; archive bytes contain pack-time mtime"
+            };
+            writeFileSync(output, `${JSON.stringify(provenance, null, 2)}\n`);
+          '
+      - name: Preflight existing GitHub release and every Basic asset before npm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          SOURCE_SHA=$(git rev-parse HEAD)
+          EXPECTED_PRERELEASE=false
+          if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then
+            EXPECTED_PRERELEASE=true
+          fi
+          ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
+          CONTENT="artifacts/enquire-mcp-basic-$VERSION.content-manifest.json"
+          SBOM="artifacts/enquire-mcp-basic-$VERSION.sbom.cdx.json"
+          LICENSES="artifacts/enquire-mcp-basic-$VERSION.third-party-licenses.json"
+          release_state() {
+            node scripts/check-release-integrity.mjs release-state "$TAG" "$EXPECTED_PRERELEASE" \
+              "$(basename "$ASSET")" "$(basename "$ASSET.sha256")" "$(basename "$CONTENT")" \
+              "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
+          }
+          assert_remote_tag_identity() {
+            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" '$2 == ref { print $1 }')
+            if [ "$RAW_TAG_COUNT" -ne 1 ] || [ "$PEELED_TAG_COUNT" -ne 1 ] || \
+               [ "$PEELED_TAG_SHA" != "$SOURCE_SHA" ]; then
+              echo "::error::Remote tag $TAG must be one annotated tag peeling to exact source SHA $SOURCE_SHA"
+              exit 1
+            fi
+          }
+          assert_stable_github_advance() {
+            if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then return; fi
+            CURRENT_LATEST_VERSION="-"
+            if LATEST_RELEASE=$(gh api "repos/${{ github.repository }}/releases/latest" 2>&1); then
+              CURRENT_LATEST_TAG=$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name // empty')
+              if ! [[ "$CURRENT_LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::GitHub latest release does not have a strict stable vX.Y.Z tag"
+                exit 1
+              fi
+              CURRENT_LATEST_VERSION=${CURRENT_LATEST_TAG#v}
+            elif ! printf '%s' "$LATEST_RELEASE" | grep -Eq 'HTTP 404|Not Found'; then
+              echo "::error::GitHub latest-release lookup failed without an authoritative not-found response"
+              exit 1
+            fi
+            node scripts/check-release-integrity.mjs channel-advance \
+              "$VERSION" "$CURRENT_LATEST_VERSION" "${{ steps.dist_tag.outputs.tag }}"
+          }
+          for LOCAL_ASSET in "$ASSET" "$ASSET.sha256" "$CONTENT" "$SBOM" "$LICENSES" "$ASSET.provenance.json"; do
+            if [ ! -f "$LOCAL_ASSET" ] || [ -L "$LOCAL_ASSET" ]; then
+              echo "::error::Preflight asset is missing, non-regular, or a symlink: $LOCAL_ASSET"
+              exit 1
+            fi
+          done
+          assert_remote_tag_identity
+          PREFLIGHT_DIR=".mcpb-release-preflight-$GITHUB_RUN_ID"
+          if [ -e "$PREFLIGHT_DIR" ]; then
+            echo "::error::Release preflight identity path already exists: $PREFLIGHT_DIR"
+            exit 1
+          fi
+          mkdir "$PREFLIGHT_DIR"
+          RELEASE_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '[.[] | select(.tag_name == $tag)] | length')
+          if [ "$RELEASE_COUNT" -gt 1 ]; then
+            echo "::error::GitHub returned duplicate draft/published releases for $TAG"
+            exit 1
+          fi
+          if [ "$RELEASE_COUNT" -eq 0 ]; then
+            RELEASE_ACTION=$(printf '%s' '{"release":null,"assets":[]}' | release_state | jq -r '.action')
+            if [ "$RELEASE_ACTION" != "create_draft" ]; then exit 1; fi
+            assert_stable_github_advance
+            echo "No existing GitHub release; validated post-npm draft creation path"
+            exit 0
+          fi
+          RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '.[] | select(.tag_name == $tag)')
+          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+          RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
+          RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+          if [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
+             { [ "$RELEASE_DRAFT" != "true" ] && [ "$RELEASE_DRAFT" != "false" ]; }; then
+            echo "::error::Existing GitHub release identity differs before npm publication"
+            exit 1
+          fi
+          ASSET_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
+            '{release: $release, assets: $assets}')
+          RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
+          if [ "$RELEASE_ACTION" != "resume_draft" ] && [ "$RELEASE_ACTION" != "publish_draft" ] && \
+             [ "$RELEASE_ACTION" != "reuse_published" ]; then
+            echo "::error::Unexpected preflight release classifier action: $RELEASE_ACTION"
+            exit 1
+          fi
+          if [ "$RELEASE_ACTION" = "reuse_published" ] && \
+             [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+            LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            if [ "$LATEST_TAG" != "$TAG" ]; then
+              echo "::error::Existing stable release $TAG is not GitHub's latest release before npm publication"
+              exit 1
+            fi
+          fi
+          if [ "$RELEASE_ACTION" = "resume_draft" ] || [ "$RELEASE_ACTION" = "publish_draft" ]; then
+            assert_stable_github_advance
+          fi
+          ACTUAL_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq 'length')
+          while IFS= read -r REMOTE_NAME; do
+            if [ "$REMOTE_NAME" != "$(basename "$ASSET")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.sha256")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$CONTENT")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$SBOM")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$LICENSES")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.provenance.json")" ]; then
+              echo "::error::Existing release contains unexpected preflight asset $REMOTE_NAME"
+              exit 1
+            fi
+          done < <(printf '%s' "$REMOTE_ASSETS" | jq -r '.[].name')
+          if [ "$RELEASE_DRAFT" = "false" ] && [ "$ACTUAL_COUNT" -ne 6 ]; then
+            echo "::error::Published release is partial before npm publication"
+            exit 1
+          fi
+          for LOCAL_ASSET in "$ASSET" "$ASSET.sha256" "$CONTENT" "$SBOM" "$LICENSES" "$ASSET.provenance.json"; do
+            NAME=$(basename "$LOCAL_ASSET")
+            MATCH_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq --arg name "$NAME" \
+              '[.[] | select(.name == $name)] | length')
+            if [ "$MATCH_COUNT" -gt 1 ]; then
+              echo "::error::Existing release contains duplicate preflight asset $NAME"
+              exit 1
+            fi
+            if [ "$MATCH_COUNT" -eq 0 ]; then
+              if [ "$RELEASE_DRAFT" = "false" ]; then
+                echo "::error::Published release is missing preflight asset $NAME"
+                exit 1
+              fi
+              continue
+            fi
+            REMOTE_ID=$(printf '%s' "$REMOTE_ASSETS" | jq -r --arg name "$NAME" \
+              '.[] | select(.name == $name) | .id')
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$PREFLIGHT_DIR/$NAME"
+            if ! cmp -s "$LOCAL_ASSET" "$PREFLIGHT_DIR/$NAME"; then
+              echo "::error::Existing release asset $NAME differs before npm publication"
+              exit 1
+            fi
+          done
+      - name: Publish with provenance or verify an exact prior publication
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          SOURCE_SHA=$(git rev-parse HEAD)
+          CHANNEL="${{ steps.dist_tag.outputs.tag }}"
+          EXPECTED_CHANNEL_VERSION="$VERSION"
+          EXPECTED_POST_ACTION="reuse"
+          parse_git_head() {
+            node -e '
+              let data = "";
+              process.stdin.on("data", (chunk) => { data += chunk; });
+              process.stdin.on("end", () => {
+                const parsed = JSON.parse(data);
+                if (typeof parsed !== "string" || !parsed) process.exit(2);
+                process.stdout.write(parsed);
+              });
+            '
+          }
+          if PUBLISHED=$(npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json 2>&1); then
+            PUBLISHED_SHA=$(printf '%s' "$PUBLISHED" | parse_git_head)
+            CHANNEL_VALUE=$(npm view "@oomkapwn/enquire-mcp" "dist-tags.$CHANNEL" --json)
+            PUBLISHED_CHANNEL_VERSION=$(printf '%s' "$CHANNEL_VALUE" | parse_git_head)
+            NPM_STATE=$(jq -n --arg gitHead "$PUBLISHED_SHA" --arg channelVersion "$PUBLISHED_CHANNEL_VERSION" \
+              '{exists: true, gitHead: $gitHead, channelVersion: $channelVersion}')
+            NPM_RESULT=$(printf '%s' "$NPM_STATE" | node scripts/check-release-integrity.mjs \
+              npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL")
+            NPM_ACTION=$(printf '%s' "$NPM_RESULT" | jq -r '.action')
+            if [ "$NPM_ACTION" = "reuse_superseded" ]; then
+              EXPECTED_CHANNEL_VERSION="$PUBLISHED_CHANNEL_VERSION"
+              EXPECTED_POST_ACTION="reuse_superseded"
+              echo "npm version $VERSION is exact and superseded by $EXPECTED_CHANNEL_VERSION on @$CHANNEL"
+            elif [ "$NPM_ACTION" != "reuse" ]; then
+              exit 1
+            else
+              echo "npm version $VERSION already exists at the exact source SHA — publication is complete"
+            fi
+          elif printf '%s' "$PUBLISHED" | grep -Eq 'E404|404 Not Found'; then
+            NPM_ACTION=$(printf '%s' '{"exists":false}' | node scripts/check-release-integrity.mjs \
+              npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL" | jq -r '.action')
+            if [ "$NPM_ACTION" != "publish" ]; then exit 1; fi
+            CURRENT_CHANNEL_VERSION="-"
+            if CURRENT_TAGS_RAW=$(npm view "@oomkapwn/enquire-mcp" dist-tags --json 2>&1); then
+              CURRENT_CHANNEL_VERSION=$(printf '%s' "$CURRENT_TAGS_RAW" | jq -er \
+                --arg channel "$CHANNEL" \
+                'if type != "object" then error("npm dist-tags is not an object") else (.[$channel] // "-") end')
+            elif ! printf '%s' "$CURRENT_TAGS_RAW" | grep -Eq 'E404|404 Not Found'; then
+              echo "::error::npm dist-tags lookup failed without an authoritative not-found response"
+              exit 1
+            fi
+            node scripts/check-release-integrity.mjs channel-advance \
+              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"
+            npm publish --provenance --access public --tag "$CHANNEL"
+          else
+            echo "::error::npm registry lookup failed without an authoritative not-found response"
+            exit 1
+          fi
+          CONFIRMED_SHA=""
+          CONFIRMED_CHANNEL_VERSION=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if CONFIRMED=$(npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json 2>/dev/null); then
+              CONFIRMED_SHA=$(printf '%s' "$CONFIRMED" | parse_git_head)
+              if [ "$CONFIRMED_SHA" != "$SOURCE_SHA" ]; then
+                echo "::error::npm postcondition gitHead=$CONFIRMED_SHA, expected $SOURCE_SHA"
+                exit 1
+              fi
+              if CHANNEL_VALUE=$(npm view "@oomkapwn/enquire-mcp" "dist-tags.$CHANNEL" --json 2>/dev/null); then
+                CONFIRMED_CHANNEL_VERSION=$(printf '%s' "$CHANNEL_VALUE" | parse_git_head)
+                if [ "$CONFIRMED_CHANNEL_VERSION" = "$EXPECTED_CHANNEL_VERSION" ]; then break; fi
+              fi
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 10; fi
+          done
+          if [ "$CONFIRMED_SHA" != "$SOURCE_SHA" ]; then
+            echo "::error::npm did not expose the exact published gitHead after 12 checks"
+            exit 1
+          fi
+          if [ "$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION" ]; then
+            echo "::error::npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION"
+            exit 1
+          fi
+          NPM_POST_STATE=$(jq -n --arg gitHead "$CONFIRMED_SHA" --arg channelVersion "$CONFIRMED_CHANNEL_VERSION" \
+            '{exists: true, gitHead: $gitHead, channelVersion: $channelVersion}')
+          NPM_POST_ACTION=$(printf '%s' "$NPM_POST_STATE" | node scripts/check-release-integrity.mjs \
+            npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL" | jq -r '.action')
+          if [ "$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION" ]; then exit 1; fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # v3.7.14 F5 — automate the GitHub Release (M13 from round-15 audit).
@@ -180,19 +618,85 @@ jobs:
       # (rc / alpha / beta etc.) get marked as prereleases. Notes are extracted
       # from CHANGELOG.md for the just-published version — the per-section
       # `## [X.Y.Z] — YYYY-MM-DD` heading is the canonical entry boundary.
-      # Skips with a warning if the release already exists (manual creation
-      # before the tag-push gets here).
-      - name: Create GitHub Release
+      # A retry may reuse an existing release only after validating its tag,
+      # remote annotated-tag source, channel, and draft/published identity.
+      - name: Prepare draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
-          # Skip if a release already exists for this tag (e.g. created manually).
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::warning::Release $TAG already exists — skipping auto-create"
+          SOURCE_SHA=$(git rev-parse HEAD)
+          EXPECTED_PRERELEASE=false
+          if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then
+            EXPECTED_PRERELEASE=true
+          fi
+          ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
+          CONTENT="artifacts/enquire-mcp-basic-$VERSION.content-manifest.json"
+          SBOM="artifacts/enquire-mcp-basic-$VERSION.sbom.cdx.json"
+          LICENSES="artifacts/enquire-mcp-basic-$VERSION.third-party-licenses.json"
+          release_state() {
+            node scripts/check-release-integrity.mjs release-state "$TAG" "$EXPECTED_PRERELEASE" \
+              "$(basename "$ASSET")" "$(basename "$ASSET.sha256")" "$(basename "$CONTENT")" \
+              "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
+          }
+          assert_remote_tag_identity() {
+            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" '$2 == ref { print $1 }')
+            if [ "$RAW_TAG_COUNT" -ne 1 ] || [ "$PEELED_TAG_COUNT" -ne 1 ] || \
+               [ "$PEELED_TAG_SHA" != "$SOURCE_SHA" ]; then
+              echo "::error::Remote tag $TAG must be one annotated tag peeling to exact source SHA $SOURCE_SHA"
+              exit 1
+            fi
+          }
+          assert_remote_tag_identity
+          # A retry may reuse an existing release only when its channel and
+          # externally verified annotated-tag source match this workflow.
+          RELEASE_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '[.[] | select(.tag_name == $tag)] | length')
+          if [ "$RELEASE_COUNT" -gt 1 ]; then
+            echo "::error::GitHub returned duplicate draft/published releases for $TAG"
+            exit 1
+          fi
+          if [ "$RELEASE_COUNT" -eq 1 ]; then
+            RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+              '.[] | select(.tag_name == $tag)')
+            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+            ASSET_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+            RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
+              '{release: $release, assets: $assets}')
+            RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
+            ACTUAL_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')
+            ACTUAL_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
+            ACTUAL_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+            if [ "$ACTUAL_TAG" != "$TAG" ] || \
+               [ "$ACTUAL_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
+               { [ "$ACTUAL_DRAFT" != "true" ] && [ "$ACTUAL_DRAFT" != "false" ]; }; then
+              echo "::error::Existing release $TAG has incompatible tag, channel, or draft identity"
+              exit 1
+            fi
+            if [ "$ACTUAL_DRAFT" = "false" ] && [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+              LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+              if [ "$LATEST_TAG" != "$TAG" ]; then
+                echo "::error::Existing stable release $TAG is not GitHub's latest release"
+                exit 1
+              fi
+            fi
+            echo "Release $TAG already exists with the exact expected draft/published identity"
             exit 0
           fi
+          RELEASE_ACTION=$(printf '%s' '{"release":null,"assets":[]}' | release_state | jq -r '.action')
+          if [ "$RELEASE_ACTION" != "create_draft" ]; then exit 1; fi
           # Slice the CHANGELOG entry for this version: from "## [X.Y.Z]" up
           # to the next "## [" heading. awk is the cleanest cross-platform
           # tool for bounded section extraction.
@@ -204,19 +708,259 @@ jobs:
           if [ -z "$NOTES" ]; then
             NOTES="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md#${VERSION//./}--$(date -u +%Y-%m-%d)) for full release notes."
           fi
-          # Determine prerelease vs latest flag from the resolved dist-tag.
+          # Uploads happen while the release is a draft. Publication is a
+          # separate postcondition after the exact asset set is complete.
           if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "$NOTES" \
-              --latest \
-              --target main
+              --draft \
+              --verify-tag
           else
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "$NOTES" \
+              --draft \
               --prerelease \
-              --target main
+              --verify-tag
+          fi
+      - name: Upload Basic MCPB asset, checksum, and provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
+          CONTENT="artifacts/enquire-mcp-basic-$VERSION.content-manifest.json"
+          SBOM="artifacts/enquire-mcp-basic-$VERSION.sbom.cdx.json"
+          LICENSES="artifacts/enquire-mcp-basic-$VERSION.third-party-licenses.json"
+          SOURCE_SHA=$(git rev-parse HEAD)
+          EXPECTED_PRERELEASE=false
+          if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then
+            EXPECTED_PRERELEASE=true
+          fi
+          release_state() {
+            node scripts/check-release-integrity.mjs release-state "$TAG" "$EXPECTED_PRERELEASE" \
+              "$(basename "$ASSET")" "$(basename "$ASSET.sha256")" "$(basename "$CONTENT")" \
+              "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
+          }
+          assert_remote_tag_identity() {
+            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" '$2 == ref { print $1 }')
+            if [ "$RAW_TAG_COUNT" -ne 1 ] || [ "$PEELED_TAG_COUNT" -ne 1 ] || \
+               [ "$PEELED_TAG_SHA" != "$SOURCE_SHA" ]; then
+              echo "::error::Remote tag $TAG must be one annotated tag peeling to exact source SHA $SOURCE_SHA"
+              exit 1
+            fi
+          }
+          assert_remote_tag_identity
+          IDENTITY_DIR=".mcpb-release-assets-$GITHUB_RUN_ID"
+          if [ -e "$IDENTITY_DIR" ]; then
+            echo "::error::release-asset identity path already exists: $IDENTITY_DIR"
+            exit 1
+          fi
+          mkdir "$IDENTITY_DIR"
+          RELEASE_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '[.[] | select(.tag_name == $tag)] | length')
+          if [ "$RELEASE_COUNT" -ne 1 ]; then
+            echo "::error::Asset phase requires exactly one draft/published release for $TAG"
+            exit 1
+          fi
+          RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '.[] | select(.tag_name == $tag)')
+          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+          RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
+          RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+          if [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
+             { [ "$RELEASE_DRAFT" != "true" ] && [ "$RELEASE_DRAFT" != "false" ]; }; then
+            echo "::error::Release identity changed before asset verification"
+            exit 1
+          fi
+          ASSET_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
+            '{release: $release, assets: $assets}')
+          RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
+          ACTUAL_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq 'length')
+          while IFS= read -r REMOTE_NAME; do
+            if [ "$REMOTE_NAME" != "$(basename "$ASSET")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.sha256")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$CONTENT")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$SBOM")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$LICENSES")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.provenance.json")" ]; then
+              echo "::error::Release $TAG contains unexpected asset $REMOTE_NAME"
+              exit 1
+            fi
+          done < <(printf '%s' "$REMOTE_ASSETS" | jq -r '.[].name')
+          if [ "$RELEASE_DRAFT" = "false" ] && [ "$ACTUAL_COUNT" -ne 6 ]; then
+            echo "::error::Published release $TAG is partial; refusing to mutate an externally visible release"
+            exit 1
+          fi
+          for LOCAL_ASSET in "$ASSET" "$ASSET.sha256" "$CONTENT" "$SBOM" "$LICENSES" "$ASSET.provenance.json"; do
+            if [ ! -f "$LOCAL_ASSET" ] || [ -L "$LOCAL_ASSET" ]; then
+              echo "::error::Release asset is missing, non-regular, or a symlink: $LOCAL_ASSET"
+              exit 1
+            fi
+            NAME=$(basename "$LOCAL_ASSET")
+            ASSET_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+            MATCH_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq --arg name "$NAME" \
+              '[.[] | select(.name == $name)] | length')
+            if [ "$MATCH_COUNT" -gt 1 ]; then
+              echo "::error::Release $TAG contains duplicate asset name $NAME"
+              exit 1
+            fi
+            if [ "$MATCH_COUNT" -eq 0 ]; then
+              CURRENT_RELEASE=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID")
+              CURRENT_UPLOAD_URL=$(printf '%s' "$CURRENT_RELEASE" | jq -r '.upload_url')
+              EXPECTED_UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets{?name,label}"
+              if [ "$CURRENT_UPLOAD_URL" != "$EXPECTED_UPLOAD_URL" ]; then
+                echo "::error::GitHub release upload URL is not bound to the exact repository and release ID"
+                exit 1
+              fi
+              CURRENT_ASSET_PAGES=$(gh api --paginate --slurp \
+                "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+              CURRENT_ASSETS=$(printf '%s' "$CURRENT_ASSET_PAGES" | jq 'add // []')
+              CURRENT_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS" \
+                '{release: $release, assets: $assets}')
+              CURRENT_ACTION=$(printf '%s' "$CURRENT_STATE" | release_state | jq -r '.action')
+              CURRENT_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME" \
+                '[.[] | select(.name == $name)] | length')
+              if [ "$CURRENT_ACTION" != "resume_draft" ] || [ "$CURRENT_NAME_COUNT" -ne 0 ]; then
+                echo "::error::Published release $TAG is missing $NAME; refusing post-publication mutation"
+                exit 1
+              fi
+              UPLOAD_BASE=${CURRENT_UPLOAD_URL%%\{*}
+              ENCODED_NAME=$(printf '%s' "$NAME" | jq -sRr @uri)
+              assert_remote_tag_identity
+              curl --fail-with-body --silent --show-error --request POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Content-Type: application/octet-stream" \
+                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null
+              ASSET_PAGES=$(gh api --paginate --slurp \
+                "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+              REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+              MATCH_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq --arg name "$NAME" \
+                '[.[] | select(.name == $name)] | length')
+              if [ "$MATCH_COUNT" -ne 1 ]; then
+                echo "::error::Uploaded asset $NAME did not resolve to one release asset"
+                exit 1
+              fi
+            fi
+            REMOTE_ASSET="$IDENTITY_DIR/$NAME"
+            if [ -e "$REMOTE_ASSET" ]; then
+              echo "::error::Remote comparison target already exists: $REMOTE_ASSET"
+              exit 1
+            fi
+            REMOTE_ID=$(printf '%s' "$REMOTE_ASSETS" | jq -r --arg name "$NAME" \
+              '.[] | select(.name == $name) | .id')
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$REMOTE_ASSET"
+            if ! cmp -s "$LOCAL_ASSET" "$REMOTE_ASSET"; then
+              echo "::error::Existing release asset $NAME differs from the canonical CI-gated bytes"
+              exit 1
+            fi
+            echo "Verified exact release asset: $NAME"
+          done
+          ASSET_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+          FINAL_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          FINAL_COUNT=$(printf '%s' "$FINAL_ASSETS" | jq 'length')
+          if [ "$FINAL_COUNT" -ne 6 ]; then
+            echo "::error::Release $TAG does not contain the complete six-asset Basic set"
+            exit 1
+          fi
+          FINAL_DIR=".mcpb-release-final-$GITHUB_RUN_ID"
+          if [ -e "$FINAL_DIR" ]; then
+            echo "::error::Final release identity path already exists: $FINAL_DIR"
+            exit 1
+          fi
+          mkdir "$FINAL_DIR"
+          while IFS= read -r REMOTE_NAME; do
+            if [ "$REMOTE_NAME" != "$(basename "$ASSET")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.sha256")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$CONTENT")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$SBOM")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$LICENSES")" ] && \
+               [ "$REMOTE_NAME" != "$(basename "$ASSET.provenance.json")" ]; then
+              echo "::error::Final release contains unexpected asset $REMOTE_NAME"
+              exit 1
+            fi
+          done < <(printf '%s' "$FINAL_ASSETS" | jq -r '.[].name')
+          for LOCAL_ASSET in "$ASSET" "$ASSET.sha256" "$CONTENT" "$SBOM" "$LICENSES" "$ASSET.provenance.json"; do
+            NAME=$(basename "$LOCAL_ASSET")
+            MATCH_COUNT=$(printf '%s' "$FINAL_ASSETS" | jq --arg name "$NAME" \
+              '[.[] | select(.name == $name)] | length')
+            if [ "$MATCH_COUNT" -ne 1 ]; then
+              echo "::error::Final release does not contain exactly one $NAME"
+              exit 1
+            fi
+            REMOTE_ID=$(printf '%s' "$FINAL_ASSETS" | jq -r --arg name "$NAME" \
+              '.[] | select(.name == $name) | .id')
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$FINAL_DIR/$NAME"
+            if ! cmp -s "$LOCAL_ASSET" "$FINAL_DIR/$NAME"; then
+              echo "::error::Final release asset $NAME differs before draft publication"
+              exit 1
+            fi
+          done
+          PUBLISH_RELEASE=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID")
+          PUBLISH_ASSET_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
+          PUBLISH_ASSETS=$(printf '%s' "$PUBLISH_ASSET_PAGES" | jq 'add // []')
+          PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS" \
+            '{release: $release, assets: $assets}')
+          FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')
+          assert_remote_tag_identity
+          if [ "$FINAL_ACTION" = "publish_draft" ]; then
+            if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+              gh api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" \
+                -F draft=false -F prerelease=false -f make_latest=true >/dev/null
+            else
+              gh api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" \
+                -F draft=false -F prerelease=true -f make_latest=false >/dev/null
+            fi
+          elif [ "$FINAL_ACTION" != "reuse_published" ]; then
+            echo "::error::Exact six-asset set produced unexpected release action $FINAL_ACTION"
+            exit 1
+          fi
+          RELEASE_PAGES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100")
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '[.[] | select(.tag_name == $tag)] | length')
+          if [ "$RELEASE_COUNT" -ne 1 ]; then
+            echo "::error::Published release postcondition requires exactly one release for $TAG"
+            exit 1
+          fi
+          RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+            '.[] | select(.tag_name == $tag)')
+          assert_remote_tag_identity
+          FINAL_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
+          FINAL_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+          if [ "$FINAL_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || [ "$FINAL_DRAFT" != "false" ]; then
+            echo "::error::Published release postcondition does not match exact annotated-tag source/channel identity"
+            exit 1
+          fi
+          if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+            LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            if [ "$LATEST_TAG" != "$TAG" ]; then
+              echo "::error::Published stable release $TAG is not GitHub's latest release"
+              exit 1
+            fi
           fi
       # v3.9.0-rc.32 — automate the official MCP Registry publish via GitHub
       # Actions OIDC (no interactive login, no dedicated secret — `id-token:

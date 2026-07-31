@@ -89,6 +89,76 @@ function containsExactInteger(text: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`).test(text);
 }
 
+type McpbDocumentationContract = Readonly<{
+  version: string;
+  toolCount: number;
+  promptCount: number;
+  nodeFloor: string;
+}>;
+
+type McpbDocumentationExpectations = Readonly<{
+  assetFilename: boolean;
+  releaseTag: boolean;
+}>;
+
+/** Keep only the local context around MCPB claims so unrelated numbers cannot satisfy the guard. */
+function mcpbClaimRegion(markdown: string): string {
+  const lines = markdown.split("\n");
+  const selected = new Set<number>();
+  for (let index = 0; index < lines.length; index++) {
+    if (!/MCPB|enquire-mcp-basic/iu.test(lines[index] ?? "")) continue;
+    for (let offset = 0; offset <= 4 && index + offset < lines.length; offset++) selected.add(index + offset);
+  }
+  return [...selected]
+    .sort((left, right) => left - right)
+    .map((index) => lines[index] ?? "")
+    .join("\n");
+}
+
+/** Compare one public MCPB claim surface with the canonical manifest contract. */
+function mcpbDocumentationProblems(
+  markdown: string,
+  contract: McpbDocumentationContract,
+  expectations: McpbDocumentationExpectations
+): string[] {
+  const region = mcpbClaimRegion(markdown);
+  const problems: string[] = [];
+  if (!region) return ["missing MCPB claim region"];
+  if (!region.includes(contract.version)) problems.push("MCPB version drift");
+  if (expectations.releaseTag && !region.includes(`/releases/tag/v${contract.version}`)) {
+    problems.push("MCPB release tag drift");
+  }
+  if (expectations.assetFilename && !region.includes(`enquire-mcp-basic-${contract.version}.mcpb`)) {
+    problems.push("MCPB asset filename drift");
+  }
+  const toolCount = String(contract.toolCount);
+  if (
+    !region.includes(`**${toolCount}`) &&
+    !new RegExp(`\\b${toolCount}(?:-tool|\\s+read-only tools?)\\b`, "iu").test(region)
+  ) {
+    problems.push("MCPB tool count drift");
+  }
+  const promptCountPresent =
+    contract.promptCount === 0
+      ? region.includes("**0") || /\bzero(?:-prompt|\s+prompts?)\b/iu.test(region)
+      : new RegExp(`\\b${contract.promptCount}\\s+(?:MCP[ -]?)?prompts?\\b`, "iu").test(region);
+  if (!promptCountPresent) problems.push("MCPB prompt count drift");
+  const nodeMajorMinor = /(?:>=)?(\d+\.\d+)/u.exec(contract.nodeFloor)?.[1] ?? "";
+  if (!nodeMajorMinor || !region.includes(`Node.js ${nodeMajorMinor}`)) problems.push("MCPB Node floor drift");
+  const stalePatterns = [
+    /\bplanned MCPB\b/iu,
+    /\bstatic checkpoint\b/iu,
+    /\bstatic implementation\b/iu,
+    /\bafter final-v4 replay\b/iu,
+    /\bwill provide\b/iu,
+    /\bpublication remain(?:s)? pending\b/iu,
+    /\bremote runtime evidence[^.\n]*\bpending\b/iu,
+    /\bdoes not claim[^.\n]*\bpublished\b/iu
+  ];
+  if (stalePatterns.some((pattern) => pattern.test(region))) problems.push("stale MCPB publication status");
+  return problems;
+}
+
 /**
  * Validate the two CI rows shared by every localized README.
  *
@@ -130,6 +200,7 @@ function publicCiPostureProblems(
     "docker",
     "CodeQL",
     "release.yml",
+    "mcpb-basic",
     "2026-07-23"
   ]) {
     if (!detail.includes(marker)) problems.push(`detail missing ${marker}`);
@@ -1737,6 +1808,20 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(findCompetitorCta(current), `${surface} contains a competitor CTA`).toBeNull();
     }
     const readme = await read("README.md");
+    const quickstart = await read("docs/QUICKSTART.md");
+    const packageVersion = (JSON.parse(await read("package.json")) as { version: string }).version;
+    const mcpbVersionProblems = (markdown: string, version: string): string[] => {
+      const problems: string[] = [];
+      if (!markdown.includes(`/releases/tag/v${version}`)) problems.push("release tag drift");
+      if (!markdown.includes(`enquire-mcp-basic-${version}.mcpb`)) problems.push("asset filename drift");
+      return problems;
+    };
+    expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
+    expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
+    expect(mcpbVersionProblems(readme.replaceAll(packageVersion, "0.0.0-stale"), packageVersion)).toEqual([
+      "release tag drift",
+      "asset filename drift"
+    ]);
     expect(readme).toContain("| Complete leadership standard | **enquire-mcp** | Smart Connections");
     expect(readme).toContain("✅ = the complete row is built in");
     expect(readme).toContain("[competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence)");
@@ -1893,6 +1978,73 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(findUnsupportedPerformanceClaim("a BM25 query is always under 100ms")).toBe("always under 100ms");
     // POSITIVE control: a bounded, corpus-specific observation remains publishable.
     expect(findUnsupportedPerformanceClaim("50–100ms BM25 top-10 at 1,771 chunks / 368 files in issue #10")).toBeNull();
+
+    // v4.0.0-rc.2 — the first MCPB documentation pass added version, tool,
+    // prompt, runtime, asset, and publication-status claims across the public
+    // surfaces, while the original guard covered only README.md + QUICKSTART.
+    // Pin the whole class to mcpb/manifest.json and keep explicit mutations so
+    // a future version bump or pre-release handoff cannot silently drift again.
+    const manifest = JSON.parse(await read("mcpb/manifest.json")) as {
+      version?: unknown;
+      tools?: unknown[];
+      prompts?: unknown[];
+      compatibility?: { runtimes?: { node?: unknown } };
+    };
+    expect(typeof manifest.version).toBe("string");
+    expect(Array.isArray(manifest.tools)).toBe(true);
+    expect(Array.isArray(manifest.prompts)).toBe(true);
+    expect(typeof manifest.compatibility?.runtimes?.node).toBe("string");
+    const contract: McpbDocumentationContract = {
+      version: manifest.version as string,
+      toolCount: manifest.tools?.length ?? -1,
+      promptCount: manifest.prompts?.length ?? -1,
+      nodeFloor: manifest.compatibility?.runtimes?.node as string
+    };
+    const surfaces: ReadonlyArray<
+      Readonly<{ file: string; expectations: McpbDocumentationExpectations }>
+    > = [
+      ...PUBLIC_READMES.map((file) => ({
+        file,
+        expectations: { assetFilename: true, releaseTag: true }
+      })),
+      {
+        file: "docs/QUICKSTART.md",
+        expectations: { assetFilename: true, releaseTag: true }
+      },
+      { file: "SECURITY.md", expectations: { assetFilename: false, releaseTag: false } },
+      { file: "STABILITY.md", expectations: { assetFilename: true, releaseTag: false } },
+      { file: "ROADMAP.md", expectations: { assetFilename: false, releaseTag: false } },
+      { file: "llms.txt", expectations: { assetFilename: true, releaseTag: true } },
+      { file: "llms-ctx.txt", expectations: { assetFilename: true, releaseTag: true } }
+    ];
+    for (const surface of surfaces) {
+      expect(
+        mcpbDocumentationProblems(await read(surface.file), contract, surface.expectations),
+        `${surface.file} MCPB contract drifted from mcpb/manifest.json`
+      ).toEqual([]);
+    }
+
+    const english = await read("README.md");
+    const fullExpectations = { assetFilename: true, releaseTag: true } as const;
+    const staleVersion = english.replaceAll(contract.version, "0.0.0-stale");
+    expect(staleVersion).not.toBe(english);
+    expect(mcpbDocumentationProblems(staleVersion, contract, fullExpectations)).toEqual(
+      expect.arrayContaining(["MCPB version drift", "MCPB release tag drift", "MCPB asset filename drift"])
+    );
+    const staleTools = english.replace("**13 read-only tools**", "**12 read-only tools**");
+    expect(staleTools).not.toBe(english);
+    expect(mcpbDocumentationProblems(staleTools, contract, fullExpectations)).toContain("MCPB tool count drift");
+    const stalePrompts = english.replace("**0 prompts**", "**1 prompt**");
+    expect(stalePrompts).not.toBe(english);
+    expect(mcpbDocumentationProblems(stalePrompts, contract, fullExpectations)).toContain("MCPB prompt count drift");
+    const staleNode = english.replace("Node.js 22.13", "Node.js 22.12");
+    expect(staleNode).not.toBe(english);
+    expect(mcpbDocumentationProblems(staleNode, contract, fullExpectations)).toContain("MCPB Node floor drift");
+    const staleStatus = english.replace("MCPB Basic", "Planned MCPB Basic static checkpoint");
+    expect(staleStatus).not.toBe(english);
+    expect(mcpbDocumentationProblems(staleStatus, contract, fullExpectations)).toContain(
+      "stale MCPB publication status"
+    );
   });
 
   // v3.7.14 F4 — close the "Hardcoded counts in docs without an invariant"
@@ -1949,7 +2101,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const requiredMatch = /REQUIRED="([^"]+)"/.exec(releaseYml);
     expect(requiredMatch, 'release.yml must declare REQUIRED="..."').not.toBeNull();
     const releaseRequired = (requiredMatch?.[1] ?? "").split("|").filter(Boolean).length;
-    expect(releaseRequired).toBe(11);
+    expect(releaseRequired).toBe(12);
 
     // Live branch-protection snapshot re-derived with `gh api` on 2026-07-23.
     // External settings are intentionally date-stamped; this invariant keeps
@@ -2130,7 +2282,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     for (const file of ["AGENTS.md", "llms.txt", "llms-ctx.txt", "ROADMAP.md"]) {
       const body = await read(file);
-      expect(body, `${file} must carry the release-required count`).toContain("11 release-required");
+      expect(body, `${file} must carry the release-required count`).toContain("12 release-required");
       expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
       expect(body, `${file} must not retain the five-advisory fiction`).not.toMatch(/5 advisory/i);
     }

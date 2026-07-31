@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-30 (v3.12.0-rc.30 candidate: client-neutral agent lifecycle recipes, a copy-ready launch kit, stricter prompt confidence/write semantics, and corrected freshness documentation on top of the rc.29 acquisition rebuild).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-31 (v3.12.0-rc.31 candidate: a non-monkey-patching MCP registration seam ahead of the approved SDK v2 major migration, on top of rc.30's agent lifecycle recipes and launch kit).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

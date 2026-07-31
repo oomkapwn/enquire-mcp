@@ -26,6 +26,7 @@ src/
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── first-run.ts        — deterministic preview/apply onboarding plan + stop/resume executor
 ├── server.ts           — MCP server bootstrap + dependency wiring
+├── mcp-registration.ts — SDK-agnostic gated registration facade (no server monkey-patch)
 ├── initialize-instructions.ts — configuration-aware, byte-bounded MCP handshake guidance
 ├── tool-registry.ts    — tool registration manifest
 ├── tool-manifest.ts    — tool metadata (names, schemas, readOnlyHint)

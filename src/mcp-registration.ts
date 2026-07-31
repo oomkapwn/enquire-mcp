@@ -32,12 +32,14 @@ export function createToolRegistrationAdapter<T extends object>(
     throw new TypeError("MCP registration target must expose registerTool()");
   }
 
+  type RegisterToolMethod = (name: string, ...rest: unknown[]) => unknown;
+
   let facade: T;
-  const registerToolMethods = new WeakMap<object, (...args: unknown[]) => unknown>();
+  const registerToolMethods = new WeakMap<object, RegisterToolMethod>();
   const registerToolSources = new WeakMap<object, unknown>();
   const boundMethods = new Map<PropertyKey, { source: unknown; method: (...args: unknown[]) => unknown }>();
 
-  const gatedRegisterTool = (current: T): ((name: string, ...rest: unknown[]) => unknown) => {
+  const gatedRegisterTool = (current: T): RegisterToolMethod => {
     const source = Reflect.get(current, "registerTool", current);
     if (typeof source !== "function") {
       throw new TypeError("MCP registration target must expose registerTool()");

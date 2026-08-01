@@ -649,6 +649,8 @@ const MCPB_NPM_CHANNEL_ADVANCE =
 const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
   '          gh api -H "Accept: application/vnd.github+json" \\\n' +
   `            "repos/\${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"`;
+const MCPB_RELEASE_VISIBILITY_POLL =
+  "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -873,6 +875,18 @@ function mcpbContractProblems(inputs: {
     '          assert_remote_tag_identity\n          if [ "$FINAL_ACTION" = "publish_draft" ]; then';
   const finalPostconditionTagProof =
     "          assert_remote_tag_identity\n          FINAL_PRERELEASE=$(printf '%s' \"$RELEASE_JSON\" | jq -r '.prerelease')";
+  const assetPhaseIndex = inputs.release.indexOf("- name: Upload Basic MCPB asset, checksum, and provenance");
+  const visibilityPollIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_POLL);
+  const visibilityBreakIndex = inputs.release.indexOf(
+    'if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi',
+    visibilityPollIndex
+  );
+  const assetReleaseJsonIndex = inputs.release.indexOf("RELEASE_JSON=$(printf", visibilityBreakIndex);
+  const visibilityPollIsSafe =
+    assetPhaseIndex >= 0 &&
+    visibilityPollIndex > assetPhaseIndex &&
+    visibilityBreakIndex > visibilityPollIndex &&
+    assetReleaseJsonIndex > visibilityBreakIndex;
   const freshUploadClassifierIndex = inputs.release.indexOf(freshUploadClassifier);
   const freshUploadRefusalIndex = inputs.release.indexOf(freshUploadRefusal);
   const freshUploadTagProofIndex = inputs.release.indexOf(freshUploadTagProof);
@@ -921,6 +935,10 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes(MCPB_ACTIONS_ARTIFACT_DOWNLOAD) ||
     !inputs.release.includes('ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP"') ||
     !inputs.release.includes("Downloaded Actions artifact digest differs from the selected API identity") ||
+    !visibilityPollIsSafe ||
+    !inputs.release.includes('if [ "$release_attempt" -eq 12 ]; then') ||
+    !inputs.release.includes("Release $TAG did not become visible after 12 bounded checks") ||
+    !inputs.release.includes("retrying in 5s") ||
     !inputs.release.includes('import { portableArchivePath } from "./scripts/lib/mcpb-safety.mjs"') ||
     !inputs.release.includes('echo "build_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"') ||
     !inputs.release.includes('CI_RUN_ID=""') ||
@@ -1540,6 +1558,17 @@ describe("release identity and exact required-check gate", () => {
         release: mcpbInputs.release.replace(
           MCPB_ACTIONS_ARTIFACT_DOWNLOAD,
           MCPB_ACTIONS_ARTIFACT_DOWNLOAD.replace("application/vnd.github+json", "application/octet-stream")
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: mcpbInputs.release.replace(
+          MCPB_RELEASE_VISIBILITY_POLL,
+          MCPB_RELEASE_VISIBILITY_POLL.replace("12", "1")
         )
       })
     ).toContain(

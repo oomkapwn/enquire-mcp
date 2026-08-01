@@ -643,7 +643,7 @@ const MCPB_HYBRID_NEGATIVE_ASSERTION =
 const MCPB_HYBRID_FALSE_HIT_ASSERTION =
   '!noMatchText.includes("Projects/Hermes.md"), "obsidian_search: negative control leaked a false hit"';
 const MCPB_NPM_CHANNEL_ADVANCE =
-  '            node scripts/check-release-integrity.mjs channel-advance \\\n' +
+  "            node scripts/check-release-integrity.mjs channel-advance \\\n" +
   '              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
   '            npm publish --provenance --access public --tag "$CHANNEL"';
 

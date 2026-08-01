@@ -42,6 +42,14 @@ export const DIAGNOSTIC_SEARCH_TOOLS_HELP =
   "Register the single-ranker search tools (obsidian_search_text, obsidian_semantic_search, obsidian_embeddings_search) IN ADDITION to the default obsidian_search hybrid tool — plus obsidian_full_text_search if --persistent-index is also set (it's gated on FTS5 availability separately). Off by default in v2.0+ — the umbrella obsidian_search auto-detects available signals and produces consistent recall. Enable when you need single-ranker output for diagnostics or A/B benchmarking.";
 
 /**
+ * `--no-prompts` help. Shared by stdio and HTTP so the opt-out stays
+ * transport-neutral; MCPB Basic uses it to advertise an exact zero-prompt
+ * surface while ordinary serve behavior remains unchanged.
+ */
+export const PROMPTS_HELP =
+  "Do not register MCP prompts. Tools and resources remain available; the default is to register all prompts.";
+
+/**
  * `--persistent-index` flag help. States the FTS5 index requirement for
  * `obsidian_full_text_search`, without implying this flag alone registers it
  * (v3.8.0-rc.10 P3-21 — pre-rc.10 phrasing "Registers obsidian_full_text_search"
@@ -121,6 +129,14 @@ export const INDEX_FILE_HELP = "Override the FTS5 index file location";
  * diagnoses or removes the persistent embedding index.
  */
 export const EMBED_FILE_HELP = "Override the embedding-index (.embed.db) file location";
+
+/**
+ * `--no-embedding-index` shared runtime-isolation help. This is primarily for
+ * restricted bundles that must not discover a full edition's per-vault vector
+ * database or inherit its watcher recovery interlock.
+ */
+export const EMBEDDING_INDEX_HELP =
+  "Disable discovery and use of the persistent embedding index for this server generation, including its watcher activation guard. The umbrella search remains available through non-embedding signals.";
 
 /**
  * `--quantize-embeddings` flag help (v3.8.0-rc.11 M-1 root-class fix; caught

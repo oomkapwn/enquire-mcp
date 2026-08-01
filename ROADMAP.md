@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-07-31 (`v4.0.0-rc.1` candidate: official TypeScript SDK v2, strict MCP `2026-07-28` plus supported legacy serving, and remote protocol/package evidence; the published v3 registration seam remains the rollback boundary).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-01 (`v4.0.0-rc.2`: the first MCPB Basic bundle on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 12-gate remote publication chain; stable `@latest` remains v3).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,9 +19,9 @@ Already shipped and differentiating:
 - **Structured Obsidian documents** — Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1807 tests, 11 release-required CI checks (7 currently branch-protected), including official-client protocol conformance and a three-OS packed-consumer aggregate, plus a pinned Windows hostile-filesystem and startup-interlock prerequisite that fails the protected `smoke` context closed; semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, structural invariant suite.
+- **Process maturity** — 1807 tests and 12 release-required CI checks (7 currently branch-protected). The v4 line defines official-client protocol conformance, a three-OS packed-consumer aggregate, and an MCPB Basic gate that consumes one exact Linux-built candidate on Linux, Windows, and macOS before release. A pinned Windows hostile-filesystem and startup-interlock prerequisite fails the protected `smoke` context closed; the project also carries a semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, and structural invariants.
 
-The **v4.0.0 `@rc` preview** keeps those v3 activation, watcher-generation and mainstream local-filesystem hardlink guarantees while moving the public transports to official MCP SDK v2. Era-aware stdio and strict modern HTTP (`2026-07-28`) coexist with supported legacy clients from one registration factory; malformed modern claims never downgrade. Aggregate write tracking keeps shared persistence behind active modern/stdio work, and new remote gates exercise the official client plus the packed public package across Linux, Windows and macOS. The single intentional programmatic break is the nominal SDK type returned by `buildMcpServer()`; tool/prompt/resource, CLI, privacy, write-gate and storage behavior remain compatible. npm `@latest` remains stable v3 pending the explicit stable-promotion decision.
+The **v4.0.0 `@rc` preview** keeps those v3 activation, watcher-generation and mainstream local-filesystem hardlink guarantees while moving the public transports to official MCP SDK v2. Era-aware stdio and strict modern HTTP (`2026-07-28`) coexist with supported legacy clients from one registration factory; malformed modern claims never downgrade. Aggregate write tracking keeps shared persistence behind active modern/stdio work, and the new remote gates are defined to exercise the official client plus the packed public package across Linux, Windows and macOS. The single intentional programmatic break is the nominal SDK type returned by `buildMcpServer()`; tool/prompt/resource, CLI, privacy, write-gate and storage behavior remain compatible. npm `@latest` remains stable v3 pending the explicit stable-promotion decision.
 
 ## Leadership plan (why the roadmap is shaped this way)
 
@@ -50,19 +50,20 @@ lead immediately visible and independently reproducible:
   client-specific install actions now lead into a benefit-led Pages landing;
   lifecycle recipes and a packageable one-click route are the next conversion
   layer.
-- **Meet the modern MCP contract as a real major.** The approved `4.0.0-rc.1`
-  candidate moves the final 2026-07-28 protocol boundary to TypeScript SDK v2,
+- **Meet the modern MCP contract as a real major.** The published `4.0.0-rc.1`
+  moved the final 2026-07-28 protocol boundary to TypeScript SDK v2,
   with separate strict-modern and supported-legacy paths rather than a partial
   v1 compatibility claim.
-- **Package only the safe install tier.** After the v4 migration, the first
-  MCPB target is Basic read-only, pure JavaScript, explicit-vault and
-  fixed-tool-allowlist. Native hybrid/model/OCR/index dependencies stay out of
-  that first bundle until a remote cross-platform evidence matrix proves them.
+- **Package only the safe install tier.** The `v4.0.0-rc.2` release packages the first
+  MCPB target as Basic read-only, pure JavaScript, explicit-vault and a fixed
+  tool allowlist. Native hybrid/model/OCR/index dependencies stay out of that
+  first bundle; publication is fail-closed until its canonical candidate passes
+  the declared remote three-OS consumer gate.
 
 The durable positioning is concrete: **the complete local-first long-term
 memory backend grounded in the vault you own**. The proof stack lives in
 [`docs/COMPARISON.md`](./docs/COMPARISON.md), [`docs/benchmarks.md`](./docs/benchmarks.md),
-and the 11-gate release chain.
+and the 12-gate release chain.
 
 ---
 
@@ -73,7 +74,7 @@ The whole pitch is rigor, so unverifiable claims come first. The second audit su
 - [x] **#15 SLSA-3 → SLSA L2** (v3.9.0-rc.7) — corrected across all surfaces; OIA **Check 4d** now statically enforces the SLSA-level claim against `release.yml` (negative-control verified in rc.8). Real **L3** is a tracked Tier-4 item, not a claim.
 - [x] **Version/RC + reranker-number drift** (v3.9.0-rc.7, partial) — README/QUICKSTART/benchmarks/AGENTS synced; reranker corrected to the measured +15.5/+24.7. _Residual instances found in the rc.8 audit (4× stale "currently rc.N", 4× stale "+5-10 NDCG@10" in api.md/COMPARISON/QUICKSTART, ROADMAP "926→927") → closed in **rc.12** below._
 - [x] **#16 OCR offline enforcement** (v3.9.0-rc.10 ✓). Built the guards the docs promised: pre-flight `assertOcrLangsInstalled` throw before `createWorker`, `langPath`/`cachePath` + `cacheMethod: "readOnly"` pinning, a real `install-ocr-lang <code>` subcommand, an absolute canvas-dimension clamp (the canvas-OOM DoS), and page-range validation. "Zero outbound network calls in serve mode" is now actually true + regression-proofed by OIA Check 4e.
-- [ ] **Close the overclaim class STRUCTURALLY** (rc.10 partial → rc.12). _rc.10 shipped **OIA Check 4e** — the #16-specific code-guard verifier (docs claiming offline OCR must be backed by `assertOcrLangsInstalled` + `cacheMethod:"readOnly"` + the `install-ocr-lang` subcommand), mirroring rc.8's #15-specific Check 4d._ Still open: (a) a GENERALIZED enforcement-verb grep (a verb→guard taxonomy beyond the SLSA/OCR specifics), (b) **RC-level currency check** — extend `check-version-consistency.mjs` / OIA to the "currently v…-rc.N" + QUICKSTART example strings (current OIA Check 7 treats 3.9==3.9 as current, so RC drift never trips) (rc.12). Together these close overclaim classes #12/#13 permanently.
+- [x] **Close the original overclaim-currency class STRUCTURALLY** (rc.10 → rc.14). OIA Check 4e binds the offline-OCR claim to its guard, the RC/header currency checks pin current-version prose, and the broader state-driven docs/supply-chain sweep is recorded in the completed rc.12–rc.14 item below. A generalized enforcement-verb taxonomy remains a separate future hardening idea, not unfinished work in this historical sprint.
 
 ## Tier 1 — Security & correctness hardening (the rc.9 → rc.13 sprint; ReDoS line extended through rc.21–rc.25)
 
@@ -122,16 +123,13 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 ## Tier 4 — Major contract and safe distribution
 
-- [x] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — approved major candidate; official modern/legacy handlers, no-downgrade routing, write-drain parity, protocol-conformance and packed-consumer gates
-  semver-major migration. Inventory protocol/SDK changes, preserve the stable
-  v3 contract where possible, publish an explicit compatibility matrix, and
-  validate every release gate remotely. A hand-built “modern MCP” shim on SDK
-  v1 is explicitly rejected.
-- [ ] **First MCPB after v4** — Basic read-only bundle only: pure JavaScript,
-  explicit vault, fixed minimal tool allowlist, no write/index/model/cache/OCR
-  preparation and no native optional dependencies. Require privacy notice,
-  third-party notices, SBOM, hash/provenance and remote OS/client validation
-  before distribution.
+- [x] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — the published major foundation has official modern/legacy handlers, no-downgrade routing, write-drain parity, and remote protocol-conformance and packed-consumer gates. This is the semver-major migration: inventory protocol/SDK changes, preserve the stable v3 contract where possible, publish an explicit compatibility matrix, and validate every release gate remotely. A hand-built “modern MCP” shim on SDK v1 is explicitly rejected.
+- [x] **First MCPB Basic bundle (`v4.0.0-rc.2`)** — exact v0.3 manifest pin, explicit vault selection, fixed 13-tool read-only allowlist, zero prompts, a Node.js 22.13+ host floor, no native/optional hybrid dependencies, logical content inventory, CycloneDX SBOM, third-party notices, and one CI-built candidate consumed through the official client on macOS, Windows, and Linux.
+- [x] **Fail-closed remote publication gate** — the exact final main/tag identity must pass every protocol, packed-package, and MCPB Basic lane plus the complete 12-context release gate before npm or GitHub Release publication. Cross-platform runtime success is claimed only by those exact remote results; desktop GUI behavior is not.
+- [ ] **Maintainer UI acceptance and directory decision** — manually review
+  installation/removal in a real compatible desktop host, then decide whether
+  to submit the bundle to any public directory. Remote consumer evidence does
+  not claim desktop UI acceptance, signing, or directory approval.
 - [ ] **Optional Obsidian companion** — RFC/demand-gated thin layer for
   install/status/open-result/community discovery. The filesystem remains the
   source of truth; no desktop/wiki-builder rewrite.

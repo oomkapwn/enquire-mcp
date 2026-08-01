@@ -1,0 +1,143 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/70fe3b34cd6dff1b3bba046638edc72a6467a4fb/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "enquire-mcp-basic",
+  "display_name": "enquire MCP — Basic Read-Only",
+  "version": "4.0.0-rc.2",
+  "description": "One-click, read-only Markdown access to an Obsidian vault: 13 focused tools, two resource surfaces, local execution, and no MCP prompts.",
+  "long_description": "The deliberately small desktop edition of enquire-mcp. Select one Obsidian vault and give an MCP client cited, freshness-aware access to Markdown notes through exactly 13 read-only tools. It includes the recommended hybrid search surface (gracefully degraded to local pure-JavaScript TF-IDF), exact live text search, wikilink navigation, tags, stats, and frontmatter queries. The Basic bundle does not expose writes, feedback, persistent index builders, model acquisition, PDF/OCR, Canvas, Bases, Dataview, watcher controls, or MCP prompts. enquire itself initiates no outbound calls while serving; the connected MCP client remains a separate trust boundary and may process returned note content under its own terms.",
+  "author": {
+    "name": "Alex (@OomkaBear)",
+    "url": "https://github.com/oomkapwn"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oomkapwn/enquire-mcp.git"
+  },
+  "homepage": "https://github.com/oomkapwn/enquire-mcp",
+  "documentation": "https://github.com/oomkapwn/enquire-mcp#readme",
+  "support": "https://github.com/oomkapwn/enquire-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/dist/index.js",
+        "serve",
+        "--vault",
+        "${user_config.vault}",
+        "--no-prompts",
+        "--no-embedding-index",
+        "--diagnostic-search-tools",
+        "--enabled-tools",
+        "obsidian_list_notes",
+        "obsidian_read_note",
+        "obsidian_search",
+        "obsidian_search_text",
+        "obsidian_get_recent_edits",
+        "obsidian_stale_notes",
+        "obsidian_resolve_wikilink",
+        "obsidian_get_backlinks",
+        "obsidian_get_outbound_links",
+        "obsidian_list_tags",
+        "obsidian_stats",
+        "obsidian_frontmatter_get",
+        "obsidian_frontmatter_search"
+      ],
+      "env": {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "obsidian_list_notes",
+      "description": "List Markdown notes by tag, folder, or modification time."
+    },
+    {
+      "name": "obsidian_read_note",
+      "description": "Read one Markdown note by path or title."
+    },
+    {
+      "name": "obsidian_search",
+      "description": "Use the recommended hybrid search surface, gracefully degraded to local TF-IDF in Basic."
+    },
+    {
+      "name": "obsidian_search_text",
+      "description": "Search live Markdown with substring or AND/OR token matching."
+    },
+    {
+      "name": "obsidian_get_recent_edits",
+      "description": "Return notes ordered by most recent modification."
+    },
+    {
+      "name": "obsidian_stale_notes",
+      "description": "Find notes not edited within a chosen number of days."
+    },
+    {
+      "name": "obsidian_resolve_wikilink",
+      "description": "Resolve an Obsidian wikilink, alias, section, or block target."
+    },
+    {
+      "name": "obsidian_get_backlinks",
+      "description": "List Markdown notes that link to or embed a target note."
+    },
+    {
+      "name": "obsidian_get_outbound_links",
+      "description": "List a note's outbound wikilinks and their resolution status."
+    },
+    {
+      "name": "obsidian_list_tags",
+      "description": "List frontmatter and inline tags with usage counts."
+    },
+    {
+      "name": "obsidian_stats",
+      "description": "Summarize note, link, orphan, broken-link, and tag counts."
+    },
+    {
+      "name": "obsidian_frontmatter_get",
+      "description": "Read all frontmatter or one frontmatter key from a note."
+    },
+    {
+      "name": "obsidian_frontmatter_search",
+      "description": "Find notes by a bounded frontmatter predicate."
+    }
+  ],
+  "tools_generated": false,
+  "prompts": [],
+  "prompts_generated": false,
+  "keywords": [
+    "obsidian",
+    "markdown",
+    "mcp",
+    "ai-memory",
+    "local-first",
+    "read-only",
+    "wikilinks",
+    "frontmatter",
+    "semantic-search"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=22.13.0"
+    }
+  },
+  "user_config": {
+    "vault": {
+      "type": "directory",
+      "title": "Obsidian vault",
+      "description": "Choose the one vault directory this read-only bundle may access.",
+      "required": true,
+      "multiple": false
+    }
+  }
+}

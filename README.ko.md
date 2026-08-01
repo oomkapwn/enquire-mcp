@@ -74,7 +74,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Obsidian 지식 표면 전체** | ✅ Markdown, wikilink, frontmatter, Canvas, Bases, PDF, OCR |
 | **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, MCP 프롬프트 19개 |
 | **통제권을 잃지 않는 확장성** | ✅ HNSW live update, persistence, adaptive refill, int8 quantization |
-| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 1807 tests, 11 release gates, SLSA L2 provenance |
+| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 1807 tests, 12 release gates, SLSA L2 provenance |
 
 **하나의 Vault. 모든 에이전트. 완전한 검색 스택. 클라우드 종속 없음.**
 
@@ -102,12 +102,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 }
 ```
 
+### 검토 가능한 데스크톱 번들이 필요하신가요? MCPB Basic
+
+[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2)는 `enquire-mcp-basic-4.0.0-rc.2.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
+
+Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**로 제한됩니다. 쓰기, 영구 인덱스, 모델, PDF/OCR, watcher는 없습니다. 실제 데스크톱 GUI, 서명, 디렉터리 승인 및 카탈로그는 유지관리자의 검증이 남아 있습니다. enquire는 serve 중 외부 호출을 시작하지 않지만 요청된 노트 텍스트는 연결된 MCP 클라이언트로 전달되며 해당 클라이언트의 개인정보 보호 조건을 따릅니다.
+
 📂 바로 사용 가능한 설정이 [`examples/`](./examples/)에 있습니다 — **Claude Desktop**, **Cursor**, **ChatGPT 커스텀 GPT**(HTTP 기반 원격 MCP), 그리고 평가 하니스를 위한 샘플 쿼리 세트.
 
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -279,8 +285,8 @@ graph LR
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
 | **캐시 + 인덱스 파일** | chmod 0600, 부모 디렉터리 0700 |
-| **단위 테스트 1807개 · 릴리스 필수 CI 검사 11개 · 현재 브랜치 보호 7개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
-| **CI** | `release.yml`은 **릴리스 gate 11개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`, `oia`, `protocol-conformance`, `package-consumer`는 릴리스 필수지만 보호되지 않습니다(브랜치 보호 스냅샷은 2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 11개 gate를 다시 확인합니다. |
+| **단위 테스트 1807개 · 릴리스 필수 CI 검사 12개 · 현재 브랜치 보호 7개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
+| **CI** | `release.yml`은 **릴리스 gate 12개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`는 릴리스 필수지만 보호되지 않습니다(브랜치 보호 스냅샷은 2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-with-code-scanning/configuring-default-setup)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 12개 gate를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |
 | **릴리스** | 태그별 npm + GitHub 릴리스 · semver · **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2; L3 생성기는 로드맵에) |
 | **안정성** | v3.0+ semver 결속 — 모든 CLI 플래그, 도구 이름, MCP 리소스, 프롬프트, 내보낸 심볼이 계약입니다 |

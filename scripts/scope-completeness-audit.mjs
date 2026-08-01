@@ -103,13 +103,17 @@ export const DEFENSES = [
       // STABILITY.md has "### MCP tool names (44 tools)" + a tool-breakdown
       // sentence — both gated by docs-consistency.test.ts line 183.
       "STABILITY.md",
-      "docs/QUICKSTART.md" // rc.42 F3 — the surface that drifted to "44-tool"
+      "docs/QUICKSTART.md", // rc.42 F3 — the surface that drifted to "44-tool"
+      // The TDQS total and MCPB Basic subset counts have separate positive +
+      // negative controls in docs-consistency.test.ts.
+      "ROADMAP.md"
     ],
     exempts: ["CHANGELOG.md", "CLAUDE.md", "docs/audits/*"],
     rationale:
       "Canonical: 44 tools (TOOL_MANIFEST length). docs-consistency.test.ts " +
       "asserts every claim site matches. v3.8.0-rc.14 M-2 added llms.txt + AGENTS.md coverage; " +
-      "v3.8.8 META-audit added STABILITY.md to scope (was already gated but missing from manifest)."
+      "v3.8.8 META-audit added STABILITY.md to scope (was already gated but missing from manifest); " +
+      "v4.0.0-rc.2 added ROADMAP.md, whose total and MCPB subset counts are separately pinned."
   },
   {
     id: "prompt-count",

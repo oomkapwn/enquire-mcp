@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs`, `oia`, `protocol-conformance`, and `package-consumer` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes. Local checks above must pass before pushing.
+`release.yml` directly enumerates the 12 release-required CI checks listed below, all of which run on every PR. Branch protection currently enforces 7; `docs`, `oia`, `protocol-conformance`, `package-consumer`, and `mcpb-basic` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes; `mcpb-basic` consumes one exact Linux-built bundle on those same three systems. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -49,7 +49,7 @@ scripts/
 ├── oia-walk.mjs                       — state-driven drift scan (12 checks)
 ├── build-pages.mjs                    — deterministic Pages landing + TypeDoc composite
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
-├── check-version-consistency.mjs      — version sync across 7 surfaces
+├── check-version-consistency.mjs      — version sync across 8 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality
 
 tests/
@@ -105,8 +105,8 @@ Every flag that BOTH `serve` and `serve-http` accept **must** pull its help text
 
 - Title under 70 chars.
 - Body: ## Summary (bullets) + ## Test plan (markdown checklist).
-- Wait for all 11 release-required CI checks to pass green before merging.
-- Tag the **squash-merge SHA on main** (not the pre-merge branch HEAD) — rule since v3.7.15.
+- Wait for all 12 release-required CI checks to pass green before merging.
+- Create an **annotated tag** on the squash-merge SHA on main (not the pre-merge branch HEAD): `git tag -a vX.Y.Z <squash-merge-SHA> -m vX.Y.Z`. The release preflight rejects lightweight tags.
 
 ## Commands cheat sheet
 
@@ -135,7 +135,7 @@ npm run test:coverage && npm run check:oia   # local dev order
 node scripts/oia-walk.mjs --allow   # always exit 0 (override for documented deferrals)
 
 # Version consistency
-node scripts/check-version-consistency.mjs  # checks 7 surfaces
+node scripts/check-version-consistency.mjs  # checks 8 surfaces
 
 # Supply-chain audit (root lockfile + registry-consumer resolution)
 npm run check:audit
@@ -147,7 +147,7 @@ node scripts/check-changelog-coverage.mjs
 node scripts/smoke.mjs
 ```
 
-## CI checks (direct release gates + transitive Windows; 7 branch-protected)
+## CI checks (12 direct release gates + transitive Windows; 7 branch-protected)
 
 Directly release-required (all run on PRs; `release.yml` blocks publication unless every listed gate passed on the tagged SHA):
 1. `lint` — biome check
@@ -156,17 +156,19 @@ Directly release-required (all run on PRs; `release.yml` blocks publication unle
 4. `smoke` — JSON-RPC smoke against synthetic vault
 5. `audit` — source + published-consumer dependency audit (prod moderate+, dev high+)
 6. `coverage` — global + per-file branch floors
-7. `version-consistency` — 7-surface version sync
+7. `version-consistency` — 8-surface version sync
 8. `docs` — TypeDoc generation; release-required but not currently branch-protected
 9. `oia` — state-driven drift scan; release-required but not currently branch-protected
 10. `protocol-conformance` — Linux + Windows aggregate for official client v2 across modern/legacy stdio and stateless/stateful HTTP
 11. `package-consumer` — aggregate packed-install/type/runtime/privacy gate across Linux, Windows, and macOS
+12. `mcpb-basic` — one Linux-built Basic bundle, logical inventory/SBOM/notices, and official-client verification across Linux, Windows, and macOS
 
 Additional unprotected checks:
 - `test-macos` is the only `continue-on-error` advisory job.
 - `test-windows` is fail-capable and unprotected by its own name, but transitively blocks protected/release-required `smoke`.
 - `protocol-conformance (linux|windows)` are fail-capable matrix legs aggregated by the directly release-required `protocol-conformance` context.
 - `package-consumer (linux|windows|macos)` are fail-capable matrix legs aggregated by the directly release-required `package-consumer` context.
+- `mcpb-basic-package` and `mcpb-basic (linux|windows|macos)` are fail-capable producer/consumer jobs aggregated by the directly release-required `mcpb-basic` context.
 - `docker` (image build + `tools/list` smoke) is fail-capable and can make the CI workflow red, but is not branch-protected.
 - GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
 
@@ -175,10 +177,10 @@ Live branch-protection snapshot (verified 2026-07-23): exactly the first 7 conte
 ## Do NOT
 
 - **Do NOT modify shared CLI help strings inline.** Lift to `src/cli-help.ts` first. The `cli-parity.test.ts` invariant fails inline drift between serve and serve-http.
-- **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 7 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading, server.json version + packages[0]).
+- **Do NOT bump version in `package.json` alone.** Run `node scripts/check-version-consistency.mjs` after — version must sync across 8 surfaces (package.json, package-lock.json root + packages[""], src/index.ts, CHANGELOG latest heading, server.json version + packages[0], and mcpb/manifest.json).
 - **Do NOT skip CI hooks** (`--no-verify`) without explicit user instruction. Investigate the hook failure root cause.
 - **Do NOT force-push to main.** Main is branch-protected. All changes go through PR + every directly enumerated release check.
-- **Do NOT tag the pre-merge branch SHA.** Tag the squash-merge SHA on main after `gh pr merge --squash`. Rule since v3.7.15 (`Assert tag is on main` guard).
+- **Do NOT tag the pre-merge branch SHA or create a lightweight release tag.** After `gh pr merge --squash`, create an annotated tag on the squash-merge SHA on main. Rule since v3.7.15 (`Assert tag is on main` guard); annotated-only enforcement starts with v4.0.0-rc.2.
 - **Do NOT edit `docs/api-reference/`** — it's auto-generated TypeDoc output. Edit TSDoc in `src/` instead.
 - **Do NOT add `// current X%` inline comments without commitment to maintain.** OIA check 6 catches drift > 1pp against `coverage-summary.json`. Either keep current OR remove the annotation.
 - **Do NOT make instance fixes when a class fix is needed.** When an audit finds a "drift" of any kind (CLI text, inline comment, doc fragment), run a full-surface sweep across the same surface type BEFORE the per-instance fix. Rule since v3.8.0-rc.11.

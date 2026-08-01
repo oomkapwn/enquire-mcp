@@ -70,14 +70,19 @@ Maintainer-only:
 # Verify
 npm run build && npm test && node scripts/smoke.mjs ~/Documents/MyVault
 
-# Bump
-# (edit package.json + src/index.ts VERSION constant + CHANGELOG.md
-#  + regenerate package-lock.json via `npm install --package-lock-only`)
+# Bump on a topic branch, then merge its PR only after all release gates pass.
+# Prefer `npm version --no-git-tag-version <version>` so no pre-merge tag is
+# created; add the matching CHANGELOG entry before verification.
 node scripts/check-version-consistency.mjs
 
-# Tag and push (CI publishes to npm with provenance)
-git commit -am "release: vX.Y.Z" && git push origin main
-git tag vX.Y.Z && git push origin vX.Y.Z
+# After squash-merge, update main and capture the new merge identity.
+git switch main
+git pull --ff-only origin main
+git log -1 --oneline
+
+# Create an annotated tag on that exact squash-merge SHA. CI publishes it.
+git tag -a vX.Y.Z <squash-merge-SHA> -m vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 The push of a `v*` tag triggers `.github/workflows/release.yml`, which runs

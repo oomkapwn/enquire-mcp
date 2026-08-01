@@ -72,7 +72,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Вся поверхность знаний Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF и OCR |
 | **Агентный поиск для сложных вопросов** | ✅ HyDE, декомпозиция на подвопросы, context packs, GraphRAG-light и 19 MCP-промптов |
 | **Масштаб без потери контроля** | ✅ Live-update HNSW, персистентность, адаптивное дозаполнение и int8-квантизация |
-| **Продакшен-доверие** | ✅ Read-only по умолчанию, privacy-фильтры, авторизованный HTTP, semver-контракты, 1807 тестов, 11 релизных гейтов и SLSA L2 provenance |
+| **Продакшен-доверие** | ✅ Read-only по умолчанию, privacy-фильтры, авторизованный HTTP, semver-контракты, 1807 тестов, 12 релизных гейтов и SLSA L2 provenance |
 
 **Одно хранилище. Все агенты. Полный стек поиска. Никакого облачного lock-in.**
 
@@ -100,12 +100,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 }
 ```
 
+### Нужен проверяемый desktop-бандл? MCPB Basic
+
+В [GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) доступен `enquire-mcp-basic-4.0.0-rc.2.mcpb` вместе с checksum, инвентарём, SBOM, notices и provenance. Бандл включает JavaScript-код сервера и обычные зависимости; совместимый MCPB-хост должен предоставить Node.js 22.13 или новее.
+
+Basic фиксирован на **13 инструментах только для чтения** и **0 промптах**: без записи, persistent-индексов, моделей, PDF/OCR и watcher. Реальный desktop GUI, подпись, выбор директории и допуск в каталог ещё требуют проверки владельцем. enquire не делает исходящих вызовов при работе, но запрошенный текст заметок передаётся подключённому MCP-клиенту и далее регулируется его условиями приватности.
+
 📂 Готовые конфигурации в [`examples/`](./examples/) — **Claude Desktop**, **Cursor**, **кастомный GPT в ChatGPT** (удалённый MCP по HTTP), плюс образец набора запросов для фреймворка оценки.
 
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -277,8 +283,8 @@ graph LR
 | **HTTP-транспорт** | Bearer-аутентификация (SHA-256 с постоянным временем + `timingSafeEqual`), ограничение частоты по токену, строгий CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, безопасно по умолчанию) — без выполнения кода |
 | **Файлы кеша + индекса** | chmod 0600, родительская директория 0700 |
-| **1807 модульных тестов · 11 обязательных для релиза CI-проверок · 7 сейчас защищают ветку** | Текущая проверенная релизная позиция; операционная детализация закреплена ниже. |
-| **CI** | `release.yml` напрямую перечисляет **11 релизных гейтов**, и все они запускаются на каждом PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance` и `package-consumer`. Закреплённый Windows hostile-filesystem job `test-windows` — дополнительный именованный check-run, который транзитивно обязателен как блокирующая предпосылка `smoke`. Защита ветки сейчас требует только **7** из них; `docs`, `oia`, `protocol-conformance` и `package-consumer` обязательны для релиза, но не защищены (снимок защиты ветки проверен онлайн 2026-07-23). `test-macos` — единственный совещательный job с `continue-on-error`. `docker` способен сделать CI-workflow красным, но не защищён; CodeQL запускает две отдельные незащищённые проверки через [настройку GitHub по умолчанию](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Перед npm publish `release.yml` повторно проверяет все 11 напрямую перечисленных гейтов на помеченном SHA. |
+| **1807 модульных тестов · 12 обязательных для релиза CI-проверок · 7 сейчас защищают ветку** | Текущая проверенная релизная позиция; операционная детализация закреплена ниже. |
+| **CI** | `release.yml` напрямую перечисляет **12 релизных гейтов**, и все они запускаются на каждом PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer` и `mcpb-basic`. Закреплённый Windows hostile-filesystem job `test-windows` — дополнительный именованный check-run, который транзитивно обязателен как блокирующая предпосылка `smoke`. Защита ветки сейчас требует только **7** из них; `docs`, `oia`, `protocol-conformance`, `package-consumer` и `mcpb-basic` обязательны для релиза, но не защищены (снимок защиты ветки проверен онлайн 2026-07-23). `test-macos` — единственный совещательный job с `continue-on-error`. `docker` способен сделать CI-workflow красным, но не защищён; CodeQL запускает две отдельные незащищённые проверки через [настройку GitHub по умолчанию](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Перед npm publish `release.yml` повторно проверяет все 12 напрямую перечисленных гейтов на помеченном SHA. |
 | **Покрытие** | Строки ≥86% · выражения ≥82% · функции ≥75% · ветви ≥74% (контролируется гейтом) |
 | **Релизы** | npm + релиз на GitHub на каждый тег · semver · **подтверждённое происхождение сборки** (npm + Sigstore, SLSA Build L2; генератор L3 в дорожной карте) |
 | **Стабильность** | v3.0+ с гарантиями semver — каждый CLI-флаг, имя инструмента, MCP-ресурс, промпт, экспортируемый символ является контрактом |

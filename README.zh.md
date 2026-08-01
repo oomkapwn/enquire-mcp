@@ -67,7 +67,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **完整的 Obsidian 知识面** | ✅ Markdown、双向链接、frontmatter、Canvas、Bases、PDF 和 OCR |
 | **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个 MCP 提示词 |
 | **扩展性能而不放弃控制** | ✅ HNSW 实时更新、持久化、自适应补充和 int8 量化 |
-| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1807 项测试、11 个发布门禁、SLSA L2 来源证明 |
+| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、1807 项测试、12 个发布门禁、SLSA L2 来源证明 |
 
 **一个仓库。所有智能体。完整检索栈。没有云端锁定。**
 
@@ -95,12 +95,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 }
 ```
 
+### 想要可审查的桌面包？MCPB Basic
+
+[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) 提供 `enquire-mcp-basic-4.0.0-rc.2.mcpb`，以及校验和、清单、SBOM、许可声明和来源证明。包内包含服务器 JavaScript 和普通依赖；兼容的 MCPB 主机必须提供 Node.js 22.13 或更高版本。
+
+Basic 固定为 **13 个只读工具**和 **0 个提示词**：不含写入、持久索引、模型、PDF/OCR 或 watcher。真实桌面 GUI、签名、目录授权和目录上架仍需维护者验证。enquire 在服务期间不会主动发起外部请求，但被请求的笔记文本会进入已连接的 MCP 客户端，并受该客户端的隐私条款约束。
+
 📂 开箱即用的配置见 [`examples/`](./examples/) —— **Claude Desktop**、**Cursor**、**ChatGPT 自定义 GPT**（通过 HTTP 的远程 MCP），以及一份评测用的示例查询集。
 
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -272,8 +278,8 @@ graph LR
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
 | **缓存 + 索引文件** | chmod 0600，父目录 0700 |
-| **1807 单元测试 · 每个 PR 11 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
-| **CI** | `release.yml` 直接列出 **11 项发布门禁**，且每个 PR 都会运行：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance` 和 `package-consumer`。固定的 Windows hostile-filesystem job `test-windows` 是一个额外的具名 check-run，并作为 `smoke` 的阻断性前置条件被间接强制。当前分支保护仅强制其中 **7 项**；`docs`、`oia`、`protocol-conformance` 与 `package-consumer` 是发布必需项，但未受保护（分支保护快照在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验其直接列出的全部 11 项门禁。 |
+| **1807 单元测试 · 每个 PR 12 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
+| **CI** | `release.yml` 直接列出 **12 项发布门禁**，且每个 PR 都会运行：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer` 和 `mcpb-basic`。固定的 Windows hostile-filesystem job `test-windows` 是一个额外的具名 check-run，并作为 `smoke` 的阻断性前置条件被间接强制。当前分支保护仅强制其中 **7 项**；`docs`、`oia`、`protocol-conformance`、`package-consumer` 与 `mcpb-basic` 是发布必需项，但未受保护（分支保护快照在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验其直接列出的全部 12 项门禁。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |
 | **构建发布** | 每个 tag 发布到 npm + GitHub Release · 语义化版本 · **签名构建溯源**（npm + Sigstore，SLSA Build L2；L3 生成器在路线图中） |
 | **稳定性** | v3.0+ 语义化版本约束——每个 CLI flag、工具名、MCP 资源、提示词、导出符号都是契约 |

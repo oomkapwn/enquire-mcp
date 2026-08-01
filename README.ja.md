@@ -67,7 +67,7 @@ AI セッションは毎回ゼロから始まり、プロジェクトや設計�
 | **Obsidian の知識面を網羅** | ✅ Markdown、wikilink、frontmatter、Canvas、Bases、PDF、OCR |
 | **難問向けのエージェント検索** | ✅ HyDE、サブ質問分解、context packs、GraphRAG-light、19 の MCP プロンプト |
 | **制御を失わないスケール** | ✅ HNSW ライブ更新、永続化、adaptive refill、int8 量子化 |
-| **プロダクションの信頼性** | ✅ 既定で read-only、privacy filter、認証 HTTP、semver 契約、1807 tests、11 release gates、SLSA L2 provenance |
+| **プロダクションの信頼性** | ✅ 既定で read-only、privacy filter、認証 HTTP、semver 契約、1807 tests、12 release gates、SLSA L2 provenance |
 
 **一つの Vault。すべてのエージェント。完全な検索スタック。クラウドロックインなし。**
 
@@ -95,12 +95,18 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 }
 ```
 
+### レビュー可能なデスクトップバンドルなら MCPB Basic
+
+[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) では `enquire-mcp-basic-4.0.0-rc.2.mcpb` と checksum、inventory、SBOM、notices、provenance を提供します。バンドルにはサーバー JavaScript と通常の依存関係が含まれ、対応 MCPB ホスト側で Node.js 22.13 以降を提供する必要があります。
+
+Basic は **13 個の読み取り専用ツール**と **0 プロンプト**に固定され、書き込み、永続インデックス、モデル、PDF/OCR、watcher はありません。実際のデスクトップ GUI、署名、ディレクトリ承認、カタログはメンテナーによる検証が未完了です。enquire は serve 中に外向き通信を開始しませんが、要求されたノート本文は接続した MCP クライアントへ渡り、そのプライバシー条件に従います。
+
 📂 すぐに使える設定は [`examples/`](./examples/) にあります —— **Claude Desktop**、**Cursor**、**ChatGPT カスタム GPT**（HTTP 経由のリモート MCP）、さらに評価ハーネス用のサンプルクエリセットも。
 
 **完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -272,8 +278,8 @@ graph LR
 | **HTTP トランスポート** | Bearer 認証（定数時間 SHA-256 + `timingSafeEqual`）、トークン別レート制限、厳格な CORS |
 | **Frontmatter** | `js-yaml@5` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
 | **キャッシュ + インデックスファイル** | chmod 0600、親ディレクトリ 0700 |
-| **1807 ユニットテスト · リリース必須 CI チェック 11 個 · 現在ブランチ保護対象は 7 個** | 現在確認済みのリリース状態。運用詳細は下に固定しています。 |
-| **CI** | `release.yml` は **11 個のリリース gate** を直接列挙し、各 PR ですべて実行します（`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer`）。固定された Windows hostile-filesystem job `test-windows` は追加の名前付き check-run で、`smoke` のブロッキング前提条件として推移的に強制されます。ブランチ保護が現在強制するのは **7 個**だけで、`docs`、`oia`、`protocol-conformance`、`package-consumer` はリリース必須ですが未保護です（ブランチ保護スナップショットは 2026-07-23 にライブ確認）。`test-macos` は `continue-on-error` を持つ唯一のアドバイザリ job です。`docker` は CI workflow を失敗させ得ますが未保護で、CodeQL は [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) により 2 つの独立した未保護分析を実行します。npm publish 前に `release.yml` がタグ付き SHA 上で直接列挙した 11 個の gate を再検証します。 |
+| **1807 ユニットテスト · リリース必須 CI チェック 12 個 · 現在ブランチ保護対象は 7 個** | 現在確認済みのリリース状態。運用詳細は下に固定しています。 |
+| **CI** | `release.yml` は **12 個のリリース gate** を直接列挙し、各 PR ですべて実行します（`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer`、`mcpb-basic`）。固定された Windows hostile-filesystem job `test-windows` は追加の名前付き check-run で、`smoke` のブロッキング前提条件として推移的に強制されます。ブランチ保護が現在強制するのは **7 個**だけで、`docs`、`oia`、`protocol-conformance`、`package-consumer`、`mcpb-basic` はリリース必須ですが未保護です（ブランチ保護スナップショットは 2026-07-23 にライブ確認）。`test-macos` は `continue-on-error` を持つ唯一のアドバイザリ job です。`docker` は CI workflow を失敗させ得ますが未保護で、CodeQL は [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) により 2 つの独立した未保護分析を実行します。npm publish 前に `release.yml` がタグ付き SHA 上で直接列挙した 12 個の gate を再検証します。 |
 | **カバレッジ** | 行 ≥86% · ステートメント ≥82% · 関数 ≥75% · 分岐 ≥74%（ゲート付き） |
 | **リリース** | タグごとに npm + GitHub リリース · semver · **署名付きビルドプロベナンス**（npm + Sigstore、SLSA Build L2；L3 ジェネレータはロードマップ上） |
 | **安定性** | v3.0+ semver 準拠 —— すべての CLI フラグ、ツール名、MCP リソース、プロンプト、エクスポートシンボルが契約 |

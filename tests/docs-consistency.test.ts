@@ -6,11 +6,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
-import {
-  replaceAllExactly,
-  replaceExactly,
-  replaceIntegerAllExactly
-} from "./helpers/exact-source-mutation.js";
+import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./helpers/exact-source-mutation.js";
 
 // Static-analysis tests: every MCP surface declared in src/tool-manifest.ts
 // (single source of truth as of v3.6.0-rc.2) must be documented in
@@ -1559,21 +1555,17 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       return problems;
     };
     expect(previewProblems(svg)).toEqual([]);
-    expect(previewProblems(replaceExactly(svg, "EVERY AGENT.", "ONE AGENT.", 1))).toContain(
-      "missing EVERY AGENT."
-    );
+    expect(previewProblems(replaceExactly(svg, "EVERY AGENT.", "ONE AGENT.", 1))).toContain("missing EVERY AGENT.");
     expect(previewProblems(replaceExactly(svg, `>${actual}</text>`, `>${actual + 1}</text>`, 1))).toContain(
       `stale TESTS count ${actual + 1}`
     );
-    expect(
-      previewProblems(replaceExactly(svg, `>${actualTools}</text>`, `>${actualTools + 1}</text>`, 1))
-    ).toContain(`stale MCP TOOLS count ${actualTools + 1}`);
+    expect(previewProblems(replaceExactly(svg, `>${actualTools}</text>`, `>${actualTools + 1}</text>`, 1))).toContain(
+      `stale MCP TOOLS count ${actualTools + 1}`
+    );
     expect(
       previewProblems(replaceExactly(svg, `>${actualPrompts}</text>`, `>${actualPrompts + 1}</text>`, 1))
     ).toContain(`stale MCP PROMPTS count ${actualPrompts + 1}`);
-    expect(previewProblems(replaceExactly(svg, "MCP PROMPTS", "WORKFLOWS", 1))).toContain(
-      "stale WORKFLOWS label"
-    );
+    expect(previewProblems(replaceExactly(svg, "MCP PROMPTS", "WORKFLOWS", 1))).toContain("stale WORKFLOWS label");
 
     const renderer = await read("scripts/render-social-preview.mjs");
     expect(renderer).toContain('"social-preview-art.png"');
@@ -1827,9 +1819,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     };
     expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
     expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
-    expect(
-      mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)
-    ).toEqual(["release tag drift", "asset filename drift"]);
+    expect(mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)).toEqual([
+      "release tag drift",
+      "asset filename drift"
+    ]);
     expect(readme).toContain("| Complete leadership standard | **enquire-mcp** | Smart Connections");
     expect(readme).toContain("✅ = the complete row is built in");
     expect(readme).toContain("[competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence)");
@@ -1882,9 +1875,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       '"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/absolute/path/to/vault"]';
     const hasCanonicalInstall = (text: string): boolean => text.includes(canonicalInstall);
     expect(hasCanonicalInstall(launchKit)).toBe(true);
-    expect(
-      hasCanonicalInstall(replaceExactly(launchKit, ', "--vault", "/absolute/path/to/vault"', "", 1))
-    ).toBe(false);
+    expect(hasCanonicalInstall(replaceExactly(launchKit, ', "--vault", "/absolute/path/to/vault"', "", 1))).toBe(false);
     expect(hasCanonicalInstall(replaceExactly(canonicalInstall, "@latest", "@rc", 1))).toBe(false);
     expect(launchKit).not.toMatch(/@rc|-rc\.\d+/i);
     expect(launchKit).not.toContain("omits either `serve` or `--vault`");
@@ -2167,9 +2158,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         ciTableRows.map(({ index }, rowIndex) => [index, inflatedCiRows[rowIndex] ?? ""] as const)
       );
       expect(ciRowsByIndex.size, `${file} CI mutation must reconstruct exactly two rows`).toBe(2);
-      const inflatedCiCounts = markdownLines
-        .map((line, index) => ciRowsByIndex.get(index) ?? line)
-        .join("\n");
+      const inflatedCiCounts = markdownLines.map((line, index) => ciRowsByIndex.get(index) ?? line).join("\n");
       expect(
         publicCiPostureProblems(inflatedCiCounts, releaseRequired, branchProtected, actualTests).length,
         `${file} exact-count detector must reject digit-prefixed lookalikes`
@@ -2288,12 +2277,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(
       setupCompletionIdentityProblems(
         cliSource,
-        replaceExactly(
-          indexSource,
-          "cliInvocation = { command: process.execPath, argsPrefix: [argv] };",
-          "",
-          1
-        )
+        replaceExactly(indexSource, "cliInvocation = { command: process.execPath, argsPrefix: [argv] };", "", 1)
       )
     ).toContain("CLI entry guard missing cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
 
@@ -2355,10 +2339,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         const current = await fs.readFile(fixtureFile, "utf8");
         const stableToken = `v${stableMajorMinor}.x`;
         expect(current, `${file} must carry the current stable token`).toContain(stableToken);
-        await fs.writeFile(
-          fixtureFile,
-          replaceAllExactly(current, stableToken, `v${staleMajorMinor}.x`, 3)
-        );
+        await fs.writeFile(fixtureFile, replaceAllExactly(current, stableToken, `v${staleMajorMinor}.x`, 3));
       }
       // A neighboring line that merely says "after", "based on", or "gates"
       // is not sufficient tombstone evidence for a current-state claim. The

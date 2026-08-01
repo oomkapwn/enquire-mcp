@@ -82,12 +82,7 @@ function isAsciiDigitAt(source: string, index: number): boolean {
  * @example
  * replaceExactly("alpha alpha", "alpha", "omega", 2); // "omega alpha"
  */
-export function replaceExactly(
-  source: string,
-  needle: string,
-  replacement: string,
-  expectedOccurrences = 1
-): string {
+export function replaceExactly(source: string, needle: string, replacement: string, expectedOccurrences = 1): string {
   const offsets = literalMatchOffsets(source, needle);
   assertExactCount(needle, offsets, expectedOccurrences);
   const firstOffset = offsets[0];

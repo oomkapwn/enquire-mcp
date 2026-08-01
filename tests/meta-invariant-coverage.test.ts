@@ -23,11 +23,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import {
-  replaceAllExactly,
-  replaceExactly,
-  replaceIntegerAllExactly
-} from "./helpers/exact-source-mutation.js";
+import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -246,10 +242,7 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
         ? staticPropertyText(node.name)
         : staticPropertyText(node.argumentExpression);
       if ((method === "replace" || method === "replaceAll") && !isTypeOnlyAccess(node)) {
-        if (
-          ts.isPropertyAccessExpression(node) &&
-          isReviewedLifecycleNormalization(filename, node, sourceFile)
-        ) {
+        if (ts.isPropertyAccessExpression(node) && isReviewedLifecycleNormalization(filename, node, sourceFile)) {
           reviewedTransforms++;
         } else {
           problems.push(`${filename}:${location(node)} has unclassified raw .${method} access`);
@@ -821,12 +814,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     expect(() => replaceExactly("alpha", "missing", "omega")).toThrow(/expected 1 occurrence\(s\), found 0/);
-    expect(() => replaceExactly("alpha alpha", "alpha", "omega")).toThrow(
-      /expected 1 occurrence\(s\), found 2/
-    );
-    expect(() => replaceAllExactly("alpha", "missing", "omega")).toThrow(
-      /expected 1 occurrence\(s\), found 0/
-    );
+    expect(() => replaceExactly("alpha alpha", "alpha", "omega")).toThrow(/expected 1 occurrence\(s\), found 2/);
+    expect(() => replaceAllExactly("alpha", "missing", "omega")).toThrow(/expected 1 occurrence\(s\), found 0/);
     expect(() => replaceExactly("alpha", "", "omega")).toThrow(/must not be empty/);
     expect(() => replaceExactly("alpha", "alpha", "omega", 0)).toThrow(/positive safe integer/);
     expect(() => replaceExactly("alpha", "alpha", "omega", 1.5)).toThrow(/positive safe integer/);
@@ -834,19 +823,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(() => replaceAllExactly("alpha", "alpha", "alpha")).toThrow(/did not change its source/);
     expect(replaceExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega alpha");
     expect(replaceAllExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega omega");
-    expect(replaceExactly("left alpha right", "alpha", "$`|$&|$'|$$")).toBe(
-      "left left |alpha| right|$ right"
-    );
+    expect(replaceExactly("left alpha right", "alpha", "$`|$&|$'|$$")).toBe("left left |alpha| right|$ right");
     expect(replaceExactly("alpha", "alpha", "$1|$01|$<name>|$0")).toBe("$1|$01|$<name>|$0");
     expect(() => replaceExactly("alpha", "alpha", "$&")).toThrow(/did not change its source/);
     expect(replaceAllExactly("a-a", "a", "$`|$&|$'", 2)).toBe("|a|-a-a-|a|");
     expect(replaceIntegerAllExactly("7 17 7", 7, "70", 2)).toBe("70 17 70");
-    expect(() => replaceIntegerAllExactly("17", 7, "70", 1)).toThrow(
-      /expected 1 bounded occurrence\(s\), found 0/
-    );
-    expect(() => replaceIntegerAllExactly("7 7", 7, "70", 1)).toThrow(
-      /expected 1 bounded occurrence\(s\), found 2/
-    );
+    expect(() => replaceIntegerAllExactly("17", 7, "70", 1)).toThrow(/expected 1 bounded occurrence\(s\), found 0/);
+    expect(() => replaceIntegerAllExactly("7 7", 7, "70", 1)).toThrow(/expected 1 bounded occurrence\(s\), found 2/);
     expect(() => replaceIntegerAllExactly("7", 7, "7", 1)).toThrow(/did not change its source/);
     expect(
       exactMutationHelperCallCount(
@@ -860,7 +843,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", exactHelperImport)).toEqual([]);
     const shadowedHelper =
       `${exactHelperImport}\n{ ` +
-      "const replaceExactly = (source: string): string => source; replaceExactly(\"alpha\"); }";
+      'const replaceExactly = (source: string): string => source; replaceExactly("alpha"); }';
     expect(exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", shadowedHelper)).toEqual([
       expect.stringMatching(/shadows exact mutation helper replaceExactly/)
     ]);
@@ -943,10 +926,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       if (expectedHelperCalls !== undefined) {
         const bindingProblems = exactMutationHelperBindingProblems(filename, source);
         expect(bindingProblems, bindingProblems.join("\n")).toEqual([]);
-        expect(
-          exactMutationHelperCallCount(filename, source),
-          `${filename} exact mutation-helper census drifted`
-        ).toBe(expectedHelperCalls);
+        expect(exactMutationHelperCallCount(filename, source), `${filename} exact mutation-helper census drifted`).toBe(
+          expectedHelperCalls
+        );
       }
     }
   });

@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createToolRegistrationAdapter } from "../src/mcp-registration.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const TOOL_MODES = new Map<string, "finish" | "rollback">([
   ["obsidian_mark_useful", "finish"],
@@ -220,35 +221,56 @@ describe("write lifecycle inventory invariant", () => {
     ]);
     const block = registrationBlock(registrySource, "obsidian_append_to_note");
     expect(block).not.toBeNull();
-    const mutated = registrySource.replace(
-      block ?? "",
-      (block ?? "").replace("runTrackedWrite(", "runUntrackedWrite(")
-    );
+    const mutatedBlock = replaceExactly(block ?? "", "runTrackedWrite(", "runUntrackedWrite(");
+    const mutated = replaceExactly(registrySource, block ?? "", mutatedBlock);
     expect(writeLifecycleProblems(mutated, serverSource, manifestSource)).toContain(
       "obsidian_append_to_note: callback bypasses runTrackedWrite"
     );
 
-    const monkeyPatched = serverSource
-      .replace("server = createToolRegistrationAdapter(mcpServer, (name) => {", "mcpServer.registerTool = (name) => {")
-      .replace("return server;", "return mcpServer;");
+    const missingAdapter = replaceExactly(
+      serverSource,
+      "server = createToolRegistrationAdapter(mcpServer, (name) => {",
+      "mcpServer.registerTool = (name) => {"
+    );
+    const monkeyPatched = replaceExactly(missingAdapter, "return server;", "return mcpServer;");
     expect(registrationSeamProblems(monkeyPatched)).toEqual([
       "server: project-owned tool registration adapter is missing",
       "server: gated facade is not returned after registration",
       "server: SDK registerTool is overwritten in place"
     ]);
 
-    const legacyStdio = serverSource
-      .replace('import { McpServer } from "@modelcontextprotocol/server";', 'import { McpServer } from "legacy-sdk";')
-      .replace('import { serveStdio } from "@modelcontextprotocol/server/stdio";', "")
-      .replace('import { WriteRequestTracker } from "./write-lifecycle.js";', "")
-      .replace(
-        "const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
-        "const transport = new StdioServerTransport();\n  await buildMcpServer(deps, opts, writeTracker).connect(transport);"
-      )
-      .replace("const writeTracker = new WriteRequestTracker();", "")
-      .replace('writeTracker.closeAdmission("Stdio shutdown closed persistent-write admission");', "")
-      .replace(/\s*await writeTracker\.abortRollbackSafe\([^\n]+\);/, "")
-      .replace("        await writeTracker.waitForAll();", "");
+    const legacyServerImport = replaceExactly(
+      serverSource,
+      'import { McpServer } from "@modelcontextprotocol/server";',
+      'import { McpServer } from "legacy-sdk";'
+    );
+    const legacyServeImport = replaceExactly(
+      legacyServerImport,
+      'import { serveStdio } from "@modelcontextprotocol/server/stdio";',
+      ""
+    );
+    const missingTrackerImport = replaceExactly(
+      legacyServeImport,
+      'import { WriteRequestTracker } from "./write-lifecycle.js";',
+      ""
+    );
+    const legacyTransport = replaceExactly(
+      missingTrackerImport,
+      "const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
+      "const transport = new StdioServerTransport();\n  await buildMcpServer(deps, opts, writeTracker).connect(transport);"
+    );
+    const missingTracker = replaceExactly(legacyTransport, "const writeTracker = new WriteRequestTracker();", "");
+    const admissionStillOpen = replaceExactly(
+      missingTracker,
+      'writeTracker.closeAdmission("Stdio shutdown closed persistent-write admission");',
+      ""
+    );
+    const rollbackStillRunning = replaceExactly(
+      admissionStillOpen,
+      '        await writeTracker.abortRollbackSafe("Stdio shutdown exceeded the protocol-close boundary");',
+      ""
+    );
+    const legacyStdio = replaceExactly(rollbackStillRunning, "        await writeTracker.waitForAll();", "");
     expect(stdioV2ServingProblems(legacyStdio)).toEqual(
       expect.arrayContaining([
         "server: McpServer is not imported from the SDK v2 server package",
@@ -262,11 +284,14 @@ describe("write lifecycle inventory invariant", () => {
       ])
     );
 
-    const racyStdio = serverSource
-      .replace("if (shutdownPromise) return shutdownPromise;", "")
-      .replace("let signalExitScheduled = false;", "")
-      .replace("if (signalExitScheduled) return;", "")
-      .replace("await waitForStdioProtocolClose(protocolClose)", "await protocolClose.then(() => true)");
+    const unmemoizedShutdown = replaceExactly(serverSource, "if (shutdownPromise) return shutdownPromise;", "");
+    const missingSignalState = replaceExactly(unmemoizedShutdown, "let signalExitScheduled = false;", "");
+    const missingSignalLatch = replaceExactly(missingSignalState, "if (signalExitScheduled) return;", "");
+    const racyStdio = replaceExactly(
+      missingSignalLatch,
+      "await waitForStdioProtocolClose(protocolClose)",
+      "await protocolClose.then(() => true)"
+    );
     expect(stdioV2ServingProblems(racyStdio)).toEqual(
       expect.arrayContaining([
         "server: stdio shutdown is not memoized across every exit path",
@@ -275,7 +300,8 @@ describe("write lifecycle inventory invariant", () => {
       ])
     );
 
-    const duplicatedDeps = serverSource.replace(
+    const duplicatedDeps = replaceExactly(
+      serverSource,
       "serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
       "serveStdio(async () => buildMcpServer(await prepareServerDeps(opts), opts, writeTracker), {"
     );
@@ -295,7 +321,8 @@ describe("write lifecycle inventory invariant", () => {
     ]);
     const block = registrationBlock(registrySource, "obsidian_replace_in_notes");
     expect(block).not.toBeNull();
-    const mutated = registrySource.replace(block ?? "", (block ?? "").replace('"rollback"', '"finish"'));
+    const mutatedBlock = replaceExactly(block ?? "", '"rollback"', '"finish"');
+    const mutated = replaceExactly(registrySource, block ?? "", mutatedBlock);
     expect(writeLifecycleProblems(mutated, serverSource, manifestSource)).toContain(
       "obsidian_replace_in_notes: expected rollback cancellation mode"
     );

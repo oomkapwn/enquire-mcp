@@ -6,6 +6,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
+import {
+  replaceAllExactly,
+  replaceExactly,
+  replaceIntegerAllExactly
+} from "./helpers/exact-source-mutation.js";
 
 // Static-analysis tests: every MCP surface declared in src/tool-manifest.ts
 // (single source of truth as of v3.6.0-rc.2) must be documented in
@@ -1554,17 +1559,21 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       return problems;
     };
     expect(previewProblems(svg)).toEqual([]);
-    expect(previewProblems(svg.replace("EVERY AGENT.", "ONE AGENT."))).toContain("missing EVERY AGENT.");
-    expect(previewProblems(svg.replace(`>${actual}</text>`, `>${actual + 1}</text>`))).toContain(
+    expect(previewProblems(replaceExactly(svg, "EVERY AGENT.", "ONE AGENT.", 1))).toContain(
+      "missing EVERY AGENT."
+    );
+    expect(previewProblems(replaceExactly(svg, `>${actual}</text>`, `>${actual + 1}</text>`, 1))).toContain(
       `stale TESTS count ${actual + 1}`
     );
-    expect(previewProblems(svg.replace(`>${actualTools}</text>`, `>${actualTools + 1}</text>`))).toContain(
-      `stale MCP TOOLS count ${actualTools + 1}`
+    expect(
+      previewProblems(replaceExactly(svg, `>${actualTools}</text>`, `>${actualTools + 1}</text>`, 1))
+    ).toContain(`stale MCP TOOLS count ${actualTools + 1}`);
+    expect(
+      previewProblems(replaceExactly(svg, `>${actualPrompts}</text>`, `>${actualPrompts + 1}</text>`, 1))
+    ).toContain(`stale MCP PROMPTS count ${actualPrompts + 1}`);
+    expect(previewProblems(replaceExactly(svg, "MCP PROMPTS", "WORKFLOWS", 1))).toContain(
+      "stale WORKFLOWS label"
     );
-    expect(previewProblems(svg.replace(`>${actualPrompts}</text>`, `>${actualPrompts + 1}</text>`))).toContain(
-      `stale MCP PROMPTS count ${actualPrompts + 1}`
-    );
-    expect(previewProblems(svg.replace("MCP PROMPTS", "WORKFLOWS"))).toContain("stale WORKFLOWS label");
 
     const renderer = await read("scripts/render-social-preview.mjs");
     expect(renderer).toContain('"social-preview-art.png"');
@@ -1818,10 +1827,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     };
     expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
     expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
-    expect(mcpbVersionProblems(readme.replaceAll(packageVersion, "0.0.0-stale"), packageVersion)).toEqual([
-      "release tag drift",
-      "asset filename drift"
-    ]);
+    expect(
+      mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)
+    ).toEqual(["release tag drift", "asset filename drift"]);
     expect(readme).toContain("| Complete leadership standard | **enquire-mcp** | Smart Connections");
     expect(readme).toContain("✅ = the complete row is built in");
     expect(readme).toContain("[competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence)");
@@ -1874,8 +1882,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       '"args": ["-y", "@oomkapwn/enquire-mcp@latest", "serve", "--vault", "/absolute/path/to/vault"]';
     const hasCanonicalInstall = (text: string): boolean => text.includes(canonicalInstall);
     expect(hasCanonicalInstall(launchKit)).toBe(true);
-    expect(hasCanonicalInstall(launchKit.replace(', "--vault", "/absolute/path/to/vault"', ""))).toBe(false);
-    expect(hasCanonicalInstall(canonicalInstall.replace("@latest", "@rc"))).toBe(false);
+    expect(
+      hasCanonicalInstall(replaceExactly(launchKit, ', "--vault", "/absolute/path/to/vault"', "", 1))
+    ).toBe(false);
+    expect(hasCanonicalInstall(replaceExactly(canonicalInstall, "@latest", "@rc", 1))).toBe(false);
     expect(launchKit).not.toMatch(/@rc|-rc\.\d+/i);
     expect(launchKit).not.toContain("omits either `serve` or `--vault`");
     expect(launchKit).not.toContain("Writes are disabled by default and require an explicit `--enable-write`");
@@ -2024,21 +2034,21 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     const english = await read("README.md");
     const fullExpectations = { assetFilename: true, releaseTag: true } as const;
-    const staleVersion = english.replaceAll(contract.version, "0.0.0-stale");
+    const staleVersion = replaceAllExactly(english, contract.version, "0.0.0-stale", 6);
     expect(staleVersion).not.toBe(english);
     expect(mcpbDocumentationProblems(staleVersion, contract, fullExpectations)).toEqual(
       expect.arrayContaining(["MCPB version drift", "MCPB release tag drift", "MCPB asset filename drift"])
     );
-    const staleTools = english.replace("**13 read-only tools**", "**12 read-only tools**");
+    const staleTools = replaceExactly(english, "**13 read-only tools**", "**12 read-only tools**", 1);
     expect(staleTools).not.toBe(english);
     expect(mcpbDocumentationProblems(staleTools, contract, fullExpectations)).toContain("MCPB tool count drift");
-    const stalePrompts = english.replace("**0 prompts**", "**1 prompt**");
+    const stalePrompts = replaceExactly(english, "**0 prompts**", "**1 prompt**", 1);
     expect(stalePrompts).not.toBe(english);
     expect(mcpbDocumentationProblems(stalePrompts, contract, fullExpectations)).toContain("MCPB prompt count drift");
-    const staleNode = english.replace("Node.js 22.13", "Node.js 22.12");
+    const staleNode = replaceExactly(english, "Node.js 22.13", "Node.js 22.12", 1);
     expect(staleNode).not.toBe(english);
     expect(mcpbDocumentationProblems(staleNode, contract, fullExpectations)).toContain("MCPB Node floor drift");
-    const staleStatus = english.replace("MCPB Basic", "Planned MCPB Basic static checkpoint");
+    const staleStatus = replaceExactly(english, "MCPB Basic", "Planned MCPB Basic static checkpoint", 1);
     expect(staleStatus).not.toBe(english);
     expect(mcpbDocumentationProblems(staleStatus, contract, fullExpectations)).toContain(
       "stale MCPB publication status"
@@ -2127,16 +2137,38 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       ).toEqual([]);
       expect(networkFaqPostureProblems(markdown), `${file} network-download posture drift`).toEqual([]);
 
-      const inflatedCiCounts = markdown
-        .split("\n")
-        .map((line) =>
-          line.startsWith("| **") && line.includes("CI")
-            ? line
-                .replace(new RegExp(`(?<!\\d)${actualTests}(?!\\d)`, "g"), `1${actualTests}`)
-                .replace(new RegExp(`(?<!\\d)${releaseRequired}(?!\\d)`, "g"), `1${releaseRequired}`)
-                .replace(new RegExp(`(?<!\\d)${branchProtected}(?!\\d)`, "g"), `1${branchProtected}`)
-            : line
-        )
+      const markdownLines = markdown.split("\n");
+      const ciTableRows = markdownLines
+        .map((line, index) => ({ index, line }))
+        .filter(({ line }) => line.startsWith("| **") && line.includes("CI"));
+      expect(ciTableRows, `${file} must carry exactly two CI posture table rows`).toHaveLength(2);
+
+      const ciRowBlock = ciTableRows.map(({ line }) => line).join("\n");
+      const expectedReleaseRequiredOccurrences = file === "README.ar.md" ? 2 : 3;
+      const inflatedCiRowBlock = replaceIntegerAllExactly(
+        replaceIntegerAllExactly(
+          replaceIntegerAllExactly(ciRowBlock, actualTests, `1${actualTests}`, 1),
+          releaseRequired,
+          `1${releaseRequired}`,
+          expectedReleaseRequiredOccurrences
+        ),
+        branchProtected,
+        `1${branchProtected}`,
+        2
+      );
+      const inflatedCiRows = inflatedCiRowBlock.split("\n");
+      expect(inflatedCiRows, `${file} CI mutation must preserve the two-row shape`).toHaveLength(2);
+      expect(
+        inflatedCiRows.filter((line, index) => line !== ciTableRows[index]?.line),
+        `${file} CI mutation must replace both selected rows`
+      ).toHaveLength(2);
+
+      const ciRowsByIndex = new Map(
+        ciTableRows.map(({ index }, rowIndex) => [index, inflatedCiRows[rowIndex] ?? ""] as const)
+      );
+      expect(ciRowsByIndex.size, `${file} CI mutation must reconstruct exactly two rows`).toBe(2);
+      const inflatedCiCounts = markdownLines
+        .map((line, index) => ciRowsByIndex.get(index) ?? line)
         .join("\n");
       expect(
         publicCiPostureProblems(inflatedCiCounts, releaseRequired, branchProtected, actualTests).length,
@@ -2231,7 +2263,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const hybridExample = await read("examples/claude-desktop-hybrid.json");
     expect(hybridExamplePackageIdentityProblems(hybridExample, previewVersion)).toEqual([]);
     expect(
-      hybridExamplePackageIdentityProblems(hybridExample.replace('"--watch"', '"--wrong-flag"'), previewVersion)
+      hybridExamplePackageIdentityProblems(
+        replaceExactly(hybridExample, '"--watch"', '"--wrong-flag"', 1),
+        previewVersion
+      )
     ).toContain("runtime args do not exactly match the hybrid-live tier");
     expect(
       hybridExamplePackageIdentityProblems(
@@ -2253,7 +2288,12 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(
       setupCompletionIdentityProblems(
         cliSource,
-        indexSource.replace("cliInvocation = { command: process.execPath, argsPrefix: [argv] };", "")
+        replaceExactly(
+          indexSource,
+          "cliInvocation = { command: process.execPath, argsPrefix: [argv] };",
+          "",
+          1
+        )
       )
     ).toContain("CLI entry guard missing cliInvocation = { command: process.execPath, argsPrefix: [argv] }");
 
@@ -2315,7 +2355,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         const current = await fs.readFile(fixtureFile, "utf8");
         const stableToken = `v${stableMajorMinor}.x`;
         expect(current, `${file} must carry the current stable token`).toContain(stableToken);
-        await fs.writeFile(fixtureFile, current.replaceAll(stableToken, `v${staleMajorMinor}.x`));
+        await fs.writeFile(
+          fixtureFile,
+          replaceAllExactly(current, stableToken, `v${staleMajorMinor}.x`, 3)
+        );
       }
       // A neighboring line that merely says "after", "based on", or "gates"
       // is not sufficient tombstone evidence for a current-state claim. The

@@ -23,6 +23,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -196,31 +197,35 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
 
     const realVault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
     const lstatHelper = methodBody(realVault, "lstatIfExistsSafe");
-    const failOpenHelper = lstatHelper.replace("throw this.sanitizeFsError(err);", "return null;");
-    expect(mutationLeafProbeProblems(realVault.replace(lstatHelper, failOpenHelper))).toContain(
+    const failOpenHelper = replaceExactly(lstatHelper, "throw this.sanitizeFsError(err);", "return null;");
+    expect(mutationLeafProbeProblems(replaceExactly(realVault, lstatHelper, failOpenHelper))).toContain(
       "lstatIfExistsSafe must return missing only for ENOENT and sanitize every other error"
     );
-    const rawWriteProbe = realVault.replace(
+    const rawWriteProbe = replaceExactly(
+      realVault,
       'await this.assertMutationLeafNotSymlink(abs, "write");',
-      "await fs.lstat(abs).catch(() => null);"
+      "await fs.lstat(abs).catch(() => null);",
+      2
     );
     expect(mutationLeafProbeProblems(rawWriteProbe)).toContain(
       "writeNote must use the mutation leaf assertion at every required phase"
     );
 
     const appendBody = methodBody(realVault, "appendNote");
-    const pathStatIdentity = appendBody.replace(
+    const pathStatIdentity = replaceExactly(
+      appendBody,
       "initialStat = await identityHandle.stat();",
       "initialStat = await this.statSafe(initialAbs);"
     );
-    expect(appendIdentityProblems(realVault.replace(appendBody, pathStatIdentity))).toContain(
+    expect(appendIdentityProblems(replaceExactly(realVault, appendBody, pathStatIdentity))).toContain(
       "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
     );
-    const blockingSpecialFileOpen = appendBody.replace(
+    const blockingSpecialFileOpen = replaceExactly(
+      appendBody,
       "fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK",
       "fsConstants.O_NOFOLLOW"
     );
-    expect(appendIdentityProblems(realVault.replace(appendBody, blockingSpecialFileOpen))).toContain(
+    expect(appendIdentityProblems(replaceExactly(realVault, appendBody, blockingSpecialFileOpen))).toContain(
       "append must preflight type without identity, open nonblocking and use descriptor stats for every identity decision"
     );
   });

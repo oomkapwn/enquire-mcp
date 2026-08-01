@@ -768,15 +768,27 @@ jobs:
             exit 1
           fi
           mkdir "$IDENTITY_DIR"
-          RELEASE_PAGES=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/releases?per_page=100")
-          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
-          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
-            '[.[] | select(.tag_name == $tag)] | length')
-          if [ "$RELEASE_COUNT" -ne 1 ]; then
-            echo "::error::Asset phase requires exactly one draft/published release for $TAG"
-            exit 1
-          fi
+          # A newly created draft can be briefly absent from list-releases.
+          # Retry only the zero-result state; duplicates still fail immediately.
+          RELEASE_COUNT=0
+          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do
+            RELEASE_PAGES=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/releases?per_page=100")
+            RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+            RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+              '[.[] | select(.tag_name == $tag)] | length')
+            if [ "$RELEASE_COUNT" -gt 1 ]; then
+              echo "::error::Asset phase found duplicate draft/published releases for $TAG"
+              exit 1
+            fi
+            if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi
+            if [ "$release_attempt" -eq 12 ]; then
+              echo "::error::Release $TAG did not become visible after 12 bounded checks"
+              exit 1
+            fi
+            echo "::warning::Release $TAG is not visible yet (attempt $release_attempt/12); retrying in 5s"
+            sleep 5
+          done
           RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '.[] | select(.tag_name == $tag)')
           RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')

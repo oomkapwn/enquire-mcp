@@ -321,10 +321,7 @@ function nodeHasReachableAssertion(node: ts.Node, skipBindings?: CallbackSkipBin
     if (nodeHasReachableAssertion(node.condition, skipBindings)) return true;
     if (isLiteralBoolean(node.condition, true)) return nodeHasReachableAssertion(node.whenTrue, skipBindings);
     if (isLiteralBoolean(node.condition, false)) return nodeHasReachableAssertion(node.whenFalse, skipBindings);
-    return (
-      nodeHasReachableAssertion(node.whenTrue, skipBindings) ||
-      nodeHasReachableAssertion(node.whenFalse, skipBindings)
-    );
+    return nodeHasReachableAssertion(node.whenTrue, skipBindings) || nodeHasReachableAssertion(node.whenFalse, skipBindings);
   }
   if (ts.isWhileStatement(node) && isLiteralBoolean(node.expression, false)) {
     return nodeHasReachableAssertion(node.expression, skipBindings);
@@ -643,9 +640,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       /no INLINE NEGATIVE control test/
     );
     const assertionComment =
-      `it("NEGATIVE: claims coverage", () => {\n` +
-      `  return true; // expect(run()).toBe(false)\n` +
-      `});`;
+      `it("NEGATIVE: claims coverage", () => {\n` + `  return true; // expect(run()).toBe(false)\n` + `});`;
     expect(checkInvariantHasNegativeCoverage("assertion-comment.test.ts", assertionComment)).toMatch(
       /no INLINE NEGATIVE control test/
     );

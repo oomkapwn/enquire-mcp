@@ -123,6 +123,29 @@ function assertMutationPreconditions(source: string, needle: string | RegExp, ex
   }
 }
 
+/** Expand the four substitution tokens supported when String.replace receives a string search value. */
+function expandLiteralReplacement(source: string, needle: string, replacement: string, offset: number): string {
+  let expanded = "";
+  for (let index = 0; index < replacement.length; index++) {
+    const current = replacement.charAt(index);
+    if (current !== "$") {
+      expanded += current;
+      continue;
+    }
+    const next = replacement.charAt(index + 1);
+    if (next === "$") expanded += "$";
+    else if (next === "&") expanded += needle;
+    else if (next === "`") expanded += source.slice(0, offset);
+    else if (next === "'") expanded += source.slice(offset + needle.length);
+    else {
+      expanded += "$";
+      continue;
+    }
+    index++;
+  }
+  return expanded;
+}
+
 /** Replace the first target after an exact census; regex needles must be non-global and non-sticky. */
 function replaceExactly(
   source: string,
@@ -135,8 +158,18 @@ function replaceExactly(
   }
   assertMutationPreconditions(source, needle, expectedOccurrences);
   let mutated: string;
-  if (typeof replacement === "string") mutated = source.replace(needle, replacement);
-  else mutated = source.replace(needle, replacement);
+  if (typeof needle === "string") {
+    const offset = source.indexOf(needle);
+    const literalReplacement =
+      typeof replacement === "string"
+        ? expandLiteralReplacement(source, needle, replacement, offset)
+        : String(replacement(needle, offset, source));
+    mutated = source.slice(0, offset) + literalReplacement + source.slice(offset + needle.length);
+  } else {
+    const regexNeedle: RegExp = needle;
+    if (typeof replacement === "string") mutated = source.replace(regexNeedle, replacement);
+    else mutated = source.replace(regexNeedle, replacement);
+  }
   if (mutated === source) throw new Error(`mutation needle ${String(needle)} did not change its source`);
   return mutated;
 }
@@ -149,17 +182,35 @@ function replaceAllExactly(
   expectedOccurrences = 1
 ): string {
   assertMutationPreconditions(source, needle, expectedOccurrences);
-  const replaceNeedle = typeof needle === "string" ? needle : globalMutationRegex(needle);
   let mutated: string;
-  if (typeof replacement === "string") mutated = source.replaceAll(replaceNeedle, replacement);
-  else mutated = source.replaceAll(replaceNeedle, replacement);
+  if (typeof needle === "string") {
+    const fragments: string[] = [];
+    let cursor = 0;
+    while (true) {
+      const offset = source.indexOf(needle, cursor);
+      if (offset === -1) break;
+      fragments.push(source.slice(cursor, offset));
+      fragments.push(
+        typeof replacement === "string"
+          ? expandLiteralReplacement(source, needle, replacement, offset)
+          : String(replacement(needle, offset, source))
+      );
+      cursor = offset + needle.length;
+    }
+    fragments.push(source.slice(cursor));
+    mutated = fragments.join("");
+  } else {
+    const regexNeedle: RegExp = globalMutationRegex(needle);
+    if (typeof replacement === "string") mutated = source.replaceAll(regexNeedle, replacement);
+    else mutated = source.replaceAll(regexNeedle, replacement);
+  }
   if (mutated === source) throw new Error(`mutation needle ${String(needle)} did not change its source`);
   return mutated;
 }
 
 /**
- * Keep raw String.replace calls out of this release oracle. Only the two
- * fail-closed helper implementations may invoke the primitives directly.
+ * Keep raw String.replace value access out of this release oracle. Only the
+ * canonical helpers' exact RegExp-only branches may invoke the primitives.
  */
 function rawMutationCallProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -170,6 +221,17 @@ function rawMutationCallProblems(source: string): string[] {
     ts.ScriptKind.TS
   );
   const problems: string[] = [];
+  const topLevelHelpers = sourceFile.statements.filter(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) &&
+      (statement.name?.text === "replaceExactly" || statement.name?.text === "replaceAllExactly")
+  );
+  const replaceExactlyDeclarations = topLevelHelpers.filter((helper) => helper.name?.text === "replaceExactly");
+  const replaceAllExactlyDeclarations = topLevelHelpers.filter((helper) => helper.name?.text === "replaceAllExactly");
+  const canonicalReplaceExactly =
+    replaceExactlyDeclarations.length === 1 ? replaceExactlyDeclarations.at(0) : undefined;
+  const canonicalReplaceAllExactly =
+    replaceAllExactlyDeclarations.length === 1 ? replaceAllExactlyDeclarations.at(0) : undefined;
 
   function nearestFunction(node: ts.Node): ts.FunctionLikeDeclaration | undefined {
     let current: ts.Node | undefined = node.parent;
@@ -190,33 +252,201 @@ function rawMutationCallProblems(source: string): string[] {
     return undefined;
   }
 
+  function staticPropertyText(node: ts.Node | undefined): string | null {
+    let current = node;
+    while (current) {
+      if (ts.isComputedPropertyName(current)) current = current.expression;
+      else if (
+        ts.isParenthesizedExpression(current) ||
+        ts.isAsExpression(current) ||
+        ts.isTypeAssertionExpression(current) ||
+        ts.isNonNullExpression(current) ||
+        ts.isSatisfiesExpression(current)
+      ) {
+        current = current.expression;
+      } else break;
+    }
+    return current &&
+      (ts.isIdentifier(current) || ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
+      ? current.text
+      : null;
+  }
+
+  function isTypeOnlyAccess(node: ts.Node): boolean {
+    let current: ts.Node | undefined = node.parent;
+    while (current) {
+      if (ts.isTypeQueryNode(current)) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  function hasExactNeedleParameters(scope: ts.FunctionDeclaration): boolean {
+    const sourceParameter = scope.parameters.at(0);
+    const needleParameter = scope.parameters.at(1);
+    if (
+      !sourceParameter ||
+      !ts.isIdentifier(sourceParameter.name) ||
+      sourceParameter.name.text !== "source" ||
+      sourceParameter.type?.kind !== ts.SyntaxKind.StringKeyword ||
+      !needleParameter ||
+      !ts.isIdentifier(needleParameter.name) ||
+      needleParameter.name.text !== "needle" ||
+      !needleParameter.type ||
+      !ts.isUnionTypeNode(needleParameter.type) ||
+      needleParameter.type.types.length !== 2
+    ) {
+      return false;
+    }
+    const hasString = needleParameter.type.types.some((type) => type.kind === ts.SyntaxKind.StringKeyword);
+    const hasRegExp = needleParameter.type.types.some(
+      (type) =>
+        ts.isTypeReferenceNode(type) &&
+        ts.isIdentifier(type.typeName) &&
+        type.typeName.text === "RegExp" &&
+        (type.typeArguments?.length ?? 0) === 0
+    );
+    return hasString && hasRegExp;
+  }
+
+  function bindingContainsIdentifier(name: ts.BindingName, identifier: string): boolean {
+    if (ts.isIdentifier(name)) return name.text === identifier;
+    return name.elements.some(
+      (element) => ts.isBindingElement(element) && bindingContainsIdentifier(element.name, identifier)
+    );
+  }
+
+  function blockShadowsSource(block: ts.Block): boolean {
+    return block.statements.some((statement) => {
+      if (ts.isVariableStatement(statement)) {
+        return statement.declarationList.declarations.some((declaration) =>
+          bindingContainsIdentifier(declaration.name, "source")
+        );
+      }
+      return (
+        (ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement) ||
+          ts.isEnumDeclaration(statement)) &&
+        statement.name?.text === "source"
+      );
+    });
+  }
+
+  function hasExactRegexBinding(
+    node: ts.Node,
+    scope: ts.FunctionDeclaration,
+    expectedHelper: "replaceExactly" | "replaceAllExactly"
+  ): boolean {
+    let branch: ts.Node | undefined = node.parent;
+    while (branch && !ts.isBlock(branch) && branch !== scope) {
+      if (
+        ts.isForStatement(branch) ||
+        ts.isForInStatement(branch) ||
+        ts.isForOfStatement(branch) ||
+        ts.isWhileStatement(branch) ||
+        ts.isDoStatement(branch) ||
+        ts.isCaseClause(branch) ||
+        ts.isDefaultClause(branch) ||
+        ts.isSwitchStatement(branch)
+      ) {
+        return false;
+      }
+      branch = branch.parent;
+    }
+    if (!branch || !ts.isBlock(branch) || !hasExactNeedleParameters(scope) || blockShadowsSource(branch)) return false;
+    const narrowing = branch.parent;
+    if (
+      !ts.isIfStatement(narrowing) ||
+      narrowing.elseStatement !== branch ||
+      !ts.isBinaryExpression(narrowing.expression) ||
+      narrowing.expression.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken ||
+      !ts.isTypeOfExpression(narrowing.expression.left) ||
+      !ts.isIdentifier(narrowing.expression.left.expression) ||
+      narrowing.expression.left.expression.text !== "needle" ||
+      !ts.isStringLiteral(narrowing.expression.right) ||
+      narrowing.expression.right.text !== "string"
+    ) {
+      return false;
+    }
+    const bindingStatement = branch.statements.at(0);
+    if (
+      !bindingStatement ||
+      !ts.isVariableStatement(bindingStatement) ||
+      (bindingStatement.declarationList.flags & ts.NodeFlags.Const) === 0 ||
+      bindingStatement.declarationList.declarations.length !== 1
+    ) {
+      return false;
+    }
+    const declaration = bindingStatement.declarationList.declarations.at(0);
+    if (
+      !declaration ||
+      !ts.isIdentifier(declaration.name) ||
+      declaration.name.text !== "regexNeedle" ||
+      !declaration.type ||
+      !ts.isTypeReferenceNode(declaration.type) ||
+      !ts.isIdentifier(declaration.type.typeName) ||
+      declaration.type.typeName.text !== "RegExp" ||
+      (declaration.type.typeArguments?.length ?? 0) !== 0
+    ) {
+      return false;
+    }
+    const initializer = declaration.initializer;
+    if (expectedHelper === "replaceExactly") {
+      return initializer !== undefined && ts.isIdentifier(initializer) && initializer.text === "needle";
+    }
+    const initializerArgument =
+      initializer !== undefined && ts.isCallExpression(initializer) ? initializer.arguments.at(0) : undefined;
+    return (
+      initializer !== undefined &&
+      ts.isCallExpression(initializer) &&
+      ts.isIdentifier(initializer.expression) &&
+      initializer.expression.text === "globalMutationRegex" &&
+      initializer.arguments.length === 1 &&
+      initializerArgument !== undefined &&
+      ts.isIdentifier(initializerArgument) &&
+      initializerArgument.text === "needle"
+    );
+  }
+
   function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      const called = node.expression;
-      const propertyMethod = ts.isPropertyAccessExpression(called) ? called.name.text : null;
-      const elementArgument = ts.isElementAccessExpression(called) ? called.argumentExpression : undefined;
-      const elementMethod =
-        elementArgument && (ts.isStringLiteral(elementArgument) || ts.isNoSubstitutionTemplateLiteral(elementArgument))
-          ? elementArgument.text
-          : null;
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const propertyMethod = ts.isPropertyAccessExpression(node) ? staticPropertyText(node.name) : null;
+      const elementArgument = ts.isElementAccessExpression(node) ? node.argumentExpression : undefined;
+      const elementMethod = staticPropertyText(elementArgument);
       const method = propertyMethod ?? elementMethod;
-      if (method === "replace" || method === "replaceAll") {
+      if ((method === "replace" || method === "replaceAll") && !isTypeOnlyAccess(node)) {
         const scope = nearestFunction(node);
         const expectedHelper = method === "replace" ? "replaceExactly" : "replaceAllExactly";
-        const receiver =
-          ts.isPropertyAccessExpression(called) || ts.isElementAccessExpression(called) ? called.expression : undefined;
+        const canonicalHelper = method === "replace" ? canonicalReplaceExactly : canonicalReplaceAllExactly;
+        const call = node.parent;
+        const firstArgument = ts.isCallExpression(call) && call.expression === node ? call.arguments.at(0) : undefined;
         const allowed =
-          ts.isPropertyAccessExpression(called) &&
-          receiver !== undefined &&
-          ts.isIdentifier(receiver) &&
-          receiver.text === "source" &&
+          ts.isCallExpression(call) &&
+          call.expression === node &&
+          ts.isPropertyAccessExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "source" &&
+          firstArgument !== undefined &&
+          ts.isIdentifier(firstArgument) &&
+          firstArgument.text === "regexNeedle" &&
+          canonicalReplaceExactly !== undefined &&
+          canonicalReplaceAllExactly !== undefined &&
           scope !== undefined &&
           ts.isFunctionDeclaration(scope) &&
-          scope.name?.text === expectedHelper;
+          scope.name?.text === expectedHelper &&
+          scope === canonicalHelper &&
+          hasExactRegexBinding(node, scope, expectedHelper);
         if (!allowed) {
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
           problems.push(`raw .${method}() mutation at ${position.line + 1}:${position.character + 1}`);
         }
+      }
+    }
+    if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+      const boundProperty = staticPropertyText(node.propertyName ?? node.name);
+      if (boundProperty === "replace" || boundProperty === "replaceAll") {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(`raw .${boundProperty}() mutation at ${position.line + 1}:${position.character + 1}`);
       }
     }
     ts.forEachChild(node, visit);
@@ -1285,9 +1515,7 @@ describe("release identity and exact required-check gate", () => {
     expect(() => replaceExactly("alpha", /(?=alpha)/u, "omega")).toThrow(/must consume text/);
     expect(() => replaceExactly("alpha", /alpha/gu, "omega")).toThrow(/must not be global or sticky/);
     expect(() => replaceExactly("alpha", /missing/u, "omega")).toThrow(/expected 1 occurrence\(s\), found 0/);
-    expect(() => replaceExactly("alpha alpha", /alpha/u, "omega")).toThrow(
-      /expected 1 occurrence\(s\), found 2/
-    );
+    expect(() => replaceExactly("alpha alpha", /alpha/u, "omega")).toThrow(/expected 1 occurrence\(s\), found 2/);
     expect(() => replaceExactly("alpha", "alpha", "omega", 0)).toThrow(/positive safe integer/);
     expect(() => replaceExactly("alpha", "alpha", "omega", 1.5)).toThrow(/positive safe integer/);
     expect(() => replaceExactly("alpha", "alpha", "omega", Number.MAX_SAFE_INTEGER + 1)).toThrow(
@@ -1299,6 +1527,29 @@ describe("release identity and exact required-check gate", () => {
     expect(replaceExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega alpha");
     expect(replaceAllExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega omega");
     expect(replaceAllExactly("alpha alpha", /alpha/u, "omega", 2)).toBe("omega omega");
+    expect(replaceExactly("left alpha right", "alpha", "$`|$&|$'|$$")).toBe(
+      "left left |alpha| right|$ right"
+    );
+    expect(replaceExactly("alpha", "alpha", "$1|$01|$<name>|$0")).toBe("$1|$01|$<name>|$0");
+    expect(replaceExactly("alpha", "alpha", () => "$&")).toBe("$&");
+    expect(() => replaceExactly("alpha", "alpha", "$&")).toThrow(/did not change its source/);
+    expect(
+      replaceExactly("alpha", "ph", (_match: string, offset: number, whole: string) => `PH@${offset}/${whole.length}`)
+    ).toBe("alPH@2/5a");
+    const literalReplacementOffsets: number[] = [];
+    expect(
+      replaceAllExactly(
+        "a-a",
+        "a",
+        (_match: string, offset: number) => {
+          literalReplacementOffsets.push(offset);
+          return "b";
+        },
+        2
+      )
+    ).toBe("b-b");
+    expect(literalReplacementOffsets).toEqual([0, 2]);
+    expect(replaceAllExactly("a-a", "a", "$`|$&|$'", 2)).toBe("|a|-a-a-|a|");
     const stickyNeedle = /alpha/uy;
     stickyNeedle.lastIndex = 6;
     expect(replaceAllExactly("alpha alpha", stickyNeedle, "omega", 2)).toBe("omega omega");
@@ -1307,12 +1558,144 @@ describe("release identity and exact required-check gate", () => {
 
     const oracleSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
     expect(rawMutationCallProblems(oracleSource)).toEqual([]);
-    expect(rawMutationCallProblems('const weakened = workflow.replace("old", "new");')).toEqual([
+    const validReplaceExactlyHelper = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = needle;
+    return source.replace(regexNeedle, "new");
+  }
+}
+`;
+    const validReplaceAllExactlyHelper = `function replaceAllExactly(
+  source: string,
+  needle: string | RegExp
+): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = globalMutationRegex(needle);
+    return source.replaceAll(regexNeedle, "new");
+  }
+}
+`;
+    const validRawHelperFixture =
+      (extra = ""): string => `${validReplaceExactlyHelper}${validReplaceAllExactlyHelper}${extra}`;
+    expect(
+      rawMutationCallProblems("type Replacer = Parameters<typeof String.prototype.replace>[1];")
+    ).toEqual([]);
+    expect(rawMutationCallProblems(validRawHelperFixture())).toEqual([]);
+    expect(rawMutationCallProblems(validRawHelperFixture('const weakened = workflow.replace("old", "new");'))).toEqual([
       expect.stringMatching(/raw \.replace\(\) mutation/)
     ]);
-    expect(rawMutationCallProblems('const weakened = workflow["replaceAll"]("old", "new");')).toEqual([
+    expect(
+      rawMutationCallProblems(
+        validRawHelperFixture('const weakened = workflow["replaceAll"]("old", "new");')
+      )
+    ).toEqual([expect.stringMatching(/raw \.replaceAll\(\) mutation/)]);
+    expect(rawMutationCallProblems(validRawHelperFixture('const rawMutation = workflow[("replace")];'))).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems(validRawHelperFixture("const rawMutation = workflow.replace;"))).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems(validRawHelperFixture('const { ["replace"]: rawMutation } = workflow;'))).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems(validRawHelperFixture("const { replace: rawMutation } = workflow;"))).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const literalNeedleMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = needle;
+    return source.replace("old", "new");
+  }
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(literalNeedleMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const unionNeedleMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: string | RegExp = needle;
+    return source.replace(regexNeedle, "new");
+  }
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(unionNeedleMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const falseAnnotationMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  const regexNeedle: RegExp = needle;
+  return source.replace(regexNeedle, "new");
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(falseAnnotationMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const unionReplaceAllNeedleMutation = `${validReplaceExactlyHelper}function replaceAllExactly(
+  source: string,
+  needle: string | RegExp
+): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: string | RegExp = globalMutationRegex(needle);
+    return source.replaceAll(regexNeedle, "new");
+  }
+}
+`;
+    expect(rawMutationCallProblems(unionReplaceAllNeedleMutation)).toEqual([
       expect.stringMatching(/raw \.replaceAll\(\) mutation/)
     ]);
+    const shadowedNeedleMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = needle;
+    for (const regexNeedle of ["old"]) return source.replace(regexNeedle, "new");
+    return source;
+  }
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(shadowedNeedleMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const shadowedSourceMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = needle;
+    const source = someAlias;
+    return source.replace(regexNeedle, "new");
+  }
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(shadowedSourceMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const loopWrappedMutation = `function replaceExactly(source: string, needle: string | RegExp): string {
+  if (typeof needle === "string") return source;
+  else {
+    const regexNeedle: RegExp = needle;
+    while (false) return source.replace(regexNeedle, "new");
+    return source;
+  }
+}
+${validReplaceAllExactlyHelper}`;
+    expect(rawMutationCallProblems(loopWrappedMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const nestedSameShapeMutation = validRawHelperFixture(`function wrapper(): void {
+  function replaceExactly(source: string, regexNeedle: RegExp): string {
+    return source.replace(regexNeedle, "new");
+  }
+  void replaceExactly;
+}`);
+    expect(rawMutationCallProblems(nestedSameShapeMutation)).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    const duplicateCanonicalMutation = validRawHelperFixture(
+      "function replaceExactly(source: string): string { return source; }"
+    );
+    expect(rawMutationCallProblems(duplicateCanonicalMutation)).toHaveLength(2);
 
     const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     expect(workflow).toContain('node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"');
@@ -1321,11 +1704,9 @@ describe("release identity and exact required-check gate", () => {
     expect(workflow).not.toMatch(/TAG="\$\{\{/);
     const mirror = /REQUIRED="([^"]+)"/.exec(workflow)?.[1];
     expect(mirror, "release.yml must retain the public gate-count mirror").toBeTruthy();
-    expect(
-      (mirror ?? "")
-        .split("|")
-        .map((name) => name.split("\\(").join("(").split("\\)").join(")"))
-    ).toEqual(REQUIRED_RELEASE_CHECKS);
+    expect((mirror ?? "").split("|").map((name) => name.split("\\(").join("(").split("\\)").join(")"))).toEqual(
+      REQUIRED_RELEASE_CHECKS
+    );
 
     const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const packageConsumer = readFileSync(new URL("../scripts/package-consumer.mjs", import.meta.url), "utf8");
@@ -1772,8 +2153,8 @@ describe("release identity and exact required-check gate", () => {
     );
     for (const [pagination, occurrences] of [
       ["CHECK_PAGES", 1],
-      ["RUN_PAGES", 2],
-      ["JOB_PAGES", 2],
+      ["RUN_PAGES", 1],
+      ["JOB_PAGES", 1],
       ["ARTIFACT_PAGES", 1]
     ] as const) {
       expect(
@@ -2066,10 +2447,7 @@ describe("release identity and exact required-check gate", () => {
     // NEGATIVE controls: the invariant rejects both the old floating-22 leg
     // and a floor that no longer matches package.json.
     expect(
-      nodeFloorCiProblems(
-        replaceExactly(ci, 'node-version: "22.13.0"', "node-version: 22", 7),
-        pkg.engines?.node
-      )
+      nodeFloorCiProblems(replaceExactly(ci, 'node-version: "22.13.0"', "node-version: 22", 7), pkg.engines?.node)
     ).toContain("test (22) must run exact engines.node floor 22.13.0");
     expect(nodeFloorCiProblems(ci, ">=22.14.0")).toContain("test (22) must run exact engines.node floor 22.14.0");
     expect(nodeFloorCiProblems(ci, "22.13.0")).toEqual(["engines.node must be one exact >=X.Y.Z floor"]);

@@ -651,6 +651,22 @@ const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
   `            "repos/\${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"`;
 const MCPB_RELEASE_VISIBILITY_POLL =
   "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";
+const MCPB_RELEASE_VISIBILITY_REFRESH = "            RELEASE_PAGES=$(gh api --paginate --slurp";
+const MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH =
+  `${MCPB_RELEASE_VISIBILITY_POLL}\n${MCPB_RELEASE_VISIBILITY_REFRESH}`;
+const MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD =
+  '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
+  '              echo "::error::Asset phase found duplicate draft/published releases for $TAG"\n' +
+  "              exit 1\n" +
+  "            fi";
+const MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD =
+  '            if [ "$release_attempt" -eq 12 ]; then\n' +
+  '              echo "::error::Release $TAG did not become visible after 12 bounded checks"\n' +
+  "              exit 1\n" +
+  "            fi";
+const MCPB_RELEASE_VISIBILITY_WAIT =
+  '            echo "::warning::Release $TAG is not visible yet (attempt $release_attempt/12); retrying in 5s"\n' +
+  "            sleep 5";
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -877,16 +893,31 @@ function mcpbContractProblems(inputs: {
     "          assert_remote_tag_identity\n          FINAL_PRERELEASE=$(printf '%s' \"$RELEASE_JSON\" | jq -r '.prerelease')";
   const assetPhaseIndex = inputs.release.indexOf("- name: Upload Basic MCPB asset, checksum, and provenance");
   const visibilityPollIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_POLL);
+  const visibilityRefreshIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_REFRESH, visibilityPollIndex);
+  const visibilityCountIndex = inputs.release.indexOf("RELEASE_COUNT=$(printf", visibilityRefreshIndex);
+  const visibilityDuplicateIndex = inputs.release.indexOf(
+    MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD,
+    visibilityCountIndex
+  );
   const visibilityBreakIndex = inputs.release.indexOf(
     'if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi',
-    visibilityPollIndex
+    visibilityDuplicateIndex
   );
-  const assetReleaseJsonIndex = inputs.release.indexOf("RELEASE_JSON=$(printf", visibilityBreakIndex);
+  const visibilityTimeoutIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD, visibilityBreakIndex);
+  const visibilityWaitIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_WAIT, visibilityTimeoutIndex);
+  const visibilityDoneIndex = inputs.release.indexOf("          done", visibilityWaitIndex);
+  const assetReleaseJsonIndex = inputs.release.indexOf("RELEASE_JSON=$(printf", visibilityDoneIndex);
   const visibilityPollIsSafe =
     assetPhaseIndex >= 0 &&
     visibilityPollIndex > assetPhaseIndex &&
-    visibilityBreakIndex > visibilityPollIndex &&
-    assetReleaseJsonIndex > visibilityBreakIndex;
+    visibilityRefreshIndex > visibilityPollIndex &&
+    visibilityCountIndex > visibilityRefreshIndex &&
+    visibilityDuplicateIndex > visibilityCountIndex &&
+    visibilityBreakIndex > visibilityDuplicateIndex &&
+    visibilityTimeoutIndex > visibilityBreakIndex &&
+    visibilityWaitIndex > visibilityTimeoutIndex &&
+    visibilityDoneIndex > visibilityWaitIndex &&
+    assetReleaseJsonIndex > visibilityDoneIndex;
   const freshUploadClassifierIndex = inputs.release.indexOf(freshUploadClassifier);
   const freshUploadRefusalIndex = inputs.release.indexOf(freshUploadRefusal);
   const freshUploadTagProofIndex = inputs.release.indexOf(freshUploadTagProof);
@@ -936,9 +967,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP"') ||
     !inputs.release.includes("Downloaded Actions artifact digest differs from the selected API identity") ||
     !visibilityPollIsSafe ||
-    !inputs.release.includes('if [ "$release_attempt" -eq 12 ]; then') ||
-    !inputs.release.includes("Release $TAG did not become visible after 12 bounded checks") ||
-    !inputs.release.includes("retrying in 5s") ||
+    !inputs.release.includes(MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH) ||
     !inputs.release.includes('import { portableArchivePath } from "./scripts/lib/mcpb-safety.mjs"') ||
     !inputs.release.includes('echo "build_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"') ||
     !inputs.release.includes('CI_RUN_ID=""') ||
@@ -1563,17 +1592,29 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    expect(
-      mcpbContractProblems({
-        ...mcpbInputs,
-        release: mcpbInputs.release.replace(
-          MCPB_RELEASE_VISIBILITY_POLL,
-          MCPB_RELEASE_VISIBILITY_POLL.replace("12", "1")
-        )
-      })
-    ).toContain(
-      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-    );
+    for (const weakenedVisibilityPoll of [
+      mcpbInputs.release.replace(MCPB_RELEASE_VISIBILITY_POLL, MCPB_RELEASE_VISIBILITY_POLL.replace("12", "1")),
+      mcpbInputs.release.replace(
+        MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH,
+        `${MCPB_RELEASE_VISIBILITY_POLL}\n            RELEASE_PAGES=$(printf`
+      ),
+      mcpbInputs.release.replace(
+        MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD,
+        MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD.replace("-gt 1", "-lt 0")
+      ),
+      mcpbInputs.release.replace(
+        MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD,
+        MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD.replace("exit 1", "true")
+      ),
+      mcpbInputs.release.replace(
+        MCPB_RELEASE_VISIBILITY_WAIT,
+        MCPB_RELEASE_VISIBILITY_WAIT.replace("sleep 5", "true")
+      )
+    ]) {
+      expect(mcpbContractProblems({ ...mcpbInputs, release: weakenedVisibilityPoll })).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
     expect(
       mcpbContractProblems({
         ...mcpbInputs,

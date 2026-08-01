@@ -510,8 +510,7 @@ function frozenEmbedCapabilityViolations(source: string): string[] {
   const frozenText = frozenReturn?.getText(sourceFile).replace(/\s+/g, "");
   if (
     embedDbFileProperties.length !== 1 ||
-    frozenText !==
-      "opts.embeddingIndex===false?null:opts.watch?startupEmbedDbAvailable?startupEmbedFile:null:undefined"
+    frozenText !== "opts.embeddingIndex===false?null:opts.watch?startupEmbedDbAvailable?startupEmbedFile:null:undefined"
   ) {
     violations.push("prepareServerDeps must return the isolated and frozen embedDbFile capability");
   }

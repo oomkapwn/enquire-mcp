@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // Build the Basic read-only MCPB on a disposable CI runner.
 //
 // The upstream 2.1.2 packer writes the current time into ZIP metadata, so the
@@ -6,8 +7,8 @@
 // record a sorted SHA-256 inventory of every logical bundle file; release
 // automation records the final artifact SHA separately.
 
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   constants,
   copyFileSync,
@@ -15,8 +16,8 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -481,7 +482,10 @@ export async function buildBasicMcpb() {
 
   // Render a square brand icon remotely. The source stays inspectable SVG;
   // the official v0.3 validator requires the bundled icon itself to be PNG.
-  await sharp(path.join(ROOT, "mcpb", "icon.svg")).resize(512, 512).png().toFile(path.join(STAGE, "icon.png"));
+  await sharp(path.join(ROOT, "mcpb", "icon.svg"))
+    .resize(512, 512)
+    .png()
+    .toFile(path.join(STAGE, "icon.png"));
 
   // Safety-walk the complete source tree, but derive the logical inventory
   // from a first official-pack pass. mcpb 2.1.2 intentionally excludes files

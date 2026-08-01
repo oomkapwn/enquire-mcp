@@ -2000,9 +2000,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       promptCount: manifest.prompts?.length ?? -1,
       nodeFloor: manifest.compatibility?.runtimes?.node as string
     };
-    const surfaces: ReadonlyArray<
-      Readonly<{ file: string; expectations: McpbDocumentationExpectations }>
-    > = [
+    const surfaces: ReadonlyArray<Readonly<{ file: string; expectations: McpbDocumentationExpectations }>> = [
       ...PUBLIC_READMES.map((file) => ({
         file,
         expectations: { assetFilename: true, releaseTag: true }

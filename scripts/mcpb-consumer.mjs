@@ -11,8 +11,8 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -26,6 +26,8 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { nativeBinaryReason, portableArchiveKey, portableArchivePath } from "./lib/mcpb-safety.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const INSTALL_ROOT_PLACEHOLDER = `\${__dirname}`;
+const VAULT_ROOT_PLACEHOLDER = `\${user_config.vault}`;
 export const SCRATCH_MARKER = ".enquire-mcpb-consumer-owned-v1";
 export const BASIC_TOOLS = [
   "obsidian_frontmatter_get",
@@ -200,7 +202,7 @@ function snapshotRegularFile(target) {
 
 function resolveManifestArgs(args, installRoot, vaultRoot) {
   return args.map((value) =>
-    value.replace("${__dirname}", installRoot).replace("${user_config.vault}", vaultRoot)
+    value.replace(INSTALL_ROOT_PLACEHOLDER, installRoot).replace(VAULT_ROOT_PLACEHOLDER, vaultRoot)
   );
 }
 
@@ -267,20 +269,21 @@ export async function verifyBasicMcpb(artifact) {
 
   const args = manifest.server.mcp_config.args;
   assert.deepEqual(args.slice(0, 8), [
-    "${__dirname}/server/dist/index.js",
+    `${INSTALL_ROOT_PLACEHOLDER}/server/dist/index.js`,
     "serve",
     "--vault",
-    "${user_config.vault}",
+    VAULT_ROOT_PLACEHOLDER,
     "--no-prompts",
     "--no-embedding-index",
     "--diagnostic-search-tools",
     "--enabled-tools"
   ]);
-  assert.deepEqual(args.slice(8).sort((left, right) => left.localeCompare(right)), BASIC_TOOLS);
+  assert.deepEqual(
+    args.slice(8).sort((left, right) => left.localeCompare(right)),
+    BASIC_TOOLS
+  );
   assert.ok(
-    !args.some((value) =>
-      /--enable-write|--feedback-weight|--watch|--persistent-index|--include-pdfs/.test(value)
-    )
+    !args.some((value) => /--enable-write|--feedback-weight|--watch|--persistent-index|--include-pdfs/.test(value))
   );
 
   const expectedEntries = new Set(["content-manifest.json", ...content.files.map((entry) => entry.path)]);
@@ -471,7 +474,7 @@ export async function verifyBasicMcpb(artifact) {
     });
     const client = new Client({ name: "enquire-mcpb-consumer", version: "1.0.0" });
     let connected = false;
-    let closeError;
+    let operationError;
     try {
       await client.connect(transport);
       connected = true;
@@ -537,8 +540,8 @@ export async function verifyBasicMcpb(artifact) {
         },
         {
           name: "obsidian_search",
-          arguments: { query: "basic search target", limit: 5 },
-          expected: /Projects\/Hermes\.md|MCPB-basic-search-target/
+          arguments: { query: "MCPB-basic-search-target", limit: 5 },
+          expected: /"signals_used":\s*\[\s*"tfidf"\s*\][\s\S]*"path":\s*"Projects\/Hermes\.md"/
         },
         {
           name: "obsidian_stale_notes",
@@ -558,6 +561,15 @@ export async function verifyBasicMcpb(artifact) {
         assert.match(textFromToolResult(result), call.expected, `${call.name}: response contract drift`);
       }
 
+      const noMatchSearch = await client.callTool({
+        name: "obsidian_search",
+        arguments: { query: "MCPB-definitely-absent-search-sentinel", limit: 5 }
+      });
+      assert.notEqual(noMatchSearch.isError, true, "obsidian_search: negative-control call failed");
+      const noMatchText = textFromToolResult(noMatchSearch);
+      assert.match(noMatchText, /"matches":\s*\[\s*\]/, "obsidian_search: absent-token query returned matches");
+      assert.ok(!noMatchText.includes("Projects/Hermes.md"), "obsidian_search: negative control leaked a false hit");
+
       const resource = await client.readResource({ uri: "obsidian://note/Projects/Hermes.md" });
       assert.match(JSON.stringify(resource.contents), /MCPB-basic-search-target/);
 
@@ -574,13 +586,18 @@ export async function verifyBasicMcpb(artifact) {
       );
       const live = await client.callTool({ name: "obsidian_read_note", arguments: { path: "Projects/Hermes.md" } });
       assert.match(textFromToolResult(live), /MCPB-basic-search-target/, "server died after negative controls");
-    } finally {
-      try {
-        if (connected) await client.close();
-        else await client.close().catch(() => {});
-      } catch (error) {
-        closeError = error;
-      }
+    } catch (error) {
+      operationError = error;
+    }
+
+    let cleanupError;
+    try {
+      if (connected) await client.close();
+      else await client.close().catch(() => {});
+    } catch (error) {
+      cleanupError = error;
+    }
+    try {
       assert.deepEqual(
         snapshotRegularTree(vaultRoot),
         vaultBefore,
@@ -593,8 +610,16 @@ export async function verifyBasicMcpb(artifact) {
         cacheBefore,
         "Basic session changed isolated cache sentinel paths"
       );
-      if (closeError) throw closeError;
+    } catch (error) {
+      cleanupError = cleanupError
+        ? new AggregateError([cleanupError, error], "Basic MCPB close and state-integrity checks both failed")
+        : error;
     }
+    if (operationError && cleanupError) {
+      throw new AggregateError([operationError, cleanupError], "Basic MCPB operation and cleanup both failed");
+    }
+    if (operationError) throw operationError;
+    if (cleanupError) throw cleanupError;
   } finally {
     removeOwnedScratch(scratch);
   }

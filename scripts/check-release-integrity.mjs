@@ -79,8 +79,7 @@ export function assertMcpbAssetVersion(version) {
 export function assertChannelVersionAdvance(candidate, current, channel) {
   const parse = (value, label) => {
     if (typeof value !== "string") throw new Error(`${label} version is missing`);
-    const match =
-      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(value);
+    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(value);
     if (!match) throw new Error(`${label} must be strict SemVer without build metadata`);
     const prerelease = match[4]?.split(".") ?? [];
     if (prerelease.some((identifier) => /^\d+$/u.test(identifier) && identifier.length > 1 && identifier[0] === "0")) {
@@ -326,19 +325,14 @@ export function evaluateMcpbCandidateRun(input) {
   const jobs = Array.isArray(input?.jobs) ? input.jobs : [];
   const artifacts = Array.isArray(input?.artifacts) ? input.artifacts : [];
   const latestNamedJob = (name) => {
-    const named = jobs.filter(
-      (job) => job?.name === name && Number.isInteger(job?.run_attempt) && job.run_attempt > 0
-    );
+    const named = jobs.filter((job) => job?.name === name && Number.isInteger(job?.run_attempt) && job.run_attempt > 0);
     const latestAttempt = named.length > 0 ? Math.max(...named.map((job) => job.run_attempt)) : 0;
     const latest = named.filter((job) => job.run_attempt === latestAttempt);
     if (latest.length > 1) throw new Error(`duplicate latest-attempt ${name} jobs`);
     return latest[0];
   };
   const aggregate = latestNamedJob("mcpb-basic");
-  if (
-    aggregate?.status !== "completed" ||
-    aggregate?.conclusion !== "success"
-  ) {
+  if (aggregate?.status !== "completed" || aggregate?.conclusion !== "success") {
     return { state: "skip" };
   }
   const producer = latestNamedJob("mcpb-basic-package");

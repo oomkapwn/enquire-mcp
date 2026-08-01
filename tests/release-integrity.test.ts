@@ -13,8 +13,6 @@ import {
   evaluateReleaseChecks,
   REQUIRED_RELEASE_CHECKS
 } from "../scripts/check-release-integrity.mjs";
-// @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.
-import { createOwnedScratch, removeOwnedScratch } from "../scripts/mcpb-consumer.mjs";
 // @ts-expect-error — .mjs safety helpers have no declaration file; the release invariant exercises their pure contract.
 import {
   nativeBinaryReason,
@@ -22,6 +20,8 @@ import {
   portableArchivePath,
   resolveRequiredDependencyRefs
 } from "../scripts/lib/mcpb-safety.mjs";
+// @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.
+import { createOwnedScratch, removeOwnedScratch } from "../scripts/mcpb-consumer.mjs";
 
 interface CheckRun {
   id: number;
@@ -640,6 +640,14 @@ const BASIC_MCPB_TOOLS = [
   "obsidian_stats"
 ].sort();
 
+const MCPB_HYBRID_POSITIVE_ASSERTION =
+  'expected: /"signals_used":\\s*\\[\\s*"tfidf"\\s*\\][\\s\\S]*"path":\\s*"Projects\\/Hermes\\.md"/';
+const MCPB_HYBRID_ABSENT_QUERY = 'arguments: { query: "MCPB-definitely-absent-search-sentinel", limit: 5 }';
+const MCPB_HYBRID_NEGATIVE_ASSERTION =
+  'assert.match(noMatchText, /"matches":\\s*\\[\\s*\\]/, "obsidian_search: absent-token query returned matches")';
+const MCPB_HYBRID_FALSE_HIT_ASSERTION =
+  '!noMatchText.includes("Projects/Hermes.md"), "obsidian_search: negative control leaked a false hit"';
+
 function mcpbContractProblems(inputs: {
   manifest: string;
   cli: string;
@@ -724,10 +732,10 @@ function mcpbContractProblems(inputs: {
     problems.push("MCPB Basic must expose exactly 13 approved read-only tools and zero prompts");
   }
   const expectedPrefix = [
-    "${__dirname}/server/dist/index.js",
+    `\${__dirname}/server/dist/index.js`,
     "serve",
     "--vault",
-    "${user_config.vault}",
+    `\${user_config.vault}`,
     "--no-prompts",
     "--no-embedding-index",
     "--diagnostic-search-tools",
@@ -760,8 +768,8 @@ function mcpbContractProblems(inputs: {
   const overrides = yamlRecord(pkg.overrides);
   const lockPackages = yamlRecord(lock.packages);
   const lockedTmp = yamlRecord(lockPackages?.["node_modules/tmp"]);
-  if (overrides?.tmp !== "0.2.6" || lockedTmp?.version !== "0.2.6" || lockPackages?.["node_modules/os-tmpdir"]) {
-    problems.push("MCPB dev graph must override tmp to patched 0.2.6 without the orphaned legacy helper");
+  if (overrides?.tmp !== "0.2.7" || lockedTmp?.version !== "0.2.7" || lockPackages?.["node_modules/os-tmpdir"]) {
+    problems.push("MCPB dev graph must override tmp to patched 0.2.7 without the orphaned legacy helper");
   }
   const scripts = yamlRecord(pkg.scripts);
   if (
@@ -823,7 +831,7 @@ function mcpbContractProblems(inputs: {
     !inputs.consumer.includes("traversal must be explicitly refused") ||
     !inputs.consumer.includes("positive consumer calls must cover every Basic tool exactly once") ||
     !inputs.consumer.includes("Basic session changed vault paths, physical identities, bytes, modes, or timestamps") ||
-    !inputs.consumer.includes('type: "directory"') ||
+    !inputs.consumer.includes('manifest.user_config.vault.type, "directory"') ||
     !inputs.consumer.includes("dev: stat.dev") ||
     !inputs.consumer.includes("ino: stat.ino") ||
     !inputs.consumer.includes("ctime_ms: stat.ctimeMs") ||
@@ -842,7 +850,10 @@ function mcpbContractProblems(inputs: {
     !inputs.consumer.includes("stranded embedding index and activation guard") ||
     !inputs.consumer.includes("Basic session changed isolated cache sentinel paths") ||
     !inputs.consumer.includes("XDG_CACHE_HOME") ||
-    !inputs.consumer.includes("/Projects\\/Hermes\\.md|MCPB-basic-search-target/") ||
+    !inputs.consumer.includes(MCPB_HYBRID_POSITIVE_ASSERTION) ||
+    !inputs.consumer.includes(MCPB_HYBRID_ABSENT_QUERY) ||
+    !inputs.consumer.includes(MCPB_HYBRID_NEGATIVE_ASSERTION) ||
+    !inputs.consumer.includes(MCPB_HYBRID_FALSE_HIT_ASSERTION) ||
     !inputs.consumer.includes("server died after negative controls")
   ) {
     problems.push(
@@ -908,11 +919,11 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('echo "build_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"') ||
     !inputs.release.includes('CI_RUN_ID=""') ||
     !inputs.release.includes('PROVENANCE_RUN_ID=""') ||
-    !inputs.release.includes('"${PINNED_RUN_ATTEMPT:--}"') ||
+    !inputs.release.includes(`"\${PINNED_RUN_ATTEMPT:--}"`) ||
     !inputs.release.includes('"$CANDIDATE_RUN_ID" != "$PROVENANCE_RUN_ID"') ||
     !inputs.release.includes("npm run mcpb:verify") ||
     !inputs.release.includes("Existing release provenance does not identify this source/artifact") ||
-    !inputs.integrity.includes("mcpb-basic-candidate-${producerAttempt}") ||
+    !inputs.integrity.includes(`mcpb-basic-candidate-\${producerAttempt}`) ||
     !inputs.release.includes('npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json') ||
     (inputs.release.match(/npm-state "\$SOURCE_SHA" "\$VERSION" "\$CHANNEL"/g) ?? []).length !== 3 ||
     !inputs.release.includes("authoritative not-found response") ||
@@ -937,11 +948,11 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("Published release $TAG is partial") ||
     !inputs.release.includes("Final release contains unexpected asset") ||
     !inputs.release.includes("Final release does not contain exactly one $NAME") ||
-    !inputs.release.includes('gh api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID"') ||
+    !inputs.release.includes(`gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`) ||
     !inputs.release.includes("group: release-publication") ||
     !inputs.release.includes("cancel-in-progress: false") ||
     !inputs.release.includes('CURRENT_UPLOAD_URL=$(printf \'%s\' "$CURRENT_RELEASE" | jq -r \'.upload_url\')') ||
-    !inputs.release.includes("https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets") ||
+    !inputs.release.includes(`https://uploads.github.com/repos/\${{ github.repository }}/releases/$RELEASE_ID/assets`) ||
     !inputs.release.includes('ENCODED_NAME=$(printf \'%s\' "$NAME" | jq -sRr @uri)') ||
     !inputs.release.includes(uploadPost) ||
     !inputs.release.includes('--data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME"') ||
@@ -949,7 +960,7 @@ function mcpbContractProblems(inputs: {
     !freshUploadOrderIsSafe ||
     !inputs.release.includes(publicationTagProof) ||
     !inputs.release.includes(finalPostconditionTagProof) ||
-    !inputs.release.includes('PUBLISH_RELEASE=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID")') ||
+    !inputs.release.includes(`PUBLISH_RELEASE=$(gh api "repos/\${{ github.repository }}/releases/$RELEASE_ID")`) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 2 ||
     inputs.release.lastIndexOf("node scripts/check-release-integrity.mjs channel-advance") >
       inputs.release.indexOf("npm publish --provenance") ||
@@ -973,7 +984,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("build_workflow_run:") ||
     !inputs.release.includes("process.env.BUILD_CI_RUN_ID") ||
     inputs.release.includes("release_workflow_run:") ||
-    !inputs.release.includes("release: `${process.env.GITHUB_SERVER_URL}") ||
+    !inputs.release.includes(`release: \`\${process.env.GITHUB_SERVER_URL}`) ||
     !inputs.release.includes("checksum:") ||
     !inputs.release.includes("content_manifest:") ||
     !inputs.release.includes("sbom:") ||
@@ -1415,7 +1426,32 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace('type: "directory"', 'type: "entry"')
+        consumer: mcpbInputs.consumer.replace(
+          MCPB_HYBRID_POSITIVE_ASSERTION,
+          "expected: /Projects\\/Hermes\\.md|MCPB-basic-search-target/"
+        )
+      })
+    ).toContain(
+      "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        consumer: mcpbInputs.consumer.replace(
+          MCPB_HYBRID_NEGATIVE_ASSERTION,
+          'assert.match(noMatchText, /Projects\\/Hermes\\.md/, "obsidian_search: absent-token query returned matches")'
+        )
+      })
+    ).toContain(
+      "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        consumer: mcpbInputs.consumer.replace(
+          'manifest.user_config.vault.type, "directory"',
+          'manifest.user_config.vault.type, "entry"'
+        )
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1451,7 +1487,7 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         integrity: mcpbInputs.integrity.replace(
-          "mcpb-basic-candidate-${producerAttempt}",
+          `mcpb-basic-candidate-\${producerAttempt}`,
           "mcpb-basic-candidate-unbound"
         )
       })
@@ -1549,7 +1585,7 @@ describe("release identity and exact required-check gate", () => {
     );
     const latestOnlyChannelGuard = mcpbInputs.release.replace(
       '            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n',
-      '            fi\n            if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n' +
+      `            fi\n            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
         '              node scripts/check-release-integrity.mjs channel-advance \\\n' +
         '                "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
         "            fi\n"
@@ -1597,8 +1633,8 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         release: mcpbInputs.release.replace(
-          '"repos/${{ github.repository }}/releases?per_page=100"',
-          '"repos/${{ github.repository }}/releases/tags/$TAG"'
+          `"repos/\${{ github.repository }}/releases?per_page=100"`,
+          `"repos/\${{ github.repository }}/releases/tags/$TAG"`
         )
       })
     ).toContain(
@@ -1626,9 +1662,9 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        packageJson: mcpbInputs.packageJson.replace('"tmp": "0.2.6"', '"tmp": "0.0.33"')
+        packageJson: mcpbInputs.packageJson.replace('"tmp": "0.2.7"', '"tmp": "0.0.33"')
       })
-    ).toContain("MCPB dev graph must override tmp to patched 0.2.6 without the orphaned legacy helper");
+    ).toContain("MCPB dev graph must override tmp to patched 0.2.7 without the orphaned legacy helper");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,

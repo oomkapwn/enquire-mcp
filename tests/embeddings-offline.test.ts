@@ -79,7 +79,11 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       const cache = path.join(scratch, "cache");
       await fs.mkdir(vault);
       process.env.XDG_CACHE_HOME = cache;
-      const embedFile = defaultIndexFile(vault).replace(/\.fts5\.db$/u, ".embed.db");
+      // Vault canonicalizes its root with realpath before deriving cache
+      // identities. macOS exposes the temp root through both /var and
+      // /private/var, so hash the same canonical path the server will use.
+      const canonicalVault = await fs.realpath(vault);
+      const embedFile = defaultIndexFile(canonicalVault).replace(/\.fts5\.db$/u, ".embed.db");
       await fs.mkdir(path.dirname(embedFile), { recursive: true });
       await fs.writeFile(embedFile, "stranded full-edition embedding index");
       await armWatcherActivationGuard(embedFile);

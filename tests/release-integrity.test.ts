@@ -652,8 +652,7 @@ const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
 const MCPB_RELEASE_VISIBILITY_POLL =
   "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";
 const MCPB_RELEASE_VISIBILITY_REFRESH = "            RELEASE_PAGES=$(gh api --paginate --slurp";
-const MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH =
-  `${MCPB_RELEASE_VISIBILITY_POLL}\n${MCPB_RELEASE_VISIBILITY_REFRESH}`;
+const MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH = `${MCPB_RELEASE_VISIBILITY_POLL}\n${MCPB_RELEASE_VISIBILITY_REFRESH}`;
 const MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD =
   '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
   '              echo "::error::Asset phase found duplicate draft/published releases for $TAG"\n' +
@@ -1606,10 +1605,7 @@ describe("release identity and exact required-check gate", () => {
         MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD,
         MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD.replace("exit 1", "true")
       ),
-      mcpbInputs.release.replace(
-        MCPB_RELEASE_VISIBILITY_WAIT,
-        MCPB_RELEASE_VISIBILITY_WAIT.replace("sleep 5", "true")
-      )
+      mcpbInputs.release.replace(MCPB_RELEASE_VISIBILITY_WAIT, MCPB_RELEASE_VISIBILITY_WAIT.replace("sleep 5", "true"))
     ]) {
       expect(mcpbContractProblems({ ...mcpbInputs, release: weakenedVisibilityPoll })).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

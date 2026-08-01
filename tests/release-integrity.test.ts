@@ -791,7 +791,7 @@ function mcpbContractProblems(inputs: {
     !inputs.build.includes("archive bytes include upstream pack-time mtime") ||
     !inputs.build.includes('[packerCli, "pack", STAGE, artifact]') ||
     !inputs.build.includes('writeFileSync(path.join(STAGE, "sbom.cdx.json")') ||
-    !inputs.build.includes('writeFileSync(\n    path.join(STAGE, "third-party-licenses.json"),') ||
+    !inputs.build.includes('writeFileSync(path.join(STAGE, "third-party-licenses.json")') ||
     !inputs.build.includes("scanInstalledPackages") ||
     !inputs.build.includes("resolveRequiredDependencyRefs") ||
     !inputs.build.includes("nativeBinaryReason") ||
@@ -1416,10 +1416,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace(
-          '["obsidian://note/{+notePath}"]',
-          '["obsidian://note/{notePath}"]'
-        )
+        consumer: mcpbInputs.consumer.replace('["obsidian://note/{+notePath}"]', '["obsidian://note/{notePath}"]')
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1692,6 +1689,17 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         build: mcpbInputs.build.replace('path.join(STAGE, "sbom.cdx.json")', 'path.join(STAGE, "sbom-disabled.json")')
+      })
+    ).toContain(
+      "MCPB builder must pin upstream, omit unsafe feature deps, two-pass inventory official bytes, ship transparency records, and guard owned cleanup"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        build: mcpbInputs.build.replace(
+          'path.join(STAGE, "third-party-licenses.json")',
+          'path.join(STAGE, "third-party-disabled.json")'
+        )
       })
     ).toContain(
       "MCPB builder must pin upstream, omit unsafe feature deps, two-pass inventory official bytes, ship transparency records, and guard owned cleanup"

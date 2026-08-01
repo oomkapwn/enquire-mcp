@@ -3,9 +3,9 @@ import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs release script has no declaration file; tests exercise its pure core.
 import {
+  assertChannelVersionAdvance,
   assertMcpbAssetVersion,
   assertReleaseTagMatchesVersion,
-  assertChannelVersionAdvance,
   candidateRunIds,
   evaluateMcpbCandidateRun,
   evaluateMcpbReleaseState,
@@ -351,9 +351,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     const jobEnv = yamlRecord(job.env);
     const jobSteps = yamlSteps(job);
     const isMcpb = id === "mcpb-basic";
-    const setup = jobSteps.find(
-      (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
-    );
+    const setup = jobSteps.find((step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@"));
     const install = namedStep(jobSteps, "Install deps (npm ci with retry)");
     if (
       job.name !== `${id} (\${{ matrix.label }})` ||
@@ -443,10 +441,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     );
     const install = namedStep(packageSteps, "Install deps (npm ci with retry)");
     const artifactIdentity = namedStep(packageSteps, "Bind artifact identity to the producer attempt");
-    const exportStep = namedStep(
-      packageSteps,
-      "Export inspectable canonical MCPB candidate and transparency records"
-    );
+    const exportStep = namedStep(packageSteps, "Export inspectable canonical MCPB candidate and transparency records");
     const exportWith = yamlRecord(exportStep?.with);
     const exportPath = typeof exportWith?.path === "string" ? exportWith.path : "";
     if (
@@ -721,7 +716,9 @@ function mcpbContractProblems(inputs: {
     releaseStateIndices.some((index) => index < 0) ||
     releaseStateIndices.some((index, position) => position > 0 && index <= (releaseStateIndices[position - 1] ?? -1))
   ) {
-    problems.push("release state machine must preflight all deterministic assets before npm, then draft/upload/publish");
+    problems.push(
+      "release state machine must preflight all deterministic assets before npm, then draft/upload/publish"
+    );
   }
   if (
     JSON.stringify(toolNames) !== JSON.stringify(BASIC_MCPB_TOOLS) ||
@@ -815,7 +812,8 @@ function mcpbContractProblems(inputs: {
     !inputs.consumer.includes('from "@modelcontextprotocol/client"') ||
     !inputs.consumer.includes('from "@modelcontextprotocol/client/stdio"') ||
     !inputs.consumer.includes('resource.uri === "obsidian://vault/info"') ||
-    !inputs.consumer.includes('template.uriTemplate), ["obsidian://note/{+notePath}"]') ||
+    !inputs.consumer.includes("templates.resourceTemplates.map((template) => template.uriTemplate)") ||
+    !inputs.consumer.includes('["obsidian://note/{+notePath}"]') ||
     !inputs.consumer.includes("optional dependency leaked") ||
     !inputs.consumer.includes('entries.get("sbom.cdx.json")') ||
     !inputs.consumer.includes('entries.get("third-party-licenses.json")') ||
@@ -860,9 +858,8 @@ function mcpbContractProblems(inputs: {
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
     );
   }
-  const freshUploadClassifier = 'CURRENT_ACTION=$(printf \'%s\' "$CURRENT_STATE" | release_state | jq -r \'.action\')';
-  const freshUploadRefusal =
-    'if [ "$CURRENT_ACTION" != "resume_draft" ] || [ "$CURRENT_NAME_COUNT" -ne 0 ]; then';
+  const freshUploadClassifier = "CURRENT_ACTION=$(printf '%s' \"$CURRENT_STATE\" | release_state | jq -r '.action')";
+  const freshUploadRefusal = 'if [ "$CURRENT_ACTION" != "resume_draft" ] || [ "$CURRENT_NAME_COUNT" -ne 0 ]; then';
   const uploadPost = "curl --fail-with-body --silent --show-error --request POST";
   const freshUploadTagProof = `              assert_remote_tag_identity\n              ${uploadPost}`;
   const publicationTagProof =
@@ -884,7 +881,9 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("actions: read") ||
     !inputs.release.includes("checks: read") ||
     !inputs.release.includes('node-version: "22.13.0"') ||
-    !inputs.release.includes("actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SOURCE_SHA&per_page=100") ||
+    !inputs.release.includes(
+      "actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SOURCE_SHA&per_page=100"
+    ) ||
     inputs.release.includes("--status success") ||
     !inputs.integrity.includes("export function evaluateNpmPublication") ||
     !inputs.integrity.includes("export function evaluateMcpbReleaseState") ||
@@ -951,9 +950,11 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes(`gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`) ||
     !inputs.release.includes("group: release-publication") ||
     !inputs.release.includes("cancel-in-progress: false") ||
-    !inputs.release.includes('CURRENT_UPLOAD_URL=$(printf \'%s\' "$CURRENT_RELEASE" | jq -r \'.upload_url\')') ||
-    !inputs.release.includes(`https://uploads.github.com/repos/\${{ github.repository }}/releases/$RELEASE_ID/assets`) ||
-    !inputs.release.includes('ENCODED_NAME=$(printf \'%s\' "$NAME" | jq -sRr @uri)') ||
+    !inputs.release.includes("CURRENT_UPLOAD_URL=$(printf '%s' \"$CURRENT_RELEASE\" | jq -r '.upload_url')") ||
+    !inputs.release.includes(
+      `https://uploads.github.com/repos/\${{ github.repository }}/releases/$RELEASE_ID/assets`
+    ) ||
+    !inputs.release.includes("ENCODED_NAME=$(printf '%s' \"$NAME\" | jq -sRr @uri)") ||
     !inputs.release.includes(uploadPost) ||
     !inputs.release.includes('--data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME"') ||
     inputs.release.includes("--hostname uploads.github.com") ||
@@ -975,7 +976,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('"$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION"') ||
     !inputs.release.includes('"$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION"') ||
     !inputs.release.includes(
-      '            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n'
+      "            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n"
     ) ||
     (inputs.release.match(/cmp -s "\$LOCAL_ASSET"/g) ?? []).length !== 3 ||
     (inputs.release.includes("gh release upload") && inputs.release.includes("--clobber")) ||
@@ -1145,12 +1146,7 @@ describe("release identity and exact required-check gate", () => {
       )
     ).toEqual({ action: "reuse_superseded", channelVersion: "4.0.0-rc.3" });
     expect(() =>
-      evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.1" },
-        "source",
-        "4.0.0",
-        "latest"
-      )
+      evaluateNpmPublication({ exists: true, gitHead: "source", channelVersion: "4.0.1" }, "source", "4.0.0", "latest")
     ).toThrow(/dist-tag/);
     expect(() =>
       evaluateNpmPublication(
@@ -1263,10 +1259,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [
-          ...candidate.jobs,
-          { name: "mcpb-basic", run_attempt: 3, status: "completed", conclusion: "failure" }
-        ]
+        jobs: [...candidate.jobs, { name: "mcpb-basic", run_attempt: 3, status: "completed", conclusion: "failure" }]
       })
     ).toEqual({ state: "skip" });
     expect(
@@ -1337,10 +1330,7 @@ describe("release identity and exact required-check gate", () => {
       )
     ).toEqual(["pkg:npm/present@1.0.0"]);
     expect(() =>
-      resolveRequiredDependencyRefs(
-        { name: "root", version: "1.0.0", dependencies: { missing: "1.0.0" } },
-        () => null
-      )
+      resolveRequiredDependencyRefs({ name: "root", version: "1.0.0", dependencies: { missing: "1.0.0" } }, () => null)
     ).toThrow(/could not resolve required dependency missing/);
 
     const ownedScratch = createOwnedScratch();
@@ -1419,6 +1409,17 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         consumer: mcpbInputs.consumer.replace("ownership token changed", "scratch cleanup continued")
+      })
+    ).toContain(
+      "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        consumer: mcpbInputs.consumer.replace(
+          '["obsidian://note/{+notePath}"]',
+          '["obsidian://note/{notePath}"]'
+        )
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1507,7 +1508,10 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace("https://uploads.github.com/repos/", "https://api.uploads.github.com/repos/")
+        release: mcpbInputs.release.replace(
+          "https://uploads.github.com/repos/",
+          "https://api.uploads.github.com/repos/"
+        )
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1539,8 +1543,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    const freshUploadClassifier =
-      'CURRENT_ACTION=$(printf \'%s\' "$CURRENT_STATE" | release_state | jq -r \'.action\')';
+    const freshUploadClassifier = "CURRENT_ACTION=$(printf '%s' \"$CURRENT_STATE\" | release_state | jq -r '.action')";
     const classifierAfterUpload = mcpbInputs.release
       .replace(freshUploadClassifier, 'CURRENT_ACTION="resume_draft"')
       .replace(
@@ -1574,7 +1577,10 @@ describe("release identity and exact required-check gate", () => {
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     const lateChannelGuard = mcpbInputs.release
-      .replace("node scripts/check-release-integrity.mjs channel-advance", "node scripts/check-release-integrity.mjs channel_disabled")
+      .replace(
+        "node scripts/check-release-integrity.mjs channel-advance",
+        "node scripts/check-release-integrity.mjs channel_disabled"
+      )
       .replace(
         'npm publish --provenance --access public --tag "$CHANNEL"',
         'npm publish --provenance --access public --tag "$CHANNEL"\n' +
@@ -1584,9 +1590,9 @@ describe("release identity and exact required-check gate", () => {
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     const latestOnlyChannelGuard = mcpbInputs.release.replace(
-      '            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n',
+      "            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n",
       `            fi\n            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
-        '              node scripts/check-release-integrity.mjs channel-advance \\\n' +
+        "              node scripts/check-release-integrity.mjs channel-advance \\\n" +
         '                "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
         "            fi\n"
     );
@@ -1596,10 +1602,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
-          'NPM_ACTION" = "reuse_superseded"',
-          'NPM_ACTION" = "reuse"'
-        )
+        release: mcpbInputs.release.replace('NPM_ACTION" = "reuse_superseded"', 'NPM_ACTION" = "reuse"')
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1965,7 +1968,9 @@ describe("release identity and exact required-check gate", () => {
         ),
         pkg.engines?.node
       )
-    ).toContain("mcpb-basic matrix must be exact-floor, unconditional, fail-capable, and consume the canonical artifact");
+    ).toContain(
+      "mcpb-basic matrix must be exact-floor, unconditional, fail-capable, and consume the canonical artifact"
+    );
     expect(
       nodeFloorCiProblems(ci.replace("    needs: mcpb-basic-matrix", "    needs: test"), pkg.engines?.node)
     ).toContain("mcpb-basic aggregate must fail closed over every matrix lane");

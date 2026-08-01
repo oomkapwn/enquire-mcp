@@ -409,11 +409,7 @@ function writeTransparencyArtifacts(runtimePackage) {
     })
   };
   writeFileSync(path.join(STAGE, "sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`, "utf8");
-  writeFileSync(
-    path.join(STAGE, "third-party-licenses.json"),
-    `${JSON.stringify(licenses, null, 2)}\n`,
-    "utf8"
-  );
+  writeFileSync(path.join(STAGE, "third-party-licenses.json"), `${JSON.stringify(licenses, null, 2)}\n`, "utf8");
 }
 
 export async function buildBasicMcpb() {

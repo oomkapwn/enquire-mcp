@@ -646,6 +646,9 @@ const MCPB_NPM_CHANNEL_ADVANCE =
   "            node scripts/check-release-integrity.mjs channel-advance \\\n" +
   '              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
   '            npm publish --provenance --access public --tag "$CHANNEL"';
+const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
+  '          gh api -H "Accept: application/vnd.github+json" \\\n' +
+  '            "repos/${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"';
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -915,7 +918,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("RUN_PAGES=$(gh api --paginate --slurp") ||
     !inputs.release.includes("JOB_PAGES=$(gh api --paginate --slurp") ||
     !inputs.release.includes("ARTIFACT_PAGES=$(gh api --paginate --slurp") ||
-    !inputs.release.includes("actions/artifacts/$PINNED_ARTIFACT_ID/zip") ||
+    !inputs.release.includes(MCPB_ACTIONS_ARTIFACT_DOWNLOAD) ||
     !inputs.release.includes('ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP"') ||
     !inputs.release.includes("Downloaded Actions artifact digest differs from the selected API identity") ||
     !inputs.release.includes('import { portableArchivePath } from "./scripts/lib/mcpb-safety.mjs"') ||
@@ -1527,6 +1530,20 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         release: mcpbInputs.release.replace("checks: read", "checks: none")
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: mcpbInputs.release.replace(
+          MCPB_ACTIONS_ARTIFACT_DOWNLOAD,
+          MCPB_ACTIONS_ARTIFACT_DOWNLOAD.replace(
+            "application/vnd.github+json",
+            "application/octet-stream"
+          )
+        )
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

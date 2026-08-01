@@ -269,7 +269,10 @@ jobs:
             exit 1
           fi
           CANDIDATE_ZIP="$RESUME_DIR/mcpb-basic-candidate-$PINNED_RUN_ATTEMPT-$PINNED_ARTIFACT_ID.zip"
-          gh api -H "Accept: application/octet-stream" \
+          # Actions artifact archives negotiate the GitHub JSON media type and
+          # redirect to the ZIP. `application/octet-stream` is reserved for the
+          # separate Releases asset endpoint and is rejected here with HTTP 415.
+          gh api -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"
           ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP" | awk '{print $1}')"
           if [ "$ACTUAL_ARTIFACT_DIGEST" != "$PINNED_ARTIFACT_DIGEST" ]; then

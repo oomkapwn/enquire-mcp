@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { load } from "js-yaml";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs release script has no declaration file; tests exercise its pure core.
 import {
@@ -74,6 +75,170 @@ function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
   return runBody(step)
     .split("\n")
     .some((line) => line.trim() === command);
+}
+
+type MutationReplacer = (match: string, offset: number, source: string) => string;
+
+/** Count non-overlapping mutation targets using the same semantics as string replacement. */
+function mutationMatchCount(source: string, needle: string): number {
+  if (needle.length === 0) throw new Error("mutation needle must not be empty");
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const match = source.indexOf(needle, offset);
+    if (match === -1) return count;
+    count++;
+    offset = match + needle.length;
+  }
+}
+
+/** Require an exact live source shape before applying a structural-test mutation. */
+function assertMutationPreconditions(source: string, needle: string, expectedOccurrences: number): void {
+  if (!Number.isSafeInteger(expectedOccurrences) || expectedOccurrences < 1) {
+    throw new Error("mutation expectedOccurrences must be a positive safe integer");
+  }
+  const actualOccurrences = mutationMatchCount(source, needle);
+  if (actualOccurrences !== expectedOccurrences) {
+    throw new Error(
+      `mutation needle ${String(needle)} expected ${expectedOccurrences} occurrence(s), found ${actualOccurrences}`
+    );
+  }
+}
+
+/** Expand the four substitution tokens supported when String.replace receives a string search value. */
+function expandLiteralReplacement(source: string, needle: string, replacement: string, offset: number): string {
+  let expanded = "";
+  for (let index = 0; index < replacement.length; index++) {
+    const current = replacement.charAt(index);
+    if (current !== "$") {
+      expanded += current;
+      continue;
+    }
+    const next = replacement.charAt(index + 1);
+    if (next === "$") expanded += "$";
+    else if (next === "&") expanded += needle;
+    else if (next === "`") expanded += source.slice(0, offset);
+    else if (next === "'") expanded += source.slice(offset + needle.length);
+    else {
+      expanded += "$";
+      continue;
+    }
+    index++;
+  }
+  return expanded;
+}
+
+/** Replace the first literal target after an exact census. */
+function replaceExactly(
+  source: string,
+  needle: string,
+  replacement: string | MutationReplacer,
+  expectedOccurrences = 1
+): string {
+  assertMutationPreconditions(source, needle, expectedOccurrences);
+  const offset = source.indexOf(needle);
+  const literalReplacement =
+    typeof replacement === "string"
+      ? expandLiteralReplacement(source, needle, replacement, offset)
+      : String(replacement(needle, offset, source));
+  const mutated = source.slice(0, offset) + literalReplacement + source.slice(offset + needle.length);
+  if (mutated === source) throw new Error(`mutation needle ${String(needle)} did not change its source`);
+  return mutated;
+}
+
+/** Replace every target only after proving its exact current source count. */
+function replaceAllExactly(
+  source: string,
+  needle: string,
+  replacement: string | MutationReplacer,
+  expectedOccurrences = 1
+): string {
+  assertMutationPreconditions(source, needle, expectedOccurrences);
+  const fragments: string[] = [];
+  let cursor = 0;
+  while (true) {
+    const offset = source.indexOf(needle, cursor);
+    if (offset === -1) break;
+    fragments.push(source.slice(cursor, offset));
+    fragments.push(
+      typeof replacement === "string"
+        ? expandLiteralReplacement(source, needle, replacement, offset)
+        : String(replacement(needle, offset, source))
+    );
+    cursor = offset + needle.length;
+  }
+  fragments.push(source.slice(cursor));
+  const mutated = fragments.join("");
+  if (mutated === source) throw new Error(`mutation needle ${String(needle)} did not change its source`);
+  return mutated;
+}
+
+/**
+ * Keep every raw String.replace value access out of this release oracle.
+ * Literal mutations use the exact census helpers above instead.
+ */
+function rawMutationCallProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "release-integrity.test.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const problems: string[] = [];
+
+  function staticPropertyText(node: ts.Node | undefined): string | null {
+    let current = node;
+    while (current) {
+      if (ts.isComputedPropertyName(current)) current = current.expression;
+      else if (
+        ts.isParenthesizedExpression(current) ||
+        ts.isAsExpression(current) ||
+        ts.isTypeAssertionExpression(current) ||
+        ts.isNonNullExpression(current) ||
+        ts.isSatisfiesExpression(current)
+      ) {
+        current = current.expression;
+      } else break;
+    }
+    return current &&
+      (ts.isIdentifier(current) || ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
+      ? current.text
+      : null;
+  }
+
+  function isTypeOnlyAccess(node: ts.Node): boolean {
+    let current: ts.Node | undefined = node.parent;
+    while (current) {
+      if (ts.isTypeQueryNode(current)) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const propertyMethod = ts.isPropertyAccessExpression(node) ? staticPropertyText(node.name) : null;
+      const elementArgument = ts.isElementAccessExpression(node) ? node.argumentExpression : undefined;
+      const elementMethod = staticPropertyText(elementArgument);
+      const method = propertyMethod ?? elementMethod;
+      if ((method === "replace" || method === "replaceAll") && !isTypeOnlyAccess(node)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(`raw .${method}() mutation at ${position.line + 1}:${position.character + 1}`);
+      }
+    }
+    if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+      const boundProperty = staticPropertyText(node.propertyName ?? node.name);
+      if (boundProperty === "replace" || boundProperty === "replaceAll") {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(`raw .${boundProperty}() mutation at ${position.line + 1}:${position.character + 1}`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return problems;
 }
 
 function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
@@ -1108,6 +1273,90 @@ describe("release identity and exact required-check gate", () => {
   });
 
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
+    let replacementCallbackCalls = 0;
+    const countingReplacement: MutationReplacer = () => {
+      replacementCallbackCalls++;
+      return "omega";
+    };
+
+    expect(() => replaceExactly("alpha", "missing", countingReplacement)).toThrow(
+      /expected 1 occurrence\(s\), found 0/
+    );
+    expect(() => replaceExactly("current-shape", "stale-shape", "omega")).toThrow(
+      /expected 1 occurrence\(s\), found 0/
+    );
+    expect(() => replaceExactly("alpha alpha", "alpha", countingReplacement)).toThrow(
+      /expected 1 occurrence\(s\), found 2/
+    );
+    expect(() => replaceAllExactly("alpha", "missing", countingReplacement)).toThrow(
+      /expected 1 occurrence\(s\), found 0/
+    );
+    expect(() => replaceAllExactly("alpha alpha", "alpha", countingReplacement)).toThrow(
+      /expected 1 occurrence\(s\), found 2/
+    );
+    expect(replacementCallbackCalls).toBe(0);
+    expect(() => replaceExactly("alpha", "", "omega")).toThrow(/must not be empty/);
+    expect(() => replaceExactly("alpha", "alpha", "omega", 0)).toThrow(/positive safe integer/);
+    expect(() => replaceExactly("alpha", "alpha", "omega", 1.5)).toThrow(/positive safe integer/);
+    expect(() => replaceExactly("alpha", "alpha", "omega", Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      /positive safe integer/
+    );
+    expect(() => replaceExactly("alpha", "alpha", "alpha")).toThrow(/did not change its source/);
+    expect(() => replaceAllExactly("alpha", "alpha", "alpha")).toThrow(/did not change its source/);
+    expect(replaceExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega alpha");
+    expect(replaceAllExactly("alpha alpha", "alpha", "omega", 2)).toBe("omega omega");
+    expect(replaceExactly("left alpha right", "alpha", "$`|$&|$'|$$")).toBe("left left |alpha| right|$ right");
+    expect(replaceExactly("alpha", "alpha", "$1|$01|$<name>|$0")).toBe("$1|$01|$<name>|$0");
+    expect(replaceExactly("alpha", "alpha", () => "$&")).toBe("$&");
+    expect(() => replaceExactly("alpha", "alpha", "$&")).toThrow(/did not change its source/);
+    expect(
+      replaceExactly("alpha", "ph", (_match: string, offset: number, whole: string) => `PH@${offset}/${whole.length}`)
+    ).toBe("alPH@2/5a");
+    const literalReplacementOffsets: number[] = [];
+    expect(
+      replaceAllExactly(
+        "a-a",
+        "a",
+        (_match: string, offset: number) => {
+          literalReplacementOffsets.push(offset);
+          return "b";
+        },
+        2
+      )
+    ).toBe("b-b");
+    expect(literalReplacementOffsets).toEqual([0, 2]);
+    expect(replaceAllExactly("a-a", "a", "$`|$&|$'", 2)).toBe("|a|-a-a-|a|");
+
+    const oracleSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
+    expect(rawMutationCallProblems(oracleSource)).toEqual([]);
+    expect(rawMutationCallProblems("type Replacer = Parameters<typeof String.prototype.replace>[1];")).toEqual([]);
+    expect(rawMutationCallProblems('const weakened = workflow.replace("old", "new");')).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems('const weakened = workflow["replaceAll"]("old", "new");')).toEqual([
+      expect.stringMatching(/raw \.replaceAll\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems('const rawMutation = workflow[("replace")];')).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems("const rawMutation = workflow.replace;")).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems('const { ["replace"]: rawMutation } = workflow;')).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems("const { replace: rawMutation } = workflow;")).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(rawMutationCallProblems("const rawMutation = String.prototype.replace;")).toEqual([
+      expect.stringMatching(/raw \.replace\(\) mutation/)
+    ]);
+    expect(
+      rawMutationCallProblems(
+        'function replaceExactly(source: string): string { return source.replace("old", "new"); }'
+      )
+    ).toEqual([expect.stringMatching(/raw \.replace\(\) mutation/)]);
+
     const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     expect(workflow).toContain('node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"');
     expect(workflow).toContain("node scripts/check-release-integrity.mjs checks");
@@ -1115,7 +1364,7 @@ describe("release identity and exact required-check gate", () => {
     expect(workflow).not.toMatch(/TAG="\$\{\{/);
     const mirror = /REQUIRED="([^"]+)"/.exec(workflow)?.[1];
     expect(mirror, "release.yml must retain the public gate-count mirror").toBeTruthy();
-    expect((mirror ?? "").split("|").map((name) => name.replaceAll("\\(", "(").replaceAll("\\)", ")"))).toEqual(
+    expect((mirror ?? "").split("|").map((name) => name.split("\\(").join("(").split("\\)").join(")"))).toEqual(
       REQUIRED_RELEASE_CHECKS
     );
 
@@ -1398,47 +1647,48 @@ describe("release identity and exact required-check gate", () => {
 
     expect(
       remoteGateScriptProblems(
-        packageConsumer.replace("Object.keys(rootPackage.optionalDependencies ?? {})", '["better-sqlite3"]'),
+        replaceExactly(packageConsumer, "Object.keys(rootPackage.optionalDependencies ?? {})", '["better-sqlite3"]'),
         protocolConformance
       )
     ).toContain("package-consumer omit lane must derive the complete optional dependency inventory");
     expect(
       remoteGateScriptProblems(
         packageConsumer,
-        protocolConformance.replace("server was not live after traversal refusal", "traversal refusal finished")
+        replaceExactly(protocolConformance, "server was not live after traversal refusal", "traversal refusal finished")
       )
     ).toContain("protocol-conformance traversal negative must distinguish refusal from crash and prove liveness");
     expect(
       remoteGateScriptProblems(
         packageConsumer,
-        protocolConformance.replace(
+        replaceExactly(
+          protocolConformance,
           'inventory.resources.includes("obsidian://note/01_Projects/Hermes.md")',
           'inventory.resources.includes("obsidian://note/01_Projects%2FHermes.md")'
         )
       )
     ).toContain("protocol-conformance must pin slash-preserving note resource URIs on every host");
-    expect(releasePollProblems(workflow.replace("timeout-minutes: 90", "timeout-minutes: 15"))).toContain(
+    expect(releasePollProblems(replaceExactly(workflow, "timeout-minutes: 90", "timeout-minutes: 15"))).toContain(
       "release polling must outlive the blocking package-consumer matrix and leave publication headroom"
     );
-    expect(releasePollProblems(workflow.replace("  actions: read", "  actions: none"))).toContain(
+    expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none"))).toContain(
       "release must grant read-only Actions API access for the exact-SHA MCPB artifact"
     );
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        manifest: mcpbInputs.manifest.replace('"name": "obsidian_stats"', '"name": "obsidian_create_note"')
+        manifest: replaceExactly(mcpbInputs.manifest, '"name": "obsidian_stats"', '"name": "obsidian_create_note"')
       })
     ).toContain("MCPB Basic must expose exactly 13 approved read-only tools and zero prompts");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        manifest: mcpbInputs.manifest.replace('"--no-prompts",', '"--watch",')
+        manifest: replaceExactly(mcpbInputs.manifest, '"--no-prompts",', '"--watch",')
       })
     ).toContain("MCPB launch args must be the exact fail-closed Basic allowlist");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        build: mcpbInputs.build.replace('"--omit=optional"', '"--include=optional"')
+        build: replaceExactly(mcpbInputs.build, '"--omit=optional"', '"--include=optional"')
       })
     ).toContain(
       "MCPB builder must pin upstream, omit unsafe feature deps, two-pass inventory official bytes, ship transparency records, and guard owned cleanup"
@@ -1446,13 +1696,13 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        versionSync: mcpbInputs.versionSync.replace("mcpbManifest.version = version", "void version")
+        versionSync: replaceExactly(mcpbInputs.versionSync, "mcpbManifest.version = version", "void version")
       })
     ).toContain("version lifecycle must synchronize and stage all eight published version surfaces");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        build: mcpbInputs.build.replace("non-portable archive path", "unchecked archive path")
+        build: replaceExactly(mcpbInputs.build, "non-portable archive path", "unchecked archive path")
       })
     ).toContain(
       "MCPB builder must pin upstream, omit unsafe feature deps, two-pass inventory official bytes, ship transparency records, and guard owned cleanup"
@@ -1460,7 +1710,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace("ownership token changed", "scratch cleanup continued")
+        consumer: replaceExactly(mcpbInputs.consumer, "ownership token changed", "scratch cleanup continued")
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1468,7 +1718,11 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace('["obsidian://note/{+notePath}"]', '["obsidian://note/{notePath}"]')
+        consumer: replaceExactly(
+          mcpbInputs.consumer,
+          '["obsidian://note/{+notePath}"]',
+          '["obsidian://note/{notePath}"]'
+        )
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1476,7 +1730,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace(
+        consumer: replaceExactly(
+          mcpbInputs.consumer,
           MCPB_HYBRID_POSITIVE_ASSERTION,
           "expected: /Projects\\/Hermes\\.md|MCPB-basic-search-target/"
         )
@@ -1487,7 +1742,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace(
+        consumer: replaceExactly(
+          mcpbInputs.consumer,
           MCPB_HYBRID_NEGATIVE_ASSERTION,
           'assert.match(noMatchText, /Projects\\/Hermes\\.md/, "obsidian_search: absent-token query returned matches")'
         )
@@ -1498,7 +1754,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace(
+        consumer: replaceExactly(
+          mcpbInputs.consumer,
           'manifest.user_config.vault.type, "directory"',
           'manifest.user_config.vault.type, "entry"'
         )
@@ -1509,7 +1766,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace('cmp -s "$LOCAL_ASSET" "$REMOTE_ASSET"', "true")
+        release: replaceExactly(mcpbInputs.release, 'cmp -s "$LOCAL_ASSET" "$REMOTE_ASSET"', "true")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1517,26 +1774,36 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           "Preflight existing GitHub release and every Basic asset before npm",
           "Preflight removed"
         )
       })
     ).toContain("release state machine must preflight all deterministic assets before npm, then draft/upload/publish");
-    const reorderedRelease = mcpbInputs.release
-      .replace("Prepare deterministic Basic release records", "__MCPB_RELEASE_ORDER_SENTINEL__")
-      .replace(
-        "Publish with provenance or verify an exact prior publication",
-        "Prepare deterministic Basic release records"
-      )
-      .replace("__MCPB_RELEASE_ORDER_SENTINEL__", "Publish with provenance or verify an exact prior publication");
+    const releaseWithOrderSentinel = replaceExactly(
+      mcpbInputs.release,
+      "Prepare deterministic Basic release records",
+      "__MCPB_RELEASE_ORDER_SENTINEL__"
+    );
+    const releaseWithSwappedPublication = replaceExactly(
+      releaseWithOrderSentinel,
+      "Publish with provenance or verify an exact prior publication",
+      "Prepare deterministic Basic release records"
+    );
+    const reorderedRelease = replaceExactly(
+      releaseWithSwappedPublication,
+      "__MCPB_RELEASE_ORDER_SENTINEL__",
+      "Publish with provenance or verify an exact prior publication"
+    );
     expect(mcpbContractProblems({ ...mcpbInputs, release: reorderedRelease })).toContain(
       "release state machine must preflight all deterministic assets before npm, then draft/upload/publish"
     );
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        integrity: mcpbInputs.integrity.replace(
+        integrity: replaceExactly(
+          mcpbInputs.integrity,
           `mcpb-basic-candidate-\${producerAttempt}`,
           "mcpb-basic-candidate-unbound"
         )
@@ -1544,11 +1811,21 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    for (const pagination of ["CHECK_PAGES", "RUN_PAGES", "JOB_PAGES", "ARTIFACT_PAGES"]) {
+    for (const [pagination, occurrences] of [
+      ["CHECK_PAGES", 1],
+      ["RUN_PAGES", 1],
+      ["JOB_PAGES", 1],
+      ["ARTIFACT_PAGES", 1]
+    ] as const) {
       expect(
         mcpbContractProblems({
           ...mcpbInputs,
-          release: mcpbInputs.release.replace(`${pagination}=$(gh api --paginate --slurp`, `${pagination}=$(gh api`)
+          release: replaceExactly(
+            mcpbInputs.release,
+            `${pagination}=$(gh api --paginate --slurp`,
+            `${pagination}=$(gh api`,
+            occurrences
+          )
         })
       ).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1557,7 +1834,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           "https://uploads.github.com/repos/",
           "https://api.uploads.github.com/repos/"
         )
@@ -1568,7 +1846,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace("group: release-publication", "group: release-$TAG")
+        release: replaceExactly(mcpbInputs.release, "group: release-publication", "group: release-$TAG")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1576,7 +1854,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace("checks: read", "checks: none")
+        release: replaceExactly(mcpbInputs.release, "checks: read", "checks: none")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1584,29 +1862,41 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           MCPB_ACTIONS_ARTIFACT_DOWNLOAD,
-          MCPB_ACTIONS_ARTIFACT_DOWNLOAD.replace("application/vnd.github+json", "application/octet-stream")
+          replaceExactly(MCPB_ACTIONS_ARTIFACT_DOWNLOAD, "application/vnd.github+json", "application/octet-stream")
         )
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     for (const weakenedVisibilityPoll of [
-      mcpbInputs.release.replace(MCPB_RELEASE_VISIBILITY_POLL, MCPB_RELEASE_VISIBILITY_POLL.replace("12", "1")),
-      mcpbInputs.release.replace(
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_RELEASE_VISIBILITY_POLL,
+        replaceExactly(MCPB_RELEASE_VISIBILITY_POLL, "12", "1")
+      ),
+      replaceExactly(
+        mcpbInputs.release,
         MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH,
         `${MCPB_RELEASE_VISIBILITY_POLL}\n            RELEASE_PAGES=$(printf`
       ),
-      mcpbInputs.release.replace(
+      replaceExactly(
+        mcpbInputs.release,
         MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD,
-        MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD.replace("-gt 1", "-lt 0")
+        replaceExactly(MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD, "-gt 1", "-lt 0")
       ),
-      mcpbInputs.release.replace(
+      replaceExactly(
+        mcpbInputs.release,
         MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD,
-        MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD.replace("exit 1", "true")
+        replaceExactly(MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD, "exit 1", "true")
       ),
-      mcpbInputs.release.replace(MCPB_RELEASE_VISIBILITY_WAIT, MCPB_RELEASE_VISIBILITY_WAIT.replace("sleep 5", "true"))
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_RELEASE_VISIBILITY_WAIT,
+        replaceExactly(MCPB_RELEASE_VISIBILITY_WAIT, "sleep 5", "true")
+      )
     ]) {
       expect(mcpbContractProblems({ ...mcpbInputs, release: weakenedVisibilityPoll })).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1615,40 +1905,51 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           'npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL"',
-          'npm-state "$PUBLISHED_SHA" "$VERSION" "$CHANNEL"'
+          'npm-state "$PUBLISHED_SHA" "$VERSION" "$CHANNEL"',
+          3
         )
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     const freshUploadClassifier = "CURRENT_ACTION=$(printf '%s' \"$CURRENT_STATE\" | release_state | jq -r '.action')";
-    const classifierAfterUpload = mcpbInputs.release
-      .replace(freshUploadClassifier, 'CURRENT_ACTION="resume_draft"')
-      .replace(
-        "curl --fail-with-body --silent --show-error --request POST",
-        `curl --fail-with-body --silent --show-error --request POST\n              ${freshUploadClassifier}`
-      );
+    const releaseWithoutFreshUploadClassifier = replaceExactly(
+      mcpbInputs.release,
+      freshUploadClassifier,
+      'CURRENT_ACTION="resume_draft"'
+    );
+    const classifierAfterUpload = replaceExactly(
+      releaseWithoutFreshUploadClassifier,
+      "curl --fail-with-body --silent --show-error --request POST",
+      `curl --fail-with-body --silent --show-error --request POST\n              ${freshUploadClassifier}`
+    );
     expect(mcpbContractProblems({ ...mcpbInputs, release: classifierAfterUpload })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     const uploadTagProof =
       "              assert_remote_tag_identity\n              curl --fail-with-body --silent --show-error --request POST";
-    const relocatedUploadTagProof = mcpbInputs.release
-      .replace(uploadTagProof, "              curl --fail-with-body --silent --show-error --request POST")
-      .replace(
-        '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null',
-        '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null\n' +
-          "              assert_remote_tag_identity"
-      );
+    const releaseWithoutUploadTagProof = replaceExactly(
+      mcpbInputs.release,
+      uploadTagProof,
+      "              curl --fail-with-body --silent --show-error --request POST"
+    );
+    const relocatedUploadTagProof = replaceExactly(
+      releaseWithoutUploadTagProof,
+      '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null',
+      '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null\n' +
+        "              assert_remote_tag_identity"
+    );
     expect(mcpbContractProblems({ ...mcpbInputs, release: relocatedUploadTagProof })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           '          assert_remote_tag_identity\n          if [ "$FINAL_ACTION" = "publish_draft" ]; then',
           '          if [ "$FINAL_ACTION" = "publish_draft" ]; then'
         )
@@ -1656,20 +1957,23 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    const lateChannelGuard = mcpbInputs.release
-      .replace(
-        "node scripts/check-release-integrity.mjs channel-advance",
-        "node scripts/check-release-integrity.mjs channel_disabled"
-      )
-      .replace(
-        'npm publish --provenance --access public --tag "$CHANNEL"',
-        'npm publish --provenance --access public --tag "$CHANNEL"\n' +
-          '              node scripts/check-release-integrity.mjs channel-advance "$VERSION" "-" latest'
-      );
+    const releaseWithEarlyChannelGuardDisabled = replaceExactly(
+      mcpbInputs.release,
+      "node scripts/check-release-integrity.mjs channel-advance",
+      "node scripts/check-release-integrity.mjs channel_disabled",
+      2
+    );
+    const lateChannelGuard = replaceExactly(
+      releaseWithEarlyChannelGuardDisabled,
+      'npm publish --provenance --access public --tag "$CHANNEL"',
+      'npm publish --provenance --access public --tag "$CHANNEL"\n' +
+        '              node scripts/check-release-integrity.mjs channel-advance "$VERSION" "-" latest'
+    );
     expect(mcpbContractProblems({ ...mcpbInputs, release: lateChannelGuard })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    const latestOnlyChannelGuard = mcpbInputs.release.replace(
+    const latestOnlyChannelGuard = replaceExactly(
+      mcpbInputs.release,
       MCPB_NPM_CHANNEL_ADVANCE,
       `            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
         "              node scripts/check-release-integrity.mjs channel-advance \\\n" +
@@ -1683,7 +1987,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace('NPM_ACTION" = "reuse_superseded"', 'NPM_ACTION" = "reuse"')
+        release: replaceExactly(mcpbInputs.release, 'NPM_ACTION" = "reuse_superseded"', 'NPM_ACTION" = "reuse"')
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1691,7 +1995,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           "is not GitHub's latest release before npm publication",
           "latest release checked after npm"
         )
@@ -1707,7 +2012,7 @@ describe("release identity and exact required-check gate", () => {
       expect(
         mcpbContractProblems({
           ...mcpbInputs,
-          release: mcpbInputs.release.replaceAll(guard, weakenedGuard)
+          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, 3)
         })
       ).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1716,9 +2021,11 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           `"repos/\${{ github.repository }}/releases?per_page=100"`,
-          `"repos/\${{ github.repository }}/releases/tags/$TAG"`
+          `"repos/\${{ github.repository }}/releases/tags/$TAG"`,
+          5
         )
       })
     ).toContain(
@@ -1727,7 +2034,8 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace(
+        release: replaceExactly(
+          mcpbInputs.release,
           "npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION",
           "npm channel unchecked"
         )
@@ -1738,7 +2046,7 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: mcpbInputs.release.replace("Final release contains unexpected asset", "Final asset accepted")
+        release: replaceExactly(mcpbInputs.release, "Final release contains unexpected asset", "Final asset accepted")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -1746,19 +2054,19 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        packageJson: mcpbInputs.packageJson.replace('"tmp": "0.2.7"', '"tmp": "0.0.33"')
+        packageJson: replaceExactly(mcpbInputs.packageJson, '"tmp": "0.2.7"', '"tmp": "0.0.33"')
       })
     ).toContain("MCPB dev graph must override tmp to patched 0.2.7 without the orphaned legacy helper");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        docsApi: mcpbInputs.docsApi.replace("| `--no-prompts`", "| `--prompts-hidden`")
+        docsApi: replaceExactly(mcpbInputs.docsApi, "| `--no-prompts`", "| `--prompts-hidden`")
       })
     ).toContain("Basic isolation flags must be shared by stdio/HTTP, documented, and preserve full defaults");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: mcpbInputs.consumer.replace('["2.0.11"]', '["1.19.9"]')
+        consumer: replaceExactly(mcpbInputs.consumer, '["2.0.11"]', '["1.19.9"]')
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
@@ -1766,13 +2074,18 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        server: mcpbInputs.server.replace("const embeddingIndexEnabled = opts.embeddingIndex !== false", "true")
+        server: replaceExactly(mcpbInputs.server, "const embeddingIndexEnabled = opts.embeddingIndex !== false", "true")
       })
     ).toContain("Basic isolation flags must be shared by stdio/HTTP, documented, and preserve full defaults");
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        build: mcpbInputs.build.replace('path.join(STAGE, "sbom.cdx.json")', 'path.join(STAGE, "sbom-disabled.json")')
+        build: replaceExactly(
+          mcpbInputs.build,
+          'path.join(STAGE, "sbom.cdx.json")',
+          'path.join(STAGE, "sbom-disabled.json")',
+          2
+        )
       })
     ).toContain(
       "MCPB builder must pin upstream, omit unsafe feature deps, two-pass inventory official bytes, ship transparency records, and guard owned cleanup"
@@ -1780,9 +2093,11 @@ describe("release identity and exact required-check gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        build: mcpbInputs.build.replace(
+        build: replaceExactly(
+          mcpbInputs.build,
           'path.join(STAGE, "third-party-licenses.json")',
-          'path.join(STAGE, "third-party-disabled.json")'
+          'path.join(STAGE, "third-party-disabled.json")',
+          2
         )
       })
     ).toContain(
@@ -1791,23 +2106,24 @@ describe("release identity and exact required-check gate", () => {
 
     // NEGATIVE controls: the invariant rejects both the old floating-22 leg
     // and a floor that no longer matches package.json.
-    expect(nodeFloorCiProblems(ci.replace('node-version: "22.13.0"', "node-version: 22"), pkg.engines?.node)).toContain(
-      "test (22) must run exact engines.node floor 22.13.0"
-    );
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, 'node-version: "22.13.0"', "node-version: 22", 7), pkg.engines?.node)
+    ).toContain("test (22) must run exact engines.node floor 22.13.0");
     expect(nodeFloorCiProblems(ci, ">=22.14.0")).toContain("test (22) must run exact engines.node floor 22.14.0");
     expect(nodeFloorCiProblems(ci, "22.13.0")).toEqual(["engines.node must be one exact >=X.Y.Z floor"]);
     expect(
       nodeFloorCiProblems(
-        ci.replace('      NPM_CONFIG_ENGINE_STRICT: "true"', '      NPM_CONFIG_ENGINE_STRICT: "false"'),
+        replaceExactly(ci, '      NPM_CONFIG_ENGINE_STRICT: "true"', '      NPM_CONFIG_ENGINE_STRICT: "false"', 7),
         pkg.engines?.node
       )
     ).toContain("test job must enforce npm engine-strict");
-    expect(nodeFloorCiProblems(ci.replace("if (declared !== expected)", "if (false)"), pkg.engines?.node)).toContain(
-      "test floor runtime assertion is missing"
-    );
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, "if (declared !== expected)", "if (false)"), pkg.engines?.node)
+    ).toContain("test floor runtime assertion is missing");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "- name: Probe native SQLite and FTS5 at declared floor\n        if: matrix.floor",
           "- name: Probe native SQLite and FTS5 at declared floor\n        if: false"
         ),
@@ -1816,13 +2132,14 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test floor native SQLite/FTS probe is missing");
     expect(
       nodeFloorCiProblems(
-        ci.replace("      - run: npm test\n        env:", "      - run: echo npm test\n        env:"),
+        replaceExactly(ci, "      - run: npm test\n        env:", "      - run: echo npm test\n        env:"),
         pkg.engines?.node
       )
     ).toContain("test floor job missing npm test");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "    timeout-minutes: 10\n    env:",
           "    timeout-minutes: 10\n    continue-on-error: true\n    env:"
         ),
@@ -1831,40 +2148,55 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test job must not declare continue-on-error");
     expect(
       nodeFloorCiProblems(
-        ci.replace(/(\n {2}smoke:[\s\S]*?node-version:) "22\.13\.0"/, (_match, prefix: string) => `${prefix} 22`),
+        replaceExactly(
+          ci,
+          '          node-version: "22.13.0"\n' +
+            "          cache: npm\n" +
+            "      - name: Install deps (npm ci with retry)",
+          "          node-version: 22\n" + "          cache: npm\n" + "      - name: Install deps (npm ci with retry)"
+        ),
         pkg.engines?.node
       )
     ).toContain("smoke must run exact engines.node floor 22.13.0");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          /(\n {2}test-windows:[\s\S]*?runs-on:) windows-2025/,
-          (_match, prefix: string) => `${prefix} ubuntu-latest`
+        replaceExactly(
+          ci,
+          "    runs-on: windows-2025\n    timeout-minutes: 20\n    defaults:",
+          "    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    defaults:"
         ),
         pkg.engines?.node
       )
     ).toContain("test-windows must preserve its exact name and pinned windows-2025 runner");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
-          /(\n {2}test-windows:[\s\S]*?node-version:) "22\.13\.0"/,
-          (_match, prefix: string) => `${prefix} 22`
+        replaceExactly(
+          ci,
+          '          node-version: "22.13.0"\n' +
+            "          cache: npm\n" +
+            "          cache-dependency-path: package-lock.json\n" +
+            "      - name: Assert real case-insensitive Windows filesystem",
+          "          node-version: 22\n" +
+            "          cache: npm\n" +
+            "          cache-dependency-path: package-lock.json\n" +
+            "      - name: Assert real case-insensitive Windows filesystem"
         ),
         pkg.engines?.node
       )
     ).toContain("test-windows must run exact engines.node floor 22.13.0");
     expect(
       nodeFloorCiProblems(
-        ci.replace("      NPM_CONFIG_SCRIPT_SHELL: 'C:\\Program Files\\Git\\bin\\bash.exe'\n", ""),
+        replaceExactly(ci, "      NPM_CONFIG_SCRIPT_SHELL: 'C:\\Program Files\\Git\\bin\\bash.exe'\n", ""),
         pkg.engines?.node
       )
     ).toContain("test-windows must run npm lifecycle scripts through pinned Git Bash");
-    expect(nodeFloorCiProblems(ci.replace('"caseprobe.md"', '"CaseProbe.md"'), pkg.engines?.node)).toContain(
+    expect(nodeFloorCiProblems(replaceExactly(ci, '"caseprobe.md"', '"CaseProbe.md"'), pkg.engines?.node)).toContain(
       "test-windows platform and case-insensitive filesystem assertion is missing"
     );
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: Probe native SQLite and FTS5 on Windows\n",
           "      - name: Probe native SQLite and FTS5 on Windows\n        if: false\n"
         ),
@@ -1873,7 +2205,8 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test-windows steps must be unconditional and must not declare continue-on-error");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           '              throw new Error("Windows filesystem probe is not case-insensitive");',
           "              return;"
         ),
@@ -1882,13 +2215,14 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test-windows platform and case-insensitive filesystem assertion is missing");
     expect(
       nodeFloorCiProblems(
-        ci.replace('if (row?.body !== "windows probe")', 'if (row?.body === "windows probe")'),
+        replaceExactly(ci, 'if (row?.body !== "windows probe")', 'if (row?.body === "windows probe")'),
         pkg.engines?.node
       )
     ).toContain("test-windows native SQLite/FTS probe is missing");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - run: npm test -- tests/windows-path-safety.test.ts",
           "      - run: echo npm test -- tests/windows-path-safety.test.ts"
         ),
@@ -1897,7 +2231,8 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test-windows missing the executable hostile-filesystem suite");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "        run: npm test -- tests/watcher-activation-guard.test.ts",
           "        run: echo npm test -- tests/watcher-activation-guard.test.ts"
         ),
@@ -1906,53 +2241,64 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("test-windows missing the exact watcher activation-guard suite");
     expect(
       nodeFloorCiProblems(
-        ci.replace("        run: npm run render:preview", "        run: echo npm run render:preview"),
+        replaceExactly(ci, "        run: npm run render:preview", "        run: echo npm run render:preview"),
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
     expect(
       nodeFloorCiProblems(
-        ci.replace("  docs:\n    runs-on: ubuntu-latest", "  docs:\n    if: false\n    runs-on: ubuntu-latest"),
+        replaceExactly(ci, "  docs:\n    runs-on: ubuntu-latest", "  docs:\n    if: false\n    runs-on: ubuntu-latest"),
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    const ciWithoutPreviewRender = replaceExactly(
+      ci,
+      "      - id: preview_render\n        run: npm run render:preview\n",
+      ""
+    );
+    const ciWithLatePreviewRender = replaceExactly(
+      ciWithoutPreviewRender,
+      "        run: git diff --exit-code -- assets/social-preview.png\n",
+      "        run: git diff --exit-code -- assets/social-preview.png\n" +
+        "      - id: preview_render\n" +
+        "        run: npm run render:preview\n"
+    );
+    expect(nodeFloorCiProblems(ciWithLatePreviewRender, pkg.engines?.node)).toContain(
+      "docs job must regenerate and fail closed on social-preview byte drift"
+    );
     expect(
       nodeFloorCiProblems(
-        ci
-          .replace("      - id: preview_render\n        run: npm run render:preview\n", "")
-          .replace(
-            "        run: git diff --exit-code -- assets/social-preview.png\n",
-            "        run: git diff --exit-code -- assets/social-preview.png\n" +
-              "      - id: preview_render\n" +
-              "        run: npm run render:preview\n"
-          ),
-        pkg.engines?.node
-      )
-    ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
-    expect(
-      nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: Require committed social-preview bytes\n",
           "      - name: Require committed social-preview bytes\n        if: false\n"
         ),
         pkg.engines?.node
       )
     ).toContain("docs job must regenerate and fail closed on social-preview byte drift");
+    const previewExportBlock =
+      "      - name: Export remotely rendered social preview\n" +
+      "        id: preview_artifact\n" +
+      "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\n" +
+      "        with:\n" +
+      "          name: rendered-social-preview\n" +
+      "          path: assets/social-preview.png\n" +
+      "          if-no-files-found: error\n" +
+      "          retention-days: 3\n" +
+      "          compression-level: 0\n";
+    expect(nodeFloorCiProblems(replaceExactly(ci, previewExportBlock, ""), pkg.engines?.node)).toContain(
+      "docs job must export the remotely rendered social preview before byte-drift enforcement"
+    );
     expect(
       nodeFloorCiProblems(
-        ci.replace(/ {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/, ""),
+        replaceExactly(ci, "          path: assets/social-preview.png", "          path: assets/stale-preview.png"),
         pkg.engines?.node
       )
     ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
     expect(
       nodeFloorCiProblems(
-        ci.replace("          path: assets/social-preview.png", "          path: assets/stale-preview.png"),
-        pkg.engines?.node
-      )
-    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
-    expect(
-      nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "          name: rendered-social-preview\n" +
             "          path: assets/social-preview.png\n" +
             "          if-no-files-found: error",
@@ -1963,38 +2309,28 @@ describe("release identity and exact required-check gate", () => {
         pkg.engines?.node
       )
     ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
+    const ciWithoutPreviewExport = replaceExactly(ci, previewExportBlock, "");
+    const ciWithLatePreviewExport = replaceExactly(
+      ciWithoutPreviewExport,
+      "        run: git diff --exit-code -- assets/social-preview.png\n",
+      `        run: git diff --exit-code -- assets/social-preview.png\n${previewExportBlock}`
+    );
+    expect(nodeFloorCiProblems(ciWithLatePreviewExport, pkg.engines?.node)).toContain(
+      "docs job must export the remotely rendered social preview before byte-drift enforcement"
+    );
     expect(
-      nodeFloorCiProblems(
-        ci
-          .replace(/ {6}- name: Export remotely rendered social preview\n[\s\S]*? {10}compression-level: 0\n/, "")
-          .replace(
-            "        run: git diff --exit-code -- assets/social-preview.png\n",
-            "        run: git diff --exit-code -- assets/social-preview.png\n" +
-              "      - name: Export remotely rendered social preview\n" +
-              "        id: preview_artifact\n" +
-              "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\n" +
-              "        with:\n" +
-              "          name: rendered-social-preview\n" +
-              "          path: assets/social-preview.png\n" +
-              "          if-no-files-found: error\n" +
-              "          retention-days: 3\n" +
-              "          compression-level: 0\n"
-          ),
-        pkg.engines?.node
-      )
-    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
-    expect(
-      nodeFloorCiProblems(ci.replace("    needs: [test, test-windows]", "    needs: [test]"), pkg.engines?.node)
+      nodeFloorCiProblems(replaceExactly(ci, "    needs: [test, test-windows]", "    needs: [test]"), pkg.engines?.node)
     ).toContain("smoke must wait for exactly the Linux matrix and blocking Windows job");
     expect(
-      nodeFloorCiProblems(ci.replace(`    if: \${{ always() }}`, "    if: success()"), pkg.engines?.node)
+      nodeFloorCiProblems(replaceExactly(ci, `    if: \${{ always() }}`, "    if: success()", 4), pkg.engines?.node)
     ).toContain("smoke must run its prerequisite gate even after an upstream failure");
-    expect(nodeFloorCiProblems(ci.replace(' ] || [ "', ' ] && [ "'), pkg.engines?.node)).toContain(
+    expect(nodeFloorCiProblems(replaceExactly(ci, ' ] || [ "', ' ] && [ "'), pkg.engines?.node)).toContain(
       "smoke prerequisite gate must fail closed on either Linux or Windows failure"
     );
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: Require Linux and Windows test prerequisites\n",
           "      - name: Require Linux and Windows test prerequisites\n        if: false\n"
         ),
@@ -2003,7 +2339,8 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: JSON-RPC smoke test (scan path)\n",
           "      - name: JSON-RPC smoke test (scan path)\n        if: false\n"
         ),
@@ -2012,7 +2349,8 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("smoke functional steps must be unconditional and fail-capable");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "            exit 1\n          fi\n      - uses: actions/checkout@",
           "            exit 0\n          fi\n      - uses: actions/checkout@"
         ),
@@ -2021,40 +2359,52 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("smoke prerequisite gate must fail closed on either Linux or Windows failure");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "          - label: windows\n            os: windows-2025\n            script_shell: 'C:\\Program Files\\Git\\bin\\bash.exe'",
-          "          - label: windows\n            os: ubuntu-latest\n            script_shell: /bin/bash"
+          "          - label: windows\n            os: ubuntu-latest\n            script_shell: /bin/bash",
+          3
         ),
         pkg.engines?.node
       )
     ).toContain("protocol-conformance matrix must preserve its exact blocking platform inventory");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "          - label: macos\n            os: macos-latest",
-          "          - label: macos\n            os: ubuntu-latest"
+          "          - label: macos\n            os: ubuntu-latest",
+          2
         ),
         pkg.engines?.node
       )
     ).toContain("package-consumer matrix must preserve its exact blocking platform inventory");
     expect(
-      nodeFloorCiProblems(ci.replace("    needs: protocol-conformance-matrix", "    needs: test"), pkg.engines?.node)
+      nodeFloorCiProblems(
+        replaceExactly(ci, "    needs: protocol-conformance-matrix", "    needs: test"),
+        pkg.engines?.node
+      )
     ).toContain("protocol-conformance aggregate must fail closed over every matrix lane");
     expect(
       nodeFloorCiProblems(
-        ci.replace("npm run schema:inventory -- --write", "echo schema inventory disabled"),
+        replaceExactly(ci, "npm run schema:inventory -- --write", "echo schema inventory disabled"),
         pkg.engines?.node
       )
     ).toContain("docs job must export and fail closed on remotely captured MCP schema drift");
     expect(
       nodeFloorCiProblems(
-        ci.replace("        run: node scripts/package-consumer.mjs", "        run: echo package-consumer-disabled"),
+        replaceExactly(
+          ci,
+          "        run: node scripts/package-consumer.mjs",
+          "        run: echo package-consumer-disabled"
+        ),
         pkg.engines?.node
       )
     ).toContain("package-consumer matrix must be exact-floor, unconditional, fail-capable, built, and executable");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: Verify canonical MCPB content and official-client contract\n        run: npm run mcpb:verify",
           "      - name: Verify canonical MCPB content and official-client contract\n        run: echo mcpb-verification-disabled"
         ),
@@ -2064,11 +2414,12 @@ describe("release identity and exact required-check gate", () => {
       "mcpb-basic matrix must be exact-floor, unconditional, fail-capable, and consume the canonical artifact"
     );
     expect(
-      nodeFloorCiProblems(ci.replace("    needs: mcpb-basic-matrix", "    needs: test"), pkg.engines?.node)
+      nodeFloorCiProblems(replaceExactly(ci, "    needs: mcpb-basic-matrix", "    needs: test"), pkg.engines?.node)
     ).toContain("mcpb-basic aggregate must fail closed over every matrix lane");
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
           "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@v7"
         ),
@@ -2079,7 +2430,8 @@ describe("release identity and exact required-check gate", () => {
     );
     expect(
       nodeFloorCiProblems(
-        ci.replace(
+        replaceExactly(
+          ci,
           "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
           "actions/download-artifact@v8"
         ),
@@ -2088,12 +2440,12 @@ describe("release identity and exact required-check gate", () => {
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     expect(
       nodeFloorCiProblems(
-        ci.replace("          digest-mismatch: error", "          digest-mismatch: warn"),
+        replaceExactly(ci, "          digest-mismatch: error", "          digest-mismatch: warn"),
         pkg.engines?.node
       )
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     expect(
-      nodeFloorCiProblems(ci.replace("          path: artifacts", "          path: ."), pkg.engines?.node)
+      nodeFloorCiProblems(replaceExactly(ci, "          path: artifacts", "          path: ."), pkg.engines?.node)
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
   });

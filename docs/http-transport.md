@@ -1,6 +1,6 @@
 # HTTP transport (remote MCP) — `enquire-mcp serve-http`
 
-> Available since v2.6.0. [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server. **Stateless** by default (one transport per request); switch to **stateful** with `--stateful` for clients that need persistent sessions and SSE notifications (ChatGPT custom GPTs, long-running agentic flows). See [Operational notes](#operational-notes) for the stateful-mode flag matrix.
+> Available since v2.6.0. [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http) — the protocol Claude.ai web, ChatGPT, Cursor's HTTP mode, and most mobile MCP clients use to talk to a remote server. **v4 serves modern MCP `2026-07-28` and supported legacy 2025-era clients from the same tool/prompt/resource factory.** Modern HTTP is per-request; `--stateful` preserves sticky sessions and SSE/DELETE lifecycle for legacy clients that require them. See [Operational notes](#operational-notes) for the stateful-mode flag matrix.
 
 The default `serve` subcommand runs over **stdio** — fast, secure, but local-only. `serve-http` runs the same server (same tools, same vault, same indexes) over **HTTP**, so an agent can reach it from a browser tab, a phone, or another machine.
 
@@ -33,6 +33,17 @@ curl http://127.0.0.1:3000/health
 > but the value shows up in `ps auxww` while the server is running and gets
 > persisted in shell history. Prefer `--bearer-token-env` for systemd units,
 > Docker containers, and anything multi-user.
+
+## Protocol-era routing in v4
+
+| Incoming traffic | Route | Session behavior |
+|---|---|---|
+| Modern `2026-07-28` request | Strict official SDK v2 handler | Fresh server per request; no legacy session allocation or `Mcp-Session-Id` requirement. |
+| Supported legacy POST, default mode | Official v2 legacy Node transport | Stateless, fresh server/transport for the request. |
+| Supported legacy traffic with `--stateful` | Existing session registry over the official v2 legacy Node transport | `initialize` allocates a bounded sticky session; follow-up POST/GET/DELETE retain the established lifecycle. |
+| Malformed or unsupported modern claim | Strict modern error ladder | Never downgraded to legacy, even when `--stateful` is enabled. |
+
+Admission stays outside both protocol legs: exact Origin policy, bearer auth, rate limiting, a bounded body, and `application/json` validation run before era routing. Every POST body is parsed once and forwarded to the selected SDK path. A modern request carrying a legacy session id cannot bind to that session.
 
 ## When to use HTTP vs stdio
 
@@ -81,6 +92,8 @@ We protect against:
 - **Rate-limit abuse.** Default 120 req/min per token; tunable via `--rate-limit`.
 - **DNS rebinding / Origin spoofing.** Every present Origin must exactly match `--cors-origin` or receives `403` before OPTIONS, health, auth, rate limiting, body parsing, session allocation, or MCP dispatch. Missing Origin remains valid for native clients. Browser CORS response headers are applied only after that admission decision.
 - **Body bombs.** Per-request body cap is derived from `--max-file-bytes` (default 5 MB) as `max(4 MB, max-file-bytes × 1.5)` — gives the JSON-RPC envelope and string-escaping enough headroom that a `create_note` payload at the file-size limit doesn't bounce at the HTTP layer with a misleading 413. v3.7.12 made this derivation explicit; pre-3.7.12 the cap was a hardcoded 4 MB which was BELOW the 5 MB file cap.
+- **Protocol confusion.** POSTs require an unambiguous `application/json` media type before parsing. The official SDK v2 classifier owns the modern/legacy decision; every non-legacy outcome stays on the strict modern path, so a malformed or unsupported modern request cannot gain legacy behavior through fallback.
+- **Shutdown integrity.** Modern and legacy-stateless requests share an aggregate persistent-write tracker; legacy stateful sessions retain their per-session tracker. Shutdown closes admission, gives ordinary exchanges a bounded grace, rolls back cancellation-safe batch mutations, waits for atomic/finish-only writes, and only then closes the shared vault/index resources.
 
 We do **not** protect against:
 - TLS downgrade — that's the tunnel's job. Always front with HTTPS.

@@ -4,7 +4,7 @@
 
 ## Product
 
-enquire-mcp is the #1 Obsidian MCP for freshness-aware, cited AI memory: one vault becomes persistent, searchable context shared by Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent.
+enquire-mcp is the #1 Obsidian MCP for freshness-aware, cited AI memory: one vault becomes persistent, searchable context shared by Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw, and every MCP-compatible agent. npm `@latest` remains the semver-bound stable v3 line; the `v4.0.0-rc.1` preview moves transports to official MCP SDK v2 while preserving the tool/prompt/resource, CLI, privacy, write-gate and storage contracts.
 
 It combines hybrid Markdown/PDF retrieval (BM25, TF-IDF, multilingual ML embeddings, Reciprocal Rank Fusion, optional BGE reranking, HNSW with int8 vectors), PDF page citations and OCR, Canvas parsing, Dataview-style LIST/TABLE queries, supported Obsidian Base-filter execution, freshness metadata, bounded agentic RAG, and GraphRAG-light. The original files remain the source of truth: verbatim, editable, auditable, local-first, vendor-neutral, and MIT-licensed.
 
@@ -49,7 +49,7 @@ For client-neutral prompt-host and direct-tool variants of this loop, use the
 - Organize: tags, wikilinks, frontmatter filters, Dataview-style LIST/TABLE queries, supported Base filters, context packs, chat-thread reading, linting, and proposal validation.
 - Write when enabled: create, append, patch, rename, archive, frontmatter update, link replacement, and chat-thread append flows.
 - Evaluate: `eval`, `eval-compare`, retrieval benchmarks, per-signal scores, failure buckets, and machine-readable artifacts.
-- Operate: stdio and Streamable HTTP transports, watcher-driven incremental indexing, package-coherent setup, tier-aware doctor, cache pruning, and offline-enforced runtime model loading.
+- Operate: era-aware stdio and strict modern MCP `2026-07-28` HTTP plus supported legacy HTTP from one v4 registration factory; malformed modern claims never downgrade. Watcher-driven incremental indexing, package-coherent setup, tier-aware doctor, cache pruning, and offline-enforced runtime model loading remain unchanged.
 
 The registered surface is 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback) plus 19 MCP prompts. See the [canonical tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md) for exact schemas and gates.
 
@@ -68,8 +68,9 @@ The measured 60-query ablation attributes +15.5 NDCG@10 and +24.7 MRR to the BGE
 - Read-only is the default. Vault writes require `--enable-write`; closed-loop usefulness feedback requires its own nonzero weight.
 - Privacy filters apply at search, read, index, watcher, graph, and write boundaries.
 - HTTP requires bearer authentication; never paste a token into an issue or log.
+- v4 modern and legacy-stateless HTTP are per-request; supported legacy stateful clients retain sticky GET/SSE/DELETE lifecycle. Exact-Origin admission, authentication, rate/body limits, protocol-era classification and aggregate persistent-write drain fail closed before shared storage closes.
 - npm releases carry Sigstore provenance at SLSA Build L2.
-- The project has 1795 unit tests and 9 release-required CI checks directly enumerated by `release.yml`; 7 are branch-protected. A pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run that blocks transitively through `smoke`.
+- The project has 1807 unit tests and 11 release-required CI checks directly enumerated by `release.yml`; 7 are branch-protected. `protocol-conformance` drives the official client v2 through both protocol eras and public transports; `package-consumer` aggregates blocking Linux, Windows, and macOS packed-install lanes. A pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run that blocks transitively through `smoke`.
 - Ordinary watched Markdown/PDF changes stage lexical and semantic work from one captured path generation, revalidate after awaited preparation, retry one drift once, and commit without yielding. An uncertain sink mutation quarantines semantic routing until restart rather than exposing a mixed live index. Deliberate same-account A → B → A path swaps remain outside the path-based proof.
 - An admitted hardlink event inventories and independently refreshes every discovered exact in-vault alias across FTS5, EmbedDb and HNSW. Missing origins always inventory; distinct case/NFC/NFD paths never fold. Writes visible only through unadmitted aliases and alias completeness above the configured 50,000-path cap remain explicit boundaries.
 

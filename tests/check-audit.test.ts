@@ -92,7 +92,9 @@ describe("check-audit scoped gate (rc.50)", () => {
     // package's root overrides, so their exact temporary exceptions are tracked
     // separately and may neither grow nor silently outlive their upstream issue.
     expect(Object.keys(ALLOWLIST)).toEqual([]);
-    expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(["GHSA-f88m-g3jw-g9cj", "GHSA-xcpc-8h2w-3j85"].sort());
+    expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(
+      ["GHSA-f88m-g3jw-g9cj", "GHSA-frvp-7c67-39w9", "GHSA-xcpc-8h2w-3j85"].sort()
+    );
     expect(invalidAllowlistEntries(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(
       staleAllowlistEntries(
@@ -310,6 +312,7 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(() => npmProcessSpec("win32", {}, "C:\\node.exe")).toThrow(/npm CLI path unavailable/);
 
     expect(consumerAllowlistForVersion("3.11.7-rc.8", CONSUMER_ALLOWLIST)).toBe(CONSUMER_ALLOWLIST);
+    expect(consumerAllowlistForVersion("4.0.0-rc.1", CONSUMER_ALLOWLIST)).toBe(CONSUMER_ALLOWLIST);
     expect(consumerAllowlistForVersion("3.11.7", CONSUMER_ALLOWLIST)).toEqual({});
     expect(consumerAllowlistForVersion("3.11.7+build.1", CONSUMER_ALLOWLIST)).toEqual({});
     expect(consumerAllowlistForVersion("3.11.7-beta.1", CONSUMER_ALLOWLIST)).toEqual({});

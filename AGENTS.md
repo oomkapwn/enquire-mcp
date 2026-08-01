@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1795+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 1807+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs` and `oia` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. Local checks above must pass before pushing.
+`release.yml` directly enumerates the CI gate contexts listed below, all of which run on every PR. Branch protection currently enforces 7; `docs`, `oia`, `protocol-conformance`, and `package-consumer` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -105,7 +105,7 @@ Every flag that BOTH `serve` and `serve-http` accept **must** pull its help text
 
 - Title under 70 chars.
 - Body: ## Summary (bullets) + ## Test plan (markdown checklist).
-- Wait for all 9 release-required CI checks to pass green before merging.
+- Wait for all 11 release-required CI checks to pass green before merging.
 - Tag the **squash-merge SHA on main** (not the pre-merge branch HEAD) — rule since v3.7.15.
 
 ## Commands cheat sheet
@@ -159,10 +159,14 @@ Directly release-required (all run on PRs; `release.yml` blocks publication unle
 7. `version-consistency` — 7-surface version sync
 8. `docs` — TypeDoc generation; release-required but not currently branch-protected
 9. `oia` — state-driven drift scan; release-required but not currently branch-protected
+10. `protocol-conformance` — Linux + Windows aggregate for official client v2 across modern/legacy stdio and stateless/stateful HTTP
+11. `package-consumer` — aggregate packed-install/type/runtime/privacy gate across Linux, Windows, and macOS
 
 Additional unprotected checks:
 - `test-macos` is the only `continue-on-error` advisory job.
 - `test-windows` is fail-capable and unprotected by its own name, but transitively blocks protected/release-required `smoke`.
+- `protocol-conformance (linux|windows)` are fail-capable matrix legs aggregated by the directly release-required `protocol-conformance` context.
+- `package-consumer (linux|windows|macos)` are fail-capable matrix legs aggregated by the directly release-required `package-consumer` context.
 - `docker` (image build + `tools/list` smoke) is fail-capable and can make the CI workflow red, but is not branch-protected.
 - GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
 

@@ -2,7 +2,7 @@
 //
 // v2.6.0 — remote-MCP support. Runs the MCP server over Streamable HTTP
 // (the protocol claude.ai web, ChatGPT, mobile clients, and Cursor's HTTP
-// mode all use). Three layers in front of the SDK transport:
+// mode all use). Four layers in front of the SDK transport:
 //
 //   1. Origin admission — a present Origin must exactly match an explicit
 //      --cors-origin entry or the request fails with 403 before any route,
@@ -19,13 +19,12 @@
 //      matching browser grant. Default empty: requests without Origin still
 //      work, while every browser-originated request fails admission.
 //
-// We use the SDK's StreamableHTTPServerTransport in stateless mode
-// (sessionIdGenerator: undefined). A fresh transport + McpServer is
-// connected per request. The Vault, FtsIndex, EmbedDb handles are
-// SHARED across all sessions — opening SQLite once and reusing across
-// thousands of remote-MCP calls. This is why prepareServerDeps() is
-// called once in startHttpServer() and buildMcpServer() is called per
-// request: the heavy I/O happens once at boot.
+// Modern 2026-07-28 requests use SDK v2's strict createMcpHandler entry.
+// Claim-less legacy traffic keeps the established Node streamable transport:
+// stateless by default, or session-keyed behind `stateful: true`. Every leg
+// builds a fresh registered McpServer over SHARED Vault/FtsIndex/EmbedDb
+// handles. This is why prepareServerDeps() runs once in startHttpServer(),
+// while buildMcpServer() may run per request/session: heavy I/O stays at boot.
 //
 // Stateless is the DEFAULT (our tools are short-running — search, read,
 // frontmatter ops), and the right choice for most deployments. Stateful,
@@ -37,7 +36,8 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
+import { createMcpHandler, isLegacyRequest, type McpHttpHandler } from "@modelcontextprotocol/server";
 import { buildMcpServer, formatReadyBanner, prepareServerDeps, type ServeOptions, type ServerDeps } from "./index.js";
 import { TOOL_MANIFEST } from "./tool-manifest.js";
 import { DEFAULT_MAX_FILE_BYTES } from "./vault.js";
@@ -49,6 +49,10 @@ import { WriteRequestTracker } from "./write-lifecycle.js";
  *  the session alive, and returns retryable 409. Process shutdown uses the
  *  same ordinary bound, followed by an integrity tail for persistent writes. */
 const DELETE_DRAIN_MS = 5000;
+/** Bounded grace for modern per-request exchanges before handler close aborts stragglers. */
+const MODERN_DRAIN_MS = 5000;
+/** Bound for the SDK handler's graceful protocol close after write integrity settles. */
+const MODERN_CLOSE_MS = 3000;
 const PERSISTENT_WRITE_TOOLS = new Set(
   TOOL_MANIFEST.filter((tool) => tool.kind === "write" || tool.kind === "feedback").map((tool) => tool.name)
 );
@@ -65,8 +69,18 @@ const PERSISTENT_WRITE_TOOLS = new Set(
 export interface HttpTransportInternals {
   /** Override the stateful DELETE call-drain deadline in tests. */
   deleteDrainMs?: number;
+  /** Override the modern per-request shutdown grace in tests. */
+  modernDrainMs?: number;
+  /** Override the modern SDK-handler close bound in tests. */
+  modernCloseMs?: number;
+  /** Supply the modern + legacy-stateless aggregate write tracker in lifecycle tests. */
+  modernWriteTracker?: WriteRequestTracker;
+  /** Replace the modern handler close operation in bounded-close tests. */
+  modernHandlerClose?: () => Promise<void>;
   /** Pause after a DELETE owns session admission; used only by lifecycle tests. */
   afterDeleteMarkedClosing?: (sessionId: string) => void | Promise<void>;
+  /** Pause after a modern request owns an in-flight slot; used only by lifecycle tests. */
+  afterModernRequestAdmitted?: () => void | Promise<void>;
 }
 
 /**
@@ -106,7 +120,7 @@ export interface HttpServeOptions extends ServeOptions {
   /**
    * v2.14.0 — when `true`, the HTTP transport runs in stateful mode:
    * sessions are keyed by the `Mcp-Session-Id` header, each session has
-   * its own `McpServer` + `StreamableHTTPServerTransport` pair, and
+   * its own `McpServer` + `NodeStreamableHTTPServerTransport` pair, and
    * server-initiated notifications stream over a long-lived `GET /mcp`
    * SSE connection. Required for ChatGPT custom GPT actions and other
    * clients that expect persistent state across requests. Off by default
@@ -262,6 +276,52 @@ export function isRequestOriginAllowed(requestOrigin: string | undefined, allowO
   return requestOrigin === undefined || allowOrigins.includes(requestOrigin);
 }
 
+/**
+ * Parse the media-type essence needed by MCP POST admission.
+ *
+ * SDK v2 requires `application/json`; parameters and case variants are
+ * accepted, while missing, joined/duplicated, or misleading parameter values
+ * are rejected. This guard runs before JSON parsing so invalid media types
+ * deterministically receive 415 rather than a parse error or legacy fallback.
+ *
+ * @param value - Node's incoming `Content-Type` header value.
+ * @returns Whether the header unambiguously denotes `application/json`.
+ * @internal
+ */
+export function isJsonContentType(value: string | string[] | undefined): boolean {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const separator = value.indexOf(";");
+  const essence = (separator === -1 ? value : value.slice(0, separator)).trim().toLowerCase();
+  const parameters = separator === -1 ? "" : value.slice(separator + 1);
+  // Node coalesces duplicate headers with a top-level comma. RFC parameters
+  // may legally contain commas inside quoted strings, including escaped
+  // quotes, so distinguish those from a joined second media type. If a quoted
+  // string is malformed/unclosed, match SDK v2's fallback: accept the JSON
+  // essence unless that ambiguous tail itself contained a comma.
+  let quoted = false;
+  let escaped = false;
+  let quotedComma = false;
+  for (const char of parameters) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === ",") {
+      if (!quoted) return false;
+      quotedComma = true;
+    }
+  }
+  return essence === "application/json" && !(quoted && quotedComma);
+}
+
 /** Read the entire request body (UTF-8 JSON). Returns undefined for empty. */
 async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -358,13 +418,19 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id, Last-Event-ID");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, Mcp-Session-Id, Last-Event-ID, MCP-Protocol-Version, Mcp-Method, Mcp-Name"
+  );
   // v3.10.0-rc.62 (HTTP-CORS-EXPOSE-SESSION-ID) — `Access-Control-Allow-Headers` only lets a
   // browser SEND `Mcp-Session-Id` on the request; to let cross-origin JS READ the session id the
   // server returns on `initialize`, it must be listed in `Access-Control-Expose-Headers`. Without
   // this, a browser MCP client in stateful mode cannot capture the `Mcp-Session-Id` response header
   // and every follow-up request is treated as a new session (the SDK exposes it as a response header).
-  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+  res.setHeader(
+    "Access-Control-Expose-Headers",
+    "Mcp-Session-Id, WWW-Authenticate, Last-Event-ID, MCP-Protocol-Version"
+  );
   res.setHeader("Access-Control-Max-Age", "600");
 }
 
@@ -374,7 +440,7 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
  */
 /**
  * v2.14.0 — one entry in the stateful-session map. Each session pairs an
- * `McpServer` instance with a `StreamableHTTPServerTransport` (in
+ * `McpServer` instance with a `NodeStreamableHTTPServerTransport` (in
  * stateful mode the SDK keys requests by the session id we assign at
  * `initialize` time) and tracks the last activity timestamp for
  * idle-eviction.
@@ -394,7 +460,7 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
  */
 interface StatefulSession {
   server: ReturnType<typeof buildMcpServer>;
-  transport: InstanceType<typeof StreamableHTTPServerTransport>;
+  transport: InstanceType<typeof NodeStreamableHTTPServerTransport>;
   /** Epoch-ms of the last `handleRequest` for this session. */
   lastActivityMs: number;
   /**
@@ -651,7 +717,7 @@ async function runWithRefcount<T>(
 /**
  * v3.10.0-rc.65 (round-3 audit) — wrap the stateful fresh-initialize body with the
  * `pendingInits` reservation so the decrement runs in a `finally` on EVERY exit path,
- * including a throw from `buildMcpServer` or the `StreamableHTTPServerTransport`
+ * including a throw from `buildMcpServer` or the `NodeStreamableHTTPServerTransport`
  * constructor. Pre-rc.65 the `pendingInits += 1` and both constructors sat OUTSIDE the
  * try/finally, so a constructor throw skipped the decrement → the counter leaked
  * permanently, lowering the effective `maxSessions` cap by one each time until every
@@ -696,18 +762,140 @@ export function deriveHttpBodyCap(maxFileBytes: string | undefined): number {
   return Math.max(4 * 1024 * 1024, Math.floor(vaultMaxBytes * 1.5));
 }
 
+async function waitForBoundedSettlement(task: Promise<void>, timeoutMs: number): Promise<boolean> {
+  if (timeoutMs <= 0) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Lifecycle owner for SDK v2's long-lived modern HTTP handler and the
+ * claim-less stateless legacy requests that share its process dependencies.
+ *
+ * The official handler creates one registered server per modern request, but
+ * the handler itself owns shared event routing and every still-open modern
+ * exchange. The same lifecycle owns one aggregate tracker for default-mode
+ * legacy stateless writes. Shutdown therefore closes admission synchronously,
+ * gives already-admitted exchanges one bounded grace, settles write integrity,
+ * and bounds SDK close before the outer HTTP shutdown closes shared deps.
+ */
+interface ModernHttpLifecycle {
+  /** Whether a new `/mcp` request may enter protocol routing. */
+  readonly accepting: boolean;
+  /** Serve one already-classified modern request through the Node adapter. */
+  serve(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void>;
+  /** Serve one claim-less stateless legacy request under the shared write owner. */
+  serveLegacyStateless(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void>;
+  /** Close admission, drain boundedly, then close the official handler. */
+  close(): Promise<void>;
+}
+
+function createModernHttpLifecycle(
+  deps: ServerDeps,
+  opts: HttpServeOptions,
+  drainMs: number,
+  closeMs: number,
+  writeTracker: WriteRequestTracker,
+  afterRequestAdmitted?: () => void | Promise<void>,
+  injectedHandlerClose?: () => Promise<void>
+): ModernHttpLifecycle {
+  const report = (prefix: string, error: Error): void => {
+    process.stderr.write(`enquire http: ${prefix} — ${error.message}\n`);
+  };
+  // Modern and default legacy HTTP are per request, not per session, so one
+  // handler-owned tracker aggregates persistent mutations across every fresh
+  // server instance. SDK close aborts transports but does not drain tool
+  // callbacks; this owner keeps shared deps alive for finish-only writes and
+  // explicitly rolls back cancellation-safe batches. Stateful legacy sessions
+  // retain their stronger independent per-session trackers below.
+  const handler: McpHttpHandler = createMcpHandler(() => buildMcpServer(deps, opts, writeTracker), {
+    legacy: "reject",
+    onerror: (error) => report("modern handler error", error)
+  });
+  const nodeHandler = toNodeHandler(handler, {
+    onerror: (error) => report("modern Node adapter error", error)
+  });
+  let accepting = true;
+  let inFlight = 0;
+  let closePromise: Promise<void> | undefined;
+
+  const serveOwned = async (
+    res: ServerResponse,
+    dispatch: () => Promise<void>,
+    runAdmissionHook: boolean
+  ): Promise<void> => {
+    // This check + increment are synchronous, so shutdown can never miss a
+    // request that passed admission but has not yet entered its SDK adapter.
+    if (!accepting) {
+      res.setHeader("Retry-After", "1");
+      sendJsonRpcError(res, 503, -32000, "Server is shutting down");
+      return;
+    }
+    inFlight += 1;
+    try {
+      if (runAdmissionHook && afterRequestAdmitted) await afterRequestAdmitted();
+      await dispatch();
+    } finally {
+      inFlight -= 1;
+    }
+  };
+
+  return {
+    get accepting(): boolean {
+      return accepting;
+    },
+    async serve(req, res, body): Promise<void> {
+      await serveOwned(res, () => nodeHandler(req, res, body), true);
+    },
+    async serveLegacyStateless(req, res, body): Promise<void> {
+      await serveOwned(res, () => handleStatelessRequest(req, res, deps, opts, body, writeTracker), false);
+    },
+    close(): Promise<void> {
+      if (closePromise) return closePromise;
+      accepting = false;
+      writeTracker.closeAdmission("Modern HTTP shutdown closed persistent-write admission");
+      const deadline = Date.now() + Math.max(0, drainMs);
+      closePromise = (async () => {
+        while (inFlight > 0 && Date.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        }
+        await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");
+        await writeTracker.waitForAll();
+        const closeTask = Promise.resolve()
+          .then(() => (injectedHandlerClose ? injectedHandlerClose() : handler.close()))
+          .catch((error) => {
+            report("modern handler close failed", error instanceof Error ? error : new Error(String(error)));
+          });
+        if (!(await waitForBoundedSettlement(closeTask, closeMs)) && closeMs > 0) {
+          process.stderr.write(`enquire http: modern handler close exceeded ${closeMs}ms; forcing TCP teardown\n`);
+        }
+      })();
+      return closePromise;
+    }
+  };
+}
+
 export function createHttpHandler(
   deps: ServerDeps,
   opts: HttpServeOptions,
   /**
    * v3.8.7 P2-11 — optional out-param. If provided, the function
    * assigns `.registry` to the stateful-mode `SessionRegistry` (or
-   * `null` in stateless mode). `startHttpServer` uses this to wire the
-   * registry into the `shutdownHttpServer` helper via the
-   * `httpServerExtras` WeakMap. Existing call sites that don't pass
-   * `out` are unaffected (backwards compatible).
+   * `null` in stateless mode) and `.modern` to the SDK v2 handler lifecycle.
+   * `startHttpServer` wires both into `shutdownHttpServer` via the
+   * `httpServerExtras` WeakMap. Existing call sites that don't pass `out`
+   * remain unaffected.
    */
-  out?: { registry: SessionRegistry | null },
+  out?: { registry: SessionRegistry | null; modern?: ModernHttpLifecycle },
   internals: HttpTransportInternals = {}
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const mcpPath = opts.mcpPath ?? "/mcp";
@@ -726,7 +914,20 @@ export function createHttpHandler(
   const maxSessions = opts.maxSessions ?? 100;
   const deleteDrainMs = Math.max(0, internals.deleteDrainMs ?? DELETE_DRAIN_MS);
   const registry = stateful ? createSessionRegistry(idleTimeoutMs) : null;
-  if (out) out.registry = registry;
+  const sharedWriteTracker = internals.modernWriteTracker ?? new WriteRequestTracker();
+  const modern = createModernHttpLifecycle(
+    deps,
+    opts,
+    Math.max(0, internals.modernDrainMs ?? MODERN_DRAIN_MS),
+    Math.max(0, internals.modernCloseMs ?? MODERN_CLOSE_MS),
+    sharedWriteTracker,
+    internals.afterModernRequestAdmitted,
+    internals.modernHandlerClose
+  );
+  if (out) {
+    out.registry = registry;
+    out.modern = modern;
+  }
 
   return async (req, res) => {
     try {
@@ -787,6 +988,49 @@ export function createHttpHandler(
         return;
       }
 
+      // `shutdownHttpServer` closes this gate before draining either protocol
+      // era. Origin/auth/rate admission above remains observable and no new
+      // body, server instance, or legacy session is allocated afterwards.
+      if (!modern.accepting) {
+        res.setHeader("Retry-After", "1");
+        sendJsonRpcError(res, 503, -32000, "Server is shutting down");
+        return;
+      }
+
+      // Match SDK v2's HTTP entry ordering: invalid media type wins before
+      // body parsing and before era classification. Otherwise malformed bytes
+      // under text/plain could become a 400 parse error, while a claim-less
+      // JSON body could be incorrectly downgraded to the legacy leg.
+      if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {
+        sendJsonRpcError(res, 415, -32000, "Unsupported Media Type: Content-Type must be application/json");
+        return;
+      }
+
+      // Every POST is bounded and parsed exactly once before protocol-era
+      // classification. `toWebRequest` and the selected SDK handler receive
+      // this parsed value, so neither re-reads the consumed Node stream.
+      let body: unknown;
+      if (req.method === "POST") {
+        try {
+          body = await readJsonBody(req, maxBodyBytes);
+        } catch (err) {
+          sendJsonRpcError(res, 400, -32700, err instanceof Error ? err.message : "Parse error");
+          return;
+        }
+
+        // Empty bodies have no modern envelope claim and remain legacy. Every
+        // non-empty JSON body goes through the SDK's own classifier. Crucially,
+        // false includes malformed/unsupported modern claims, so those stay on
+        // the strict modern error ladder rather than downgrading to legacy.
+        if (body !== undefined) {
+          const probe = await toWebRequest(req, body);
+          if (!(await isLegacyRequest(probe, body))) {
+            await modern.serve(req, res, body);
+            return;
+          }
+        }
+      }
+
       // Stateless mode (default) — POST only; fresh server+transport
       // per request. Same path as v2.6.0.
       if (!stateful || !registry) {
@@ -794,7 +1038,11 @@ export function createHttpHandler(
           sendJsonRpcError(res, 405, -32000, `Method ${req.method} not allowed for ${mcpPath}`);
           return;
         }
-        await handleStatelessRequest(req, res, deps, opts, maxBodyBytes);
+        if (body === undefined) {
+          sendJsonRpcError(res, 400, -32700, "Parse error: the request body is empty");
+          return;
+        }
+        await modern.serveLegacyStateless(req, res, body);
         return;
       }
 
@@ -949,19 +1197,16 @@ export function createHttpHandler(
         return;
       }
 
-      // POST /mcp — either an existing session (Mcp-Session-Id header)
-      // or a new initialize. Read the body once; we'll need it to
-      // detect initialize and to feed handleRequest.
-      let body: unknown;
-      try {
-        body = await readJsonBody(req, maxBodyBytes);
-      } catch (err) {
-        sendJsonRpcError(res, 400, -32700, err instanceof Error ? err.message : "Parse error");
-        return;
-      }
+      // Legacy POST /mcp — either an existing session (Mcp-Session-Id
+      // header) or a new initialize. The shared pre-router above already read
+      // and classified this body once; only claim-less traffic reaches here.
 
       if (sessionId) {
         // Existing session — route to its transport.
+        if (body === undefined) {
+          sendJsonRpcError(res, 400, -32700, "Parse error: the request body is empty");
+          return;
+        }
         const session = registry.sessions.get(sessionId);
         // v3.8.7 P2-10 — same `closing` defense as the GET branch. A
         // session marked `closing` is mid-shutdown and not safe to use.
@@ -1039,7 +1284,7 @@ export function createHttpHandler(
       // v3.8.7 P2-10 + v3.10.0-rc.65 — reserve the slot synchronously and run the WHOLE
       // build+connect+initialize under `runWithPendingInit`, so the reservation is released on
       // EVERY exit path — including a throw from `buildMcpServer` or the
-      // `StreamableHTTPServerTransport` constructor (pre-rc.65 those ran BEFORE the try/finally,
+      // `NodeStreamableHTTPServerTransport` constructor (pre-rc.65 those ran BEFORE the try/finally,
       // so a constructor throw leaked `pendingInits` permanently → eventual 503). Between the
       // reservation and the `onsessioninitialized` callback the cap-check above can see it via
       // `pendingInits` and reject concurrent inits that would overshoot the cap.
@@ -1051,14 +1296,14 @@ export function createHttpHandler(
           // throws (rc.65 — the constructors are now inside the try, not before it).
           let server: ReturnType<typeof buildMcpServer> | undefined;
           let session: StatefulSession | undefined;
-          let transport: InstanceType<typeof StreamableHTTPServerTransport> | undefined;
+          let transport: InstanceType<typeof NodeStreamableHTTPServerTransport> | undefined;
           try {
             const writeTracker = new WriteRequestTracker();
             server = buildMcpServer(deps, opts, writeTracker);
             session = {
               server,
               // Filled in below once `transport` is constructed.
-              transport: null as unknown as InstanceType<typeof StreamableHTTPServerTransport>,
+              transport: null as unknown as InstanceType<typeof NodeStreamableHTTPServerTransport>,
               lastActivityMs: Date.now(),
               inFlight: 0,
               inFlightCalls: 0,
@@ -1068,7 +1313,7 @@ export function createHttpHandler(
               closing: false
             };
             const sess = session; // captured (definitely-assigned) for the SDK callbacks
-            transport = new StreamableHTTPServerTransport({
+            transport = new NodeStreamableHTTPServerTransport({
               sessionIdGenerator: () => randomBytes(16).toString("hex"),
               onsessioninitialized: (sid: string) => {
                 // The SDK guarantees this fires before initialize's response
@@ -1156,17 +1401,11 @@ async function handleStatelessRequest(
   res: ServerResponse,
   deps: ServerDeps,
   opts: HttpServeOptions,
-  maxBodyBytes: number
+  body: unknown,
+  writeTracker: WriteRequestTracker
 ): Promise<void> {
-  let body: unknown;
-  try {
-    body = await readJsonBody(req, maxBodyBytes);
-  } catch (err) {
-    sendJsonRpcError(res, 400, -32700, err instanceof Error ? err.message : "Parse error");
-    return;
-  }
-  const server = buildMcpServer(deps, opts);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const server = buildMcpServer(deps, opts, writeTracker);
+  const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   // v3.9.0-rc.16 — register cleanup BEFORE connect + make it idempotent +
   // error-safe, for parity with the stateful path's close discipline (P2-10).
   // Pre-rc.16 the `res.on("close")` registration sat AFTER `server.connect()`,
@@ -1217,10 +1456,15 @@ export function generateBearerToken(): string {
 interface HttpServerExtras {
   /** Stateful-mode registry; null in stateless mode. */
   registry: SessionRegistry | null;
+  /** SDK v2 modern per-request handler and its bounded shutdown owner. */
+  modern: ModernHttpLifecycle;
   /** Server deps so shutdownHttpServer can close watcher/fts/embed-db cleanly. */
   deps: ServerDeps;
 }
 const httpServerExtras = new WeakMap<HttpServer, HttpServerExtras>();
+/** One teardown promise per server so concurrent programmatic callers join the
+ * same protocol/write/dependency drain instead of racing it with a TCP close. */
+const httpServerShutdowns = new WeakMap<HttpServer, Promise<void>>();
 
 /**
  * v3.10.0-rc.23 — bounded grace for `server.close()`. Node's
@@ -1292,61 +1536,67 @@ export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CL
  *   3. Close vault, fts5 index, watcher, watcherEmbedDb — same order
  *      as the SIGINT cleanup chain in startHttpServer.
  *
- * Idempotent: a second call on the same server is a no-op once extras
- * are unset.
+ * Idempotent: sequential and concurrent calls on the same server join the
+ * same memoized teardown promise.
  */
 export async function shutdownHttpServer(server: HttpServer): Promise<void> {
-  const extras = httpServerExtras.get(server);
-  if (!extras) {
-    // Already cleaned up (or not from startHttpServer). Still close the
-    // TCP listener for safety.
-    await closeServerBounded(server);
-    return;
-  }
-  httpServerExtras.delete(server);
-  try {
-    if (extras.registry) {
-      await extras.registry.closeAll().catch(() => {});
+  const existingShutdown = httpServerShutdowns.get(server);
+  if (existingShutdown) return existingShutdown;
+
+  const shutdownTask = (async () => {
+    const extras = httpServerExtras.get(server);
+    if (!extras) {
+      // Not from startHttpServer. Still close the TCP listener for safety.
+      await closeServerBounded(server);
+      return;
     }
-  } catch {
-    /* best-effort */
-  }
-  await closeServerBounded(server);
-  // Close deps last — they own SQLite + chokidar handles that should
-  // outlive in-flight requests (which we drained above). Vault doesn't
-  // own a SQLite handle (no `close()` method), but it owns the
-  // persistent disk cache that we should flush before exit so a
-  // SIGKILL-followed-by-cold-start doesn't reread an empty vault.
-  // v3.10.0-rc.44 (M6) — ORDER MATTERS, and now mirrors shutdownStdioDeps. Drain the
-  // watcher FIRST, while ftsIndex + watcherEmbedDb are still OPEN: an in-flight / late
-  // chokidar handler calls ftsIndex.reindexFile/dropFile + embed-db ops, and
-  // watcher.close()'s flushHnswToDisk calls embedDb.computeSignature(). Pre-rc.44
-  // ftsIndex.close() ran BEFORE the drain, so a handler still in flight during the
-  // closeAll(5s)+closeServerBounded(3s) window threw on a closed SQLite handle and the
-  // whole event (fts + embed + hnsw) was dropped. Then close the watcher's embed-db,
-  // flush the vault cache, and close fts LAST.
-  try {
-    await extras.deps.watcher?.close();
-  } catch {
-    /* best-effort */
-  }
-  try {
-    extras.deps.watcherEmbedDb?.close();
-  } catch {
-    /* best-effort */
-  }
-  if (extras.deps.vault.persistentCacheEnabled) {
+    httpServerExtras.delete(server);
+    // Close both era gates synchronously, then drain independently. Legacy
+    // sessions retain their stronger persistent-write tail; modern exchanges
+    // receive their bounded grace before the SDK handler aborts stragglers.
+    // Both protocol owners are closed before the shared deps below.
+    const modernClose = extras.modern.close().catch(() => {});
+    const legacyClose = extras.registry?.closeAll().catch(() => {}) ?? Promise.resolve();
+    await Promise.all([modernClose, legacyClose]);
+    await closeServerBounded(server);
+    // Close deps last — they own SQLite + chokidar handles that should
+    // outlive in-flight requests (which we drained above). Vault doesn't
+    // own a SQLite handle (no `close()` method), but it owns the
+    // persistent disk cache that we should flush before exit so a
+    // SIGKILL-followed-by-cold-start doesn't reread an empty vault.
+    // v3.10.0-rc.44 (M6) — ORDER MATTERS, and now mirrors shutdownStdioDeps. Drain the
+    // watcher FIRST, while ftsIndex + watcherEmbedDb are still OPEN: an in-flight / late
+    // chokidar handler calls ftsIndex.reindexFile/dropFile + embed-db ops, and
+    // watcher.close()'s flushHnswToDisk calls embedDb.computeSignature(). Pre-rc.44
+    // ftsIndex.close() ran BEFORE the drain, so a handler still in flight during the
+    // closeAll(5s)+closeServerBounded(3s) window threw on a closed SQLite handle and the
+    // whole event (fts + embed + hnsw) was dropped. Then close the watcher's embed-db,
+    // flush the vault cache, and close fts LAST.
     try {
-      await extras.deps.vault.saveDiskCache();
+      await extras.deps.watcher?.close();
     } catch {
       /* best-effort */
     }
-  }
-  try {
-    extras.deps.ftsIndex?.close();
-  } catch {
-    /* best-effort */
-  }
+    try {
+      extras.deps.watcherEmbedDb?.close();
+    } catch {
+      /* best-effort */
+    }
+    if (extras.deps.vault.persistentCacheEnabled) {
+      try {
+        await extras.deps.vault.saveDiskCache();
+      } catch {
+        /* best-effort */
+      }
+    }
+    try {
+      extras.deps.ftsIndex?.close();
+    } catch {
+      /* best-effort */
+    }
+  })();
+  httpServerShutdowns.set(server, shutdownTask);
+  return shutdownTask;
 }
 
 /**
@@ -1412,12 +1662,19 @@ export async function startHttpServer(
   const deps = await prepareServerDeps(normalizedOpts);
   // v3.8.7 P2-11 — capture the stateful registry via the out-param so
   // we can wire it into `shutdownHttpServer` via the WeakMap below.
-  const handlerOut: { registry: SessionRegistry | null } = { registry: null };
+  const handlerOut: { registry: SessionRegistry | null; modern?: ModernHttpLifecycle } = { registry: null };
   const handler = createHttpHandler(deps, normalizedOpts, handlerOut, internals);
   const httpServer = createServer((req, res) => {
     void handler(req, res);
   });
-  httpServerExtras.set(httpServer, { registry: handlerOut.registry, deps });
+  const modern = handlerOut.modern;
+  if (!modern) {
+    // `createHttpHandler` always publishes the lifecycle before returning.
+    // Keep this fail-closed guard so a future refactor cannot start a listener
+    // whose modern exchanges are absent from shutdown ownership.
+    throw new Error("enquire serve-http: modern HTTP lifecycle was not initialized");
+  }
+  httpServerExtras.set(httpServer, { registry: handlerOut.registry, modern, deps });
 
   // v3.10.0-rc.19 (audit M3) — ONE graceful-shutdown orchestrator on signal.
   // `shutdownHttpServer` already drains in-flight stateful sessions, closes the
@@ -1435,7 +1692,7 @@ export async function startHttpServer(
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
     // beforeExit (natural drain, no signal): best-effort teardown, never exit.
-    // Idempotent via shutdownHttpServer's WeakMap-delete; guarded so the async
+    // Idempotent via shutdownHttpServer's memoized promise; guarded so the async
     // teardown it schedules can't make beforeExit re-fire in a loop.
     let beforeExitRan = false;
     process.on("beforeExit", () => {

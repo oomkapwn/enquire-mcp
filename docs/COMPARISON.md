@@ -91,7 +91,7 @@ the same outcome?
 | **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **1795 tests + 9 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **1807 tests + 11 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
 combination was not documented on the reviewed public product surface; it does
@@ -145,7 +145,7 @@ private branches, future releases, or unadvertised behavior.
 | **Local scale controls** | HNSW, int8 vectors, persistence, live watcher updates, and adaptive refill | Dense retrieval stays practical as a real vault grows |
 | **Remote-agent readiness** | Streamable HTTP, exact-Origin admission, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
 | **Safe defaults** | Read-only by default, explicit write gate, privacy filters, dry-run support | Agents receive the minimum authority they need |
-| **Release trust** | 9 release gates, signed npm provenance, semver contracts | Buyers can verify both behavior and package origin |
+| **Release trust** | 11 release gates, signed npm provenance, semver contracts | Buyers can verify both behavior and package origin |
 
 ## Proof surface
 
@@ -155,8 +155,8 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **1795** |
-| Release-required CI gates | **9** |
+| Test count (public) | **1807** |
+| Release-required CI gates | **11** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |
 | Outbound calls initiated by enquire during serve | **Zero** |

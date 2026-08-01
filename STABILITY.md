@@ -4,7 +4,18 @@
 
 ## TL;DR
 
-On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resource URI, MCP prompt name, and exported TypeScript symbol below is **semver-bound**. Breaking changes require a major bump. Minor releases add backward-compatible functionality; patch releases fix defects without adding a new public capability. Explicit `@rc` previews remain prerelease surfaces until stable promotion.
+On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resource URI, MCP prompt name, and exported TypeScript symbol below is **semver-bound**. Breaking changes require a major bump. Minor releases add backward-compatible functionality; patch releases fix defects without adding a new public capability. Explicit `@rc` previews remain prerelease surfaces until stable promotion. npm `@latest` remains the stable v3 line while v4 is exercised on `@rc`.
+
+## v4.x prerelease compatibility boundary
+
+`4.0.0-rc.1` is a deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
+
+- The 46 tool names and argument shapes, 19 prompt names and schemas, resources, CLI flags/defaults, privacy controls, write gates, and vault/index/cache formats remain compatible with v3.
+- `serve` now uses SDK v2's era-aware stdio entrypoint. `serve-http` accepts strict modern `2026-07-28` exchanges and supported legacy 2025-era clients from the same registered surface; `--stateful` continues to provide sticky sessions, GET/SSE, and DELETE lifecycle for the legacy leg. Malformed or unsupported modern claims are never retried as legacy.
+- The one intentional programmatic TypeScript break is nominal: `buildMcpServer()` now returns `McpServer` from `@modelcontextprotocol/server@2.0.0`, not the monolithic SDK v1 class. Consumers that name or inspect the old SDK type must migrate their import/type expectation; the Enquire function name and parameters are unchanged.
+- Modern HTTP and legacy-stateless HTTP are per-request. Legacy stateful HTTP retains its session lifecycle. Persistent writes on stdio and every HTTP leg are drained or rolled back before shared persistence resources close.
+
+Because this is an `@rc`, the v4 contract is not a stable-channel promise yet. Stable v4 promotion additionally requires real-client evidence and an explicit maintainer decision; installing `@latest` continues to select v3.
 
 ## v3.x stable surfaces
 

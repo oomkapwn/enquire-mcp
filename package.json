@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@oomkapwn/enquire-mcp",
-  "version": "3.12.0-rc.31",
+  "version": "4.0.0-rc.1",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid search over Markdown and PDFs/OCR, plus Canvas parsing, Dataview-style LIST/TABLE queries, and supported Obsidian Base-filter execution. Read-only by default; zero outbound calls initiated by enquire during serve. 46 tools, 19 MCP prompts, 1795 tests, signed npm build provenance (SLSA L2), semver-bound, MIT.",
+  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid search over Markdown and PDFs/OCR, plus Canvas parsing, Dataview-style LIST/TABLE queries, and supported Obsidian Base-filter execution. Read-only by default; zero outbound calls initiated by enquire during serve. 46 tools, 19 MCP prompts, 1807 tests, signed npm build provenance (SLSA L2), semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"
@@ -209,7 +209,8 @@
     "node": ">=22.13.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "js-yaml": "^5.2.2",
@@ -217,6 +218,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",

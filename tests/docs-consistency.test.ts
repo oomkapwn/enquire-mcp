@@ -1949,7 +1949,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const requiredMatch = /REQUIRED="([^"]+)"/.exec(releaseYml);
     expect(requiredMatch, 'release.yml must declare REQUIRED="..."').not.toBeNull();
     const releaseRequired = (requiredMatch?.[1] ?? "").split("|").filter(Boolean).length;
-    expect(releaseRequired).toBe(9);
+    expect(releaseRequired).toBe(11);
 
     // Live branch-protection snapshot re-derived with `gh api` on 2026-07-23.
     // External settings are intentionally date-stamped; this invariant keeps
@@ -2130,7 +2130,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     for (const file of ["AGENTS.md", "llms.txt", "llms-ctx.txt", "ROADMAP.md"]) {
       const body = await read(file);
-      expect(body, `${file} must carry the release-required count`).toContain("9 release-required");
+      expect(body, `${file} must carry the release-required count`).toContain("11 release-required");
       expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
       expect(body, `${file} must not retain the five-advisory fiction`).not.toMatch(/5 advisory/i);
     }
@@ -2853,9 +2853,9 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
   });
 
   it("NEGATIVE: checkLlmsCiGates catches drift", () => {
-    expect(checkLlmsCiGates("9 release-required CI checks", 9)).toBeNull();
-    expect(checkLlmsCiGates("10 release-required CI checks", 9)).toMatch(/10.*9/);
-    expect(checkLlmsCiGates("no gates claim", 9)).toMatch(/must declare/);
+    expect(checkLlmsCiGates("11 release-required CI checks", 11)).toBeNull();
+    expect(checkLlmsCiGates("10 release-required CI checks", 11)).toMatch(/10.*11/);
+    expect(checkLlmsCiGates("no gates claim", 11)).toMatch(/must declare/);
   });
 
   it("NEGATIVE: checkAgentsTestFloor catches floor above actual + missing claim", () => {
@@ -2879,13 +2879,13 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
 
   it("NEGATIVE: checkAgentsCiGates catches ANY drifted mention", () => {
     // All match → pass
-    expect(checkAgentsCiGates("9 release-required CI checks, 9 release-required CI checks", 9)).toBeNull();
+    expect(checkAgentsCiGates("11 release-required CI checks, 11 release-required CI checks", 11)).toBeNull();
     // First mention drifts → fail
-    expect(checkAgentsCiGates("10 release-required CI checks, 9 release-required CI checks", 9)).toMatch(/10/);
+    expect(checkAgentsCiGates("10 release-required CI checks, 11 release-required CI checks", 11)).toMatch(/10/);
     // Last mention drifts → fail (multiple-mention coverage)
-    expect(checkAgentsCiGates("9 release-required CI checks, 10 release-required CI checks", 9)).toMatch(/10/);
+    expect(checkAgentsCiGates("11 release-required CI checks, 10 release-required CI checks", 11)).toMatch(/10/);
     // Zero mentions → fail
-    expect(checkAgentsCiGates("no claim", 9)).toMatch(/at least once/);
+    expect(checkAgentsCiGates("no claim", 11)).toMatch(/at least once/);
   });
 
   // v3.11.0-rc.8 (pre-promotion audit LOW) — CITATION.cff `version` tracks the @latest

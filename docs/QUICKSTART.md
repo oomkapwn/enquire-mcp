@@ -25,14 +25,14 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v3.12.0-rc.31` preview: tier-aware source-preserving doctor, preview-first `first-run`, configuration-aware MCP instructions, verified client-specific install actions, explicitly q8 local embedding weights, evidence-complete benchmark provenance, the non-monkey-patching MCP registration seam, and remote CI at the literal Node 22.13.0 runtime floor. Until that release reaches `@latest`, install that exact prerelease globally, then keep preparation and generated runtime on this one installation:
+This source guide also documents the `v4.0.0-rc.1` preview. It keeps the v3 tool/prompt/resource and CLI surface while moving to the official MCP SDK v2: modern `2026-07-28` and supported legacy clients share one registration factory, with strict no-downgrade routing and remote protocol/package gates. It also includes the tier-aware source-preserving doctor, preview-first `first-run`, verified client-specific install actions, explicit q8 local embedding weights, and the literal Node 22.13.0 runtime floor. npm `@latest` remains stable v3; to exercise v4, install this exact prerelease globally and keep preparation plus generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@3.12.0-rc.31
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.1
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `3.12.0-rc.31` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `4.0.0-rc.1` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 For a client-specific install action, run `enquire-mcp configure --client <name> --vault /absolute/path`. The preview prints a native review URI only where the client officially accepts an arbitrary local definition (VS Code), a copy-and-run command where the client exposes one (Claude Code and Codex), and an explicit **copy-only** label where public one-click routes are limited to Marketplace/Registry entries. Every mode includes the exact generated config as the fallback.
 

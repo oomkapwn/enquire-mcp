@@ -642,6 +642,10 @@ const MCPB_HYBRID_NEGATIVE_ASSERTION =
   'assert.match(noMatchText, /"matches":\\s*\\[\\s*\\]/, "obsidian_search: absent-token query returned matches")';
 const MCPB_HYBRID_FALSE_HIT_ASSERTION =
   '!noMatchText.includes("Projects/Hermes.md"), "obsidian_search: negative control leaked a false hit"';
+const MCPB_NPM_CHANNEL_ADVANCE =
+  '            node scripts/check-release-integrity.mjs channel-advance \\\n' +
+  '              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
+  '            npm publish --provenance --access public --tag "$CHANNEL"';
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -975,9 +979,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('EXPECTED_POST_ACTION="reuse_superseded"') ||
     !inputs.release.includes('"$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION"') ||
     !inputs.release.includes('"$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION"') ||
-    !inputs.release.includes(
-      "            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n"
-    ) ||
+    !inputs.release.includes(MCPB_NPM_CHANNEL_ADVANCE) ||
     (inputs.release.match(/cmp -s "\$LOCAL_ASSET"/g) ?? []).length !== 3 ||
     (inputs.release.includes("gh release upload") && inputs.release.includes("--clobber")) ||
     !inputs.release.includes("SOURCE_SHA=$(git rev-parse HEAD)") ||
@@ -1587,11 +1589,12 @@ describe("release identity and exact required-check gate", () => {
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     const latestOnlyChannelGuard = mcpbInputs.release.replace(
-      "            fi\n            node scripts/check-release-integrity.mjs channel-advance \\\n",
-      `            fi\n            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
+      MCPB_NPM_CHANNEL_ADVANCE,
+      `            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
         "              node scripts/check-release-integrity.mjs channel-advance \\\n" +
         '                "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
-        "            fi\n"
+        "            fi\n" +
+        '            npm publish --provenance --access public --tag "$CHANNEL"'
     );
     expect(mcpbContractProblems({ ...mcpbInputs, release: latestOnlyChannelGuard })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

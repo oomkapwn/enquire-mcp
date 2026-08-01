@@ -1355,9 +1355,7 @@ describe("release identity and exact required-check gate", () => {
       rawMutationCallProblems(
         'function replaceExactly(source: string): string { return source.replace("old", "new"); }'
       )
-    ).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
+    ).toEqual([expect.stringMatching(/raw \.replace\(\) mutation/)]);
 
     const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     expect(workflow).toContain('node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"');
@@ -2155,9 +2153,7 @@ describe("release identity and exact required-check gate", () => {
           '          node-version: "22.13.0"\n' +
             "          cache: npm\n" +
             "      - name: Install deps (npm ci with retry)",
-          "          node-version: 22\n" +
-            "          cache: npm\n" +
-            "      - name: Install deps (npm ci with retry)"
+          "          node-version: 22\n" + "          cache: npm\n" + "      - name: Install deps (npm ci with retry)"
         ),
         pkg.engines?.node
       )
@@ -2290,12 +2286,9 @@ describe("release identity and exact required-check gate", () => {
       "          if-no-files-found: error\n" +
       "          retention-days: 3\n" +
       "          compression-level: 0\n";
-    expect(
-      nodeFloorCiProblems(
-        replaceExactly(ci, previewExportBlock, ""),
-        pkg.engines?.node
-      )
-    ).toContain("docs job must export the remotely rendered social preview before byte-drift enforcement");
+    expect(nodeFloorCiProblems(replaceExactly(ci, previewExportBlock, ""), pkg.engines?.node)).toContain(
+      "docs job must export the remotely rendered social preview before byte-drift enforcement"
+    );
     expect(
       nodeFloorCiProblems(
         replaceExactly(ci, "          path: assets/social-preview.png", "          path: assets/stale-preview.png"),
@@ -2320,7 +2313,7 @@ describe("release identity and exact required-check gate", () => {
     const ciWithLatePreviewExport = replaceExactly(
       ciWithoutPreviewExport,
       "        run: git diff --exit-code -- assets/social-preview.png\n",
-      "        run: git diff --exit-code -- assets/social-preview.png\n" + previewExportBlock
+      `        run: git diff --exit-code -- assets/social-preview.png\n${previewExportBlock}`
     );
     expect(nodeFloorCiProblems(ciWithLatePreviewExport, pkg.engines?.node)).toContain(
       "docs job must export the remotely rendered social preview before byte-drift enforcement"

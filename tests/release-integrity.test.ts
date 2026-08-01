@@ -481,9 +481,10 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   const mcpbDownload = namedStep(mcpbSteps, "Download canonical Linux MCPB candidate");
   const mcpbDownloadWith = yamlRecord(mcpbDownload?.with);
   if (
-    mcpbDownload?.uses !== "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" ||
+    mcpbDownload?.uses !== "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" ||
     mcpbDownloadWith?.name !== `\${{ needs['mcpb-basic-package'].outputs.artifact_name }}` ||
     mcpbDownloadWith?.path !== "artifacts" ||
+    mcpbDownloadWith?.["digest-mismatch"] !== "error" ||
     "if" in (mcpbDownload ?? {}) ||
     "continue-on-error" in (mcpbDownload ?? {})
   ) {
@@ -2079,9 +2080,15 @@ describe("release identity and exact required-check gate", () => {
     expect(
       nodeFloorCiProblems(
         ci.replace(
-          "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0",
-          "actions/download-artifact@v4"
+          "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+          "actions/download-artifact@v8"
         ),
+        pkg.engines?.node
+      )
+    ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
+    expect(
+      nodeFloorCiProblems(
+        ci.replace("          digest-mismatch: error", "          digest-mismatch: warn"),
         pkg.engines?.node
       )
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0-rc.1] — 2026-07-31
+## [4.0.0-rc.1] — 2026-08-01
 
 > **TL;DR:** **enquire now uses the official MCP TypeScript SDK v2 and serves the final MCP `2026-07-28` protocol without abandoning supported legacy clients.** One v2 registration factory exposes the same 46 tools, 19 prompts and resources over era-aware stdio, strict per-request modern HTTP, and the existing optional stateful legacy HTTP lifecycle. A malformed or unsupported modern claim cannot fall back to legacy. Persistent writes on stdio and every HTTP leg use explicit shutdown accounting, so shared indexes and vault resources cannot close ahead of accepted work. Two new fail-closed release contexts exercise the official v2 client across protocol eras and install the public tarball on Linux, Windows and macOS. Tool names/arguments, prompt/resource schemas, CLI behavior, privacy/write gates and on-disk formats remain compatible; the deliberate major break is the nominal TypeScript SDK type returned by `buildMcpServer()`.
 >
@@ -30,6 +30,13 @@ All notable changes to this project will be documented here. The format follows 
 - **`package-consumer` is a required three-OS aggregate.** Linux, Windows and macOS install the packed public tarball both normally and with optional dependencies omitted, validate every public export/subpath, prove the v2 nominal server type, exercise CLI/version and read-only vault behavior, and fail if source/private coordination material or SDK v1 leaks into the package.
 - **Protocol and visual drift are recoverable under the remote-only workstation policy.** The docs job now captures the runner-emitted tools/list schema inventory and rendered social preview, exports both exact artifacts before their fail-closed diffs, and lets maintainers review and commit those bytes without starting the MCP server or renderer locally. The first remote capture (`sha256:48fb886c…` artifact; `sha256:5a7a0230…` schema inventory) proved the complete wire delta: all 46 root `$schema` declarations move from draft-07 to the SDK-v2 draft-2020-12 URI, adding exactly five serialized bytes per tool while keyword counts, schema depth and every functional field remain unchanged. The exact fixture, landing-page proof counts and remotely rendered PNG were refreshed instead of weakening comparison rules.
 - **Release publication now names 11 direct required contexts.** Both new matrix aggregates are `always()`/fail-closed prerequisites of the release workflow. Existing protected Linux/Node, Windows hostile-filesystem/startup-interlock, smoke, audit, coverage, docs, OIA, Docker and CodeQL evidence remains additive rather than weakened.
+
+### RC-only published-consumer advisory boundary
+
+- **The source graph remains strict with an empty allowlist.** A clean registry consumer of the packed candidate resolves `@modelcontextprotocol/node@2.0.0` → `@hono/node-server ^1.19.9`, which cannot admit the patched `>=2.0.5` release and therefore reports `GHSA-frvp-7c67-39w9` even though the source lockfile's root override is patched.
+- **The affected surface is not reachable through Enquire.** The advisory is confined to the Windows `serveStatic` helper; neither Enquire nor the official Node adapter imports or mounts that helper. The adapter path used here is `getRequestListener` / `toNodeHandler` only.
+- **Maintainer approval is narrow and removal-tracked.** On 2026-08-01 the maintainer approved the exact advisory as a third published-consumer exception for RC releases only, pending the official range fix tracked by `modelcontextprotocol/typescript-sdk#2531` / PR #2574. The stale-entry gate requires removal when the advisory disappears. Stable versions and every non-`rc` channel still receive an empty consumer allowlist and remain fail-closed.
+- **This is disclosure, not a dependency-fix claim.** No runtime path, dependency version or product behavior changed in this follow-up; remote CI must still prove the exact packed candidate and all 11 release contexts before publication.
 
 ### Tests (1807)
 

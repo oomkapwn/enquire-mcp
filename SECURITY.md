@@ -226,19 +226,21 @@ npm applies `overrides` only from the root project performing an install. The ov
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the v4.0.0-rc.1 candidate, the clean consumer policy has exactly two configured temporary
-upstream exceptions, listed below. The packed-consumer audit additionally detects
+As of the v4.0.0-rc.1 candidate, the clean consumer policy has exactly three configured temporary
+upstream exceptions, listed below. The third exception covers
 [`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9) through
-`@modelcontextprotocol/node@2.0.0` → `@hono/node-server ^1.19.9`, so publication remains blocked. A
+`@modelcontextprotocol/node@2.0.0` → `@hono/node-server ^1.19.9`. A
 prior live-audit response temporarily omitted that advisory, but the dependency edge never became
 capable of resolving patched `>=2.0.5`: npm consumers ignore Enquire's root override and there is no
 patched 1.x. Enquire and the official Node adapter use `getRequestListener` / `toNodeHandler` and do
 not import or mount the affected Windows `serveStatic` surface. The correct upstream range fix is
 tracked by [typescript-sdk#2531](https://github.com/modelcontextprotocol/typescript-sdk/issues/2531)
-and open [PR #2574](https://github.com/modelcontextprotocol/typescript-sdk/pull/2574). Until an
-official package ships, adding a third RC-only exception is a separate maintainer decision; it is not
-silently inferred from reachability.
+and open [PR #2574](https://github.com/modelcontextprotocol/typescript-sdk/pull/2574). The maintainer
+approved this exact reachability-based exception for RC publication on 2026-08-01. It is not a claim
+that the dependency is patched: stable remains blocked, and the stale-entry gate requires removal as
+soon as an official `@modelcontextprotocol/node` release admits the patched server.
 
+- [`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9) via `@modelcontextprotocol/node` → `@hono/node-server`. The affected Windows static-file helper is not imported or mounted by Enquire or the official Node adapter. Removal is tracked in [modelcontextprotocol/typescript-sdk#2531](https://github.com/modelcontextprotocol/typescript-sdk/issues/2531).
 - [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
 - [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).
 

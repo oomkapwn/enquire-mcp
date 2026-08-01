@@ -321,7 +321,9 @@ function nodeHasReachableAssertion(node: ts.Node, skipBindings?: CallbackSkipBin
     if (nodeHasReachableAssertion(node.condition, skipBindings)) return true;
     if (isLiteralBoolean(node.condition, true)) return nodeHasReachableAssertion(node.whenTrue, skipBindings);
     if (isLiteralBoolean(node.condition, false)) return nodeHasReachableAssertion(node.whenFalse, skipBindings);
-    return nodeHasReachableAssertion(node.whenTrue, skipBindings) || nodeHasReachableAssertion(node.whenFalse, skipBindings);
+    return (
+      nodeHasReachableAssertion(node.whenTrue, skipBindings) || nodeHasReachableAssertion(node.whenFalse, skipBindings)
+    );
   }
   if (ts.isWhileStatement(node) && isLiteralBoolean(node.expression, false)) {
     return nodeHasReachableAssertion(node.expression, skipBindings);

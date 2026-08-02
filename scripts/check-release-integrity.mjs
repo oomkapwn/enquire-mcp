@@ -138,8 +138,7 @@ function assertCanonicalPositiveDecimal(value, label) {
 
 function assertCanonicalReleaseTag(tag) {
   if (typeof tag !== "string") throw new Error("release tag must be one canonical SemVer tag");
-  const match =
-    /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(tag);
+  const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(tag);
   if (!match) throw new Error("release tag must be one canonical SemVer tag without build metadata");
   const prerelease = match[4]?.split(".") ?? [];
   if (prerelease.some((identifier) => /^\d+$/u.test(identifier) && identifier.length > 1 && identifier[0] === "0")) {
@@ -281,12 +280,7 @@ function assertExactFulcioOidcIssuer(certificateDer, label) {
   if (field.tag !== 0xa3 || field.next !== tbs.contentEnd) {
     throw new Error(`${label} certificate must contain one final extensions field`);
   }
-  const extensions = readDerElement(
-    certificateDer,
-    field.contentStart,
-    field.contentEnd,
-    `${label} extensions`
-  );
+  const extensions = readDerElement(certificateDer, field.contentStart, field.contentEnd, `${label} extensions`);
   if (extensions.tag !== 0x30 || extensions.next !== field.contentEnd) {
     throw new Error(`${label} certificate extensions must be one exact DER sequence`);
   }
@@ -295,23 +289,13 @@ function assertExactFulcioOidcIssuer(certificateDer, label) {
   let v2IssuerCount = 0;
   cursor = extensions.contentStart;
   while (cursor < extensions.contentEnd) {
-    const extension = readDerElement(
-      certificateDer,
-      cursor,
-      extensions.contentEnd,
-      `${label} extension`
-    );
+    const extension = readDerElement(certificateDer, cursor, extensions.contentEnd, `${label} extension`);
     if (extension.tag !== 0x30) throw new Error(`${label} has a malformed certificate extension`);
     let extensionCursor = extension.contentStart;
     const oid = readDerElement(certificateDer, extensionCursor, extension.contentEnd, `${label} extension OID`);
     if (oid.tag !== 0x06) throw new Error(`${label} certificate extension lacks an OID`);
     extensionCursor = oid.next;
-    let value = readDerElement(
-      certificateDer,
-      extensionCursor,
-      extension.contentEnd,
-      `${label} extension value`
-    );
+    let value = readDerElement(certificateDer, extensionCursor, extension.contentEnd, `${label} extension value`);
     if (value.tag === 0x01) {
       if (
         value.contentEnd - value.contentStart !== 1 ||
@@ -320,12 +304,7 @@ function assertExactFulcioOidcIssuer(certificateDer, label) {
         throw new Error(`${label} certificate extension has a malformed critical flag`);
       }
       extensionCursor = value.next;
-      value = readDerElement(
-        certificateDer,
-        extensionCursor,
-        extension.contentEnd,
-        `${label} extension value`
-      );
+      value = readDerElement(certificateDer, extensionCursor, extension.contentEnd, `${label} extension value`);
     }
     if (value.tag !== 0x04 || value.next !== extension.contentEnd) {
       throw new Error(`${label} certificate extension must end in one OCTET STRING`);
@@ -349,10 +328,7 @@ function assertExactFulcioOidcIssuer(certificateDer, label) {
       if (v2IssuerCount > 1) {
         throw new Error(`${label} certificate contains duplicate Fulcio v2 OIDC issuer extensions`);
       }
-      if (
-        decodeCanonicalDerUtf8String(valueBytes, `${label} Fulcio v2 OIDC issuer`) !==
-        FULCIO_GITHUB_ACTIONS_ISSUER
-      ) {
+      if (decodeCanonicalDerUtf8String(valueBytes, `${label} Fulcio v2 OIDC issuer`) !== FULCIO_GITHUB_ACTIONS_ISSUER) {
         throw new Error(`${label} Fulcio v2 OIDC issuer is not GitHub Actions`);
       }
     }
@@ -796,11 +772,7 @@ export function evaluateNpmPublication(state, expectedSha, expectedIntegrity, ex
  */
 export function evaluateNpmProvenanceContext(context, expectedSourceSha, expectedTag) {
   assertExactRecord(context, ["declared", "runtime"], "npm provenance context");
-  const declared = assertExactRecord(
-    context.declared,
-    PROVENANCE_CONTEXT_FIELDS,
-    "declared npm provenance context"
-  );
+  const declared = assertExactRecord(context.declared, PROVENANCE_CONTEXT_FIELDS, "declared npm provenance context");
   const runtime = assertExactRecord(context.runtime, PROVENANCE_CONTEXT_FIELDS, "runtime npm provenance context");
   if (!isExactSha1(expectedSourceSha)) {
     throw new Error("expected npm provenance source SHA must be one exact lowercase SHA-1");
@@ -817,8 +789,7 @@ export function evaluateNpmProvenanceContext(context, expectedSourceSha, expecte
   }
 
   const expectedRef = `refs/tags/${expectedTag}`;
-  const expectedWorkflowRef =
-    `${NPM_PROVENANCE_IDENTITY.repository}/${NPM_PROVENANCE_IDENTITY.workflowPath}@${expectedRef}`;
+  const expectedWorkflowRef = `${NPM_PROVENANCE_IDENTITY.repository}/${NPM_PROVENANCE_IDENTITY.workflowPath}@${expectedRef}`;
   const fixed = {
     eventName: "push",
     sha: expectedSourceSha,
@@ -888,19 +859,11 @@ function assertExactNpmVerificationMaterial(predicateType, material, keyid, expe
     return;
   }
 
-  const chain = assertExactRecord(
-    verified.x509CertificateChain,
-    ["certificates"],
-    `${label} SLSA certificate chain`
-  );
+  const chain = assertExactRecord(verified.x509CertificateChain, ["certificates"], `${label} SLSA certificate chain`);
   if (!Array.isArray(chain.certificates) || chain.certificates.length !== 1) {
     throw new Error(`${label} SLSA verification material must contain exactly one signing certificate`);
   }
-  const certificate = assertExactRecord(
-    chain.certificates[0],
-    ["rawBytes"],
-    `${label} SLSA signing certificate`
-  );
+  const certificate = assertExactRecord(chain.certificates[0], ["rawBytes"], `${label} SLSA signing certificate`);
   const certificateDer = decodeCanonicalBase64(certificate.rawBytes, `${label} SLSA signing certificate`);
   if (keyid !== "") {
     throw new Error(`${label} SLSA DSSE key id must be empty for keyless Fulcio signing`);
@@ -1059,11 +1022,7 @@ function assertExactNpmSlsaStatement(statement, expected) {
     ["uri", "digest"],
     "npm SLSA resolved source dependency"
   );
-  const dependencyDigest = assertExactRecord(
-    dependency.digest,
-    ["gitCommit"],
-    "npm SLSA resolved source digest"
-  );
+  const dependencyDigest = assertExactRecord(dependency.digest, ["gitCommit"], "npm SLSA resolved source digest");
   if (dependency.uri !== `git+${repositoryUrl}@${expectedRef}` || dependencyDigest.gitCommit !== expected.sourceSha) {
     throw new Error("npm SLSA resolved dependency does not match the exact tagged source SHA");
   }
@@ -1111,16 +1070,7 @@ function assertExactNpmSlsaStatement(statement, expected) {
 export function evaluateNpmProvenanceAttestations(report, expected) {
   assertExactRecord(
     expected,
-    [
-      "name",
-      "version",
-      "integrity",
-      "sourceSha",
-      "tag",
-      "publishAttempted",
-      "currentRunId",
-      "currentRunAttempt"
-    ],
+    ["name", "version", "integrity", "sourceSha", "tag", "publishAttempted", "currentRunId", "currentRunAttempt"],
     "expected npm provenance identity"
   );
   if (expected.name !== NPM_PROVENANCE_IDENTITY.packageName) {
@@ -1176,8 +1126,7 @@ export function evaluateNpmProvenanceAttestations(report, expected) {
     throw new Error("verified npm release-package entry does not match the exact installed target");
   }
 
-  const attestationUrl =
-    `${NPM_PROVENANCE_IDENTITY.attestationBaseUrl}@oomkapwn%2fenquire-mcp@${expected.version}`;
+  const attestationUrl = `${NPM_PROVENANCE_IDENTITY.attestationBaseUrl}@oomkapwn%2fenquire-mcp@${expected.version}`;
   const attestations = assertExactRecord(target.attestations, ["url", "provenance"], "npm attestation locator");
   const provenance = assertExactRecord(
     attestations.provenance,

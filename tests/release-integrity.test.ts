@@ -4457,25 +4457,25 @@ describe("release identity and exact required-job gate", () => {
       )
     ];
     const snapshotShapeMutations = [
-      replaceExactly(
+      replaceAllExactly(
         mcpbInputs.release,
         "'{release: $release, assets: $assets}')",
         "'{release: $assets, assets: $release}')",
         15
       ),
-      replaceExactly(
+      replaceAllExactly(
         mcpbInputs.release,
         "[.[] | {name, content_type, size, digest}] | sort_by(.name)",
         "[.[] | {name, content_type, digest}] | sort_by(.name)",
         3
       ),
-      replaceExactly(
+      replaceAllExactly(
         mcpbInputs.release,
         "'{release: $release, assets: $assets}')",
         "'{release: $assets, assets: $release}') # '{release: $release, assets: $assets}')",
         15
       ),
-      replaceExactly(
+      replaceAllExactly(
         mcpbInputs.release,
         "'[.[] | {name, content_type, size, digest}] | sort_by(.name)')",
         "'[.[] | {name, content_type, digest}] | sort_by(.name)') # [.[] | {name, content_type, size, digest}] | sort_by(.name)",

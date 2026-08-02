@@ -4304,6 +4304,9 @@ describe("release identity and exact required-job gate", () => {
     );
   });
 
+  // This mutation oracle intentionally exercises thousands of structural checks.
+  // Exact-head V8 coverage measured 14,996ms after redundant parse removal, so
+  // keep a scoped ceiling with real hang detection instead of weakening cases.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertNpmProvenanceEvaluatorContract();
     let replacementCallbackCalls = 0;
@@ -4563,7 +4566,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(
         mcpbInputs.release,
-        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n` + `                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
         `              ${NPM_PROVENANCE_AUDIT_COMMAND}`
       ),
       replaceExactly(
@@ -4579,7 +4582,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(
         mcpbInputs.release,
-        `/usr/bin/env -i "\${CLEAN_ENV[@]}" \\\n` + `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`,
+        `/usr/bin/env -i "\${CLEAN_ENV[@]}" \\\n              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`,
         `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`
       ),
       replaceExactly(
@@ -4602,9 +4605,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`)
     ]) {
-      expect(npmProvenanceWorkflowProblems(weakenedProvenanceWorkflow)).toContain(
-        NPM_PROVENANCE_CONTRACT_PROBLEM
-      );
+      expect(npmProvenanceWorkflowProblems(weakenedProvenanceWorkflow)).toContain(NPM_PROVENANCE_CONTRACT_PROBLEM);
     }
 
     // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
@@ -4739,9 +4740,7 @@ describe("release identity and exact required-job gate", () => {
         "false"
       )
     ]) {
-      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain(
-        NPM_PROVENANCE_CONTRACT_PROBLEM
-      );
+      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain(NPM_PROVENANCE_CONTRACT_PROBLEM);
     }
 
     expect(assertMcpbAssetVersion("4.0.0-rc.2")).toBe("4.0.0-rc.2");
@@ -7557,5 +7556,5 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
-  });
+  }, 30_000);
 });

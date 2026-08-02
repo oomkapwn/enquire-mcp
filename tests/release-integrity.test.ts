@@ -40,8 +40,7 @@ interface WorkflowJob {
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
 const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))";
-const MUTATED_RELEASE_JOB_REMAINING =
-  "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))";
+const MUTATED_RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))";
 const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
 const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
 const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
@@ -2617,14 +2616,7 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain("release polling must outlive the blocking package-consumer matrix and leave publication headroom");
     expect(
-      releasePollProblems(
-        replaceExactly(
-          workflow,
-          RAW_GH_READ_DEADLINE_GUARD,
-          MUTATED_RAW_GH_READ_DEADLINE_GUARD,
-          4
-        )
-      )
+      releasePollProblems(replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, 4))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 5))).toContain(
       "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
@@ -3041,11 +3033,7 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
       replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
       replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
-      replaceExactly(
-        mcpbInputs.release,
-        RAW_NPM_RESERVE_DEADLINE_GUARD,
-        MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD
-      ),
+      replaceExactly(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD, MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
       replaceAllExactly(

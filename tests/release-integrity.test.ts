@@ -66,8 +66,7 @@ const NPM_PROVENANCE_SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
 const NPM_PROVENANCE_SHA512_HEX = "ab".repeat(64);
 const NPM_PROVENANCE_INTEGRITY = `sha512-${Buffer.from(NPM_PROVENANCE_SHA512_HEX, "hex").toString("base64")}`;
 const NPM_PROVENANCE_PUBLISH_KEY_HINT = `SHA256:${Buffer.from("11".repeat(32), "hex").toString("base64").slice(0, -1)}`;
-const NPM_PROVENANCE_SIGNER_URI =
-  `https://github.com/oomkapwn/enquire-mcp/.github/workflows/release.yml@refs/tags/${NPM_PROVENANCE_TAG}`;
+const NPM_PROVENANCE_SIGNER_URI = `https://github.com/oomkapwn/enquire-mcp/.github/workflows/release.yml@refs/tags/${NPM_PROVENANCE_TAG}`;
 const NPM_PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const NPM_PROVENANCE_SLSA_CERTIFICATE_WITHOUT_ISSUER =
   "MIICHjCCAYegAwIBAgIJAM7GhthLV625MA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
@@ -143,6 +142,7 @@ const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_
 const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
             if [ "$remaining" -lt "$required" ]; then`;
 const GH_READ_GUARD_COUNT = 5;
+const RELEASE_DEADLINE_ENV_BINDING_COUNT = 6;
 const NPM_RESERVE_GUARD_COUNT = 3;
 const RELEASE_SINGLETON_DECODER_COUNT = 2;
 const TRUSTED_CI_RUN = Object.freeze({
@@ -289,9 +289,7 @@ function npmSlsaStatement(options: NpmSlsaStatementOptions = {}) {
         },
         resolvedDependencies: [
           {
-            uri:
-              options.dependencyUri ??
-              `git+https://github.com/oomkapwn/enquire-mcp@refs/tags/${NPM_PROVENANCE_TAG}`,
+            uri: options.dependencyUri ?? `git+https://github.com/oomkapwn/enquire-mcp@refs/tags/${NPM_PROVENANCE_TAG}`,
             digest: { gitCommit: options.gitCommit ?? TRUSTED_SOURCE_SHA }
           }
         ]
@@ -364,10 +362,7 @@ function npmAttestationBundle(
   return {
     predicateType,
     bundle: {
-      mediaType:
-        options.mediaType === undefined
-          ? "application/vnd.dev.sigstore.bundle+json;version=0.2"
-          : options.mediaType,
+      mediaType: options.mediaType === undefined ? "application/vnd.dev.sigstore.bundle+json;version=0.2" : options.mediaType,
       verificationMaterial:
         options.verificationMaterial === undefined ? verificationMaterial : options.verificationMaterial,
       dsseEnvelope: {
@@ -398,18 +393,16 @@ interface NpmProvenanceReportOptions {
 
 function npmProvenanceReport(options: NpmProvenanceReportOptions = {}) {
   const bundles = options.bundles ?? [
-      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(options.publish)),
-      npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(options.slsa))
-    ];
+    npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(options.publish)),
+    npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(options.slsa))
+  ];
   const target = {
     name: "@oomkapwn/enquire-mcp",
     version: NPM_PROVENANCE_VERSION,
     location: "node_modules/@oomkapwn/enquire-mcp",
     registry: "https://registry.npmjs.org/",
     attestations: {
-      url:
-        `https://registry.npmjs.org/-/npm/v1/attestations/` +
-        `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+      url: `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
       provenance: { predicateType: NPM_PROVENANCE_SLSA_PREDICATE }
     },
     attestationBundles: bundles,
@@ -2589,6 +2582,7 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     PROVENANCE_WORKFLOW_SHA: `\${{ github.workflow_sha }}`
   };
   const verifierBindings: Record<string, string> = {
+    RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
     EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
     EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
     EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
@@ -2635,9 +2629,9 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     '"NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"',
     globalConfigBindingIndex
   );
-  const downloadIndex = verificationRun.indexOf('NPM_CLI_HTTP_STATUS=$(/usr/bin/env -i', userConfigBindingIndex);
-  const sizeIndex = verificationRun.indexOf('NPM_CLI_ACTUAL_SIZE=$(/usr/bin/env -i', downloadIndex);
-  const sriIndex = verificationRun.indexOf('NPM_CLI_ACTUAL_SRI=$(/usr/bin/env -i', sizeIndex);
+  const downloadIndex = verificationRun.indexOf("NPM_CLI_HTTP_STATUS=$(/usr/bin/env -i", userConfigBindingIndex);
+  const sizeIndex = verificationRun.indexOf("NPM_CLI_ACTUAL_SIZE=$(/usr/bin/env -i", downloadIndex);
+  const sriIndex = verificationRun.indexOf("NPM_CLI_ACTUAL_SRI=$(/usr/bin/env -i", sizeIndex);
   const pathInventoryIndex = verificationRun.indexOf("if ! NPM_CLI_MEMBERS=$(/usr/bin/env -i", sriIndex);
   const pathInventoryGuardIndex = verificationRun.indexOf(
     "absolute, escaping, or non-package member path",
@@ -2737,7 +2731,7 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
       "set -euo pipefail\nbuiltin unset -v GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN NPM_TOKEN\n" +
         "builtin unset -v ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN"
     ) &&
-    verificationRun.includes('/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/mktemp -d') &&
+    verificationRun.includes("/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/mktemp -d") &&
     verificationRun.includes("AWK_BIN=$(type -P awk)") &&
     verificationRun.includes('NPM_USERCONFIG="$VERIFY_ROOT/user.npmrc"') &&
     verificationRun.includes('NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"') &&
@@ -2775,10 +2769,8 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     ) &&
     mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=10s 120s "$CURL_BIN"') === 1 &&
     mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=5s 30s') === 5 &&
-    mutationMatchCount(
-      verificationRun,
-      '"$TIMEOUT_BIN" --kill-after=10s 600s "$NODE_BIN" "$NPM_CLI_JS" install'
-    ) === 1 &&
+    mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=10s 600s "$NODE_BIN" "$NPM_CLI_JS" install') ===
+      1 &&
     mutationMatchCount(verificationRun, NPM_PROVENANCE_AUDIT_COMMAND) === 1 &&
     mutationMatchCount(verificationRun, NPM_PROVENANCE_EVALUATOR_COMMAND) === 1 &&
     verificationRun.includes("--json --include-attestations --omit=optional --registry=https://registry.npmjs.org/") &&
@@ -2788,13 +2780,13 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     verificationRun.includes("for (( attempt=1; attempt<=8; attempt++ )); do") &&
     verificationRun.includes('[ "$attempt" -lt 8 ]') &&
     verificationRun.includes("attempt $attempt/8") &&
-    verificationRun.includes('/bin/sleep 10') &&
+    verificationRun.includes("/bin/sleep 10") &&
     verifierReserveCoversWorstCase &&
     !/(?:^|\s)(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:publish|unpublish|dist-tag)\b/mu.test(verificationRun) &&
     integrity.includes("export function evaluateNpmProvenanceContext") &&
     integrity.includes("export function evaluateNpmProvenanceAttestations") &&
     integrity.includes('eventName: "push"') &&
-    integrity.includes('workflowSha: expectedSourceSha') &&
+    integrity.includes("workflowSha: expectedSourceSha") &&
     integrity.includes("statement.subject.length !== 1") &&
     integrity.includes("subject.name !== expectedPurl || digest.sha512 !== expectedSha512") &&
     integrity.includes("predicateType === NPM_PROVENANCE_IDENTITY.publishPredicateType") &&
@@ -2830,7 +2822,7 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     integrity.includes("oid.tag !== 0x06") &&
     integrity.includes("value.tag !== 0x04 || value.next !== extension.contentEnd") &&
     integrity.includes("oidBytes.equals(FULCIO_ISSUER_OID_LEGACY)") &&
-    integrity.includes("valueBytes.toString(\"utf8\") !== FULCIO_GITHUB_ACTIONS_ISSUER") &&
+    integrity.includes('valueBytes.toString("utf8") !== FULCIO_GITHUB_ACTIONS_ISSUER') &&
     integrity.includes('Buffer.from(FULCIO_GITHUB_ACTIONS_ISSUER, "utf8").equals(valueBytes)') &&
     integrity.includes("oidBytes.equals(FULCIO_ISSUER_OID_V2)") &&
     integrity.includes("decodeCanonicalDerUtf8String(valueBytes") &&
@@ -2839,9 +2831,7 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     integrity.includes("legacyIssuerCount + v2IssuerCount === 0") &&
     integrity.includes("assertExactFulcioOidcIssuer(certificateDer, label);") &&
     integrity.includes(`\`\${NPM_PROVENANCE_IDENTITY.workflowPath}@refs/tags/\${expected.tag}\``) &&
-    integrity.includes(
-      "decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri)"
-    ) &&
+    integrity.includes("decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri)") &&
     integrity.includes("    expectedSignerUri,\n    label\n  );") &&
     integrity.includes('keyid !== ""') &&
     integrity.includes("statement.predicateType !== item.predicateType") &&
@@ -3543,9 +3533,10 @@ function mcpbContractProblems(inputs: {
 
 function assertNpmProvenanceEvaluatorContract() {
   // Positive control: one exact tag-push context observed through two independent surfaces.
-  expect(
-    evaluateNpmProvenanceContext(npmProvenanceContext(), TRUSTED_SOURCE_SHA, NPM_PROVENANCE_TAG)
-  ).toEqual({ runId: NPM_PROVENANCE_RUN_ID, runAttempt: NPM_PROVENANCE_RUN_ATTEMPT });
+  expect(evaluateNpmProvenanceContext(npmProvenanceContext(), TRUSTED_SOURCE_SHA, NPM_PROVENANCE_TAG)).toEqual({
+    runId: NPM_PROVENANCE_RUN_ID,
+    runAttempt: NPM_PROVENANCE_RUN_ATTEMPT
+  });
 
   // Negative control: every context field, side, expected identity, and object shape is fail-closed.
   {
@@ -3588,9 +3579,10 @@ function assertNpmProvenanceEvaluatorContract() {
 
   // Positive controls: fresh publication, historical reuse, bundle reorder, and unrelated dependencies.
   {
-    expect(
-      evaluateNpmProvenanceAttestations(npmProvenanceReport(), npmProvenanceExpected(true))
-    ).toEqual({ runId: NPM_PROVENANCE_RUN_ID, runAttempt: NPM_PROVENANCE_RUN_ATTEMPT });
+    expect(evaluateNpmProvenanceAttestations(npmProvenanceReport(), npmProvenanceExpected(true))).toEqual({
+      runId: NPM_PROVENANCE_RUN_ID,
+      runAttempt: NPM_PROVENANCE_RUN_ATTEMPT
+    });
 
     const historicalRunId = "30000000001";
     expect(
@@ -3602,15 +3594,10 @@ function assertNpmProvenanceEvaluatorContract() {
 
     const publishBundle = npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement());
     const slsaBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement());
-    for (const rawBytes of [
-      NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE,
-      NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE
-    ]) {
-      const alternateIssuerSlsaBundle = npmAttestationBundle(
-        NPM_PROVENANCE_SLSA_PREDICATE,
-        npmSlsaStatement(),
-        { verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }]) }
-      );
+    for (const rawBytes of [NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE, NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE]) {
+      const alternateIssuerSlsaBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+        verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }])
+      });
       expect(
         evaluateNpmProvenanceAttestations(
           npmProvenanceReport({ bundles: [publishBundle, alternateIssuerSlsaBundle] }),
@@ -3660,8 +3647,7 @@ function assertNpmProvenanceEvaluatorContract() {
     { registry: "https://registry.npmjs.org" },
     {
       attestations:
-        `https://registry.npmjs.org/-/npm/v1/attestations/` +
-        `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`
+        `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`
     },
     {
       attestations: {
@@ -3671,9 +3657,7 @@ function assertNpmProvenanceEvaluatorContract() {
     },
     {
       attestations: {
-        url:
-          `https://registry.npmjs.org/-/npm/v1/attestations/` +
-          `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+        url: `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
         provenance: { predicateType: NPM_PROVENANCE_PUBLISH_PREDICATE }
       }
     },
@@ -3736,11 +3720,9 @@ function assertNpmProvenanceEvaluatorContract() {
       branchCertificate,
       NPM_PROVENANCE_SLSA_MULTIPLE_SAN_CERTIFICATE
     ]) {
-      const wrongSignerBundle = npmAttestationBundle(
-        NPM_PROVENANCE_SLSA_PREDICATE,
-        npmSlsaStatement(),
-        { verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }]) }
-      );
+      const wrongSignerBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+        verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }])
+      });
       expect(() =>
         evaluateNpmProvenanceAttestations(
           npmProvenanceReport({ bundles: [publishBundle, wrongSignerBundle] }),
@@ -3751,11 +3733,9 @@ function assertNpmProvenanceEvaluatorContract() {
 
     const certificateDer = Buffer.from(NPM_PROVENANCE_SLSA_CERTIFICATE, "base64");
     const malformedDerCertificate = certificateDer.subarray(0, certificateDer.length - 1).toString("base64");
-    const malformedCertificateBundle = npmAttestationBundle(
-      NPM_PROVENANCE_SLSA_PREDICATE,
-      npmSlsaStatement(),
-      { verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes: malformedDerCertificate }]) }
-    );
+    const malformedCertificateBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+      verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes: malformedDerCertificate }])
+    });
     expect(() =>
       evaluateNpmProvenanceAttestations(
         npmProvenanceReport({ bundles: [publishBundle, malformedCertificateBundle] }),
@@ -4495,6 +4475,13 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         `PUBLISH_ATTEMPTED: \${{ steps.npm_publication.outputs.publish_attempted }}`,
         'PUBLISH_ATTEMPTED: "false"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}\n` +
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`,
+        `          RELEASE_JOB_DEADLINE_EPOCH: 9999999999\n` +
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`
       ),
       replaceExactly(mcpbInputs.release, '          NPM_TOKEN: ""', `          NPM_TOKEN: \${{ secrets.NPM_TOKEN }}`),
       replaceExactly(mcpbInputs.release, '          NPM_CLI_VERSION: "11.18.0"', '          NPM_CLI_VERSION: "latest"'),
@@ -5307,7 +5294,7 @@ describe("release identity and exact required-job gate", () => {
           workflow,
           `RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}`,
           "RELEASE_JOB_DEADLINE_EPOCH: 9999999999",
-          GH_READ_GUARD_COUNT
+          RELEASE_DEADLINE_ENV_BINDING_COUNT
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");

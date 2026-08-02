@@ -2290,9 +2290,9 @@ describe("release identity and exact required-job gate", () => {
         })
       ).toThrow(/invalid identity/);
     }
-    expect(
-      evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidateArtifact, expired: true }] })
-    ).toEqual({ state: "skip" });
+    expect(evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidateArtifact, expired: true }] })).toEqual({
+      state: "skip"
+    });
 
     expect(portableArchivePath("server/dist/index.js")).toBe("server/dist/index.js");
     for (const hostile of [
@@ -2380,16 +2380,9 @@ describe("release identity and exact required-job gate", () => {
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
-    expect(
-      releasePollProblems(
-        replaceExactly(
-          workflow,
-          "--raw-field|--raw-field=*",
-          "--raw-field",
-          5
-        )
-      )
-    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
+    expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 5))).toContain(
+      "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
+    );
     expect(
       releasePollProblems(
         replaceExactly(
@@ -2421,21 +2414,21 @@ describe("release identity and exact required-job gate", () => {
         )
       )
     ).toContain("release checks must bind exact names to one exact ci.yml main-push workflow-run all-execution view");
-    expect(
-      releasePollProblems(replaceExactly(workflow, "flatten-pages release", "jq 'add // []'", 5))
-    ).toContain("every paginated release read must use one strict collection decoder");
-    expect(
-      releasePollProblems(replaceExactly(workflow, "--paginate --slurp", "--paginate", 19))
-    ).toContain("every paginated release read must use one strict collection decoder");
-    expect(
-      releasePollProblems(replaceExactly(workflow, '"$ARTIFACT_PAGES"', '"$JOB_PAGES"'))
-    ).toContain("every paginated release read must use one strict collection decoder");
-    expect(
-      releasePollProblems(replaceExactly(workflow, '"$RELEASE_PAGES"', '"$ASSET_PAGES"', 5))
-    ).toContain("every paginated release read must use one strict collection decoder");
-    expect(
-      releasePollProblems(replaceExactly(workflow, '"$CURRENT_ASSET_PAGES"', '"$ASSET_PAGES"'))
-    ).toContain("every paginated release read must use one strict collection decoder");
+    expect(releasePollProblems(replaceExactly(workflow, "flatten-pages release", "jq 'add // []'", 5))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, "--paginate --slurp", "--paginate", 19))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$ARTIFACT_PAGES"', '"$JOB_PAGES"'))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$RELEASE_PAGES"', '"$ASSET_PAGES"', 5))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$CURRENT_ASSET_PAGES"', '"$ASSET_PAGES"'))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
     const absenceLoop =
       "          for (( release_preflight_attempt=1; release_preflight_attempt<=12; release_preflight_attempt++ )); do";
     const absenceRefresh =
@@ -2451,11 +2444,7 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     expect(
       releasePollProblems(
-        replaceExactly(
-          workflow,
-          `${absenceLoop}\n${absenceRefresh}`,
-          `${absenceRefresh}\n${absenceLoop}`
-        )
+        replaceExactly(workflow, `${absenceLoop}\n${absenceRefresh}`, `${absenceRefresh}\n${absenceLoop}`)
       )
     ).toContain("release absence must require six successful strict zero observations before npm");
     expect(
@@ -2677,8 +2666,8 @@ describe("release identity and exact required-job gate", () => {
         ...mcpbInputs,
         release: replaceExactly(
           mcpbInputs.release,
-          '{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}',
-          '{jobs: $jobs, artifacts: $artifacts}'
+          "{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}",
+          "{jobs: $jobs, artifacts: $artifacts}"
         )
       })
     ).toContain(

@@ -17,11 +17,9 @@ concurrency:
 
 permissions:
   # Read the exact-SHA CI artifact that already passed the cross-platform
-  # mcpb-basic gate; explicit maps otherwise default omitted scopes to none.
+  # mcpb-basic gate and the exact workflow-run attempt's jobs; explicit maps
+  # otherwise default omitted scopes to none.
   actions: read
-  # The first release gate reads the exact commit's check-runs. Once a
-  # permissions map is explicit, this scope must also be explicit.
-  checks: read
   # `contents: write` (was `read` pre-3.7.15) — required for the
   # "Create GitHub Release" step (v3.7.14 F5) to call the GitHub Releases
   # API. The first end-to-end test of F5 (v3.7.14 tag push) failed with
@@ -36,11 +34,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # The exact-SHA package-consumer matrix is allowed 30 minutes per lane;
-    # keep enough room to await it and still perform the independent release
-    # install/test/publish sequence afterward.
-    timeout-minutes: 90
+    # A global 230-minute workflow deadline leaves a 10-minute runner buffer.
+    # Later transaction-specific reserves consume this common clock instead of
+    # pretending that independent command timeouts compose automatically.
+    timeout-minutes: 240
     steps:
+      - name: Establish global release deadline
+        run: echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
@@ -58,21 +58,63 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          set -eu
+          set -euo pipefail
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          CI_GATE_DEADLINE=$((SECONDS + 3600))
+          gate_timeout() {
+            local cap="$1"
+            shift
+            local remaining=$((CI_GATE_DEADLINE - SECONDS))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Exact-SHA CI gate reached its absolute 60-minute deadline" >&2
+              return 124
+            fi
+            local limit="$cap"
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=10s "${limit}s" "$@"
+          }
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            gate_timeout 20 "$GH_BIN" "$@"
+          }
+          ci_wait() {
+            local message="$1"
+            if [ $((CI_GATE_DEADLINE - SECONDS)) -le 30 ]; then
+              echo "::error::Exact-SHA CI gate reached its absolute 60-minute deadline"
+              exit 1
+            fi
+            echo "$message"
+            sleep 30
+          }
           TAG="$RELEASE_TAG"
           VERSION=$(node -p "require('./package.json').version")
           node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"
           SHA=$(git rev-parse HEAD)
           echo "Tagged SHA: $SHA"
-          git fetch origin main --depth=200
+          "$TIMEOUT_BIN" --kill-after=10s 120s git fetch origin main --depth=200
           if ! git merge-base --is-ancestor "$SHA" origin/main; then
             echo "::error::Tagged SHA $SHA is not on main — refusing to publish (someone tagged a commit that wasn't merged through PR review)."
             exit 1
           fi
           echo "✓ SHA is on main"
-          # Verify the required CI checks passed on this exact SHA. We query
-          # check-runs (per-job) rather than check-suites (per-workflow) so we
-          # can name the contexts that branch protection requires. Tag pushes
+          # Verify the required CI jobs passed on this exact SHA. The
+          # exact-run `filter=all` view exposes every rerun execution. The
+          # shared evaluator validates every identity and selects the unique
+          # maximum run_attempt independently per required name, preserving
+          # untouched successes after rerun-failed. Tag pushes
           # can race with CI on main starting — poll for up to 60 minutes. The
           # v4 package-consumer matrix alone has a 30-minute runner budget, so
           # the former five-minute poll could reject a healthy immediate tag.
@@ -99,10 +141,46 @@ jobs:
           REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer|mcpb-basic"
           REQ_COUNT=12
           for (( attempt=1; attempt<=120; attempt++ )); do
-            CHECK_PAGES=$(gh api --paginate --slurp \
-              "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100")
-            JSON=$(printf '%s' "$CHECK_PAGES" | jq '{check_runs: [.[].check_runs[]]}')
-            RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks)
+            if ! CI_RUN_PAGES=$(gh_read api --paginate --slurp \
+              "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SHA&per_page=100"); then
+              if [ "$attempt" -eq 120 ]; then
+                echo "::error::Exact ci.yml workflow run remained unreadable after 60 minutes"
+                exit 1
+              fi
+              ci_wait "CI workflow-run lookup failed (attempt $attempt/120) — waiting 30s..."
+              continue
+            fi
+            CI_RUNS=$(printf '%s' "$CI_RUN_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-field workflow_runs)
+            CI_RUN_COUNT=$(printf '%s' "$CI_RUNS" | jq 'length')
+            if [ "$CI_RUN_COUNT" -gt 1 ]; then
+              echo "::error::More than one exact ci.yml main-push run exists for $SHA"
+              exit 1
+            fi
+            if [ "$CI_RUN_COUNT" -eq 0 ]; then
+              if [ "$attempt" -eq 120 ]; then
+                echo "::error::No exact ci.yml main-push run appeared for $SHA after 60 minutes"
+                exit 1
+              fi
+              ci_wait "Exact ci.yml main-push run is not visible (attempt $attempt/120) — waiting 30s..."
+              continue
+            fi
+            WORKFLOW_RUN=$(printf '%s' "$CI_RUNS" | jq '.[0]')
+            WORKFLOW_RUN_ID=$(printf '%s' "$WORKFLOW_RUN" | jq -er \
+              '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
+            if ! JOB_PAGES=$(gh_read api --paginate --slurp \
+              "repos/${{ github.repository }}/actions/runs/$WORKFLOW_RUN_ID/jobs?filter=all&per_page=100"); then
+              if [ "$attempt" -eq 120 ]; then
+                echo "::error::Exact CI workflow-run attempt jobs remained unreadable after 60 minutes"
+                exit 1
+              fi
+              ci_wait "CI workflow-run attempt job lookup failed (attempt $attempt/120) — waiting 30s..."
+              continue
+            fi
+            JOBS=$(printf '%s' "$JOB_PAGES" | node scripts/check-release-integrity.mjs flatten-field jobs)
+            JSON=$(jq -n --argjson workflow_run "$WORKFLOW_RUN" --argjson jobs "$JOBS" \
+              '{workflow_run: $workflow_run, jobs: $jobs}')
+            RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks "$SHA")
             STATE=$(printf '%s' "$RESULT" | jq -r '.state')
             if [ "$STATE" = "failed" ]; then
               echo "::error::Required CI checks failed on $SHA"
@@ -111,7 +189,7 @@ jobs:
             fi
             DONE=$(printf '%s' "$RESULT" | jq -r '.succeeded | length')
             if [ "$STATE" = "ready" ]; then
-              echo "✓ All $REQ_COUNT distinct required checks passed on $SHA"
+              echo "✓ All $REQ_COUNT distinct required jobs passed on $SHA"
               break
             fi
             if [ "$attempt" -eq 120 ]; then
@@ -120,8 +198,7 @@ jobs:
               exit 1
             fi
             UNRESOLVED=$(printf '%s' "$RESULT" | jq -r '[.missing[], .pending[]] | join(", ")')
-            echo "CI still running ($DONE/$REQ_COUNT distinct checks passed; unresolved: $UNRESOLVED; attempt $attempt/120) — waiting 30s..."
-            sleep 30
+            ci_wait "CI still running ($DONE/$REQ_COUNT distinct jobs passed; unresolved: $UNRESOLVED; attempt $attempt/120) — waiting 30s..."
           done
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -169,6 +246,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              return 2
+            fi
+            local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Global 230-minute release deadline reached during a GitHub read" >&2
+              return 124
+            fi
+            local limit=20
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
+          }
           SOURCE_SHA=$(git rev-parse HEAD)
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
@@ -192,9 +298,10 @@ jobs:
           PINNED_RUN_ATTEMPT=""
           PINNED_ARTIFACT_ID=""
           PINNED_ARTIFACT_DIGEST=""
-          RELEASE_PAGES=$(gh api --paginate --slurp \
+          RELEASE_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases?per_page=100")
-          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages release)
           RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '[.[] | select(.tag_name == $tag)] | length')
           if [ "$RELEASE_COUNT" -gt 1 ]; then
@@ -204,10 +311,12 @@ jobs:
           if [ "$RELEASE_COUNT" -eq 1 ]; then
             RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
               '.[] | select(.tag_name == $tag)')
-            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
-            RELEASE_ASSET_PAGES=$(gh api --paginate --slurp \
+            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -er \
+              '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
+            RELEASE_ASSET_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-            RELEASE_ASSETS=$(printf '%s' "$RELEASE_ASSET_PAGES" | jq 'add // []')
+            RELEASE_ASSETS=$(printf '%s' "$RELEASE_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages asset)
             PROVENANCE_COUNT=$(printf '%s' "$RELEASE_ASSETS" | jq --arg name "$PROVENANCE_NAME" \
               '[.[] | select(.name == $name)] | length')
             if [ "$PROVENANCE_COUNT" -gt 1 ]; then
@@ -216,9 +325,9 @@ jobs:
             fi
             if [ "$PROVENANCE_COUNT" -eq 1 ]; then
               RESUME_PROVENANCE="$RESUME_DIR/$PROVENANCE_NAME"
-              PROVENANCE_ID=$(printf '%s' "$RELEASE_ASSETS" | jq -r --arg name "$PROVENANCE_NAME" \
-                '.[] | select(.name == $name) | .id')
-              gh api -H "Accept: application/octet-stream" \
+              PROVENANCE_ID=$(printf '%s' "$RELEASE_ASSETS" | jq -er --arg name "$PROVENANCE_NAME" \
+                '.[] | select(.name == $name) | .id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
+              gh_read api -H "Accept: application/octet-stream" \
                 "repos/${{ github.repository }}/releases/assets/$PROVENANCE_ID" > "$RESUME_PROVENANCE"
               PROVENANCE_SOURCE=$(jq -r '.source_sha // empty' "$RESUME_PROVENANCE")
               PROVENANCE_ARTIFACT=$(jq -r '.artifact // empty' "$RESUME_PROVENANCE")
@@ -229,8 +338,9 @@ jobs:
               PINNED_ARTIFACT_DIGEST=$(jq -r '.build_artifact_digest // empty' "$RESUME_PROVENANCE")
               if [ "$PROVENANCE_SOURCE" != "$SOURCE_SHA" ] || \
                  [ "$PROVENANCE_ARTIFACT" != "enquire-mcp-basic-$VERSION.mcpb" ] || \
-                 ! [[ "$PROVENANCE_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$PINNED_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || \
-                 ! [[ "$PINNED_ARTIFACT_ID" =~ ^[0-9]+$ ]] || \
+                 ! [[ "$PROVENANCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
+                 ! [[ "$PINNED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
+                 ! [[ "$PINNED_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || \
                  ! [[ "$PINNED_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
                 echo "::error::Existing release provenance does not identify this source/artifact"
                 exit 1
@@ -238,23 +348,28 @@ jobs:
             fi
           fi
 
-          RUN_PAGES=$(gh api --paginate --slurp \
+          RUN_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SOURCE_SHA&per_page=100")
-          RUNS=$(printf '%s' "$RUN_PAGES" | jq '[.[].workflow_runs[]]')
+          RUNS=$(printf '%s' "$RUN_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-field workflow_runs)
           while IFS= read -r CANDIDATE_RUN_ID; do
             if [ -n "$PROVENANCE_RUN_ID" ] && [ "$CANDIDATE_RUN_ID" != "$PROVENANCE_RUN_ID" ]; then
               continue
             fi
-            JOB_PAGES=$(gh api --paginate --slurp \
+            JOB_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/jobs?filter=all&per_page=100")
-            JOBS=$(printf '%s' "$JOB_PAGES" | jq '[.[].jobs[]]')
-            ARTIFACT_PAGES=$(gh api --paginate --slurp \
+            JOBS=$(printf '%s' "$JOB_PAGES" | node scripts/check-release-integrity.mjs flatten-field jobs)
+            ARTIFACT_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100")
-            CANDIDATE_ARTIFACTS=$(printf '%s' "$ARTIFACT_PAGES" | jq '[.[].artifacts[]]')
-            CANDIDATE_PAYLOAD=$(jq -n --argjson jobs "$JOBS" --argjson artifacts "$CANDIDATE_ARTIFACTS" \
-              '{jobs: $jobs, artifacts: $artifacts}')
+            CANDIDATE_ARTIFACTS=$(printf '%s' "$ARTIFACT_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-field artifacts)
+            CANDIDATE_RUN=$(printf '%s' "$RUNS" | jq -ce --argjson id "$CANDIDATE_RUN_ID" \
+              '[.[] | select(.id == $id)] | if length == 1 then .[0] else error("candidate run identity changed") end')
+            CANDIDATE_PAYLOAD=$(jq -n --argjson workflow_run "$CANDIDATE_RUN" \
+              --argjson jobs "$JOBS" --argjson artifacts "$CANDIDATE_ARTIFACTS" \
+              '{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}')
             CANDIDATE_RESULT=$(printf '%s' "$CANDIDATE_PAYLOAD" | node scripts/check-release-integrity.mjs \
-              candidate "$CANDIDATE_RUN_ID" "${PINNED_RUN_ATTEMPT:--}" \
+              candidate "$SOURCE_SHA" "${PINNED_RUN_ATTEMPT:--}" \
               "${PINNED_ARTIFACT_ID:--}" "${PINNED_ARTIFACT_DIGEST:--}")
             if [ "$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.state')" = "skip" ]; then continue; fi
             CI_RUN_ID="$CANDIDATE_RUN_ID"
@@ -272,7 +387,7 @@ jobs:
           # Actions artifact archives negotiate the GitHub JSON media type and
           # redirect to the ZIP. `application/octet-stream` is reserved for the
           # separate Releases asset endpoint and is rejected here with HTTP 415.
-          gh api -H "Accept: application/vnd.github+json" \
+          gh_read api -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"
           ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP" | awk '{print $1}')"
           if [ "$ACTUAL_ARTIFACT_DIGEST" != "$PINNED_ARTIFACT_DIGEST" ]; then
@@ -379,6 +494,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              return 2
+            fi
+            local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Global 230-minute release deadline reached during a GitHub read" >&2
+              return 124
+            fi
+            local limit=20
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
+          }
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
           SOURCE_SHA=$(git rev-parse HEAD)
@@ -396,7 +540,8 @@ jobs:
               "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
           }
           assert_remote_tag_identity() {
-            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            REMOTE_TAGS=$("$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin \
+              "refs/tags/$TAG" "refs/tags/$TAG^{}")
             RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
               '$2 == ref { count++ } END { print count+0 }')
             PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
@@ -411,7 +556,7 @@ jobs:
           assert_stable_github_advance() {
             if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then return; fi
             CURRENT_LATEST_VERSION="-"
-            if LATEST_RELEASE=$(gh api "repos/${{ github.repository }}/releases/latest" 2>&1); then
+            if LATEST_RELEASE=$(gh_read api "repos/${{ github.repository }}/releases/latest" 2>&1); then
               CURRENT_LATEST_TAG=$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name // empty')
               if ! [[ "$CURRENT_LATEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                 echo "::error::GitHub latest release does not have a strict stable vX.Y.Z tag"
@@ -438,16 +583,46 @@ jobs:
             exit 1
           fi
           mkdir "$PREFLIGHT_DIR"
-          RELEASE_PAGES=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/releases?per_page=100")
-          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
-          RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
-            '[.[] | select(.tag_name == $tag)] | length')
-          if [ "$RELEASE_COUNT" -gt 1 ]; then
-            echo "::error::GitHub returned duplicate draft/published releases for $TAG"
-            exit 1
-          fi
+          # Only six separately successful and strictly decoded zero results
+          # make an eventually consistent Releases collection authoritative.
+          # Failed reads consume the bounded attempt budget but never count as
+          # absence; a visible exact release wins immediately.
+          RELEASE_COUNT=0
+          RELEASE_ABSENCE_OBSERVATIONS=0
+          for (( release_preflight_attempt=1; release_preflight_attempt<=12; release_preflight_attempt++ )); do
+            if ! RELEASE_PAGES=$(gh_read api --paginate --slurp \
+              "repos/${{ github.repository }}/releases?per_page=100"); then
+              if [ "$release_preflight_attempt" -eq 12 ]; then
+                echo "::error::GitHub release preflight remained unreadable after 12 bounded checks"
+                exit 1
+              fi
+              echo "::warning::GitHub release preflight read failed (attempt $release_preflight_attempt/12); retrying in 5s"
+              sleep 5
+              continue
+            fi
+            RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages release)
+            RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
+              '[.[] | select(.tag_name == $tag)] | length')
+            if [ "$RELEASE_COUNT" -gt 1 ]; then
+              echo "::error::GitHub returned duplicate draft/published releases for $TAG"
+              exit 1
+            fi
+            if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi
+            RELEASE_ABSENCE_OBSERVATIONS=$((RELEASE_ABSENCE_OBSERVATIONS + 1))
+            if [ "$RELEASE_ABSENCE_OBSERVATIONS" -eq 6 ]; then break; fi
+            if [ "$release_preflight_attempt" -eq 12 ]; then
+              echo "::error::GitHub release absence did not reach six authoritative observations"
+              exit 1
+            fi
+            echo "::warning::Release $TAG is absent before npm ($RELEASE_ABSENCE_OBSERVATIONS/6 confirmations); retrying in 5s"
+            sleep 5
+          done
           if [ "$RELEASE_COUNT" -eq 0 ]; then
+            if [ "$RELEASE_ABSENCE_OBSERVATIONS" -ne 6 ]; then
+              echo "::error::GitHub release absence was not confirmed before npm publication"
+              exit 1
+            fi
             RELEASE_ACTION=$(printf '%s' '{"release":null,"assets":[]}' | release_state | jq -r '.action')
             if [ "$RELEASE_ACTION" != "create_draft" ]; then exit 1; fi
             assert_stable_github_advance
@@ -456,7 +631,8 @@ jobs:
           fi
           RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '.[] | select(.tag_name == $tag)')
-          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -er \
+            '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
           RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
           RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
           if [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
@@ -464,9 +640,10 @@ jobs:
             echo "::error::Existing GitHub release identity differs before npm publication"
             exit 1
           fi
-          ASSET_PAGES=$(gh api --paginate --slurp \
+          ASSET_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages asset)
           RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
             '{release: $release, assets: $assets}')
           RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
@@ -477,7 +654,7 @@ jobs:
           fi
           if [ "$RELEASE_ACTION" = "reuse_published" ] && \
              [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
-            LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            LATEST_TAG=$(gh_read api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
             if [ "$LATEST_TAG" != "$TAG" ]; then
               echo "::error::Existing stable release $TAG is not GitHub's latest release before npm publication"
               exit 1
@@ -519,7 +696,7 @@ jobs:
             fi
             REMOTE_ID=$(printf '%s' "$REMOTE_ASSETS" | jq -r --arg name "$NAME" \
               '.[] | select(.name == $name) | .id')
-            gh api -H "Accept: application/octet-stream" \
+            gh_read api -H "Accept: application/octet-stream" \
               "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$PREFLIGHT_DIR/$NAME"
             if ! cmp -s "$LOCAL_ASSET" "$PREFLIGHT_DIR/$NAME"; then
               echo "::error::Existing release asset $NAME differs before npm publication"
@@ -628,6 +805,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              return 2
+            fi
+            local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Global 230-minute release deadline reached during a GitHub read" >&2
+              return 124
+            fi
+            local limit=20
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
+          }
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
           SOURCE_SHA=$(git rev-parse HEAD)
@@ -645,7 +851,8 @@ jobs:
               "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
           }
           assert_remote_tag_identity() {
-            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            REMOTE_TAGS=$("$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin \
+              "refs/tags/$TAG" "refs/tags/$TAG^{}")
             RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
               '$2 == ref { count++ } END { print count+0 }')
             PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
@@ -660,9 +867,10 @@ jobs:
           assert_remote_tag_identity
           # A retry may reuse an existing release only when its channel and
           # externally verified annotated-tag source match this workflow.
-          RELEASE_PAGES=$(gh api --paginate --slurp \
+          RELEASE_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases?per_page=100")
-          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages release)
           RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '[.[] | select(.tag_name == $tag)] | length')
           if [ "$RELEASE_COUNT" -gt 1 ]; then
@@ -672,10 +880,12 @@ jobs:
           if [ "$RELEASE_COUNT" -eq 1 ]; then
             RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
               '.[] | select(.tag_name == $tag)')
-            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
-            ASSET_PAGES=$(gh api --paginate --slurp \
+            RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -er \
+              '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
+            ASSET_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages asset)
             RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
               '{release: $release, assets: $assets}')
             RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
@@ -689,7 +899,7 @@ jobs:
               exit 1
             fi
             if [ "$ACTUAL_DRAFT" = "false" ] && [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
-              LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+              LATEST_TAG=$(gh_read api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
               if [ "$LATEST_TAG" != "$TAG" ]; then
                 echo "::error::Existing stable release $TAG is not GitHub's latest release"
                 exit 1
@@ -732,6 +942,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              return 2
+            fi
+            local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Global 230-minute release deadline reached during a GitHub read" >&2
+              return 124
+            fi
+            local limit=20
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
+          }
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
           ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
@@ -749,7 +988,8 @@ jobs:
               "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
           }
           assert_remote_tag_identity() {
-            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            REMOTE_TAGS=$("$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin \
+              "refs/tags/$TAG" "refs/tags/$TAG^{}")
             RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
               '$2 == ref { count++ } END { print count+0 }')
             PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
@@ -772,9 +1012,10 @@ jobs:
           # Retry only the zero-result state; duplicates still fail immediately.
           RELEASE_COUNT=0
           for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do
-            RELEASE_PAGES=$(gh api --paginate --slurp \
+            RELEASE_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/releases?per_page=100")
-            RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+            RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages release)
             RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
               '[.[] | select(.tag_name == $tag)] | length')
             if [ "$RELEASE_COUNT" -gt 1 ]; then
@@ -791,7 +1032,8 @@ jobs:
           done
           RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '.[] | select(.tag_name == $tag)')
-          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.id')
+          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | jq -er \
+            '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991)')
           RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
           RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
           if [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
@@ -799,9 +1041,10 @@ jobs:
             echo "::error::Release identity changed before asset verification"
             exit 1
           fi
-          ASSET_PAGES=$(gh api --paginate --slurp \
+          ASSET_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages asset)
           RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
             '{release: $release, assets: $assets}')
           RELEASE_ACTION=$(printf '%s' "$RELEASE_STATE" | release_state | jq -r '.action')
@@ -827,9 +1070,10 @@ jobs:
               exit 1
             fi
             NAME=$(basename "$LOCAL_ASSET")
-            ASSET_PAGES=$(gh api --paginate --slurp \
+            ASSET_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+            REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages asset)
             MATCH_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq --arg name "$NAME" \
               '[.[] | select(.name == $name)] | length')
             if [ "$MATCH_COUNT" -gt 1 ]; then
@@ -837,16 +1081,17 @@ jobs:
               exit 1
             fi
             if [ "$MATCH_COUNT" -eq 0 ]; then
-              CURRENT_RELEASE=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID")
+              CURRENT_RELEASE=$(gh_read api "repos/${{ github.repository }}/releases/$RELEASE_ID")
               CURRENT_UPLOAD_URL=$(printf '%s' "$CURRENT_RELEASE" | jq -r '.upload_url')
               EXPECTED_UPLOAD_URL="https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets{?name,label}"
               if [ "$CURRENT_UPLOAD_URL" != "$EXPECTED_UPLOAD_URL" ]; then
                 echo "::error::GitHub release upload URL is not bound to the exact repository and release ID"
                 exit 1
               fi
-              CURRENT_ASSET_PAGES=$(gh api --paginate --slurp \
+              CURRENT_ASSET_PAGES=$(gh_read api --paginate --slurp \
                 "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-              CURRENT_ASSETS=$(printf '%s' "$CURRENT_ASSET_PAGES" | jq 'add // []')
+              CURRENT_ASSETS=$(printf '%s' "$CURRENT_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+                flatten-pages asset)
               CURRENT_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS" \
                 '{release: $release, assets: $assets}')
               CURRENT_ACTION=$(printf '%s' "$CURRENT_STATE" | release_state | jq -r '.action')
@@ -865,9 +1110,10 @@ jobs:
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 -H "Content-Type: application/octet-stream" \
                 --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null
-              ASSET_PAGES=$(gh api --paginate --slurp \
+              ASSET_PAGES=$(gh_read api --paginate --slurp \
                 "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-              REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+              REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+                flatten-pages asset)
               MATCH_COUNT=$(printf '%s' "$REMOTE_ASSETS" | jq --arg name "$NAME" \
                 '[.[] | select(.name == $name)] | length')
               if [ "$MATCH_COUNT" -ne 1 ]; then
@@ -882,7 +1128,7 @@ jobs:
             fi
             REMOTE_ID=$(printf '%s' "$REMOTE_ASSETS" | jq -r --arg name "$NAME" \
               '.[] | select(.name == $name) | .id')
-            gh api -H "Accept: application/octet-stream" \
+            gh_read api -H "Accept: application/octet-stream" \
               "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$REMOTE_ASSET"
             if ! cmp -s "$LOCAL_ASSET" "$REMOTE_ASSET"; then
               echo "::error::Existing release asset $NAME differs from the canonical CI-gated bytes"
@@ -890,9 +1136,10 @@ jobs:
             fi
             echo "Verified exact release asset: $NAME"
           done
-          ASSET_PAGES=$(gh api --paginate --slurp \
+          ASSET_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-          FINAL_ASSETS=$(printf '%s' "$ASSET_PAGES" | jq 'add // []')
+          FINAL_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages asset)
           FINAL_COUNT=$(printf '%s' "$FINAL_ASSETS" | jq 'length')
           if [ "$FINAL_COUNT" -ne 6 ]; then
             echo "::error::Release $TAG does not contain the complete six-asset Basic set"
@@ -925,17 +1172,18 @@ jobs:
             fi
             REMOTE_ID=$(printf '%s' "$FINAL_ASSETS" | jq -r --arg name "$NAME" \
               '.[] | select(.name == $name) | .id')
-            gh api -H "Accept: application/octet-stream" \
+            gh_read api -H "Accept: application/octet-stream" \
               "repos/${{ github.repository }}/releases/assets/$REMOTE_ID" > "$FINAL_DIR/$NAME"
             if ! cmp -s "$LOCAL_ASSET" "$FINAL_DIR/$NAME"; then
               echo "::error::Final release asset $NAME differs before draft publication"
               exit 1
             fi
           done
-          PUBLISH_RELEASE=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID")
-          PUBLISH_ASSET_PAGES=$(gh api --paginate --slurp \
+          PUBLISH_RELEASE=$(gh_read api "repos/${{ github.repository }}/releases/$RELEASE_ID")
+          PUBLISH_ASSET_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases/$RELEASE_ID/assets?per_page=100")
-          PUBLISH_ASSETS=$(printf '%s' "$PUBLISH_ASSET_PAGES" | jq 'add // []')
+          PUBLISH_ASSETS=$(printf '%s' "$PUBLISH_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages asset)
           PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS" \
             '{release: $release, assets: $assets}')
           FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')
@@ -952,9 +1200,10 @@ jobs:
             echo "::error::Exact six-asset set produced unexpected release action $FINAL_ACTION"
             exit 1
           fi
-          RELEASE_PAGES=$(gh api --paginate --slurp \
+          RELEASE_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases?per_page=100")
-          RELEASES=$(printf '%s' "$RELEASE_PAGES" | jq 'add // []')
+          RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+            flatten-pages release)
           RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
             '[.[] | select(.tag_name == $tag)] | length')
           if [ "$RELEASE_COUNT" -ne 1 ]; then
@@ -971,7 +1220,7 @@ jobs:
             exit 1
           fi
           if [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
-            LATEST_TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            LATEST_TAG=$(gh_read api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
             if [ "$LATEST_TAG" != "$TAG" ]; then
               echo "::error::Published stable release $TAG is not GitHub's latest release"
               exit 1

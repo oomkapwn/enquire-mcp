@@ -12,6 +12,8 @@ import {
   evaluateMcpbReleaseState,
   evaluateNpmPublication,
   evaluateReleaseChecks,
+  flattenPaginatedArrays,
+  flattenPaginatedField,
   REQUIRED_RELEASE_CHECKS
 } from "../scripts/check-release-integrity.mjs";
 // @ts-expect-error — .mjs safety helpers have no declaration file; the release invariant exercises their pure contract.
@@ -24,31 +26,67 @@ import {
 // @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.
 import { createOwnedScratch, removeOwnedScratch } from "../scripts/mcpb-consumer.mjs";
 
-interface CheckRun {
+interface WorkflowJob {
   id: number;
   name: string;
   status: "completed" | "in_progress";
   conclusion: string | null;
   started_at: string;
+  run_id: number;
+  run_attempt: number;
+  head_sha: string;
+  workflow_name: string;
 }
 
-function run(
+const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
+const TRUSTED_CI_RUN = Object.freeze({
+  id: 30_726_087_813,
+  name: "CI",
+  path: ".github/workflows/ci.yml",
+  event: "push",
+  head_branch: "main",
+  head_sha: TRUSTED_SOURCE_SHA,
+  run_attempt: 1,
+  status: "completed"
+});
+
+function job(
   name: string,
   id: number,
   conclusion: string | null = "success",
-  status: CheckRun["status"] = "completed"
-): CheckRun {
+  status: WorkflowJob["status"] = "completed",
+  runAttempt = TRUSTED_CI_RUN.run_attempt
+): WorkflowJob {
   return {
     id,
     name,
     status,
     conclusion,
-    started_at: new Date(Date.UTC(2026, 6, 25, 0, 0, id)).toISOString()
+    started_at: new Date(Date.UTC(2026, 6, 25, 0, 0, id)).toISOString(),
+    run_id: TRUSTED_CI_RUN.id,
+    run_attempt: runAttempt,
+    head_sha: TRUSTED_SOURCE_SHA,
+    workflow_name: "CI"
   };
 }
 
-function allSuccessful(): CheckRun[] {
-  return REQUIRED_RELEASE_CHECKS.map((name: string, index: number) => run(name, index + 1));
+function allSuccessful(): WorkflowJob[] {
+  return REQUIRED_RELEASE_CHECKS.map((name: string, index: number) => job(name, index + 1));
+}
+
+function evaluateChecks(jobs: WorkflowJob[], workflowRun = TRUSTED_CI_RUN) {
+  return evaluateReleaseChecks(jobs, workflowRun, TRUSTED_SOURCE_SHA);
+}
+
+function releaseAsset(name: string, id: number) {
+  return {
+    id,
+    name,
+    state: "uploaded",
+    content_type: "application/octet-stream",
+    size: id,
+    digest: `sha256:${id.toString(16).padStart(64, "0")}`
+  };
 }
 
 type YamlRecord = Record<string, unknown>;
@@ -925,19 +963,175 @@ function releasePollProblems(workflow: string): string[] {
   } catch {
     return ["release.yml must be valid YAML"];
   }
-  if (yamlRecord(document?.permissions)?.actions !== "read") {
+  const permissions = yamlRecord(document?.permissions) ?? {};
+  if (permissions.actions !== "read" || "checks" in permissions) {
     return ["release must grant read-only Actions API access for the exact-SHA MCPB artifact"];
   }
   const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
-  const gate = namedStep(yamlSteps(publish ?? {}), "Assert tag is on main and required CI checks passed");
+  const steps = yamlSteps(publish ?? {});
+  const deadline = namedStep(steps, "Establish global release deadline");
+  const gate = namedStep(steps, "Assert tag is on main and required CI checks passed");
   const body = runBody(gate);
   if (
-    Number(publish?.["timeout-minutes"] ?? 0) < 90 ||
+    Number(publish?.["timeout-minutes"] ?? 0) !== 240 ||
+    steps[0] !== deadline ||
+    runBody(deadline) !== 'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"' ||
+    !body.includes("CI_GATE_DEADLINE=$((SECONDS + 3600))") ||
+    !body.includes("gate_timeout()") ||
+    !body.includes(`"$TIMEOUT_BIN" --kill-after=10s "\${limit}s" "$@"`) ||
+    !body.includes('gate_timeout 20 "$GH_BIN" "$@"') ||
+    !body.includes('"$TIMEOUT_BIN" --kill-after=10s 120s git fetch origin main --depth=200') ||
     !body.includes("attempt<=120") ||
     !body.includes('"$attempt" -eq 120') ||
     !body.includes("after 60 minutes")
   ) {
     return ["release polling must outlive the blocking package-consumer matrix and leave publication headroom"];
+  }
+  const globalReadBodies = [
+    runBody(namedStep(steps, "Download exact CI-gated Basic MCPB release asset")),
+    runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm")),
+    runBody(namedStep(steps, "Prepare draft GitHub Release")),
+    runBody(namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"))
+  ];
+  const ghReadMutationArgs =
+    "graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*";
+  const rawGhApiLines = workflow
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /(?:^|\$\()gh api(?:\s|$)/u.test(line));
+  if (
+    globalReadBodies.some(
+      (readBody) =>
+        !readBody.includes("gh_read() {") ||
+        !readBody.includes(`"\${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$`) ||
+        !readBody.includes("local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))") ||
+        !readBody.includes('for argument in "$@"; do') ||
+        !readBody.includes(ghReadMutationArgs) ||
+        !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
+        !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
+    ) ||
+    (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 5 ||
+    (workflow.match(/RELEASE_JOB_DEADLINE_EPOCH - \$\(date \+%s\)/g) ?? []).length !== 4 ||
+    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 5 ||
+    mutationMatchCount(workflow, ghReadMutationArgs) !== 5 ||
+    (workflow.match(/gh_read api/g) ?? []).length !== 30 ||
+    workflow.includes("gh() {") ||
+    workflow.includes("gh_read api --method") ||
+    rawGhApiLines.length !== 2 ||
+    rawGhApiLines.some(
+      (line) => line !== `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID" \\`
+    )
+  ) {
+    return ["all post-gate GitHub reads must consume the global deadline without shadowing release writes"];
+  }
+  if (
+    !body.includes("actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SHA&per_page=100") ||
+    !body.includes("flatten-field workflow_runs") ||
+    !body.includes("CI_RUN_COUNT=$(printf") ||
+    !body.includes('[ "$CI_RUN_COUNT" -gt 1 ]') ||
+    !body.includes("WORKFLOW_RUN=$(printf") ||
+    !body.includes("WORKFLOW_RUN_ID=$(printf") ||
+    !body.includes(". <= 9007199254740991") ||
+    !body.includes("actions/runs/$WORKFLOW_RUN_ID/jobs?filter=all&per_page=100") ||
+    !body.includes("flatten-field jobs") ||
+    !body.includes('--argjson workflow_run "$WORKFLOW_RUN" --argjson jobs "$JOBS"') ||
+    !body.includes("'{workflow_run: $workflow_run, jobs: $jobs}'") ||
+    !body.includes('check-release-integrity.mjs checks "$SHA"') ||
+    body.includes("check-runs?") ||
+    body.includes("filter=latest")
+  ) {
+    return ["release checks must bind exact names to one exact ci.yml main-push workflow-run all-execution view"];
+  }
+  const normalizedWorkflow = workflow
+    .split(/\\\r?\n\s*/u)
+    .join(" ")
+    .split(/\s+/u)
+    .join(" ");
+  const paginationBinding = (result: string, pages: string, decoder: string) =>
+    `${result}=$(printf '%s' "$${pages}" | node scripts/check-release-integrity.mjs ${decoder})`;
+  const strictPaginationBindings: Array<[string, number]> = [
+    [paginationBinding("CI_RUNS", "CI_RUN_PAGES", "flatten-field workflow_runs"), 1],
+    [paginationBinding("JOBS", "JOB_PAGES", "flatten-field jobs"), 2],
+    [paginationBinding("RUNS", "RUN_PAGES", "flatten-field workflow_runs"), 1],
+    [paginationBinding("CANDIDATE_ARTIFACTS", "ARTIFACT_PAGES", "flatten-field artifacts"), 1],
+    [paginationBinding("RELEASES", "RELEASE_PAGES", "flatten-pages release"), 5],
+    [paginationBinding("RELEASE_ASSETS", "RELEASE_ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 5],
+    [paginationBinding("CURRENT_ASSETS", "CURRENT_ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("FINAL_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("PUBLISH_ASSETS", "PUBLISH_ASSET_PAGES", "flatten-pages asset"), 1]
+  ];
+  if (
+    strictPaginationBindings.some(
+      ([binding, expected]) => mutationMatchCount(normalizedWorkflow, binding) !== expected
+    ) ||
+    (workflow.match(/flatten-pages release/g) ?? []).length !== 5 ||
+    (workflow.match(/flatten-pages asset/g) ?? []).length !== 9 ||
+    (workflow.match(/flatten-field workflow_runs/g) ?? []).length !== 2 ||
+    (workflow.match(/flatten-field jobs/g) ?? []).length !== 2 ||
+    (workflow.match(/flatten-field artifacts/g) ?? []).length !== 1 ||
+    (workflow.match(/--paginate --slurp/g) ?? []).length !== 19 ||
+    workflow.includes("add // []") ||
+    workflow.includes("[.[].workflow_runs[]]") ||
+    workflow.includes("[.[].jobs[]]") ||
+    workflow.includes("[.[].artifacts[]]")
+  ) {
+    return ["every paginated release read must use one strict collection decoder"];
+  }
+  const preflight = runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"));
+  const initIndex = preflight.indexOf("RELEASE_ABSENCE_OBSERVATIONS=0");
+  const loopIndex = preflight.indexOf("release_preflight_attempt<=12", initIndex);
+  const refreshIndex = preflight.indexOf("if ! RELEASE_PAGES=$(gh_read api --paginate --slurp", loopIndex);
+  const refreshEndpointIndex = preflight.indexOf(
+    `"repos/\${{ github.repository }}/releases?per_page=100"); then`,
+    refreshIndex
+  );
+  const failureIndex = preflight.indexOf("GitHub release preflight read failed", refreshEndpointIndex);
+  const failureContinueIndex = preflight.indexOf("continue", failureIndex);
+  const parseBindingIndex = preflight.indexOf("RELEASES=$(printf '%s' \"$RELEASE_PAGES\"", failureContinueIndex);
+  const parseIndex = preflight.indexOf("flatten-pages release", parseBindingIndex);
+  const countIndex = preflight.indexOf("RELEASE_COUNT=$(printf '%s' \"$RELEASES\"", parseIndex);
+  const tagFilter = "'[.[] | select(.tag_name == $tag)] | length')";
+  const tagFilterIndex = preflight.indexOf(tagFilter, countIndex);
+  const duplicateGuardIndex = preflight.indexOf('if [ "$RELEASE_COUNT" -gt 1 ]; then', tagFilterIndex);
+  const duplicateErrorIndex = preflight.indexOf(
+    "GitHub returned duplicate draft/published releases for $TAG",
+    duplicateGuardIndex
+  );
+  const visibleBreakIndex = preflight.indexOf('[ "$RELEASE_COUNT" -eq 1 ]; then break; fi', duplicateErrorIndex);
+  const incrementIndex = preflight.indexOf(
+    "RELEASE_ABSENCE_OBSERVATIONS=$((RELEASE_ABSENCE_OBSERVATIONS + 1))",
+    countIndex
+  );
+  const readyIndex = preflight.indexOf('[ "$RELEASE_ABSENCE_OBSERVATIONS" -eq 6 ]', incrementIndex);
+  const guardIndex = preflight.indexOf('[ "$RELEASE_ABSENCE_OBSERVATIONS" -ne 6 ]', readyIndex);
+  const absentStateIndex = preflight.indexOf('{"release":null,"assets":[]}', guardIndex);
+  if (
+    mutationMatchCount(preflight, "RELEASE_ABSENCE_OBSERVATIONS=0") !== 1 ||
+    mutationMatchCount(preflight, "RELEASE_ABSENCE_OBSERVATIONS=$((RELEASE_ABSENCE_OBSERVATIONS + 1))") !== 1 ||
+    mutationMatchCount(preflight, "if ! RELEASE_PAGES=$(gh_read api --paginate --slurp") !== 1 ||
+    !preflight.includes("sleep 5") ||
+    initIndex < 0 ||
+    loopIndex <= initIndex ||
+    refreshIndex <= loopIndex ||
+    refreshEndpointIndex <= refreshIndex ||
+    failureIndex <= refreshEndpointIndex ||
+    failureContinueIndex <= failureIndex ||
+    parseBindingIndex <= failureContinueIndex ||
+    parseIndex <= parseBindingIndex ||
+    countIndex <= parseIndex ||
+    tagFilterIndex <= countIndex ||
+    duplicateGuardIndex <= tagFilterIndex ||
+    preflight.slice(tagFilterIndex + tagFilter.length, duplicateGuardIndex).trim().length !== 0 ||
+    duplicateErrorIndex <= duplicateGuardIndex ||
+    visibleBreakIndex <= duplicateErrorIndex ||
+    preflight.slice(tagFilterIndex + tagFilter.length, visibleBreakIndex).includes("RELEASE_COUNT=") ||
+    incrementIndex <= visibleBreakIndex ||
+    readyIndex <= incrementIndex ||
+    guardIndex <= readyIndex ||
+    absentStateIndex <= guardIndex
+  ) {
+    return ["release absence must require six successful strict zero observations before npm"];
   }
   return [];
 }
@@ -970,11 +1164,11 @@ const MCPB_NPM_CHANNEL_ADVANCE =
   '              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
   '            npm publish --provenance --access public --tag "$CHANNEL"';
 const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
-  '          gh api -H "Accept: application/vnd.github+json" \\\n' +
+  '          gh_read api -H "Accept: application/vnd.github+json" \\\n' +
   `            "repos/\${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"`;
 const MCPB_RELEASE_VISIBILITY_POLL =
   "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";
-const MCPB_RELEASE_VISIBILITY_REFRESH = "            RELEASE_PAGES=$(gh api --paginate --slurp";
+const MCPB_RELEASE_VISIBILITY_REFRESH = "            RELEASE_PAGES=$(gh_read api --paginate --slurp";
 const MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH = `${MCPB_RELEASE_VISIBILITY_POLL}\n${MCPB_RELEASE_VISIBILITY_REFRESH}`;
 const MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD =
   '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
@@ -1253,7 +1447,7 @@ function mcpbContractProblems(inputs: {
     inputs.release.includes("npm run mcpb:build") ||
     !inputs.release.includes("Download exact CI-gated Basic MCPB release asset") ||
     !inputs.release.includes("actions: read") ||
-    !inputs.release.includes("checks: read") ||
+    inputs.release.includes("checks: read") ||
     !inputs.release.includes('node-version: "22.13.0"') ||
     !inputs.release.includes(
       "actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SOURCE_SHA&per_page=100"
@@ -1261,6 +1455,18 @@ function mcpbContractProblems(inputs: {
     inputs.release.includes("--status success") ||
     !inputs.integrity.includes("export function evaluateNpmPublication") ||
     !inputs.integrity.includes("export function evaluateMcpbReleaseState") ||
+    !inputs.integrity.includes("export function evaluateReleaseChecks") ||
+    !inputs.integrity.includes("export function flattenPaginatedArrays") ||
+    !inputs.integrity.includes("export function flattenPaginatedField") ||
+    !inputs.integrity.includes('workflowRun.name !== "CI"') ||
+    !inputs.integrity.includes('workflowRun.path !== ".github/workflows/ci.yml"') ||
+    !inputs.integrity.includes("job.run_id !== trustedRun.id") ||
+    !inputs.integrity.includes("job.run_attempt > trustedRun.run_attempt") ||
+    !inputs.integrity.includes("duplicate required CI job in exact workflow-run attempt") ||
+    !inputs.integrity.includes("Number.isSafeInteger(value)") ||
+    !inputs.integrity.includes("GitHub release state must explicitly contain release and assets") ||
+    !inputs.integrity.includes("isExactSha256DigestOrNull") ||
+    !inputs.integrity.includes("paginated asset element has an invalid identity") ||
     !inputs.integrity.includes("export function candidateRunIds") ||
     !inputs.integrity.includes("export function evaluateMcpbCandidateRun") ||
     !inputs.integrity.includes("export function assertMcpbAssetVersion") ||
@@ -1268,6 +1474,8 @@ function mcpbContractProblems(inputs: {
     inputs.integrity.includes("release.target_commitish") ||
     !inputs.release.includes('node scripts/check-release-integrity.mjs asset-version "$VERSION"') ||
     !inputs.release.includes("node scripts/check-release-integrity.mjs candidate-runs") ||
+    !inputs.release.includes('candidate "$SOURCE_SHA"') ||
+    !inputs.release.includes("{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}") ||
     !/node scripts\/check-release-integrity\.mjs \\\s+candidate/u.test(inputs.release) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
     (inputs.release.match(/release-state "\$TAG" "\$EXPECTED_PRERELEASE"/g) ?? []).length !== 3 ||
@@ -1279,12 +1487,12 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('echo "build_run_attempt=$PINNED_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"') ||
     !inputs.release.includes('echo "artifact_id=$PINNED_ARTIFACT_ID" >> "$GITHUB_OUTPUT"') ||
     !inputs.release.includes('echo "artifact_digest=$PINNED_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"') ||
-    !inputs.release.includes("jobs?filter=all&per_page=100") ||
+    !inputs.release.includes("actions/runs/$CANDIDATE_RUN_ID/jobs?filter=all&per_page=100") ||
     !inputs.release.includes("actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100") ||
-    !inputs.release.includes("CHECK_PAGES=$(gh api --paginate --slurp") ||
-    !inputs.release.includes("RUN_PAGES=$(gh api --paginate --slurp") ||
-    !inputs.release.includes("JOB_PAGES=$(gh api --paginate --slurp") ||
-    !inputs.release.includes("ARTIFACT_PAGES=$(gh api --paginate --slurp") ||
+    !inputs.release.includes("CI_RUN_PAGES=$(gh_read api --paginate --slurp") ||
+    !inputs.release.includes("\n          RUN_PAGES=$(gh_read api --paginate --slurp") ||
+    !inputs.release.includes("JOB_PAGES=$(gh_read api --paginate --slurp") ||
+    !inputs.release.includes("ARTIFACT_PAGES=$(gh_read api --paginate --slurp") ||
     !inputs.release.includes(MCPB_ACTIONS_ARTIFACT_DOWNLOAD) ||
     !inputs.release.includes('ACTUAL_ARTIFACT_DIGEST="sha256:$(sha256sum "$CANDIDATE_ZIP"') ||
     !inputs.release.includes("Downloaded Actions artifact digest differs from the selected API identity") ||
@@ -1310,7 +1518,7 @@ function mcpbContractProblems(inputs: {
     inputs.release.includes("/releases/tags/") ||
     inputs.release.includes("gh release download") ||
     !inputs.release.includes("Existing release asset $NAME differs before npm publication") ||
-    !inputs.release.includes('git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}"') ||
+    (inputs.release.match(/git ls-remote --tags origin/g) ?? []).length !== 3 ||
     (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 3 ||
     (inputs.release.match(/^\s+assert_remote_tag_identity$/gmu) ?? []).length !== 6 ||
     (inputs.release.match(/"\$RAW_TAG_COUNT" -ne 1/g) ?? []).length !== 3 ||
@@ -1337,7 +1545,7 @@ function mcpbContractProblems(inputs: {
     !freshUploadOrderIsSafe ||
     !inputs.release.includes(publicationTagProof) ||
     !inputs.release.includes(finalPostconditionTagProof) ||
-    !inputs.release.includes(`PUBLISH_RELEASE=$(gh api "repos/\${{ github.repository }}/releases/$RELEASE_ID")`) ||
+    !inputs.release.includes(`PUBLISH_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID")`) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 2 ||
     inputs.release.lastIndexOf("node scripts/check-release-integrity.mjs channel-advance") >
       inputs.release.indexOf("npm publish --provenance") ||
@@ -1376,7 +1584,7 @@ function mcpbContractProblems(inputs: {
   return problems;
 }
 
-describe("release identity and exact required-check gate", () => {
+describe("release identity and exact required-job gate", () => {
   it("accepts only the tag derived from package.json version", () => {
     expect(assertReleaseTagMatchesVersion("v3.12.0-rc.10", "3.12.0-rc.10")).toBe("v3.12.0-rc.10");
   });
@@ -1388,8 +1596,8 @@ describe("release identity and exact required-check gate", () => {
     expect(() => assertReleaseTagMatchesVersion("", "3.12.0-rc.10")).toThrow(/tag is missing/);
   });
 
-  it("requires one successful run for every exact context", () => {
-    expect(evaluateReleaseChecks(allSuccessful())).toEqual({
+  it("requires one successful job for every exact context", () => {
+    expect(evaluateChecks(allSuccessful())).toEqual({
       state: "ready",
       succeeded: REQUIRED_RELEASE_CHECKS,
       missing: [],
@@ -1398,35 +1606,295 @@ describe("release identity and exact required-check gate", () => {
     });
   });
 
-  it("does not let a duplicate run hide a missing context (NEGATIVE control)", () => {
-    const checks = allSuccessful().filter((item) => item.name !== "oia");
-    checks.push(run("lint", 20), run("lint", 21), run("lint-extra", 22));
-    const result = evaluateReleaseChecks(checks);
+  it("does not let an extra job hide a missing context (NEGATIVE control)", () => {
+    const jobs = allSuccessful().filter((item) => item.name !== "oia");
+    jobs.push(job("lint-extra", 22));
+    const result = evaluateChecks(jobs);
     expect(result.state).toBe("pending");
     expect(result.succeeded).toHaveLength(REQUIRED_RELEASE_CHECKS.length - 1);
     expect(result.missing).toEqual(["oia"]);
   });
 
-  it("uses the latest rerun for each context", () => {
-    const recovered = [...allSuccessful(), run("audit", 30, "failure"), run("audit", 31, "success")];
-    expect(evaluateReleaseChecks(recovered).state).toBe("ready");
-
-    const regressed = [...allSuccessful(), run("coverage", 40, "success"), run("coverage", 41, "failure")];
-    expect(evaluateReleaseChecks(regressed)).toMatchObject({
+  it("selects the unique maximum attempt per name independent of response order", () => {
+    const rerun = { ...TRUSTED_CI_RUN, run_attempt: 2 };
+    const oldSuccessNewFailure = [...allSuccessful(), job("coverage", 40, "failure", "completed", 2)];
+    const expectedFailure = {
       state: "failed",
       failed: [{ name: "coverage", conclusion: "failure" }]
+    };
+    expect(evaluateReleaseChecks(oldSuccessNewFailure, rerun, TRUSTED_SOURCE_SHA)).toMatchObject(expectedFailure);
+    expect(evaluateReleaseChecks([...oldSuccessNewFailure].reverse(), rerun, TRUSTED_SOURCE_SHA)).toMatchObject(
+      expectedFailure
+    );
+
+    const oldFailureNewSuccess = allSuccessful().map((item) =>
+      item.name === "coverage" ? job("coverage", 41, "failure") : item
+    );
+    oldFailureNewSuccess.push(job("coverage", 42, "success", "completed", 2));
+    expect(evaluateReleaseChecks(oldFailureNewSuccess, rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
+    expect(evaluateReleaseChecks([...oldFailureNewSuccess].reverse(), rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
+
+    const pendingMaximum = [...allSuccessful(), job("docs", 43, null, "in_progress", 2)];
+    expect(evaluateReleaseChecks(pendingMaximum, rerun, TRUSTED_SOURCE_SHA)).toMatchObject({
+      state: "pending",
+      pending: ["docs"]
     });
+
+    const duplicateMaximum = [
+      ...allSuccessful(),
+      job("audit", 44, "success", "completed", 2),
+      job("audit", 45, "success", "completed", 2)
+    ];
+    expect(() => evaluateReleaseChecks(duplicateMaximum, rerun, TRUSTED_SOURCE_SHA)).toThrow(
+      /duplicate required CI job in exact workflow-run attempt 2: audit/
+    );
+
+    const duplicateOldAttempt = [
+      ...allSuccessful(),
+      job("smoke", 46, "failure"),
+      job("smoke", 47, "success", "completed", 2)
+    ];
+    expect(evaluateReleaseChecks(duplicateOldAttempt, rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
+
+    for (const id of [undefined, 0, 1.5, Number.MAX_SAFE_INTEGER + 1, "30726087813"]) {
+      expect(() => evaluateReleaseChecks(allSuccessful(), { ...TRUSTED_CI_RUN, id }, TRUSTED_SOURCE_SHA)).toThrow(
+        /trusted CI workflow run identity diverged/
+      );
+    }
+    for (const divergentRun of [
+      { ...TRUSTED_CI_RUN, name: "Other" },
+      { ...TRUSTED_CI_RUN, path: ".github/workflows/other.yml" },
+      { ...TRUSTED_CI_RUN, event: "workflow_dispatch" },
+      { ...TRUSTED_CI_RUN, head_branch: "topic" },
+      { ...TRUSTED_CI_RUN, head_sha: "f".repeat(40) },
+      { ...TRUSTED_CI_RUN, run_attempt: 0 },
+      { ...TRUSTED_CI_RUN, run_attempt: 1.5 },
+      { ...TRUSTED_CI_RUN, status: "" }
+    ]) {
+      expect(() => evaluateReleaseChecks(allSuccessful(), divergentRun, TRUSTED_SOURCE_SHA)).toThrow(
+        /trusted CI workflow run identity diverged/
+      );
+    }
+    expect(() => evaluateReleaseChecks(allSuccessful(), TRUSTED_CI_RUN, "f".repeat(40))).toThrow(
+      /trusted CI workflow run identity diverged/
+    );
+
+    const valid = allSuccessful();
+    for (const foreign of [
+      { ...job("coverage", 60), id: 0 },
+      { ...job("coverage", 60), id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...job("coverage", 60), run_id: String(TRUSTED_CI_RUN.id) },
+      { ...job("coverage", 60), run_id: TRUSTED_CI_RUN.id + 1 },
+      { ...job("coverage", 60), run_attempt: 2 },
+      { ...job("coverage", 60), head_sha: "f".repeat(40) },
+      { ...job("coverage", 60), workflow_name: "Other" }
+    ]) {
+      expect(() => evaluateReleaseChecks([...valid, foreign], TRUSTED_CI_RUN, TRUSTED_SOURCE_SHA)).toThrow(
+        /coverage diverged from the exact workflow-run identity/
+      );
+    }
+    const duplicateId = allSuccessful().map((item) =>
+      item.name === "audit" ? { ...item, id: allSuccessful()[0]?.id ?? 1 } : item
+    );
+    expect(() => evaluateChecks(duplicateId)).toThrow(/duplicate CI job id/);
+    expect(() => evaluateChecks([{ name: "unrelated" } as unknown as WorkflowJob, ...allSuccessful()])).toThrow(
+      /CI job unrelated diverged/
+    );
+    expect(() => evaluateReleaseChecks({}, TRUSTED_CI_RUN, TRUSTED_SOURCE_SHA)).toThrow(/must be an array/);
+    expect(
+      evaluateReleaseChecks(allSuccessful(), { ...TRUSTED_CI_RUN, status: "in_progress" }, TRUSTED_SOURCE_SHA)
+    ).toMatchObject({ state: "pending", pending: ["CI workflow run"] });
   });
 
-  it("distinguishes in-progress from completed non-success checks", () => {
-    const pending = [...allSuccessful(), run("docs", 50, null, "in_progress")];
-    expect(evaluateReleaseChecks(pending)).toMatchObject({ state: "pending", pending: ["docs"] });
+  it("distinguishes in-progress from completed non-success jobs", () => {
+    const pending = allSuccessful().map((item) => (item.name === "docs" ? job("docs", 50, null, "in_progress") : item));
+    expect(evaluateChecks(pending)).toMatchObject({ state: "pending", pending: ["docs"] });
 
-    const skipped = [...allSuccessful(), run("smoke", 51, "skipped")];
-    expect(evaluateReleaseChecks(skipped)).toMatchObject({
+    const skipped = allSuccessful().map((item) => (item.name === "smoke" ? job("smoke", 51, "skipped") : item));
+    expect(evaluateChecks(skipped)).toMatchObject({
       state: "failed",
       failed: [{ name: "smoke", conclusion: "skipped" }]
     });
+
+    const release = {
+      id: 10,
+      tag_name: "v4.0.0-rc.2",
+      draft: true,
+      prerelease: true
+    };
+    const asset = releaseAsset("candidate.mcpb", 11);
+    expect(flattenPaginatedArrays([[]], "release")).toEqual([]);
+    expect(flattenPaginatedArrays([[]], "asset")).toEqual([]);
+    expect(flattenPaginatedArrays([[release], [{ ...release, id: 12 }]], "release")).toEqual([
+      release,
+      { ...release, id: 12 }
+    ]);
+    expect(flattenPaginatedArrays([[asset]], "asset")).toEqual([asset]);
+    expect(() => flattenPaginatedArrays([[release], [{ ...release }]], "release")).toThrow(/duplicate id/);
+    expect(() => flattenPaginatedArrays([[asset], [{ ...asset, name: "other.mcpb" }]], "asset")).toThrow(
+      /duplicate id/
+    );
+
+    for (const malformed of [[], {}, null, [null], [{}], [[null]], [[{}]]]) {
+      expect(() => flattenPaginatedArrays(malformed, "release")).toThrow(/paginated/);
+    }
+    for (const invalidRelease of [
+      { ...release, id: 0 },
+      { ...release, id: 1.5 },
+      { ...release, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...release, id: "10" },
+      { ...release, tag_name: "" },
+      { ...release, draft: "true" },
+      { ...release, prerelease: "true" },
+      { ...release, prerelease: undefined }
+    ]) {
+      expect(() => flattenPaginatedArrays([[invalidRelease]], "release")).toThrow(/invalid identity/);
+    }
+    for (const invalidAsset of [
+      { ...asset, id: 0 },
+      { ...asset, id: 1.5 },
+      { ...asset, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...asset, id: "11" },
+      { ...asset, name: "" },
+      { ...asset, state: "" },
+      { ...asset, content_type: "" },
+      { ...asset, size: -1 },
+      { ...asset, size: 1.5 },
+      { ...asset, size: Number.MAX_SAFE_INTEGER + 1 },
+      { ...asset, size: "11" },
+      { ...asset, digest: 42 },
+      { ...asset, digest: `sha256:${"A".repeat(64)}` },
+      { ...asset, digest: "sha256:short" }
+    ]) {
+      expect(() => flattenPaginatedArrays([[invalidAsset]], "asset")).toThrow(/invalid identity/);
+    }
+    expect(flattenPaginatedArrays([[{ ...asset, digest: null }]], "asset")).toEqual([{ ...asset, digest: null }]);
+
+    const run = { ...TRUSTED_CI_RUN };
+    expect(flattenPaginatedField([{ total_count: 0, workflow_runs: [] }], "workflow_runs")).toEqual([]);
+    expect(
+      flattenPaginatedField(
+        [
+          { total_count: 2, workflow_runs: [run] },
+          { total_count: 2, workflow_runs: [{ ...run, id: run.id + 1 }] }
+        ],
+        "workflow_runs"
+      )
+    ).toEqual([run, { ...run, id: run.id + 1 }]);
+    const oneJob = job("lint", 70);
+    expect(flattenPaginatedField([{ total_count: 1, jobs: [oneJob] }], "jobs")).toEqual([oneJob]);
+    const oneArtifact = {
+      id: 71,
+      name: "mcpb-basic-candidate-1",
+      expired: false,
+      digest: `sha256:${"7".repeat(64)}`
+    };
+    expect(flattenPaginatedField([{ total_count: 1, artifacts: [oneArtifact] }], "artifacts")).toEqual([oneArtifact]);
+    expect(() =>
+      flattenPaginatedField(
+        [
+          { total_count: 2, workflow_runs: [run] },
+          { total_count: 2, workflow_runs: [{ ...run }] }
+        ],
+        "workflow_runs"
+      )
+    ).toThrow(/duplicate id/);
+    expect(() =>
+      flattenPaginatedField([{ total_count: 2, jobs: [oneJob, { ...oneJob, name: "other" }] }], "jobs")
+    ).toThrow(/duplicate id/);
+    expect(() =>
+      flattenPaginatedField(
+        [{ total_count: 2, artifacts: [oneArtifact, { ...oneArtifact, name: "other" }] }],
+        "artifacts"
+      )
+    ).toThrow(/duplicate id/);
+    for (const malformed of [
+      [],
+      {},
+      null,
+      [[]],
+      [{}],
+      [{ total_count: -1, workflow_runs: [] }],
+      [{ total_count: 1.5, workflow_runs: [] }],
+      [{ total_count: Number.MAX_SAFE_INTEGER + 1, workflow_runs: [] }],
+      [{ total_count: "0", workflow_runs: [] }],
+      [{ total_count: 0, workflow_runs: null }],
+      [{ total_count: 1, workflow_runs: [null] }],
+      [{ total_count: 1, workflow_runs: [[]] }],
+      [{ total_count: 1, workflow_runs: [{}] }],
+      [{ total_count: 0, workflow_runs: [run] }],
+      [{ total_count: 2, workflow_runs: [run] }],
+      [
+        { total_count: 2, workflow_runs: [run] },
+        { total_count: 3, workflow_runs: [{ ...run, id: run.id + 1 }] }
+      ]
+    ]) {
+      expect(() => flattenPaginatedField(malformed, "workflow_runs")).toThrow(/paginated/);
+    }
+    for (const malformedRun of [
+      { ...run, id: 0 },
+      { ...run, id: "1" },
+      { ...run, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...run, name: "" },
+      { ...run, path: "" },
+      { ...run, event: "" },
+      { ...run, head_branch: "" },
+      { ...run, head_sha: "not-a-sha" },
+      { ...run, run_attempt: 0 },
+      { ...run, run_attempt: 1.5 },
+      { ...run, run_attempt: Number.MAX_SAFE_INTEGER + 1 },
+      { ...run, run_attempt: "1" },
+      { ...run, status: "" }
+    ]) {
+      expect(() => flattenPaginatedField([{ total_count: 1, workflow_runs: [malformedRun] }], "workflow_runs")).toThrow(
+        /invalid identity/
+      );
+    }
+    for (const malformedJob of [
+      { ...oneJob, id: "70" },
+      { ...oneJob, id: 0 },
+      { ...oneJob, id: 1.5 },
+      { ...oneJob, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...oneJob, name: "" },
+      { ...oneJob, run_id: 0 },
+      { ...oneJob, run_id: 1.5 },
+      { ...oneJob, run_id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...oneJob, run_id: String(oneJob.run_id) },
+      { ...oneJob, run_attempt: 0 },
+      { ...oneJob, run_attempt: 1.5 },
+      { ...oneJob, run_attempt: Number.MAX_SAFE_INTEGER + 1 },
+      { ...oneJob, run_attempt: "1" },
+      { ...oneJob, head_sha: "not-a-sha" },
+      { ...oneJob, workflow_name: "" },
+      { ...oneJob, status: "" },
+      { ...oneJob, conclusion: 1 }
+    ]) {
+      expect(() => flattenPaginatedField([{ total_count: 1, jobs: [malformedJob] }], "jobs")).toThrow(
+        /invalid identity/
+      );
+    }
+    for (const malformedArtifact of [
+      { ...oneArtifact, id: 0 },
+      { ...oneArtifact, id: 1.5 },
+      { ...oneArtifact, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...oneArtifact, id: "71" },
+      { ...oneArtifact, name: "" },
+      { ...oneArtifact, expired: "false" },
+      { ...oneArtifact, digest: undefined },
+      { ...oneArtifact, digest: 42 },
+      { ...oneArtifact, digest: `sha256:${"A".repeat(64)}` }
+    ]) {
+      expect(() => flattenPaginatedField([{ total_count: 1, artifacts: [malformedArtifact] }], "artifacts")).toThrow(
+        /invalid identity/
+      );
+    }
+    expect(
+      flattenPaginatedField([{ total_count: 1, artifacts: [{ ...oneArtifact, digest: null }] }], "artifacts")
+    ).toEqual([{ ...oneArtifact, digest: null }]);
+    expect(() => flattenPaginatedField([{ total_count: 0, other: [] }], "workflow_runs")).toThrow(/invalid envelope/);
+    expect(() => flattenPaginatedField([{ total_count: 0, workflow_runs: [] }], "unknown")).toThrow(
+      /unknown paginated/
+    );
   });
 
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
@@ -1637,31 +2105,35 @@ describe("release identity and exact required-check gate", () => {
       assetNames: ["a", "b"]
     };
     const draftRelease = {
+      id: 100,
       tag_name: releaseExpected.tag,
       target_commitish: "main",
       prerelease: releaseExpected.prerelease,
       draft: true
     };
+    const assetA = releaseAsset("a", 101);
+    const assetB = releaseAsset("b", 102);
     expect(evaluateMcpbReleaseState({ release: null, assets: [] }, releaseExpected)).toEqual({
       action: "create_draft",
       missing: ["a", "b"]
     });
-    expect(evaluateMcpbReleaseState({ release: draftRelease, assets: [{ name: "a" }] }, releaseExpected)).toEqual({
+    expect(evaluateMcpbReleaseState({ release: draftRelease, assets: [assetA] }, releaseExpected)).toEqual({
       action: "resume_draft",
       missing: ["b"]
     });
-    expect(
-      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ name: "a" }, { name: "b" }] }, releaseExpected)
-    ).toEqual({ action: "publish_draft", missing: [] });
+    expect(evaluateMcpbReleaseState({ release: draftRelease, assets: [assetA, assetB] }, releaseExpected)).toEqual({
+      action: "publish_draft",
+      missing: []
+    });
     expect(
       evaluateMcpbReleaseState(
-        { release: { ...draftRelease, draft: false, immutable: true }, assets: [{ name: "a" }, { name: "b" }] },
+        { release: { ...draftRelease, draft: false, immutable: true }, assets: [assetA, assetB] },
         releaseExpected
       )
     ).toEqual({ action: "reuse_published", missing: [] });
     expect(() =>
       evaluateMcpbReleaseState(
-        { release: { ...draftRelease, draft: false, immutable: true }, assets: [{ name: "a" }] },
+        { release: { ...draftRelease, draft: false, immutable: true }, assets: [assetA] },
         releaseExpected
       )
     ).toThrow(/partial/);
@@ -1669,44 +2141,62 @@ describe("release identity and exact required-check gate", () => {
       evaluateMcpbReleaseState({ release: { ...draftRelease, tag_name: "v4.0.0-rc.1" }, assets: [] }, releaseExpected)
     ).toThrow(/identity diverged/);
     expect(() =>
-      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ name: "unexpected" }] }, releaseExpected)
+      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ ...assetA, name: "unexpected" }] }, releaseExpected)
     ).toThrow(/unexpected/);
     expect(() =>
-      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ name: "a" }, { name: "a" }] }, releaseExpected)
+      evaluateMcpbReleaseState({ release: draftRelease, assets: [assetA, { ...assetA, id: 103 }] }, releaseExpected)
     ).toThrow(/duplicate/);
+    expect(() =>
+      evaluateMcpbReleaseState(
+        { release: draftRelease, assets: [assetA, { ...assetB, id: assetA.id }] },
+        releaseExpected
+      )
+    ).toThrow(/duplicate GitHub release asset id/);
+    for (const malformedState of [
+      {},
+      { release: null },
+      { release: null, assets: null },
+      { release: undefined, assets: [] },
+      { release: { ...draftRelease, id: 0 }, assets: [] },
+      { release: { ...draftRelease, id: 1.5 }, assets: [] },
+      { release: { ...draftRelease, id: Number.MAX_SAFE_INTEGER + 1 }, assets: [] },
+      { release: draftRelease, assets: [{ ...assetA, id: 0 }] }
+    ]) {
+      expect(() => evaluateMcpbReleaseState(malformedState, releaseExpected)).toThrow();
+    }
 
-    expect(
-      candidateRunIds(
-        [
-          { id: 20, head_sha: "source", head_branch: "main", event: "push" },
-          { id: 10, head_sha: "source", head_branch: "main", event: "push" },
-          { id: 5, head_sha: "other", head_branch: "main", event: "push" },
-          { id: 6, head_sha: "source", head_branch: "topic", event: "push" },
-          { id: 7, head_sha: "source", head_branch: "main", event: "workflow_dispatch" }
-        ],
-        "source"
-      )
-    ).toEqual(["10", "20"]);
-    expect(() =>
-      candidateRunIds([{ id: "not-a-run", head_sha: "source", head_branch: "main", event: "push" }], "source")
-    ).toThrow(/invalid positive decimal id/);
-    expect(() =>
-      candidateRunIds(
-        [
-          { id: 10, head_sha: "source", head_branch: "main", event: "push" },
-          { id: "10", head_sha: "source", head_branch: "main", event: "push" }
-        ],
-        "source"
-      )
-    ).toThrow(/duplicate candidate workflow run id/);
+    const candidateRun10 = { ...TRUSTED_CI_RUN, id: 10 };
+    const candidateRun20 = { ...TRUSTED_CI_RUN, id: 20 };
+    expect(candidateRunIds([candidateRun20, candidateRun10], TRUSTED_SOURCE_SHA)).toEqual(["10", "20"]);
+    for (const malformedRun of [
+      { ...candidateRun10, id: 0 },
+      { ...candidateRun10, id: 1.5 },
+      { ...candidateRun10, id: Number.MAX_SAFE_INTEGER + 1 },
+      { ...candidateRun10, id: "10" },
+      { ...candidateRun10, name: "Other" },
+      { ...candidateRun10, path: ".github/workflows/other.yml" },
+      { ...candidateRun10, head_sha: "f".repeat(40) }
+    ]) {
+      expect(() => candidateRunIds([malformedRun], TRUSTED_SOURCE_SHA)).toThrow(/trusted CI workflow run identity/);
+    }
+    expect(() => candidateRunIds([candidateRun10, { ...candidateRun10 }], TRUSTED_SOURCE_SHA)).toThrow(
+      /duplicate candidate workflow run id/
+    );
+    expect(() => candidateRunIds([candidateRun10], "source")).toThrow(/source SHA/);
+
     const digest = `sha256:${"a".repeat(64)}`;
+    const candidateWorkflowRun = { ...TRUSTED_CI_RUN, run_attempt: 2 };
+    const candidateJob = (name: string, id: number, runAttempt: number, conclusion: string | null = "success") =>
+      job(name, id, conclusion, "completed", runAttempt);
+    const unrelatedCandidateJob = candidateJob("unrelated", 200, 1);
+    const producerCandidateJob = candidateJob("mcpb-basic-package", 201, 1);
+    const aggregateCandidateJob = candidateJob("mcpb-basic", 202, 2);
+    const candidateArtifact = { name: "mcpb-basic-candidate-1", expired: false, id: 42, digest };
     const candidate = {
-      jobs: [
-        { name: "unrelated", run_attempt: 99, status: "completed", conclusion: "success" },
-        { name: "mcpb-basic-package", run_attempt: 1, status: "completed", conclusion: "success" },
-        { name: "mcpb-basic", run_attempt: 2, status: "completed", conclusion: "success" }
-      ],
-      artifacts: [{ name: "mcpb-basic-candidate-1", expired: false, id: 42, digest }]
+      workflowRun: candidateWorkflowRun,
+      expectedSourceSha: TRUSTED_SOURCE_SHA,
+      jobs: [unrelatedCandidateJob, producerCandidateJob, aggregateCandidateJob],
+      artifacts: [candidateArtifact]
     };
     expect(evaluateMcpbCandidateRun(candidate)).toEqual({
       state: "selected",
@@ -1717,48 +2207,92 @@ describe("release identity and exact required-check gate", () => {
     expect(
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [...candidate.jobs, { name: "mcpb-basic", run_attempt: 3, status: "completed", conclusion: "failure" }]
+        workflowRun: { ...candidateWorkflowRun, run_attempt: 3 },
+        jobs: [...candidate.jobs, candidateJob("mcpb-basic", 203, 3, "failure")]
       })
     ).toEqual({ state: "skip" });
     expect(
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [
-          { name: "mcpb-basic-package", run_attempt: 2, status: "completed", conclusion: "success" },
-          { name: "mcpb-basic", run_attempt: 1, status: "completed", conclusion: "success" }
-        ],
+        jobs: [candidateJob("mcpb-basic-package", 204, 2), candidateJob("mcpb-basic", 205, 1)],
         artifacts: [{ name: "mcpb-basic-candidate-2", expired: false, id: 42, digest }]
       })
     ).toEqual({ state: "skip" });
     expect(() =>
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [...candidate.jobs, candidate.jobs[2]]
+        jobs: [...candidate.jobs, candidateJob("mcpb-basic", 206, 2)]
       })
     ).toThrow(/duplicate latest-attempt/);
     expect(() =>
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [...candidate.jobs, candidate.jobs[1]]
+        jobs: [...candidate.jobs, candidateJob("mcpb-basic-package", 207, 1)]
       })
     ).toThrow(/duplicate latest-attempt mcpb-basic-package/);
     expect(() =>
       evaluateMcpbCandidateRun({
         ...candidate,
-        artifacts: [...candidate.artifacts, { ...candidate.artifacts[0], id: 43 }]
+        jobs: [...candidate.jobs, { ...aggregateCandidateJob }]
+      })
+    ).toThrow(/duplicate candidate CI job id/);
+    expect(() =>
+      evaluateMcpbCandidateRun({
+        ...candidate,
+        artifacts: [...candidate.artifacts, { ...candidateArtifact, id: 43 }]
       })
     ).toThrow(/duplicate live/);
+    expect(() =>
+      evaluateMcpbCandidateRun({
+        ...candidate,
+        artifacts: [...candidate.artifacts, { ...candidateArtifact, name: "other", id: candidateArtifact.id }]
+      })
+    ).toThrow(/duplicate Actions artifact id/);
     expect(() => evaluateMcpbCandidateRun({ ...candidate, pinnedArtifactId: "43" })).toThrow(/artifact id/);
+    for (const unsafePin of ["0", "01", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() => evaluateMcpbCandidateRun({ ...candidate, pinnedArtifactId: unsafePin })).toThrow(/safe integer/);
+    }
     expect(() => evaluateMcpbCandidateRun({ ...candidate, pinnedRunAttempt: "2" })).toThrow(/producer attempt/);
     expect(() => evaluateMcpbCandidateRun({ ...candidate, pinnedDigest: `sha256:${"b".repeat(64)}` })).toThrow(
       /artifact digest/
     );
+    for (const malformedDigestPin of [false, 0, 42, "sha256:short", `sha256:${"A".repeat(64)}`]) {
+      expect(() => evaluateMcpbCandidateRun({ ...candidate, pinnedDigest: malformedDigestPin })).toThrow(
+        /exact lowercase SHA-256 digest/
+      );
+    }
     expect(() =>
-      evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidate.artifacts[0], digest: "sha256:no" }] })
-    ).toThrow(/lacks an exact id or SHA-256 digest/);
-    expect(
-      evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidate.artifacts[0], expired: true }] })
-    ).toEqual({ state: "skip" });
+      evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidateArtifact, digest: "sha256:no" }] })
+    ).toThrow(/invalid identity/);
+    for (const foreignJob of [
+      { ...candidateJob("mcpb-basic-package", 206, 1), run_id: String(TRUSTED_CI_RUN.id) },
+      { ...candidateJob("mcpb-basic-package", 206, 1), run_id: TRUSTED_CI_RUN.id + 1 },
+      { ...candidateJob("mcpb-basic-package", 206, 1), id: 0 },
+      { ...candidateJob("mcpb-basic-package", 206, 1), head_sha: "f".repeat(40) },
+      { ...candidateJob("mcpb-basic-package", 206, 1), workflow_name: "Other" },
+      { ...candidateJob("mcpb-basic-package", 206, 3) }
+    ]) {
+      expect(() => evaluateMcpbCandidateRun({ ...candidate, jobs: [foreignJob, aggregateCandidateJob] })).toThrow(
+        /candidate CI job/
+      );
+    }
+    expect(() =>
+      evaluateMcpbCandidateRun({
+        ...candidate,
+        jobs: [{ ...unrelatedCandidateJob, id: 0 }, producerCandidateJob, aggregateCandidateJob]
+      })
+    ).toThrow(/candidate CI job unrelated/);
+    for (const unsafeArtifactId of [0, 1.5, Number.MAX_SAFE_INTEGER + 1, "42"]) {
+      expect(() =>
+        evaluateMcpbCandidateRun({
+          ...candidate,
+          artifacts: [{ ...candidateArtifact, id: unsafeArtifactId }]
+        })
+      ).toThrow(/invalid identity/);
+    }
+    expect(evaluateMcpbCandidateRun({ ...candidate, artifacts: [{ ...candidateArtifact, expired: true }] })).toEqual({
+      state: "skip"
+    });
 
     expect(portableArchivePath("server/dist/index.js")).toBe("server/dist/index.js");
     for (const hostile of [
@@ -1824,11 +2358,162 @@ describe("release identity and exact required-check gate", () => {
         )
       )
     ).toContain("protocol-conformance must pin slash-preserving note resource URIs on every host");
-    expect(releasePollProblems(replaceExactly(workflow, "timeout-minutes: 90", "timeout-minutes: 15"))).toContain(
+    expect(releasePollProblems(replaceExactly(workflow, "timeout-minutes: 240", "timeout-minutes: 239"))).toContain(
       "release polling must outlive the blocking package-consumer matrix and leave publication headroom"
     );
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"',
+          'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 138000))" >> "$GITHUB_ENV"'
+        )
+      )
+    ).toContain("release polling must outlive the blocking package-consumer matrix and leave publication headroom");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          "RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)",
+          "RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH",
+          4
+        )
+      )
+    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
+    expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 5))).toContain(
+      "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
+    );
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          "\n          RUN_PAGES=$(gh_read api --paginate --slurp",
+          "\n          RUN_PAGES=$(gh api --paginate --slurp"
+        )
+      )
+    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
+          `gh_read api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
+          2
+        )
+      )
+    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none"))).toContain(
       "release must grant read-only Actions API access for the exact-SHA MCPB artifact"
+    );
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          "actions/runs/$WORKFLOW_RUN_ID/jobs?filter=all&per_page=100",
+          "actions/runs/$WORKFLOW_RUN_ID/jobs?filter=latest&per_page=100"
+        )
+      )
+    ).toContain("release checks must bind exact names to one exact ci.yml main-push workflow-run all-execution view");
+    expect(releasePollProblems(replaceExactly(workflow, "flatten-pages release", "jq 'add // []'", 5))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, "--paginate --slurp", "--paginate", 19))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$ARTIFACT_PAGES"', '"$JOB_PAGES"'))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$RELEASE_PAGES"', '"$ASSET_PAGES"', 5))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    expect(releasePollProblems(replaceExactly(workflow, '"$CURRENT_ASSET_PAGES"', '"$ASSET_PAGES"'))).toContain(
+      "every paginated release read must use one strict collection decoder"
+    );
+    const absenceLoop =
+      "          for (( release_preflight_attempt=1; release_preflight_attempt<=12; release_preflight_attempt++ )); do";
+    const absenceRefresh =
+      "            if ! RELEASE_PAGES=$(gh_read api --paginate --slurp \\\n" +
+      `              "repos/\${{ github.repository }}/releases?per_page=100"); then\n` +
+      '              if [ "$release_preflight_attempt" -eq 12 ]; then\n' +
+      '                echo "::error::GitHub release preflight remained unreadable after 12 bounded checks"\n' +
+      "                exit 1\n" +
+      "              fi\n" +
+      '              echo "::warning::GitHub release preflight read failed (attempt $release_preflight_attempt/12); retrying in 5s"\n' +
+      "              sleep 5\n" +
+      "              continue\n" +
+      "            fi";
+    expect(
+      releasePollProblems(
+        replaceExactly(workflow, `${absenceLoop}\n${absenceRefresh}`, `${absenceRefresh}\n${absenceLoop}`)
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(replaceExactly(workflow, "RELEASE_ABSENCE_OBSERVATIONS=0", "RELEASE_ABSENCE_OBSERVATIONS=5"))
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          '            if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi\n' +
+            "            RELEASE_ABSENCE_OBSERVATIONS=$((RELEASE_ABSENCE_OBSERVATIONS + 1))",
+          "            RELEASE_ABSENCE_OBSERVATIONS=$((RELEASE_ABSENCE_OBSERVATIONS + 1))"
+        )
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          '            RELEASE_COUNT=$(printf \'%s\' "$RELEASES" | jq --arg tag "$TAG" \\\n' +
+            "              '[.[] | select(.tag_name == $tag)] | length')\n" +
+            '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
+            '              echo "::error::GitHub returned duplicate draft/published releases for $TAG"',
+          "            RELEASE_COUNT=0\n" +
+            '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
+            '              echo "::error::GitHub returned duplicate draft/published releases for $TAG"'
+        )
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          '              echo "::warning::GitHub release preflight read failed (attempt $release_preflight_attempt/12); retrying in 5s"\n' +
+            "              sleep 5\n" +
+            "              continue",
+          '              echo "::error::GitHub release preflight read failed"\n' + "              sleep 5"
+        )
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          '[ "$RELEASE_ABSENCE_OBSERVATIONS" -eq 6 ]',
+          '[ "$RELEASE_ABSENCE_OBSERVATIONS" -eq 5 ]'
+        )
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          '[ "$RELEASE_ABSENCE_OBSERVATIONS" -ne 6 ]',
+          '[ "$RELEASE_ABSENCE_OBSERVATIONS" -ne 1 ]'
+        )
+      )
+    ).toContain("release absence must require six successful strict zero observations before npm");
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceExactly(
+          mcpbInputs.release,
+          "actions/runs/$CANDIDATE_RUN_ID/jobs?filter=all&per_page=100",
+          "actions/runs/$CANDIDATE_RUN_ID/jobs?filter=latest&per_page=100"
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     expect(
       mcpbContractProblems({
@@ -1968,26 +2653,26 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    for (const [pagination, occurrences] of [
-      ["CHECK_PAGES", 1],
-      ["RUN_PAGES", 1],
-      ["JOB_PAGES", 1],
-      ["ARTIFACT_PAGES", 1]
-    ] as const) {
-      expect(
-        mcpbContractProblems({
-          ...mcpbInputs,
-          release: replaceExactly(
-            mcpbInputs.release,
-            `${pagination}=$(gh api --paginate --slurp`,
-            `${pagination}=$(gh api`,
-            occurrences
-          )
-        })
-      ).toContain(
-        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-      );
-    }
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceExactly(mcpbInputs.release, 'candidate "$SOURCE_SHA"', 'candidate "$CANDIDATE_RUN_ID"')
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceExactly(
+          mcpbInputs.release,
+          "{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}",
+          "{jobs: $jobs, artifacts: $artifacts}"
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
@@ -2004,14 +2689,6 @@ describe("release identity and exact required-check gate", () => {
       mcpbContractProblems({
         ...mcpbInputs,
         release: replaceExactly(mcpbInputs.release, "group: release-publication", "group: release-$TAG")
-      })
-    ).toContain(
-      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-    );
-    expect(
-      mcpbContractProblems({
-        ...mcpbInputs,
-        release: replaceExactly(mcpbInputs.release, "checks: read", "checks: none")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

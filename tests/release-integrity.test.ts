@@ -55,13 +55,13 @@ function runReleaseIntegrityCli(args: string[], input = "", extraEnv: Record<str
 }
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
-const RELEASE_JOB_CLOCK_GUARD = `local now remaining
+const RELEASE_JOB_CLOCK_GUARD = `  local now remaining
   if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
     echo "::error::Current epoch is unavailable or malformed" >&2
     return 2
   fi
   remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))`;
-const MUTATED_RELEASE_JOB_CLOCK_GUARD = `local now remaining
+const MUTATED_RELEASE_JOB_CLOCK_GUARD = `  local now remaining
   if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
     echo "::error::Current epoch is unavailable or malformed" >&2
     return 2
@@ -69,11 +69,7 @@ const MUTATED_RELEASE_JOB_CLOCK_GUARD = `local now remaining
   remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))`;
 const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_CLOCK_GUARD}\n  if [ "$remaining" -le 10 ]; then`;
 const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_CLOCK_GUARD}\n  if [ "$remaining" -lt "$required" ]; then`;
-const rawClockGuard = (guard: string) =>
-  guard
-    .split("\n")
-    .map((line) => `            ${line}`)
-    .join("\n");
+const rawClockGuard = (guard: string) => `          ${guard.split("\n").join("\n          ")}`;
 const RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(RELEASE_JOB_CLOCK_GUARD)}
             if [ "$remaining" -le 10 ]; then`;
 const RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(RELEASE_JOB_CLOCK_GUARD)}
@@ -3408,6 +3404,7 @@ describe("release identity and exact required-job gate", () => {
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
+    expect(mutationMatchCount(workflow, RAW_GH_READ_DEADLINE_GUARD)).toBe(5);
     expect(
       releasePollProblems(replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, 5))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
@@ -3767,6 +3764,7 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
     const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
+    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(3);
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,

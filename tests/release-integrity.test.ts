@@ -2551,7 +2551,7 @@ const NPM_PROVENANCE_SUCCESS_CONDITION = '[ "$AUDIT_EXIT" -eq 0 ] && [ "$EVALUAT
 const NPM_PROVENANCE_CLI_SRI =
   "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==";
 
-function npmProvenanceContractProblems(release: string, integrity: string): string[] {
+function npmProvenanceWorkflowProblems(release: string): string[] {
   let steps: YamlRecord[];
   try {
     const releaseDocument = yamlRecord(load(release));
@@ -2788,7 +2788,12 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     verificationRun.includes("attempt $attempt/8") &&
     verificationRun.includes("/bin/sleep 10") &&
     verifierReserveCoversWorstCase &&
-    !/(?:^|\s)(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:publish|unpublish|dist-tag)\b/mu.test(verificationRun) &&
+    !/(?:^|\s)(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:publish|unpublish|dist-tag)\b/mu.test(verificationRun);
+  return isExact ? [] : [NPM_PROVENANCE_CONTRACT_PROBLEM];
+}
+
+function npmProvenanceEvaluatorProblems(integrity: string): string[] {
+  const isExact =
     integrity.includes("export function evaluateNpmProvenanceContext") &&
     integrity.includes("export function evaluateNpmProvenanceAttestations") &&
     integrity.includes('eventName: "push"') &&
@@ -2856,6 +2861,12 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
     integrity.includes('} else if (mode === "npm-provenance-context")') &&
     integrity.includes('} else if (mode === "npm-provenance")');
   return isExact ? [] : [NPM_PROVENANCE_CONTRACT_PROBLEM];
+}
+
+function npmProvenanceContractProblems(release: string, integrity: string): string[] {
+  const workflowProblems = npmProvenanceWorkflowProblems(release);
+  if (workflowProblems.length !== 0) return workflowProblems;
+  return npmProvenanceEvaluatorProblems(integrity);
 }
 
 function mcpbContractProblems(inputs: {
@@ -4449,10 +4460,25 @@ describe("release identity and exact required-job gate", () => {
     expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
     expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
+    const provenanceWorkflowCompositionMutation = replaceExactly(
+      mcpbInputs.release,
+      NPM_PROVENANCE_CONTEXT_COMMAND,
+      "true # provenance context bypassed"
+    );
+    const provenanceEvaluatorCompositionMutation = replaceExactly(
+      mcpbInputs.integrity,
+      'eventName: "push"',
+      'eventName: "workflow_dispatch"'
+    );
+    expect(npmProvenanceContractProblems(provenanceWorkflowCompositionMutation, mcpbInputs.integrity)).toContain(
+      NPM_PROVENANCE_CONTRACT_PROBLEM
+    );
+    expect(npmProvenanceContractProblems(mcpbInputs.release, provenanceEvaluatorCompositionMutation)).toContain(
+      NPM_PROVENANCE_CONTRACT_PROBLEM
+    );
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(mcpbInputs.release, NPM_PROVENANCE_CONTEXT_COMMAND, "true # provenance context bypassed"),
       replaceExactly(
         mcpbInputs.release,
         'require_job_reserve 4500 "npm publish"',
@@ -4576,14 +4602,13 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`)
     ]) {
-      expect(npmProvenanceContractProblems(weakenedProvenanceWorkflow, mcpbInputs.integrity)).toContain(
+      expect(npmProvenanceWorkflowProblems(weakenedProvenanceWorkflow)).toContain(
         NPM_PROVENANCE_CONTRACT_PROBLEM
       );
     }
 
     // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
     for (const weakenedProvenanceEvaluator of [
-      replaceExactly(mcpbInputs.integrity, 'eventName: "push"', 'eventName: "workflow_dispatch"'),
       replaceExactly(mcpbInputs.integrity, "workflowSha: expectedSourceSha", "workflowSha: declared.workflowSha"),
       replaceExactly(mcpbInputs.integrity, "statement.subject.length !== 1", "statement.subject.length < 1"),
       replaceExactly(
@@ -4714,7 +4739,7 @@ describe("release identity and exact required-job gate", () => {
         "false"
       )
     ]) {
-      expect(npmProvenanceContractProblems(mcpbInputs.release, weakenedProvenanceEvaluator)).toContain(
+      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain(
         NPM_PROVENANCE_CONTRACT_PROBLEM
       );
     }

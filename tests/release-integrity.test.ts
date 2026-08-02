@@ -1268,11 +1268,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     const endLineBreak = body.indexOf("\n", end);
     const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
     const indent = body.slice(startLine, start);
-    if (
-      endLine <= startLine ||
-      !/^[ \t]*$/u.test(indent) ||
-      body.slice(endLine, endLineEnd) !== indent + endNeedle
-    ) {
+    if (endLine <= startLine || !/^[ \t]*$/u.test(indent) || body.slice(endLine, endLineEnd) !== indent + endNeedle) {
       return "";
     }
     const rawBlock = body.slice(startLine, endLine);
@@ -1679,8 +1675,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     'echo "::error::gh_read rejects mutation-capable gh api arguments" >&2'
   ]);
   const directGhApiLines = ghApiSurfaceLines.filter((line) => !allowedGhApiMessages.has(line));
-  const hasForbiddenReleaseCli =
-    /(?:"?\$(?:GH_BIN|\{GH_BIN\})"?|\bgh)\s+release\s+(?:delete|edit|upload)\b/iu.test(allRunBodies);
+  const hasForbiddenReleaseCli = /(?:"?\$(?:GH_BIN|\{GH_BIN\})"?|\bgh)\s+release\s+(?:delete|edit|upload)\b/iu.test(
+    allRunBodies
+  );
   if (
     explicitWriteMethods.length !== 2 ||
     mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
@@ -4107,11 +4104,7 @@ describe("release identity and exact required-job gate", () => {
         "              UPLOAD_EXIT=0",
         '              LOCAL_ASSET="/tmp/attacker"\n              UPLOAD_EXIT=0'
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        "              UPLOAD_EXIT=0",
-        "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"
-      ),
+      replaceExactly(mcpbInputs.release, "              UPLOAD_EXIT=0", "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"),
       replaceExactly(
         mcpbInputs.release,
         "              UPLOAD_EXIT=$?",
@@ -4236,8 +4229,7 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.release,
         "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          "$GH_BIN" release delete "$TAG"\n' +
-          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
       )
     ];
     for (const weakenedReleaseTransaction of releaseTransactionMutations) {
@@ -4247,8 +4239,7 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.release,
         "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          "$GH_BIN" release delete "$TAG"\n' +
-          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
       ),
       replaceExactly(
         mcpbInputs.release,

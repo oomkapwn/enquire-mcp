@@ -1258,6 +1258,28 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     const end = start < 0 ? -1 : body.indexOf(endNeedle, start + startNeedle.length);
     return start >= 0 && end > start ? body.slice(start, end) : "";
   };
+  const normalizedIndentedBlock = (body: string, startNeedle: string, endNeedle: string) => {
+    if (mutationMatchCount(body, startNeedle) !== 1 || mutationMatchCount(body, endNeedle) !== 1) return "";
+    const start = body.indexOf(startNeedle);
+    const end = start < 0 ? -1 : body.indexOf(endNeedle, start + startNeedle.length);
+    if (start < 0 || end <= start) return "";
+    const startLine = body.lastIndexOf("\n", start) + 1;
+    const endLine = body.lastIndexOf("\n", end) + 1;
+    const endLineBreak = body.indexOf("\n", end);
+    const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
+    const indent = body.slice(startLine, start);
+    if (
+      endLine <= startLine ||
+      !/^[ \t]*$/u.test(indent) ||
+      body.slice(endLine, endLineEnd) !== indent + endNeedle
+    ) {
+      return "";
+    }
+    const rawBlock = body.slice(startLine, endLine);
+    const lines = (rawBlock.endsWith("\n") ? rawBlock.slice(0, -1) : rawBlock).split("\n");
+    if (lines.some((line) => line.length > 0 && !line.startsWith(indent))) return "";
+    return lines.map((line) => (line.length > 0 ? line.slice(indent.length) : line)).join("\n");
+  };
   const sha256 = (body: string) => createHash("sha256").update(body, "utf8").digest("hex");
   const clearedSecretEnv = [
     "BASH_ENV",
@@ -1454,6 +1476,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     '  -H "Content-Type: application/octet-stream" \\\n' +
     '  --data-binary "@$LOCAL_ASSET" --output "$UPLOAD_RESPONSE" --write-out \'%{http_code}\' \\\n' +
     '  "$UPLOAD_BASE?name=$ENCODED_NAME")';
+  const uploadCurlBody = normalizedIndentedBlock(upload, 'UPLOAD_STATUS=$("$TIMEOUT_BIN"', "UPLOAD_EXIT=$?");
   const uploadDraftGuard = 'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
   const absenceLoop = "for (( absence_attempt=1; absence_attempt<=12;";
   const uploadReserve = 'require_job_reserve 1500 "release asset upload for $NAME"';
@@ -1487,7 +1510,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(upload, "--request POST") !== 1 ||
     mutationMatchCount(upload, uploadPost) !== 1 ||
     mutationMatchCount(upload, uploadTarget) !== 1 ||
-    mutationMatchCount(upload, exactUploadCurl) !== 1 ||
+    uploadCurlBody !== exactUploadCurl ||
     mutationMatchCount(upload, uploadDraftGuard) !== 1 ||
     mutationMatchCount(upload, '"$CURL_BIN"') !== 1 ||
     assignmentLineCount(upload, "TAG") !== 1 ||
@@ -1496,6 +1519,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     assignmentLineCount(upload, "LOCAL_ASSET") !== 0 ||
     assignmentLineCount(upload, "LOCAL_SIZE") !== 2 ||
     assignmentLineCount(upload, "LOCAL_DIGEST") !== 2 ||
+    assignmentLineCount(upload, "UPLOAD_EXIT") !== 2 ||
+    assignmentLineCount(upload, "UPLOAD_STATUS") !== 1 ||
     mutationMatchCount(upload, "CONFIRM_UPLOAD_URL=") !== 1 ||
     mutationMatchCount(upload, "UPLOAD_BASE=") !== 1 ||
     !upload.includes(NPM_RESERVE_DEADLINE_GUARD) ||
@@ -1512,7 +1537,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     !upload.includes('CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET"') ||
     mutationMatchCount(upload, "confirm_exact_draft_identity()") !== 1 ||
     mutationMatchCount(upload, "confirm_exact_draft_identity ") !== 2 ||
-    !upload.includes("UPLOAD_EXIT=$?") ||
+    mutationMatchCount(upload, "UPLOAD_EXIT=$?") !== 1 ||
     !upload.includes('UPLOAD_STATUS" = "201"') ||
     !upload.includes("Upload response was malformed") ||
     !upload.includes("without repeating POST") ||
@@ -1654,10 +1679,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     'echo "::error::gh_read rejects mutation-capable gh api arguments" >&2'
   ]);
   const directGhApiLines = ghApiSurfaceLines.filter((line) => !allowedGhApiMessages.has(line));
-  const uploadCurlStart = upload.indexOf('UPLOAD_STATUS=$("$TIMEOUT_BIN"');
-  const uploadCurlEnd = upload.indexOf("UPLOAD_EXIT=$?", uploadCurlStart);
-  const uploadCurlBody =
-    uploadCurlStart >= 0 && uploadCurlEnd > uploadCurlStart ? upload.slice(uploadCurlStart, uploadCurlEnd) : "";
+  const hasForbiddenReleaseCli =
+    /(?:"?\$(?:GH_BIN|\{GH_BIN\})"?|\bgh)\s+release\s+(?:delete|edit|upload)\b/iu.test(allRunBodies);
   if (
     explicitWriteMethods.length !== 2 ||
     mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
@@ -1670,10 +1693,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     ) ||
     mutationMatchCount(allRunBodies, 'release create "$TAG"') !== 1 ||
     /(?:--method|-X|--request)(?:=|\s+)(?:DELETE|PUT)\b/iu.test(allRunBodies) ||
-    /\brelease\s+(?:delete|edit|upload)\b/iu.test(allRunBodies) ||
+    hasForbiddenReleaseCli ||
     allRunBodies.includes("delete-asset") ||
     allRunBodies.includes("--clobber") ||
-    allRunBodies.includes("gh release upload") ||
     /(?:^|\s)(?:--insecure|-k|--resolve|--connect-to|--unix-socket|--abstract-unix-socket)(?:\s|=|$)/mu.test(
       uploadCurlBody
     ) ||
@@ -4085,6 +4107,16 @@ describe("release identity and exact required-job gate", () => {
         "              UPLOAD_EXIT=0",
         '              LOCAL_ASSET="/tmp/attacker"\n              UPLOAD_EXIT=0'
       ),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=0",
+        "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=$?",
+        "              UPLOAD_EXIT=$?\n              UPLOAD_STATUS=201"
+      ),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 1500 "release asset upload for $NAME"', "true"),
       replaceExactly(
         mcpbInputs.release,
@@ -4200,10 +4232,34 @@ describe("release identity and exact required-job gate", () => {
         "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
         '          "$GH_BIN" api --method DELETE "repos/unsafe"\n' +
           "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          "$GH_BIN" release delete "$TAG"\n' +
+          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
       )
     ];
     for (const weakenedReleaseTransaction of releaseTransactionMutations) {
       expect(githubReleaseTransactionProblems(weakenedReleaseTransaction)).not.toEqual([]);
+    }
+    for (const forbiddenReleaseCliMutation of [
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          "$GH_BIN" release delete "$TAG"\n' +
+          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          echo "$("$GH_BIN" release delete "$TAG")"\n' +
+          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      )
+    ]) {
+      expect(githubReleaseTransactionProblems(forbiddenReleaseCliMutation)).toEqual([
+        "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      ]);
     }
     expect(
       githubReleaseTransactionProblems(

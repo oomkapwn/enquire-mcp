@@ -1371,6 +1371,12 @@ function mcpbContractProblems(inputs: {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => /\bnpm (?:pack|publish)\b/u.test(line) || /\$NPM_BIN"?\s+(?:pack|publish)\b/u.test(line));
+  const npmRegistryMutationCommands = npmPublishRun
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) =>
+      /^(?:(?:command|exec)\s+)?(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:dist-tag|unpublish)\b/u.test(line)
+    );
   const npmPackPublishExpectedTail = [
     'echo "::error::npm pack did not produce exactly one canonical tarball"',
     'echo "::error::npm pack returned a divergent package name or version"',
@@ -1437,8 +1443,7 @@ function mcpbContractProblems(inputs: {
       ) ?? []
     ).length === 1 &&
     npmPublishRun.includes(MCPB_EXACT_NPM_PUBLISH_RUN) &&
-    !npmPublishRun.includes("npm dist-tag") &&
-    !npmPublishRun.includes("npm unpublish") &&
+    npmRegistryMutationCommands.length === 0 &&
     npmPublishRun.includes("NPM_PUBLISH_ATTEMPTED=true") &&
     npmPublishRun.includes("NPM_PUBLISH_EXIT=$?") &&
     npmPublishRun.includes("npm exact SRI/channel state did not converge after 12 bounded reads") &&

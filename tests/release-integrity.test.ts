@@ -1,4 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -8,6 +11,7 @@ import {
   assertMcpbAssetVersion,
   assertReleaseTagMatchesVersion,
   candidateRunIds,
+  evaluateConvergentCount,
   evaluateMcpbCandidateRun,
   evaluateMcpbReleaseState,
   evaluateNpmPublication,
@@ -38,15 +42,45 @@ interface WorkflowJob {
   workflow_name: string;
 }
 
+function runReleaseIntegrityCli(args: string[], input = "", extraEnv: Record<string, string> = {}) {
+  return spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("../scripts/check-release-integrity.mjs", import.meta.url)), ...args],
+    {
+      encoding: "utf8",
+      env: { ...process.env, ...extraEnv },
+      input
+    }
+  );
+}
+
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
-const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))";
-const MUTATED_RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))";
-const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
-const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
-const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
-const RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
-const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
-const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
+const RELEASE_JOB_CLOCK_GUARD = `  local now remaining
+  if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::Current epoch is unavailable or malformed" >&2
+    return 2
+  fi
+  remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))`;
+const MUTATED_RELEASE_JOB_CLOCK_GUARD = `  local now remaining
+  if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::Current epoch is unavailable or malformed" >&2
+    return 2
+  fi
+  remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))`;
+const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_CLOCK_GUARD}\n  if [ "$remaining" -le 10 ]; then`;
+const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_CLOCK_GUARD}\n  if [ "$remaining" -lt "$required" ]; then`;
+const rawClockGuard = (guard: string) => `          ${guard.split("\n").join("\n          ")}`;
+const RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(RELEASE_JOB_CLOCK_GUARD)}
+            if [ "$remaining" -le 10 ]; then`;
+const RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(RELEASE_JOB_CLOCK_GUARD)}
+            if [ "$remaining" -lt "$required" ]; then`;
+const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
+            if [ "$remaining" -le 10 ]; then`;
+const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
+            if [ "$remaining" -lt "$required" ]; then`;
+const GH_READ_GUARD_COUNT = 5;
+const NPM_RESERVE_GUARD_COUNT = 3;
+const RELEASE_SINGLETON_DECODER_COUNT = 2;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -991,10 +1025,17 @@ function releasePollProblems(workflow: string): string[] {
   const deadline = namedStep(steps, "Establish global release deadline");
   const gate = namedStep(steps, "Assert tag is on main and required CI checks passed");
   const body = runBody(gate);
+  const deadlineBody = runBody(deadline);
   if (
     Number(publish?.["timeout-minutes"] ?? 0) !== 240 ||
     steps[0] !== deadline ||
-    runBody(deadline) !== 'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"' ||
+    steps.filter((step) => step.name === "Establish global release deadline").length !== 1 ||
+    deadline?.id !== "deadline" ||
+    !deadlineBody.includes("set -euo pipefail") ||
+    !deadlineBody.includes("NOW=$(/bin/date +%s)") ||
+    !deadlineBody.includes('[[ "$NOW" =~ ^[1-9][0-9]*$ ]]') ||
+    !deadlineBody.includes('echo "epoch=$((NOW + 13800))" >> "$GITHUB_OUTPUT"') ||
+    deadlineBody.includes("GITHUB_ENV") ||
     !body.includes("CI_GATE_DEADLINE=$((SECONDS + 3600))") ||
     !body.includes("gate_timeout()") ||
     !body.includes(`"$TIMEOUT_BIN" --kill-after=10s "\${limit}s" "$@"`) ||
@@ -1006,12 +1047,45 @@ function releasePollProblems(workflow: string): string[] {
   ) {
     return ["release polling must outlive the blocking package-consumer matrix and leave publication headroom"];
   }
-  const globalReadBodies = [
-    runBody(namedStep(steps, "Download exact CI-gated Basic MCPB release asset")),
-    runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm")),
-    runBody(namedStep(steps, "Prepare draft GitHub Release")),
-    runBody(namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"))
+  const tagSyntaxIndex = body.indexOf('[[ "$TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+');
+  const sourceShaIndex = body.indexOf("SHA=$(git rev-parse HEAD)", tagSyntaxIndex);
+  const mainFetchIndex = body.indexOf(
+    '"$TIMEOUT_BIN" --kill-after=10s 120s git fetch origin main --depth=200',
+    sourceShaIndex
+  );
+  const ancestryIndex = body.indexOf('git merge-base --is-ancestor "$SHA" origin/main', mainFetchIndex);
+  const packageVersionIndex = body.indexOf(
+    "VERSION=$(/usr/bin/jq -er \\\n" +
+      '  \'.version | select(type == "string" and test("^[0-9]+\\\\.[0-9]+\\\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))\' \\\n' +
+      "  package.json)",
+    ancestryIndex
+  );
+  const tagEqualityIndex = body.indexOf('[ "$TAG" != "v$VERSION" ]', packageVersionIndex);
+  const assertTagIndex = body.indexOf(
+    'node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"',
+    tagEqualityIndex
+  );
+  const firstRepositoryNodeIndex = body.indexOf("node scripts/");
+  if (
+    tagSyntaxIndex < 0 ||
+    sourceShaIndex <= tagSyntaxIndex ||
+    mainFetchIndex <= sourceShaIndex ||
+    ancestryIndex <= mainFetchIndex ||
+    packageVersionIndex <= ancestryIndex ||
+    tagEqualityIndex <= packageVersionIndex ||
+    assertTagIndex <= tagEqualityIndex ||
+    firstRepositoryNodeIndex !== assertTagIndex
+  ) {
+    return ["release gate must prove main ancestry before executing repository-owned code"];
+  }
+  const globalReadSteps = [
+    namedStep(steps, "Download exact CI-gated Basic MCPB release asset"),
+    namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"),
+    namedStep(steps, "Publish with provenance or verify an exact prior publication"),
+    namedStep(steps, "Prepare draft GitHub Release"),
+    namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance")
   ];
+  const globalReadBodies = globalReadSteps.map(runBody);
   const ghReadMutationArgs =
     "graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*";
   const rawGhApiLines = workflow
@@ -1019,6 +1093,9 @@ function releasePollProblems(workflow: string): string[] {
     .map((line) => line.trim())
     .filter((line) => /(?:^|\$\()gh api(?:\s|$)/u.test(line));
   if (
+    globalReadSteps.some(
+      (step) => yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== `\${{ steps.deadline.outputs.epoch }}`
+    ) ||
     globalReadBodies.some(
       (readBody) =>
         !readBody.includes("gh_read() {") ||
@@ -1029,16 +1106,13 @@ function releasePollProblems(workflow: string): string[] {
         !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
         !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
-    (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 5 ||
-    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 5 ||
-    mutationMatchCount(workflow, ghReadMutationArgs) !== 5 ||
-    (workflow.match(/gh_read api/g) ?? []).length !== 30 ||
+    (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 6 ||
+    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 6 ||
+    mutationMatchCount(workflow, ghReadMutationArgs) !== 6 ||
+    (workflow.match(/gh_read api/g) ?? []).length !== 43 ||
     workflow.includes("gh() {") ||
     workflow.includes("gh_read api --method") ||
-    rawGhApiLines.length !== 2 ||
-    rawGhApiLines.some(
-      (line) => line !== `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID" \\`
-    )
+    rawGhApiLines.length !== 0
   ) {
     return ["all post-gate GitHub reads must consume the global deadline without shadowing release writes"];
   }
@@ -1074,17 +1148,19 @@ function releasePollProblems(workflow: string): string[] {
     [paginationBinding("CANDIDATE_ARTIFACTS", "ARTIFACT_PAGES", "flatten-field artifacts"), 1],
     [paginationBinding("RELEASES", "RELEASE_PAGES", "flatten-pages release"), 5],
     [paginationBinding("RELEASE_ASSETS", "RELEASE_ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 5],
+    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 3],
     [paginationBinding("CURRENT_ASSETS", "CURRENT_ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("FINAL_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("PUBLISH_ASSETS", "PUBLISH_ASSET_PAGES", "flatten-pages asset"), 1]
+    [paginationBinding("RECOVERY_RELEASES", "RECOVERY_PAGES", "flatten-pages release"), 1],
+    [paginationBinding("RECOVERY_ASSETS", "RECOVERY_ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("CONFIRM_ASSETS", "CONFIRM_ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("POST_ASSETS", "POST_ASSET_PAGES", "flatten-pages asset"), 1]
   ];
   if (
     strictPaginationBindings.some(
       ([binding, expected]) => mutationMatchCount(normalizedWorkflow, binding) !== expected
     ) ||
-    (workflow.match(/flatten-pages release/g) ?? []).length !== 5 ||
-    (workflow.match(/flatten-pages asset/g) ?? []).length !== 9 ||
+    (workflow.match(/flatten-pages release/g) ?? []).length !== 6 ||
+    (workflow.match(/flatten-pages asset/g) ?? []).length !== 8 ||
     (workflow.match(/flatten-field workflow_runs/g) ?? []).length !== 2 ||
     (workflow.match(/flatten-field jobs/g) ?? []).length !== 2 ||
     (workflow.match(/flatten-field artifacts/g) ?? []).length !== 1 ||
@@ -1154,6 +1230,736 @@ function releasePollProblems(workflow: string): string[] {
   return [];
 }
 
+function githubReleaseTransactionProblems(workflow: string): string[] {
+  let steps: YamlRecord[];
+  try {
+    const document = yamlRecord(load(workflow));
+    const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
+    steps = yamlSteps(publish ?? {});
+  } catch {
+    return ["GitHub Release transaction workflow must parse"];
+  }
+  const preflight = runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"));
+  const prepare = runBody(namedStep(steps, "Prepare draft GitHub Release"));
+  const upload = runBody(namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"));
+  if (preflight.length === 0 || prepare.length === 0 || upload.length === 0) {
+    return ["GitHub Release transaction steps must exist"];
+  }
+
+  const problems: string[] = [];
+  const assignmentLineCount = (body: string, name: string) => {
+    if (!/^[A-Z][A-Z0-9_]*$/u.test(name)) return 0;
+    const modifierAssignment = new RegExp(
+      `^(?:export|readonly|declare|typeset|local)(?:\\s+-[A-Za-z]+)*\\s+${name}=`,
+      "u"
+    );
+    const printfAssignment = new RegExp(
+      `^(?:(?:builtin|command)\\s+)?printf\\s+-v\\s+(?:["']?)${name}(?:["']?)(?:\\s|$)`,
+      "u"
+    );
+    return body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith(`${name}=`) || modifierAssignment.test(line) || printfAssignment.test(line))
+      .length;
+  };
+  const boundedBlock = (body: string, startNeedle: string, endNeedle: string) => {
+    const start = body.indexOf(startNeedle);
+    const end = start < 0 ? -1 : body.indexOf(endNeedle, start + startNeedle.length);
+    return start >= 0 && end > start ? body.slice(start, end) : "";
+  };
+  const normalizedIndentedBlock = (body: string, startNeedle: string, endNeedle: string) => {
+    if (mutationMatchCount(body, startNeedle) !== 1 || mutationMatchCount(body, endNeedle) !== 1) return "";
+    const start = body.indexOf(startNeedle);
+    const end = start < 0 ? -1 : body.indexOf(endNeedle, start + startNeedle.length);
+    if (start < 0 || end <= start) return "";
+    const startLine = body.lastIndexOf("\n", start) + 1;
+    const endLine = body.lastIndexOf("\n", end) + 1;
+    const endLineBreak = body.indexOf("\n", end);
+    const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
+    const indent = body.slice(startLine, start);
+    const endIndent = body.slice(endLine, end);
+    const endSuffix = body.slice(end + endNeedle.length, endLineEnd);
+    if (
+      endLine <= startLine ||
+      !/^[ \t]*$/u.test(indent) ||
+      !/^[ \t]*$/u.test(endIndent) ||
+      !endIndent.startsWith(indent) ||
+      endSuffix.length !== 0
+    ) {
+      return "";
+    }
+    const rawBlock = body.slice(startLine, endLine);
+    const lines = (rawBlock.endsWith("\n") ? rawBlock.slice(0, -1) : rawBlock).split("\n");
+    if (lines.some((line) => line.length > 0 && !line.startsWith(indent))) return "";
+    return lines.map((line) => (line.length > 0 ? line.slice(indent.length) : line)).join("\n");
+  };
+  const sha256 = (body: string) => createHash("sha256").update(body, "utf8").digest("hex");
+  const clearedSecretEnv = [
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "PS4",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "LD_DEBUG_OUTPUT",
+    "LD_PROFILE",
+    "GLIBC_TUNABLES",
+    "TAR_OPTIONS",
+    "OPENSSL_CONF",
+    "NODE_DEBUG",
+    "GODEBUG",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "CURL_CA_BUNDLE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS"
+  ];
+  const githubSecretSteps = [
+    "Assert tag is on main and required CI checks passed",
+    "Download exact CI-gated Basic MCPB release asset",
+    "Preflight existing GitHub release and every Basic asset before npm",
+    "Publish with provenance or verify an exact prior publication",
+    "Prepare draft GitHub Release",
+    "Upload Basic MCPB asset, checksum, and provenance"
+  ];
+  const clearedGithubEnv = [...clearedSecretEnv, "GH_HTTP_UNIX_SOCKET"];
+  const otherSecretSteps: string[] = [];
+  const checkoutSteps = steps.filter(
+    (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@")
+  );
+  const checkout = checkoutSteps[0];
+  const githubTokenSteps = new Set(["Assert tag is on main and required CI checks passed"]);
+  const freshGithubConfig =
+    'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")\nexport GH_CONFIG_DIR';
+  const protectedShell = "/bin/bash --noprofile --norc -p -e -o pipefail {0}";
+  const secretStepEnvIsSealed =
+    [...githubSecretSteps, ...otherSecretSteps].every(
+      (name) => steps.filter((step) => step.name === name).length === 1
+    ) &&
+    steps
+      .filter((step) => {
+        const env = yamlRecord(step.env);
+        return env !== null && ("GH_TOKEN" in env || "NODE_AUTH_TOKEN" in env);
+      })
+      .every((step) => typeof step.name === "string" && githubSecretSteps.includes(step.name)) &&
+    steps.filter((step) => {
+      const env = yamlRecord(step.env);
+      return env !== null && ("GH_TOKEN" in env || "NODE_AUTH_TOKEN" in env);
+    }).length === githubSecretSteps.length &&
+    mutationMatchCount(workflow, `\${{ github.token }}`) === 1 &&
+    mutationMatchCount(workflow, `\${{ secrets.GITHUB_TOKEN }}`) === 5 &&
+    mutationMatchCount(workflow, `\${{ secrets.NPM_TOKEN }}`) === 1 &&
+    checkoutSteps.length === 1 &&
+    yamlRecord(checkout?.with)?.["persist-credentials"] === false &&
+    githubSecretSteps.every((name) => {
+      const env = yamlRecord(namedStep(steps, name)?.env);
+      const stepBody = runBody(namedStep(steps, name));
+      return (
+        env?.GH_HOST === "github.com" &&
+        namedStep(steps, name)?.shell === protectedShell &&
+        env?.NODE_TLS_REJECT_UNAUTHORIZED === "1" &&
+        env?.GH_TOKEN === (githubTokenSteps.has(name) ? `\${{ github.token }}` : `\${{ secrets.GITHUB_TOKEN }}`) &&
+        clearedGithubEnv.every((key) => env?.[key] === "") &&
+        mutationMatchCount(stepBody, freshGithubConfig) === 1 &&
+        stepBody.startsWith(`set -euo pipefail\n${freshGithubConfig}`)
+      );
+    }) &&
+    otherSecretSteps.every((name) => {
+      const step = namedStep(steps, name);
+      const env = yamlRecord(step?.env);
+      return (
+        step?.shell === protectedShell &&
+        env?.NODE_TLS_REJECT_UNAUTHORIZED === "1" &&
+        clearedSecretEnv.every((key) => env?.[key] === "")
+      );
+    });
+  if (!secretStepEnvIsSealed) {
+    problems.push(
+      "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+    );
+  }
+  const releaseTestStep = namedStep(steps, "Test exact source without npm or contents-write tokens");
+  const releaseTestEnv = yamlRecord(releaseTestStep?.env);
+  if (
+    steps.filter((step) => step.name === "Test exact source without npm or contents-write tokens").length !== 1 ||
+    runBody(releaseTestStep) !== "npm test" ||
+    releaseTestEnv !== null
+  ) {
+    problems.push("release-time tests must run without npm or contents-write tokens");
+  }
+  // These hashes deliberately freeze the complete status-envelope parser and
+  // both write-authorizing call sites. Substring inventories cannot detect an
+  // additive `|| true`, a forced return code, or a second fail-open branch.
+  const preflightLatestHelper = boundedBlock(preflight, "github_latest_read() {", "\nVERSION=");
+  const uploadLatestHelper = boundedBlock(upload, "github_latest_read() {", "\nVERSION=");
+  const preflightLatestCaller = boundedBlock(preflight, "assert_stable_github_advance() {", "\nfor LOCAL_ASSET");
+  const uploadLatestCaller = boundedBlock(
+    upload,
+    "# The stable-channel guard is deliberately after reserve",
+    "\n    PATCH_EXIT=0"
+  );
+  if (
+    mutationMatchCount(workflow, "github_latest_read() {") !== 2 ||
+    mutationMatchCount(workflow, "GITHUB_LATEST_EXIT=$?") !== 2 ||
+    mutationMatchCount(workflow, "GITHUB_LATEST_SNAPSHOT") !== 6 ||
+    mutationMatchCount(
+      workflow,
+      '.documentation_url == "https://docs.github.com/rest/releases/releases#get-the-latest-release"'
+    ) !== 2 ||
+    preflightLatestHelper !== uploadLatestHelper ||
+    sha256(preflightLatestHelper) !== "46b6a5d80735d489f616088c0bfb839adb89332e86a3edc23df20aa3dbbab817" ||
+    sha256(preflightLatestCaller) !== "454974092ffab8215eadcf379d249cf79f7f6f70e0de22590c2f325e397a61e8" ||
+    sha256(uploadLatestCaller) !== "55946514a824216a1c78ded2dba1e48ec8fcbb675da99d6243c911fd5f531ef2"
+  ) {
+    problems.push("GitHub latest-release absence must be one strict HTTP identity, never stderr text");
+  }
+  if (
+    mutationMatchCount(workflow, 'NOTES=$(awk -v heading="## [$VERSION] — "') !== 3 ||
+    mutationMatchCount(workflow, 'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"') !== 3
+  ) {
+    problems.push("every release snapshot must bind the exact canonical title and CHANGELOG body");
+  }
+  const createReserve = 'require_job_reserve 3600 "GitHub draft creation"';
+  const createArgs = `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes "$NOTES" --draft --verify-tag)`;
+  const createChannelBlock =
+    `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` + "  CREATE_ARGS+=(--prerelease)\n" + "fi";
+  const createCommand = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
+  const createRecovery = "for (( create_recovery_attempt=1; create_recovery_attempt<=12;";
+  const createReserveIndex = prepare.indexOf(createReserve);
+  const createTagIndex = prepare.indexOf("assert_remote_tag_identity", createReserveIndex);
+  const createCommandIndex = prepare.indexOf(createCommand, createTagIndex);
+  const createRecoveryIndex = prepare.indexOf(createRecovery, createCommandIndex);
+  const createActionIndex = prepare.indexOf('RECOVERY_ACTION" != "reuse_published"', createRecoveryIndex);
+  const createActionErrorIndex = prepare.indexOf(
+    "Draft create readback produced unsafe release action",
+    createActionIndex
+  );
+  const createPostTagIndex = prepare.indexOf("assert_remote_tag_identity", createActionErrorIndex);
+  const createConfirmationIndex = prepare.indexOf("Confirmed exact release $TAG", createPostTagIndex);
+  if (
+    mutationMatchCount(prepare, createArgs) !== 1 ||
+    assignmentLineCount(prepare, "TAG") !== 1 ||
+    mutationMatchCount(prepare, "CREATE_ARGS=(") !== 1 ||
+    mutationMatchCount(prepare, createChannelBlock) !== 1 ||
+    mutationMatchCount(prepare, "CREATE_ARGS+=(") !== 1 ||
+    mutationMatchCount(prepare, createCommand) !== 1 ||
+    mutationMatchCount(prepare, 'release create "$TAG"') !== 1 ||
+    !prepare.includes('awk -v heading="## [$VERSION] — "') ||
+    !prepare.includes("index($0, heading) == 1") ||
+    prepare.includes('$0 ~ "^## \\[" ver') ||
+    !prepare.includes("/blob/main/CHANGELOG.md) for full release notes") ||
+    prepare.includes(`CHANGELOG.md#\${VERSION//./}`) ||
+    !prepare.includes(NPM_RESERVE_DEADLINE_GUARD) ||
+    !prepare.includes("CREATE_EXIT=$?") ||
+    !prepare.includes("authoritative reads must prove one exact safe release state") ||
+    !prepare.includes("flatten-pages release") ||
+    !prepare.includes("flatten-pages asset") ||
+    !prepare.includes('RECOVERY_ACTION" != "resume_draft"') ||
+    !prepare.includes('RECOVERY_ACTION" != "publish_draft"') ||
+    !prepare.includes('RECOVERY_ACTION" != "reuse_published"') ||
+    createReserveIndex < 0 ||
+    createTagIndex <= createReserveIndex ||
+    createCommandIndex <= createTagIndex ||
+    createRecoveryIndex <= createCommandIndex ||
+    createActionIndex <= createRecoveryIndex ||
+    createActionErrorIndex <= createActionIndex ||
+    createPostTagIndex <= createActionErrorIndex ||
+    createConfirmationIndex <= createPostTagIndex
+  ) {
+    problems.push("draft creation must be one bounded write followed by exact readback without replay");
+  }
+
+  const uploadPost = "--fail-with-body --silent --show-error --request POST --retry 0";
+  const uploadTarget = '"$UPLOAD_BASE?name=$ENCODED_NAME")';
+  const releaseStatePayload = "'{release: $release, assets: $assets}')";
+  const metadataProjection = "[.[] | {name, content_type, size, digest}] | sort_by(.name)";
+  const exactUploadCurl =
+    'UPLOAD_STATUS=$("$TIMEOUT_BIN" --kill-after=10s 310s "$CURL_BIN" --disable \\\n' +
+    "  --fail-with-body --silent --show-error --request POST --retry 0 \\\n" +
+    "  --proxy '' --proto '=https' --tlsv1.2 --max-redirs 0 \\\n" +
+    "  --connect-timeout 10 --max-time 300 --max-filesize 1048576 \\\n" +
+    '  -H "Authorization: Bearer $GH_TOKEN" \\\n' +
+    '  -H "Accept: application/vnd.github+json" \\\n' +
+    '  -H "X-GitHub-Api-Version: 2022-11-28" \\\n' +
+    '  -H "Content-Type: application/octet-stream" \\\n' +
+    '  --data-binary "@$LOCAL_ASSET" --output "$UPLOAD_RESPONSE" --write-out \'%{http_code}\' \\\n' +
+    '  "$UPLOAD_BASE?name=$ENCODED_NAME")';
+  const uploadCurlBody = normalizedIndentedBlock(upload, 'UPLOAD_STATUS=$("$TIMEOUT_BIN"', "UPLOAD_EXIT=$?");
+  const uploadDraftGuard = 'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
+  const uploadConfirmGuard = 'if [ "$CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0 ] ||';
+  const uploadConfirmProjectionGuard = '[ "$CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET" ]; then';
+  const prewriteStateSource = `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`;
+  const prewriteActionSource = `PREWRITE_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`;
+  const prewriteNameCountSource = `PREWRITE_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`;
+  const prewriteProjectionSource = `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
+  const prewriteLocalSubsetSource = `PREWRITE_LOCAL_SUBSET=$(jq -cn --argjson local "$LOCAL_ASSET_PROJECTION"`;
+  const prewriteLocalSubsetRemoteSource = '--argjson remote "$CURRENT_ASSETS"';
+  const prewriteProjectionGuard = '[ "$PREWRITE_ASSET_PROJECTION" != "$PREWRITE_LOCAL_SUBSET" ]; then';
+  const confirmStateSource = `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`;
+  const confirmActionSource = `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`;
+  const confirmNameCountSource = `CONFIRM_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`;
+  const confirmProjectionSource = `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
+  const confirmLocalSubsetSource = `CONFIRM_LOCAL_SUBSET=$(jq -cn --argjson local "$LOCAL_ASSET_PROJECTION"`;
+  const confirmLocalSubsetRemoteSource = '--argjson remote "$CONFIRM_ASSETS"';
+  const localSubsetProjection =
+    "[$local[] | . as $candidate | select(any($remote[]; .name == $candidate.name))] | sort_by(.name)";
+  const uploadConfirmCall = 'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then';
+  const uploadBaseSource = `UPLOAD_BASE=\${CONFIRM_UPLOAD_URL%%\\{*}`;
+  const prewriteAuthorizationBlock = normalizedIndentedBlock(upload, prewriteStateSource, uploadConfirmCall);
+  const confirmAuthorizationBlock = normalizedIndentedBlock(upload, uploadConfirmCall, uploadBaseSource);
+  const hasExactPrewriteAuthorizationBlock =
+    sha256(prewriteAuthorizationBlock) === "1c6761bb54fe84f3adb666b82c80b39261bc023b92dde7c6d1cde631a649d852";
+  const hasExactConfirmAuthorizationBlock =
+    sha256(confirmAuthorizationBlock) === "fa471513b99a728dea4dfdfa7354a7c9a26d71808e417c68c4de455f567f105b";
+  const absenceLoop = "for (( absence_attempt=1; absence_attempt<=12;";
+  const uploadReserve = 'require_job_reserve 1500 "release asset upload for $NAME"';
+  const uploadRecovery = "for (( upload_recovery_attempt=1; upload_recovery_attempt<=12;";
+  const absenceIndex = upload.indexOf(absenceLoop);
+  const uploadReserveIndex = upload.indexOf(uploadReserve, absenceIndex);
+  const uploadTagIndex = upload.indexOf("assert_remote_tag_identity", uploadReserveIndex);
+  const uploadRefreshIndex = upload.indexOf("Immediate pre-upload reconciliation for $NAME", uploadTagIndex);
+  const prewriteStateSourceIndex = upload.indexOf(prewriteStateSource, uploadRefreshIndex);
+  const prewriteActionSourceIndex = upload.indexOf(prewriteActionSource, prewriteStateSourceIndex);
+  const prewriteNameCountSourceIndex = upload.indexOf(prewriteNameCountSource, prewriteActionSourceIndex);
+  const uploadDraftGuardIndex = upload.indexOf(uploadDraftGuard, prewriteNameCountSourceIndex);
+  const prewriteProjectionSourceIndex = upload.indexOf(prewriteProjectionSource, uploadDraftGuardIndex);
+  const prewriteLocalSubsetSourceIndex = upload.indexOf(prewriteLocalSubsetSource, prewriteProjectionSourceIndex);
+  const prewriteLocalSubsetRemoteSourceIndex = upload.indexOf(
+    prewriteLocalSubsetRemoteSource,
+    prewriteLocalSubsetSourceIndex
+  );
+  const prewriteProjectionGuardIndex = upload.indexOf(prewriteProjectionGuard, prewriteLocalSubsetRemoteSourceIndex);
+  const uploadConfirmIndex = upload.indexOf(
+    "Immediate pre-upload confirmation for $NAME",
+    prewriteProjectionGuardIndex
+  );
+  const uploadConfirmStateIndex = upload.indexOf(confirmStateSource, uploadConfirmIndex);
+  const uploadConfirmActionSourceIndex = upload.indexOf(confirmActionSource, uploadConfirmStateIndex);
+  const uploadConfirmNameCountSourceIndex = upload.indexOf(confirmNameCountSource, uploadConfirmActionSourceIndex);
+  const uploadConfirmProjectionSourceIndex = upload.indexOf(confirmProjectionSource, uploadConfirmNameCountSourceIndex);
+  const uploadConfirmLocalSubsetSourceIndex = upload.indexOf(
+    confirmLocalSubsetSource,
+    uploadConfirmProjectionSourceIndex
+  );
+  const uploadConfirmLocalSubsetRemoteSourceIndex = upload.indexOf(
+    confirmLocalSubsetRemoteSource,
+    uploadConfirmLocalSubsetSourceIndex
+  );
+  const uploadConfirmGuardIndex = upload.indexOf(uploadConfirmGuard, uploadConfirmLocalSubsetRemoteSourceIndex);
+  const uploadConfirmProjectionGuardIndex = upload.indexOf(uploadConfirmProjectionGuard, uploadConfirmGuardIndex);
+  const uploadConfirmErrorIndex = upload.indexOf("Final pre-upload snapshot is not", uploadConfirmProjectionGuardIndex);
+  const uploadUrlGuardIndex = upload.indexOf(
+    "GitHub release upload URL is not bound to the exact repository and release ID",
+    uploadConfirmErrorIndex
+  );
+  const uploadRehashIndex = upload.indexOf("Canonical local release asset changed before upload", uploadUrlGuardIndex);
+  const uploadBaseIndex = upload.indexOf(uploadBaseSource, uploadRehashIndex);
+  const uploadPostIndex = upload.indexOf(uploadPost, uploadBaseIndex);
+  const uploadTargetIndex = upload.indexOf(uploadTarget, uploadPostIndex);
+  const uploadRecoveryIndex = upload.indexOf(uploadRecovery, uploadPostIndex);
+  const uploadRecoveryEndIndex = upload.indexOf(
+    "Ambiguous upload never exposed exact asset $NAME",
+    uploadRecoveryIndex
+  );
+  const uploadPostTagIndex = upload.indexOf("assert_remote_tag_identity", uploadRecoveryEndIndex);
+  const uploadIdentityIndex = upload.indexOf('if [ "$MATCH_COUNT" -ne 1 ]; then', uploadPostTagIndex);
+  if (
+    mutationMatchCount(upload, "--request POST") !== 1 ||
+    mutationMatchCount(upload, uploadPost) !== 1 ||
+    mutationMatchCount(upload, uploadTarget) !== 1 ||
+    uploadCurlBody !== exactUploadCurl ||
+    mutationMatchCount(upload, uploadDraftGuard) !== 1 ||
+    mutationMatchCount(upload, uploadConfirmGuard) !== 1 ||
+    mutationMatchCount(upload, uploadConfirmProjectionGuard) !== 1 ||
+    mutationMatchCount(upload, prewriteStateSource) !== 1 ||
+    mutationMatchCount(upload, prewriteActionSource) !== 1 ||
+    mutationMatchCount(upload, prewriteNameCountSource) !== 1 ||
+    mutationMatchCount(upload, prewriteProjectionSource) !== 1 ||
+    mutationMatchCount(upload, prewriteLocalSubsetSource) !== 1 ||
+    mutationMatchCount(upload, prewriteLocalSubsetRemoteSource) !== 1 ||
+    mutationMatchCount(upload, prewriteProjectionGuard) !== 1 ||
+    mutationMatchCount(upload, confirmStateSource) !== 1 ||
+    mutationMatchCount(upload, confirmActionSource) !== 1 ||
+    mutationMatchCount(upload, confirmNameCountSource) !== 1 ||
+    mutationMatchCount(upload, confirmProjectionSource) !== 1 ||
+    mutationMatchCount(upload, confirmLocalSubsetSource) !== 1 ||
+    mutationMatchCount(upload, confirmLocalSubsetRemoteSource) !== 1 ||
+    mutationMatchCount(upload, localSubsetProjection) !== 2 ||
+    !hasExactPrewriteAuthorizationBlock ||
+    !hasExactConfirmAuthorizationBlock ||
+    mutationMatchCount(upload, '"$CURL_BIN"') !== 1 ||
+    assignmentLineCount(upload, "TAG") !== 1 ||
+    assignmentLineCount(upload, "RELEASE_ID") !== 1 ||
+    assignmentLineCount(upload, "ENCODED_NAME") !== 1 ||
+    assignmentLineCount(upload, "LOCAL_ASSET") !== 0 ||
+    assignmentLineCount(upload, "LOCAL_SIZE") !== 2 ||
+    assignmentLineCount(upload, "LOCAL_DIGEST") !== 2 ||
+    assignmentLineCount(upload, "UPLOAD_EXIT") !== 2 ||
+    assignmentLineCount(upload, "UPLOAD_STATUS") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_STATE") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_ACTION") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_NAME_COUNT") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_ASSET_PROJECTION") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_LOCAL_SUBSET") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_STATE") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ACTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_NAME_COUNT") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ASSET_PROJECTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_LOCAL_SUBSET") !== 1 ||
+    mutationMatchCount(upload, "CONFIRM_UPLOAD_URL=") !== 1 ||
+    mutationMatchCount(upload, "UPLOAD_BASE=") !== 1 ||
+    !upload.includes(NPM_RESERVE_DEADLINE_GUARD) ||
+    !upload.includes('"$CURL_BIN" --disable') ||
+    !upload.includes("--proxy ''") ||
+    !upload.includes("--proto '=https' --tlsv1.2 --max-redirs 0") ||
+    !upload.includes("--connect-timeout 10 --max-time 300 --max-filesize 1048576") ||
+    !upload.includes("ASSET_ABSENCE_OBSERVATIONS=$((ASSET_ABSENCE_OBSERVATIONS + 1))") ||
+    !upload.includes('[ "$ASSET_ABSENCE_OBSERVATIONS" -ne 6 ]') ||
+    !upload.includes("Canonical local release asset changed before upload") ||
+    !upload.includes('CONFIRM_DRAFT" != "true"') ||
+    mutationMatchCount(upload, "confirm_exact_draft_identity()") !== 1 ||
+    mutationMatchCount(upload, "confirm_exact_draft_identity ") !== 2 ||
+    mutationMatchCount(upload, "UPLOAD_EXIT=$?") !== 1 ||
+    !upload.includes('UPLOAD_STATUS" = "201"') ||
+    !upload.includes("Upload response was malformed") ||
+    !upload.includes("without repeating POST") ||
+    !upload.includes("Ambiguous upload never exposed exact asset") ||
+    !upload.includes("manual recovery required") ||
+    absenceIndex < 0 ||
+    uploadReserveIndex <= absenceIndex ||
+    uploadTagIndex <= uploadReserveIndex ||
+    uploadRefreshIndex <= uploadTagIndex ||
+    prewriteStateSourceIndex <= uploadRefreshIndex ||
+    prewriteActionSourceIndex <= prewriteStateSourceIndex ||
+    prewriteNameCountSourceIndex <= prewriteActionSourceIndex ||
+    uploadDraftGuardIndex <= prewriteNameCountSourceIndex ||
+    prewriteProjectionSourceIndex <= uploadDraftGuardIndex ||
+    prewriteLocalSubsetSourceIndex <= prewriteProjectionSourceIndex ||
+    prewriteLocalSubsetRemoteSourceIndex <= prewriteLocalSubsetSourceIndex ||
+    prewriteProjectionGuardIndex <= prewriteLocalSubsetRemoteSourceIndex ||
+    uploadConfirmIndex <= prewriteProjectionGuardIndex ||
+    uploadConfirmStateIndex <= uploadConfirmIndex ||
+    uploadConfirmActionSourceIndex <= uploadConfirmStateIndex ||
+    uploadConfirmNameCountSourceIndex <= uploadConfirmActionSourceIndex ||
+    uploadConfirmProjectionSourceIndex <= uploadConfirmNameCountSourceIndex ||
+    uploadConfirmLocalSubsetSourceIndex <= uploadConfirmProjectionSourceIndex ||
+    uploadConfirmLocalSubsetRemoteSourceIndex <= uploadConfirmLocalSubsetSourceIndex ||
+    uploadConfirmGuardIndex <= uploadConfirmLocalSubsetRemoteSourceIndex ||
+    uploadConfirmProjectionGuardIndex <= uploadConfirmGuardIndex ||
+    upload.slice(uploadConfirmGuardIndex + uploadConfirmGuard.length, uploadConfirmProjectionGuardIndex).trim() !==
+      "\\" ||
+    uploadConfirmErrorIndex <= uploadConfirmProjectionGuardIndex ||
+    uploadUrlGuardIndex <= uploadConfirmErrorIndex ||
+    uploadRehashIndex <= uploadUrlGuardIndex ||
+    uploadBaseIndex <= uploadRehashIndex ||
+    uploadPostIndex <= uploadBaseIndex ||
+    uploadTargetIndex <= uploadPostIndex ||
+    uploadRecoveryIndex <= uploadPostIndex ||
+    uploadRecoveryEndIndex <= uploadRecoveryIndex ||
+    uploadPostTagIndex <= uploadRecoveryEndIndex ||
+    uploadIdentityIndex <= uploadPostTagIndex
+  ) {
+    problems.push("each missing release asset must use one retry-free POST and exact no-replay reconciliation");
+  }
+
+  const projection = "[.[] | {id, name, state, content_type, size, digest}] | sort_by(.name)";
+  const publishReserve = 'require_job_reserve 2400 "GitHub Release publication"';
+  const finalAssetIdentitySource = `FINAL_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`;
+  const publishReleaseSource = "PUBLISH_RELEASE=$CURRENT_RELEASE";
+  const publishAssetsSource = "PUBLISH_ASSETS=$CURRENT_ASSETS";
+  const publishStateSource = `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`;
+  const publishActionSource = `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const publishAssetIdentitySource = `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`;
+  const immediatePublishStateReleaseSource = `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`;
+  const immediatePublishStateAssetsSource = `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`;
+  const immediatePublishActionSource = `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const immediateAssetIdentitySource = `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
+  const confirmPublishStateReleaseSource = `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`;
+  const confirmPublishStateAssetsSource = `--argjson assets "$CONFIRM_ASSETS" '{release: $release, assets: $assets}')`;
+  const confirmPublishActionSource = `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const confirmAssetIdentitySource = `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
+  const publishAssetIdentityGuard = '[ "$PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
+  const immediateAssetIdentityGuard = '[ "$IMMEDIATE_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
+  const publishConfirmActionGuard = 'if [ "$CONFIRM_PUBLISH_ACTION" != "publish_draft" ] ||';
+  const publishConfirmIdentityGuard = '[ "$CONFIRM_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]; then';
+  const publishDraftGate = 'if [ "$FINAL_ACTION" = "publish_draft" ]; then';
+  const finalLocalProjectionSource = `FINAL_LOCAL_PROJECTION=$(printf '%s' "$FINAL_ASSETS" | jq -cS`;
+  const finalDirectorySource = 'FINAL_DIR=".mcpb-release-final-$GITHUB_RUN_ID"';
+  const publishFieldsSource = 'PUBLISH_FIELDS=(-F draft=false -F "prerelease=$EXPECTED_PRERELEASE")';
+  const publishDraftConfirmationSource =
+    'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then';
+  const stableChannelComment = "# The stable-channel guard is deliberately after reserve, tag";
+  const finalLocalProjectionBlock = normalizedIndentedBlock(upload, finalLocalProjectionSource, finalDirectorySource);
+  const publicationAuthorizationBlock = normalizedIndentedBlock(upload, publishReleaseSource, publishFieldsSource);
+  const immediatePublicationAuthorizationBlock = normalizedIndentedBlock(
+    upload,
+    immediatePublishStateReleaseSource,
+    publishDraftConfirmationSource
+  );
+  const confirmPublicationAuthorizationBlock = normalizedIndentedBlock(
+    upload,
+    publishDraftConfirmationSource,
+    stableChannelComment
+  );
+  const hasExactFinalLocalProjectionBlock =
+    sha256(finalLocalProjectionBlock) === "19fd4a2754537c71e163f0bb04c209608ed3030871de2e8c54ef9e5108585577";
+  const hasExactPublicationAuthorizationBlock =
+    sha256(publicationAuthorizationBlock) === "76e4fcdf0beed45cb489560f1f904a1f76ed23c39cde0da07c03d4afa1d5f674";
+  const hasExactImmediatePublicationAuthorizationBlock =
+    sha256(immediatePublicationAuthorizationBlock) ===
+    "8b4d3468625685260be550e095dc83c684288487cd6f9447236631d87c71ed3a";
+  const hasExactConfirmPublicationAuthorizationBlock =
+    sha256(confirmPublicationAuthorizationBlock) === "0ac17f80d5e5a9e6933c4b68d4aa5dc90fddc73ee377115745bad5cc42f982da";
+  const publishFieldsBlock =
+    'PUBLISH_FIELDS=(-F draft=false -F "prerelease=$EXPECTED_PRERELEASE")\n' +
+    `  if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
+    "    PUBLISH_FIELDS+=(-f make_latest=true)\n" +
+    "  else\n" +
+    "    PUBLISH_FIELDS+=(-f make_latest=false)\n" +
+    "  fi";
+  const finalIdentitySourceIndex = upload.indexOf(finalAssetIdentitySource);
+  const publishReleaseSourceIndex = upload.indexOf(publishReleaseSource, finalIdentitySourceIndex);
+  const publishAssetsSourceIndex = upload.indexOf(publishAssetsSource, publishReleaseSourceIndex);
+  const publishStateSourceIndex = upload.indexOf(publishStateSource, publishAssetsSourceIndex);
+  const publishActionSourceIndex = upload.indexOf(publishActionSource, publishStateSourceIndex);
+  const publishIdentitySourceIndex = upload.indexOf(publishAssetIdentitySource, publishActionSourceIndex);
+  const publishIdentityGuardIndex = upload.indexOf(publishAssetIdentityGuard, publishIdentitySourceIndex);
+  const outerPublishDraftGateIndex = upload.indexOf(publishDraftGate, publishIdentityGuardIndex);
+  const publishReserveIndex = upload.indexOf(publishReserve, outerPublishDraftGateIndex);
+  const publishTagIndex = upload.indexOf("assert_remote_tag_identity", publishReserveIndex);
+  const publishRefreshIndex = upload.indexOf("Immediate pre-publication reconciliation", publishTagIndex);
+  const immediatePublishStateReleaseSourceIndex = upload.indexOf(
+    immediatePublishStateReleaseSource,
+    publishRefreshIndex
+  );
+  const immediatePublishStateAssetsSourceIndex = upload.indexOf(
+    immediatePublishStateAssetsSource,
+    immediatePublishStateReleaseSourceIndex
+  );
+  const immediatePublishActionSourceIndex = upload.indexOf(
+    immediatePublishActionSource,
+    immediatePublishStateAssetsSourceIndex
+  );
+  const immediateIdentitySourceIndex = upload.indexOf(immediateAssetIdentitySource, immediatePublishActionSourceIndex);
+  const immediateIdentityGuardIndex = upload.indexOf(immediateAssetIdentityGuard, immediateIdentitySourceIndex);
+  const innerPublishDraftGateIndex = upload.indexOf(publishDraftGate, immediateIdentityGuardIndex);
+  const publishDraftConfirmIndex = upload.indexOf(
+    "Immediate pre-publication draft confirmation",
+    innerPublishDraftGateIndex
+  );
+  const publishConfirmStateIndex = upload.indexOf(confirmPublishStateReleaseSource, publishDraftConfirmIndex);
+  const publishConfirmStateAssetsSourceIndex = upload.indexOf(
+    confirmPublishStateAssetsSource,
+    publishConfirmStateIndex
+  );
+  const publishConfirmActionSourceIndex = upload.indexOf(
+    confirmPublishActionSource,
+    publishConfirmStateAssetsSourceIndex
+  );
+  const publishConfirmIdentitySourceIndex = upload.indexOf(confirmAssetIdentitySource, publishConfirmActionSourceIndex);
+  const publishConfirmActionGuardIndex = upload.indexOf(publishConfirmActionGuard, publishConfirmIdentitySourceIndex);
+  const publishConfirmIdentityGuardIndex = upload.indexOf(publishConfirmIdentityGuard, publishConfirmActionGuardIndex);
+  const publishConfirmErrorIndex = upload.indexOf(
+    "Final pre-publication snapshot changed before the publication boundary",
+    publishConfirmIdentityGuardIndex
+  );
+  const latestPrewriteIndex = upload.indexOf("if github_latest_read; then", publishConfirmErrorIndex);
+  const latestAdvanceIndex = upload.indexOf(
+    `"$VERSION" "$CURRENT_LATEST_VERSION" "\${{ steps.dist_tag.outputs.tag }}"`,
+    latestPrewriteIndex
+  );
+  const patchPrefix = 'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH \\';
+  const patchTarget = `"repos/\${{ github.repository }}/releases/$RELEASE_ID" "\${PUBLISH_FIELDS[@]}")`;
+  const patchIndex = upload.indexOf(patchPrefix, latestAdvanceIndex);
+  const patchTargetIndex = upload.indexOf(patchTarget, patchIndex);
+  const publishRecoveryIndex = upload.indexOf("for (( publish_attempt=1; publish_attempt<=12;", patchIndex);
+  const postProjectionIndex = upload.indexOf("POST_ASSET_IDENTITY", publishRecoveryIndex);
+  const latestLoopIndex = upload.indexOf("for (( latest_attempt=1; latest_attempt<=12;", postProjectionIndex);
+  const latestConvergenceIndex = upload.indexOf(
+    '[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]',
+    latestLoopIndex
+  );
+  const latestFailureIndex = upload.indexOf("did not become GitHub's latest release", latestConvergenceIndex);
+  const finalTagIndex = upload.indexOf("assert_remote_tag_identity", latestFailureIndex);
+  const immediateReuseIndex = upload.indexOf('elif [ "$FINAL_ACTION" = "reuse_published" ]; then', patchTargetIndex);
+  const immediateReuseTagIndex = upload.indexOf("assert_remote_tag_identity", immediateReuseIndex);
+  const outerReuseIndex = upload.indexOf('elif [ "$FINAL_ACTION" = "reuse_published" ]; then', immediateReuseTagIndex);
+  const outerReuseTagIndex = upload.indexOf("assert_remote_tag_identity", outerReuseIndex);
+  if (
+    mutationMatchCount(upload, "--method PATCH") !== 1 ||
+    mutationMatchCount(upload, patchPrefix) !== 1 ||
+    mutationMatchCount(upload, patchTarget) !== 1 ||
+    mutationMatchCount(upload, publishFieldsBlock) !== 1 ||
+    mutationMatchCount(upload, "PUBLISH_FIELDS=(") !== 1 ||
+    mutationMatchCount(upload, "PUBLISH_FIELDS+=(") !== 2 ||
+    mutationMatchCount(upload, "PUBLISH_FIELDS+=(-f make_latest=true)") !== 1 ||
+    mutationMatchCount(upload, "PUBLISH_FIELDS+=(-f make_latest=false)") !== 1 ||
+    mutationMatchCount(upload, finalAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, publishReleaseSource) !== 1 ||
+    mutationMatchCount(upload, publishAssetsSource) !== 1 ||
+    mutationMatchCount(upload, publishStateSource) !== 1 ||
+    mutationMatchCount(upload, publishActionSource) !== 1 ||
+    mutationMatchCount(upload, publishAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishStateReleaseSource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishStateAssetsSource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishActionSource) !== 1 ||
+    mutationMatchCount(upload, immediateAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishStateReleaseSource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishStateAssetsSource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishActionSource) !== 1 ||
+    mutationMatchCount(upload, confirmAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, publishAssetIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, immediateAssetIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, publishConfirmActionGuard) !== 1 ||
+    mutationMatchCount(upload, publishConfirmIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, publishDraftGate) !== 2 ||
+    !hasExactPublicationAuthorizationBlock ||
+    !hasExactImmediatePublicationAuthorizationBlock ||
+    !hasExactConfirmPublicationAuthorizationBlock ||
+    assignmentLineCount(upload, "FINAL_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_RELEASE") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_ASSETS") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "FINAL_ACTION") !== 3 ||
+    assignmentLineCount(upload, "PUBLISH_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "IMMEDIATE_PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "IMMEDIATE_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_PUBLISH_ACTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ASSET_IDENTITY") !== 1 ||
+    !upload.includes("PATCH_EXIT=$?") ||
+    !upload.includes("without repeating PATCH") ||
+    !upload.includes(
+      `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID"); then`
+    ) ||
+    !upload.includes("for (( published_list_attempt=1; published_list_attempt<=12;") ||
+    !upload.includes("for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12;") ||
+    !upload.includes("IMMEDIATE_ASSET_IDENTITY") ||
+    !upload.includes("Recovered an externally completed exact publication before repeating PATCH") ||
+    !upload.includes('[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]') ||
+    !upload.includes(`"$VERSION" "$CURRENT_LATEST_VERSION" "\${{ steps.dist_tag.outputs.tag }}"`) ||
+    finalIdentitySourceIndex < 0 ||
+    publishReleaseSourceIndex <= finalIdentitySourceIndex ||
+    publishAssetsSourceIndex <= publishReleaseSourceIndex ||
+    publishStateSourceIndex <= publishAssetsSourceIndex ||
+    publishActionSourceIndex <= publishStateSourceIndex ||
+    publishIdentitySourceIndex <= publishActionSourceIndex ||
+    publishIdentityGuardIndex <= publishIdentitySourceIndex ||
+    outerPublishDraftGateIndex <= publishIdentityGuardIndex ||
+    publishReserveIndex <= outerPublishDraftGateIndex ||
+    publishTagIndex <= publishReserveIndex ||
+    publishRefreshIndex <= publishTagIndex ||
+    immediatePublishStateReleaseSourceIndex <= publishRefreshIndex ||
+    immediatePublishStateAssetsSourceIndex <= immediatePublishStateReleaseSourceIndex ||
+    immediatePublishActionSourceIndex <= immediatePublishStateAssetsSourceIndex ||
+    immediateIdentitySourceIndex <= immediatePublishActionSourceIndex ||
+    immediateIdentityGuardIndex <= immediateIdentitySourceIndex ||
+    innerPublishDraftGateIndex <= immediateIdentityGuardIndex ||
+    innerPublishDraftGateIndex <= outerPublishDraftGateIndex ||
+    publishDraftConfirmIndex <= innerPublishDraftGateIndex ||
+    publishConfirmStateIndex <= publishDraftConfirmIndex ||
+    publishConfirmStateAssetsSourceIndex <= publishConfirmStateIndex ||
+    publishConfirmActionSourceIndex <= publishConfirmStateAssetsSourceIndex ||
+    publishConfirmIdentitySourceIndex <= publishConfirmActionSourceIndex ||
+    publishConfirmActionGuardIndex <= publishConfirmIdentitySourceIndex ||
+    publishConfirmIdentityGuardIndex <= publishConfirmActionGuardIndex ||
+    upload
+      .slice(publishConfirmActionGuardIndex + publishConfirmActionGuard.length, publishConfirmIdentityGuardIndex)
+      .trim() !== "\\" ||
+    publishConfirmErrorIndex <= publishConfirmIdentityGuardIndex ||
+    latestPrewriteIndex <= publishConfirmErrorIndex ||
+    latestAdvanceIndex <= latestPrewriteIndex ||
+    patchIndex <= latestAdvanceIndex ||
+    patchTargetIndex <= patchIndex ||
+    upload.slice(patchIndex + patchPrefix.length, patchTargetIndex).trim().length !== 0 ||
+    immediateReuseIndex <= patchTargetIndex ||
+    immediateReuseTagIndex <= immediateReuseIndex ||
+    outerReuseIndex <= immediateReuseTagIndex ||
+    outerReuseTagIndex <= outerReuseIndex ||
+    outerReuseTagIndex >= publishRecoveryIndex ||
+    publishRecoveryIndex <= patchIndex ||
+    postProjectionIndex <= publishRecoveryIndex ||
+    latestLoopIndex <= postProjectionIndex ||
+    latestConvergenceIndex <= latestLoopIndex ||
+    latestFailureIndex <= latestConvergenceIndex ||
+    finalTagIndex <= latestFailureIndex
+  ) {
+    problems.push("release publication must be one bounded PATCH followed by exact-ID convergence without replay");
+  }
+  if (
+    mutationMatchCount(upload, releaseStatePayload) !== 12 ||
+    mutationMatchCount(upload, metadataProjection) !== 3 ||
+    !hasExactPrewriteAuthorizationBlock ||
+    !hasExactConfirmAuthorizationBlock ||
+    !hasExactFinalLocalProjectionBlock ||
+    !hasExactPublicationAuthorizationBlock ||
+    !hasExactImmediatePublicationAuthorizationBlock ||
+    !hasExactConfirmPublicationAuthorizationBlock
+  ) {
+    problems.push("release authorization snapshots must preserve their exact state and metadata projections");
+  }
+  if (
+    mutationMatchCount(upload, projection) !== 5 ||
+    mutationMatchCount(upload, "node scripts/check-release-integrity.mjs visibility") !== 2 ||
+    !upload.includes('[ "$PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]') ||
+    !upload.includes('[ "$POST_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]') ||
+    !upload.includes("download_exact_release_asset()") ||
+    !upload.includes('cmp -s "$local_asset" "$attempt_asset"') ||
+    !upload.includes('[ "$FINAL_LOCAL_PROJECTION" != "$LOCAL_ASSET_PROJECTION" ]')
+  ) {
+    problems.push("the exact six-asset identity and bytes must remain frozen across publication");
+  }
+  const allRunBodies = steps.map(runBody).join("\n");
+  const explicitWriteMethods =
+    allRunBodies.match(/(?:(?:--method|--request)(?:=|\s+)|-X\s*)(?:POST|PATCH|PUT|DELETE)\b/giu) ?? [];
+  const ghApiSurfaceLines = allRunBodies
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /\bgh\s+api\b|"?\$GH_BIN"?\s+api\b/u.test(line));
+  const allowedGhApiMessages = new Set([
+    'echo "::error::gh_read accepts read-only gh api calls" >&2',
+    'echo "::error::gh_read rejects mutation-capable gh api arguments" >&2'
+  ]);
+  const directGhApiLines = ghApiSurfaceLines.filter((line) => !allowedGhApiMessages.has(line));
+  const hasForbiddenReleaseCli = /(?:"?\$(?:GH_BIN|\{GH_BIN\})"?|\bgh)\s+release\s+(?:delete|edit|upload)\b/iu.test(
+    allRunBodies
+  );
+  if (
+    explicitWriteMethods.length !== 2 ||
+    mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
+    mutationMatchCount(allRunBodies, "--method PATCH") !== 1 ||
+    mutationMatchCount(allRunBodies, '"$GH_BIN" api --method PATCH') !== 1 ||
+    ghApiSurfaceLines.length !== 13 ||
+    directGhApiLines.length !== 1 ||
+    !directGhApiLines[0]?.startsWith(
+      'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH'
+    ) ||
+    mutationMatchCount(allRunBodies, 'release create "$TAG"') !== 1 ||
+    /(?:--method|-X|--request)(?:=|\s+)(?:DELETE|PUT)\b/iu.test(allRunBodies) ||
+    hasForbiddenReleaseCli ||
+    allRunBodies.includes("delete-asset") ||
+    allRunBodies.includes("--clobber") ||
+    /(?:^|\s)(?:--insecure|-k|--resolve|--connect-to|--unix-socket|--abstract-unix-socket)(?:\s|=|$)/mu.test(
+      uploadCurlBody
+    ) ||
+    mutationMatchCount(uploadCurlBody, '--data-binary "@$LOCAL_ASSET"') !== 1 ||
+    (uploadCurlBody.match(/https?:\/\//gu) ?? []).length !== 0 ||
+    mutationMatchCount(uploadCurlBody, uploadTarget) !== 1 ||
+    /--retry\s+[1-9]/u.test(upload)
+  ) {
+    problems.push("GitHub Release recovery must expose no delete, clobber, or transport-replay path");
+  }
+  return problems;
+}
+
 const BASIC_MCPB_TOOLS = [
   "obsidian_frontmatter_get",
   "obsidian_frontmatter_search",
@@ -1183,11 +1989,30 @@ const MCPB_NPM_CHANNEL_ADVANCE =
   '            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")';
 const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';
 const MCPB_EXACT_NPM_PUBLISH =
-  '            "$TIMEOUT_BIN" --kill-after=10s 600s npm publish "$PACKAGE_TARBALL"' +
-  ' --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+  `              /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
+  "                NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
+  "                NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
+  "                NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
+  '                NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
+  '                "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
+  '                --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
+  "                --registry=https://registry.npmjs.org/ \\\n" +
+  "                --@oomkapwn:registry=https://registry.npmjs.org/ \\\n" +
+  "                --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
+  '                --provenance --access public --tag "$CHANNEL" --ignore-scripts';
 const MCPB_EXACT_NPM_PUBLISH_RUN =
-  '"$TIMEOUT_BIN" --kill-after=10s 600s npm publish "$PACKAGE_TARBALL"' +
-  ' --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+  `    /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
+  "      NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
+  "      NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
+  "      NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
+  '      NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
+  '      "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
+  '      --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
+  "      --registry=https://registry.npmjs.org/ \\\n" +
+  "      --@oomkapwn:registry=https://registry.npmjs.org/ \\\n" +
+  "      --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
+  '      --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+const MCPB_EXACT_NPM_PUBLISH_HEAD = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\';
 const MCPB_NPM_TARBALL_SRI =
   'process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1]))' + '.digest("base64")}`);';
 const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
@@ -1195,7 +2020,7 @@ const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
   `            "repos/\${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"`;
 const MCPB_RELEASE_VISIBILITY_POLL =
   "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";
-const MCPB_RELEASE_VISIBILITY_REFRESH = "            RELEASE_PAGES=$(gh_read api --paginate --slurp";
+const MCPB_RELEASE_VISIBILITY_REFRESH = "            if ! RELEASE_PAGES=$(gh_read api --paginate --slurp";
 const MCPB_RELEASE_VISIBILITY_POLL_WITH_REFRESH = `${MCPB_RELEASE_VISIBILITY_POLL}\n${MCPB_RELEASE_VISIBILITY_REFRESH}`;
 const MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD =
   '            if [ "$RELEASE_COUNT" -gt 1 ]; then\n' +
@@ -1210,6 +2035,11 @@ const MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD =
 const MCPB_RELEASE_VISIBILITY_WAIT =
   '            echo "::warning::Release $TAG is not visible yet (attempt $release_attempt/12); retrying in 5s"\n' +
   "            sleep 5";
+const MCPB_PREFLIGHT_ASSET_COMPARE =
+  '            if ! cmp -s "$LOCAL_ASSET" "$PREFLIGHT_DIR/$NAME"; then\n' +
+  '              echo "::error::Existing release asset $NAME differs before npm publication"\n' +
+  "              exit 1\n" +
+  "            fi";
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -1291,7 +2121,16 @@ function mcpbContractProblems(inputs: {
   const npmPublishStep = namedStep(releaseSteps, "Publish with provenance or verify an exact prior publication");
   const npmPublishRun = runBody(npmPublishStep);
   const npmPublishEnv = yamlRecord(npmPublishStep?.env);
+  const npmAssignmentLineCount = (name: string) =>
+    npmPublishRun
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith(`${name}=`)).length;
   const npmStateInvocation = 'npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL"';
+  const npmEnvPurgePattern =
+    "npm_config_registry|npm_config_@oomkapwn:registry|npm_config_proxy|npm_config_https_proxy|" +
+    "npm_config_ca|npm_config_cafile|npm_config_strict_ssl|npm_config_fetch_retries|" +
+    "npm_config_fetch_timeout|npm_config_userconfig|npm_config_globalconfig";
   const npmReserveIndex = npmPublishRun.indexOf('require_job_reserve 2100 "npm publish"');
   const npmPrewriteTagIndex = npmPublishRun.indexOf("\n  assert_remote_tag_identity", npmReserveIndex);
   const npmPrewriteReadIndex = npmPublishRun.indexOf("if ! registry_read; then", npmPrewriteTagIndex);
@@ -1300,8 +2139,17 @@ function mcpbContractProblems(inputs: {
     npmPrewriteReadIndex
   );
   const npmAttemptedIndex = npmPublishRun.indexOf("NPM_PUBLISH_ATTEMPTED=true", npmRehashIndex);
-  const npmNonfatalIndex = npmPublishRun.indexOf("set +e", npmAttemptedIndex);
-  const npmPublishIndex = npmPublishRun.indexOf(MCPB_EXACT_NPM_PUBLISH_RUN, npmNonfatalIndex);
+  const npmPublishCwdIndex = npmPublishRun.indexOf(
+    'NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")',
+    npmAttemptedIndex
+  );
+  const npmPublishCwdGuardIndex = npmPublishRun.indexOf(
+    '[ ! -d "$NPM_PUBLISH_CWD" ] || [ -L "$NPM_PUBLISH_CWD" ]',
+    npmPublishCwdIndex
+  );
+  const npmNonfatalIndex = npmPublishRun.indexOf("set +e", npmPublishCwdGuardIndex);
+  const npmPublishCdIndex = npmPublishRun.indexOf('cd "$NPM_PUBLISH_CWD" || exit 125', npmNonfatalIndex);
+  const npmPublishIndex = npmPublishRun.indexOf(MCPB_EXACT_NPM_PUBLISH_RUN, npmPublishCdIndex);
   const npmExitCaptureIndex = npmPublishRun.indexOf("NPM_PUBLISH_EXIT=$?", npmPublishIndex);
   const npmFatalIndex = npmPublishRun.indexOf("set -e", npmExitCaptureIndex);
   const npmReadbackIndex = npmPublishRun.indexOf("for (( attempt=1; attempt<=12; attempt++ )); do", npmFatalIndex);
@@ -1312,8 +2160,11 @@ function mcpbContractProblems(inputs: {
     npmPrewriteReadIndex > npmPrewriteTagIndex &&
     npmRehashIndex > npmPrewriteReadIndex &&
     npmAttemptedIndex > npmRehashIndex &&
-    npmNonfatalIndex > npmAttemptedIndex &&
-    npmPublishIndex > npmNonfatalIndex &&
+    npmPublishCwdIndex > npmAttemptedIndex &&
+    npmPublishCwdGuardIndex > npmPublishCwdIndex &&
+    npmNonfatalIndex > npmPublishCwdGuardIndex &&
+    npmPublishCdIndex > npmNonfatalIndex &&
+    npmPublishIndex > npmPublishCdIndex &&
     npmExitCaptureIndex > npmPublishIndex &&
     npmFatalIndex > npmExitCaptureIndex &&
     npmReadbackIndex > npmFatalIndex &&
@@ -1323,10 +2174,11 @@ function mcpbContractProblems(inputs: {
     /require_job_reserve ([0-9]+) "npm publish"/gu,
     1
   );
-  const npmTagTiming = exactPositiveIntegerCaptures(
+  const npmTagReadLimit = exactPositiveIntegerCaptures(npmPublishRun, /local limit=([0-9]+)/gu, 1);
+  const npmTagReadKill = exactPositiveIntegerCaptures(
     npmPublishRun,
-    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s git ls-remote --tags origin/gu,
-    2
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s "\$\{limit\}s" "\$GH_BIN"/gu,
+    1
   );
   const npmRegistryTiming = exactPositiveIntegerCaptures(
     npmPublishRun,
@@ -1335,7 +2187,7 @@ function mcpbContractProblems(inputs: {
   );
   const npmPublishTiming = exactPositiveIntegerCaptures(
     npmPublishRun,
-    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s npm publish "\$PACKAGE_TARBALL"/gu,
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s "\$NPM_BIN" publish "\$PACKAGE_TARBALL"/gu,
     2
   );
   const npmReadbackTiming = exactPositiveIntegerCaptures(
@@ -1345,14 +2197,16 @@ function mcpbContractProblems(inputs: {
   );
   const npmSleepTiming = exactPositiveIntegerCaptures(npmPublishRun, /^\s*sleep ([0-9]+)$/gmu, 1);
   const [npmReserveSeconds = 0] = npmReserveTiming ?? [];
-  const [npmTagKillSeconds = 0, npmTagTimeoutSeconds = 0] = npmTagTiming ?? [];
+  const [npmTagReadLimitSeconds = 0] = npmTagReadLimit ?? [];
+  const [npmTagReadKillSeconds = 0] = npmTagReadKill ?? [];
   const [npmRegistryKillSeconds = 0, npmRegistryTimeoutSeconds = 0] = npmRegistryTiming ?? [];
   const [npmPublishKillSeconds = 0, npmPublishTimeoutSeconds = 0] = npmPublishTiming ?? [];
   const [npmReadbackAttempts = 0] = npmReadbackTiming ?? [];
   const [npmSleepSeconds = 0] = npmSleepTiming ?? [];
   const npmTimingContractIsExact =
     npmReserveTiming !== null &&
-    npmTagTiming !== null &&
+    npmTagReadLimit !== null &&
+    npmTagReadKill !== null &&
     npmRegistryTiming !== null &&
     npmPublishTiming !== null &&
     npmReadbackTiming !== null &&
@@ -1361,7 +2215,7 @@ function mcpbContractProblems(inputs: {
   const npmReserveCoversWorstCase =
     npmTimingContractIsExact &&
     npmReserveSeconds >=
-      2 * (npmTagTimeoutSeconds + npmTagKillSeconds) +
+      2 * 3 * (npmTagReadLimitSeconds + npmTagReadKillSeconds) +
         (npmRegistryTimeoutSeconds + npmRegistryKillSeconds) +
         (npmPublishTimeoutSeconds + npmPublishKillSeconds) +
         npmReadbackAttempts * (npmRegistryTimeoutSeconds + npmRegistryKillSeconds) +
@@ -1382,7 +2236,8 @@ function mcpbContractProblems(inputs: {
     'echo "::error::npm pack tarball is missing, non-regular, or a symlink"',
     'echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"',
     'require_job_reserve 2100 "npm publish"',
-    MCPB_EXACT_NPM_PUBLISH_RUN,
+    'echo "::error::npm publish scratch directory is missing, non-directory, or a symlink"',
+    MCPB_EXACT_NPM_PUBLISH_HEAD,
     'echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"'
   ];
   const npmCommandSurfaceIsClosed =
@@ -1390,16 +2245,60 @@ function mcpbContractProblems(inputs: {
     npmPackPublishSurface[0]?.startsWith(`PACK_JSON=$(${MCPB_EXACT_NPM_PACK}`) === true &&
     npmPackPublishSurface[0]?.endsWith("\\") === true &&
     JSON.stringify(npmPackPublishSurface.slice(1)) === JSON.stringify(npmPackPublishExpectedTail) &&
-    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 31 &&
-    (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 2;
+    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 32 &&
+    (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 3;
   const npmPublicationIsByteBound =
+    npmAssignmentLineCount("NPM_BIN") === 1 &&
+    npmAssignmentLineCount("NODE_BIN") === 1 &&
+    npmAssignmentLineCount("CURL_BIN") === 1 &&
+    npmAssignmentLineCount("TAR_BIN") === 1 &&
+    npmAssignmentLineCount("TIMEOUT_BIN") === 1 &&
+    npmAssignmentLineCount("PACKAGE_TARBALL") === 1 &&
+    npmAssignmentLineCount("NPM_CONFIG_USERCONFIG") === 2 &&
+    npmAssignmentLineCount("NPM_PUBLISH_CWD") === 1 &&
+    npmAssignmentLineCount("NPM_ENV_UNSETS") === 1 &&
+    npmAssignmentLineCount("NPM_ENV_KEY_CANONICAL") === 2 &&
     npmPublishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}` &&
+    npmPublishEnv?.NPM_CONFIG_REGISTRY === "https://registry.npmjs.org/" &&
+    npmPublishEnv?.npm_config_registry === "https://registry.npmjs.org/" &&
+    npmPublishEnv?.NPM_CONFIG_GLOBALCONFIG === "/dev/null" &&
+    npmPublishEnv?.npm_config_globalconfig === "/dev/null" &&
+    npmPublishEnv?.NPM_CONFIG_PROXY === "" &&
+    npmPublishEnv?.npm_config_proxy === "" &&
+    npmPublishEnv?.NPM_CONFIG_HTTPS_PROXY === "" &&
+    npmPublishEnv?.npm_config_https_proxy === "" &&
+    npmPublishEnv?.NPM_CONFIG_CAFILE === "" &&
+    npmPublishEnv?.npm_config_cafile === "" &&
+    npmPublishEnv?.NPM_CONFIG_CA === "" &&
+    npmPublishEnv?.npm_config_ca === "" &&
+    npmPublishEnv?.NPM_CONFIG_STRICT_SSL === "true" &&
+    npmPublishEnv?.npm_config_strict_ssl === "true" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_TIMEOUT === "60000" &&
+    npmPublishEnv?.npm_config_fetch_timeout === "60000" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_RETRIES === "0" &&
+    npmPublishEnv?.npm_config_fetch_retries === "0" &&
     npmPublishRun.includes('PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"') &&
+    npmPublishRun.startsWith(
+      'set -euo pipefail\nGH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")'
+    ) &&
+    npmPublishRun.includes('NPM_CONFIG_USERCONFIG=$(/usr/bin/mktemp "$RUNNER_TEMP/enquire-npmrc.XXXXXX")') &&
+    npmPublishRun.includes('npm_config_userconfig="$NPM_CONFIG_USERCONFIG"') &&
+    npmPublishRun.includes("export NPM_CONFIG_USERCONFIG npm_config_userconfig") &&
+    npmPublishRun.includes('chmod 600 "$NPM_CONFIG_USERCONFIG"') &&
+    npmPublishRun.includes("'registry=https://registry.npmjs.org/'") &&
+    npmPublishRun.includes(`'//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}'`) &&
+    mutationMatchCount(npmPublishRun, "NPM_ENV_UNSETS=()") === 1 &&
+    npmPublishRun.includes("while IFS='=' read -r NPM_ENV_KEY _; do") &&
+    npmPublishRun.includes(`NPM_ENV_KEY_CANONICAL=\${NPM_ENV_KEY,,}`) &&
+    npmPublishRun.includes(`NPM_ENV_KEY_CANONICAL=\${NPM_ENV_KEY_CANONICAL//-/_}`) &&
+    npmPublishRun.includes('case "$NPM_ENV_KEY_CANONICAL" in') &&
+    mutationMatchCount(npmPublishRun, npmEnvPurgePattern) === 1 &&
+    npmPublishRun.includes('NPM_ENV_UNSETS+=("--unset=$NPM_ENV_KEY")') &&
+    npmPublishRun.includes("done < <(/usr/bin/env)") &&
     npmPublishRun.includes('PACKUMENT=$(mktemp "$RUNNER_TEMP/enquire-npm-packument.XXXXXX")') &&
     npmPublishRun.includes("registry_read() {") &&
     npmPublishRun.includes('"$TIMEOUT_BIN" --kill-after=5s 35s "$CURL_BIN"') &&
+    npmPublishRun.includes("\"$CURL_BIN\" --disable --proxy ''") &&
     npmPublishRun.includes("--connect-timeout 10 --max-time 30 --max-filesize 67108864 --retry 0") &&
     npmPublishRun.includes("--proto '=https' --tlsv1.2") &&
     npmPublishRun.includes('--header "Accept: application/json" --header "Cache-Control: no-cache"') &&
@@ -1435,12 +2334,10 @@ function mcpbContractProblems(inputs: {
     npmPublishRun.includes('[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
     npmPublishRun.includes('[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
     npmPublishRun.split(npmStateInvocation).length - 1 === 3 &&
-    (
-      npmPublishRun.match(
-        /npm publish "\$PACKAGE_TARBALL" --provenance --access public --tag "\$CHANNEL" --ignore-scripts/g
-      ) ?? []
-    ).length === 1 &&
-    npmPublishRun.includes(MCPB_EXACT_NPM_PUBLISH_RUN) &&
+    mutationMatchCount(npmPublishRun, MCPB_EXACT_NPM_PUBLISH_RUN) === 1 &&
+    npmPublishRun.includes('NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")') &&
+    npmPublishRun.includes('[ ! -d "$NPM_PUBLISH_CWD" ] || [ -L "$NPM_PUBLISH_CWD" ]') &&
+    npmPublishRun.includes('cd "$NPM_PUBLISH_CWD" || exit 125') &&
     npmRegistryMutationCommands.length === 0 &&
     npmPublishRun.includes("NPM_PUBLISH_ATTEMPTED=true") &&
     npmPublishRun.includes("NPM_PUBLISH_EXIT=$?") &&
@@ -1587,14 +2484,6 @@ function mcpbContractProblems(inputs: {
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"
     );
   }
-  const freshUploadClassifier = "CURRENT_ACTION=$(printf '%s' \"$CURRENT_STATE\" | release_state | jq -r '.action')";
-  const freshUploadRefusal = 'if [ "$CURRENT_ACTION" != "resume_draft" ] || [ "$CURRENT_NAME_COUNT" -ne 0 ]; then';
-  const uploadPost = "curl --fail-with-body --silent --show-error --request POST";
-  const freshUploadTagProof = `              assert_remote_tag_identity\n              ${uploadPost}`;
-  const publicationTagProof =
-    '          assert_remote_tag_identity\n          if [ "$FINAL_ACTION" = "publish_draft" ]; then';
-  const finalPostconditionTagProof =
-    "          assert_remote_tag_identity\n          FINAL_PRERELEASE=$(printf '%s' \"$RELEASE_JSON\" | jq -r '.prerelease')";
   const assetPhaseIndex = inputs.release.indexOf("- name: Upload Basic MCPB asset, checksum, and provenance");
   const visibilityPollIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_POLL);
   const visibilityRefreshIndex = inputs.release.indexOf(MCPB_RELEASE_VISIBILITY_REFRESH, visibilityPollIndex);
@@ -1622,15 +2511,38 @@ function mcpbContractProblems(inputs: {
     visibilityWaitIndex > visibilityTimeoutIndex &&
     visibilityDoneIndex > visibilityWaitIndex &&
     assetReleaseJsonIndex > visibilityDoneIndex;
-  const freshUploadClassifierIndex = inputs.release.indexOf(freshUploadClassifier);
-  const freshUploadRefusalIndex = inputs.release.indexOf(freshUploadRefusal);
-  const freshUploadTagProofIndex = inputs.release.indexOf(freshUploadTagProof);
-  const uploadPostIndex = inputs.release.indexOf(uploadPost);
-  const freshUploadOrderIsSafe =
-    freshUploadClassifierIndex >= 0 &&
-    freshUploadRefusalIndex > freshUploadClassifierIndex &&
-    freshUploadTagProofIndex > freshUploadRefusalIndex &&
-    uploadPostIndex > freshUploadTagProofIndex;
+  const remoteTagIdentityStepNames = [
+    "Preflight existing GitHub release and every Basic asset before npm",
+    "Publish with provenance or verify an exact prior publication",
+    "Prepare draft GitHub Release",
+    "Upload Basic MCPB asset, checksum, and provenance"
+  ];
+  const remoteTagIdentityExpectedCalls = [1, 2, 3, 7];
+  const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
+  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) => runBody(namedStep(releaseSteps, name)));
+  const remoteTagIdentityBodies = remoteTagIdentityRuns.map((body) => {
+    if (mutationMatchCount(body, remoteTagIdentityMarker) !== 1) return "";
+    const start = body.indexOf(remoteTagIdentityMarker);
+    const end = body.indexOf("\n}", start + remoteTagIdentityMarker.length);
+    const endLineBreak = end < 0 ? -1 : body.indexOf("\n", end + 2);
+    const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
+    if (end < 0 || body.slice(end + 2, endLineEnd).length !== 0) return "";
+    return start >= 0 && end > start ? body.slice(start, end + 2) : "";
+  });
+  const canonicalRemoteTagIdentityBody = remoteTagIdentityBodies[0] ?? "";
+  const remoteTagIdentityIsCanonical =
+    canonicalRemoteTagIdentityBody.length > 0 &&
+    remoteTagIdentityBodies.every((body) => body === canonicalRemoteTagIdentityBody) &&
+    remoteTagIdentityRuns.every((body, index) => {
+      const expectedCalls = remoteTagIdentityExpectedCalls[index];
+      return (
+        expectedCalls !== undefined &&
+        (body.match(/^[ \t]*assert_remote_tag_identity[ \t]*$/gmu) ?? []).length === expectedCalls &&
+        mutationMatchCount(body, "assert_remote_tag_identity") === expectedCalls + 1
+      );
+    }) &&
+    createHash("sha256").update(canonicalRemoteTagIdentityBody, "utf8").digest("hex") ===
+      "1c4171ada2237d39b1bcbd02a23ce69a6db4ed3843421d865ebb8795b7bdba76";
   if (
     inputs.release.includes("npm run mcpb:build") ||
     !inputs.release.includes("Download exact CI-gated Basic MCPB release asset") ||
@@ -1651,6 +2563,7 @@ function mcpbContractProblems(inputs: {
     !inputs.integrity.includes("state.integrity !== expectedIntegrity") ||
     !inputs.integrity.includes("evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])") ||
     !inputs.integrity.includes("export function evaluateMcpbReleaseState") ||
+    !inputs.integrity.includes("export function evaluateConvergentCount") ||
     !inputs.integrity.includes("export function evaluateReleaseChecks") ||
     !inputs.integrity.includes("export function flattenPaginatedArrays") ||
     !inputs.integrity.includes("export function flattenPaginatedField") ||
@@ -1661,12 +2574,21 @@ function mcpbContractProblems(inputs: {
     !inputs.integrity.includes("duplicate required CI job in exact workflow-run attempt") ||
     !inputs.integrity.includes("Number.isSafeInteger(value)") ||
     !inputs.integrity.includes("GitHub release state must explicitly contain release and assets") ||
+    !inputs.integrity.includes("release.name !== expected.name") ||
+    !inputs.integrity.includes("release.body !== expected.body") ||
+    !inputs.integrity.includes("name: process.env.EXPECTED_RELEASE_NAME") ||
+    !inputs.integrity.includes("body: process.env.EXPECTED_RELEASE_BODY") ||
     !inputs.integrity.includes("isExactSha256DigestOrNull") ||
     !inputs.integrity.includes("paginated asset element has an invalid identity") ||
     !inputs.integrity.includes("export function candidateRunIds") ||
     !inputs.integrity.includes("export function evaluateMcpbCandidateRun") ||
     !inputs.integrity.includes("export function assertMcpbAssetVersion") ||
     !inputs.integrity.includes("export function assertChannelVersionAdvance") ||
+    !inputs.integrity.includes('asset.state !== "uploaded"') ||
+    !inputs.integrity.includes('asset.content_type !== "application/octet-stream"') ||
+    !inputs.integrity.includes("asset.size <= 0") ||
+    !inputs.integrity.includes("/^sha256:[0-9a-f]{64}$/u.test(asset.digest)") ||
+    !inputs.integrity.includes('if (prerelease !== "true" && prerelease !== "false")') ||
     inputs.integrity.includes("release.target_commitish") ||
     !inputs.release.includes('node scripts/check-release-integrity.mjs asset-version "$VERSION"') ||
     !inputs.release.includes("node scripts/check-release-integrity.mjs candidate-runs") ||
@@ -1675,6 +2597,8 @@ function mcpbContractProblems(inputs: {
     !/node scripts\/check-release-integrity\.mjs \\\s+candidate/u.test(inputs.release) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
     (inputs.release.match(/release-state "\$TAG" "\$EXPECTED_PRERELEASE"/g) ?? []).length !== 3 ||
+    (inputs.release.match(/EXPECTED_RELEASE_NAME="\$TAG" EXPECTED_RELEASE_BODY="\$NOTES"/g) ?? []).length !== 3 ||
+    (inputs.release.match(/NOTES=\$\(awk -v heading="## \[\$VERSION\] — "/g) ?? []).length !== 3 ||
     inputs.release.includes('release-state "$TAG" "$SOURCE_SHA"') ||
     !inputs.release.includes("build_artifact_id:") ||
     !inputs.release.includes("build_artifact_digest:") ||
@@ -1709,13 +2633,16 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("assets?per_page=100") ||
     inputs.release.includes("/releases/tags/") ||
     inputs.release.includes("gh release download") ||
-    !inputs.release.includes("Existing release asset $NAME differs before npm publication") ||
-    (inputs.release.match(/git ls-remote --tags origin/g) ?? []).length !== 4 ||
+    mutationMatchCount(inputs.release, MCPB_PREFLIGHT_ASSET_COMPARE) !== 1 ||
+    inputs.release.includes("git ls-remote --tags origin") ||
+    !remoteTagIdentityIsCanonical ||
     (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 4 ||
-    (inputs.release.match(/^\s+assert_remote_tag_identity$/gmu) ?? []).length !== 8 ||
-    (inputs.release.match(/"\$RAW_TAG_COUNT" -ne 1/g) ?? []).length !== 4 ||
-    (inputs.release.match(/"\$PEELED_TAG_COUNT" -ne 1/g) ?? []).length !== 4 ||
-    (inputs.release.match(/"\$PEELED_TAG_SHA" != "\$SOURCE_SHA"/g) ?? []).length !== 4 ||
+    (inputs.release.match(/git\/ref\/tags\/\$TAG/g) ?? []).length !== 8 ||
+    (inputs.release.match(/git\/tags\/\$TAG_OBJECT_SHA/g) ?? []).length !== 4 ||
+    (inputs.release.match(/TAG_REF_CONFIRM_JSON/g) ?? []).length !== 8 ||
+    (inputs.release.match(/\.sha == \$tag_object_sha and \.tag == \$tag/g) ?? []).length !== 4 ||
+    (inputs.release.match(/\.type == "commit" and \.sha == \$sha/g) ?? []).length !== 4 ||
+    (inputs.release.match(/\.type == "tag" and \.sha == \$sha/g) ?? []).length !== 4 ||
     inputs.release.includes("target_commitish") ||
     inputs.release.includes("--target") ||
     !inputs.release.includes("--verify-tag") ||
@@ -1723,24 +2650,18 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("Published release $TAG is partial") ||
     !inputs.release.includes("Final release contains unexpected asset") ||
     !inputs.release.includes("Final release does not contain exactly one $NAME") ||
-    !inputs.release.includes(`gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`) ||
     !inputs.release.includes("group: release-publication") ||
     !inputs.release.includes("cancel-in-progress: false") ||
-    !inputs.release.includes("CURRENT_UPLOAD_URL=$(printf '%s' \"$CURRENT_RELEASE\" | jq -r '.upload_url')") ||
+    !inputs.release.includes("CONFIRM_UPLOAD_URL=$(printf '%s' \"$CONFIRM_RELEASE\" | jq -er") ||
+    !inputs.release.includes('[ "$CONFIRM_UPLOAD_URL" != "$EXPECTED_UPLOAD_URL" ]') ||
+    !inputs.release.includes(`UPLOAD_BASE=\${CONFIRM_UPLOAD_URL%%\\{*}`) ||
     !inputs.release.includes(
       `https://uploads.github.com/repos/\${{ github.repository }}/releases/$RELEASE_ID/assets`
     ) ||
     !inputs.release.includes("ENCODED_NAME=$(printf '%s' \"$NAME\" | jq -sRr @uri)") ||
-    !inputs.release.includes(uploadPost) ||
-    !inputs.release.includes('--data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME"') ||
+    !inputs.release.includes('--data-binary "@$LOCAL_ASSET"') ||
     inputs.release.includes("--hostname uploads.github.com") ||
-    !freshUploadOrderIsSafe ||
-    !inputs.release.includes(publicationTagProof) ||
-    !inputs.release.includes(finalPostconditionTagProof) ||
-    !inputs.release.includes(`PUBLISH_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID")`) ||
-    (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 3 ||
-    inputs.release.lastIndexOf("node scripts/check-release-integrity.mjs channel-advance") >
-      inputs.release.indexOf(MCPB_EXACT_NPM_PUBLISH) ||
+    (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 4 ||
     !inputs.release.includes("assert_stable_github_advance") ||
     !inputs.release.includes("is not GitHub's latest release before npm publication") ||
     !inputs.release.includes('"$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"') ||
@@ -1751,8 +2672,8 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('"$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION"') ||
     !inputs.release.includes('"$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION"') ||
     !inputs.release.includes(MCPB_NPM_CHANNEL_ADVANCE) ||
-    (inputs.release.match(/cmp -s "\$LOCAL_ASSET"/g) ?? []).length !== 3 ||
     (inputs.release.includes("gh release upload") && inputs.release.includes("--clobber")) ||
+    githubReleaseTransactionProblems(inputs.release).length !== 0 ||
     !inputs.release.includes("SOURCE_SHA=$(git rev-parse HEAD)") ||
     !inputs.release.includes("source_sha: process.env.SOURCE_SHA") ||
     !inputs.release.includes("build_workflow_run:") ||
@@ -2209,6 +3130,7 @@ describe("release identity and exact required-job gate", () => {
     expect(nodeFloorCiProblems(ci, pkg.engines?.node)).toEqual([]);
     expect(remoteGateScriptProblems(packageConsumer, protocolConformance)).toEqual([]);
     expect(releasePollProblems(workflow)).toEqual([]);
+    expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
 
     expect(assertMcpbAssetVersion("4.0.0-rc.2")).toBe("4.0.0-rc.2");
@@ -2350,21 +3272,41 @@ describe("release identity and exact required-job gate", () => {
     const releaseExpected = {
       tag: "v4.0.0-rc.2",
       prerelease: true,
+      name: "v4.0.0-rc.2",
+      body: "Canonical release notes",
       assetNames: ["a", "b"]
     };
     const draftRelease = {
       id: 100,
       tag_name: releaseExpected.tag,
       target_commitish: "main",
+      name: releaseExpected.name,
+      body: releaseExpected.body,
       prerelease: releaseExpected.prerelease,
       draft: true
     };
     const assetA = releaseAsset("a", 101);
     const assetB = releaseAsset("b", 102);
+    const sixNames = ["a", "b", "c", "d", "e", "f"];
+    const sixAssets = sixNames.map((name, index) => releaseAsset(name, 101 + index));
+    const sixExpected = { ...releaseExpected, assetNames: sixNames };
     expect(evaluateMcpbReleaseState({ release: null, assets: [] }, releaseExpected)).toEqual({
       action: "create_draft",
       missing: ["a", "b"]
     });
+    for (const malformedExpected of [
+      null,
+      {},
+      { ...releaseExpected, tag: "" },
+      { ...releaseExpected, prerelease: "true" },
+      { ...releaseExpected, name: "" },
+      { ...releaseExpected, body: "" },
+      { ...releaseExpected, assetNames: null },
+      { ...releaseExpected, assetNames: ["a", ""] },
+      { ...releaseExpected, assetNames: ["a", "a"] }
+    ]) {
+      expect(() => evaluateMcpbReleaseState({ release: null, assets: [] }, malformedExpected)).toThrow();
+    }
     expect(evaluateMcpbReleaseState({ release: draftRelease, assets: [assetA] }, releaseExpected)).toEqual({
       action: "resume_draft",
       missing: ["b"]
@@ -2379,6 +3321,14 @@ describe("release identity and exact required-job gate", () => {
         releaseExpected
       )
     ).toEqual({ action: "reuse_published", missing: [] });
+    expect(evaluateMcpbReleaseState({ release: draftRelease, assets: sixAssets }, sixExpected)).toEqual({
+      action: "publish_draft",
+      missing: []
+    });
+    expect(evaluateMcpbReleaseState({ release: draftRelease, assets: [...sixAssets].reverse() }, sixExpected)).toEqual({
+      action: "publish_draft",
+      missing: []
+    });
     expect(() =>
       evaluateMcpbReleaseState(
         { release: { ...draftRelease, draft: false, immutable: true }, assets: [assetA] },
@@ -2388,6 +3338,12 @@ describe("release identity and exact required-job gate", () => {
     expect(() =>
       evaluateMcpbReleaseState({ release: { ...draftRelease, tag_name: "v4.0.0-rc.1" }, assets: [] }, releaseExpected)
     ).toThrow(/identity diverged/);
+    expect(() =>
+      evaluateMcpbReleaseState({ release: { ...draftRelease, name: "phishing title" }, assets: [] }, releaseExpected)
+    ).toThrow(/metadata/);
+    expect(() =>
+      evaluateMcpbReleaseState({ release: { ...draftRelease, body: "stale notes" }, assets: [] }, releaseExpected)
+    ).toThrow(/metadata/);
     expect(() =>
       evaluateMcpbReleaseState({ release: draftRelease, assets: [{ ...assetA, name: "unexpected" }] }, releaseExpected)
     ).toThrow(/unexpected/);
@@ -2400,17 +3356,119 @@ describe("release identity and exact required-job gate", () => {
         releaseExpected
       )
     ).toThrow(/duplicate GitHub release asset id/);
+    expect(() =>
+      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ ...assetA, state: "starter" }] }, releaseExpected)
+    ).toThrow(/manual recovery/);
+    for (const malformedAsset of [
+      { ...assetA, state: "" },
+      { ...assetA, state: null },
+      { ...assetA, content_type: "text/plain" },
+      { ...assetA, content_type: null },
+      { ...assetA, size: 0 },
+      { ...assetA, size: -1 },
+      { ...assetA, size: 1.5 },
+      { ...assetA, size: Number.MAX_SAFE_INTEGER + 1 },
+      { ...assetA, size: "101" },
+      { ...assetA, digest: null },
+      { ...assetA, digest: "sha256:short" },
+      { ...assetA, digest: `sha256:${"A".repeat(64)}` },
+      { ...assetA, digest: `sha512-${"a".repeat(64)}` }
+    ]) {
+      expect(() =>
+        evaluateMcpbReleaseState({ release: draftRelease, assets: [malformedAsset] }, releaseExpected)
+      ).toThrow();
+    }
     for (const malformedState of [
       {},
       { release: null },
       { release: null, assets: null },
+      { release: null, assets: [assetA] },
       { release: undefined, assets: [] },
       { release: { ...draftRelease, id: 0 }, assets: [] },
       { release: { ...draftRelease, id: 1.5 }, assets: [] },
       { release: { ...draftRelease, id: Number.MAX_SAFE_INTEGER + 1 }, assets: [] },
-      { release: draftRelease, assets: [{ ...assetA, id: 0 }] }
+      { release: { ...draftRelease, id: "100" }, assets: [] },
+      { release: draftRelease, assets: [{ ...assetA, id: 0 }] },
+      { release: draftRelease, assets: [{ ...assetA, id: "101" }] },
+      { release: draftRelease, assets: [{ ...assetA, id: Number.MAX_SAFE_INTEGER + 1 }] }
     ]) {
       expect(() => evaluateMcpbReleaseState(malformedState, releaseExpected)).toThrow();
+    }
+    expect(evaluateConvergentCount(0, 1, 1, 12, "draft")).toEqual({ action: "retry", attempt: 1 });
+    expect(evaluateConvergentCount(1, 1, 2, 12, "draft")).toEqual({ action: "ready", attempt: 2 });
+    expect(evaluateConvergentCount(4, 6, 10, 12, "assets")).toEqual({ action: "retry", attempt: 10 });
+    expect(evaluateConvergentCount(6, 6, 11, 12, "assets")).toEqual({ action: "ready", attempt: 11 });
+    expect(() => evaluateConvergentCount(2, 1, 1, 12, "draft")).toThrow(/expected exactly 1/);
+    expect(() => evaluateConvergentCount(5, 6, 12, 12, "assets")).toThrow(/did not converge/);
+    for (const [observed, expected, attempt, maxAttempts, label] of [
+      [-1, 1, 1, 12, "draft"],
+      [0, 0, 1, 12, "draft"],
+      [0, 1, 0, 12, "draft"],
+      [0, 1, 1, 0, "draft"],
+      [0, 1, 13, 12, "draft"],
+      [0, 1, 1, 12, ""],
+      [0.5, 1, 1, 12, "draft"],
+      [0, 1.5, 1, 12, "draft"],
+      [0, 1, 1.5, 12, "draft"],
+      [0, 1, 1, 12.5, "draft"],
+      [Number.MAX_SAFE_INTEGER + 1, 1, 1, 12, "draft"],
+      [0, 1, 1, Number.MAX_SAFE_INTEGER + 1, "draft"],
+      ["0", 1, 1, 12, "draft"],
+      [0, 1, 1, 12, 42]
+    ]) {
+      expect(() => evaluateConvergentCount(observed, expected, attempt, maxAttempts, label)).toThrow(/invalid/);
+    }
+    const releaseCliEnv = {
+      EXPECTED_RELEASE_NAME: releaseExpected.name,
+      EXPECTED_RELEASE_BODY: releaseExpected.body
+    };
+    const releaseCli = runReleaseIntegrityCli(
+      ["release-state", releaseExpected.tag, "true", "a", "b"],
+      JSON.stringify({ release: draftRelease, assets: [assetA] }),
+      releaseCliEnv
+    );
+    expect(releaseCli.status).toBe(0);
+    expect(JSON.parse(releaseCli.stdout)).toEqual({ action: "resume_draft", missing: ["b"] });
+    const publishedReleaseCli = runReleaseIntegrityCli(
+      ["release-state", releaseExpected.tag, "false", "a", "b"],
+      JSON.stringify({
+        release: { ...draftRelease, prerelease: false, draft: false, immutable: true },
+        assets: [assetA, assetB]
+      }),
+      releaseCliEnv
+    );
+    expect(publishedReleaseCli.status).toBe(0);
+    expect(JSON.parse(publishedReleaseCli.stdout)).toEqual({ action: "reuse_published", missing: [] });
+    expect(
+      runReleaseIntegrityCli(
+        ["release-state", releaseExpected.tag, "TRUE", "a", "b"],
+        JSON.stringify({ release: draftRelease, assets: [assetA] }),
+        releaseCliEnv
+      ).status
+    ).not.toBe(0);
+    expect(
+      runReleaseIntegrityCli(
+        ["release-state", releaseExpected.tag, "true", "a", "b"],
+        JSON.stringify({ release: draftRelease, assets: [assetA] })
+      ).status
+    ).not.toBe(0);
+    const visibilityCli = runReleaseIntegrityCli(["visibility", "0", "1", "1", "12", "draft"]);
+    expect(visibilityCli.status).toBe(0);
+    expect(JSON.parse(visibilityCli.stdout)).toEqual({ action: "retry", attempt: 1 });
+    const assetVisibilityRetryCli = runReleaseIntegrityCli(["visibility", "4", "6", "10", "12", "assets"]);
+    expect(assetVisibilityRetryCli.status).toBe(0);
+    expect(JSON.parse(assetVisibilityRetryCli.stdout)).toEqual({ action: "retry", attempt: 10 });
+    const assetVisibilityReadyCli = runReleaseIntegrityCli(["visibility", "6", "6", "11", "12", "assets"]);
+    expect(assetVisibilityReadyCli.status).toBe(0);
+    expect(JSON.parse(assetVisibilityReadyCli.stdout)).toEqual({ action: "ready", attempt: 11 });
+    for (const args of [
+      ["visibility", "01", "1", "1", "12", "draft"],
+      ["visibility", "0.5", "1", "1", "12", "draft"],
+      ["visibility", "9007199254740992", "1", "1", "12", "draft"],
+      ["visibility", "0", "1", "1", "0", "draft"],
+      ["visibility", "0", "1", "1", "12"]
+    ]) {
+      expect(runReleaseIntegrityCli(args).status).not.toBe(0);
     }
 
     const candidateRun10 = { ...TRUSTED_CI_RUN, id: 10 };
@@ -2613,15 +3671,38 @@ describe("release identity and exact required-job gate", () => {
       releasePollProblems(
         replaceExactly(
           workflow,
-          'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"',
-          'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 138000))" >> "$GITHUB_ENV"'
+          "          SHA=$(git rev-parse HEAD)",
+          '          node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"\n' +
+            "          SHA=$(git rev-parse HEAD)"
+        )
+      )
+    ).toContain("release gate must prove main ancestry before executing repository-owned code");
+    expect(
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          'echo "epoch=$((NOW + 13800))" >> "$GITHUB_OUTPUT"',
+          'echo "epoch=$((NOW + 138000))" >> "$GITHUB_OUTPUT"'
         )
       )
     ).toContain("release polling must outlive the blocking package-consumer matrix and leave publication headroom");
     expect(
-      releasePollProblems(replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, 4))
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          `RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}`,
+          "RELEASE_JOB_DEADLINE_EPOCH: 9999999999",
+          GH_READ_GUARD_COUNT
+        )
+      )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
-    expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 5))).toContain(
+    expect(mutationMatchCount(workflow, RAW_GH_READ_DEADLINE_GUARD)).toBe(GH_READ_GUARD_COUNT);
+    expect(
+      releasePollProblems(
+        replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, GH_READ_GUARD_COUNT)
+      )
+    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
+    expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 6))).toContain(
       "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
     );
     expect(
@@ -2634,14 +3715,7 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(
-      releasePollProblems(
-        replaceExactly(
-          workflow,
-          `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
-          `gh_read api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
-          2
-        )
-      )
+      releasePollProblems(replaceExactly(workflow, `"$GH_BIN" api --method PATCH`, `gh_read api --method PATCH`))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none"))).toContain(
       "release must grant read-only Actions API access for the exact-SHA MCPB artifact"
@@ -2655,7 +3729,7 @@ describe("release identity and exact required-job gate", () => {
         )
       )
     ).toContain("release checks must bind exact names to one exact ci.yml main-push workflow-run all-execution view");
-    expect(releasePollProblems(replaceExactly(workflow, "flatten-pages release", "jq 'add // []'", 5))).toContain(
+    expect(releasePollProblems(replaceExactly(workflow, "flatten-pages release", "jq 'add // []'", 6))).toContain(
       "every paginated release read must use one strict collection decoder"
     );
     expect(releasePollProblems(replaceExactly(workflow, "--paginate --slurp", "--paginate", 19))).toContain(
@@ -2849,7 +3923,7 @@ describe("release identity and exact required-job gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: replaceExactly(mcpbInputs.release, 'cmp -s "$LOCAL_ASSET" "$REMOTE_ASSET"', "true")
+        release: replaceExactly(mcpbInputs.release, 'cmp -s "$LOCAL_ASSET" "$PREFLIGHT_DIR/$NAME"', "true")
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -2984,6 +4058,7 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
     const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
+    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(NPM_RESERVE_GUARD_COUNT);
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,
@@ -3022,6 +4097,21 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.release,
         MCPB_EXACT_NPM_PUBLISH,
+        `              PACKAGE_TARBALL="/tmp/attacker.tgz"\n${MCPB_EXACT_NPM_PUBLISH}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `              NPM_BIN="/tmp/attacker"\n${MCPB_EXACT_NPM_PUBLISH}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `              NPM_ENV_UNSETS=( )\n${MCPB_EXACT_NPM_PUBLISH}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
         replaceExactly(MCPB_EXACT_NPM_PUBLISH, " --kill-after=10s", "")
       ),
       replaceExactly(
@@ -3029,22 +4119,65 @@ describe("release identity and exact required-job gate", () => {
         MCPB_EXACT_NPM_PUBLISH,
         replaceExactly(MCPB_EXACT_NPM_PUBLISH, " --ignore-scripts", "")
       ),
+      replaceExactly(mcpbInputs.release, "--strict-ssl=true", "--strict-ssl=false"),
+      replaceExactly(mcpbInputs.release, "--fetch-retries=0", "--fetch-retries=1"),
+      replaceExactly(
+        mcpbInputs.release,
+        "npm_config_proxy|npm_config_https_proxy",
+        "npm_config_proxy|npm_config_wrong_proxy"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `NPM_ENV_KEY_CANONICAL=\${NPM_ENV_KEY_CANONICAL//-/_}`,
+        `NPM_ENV_KEY_CANONICAL=\${NPM_ENV_KEY_CANONICAL//_/-}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '            case "$NPM_ENV_KEY_CANONICAL" in',
+        '            NPM_ENV_KEY_CANONICAL=other\n            case "$NPM_ENV_KEY_CANONICAL" in'
+      ),
+      replaceExactly(mcpbInputs.release, 'NPM_CONFIG_STRICT_SSL: "true"', 'NPM_CONFIG_STRICT_SSL: "false"'),
       replaceExactly(mcpbInputs.release, 'NPM_CONFIG_FETCH_RETRIES: "0"', 'NPM_CONFIG_FETCH_RETRIES: "1"'),
       replaceExactly(mcpbInputs.release, "--max-filesize 67108864 --retry 0", "--max-filesize 67108864 --retry 1"),
       replaceExactly(mcpbInputs.release, '[ "$status" != "200" ]', '[ "$status" = "500" ]'),
-      replaceExactly(mcpbInputs.release, "Accept: application/json", "Accept: application/vnd.npm.install-v1+json"),
+      replaceExactly(
+        mcpbInputs.release,
+        '--header "Accept: application/json" --header "Cache-Control: no-cache"',
+        '--header "Accept: application/vnd.npm.install-v1+json" --header "Cache-Control: no-cache"'
+      ),
       replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
       replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
       replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
-      replaceExactly(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD, MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD),
-      replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
-      replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
+      replaceExactly(
+        mcpbInputs.release,
+        RAW_NPM_RESERVE_DEADLINE_GUARD,
+        MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD,
+        NPM_RESERVE_GUARD_COUNT
+      ),
       replaceAllExactly(
         mcpbInputs.release,
-        '"$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin',
-        '"$TIMEOUT_BIN" --kill-after=10s 600s git ls-remote --tags origin',
-        4
+        'if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then',
+        "if now=$(/bin/date +%s); then",
+        GH_READ_GUARD_COUNT + NPM_RESERVE_GUARD_COUNT
       ),
+      replaceExactly(
+        mcpbInputs.release,
+        'NPM_CONFIG_USERCONFIG=$(/usr/bin/mktemp "$RUNNER_TEMP/enquire-npmrc.XXXXXX")',
+        'NPM_CONFIG_USERCONFIG="$GITHUB_WORKSPACE/.npmrc"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '              cd "$NPM_PUBLISH_CWD" || exit 125',
+        '              cd "$GITHUB_WORKSPACE"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "                --@oomkapwn:registry=https://registry.npmjs.org/ \\",
+        "                --@oomkapwn:registry=https://attacker.invalid/ \\"
+      ),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
+      replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
+      replaceAllExactly(mcpbInputs.release, "            local limit=20", "            local limit=200", 5),
       replaceExactly(
         mcpbInputs.release,
         '            require_job_reserve 2100 "npm publish"\n            assert_remote_tag_identity',
@@ -3135,48 +4268,609 @@ describe("release identity and exact required-job gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    const freshUploadClassifier = "CURRENT_ACTION=$(printf '%s' \"$CURRENT_STATE\" | release_state | jq -r '.action')";
-    const releaseWithoutFreshUploadClassifier = replaceExactly(
-      mcpbInputs.release,
-      freshUploadClassifier,
-      'CURRENT_ACTION="resume_draft"'
-    );
-    const classifierAfterUpload = replaceExactly(
-      releaseWithoutFreshUploadClassifier,
-      "curl --fail-with-body --silent --show-error --request POST",
-      `curl --fail-with-body --silent --show-error --request POST\n              ${freshUploadClassifier}`
-    );
-    expect(mcpbContractProblems({ ...mcpbInputs, release: classifierAfterUpload })).toContain(
-      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-    );
-    const uploadTagProof =
-      "              assert_remote_tag_identity\n              curl --fail-with-body --silent --show-error --request POST";
-    const releaseWithoutUploadTagProof = replaceExactly(
-      mcpbInputs.release,
-      uploadTagProof,
-      "              curl --fail-with-body --silent --show-error --request POST"
-    );
-    const relocatedUploadTagProof = replaceExactly(
-      releaseWithoutUploadTagProof,
-      '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null',
-      '                --data-binary "@$LOCAL_ASSET" "$UPLOAD_BASE?name=$ENCODED_NAME" >/dev/null\n' +
-        "              assert_remote_tag_identity"
-    );
-    expect(mcpbContractProblems({ ...mcpbInputs, release: relocatedUploadTagProof })).toContain(
-      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    const createWrite = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
+    const uploadWrite = "--fail-with-body --silent --show-error --request POST --retry 0";
+    const uploadCurl = `"$CURL_BIN" --disable \\\n                --fail-with-body --silent --show-error --request POST --retry 0`;
+    const patchWrite = '"$GH_BIN" api --method PATCH';
+    const createTarget = `release create "$TAG" --repo "\${{ github.repository }}"`;
+    const uploadTarget = '"$UPLOAD_BASE?name=$ENCODED_NAME")';
+    const patchTarget = `"repos/\${{ github.repository }}/releases/$RELEASE_ID" "\${PUBLISH_FIELDS[@]}")`;
+    const releaseProjection = "[.[] | {id, name, state, content_type, size, digest}] | sort_by(.name)";
+    const rawCreateChannel =
+      `          if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` +
+      "            CREATE_ARGS+=(--prerelease)\n" +
+      "          fi";
+    const uploadConfirmationMutations = [
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0',
+        'CONFIRM_ACTION" != "resume_draft" ] && [ "$CONFIRM_NAME_COUNT" -ne 0'
+      ),
+      replaceExactly(mcpbInputs.release, 'CONFIRM_NAME_COUNT" -ne 0 ] ||', 'CONFIRM_NAME_COUNT" -ne 0 ] &&'),
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET"',
+        'CONFIRM_ASSET_PROJECTION" = "$CONFIRM_LOCAL_SUBSET"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`,
+        `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CONFIRM_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`,
+        `PREWRITE_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`,
+        `PREWRITE_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`,
+        `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, '--argjson remote "$CURRENT_ASSETS"', '--argjson remote "$CONFIRM_ASSETS"'),
+      replaceExactly(
+        mcpbInputs.release,
+        'PREWRITE_ASSET_PROJECTION" != "$PREWRITE_LOCAL_SUBSET"',
+        'PREWRITE_ASSET_PROJECTION" = "$PREWRITE_LOCAL_SUBSET"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`,
+        `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CURRENT_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`,
+        `CONFIRM_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`,
+        `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, '--argjson remote "$CONFIRM_ASSETS"', '--argjson remote "$CURRENT_ASSETS"'),
+      replaceExactly(
+        mcpbInputs.release,
+        "[$local[] | . as $candidate | select(any($remote[]; .name == $candidate.name))] | sort_by(.name)",
+        "[$remote[]] | sort_by(.name)",
+        2
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              CONFIRM_ACTION="resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              export CONFIRM_ACTION="resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              printf -v CONFIRM_ACTION '%s' "resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              read -r CONFIRM_ACTION <<< "resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          `              CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`,
+        'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          "              CONFIRM_ASSETS=$CURRENT_ASSETS\n" +
+          `              CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`
+      )
+    ];
+    const publicationBoundaryMutations = [
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_PUBLISH_ACTION" != "publish_draft" ] ||',
+        'CONFIRM_PUBLISH_ACTION" = "publish_draft" ] ||'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'CONFIRM_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`,
+        `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`,
+        `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'IMMEDIATE_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'IMMEDIATE_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'PUBLISH_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`,
+        `FINAL_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, "PUBLISH_RELEASE=$CURRENT_RELEASE", "PUBLISH_RELEASE=$FINAL_RELEASE"),
+      replaceExactly(mcpbInputs.release, "PUBLISH_ASSETS=$CURRENT_ASSETS", "PUBLISH_ASSETS=$FINAL_ASSETS"),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`,
+        `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$FINAL_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `FINAL_ACTION=$(printf '%s' "$FINAL_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`,
+        `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`,
+        `--argjson assets "$FINAL_ASSETS" '{release: $release, assets: $assets}')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`,
+        `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `--argjson assets "$CONFIRM_ASSETS" '{release: $release, assets: $assets}')`,
+        `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS\n          PUBLISH_ASSET_IDENTITY="$FINAL_ASSET_IDENTITY"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')\n              export CONFIRM_PUBLISH_ACTION="publish_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          `              CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`,
+        'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          "              CONFIRM_ASSETS=$CURRENT_ASSETS\n" +
+          `              CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if [ "$FINAL_ACTION" = "publish_draft" ]; then',
+        'if [ "$FINAL_ACTION" != "publish_draft" ]; then',
+        2
+      )
+    ];
+    const snapshotShapeMutations = [
+      replaceAllExactly(
+        mcpbInputs.release,
+        "'{release: $release, assets: $assets}')",
+        "'{release: $assets, assets: $release}')",
+        15
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "[.[] | {name, content_type, size, digest}] | sort_by(.name)",
+        "[.[] | {name, content_type, digest}] | sort_by(.name)",
+        3
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "'{release: $release, assets: $assets}')",
+        "'{release: $assets, assets: $release}') # '{release: $release, assets: $assets}')",
+        15
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "'[.[] | {name, content_type, size, digest}] | sort_by(.name)')",
+        "'[.[] | {name, content_type, digest}] | sort_by(.name)') # [.[] | {name, content_type, size, digest}] | sort_by(.name)",
+        3
+      )
+    ];
+    const releaseTransactionMutations = [
+      ...uploadConfirmationMutations,
+      ...publicationBoundaryMutations,
+      ...snapshotShapeMutations,
+      replaceAllExactly(
+        mcpbInputs.release,
+        "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
+        "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
+        6
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")',
+        'GH_CONFIG_DIR="$RUNNER_TEMP"',
+        6
+      ),
+      replaceExactly(mcpbInputs.release, '          SHELLOPTS: ""', '          SHELLOPTS: "xtrace"', 6),
+      replaceExactly(mcpbInputs.release, '          LD_AUDIT: ""', '          LD_AUDIT: "/tmp/evil.so"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          TAR_OPTIONS: ""',
+        '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
+        6
+      ),
+      replaceExactly(mcpbInputs.release, '          GODEBUG: ""', '          GODEBUG: "http2debug=2"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
+        '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
+        6
+      ),
+      replaceExactly(mcpbInputs.release, "          persist-credentials: false", "          persist-credentials: true"),
+      replaceExactly(
+        mcpbInputs.release,
+        `"repos/\${{ github.repository }}/releases/latest" 2>/dev/null)`,
+        `"repos/\${{ github.repository }}/releases/latest" 2>&1)`,
+        2
+      ),
+      replaceExactly(mcpbInputs.release, "select(length == 1) | .[0] |", ".[] |", RELEASE_SINGLETON_DECODER_COUNT),
+      replaceExactly(mcpbInputs.release, "/usr/bin/jq -cse \\", "/usr/bin/jq -ce \\", 2),
+      replaceExactly(mcpbInputs.release, "| /usr/bin/jq -se \\", "| /usr/bin/jq -e \\", 2),
+      replaceExactly(mcpbInputs.release, '[ "$GITHUB_LATEST_EXIT" -ne 4 ]', '[ "$GITHUB_LATEST_EXIT" -ne 2 ]', 2),
+      replaceExactly(
+        mcpbInputs.release,
+        '.message == "Not Found" and .status == "404" and',
+        '(.message | type) == "string" and .status == "404" and',
+        2
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"',
+        'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$REMOTE_BODY"',
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n" +
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
+      ),
+      replaceExactly(mcpbInputs.release, createWrite, `${createWrite}\n          ${createWrite}`),
+      replaceExactly(
+        mcpbInputs.release,
+        createWrite,
+        `CREATE_ARGS=(api -f draft=true "repos/attacker/repo/releases")\n          ${createWrite}`
+      ),
+      replaceExactly(mcpbInputs.release, createWrite, `TAG="v0.0.0"\n          ${createWrite}`),
+      replaceExactly(mcpbInputs.release, createTarget, 'release create "v0.0.0" --repo "attacker/repo"'),
+      replaceExactly(
+        mcpbInputs.release,
+        rawCreateChannel,
+        replaceExactly(rawCreateChannel, '!= "latest"', '= "latest"')
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "            CREATE_ARGS+=(--prerelease)",
+        '            CREATE_ARGS+=(--repo "attacker/repo")'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `      - name: Prepare draft GitHub Release
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: ""`,
+        `      - name: Prepare draft GitHub Release
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: "/tmp/untrusted-hook"`
+      ),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 3600 "GitHub draft creation"', "true"),
+      replaceExactly(
+        mcpbInputs.release,
+        '              assert_remote_tag_identity\n              echo "Confirmed exact release $TAG',
+        '              echo "Confirmed exact release $TAG'
+      ),
+      replaceAllExactly(mcpbInputs.release, 'awk -v heading="## [$VERSION] — "', 'awk -v ver="$VERSION"', 3),
+      replaceExactly(mcpbInputs.release, uploadWrite, `${uploadWrite}\n                ${uploadWrite}`),
+      replaceExactly(
+        mcpbInputs.release,
+        uploadCurl,
+        `"$CURL_BIN" \\\n                --fail-with-body --silent --show-error --request POST --retry 0`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
+        "--proto '=https' --tlsv1.2 --max-redirs 0"
+      ),
+      replaceExactly(mcpbInputs.release, "--request POST --retry 0", "--request POST --retry 1"),
+      replaceExactly(mcpbInputs.release, uploadTarget, '"https://uploads.github.com/repos/attacker/repo/assets")'),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=0",
+        '              UPLOAD_BASE="https://attacker.invalid/upload"\n              UPLOAD_EXIT=0'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=0",
+        '              ENCODED_NAME="attacker"\n              UPLOAD_EXIT=0'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=0",
+        '              LOCAL_ASSET="/tmp/attacker"\n              UPLOAD_EXIT=0'
+      ),
+      replaceExactly(mcpbInputs.release, "              UPLOAD_EXIT=0", "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"),
+      replaceExactly(
+        mcpbInputs.release,
+        "              UPLOAD_EXIT=$?",
+        "              UPLOAD_EXIT=$?\n              UPLOAD_STATUS=201"
+      ),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 1500 "release asset upload for $NAME"', "true"),
+      replaceExactly(
+        mcpbInputs.release,
+        "Immediate pre-upload reconciliation for $NAME",
+        "Stale pre-upload reconciliation for $NAME"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "Immediate pre-upload confirmation for $NAME",
+        "Stale pre-upload confirmation for $NAME"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0',
+        'PREWRITE_ACTION" != "resume_draft" ] && [ "$PREWRITE_NAME_COUNT" -ne 0'
+      ),
+      replaceExactly(mcpbInputs.release, "upload_recovery_attempt<=12", "upload_recovery_attempt<=1"),
+      replaceExactly(
+        mcpbInputs.release,
+        '              assert_remote_tag_identity\n            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then',
+        '            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then'
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        releaseProjection,
+        "[.[] | {id, name, state, content_type, size}] | sort_by(.name)",
+        5
+      ),
+      replaceExactly(mcpbInputs.release, patchWrite, `${patchWrite}\n            ${patchWrite}`),
+      replaceExactly(mcpbInputs.release, patchWrite, `RELEASE_ID=1\n            ${patchWrite}`),
+      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS+=(-F draft=true)\n            ${patchWrite}`),
+      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS=(-F draft=true)\n            ${patchWrite}`),
+      replaceExactly(mcpbInputs.release, patchTarget, '"repos/attacker/repo/releases/1"'),
+      replaceExactly(
+        mcpbInputs.release,
+        "PUBLISH_FIELDS+=(-f make_latest=true)",
+        "PUBLISH_FIELDS+=(-f make_latest=false)"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "PUBLISH_FIELDS+=(-f make_latest=false)",
+        "PUBLISH_FIELDS+=(-f make_latest=true)"
+      ),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 2400 "GitHub Release publication"', "true"),
+      replaceExactly(
+        mcpbInputs.release,
+        "Immediate pre-publication reconciliation",
+        "Stale pre-publication reconciliation"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "Immediate pre-publication draft confirmation",
+        "Stale pre-publication draft confirmation"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '            assert_remote_tag_identity\n            if ! refresh_exact_release_assets "Immediate pre-publication',
+        '            if ! refresh_exact_release_assets "Immediate pre-publication'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n              assert_remote_tag_identity',
+        '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n            assert_remote_tag_identity',
+        '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID"); then`,
+        `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/latest"); then`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]',
+        '[ "$LATEST_TAG" = "$TAG" ]'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        createWrite,
+        `"$GH_BIN" api --method POST "repos/attacker/repo/releases"\n          ${createWrite}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        createWrite,
+        `"$GH_BIN" api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        createWrite,
+        `gh api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
+        "--proxy '' --resolve uploads.github.com:443:127.0.0.1 --proto '=https' --tlsv1.2 --max-redirs 0"
+      ),
+      replaceExactly(mcpbInputs.release, uploadTarget, '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'),
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          "$GH_BIN" api --method DELETE "repos/unsafe"\n' +
+          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      )
+    ];
+    for (const [mutationIndex, weakenedReleaseTransaction] of releaseTransactionMutations.entries()) {
+      expect(
+        githubReleaseTransactionProblems(weakenedReleaseTransaction),
+        `release transaction mutation ${mutationIndex + 1} must fail closed`
+      ).not.toEqual([]);
+    }
+    for (const weakenedUploadConfirmation of uploadConfirmationMutations) {
+      expect(githubReleaseTransactionProblems(weakenedUploadConfirmation)).toContain(
+        "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      );
+    }
+    for (const weakenedPublicationBoundary of publicationBoundaryMutations) {
+      expect(githubReleaseTransactionProblems(weakenedPublicationBoundary)).toContain(
+        "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      );
+    }
+    for (const weakenedSnapshotShape of snapshotShapeMutations) {
+      expect(githubReleaseTransactionProblems(weakenedSnapshotShape)).toContain(
+        "release authorization snapshots must preserve their exact state and metadata projections"
+      );
+    }
+    for (const forbiddenReleaseCliMutation of [
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
+        '          echo "$("$GH_BIN" release delete "$TAG")"\n' +
+          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+      )
+    ]) {
+      expect(githubReleaseTransactionProblems(forbiddenReleaseCliMutation)).toEqual([
+        "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      ]);
+    }
+    expect(
+      githubReleaseTransactionProblems(
+        replaceAllExactly(
+          mcpbInputs.release,
+          "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
+          "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
+          6
+        )
+      )
+    ).toContain(
+      "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
     );
     expect(
-      mcpbContractProblems({
-        ...mcpbInputs,
-        release: replaceExactly(
+      githubReleaseTransactionProblems(
+        replaceExactly(
           mcpbInputs.release,
-          '          assert_remote_tag_identity\n          if [ "$FINAL_ACTION" = "publish_draft" ]; then',
-          '          if [ "$FINAL_ACTION" = "publish_draft" ]; then'
+          rawCreateChannel,
+          replaceExactly(rawCreateChannel, '!= "latest"', '= "latest"')
         )
-      })
-    ).toContain(
-      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-    );
+      )
+    ).toContain("draft creation must be one bounded write followed by exact readback without replay");
+    expect(
+      githubReleaseTransactionProblems(
+        replaceExactly(
+          mcpbInputs.release,
+          "Immediate pre-upload confirmation for $NAME",
+          "Stale pre-upload confirmation for $NAME"
+        )
+      )
+    ).toContain("each missing release asset must use one retry-free POST and exact no-replay reconciliation");
+    expect(
+      githubReleaseTransactionProblems(
+        replaceExactly(
+          mcpbInputs.release,
+          "PUBLISH_FIELDS+=(-f make_latest=true)",
+          "PUBLISH_FIELDS+=(-f make_latest=false)"
+        )
+      )
+    ).toContain("release publication must be one bounded PATCH followed by exact-ID convergence without replay");
+    expect(
+      githubReleaseTransactionProblems(
+        replaceExactly(
+          mcpbInputs.release,
+          createWrite,
+          `gh api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
+        )
+      )
+    ).toContain("GitHub Release recovery must expose no delete, clobber, or transport-replay path");
+    for (const weakenedReleaseEvaluator of [
+      replaceExactly(mcpbInputs.integrity, 'asset.state !== "uploaded"', 'asset.state !== "starter"'),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'asset.content_type !== "application/octet-stream"',
+        'asset.content_type !== "text/plain"'
+      ),
+      replaceExactly(mcpbInputs.integrity, "asset.size <= 0", "asset.size < 0"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "/^sha256:[0-9a-f]{64}$/u.test(asset.digest)",
+        "/^sha256:/u.test(asset.digest)"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'prerelease !== "true" && prerelease !== "false"',
+        'prerelease !== "true" && prerelease !== "draft"'
+      ),
+      replaceExactly(mcpbInputs.integrity, "release.name !== expected.name", "release.name !== release.name"),
+      replaceExactly(mcpbInputs.integrity, "release.body !== expected.body", "release.body !== release.body"),
+      replaceExactly(mcpbInputs.integrity, "name: process.env.EXPECTED_RELEASE_NAME", "name: payload?.release?.name"),
+      replaceExactly(mcpbInputs.integrity, "body: process.env.EXPECTED_RELEASE_BODY", "body: payload?.release?.body")
+    ]) {
+      expect(mcpbContractProblems({ ...mcpbInputs, integrity: weakenedReleaseEvaluator })).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
     const lateChannelGuard = replaceExactly(
       mcpbInputs.release,
       MCPB_NPM_CHANNEL_ADVANCE,
@@ -3219,16 +4913,55 @@ describe("release identity and exact required-job gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    for (const [guard, weakenedGuard] of [
-      ['[ "$RAW_TAG_COUNT" -ne 1 ]', '[ "$RAW_TAG_COUNT" -lt 0 ]'],
-      ['[ "$PEELED_TAG_COUNT" -ne 1 ]', '[ "$PEELED_TAG_COUNT" -lt 0 ]'],
-      ['[ "$PEELED_TAG_SHA" != "$SOURCE_SHA" ]', '[ "$PEELED_TAG_SHA" = "$SOURCE_SHA" ]']
+    for (const [guard, weakenedGuard, count] of [
+      [`"repos/\${{ github.repository }}/git/ref/tags/$TAG"`, '"repos/attacker/repo/git/ref/tags/$TAG"', 8],
+      [
+        `"repos/\${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"`,
+        '"repos/attacker/repo/git/tags/$TAG_OBJECT_SHA"',
+        4
+      ],
+      [".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 4],
+      ['.type == "commit" and .sha == $sha', '.type == "commit"', 4],
+      ['.type == "tag" and .sha == $sha', '.type == "tag"', 4]
     ] as const) {
       expect(
         mcpbContractProblems({
           ...mcpbInputs,
-          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, 4)
+          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, count)
         })
+      ).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
+    for (const [label, weakenedRelease] of [
+      [
+        "alternate definition",
+        replaceExactly(
+          mcpbInputs.release,
+          "          assert_stable_github_advance() {",
+          "          function assert_remote_tag_identity { return 0; }\n" + "          assert_stable_github_advance() {"
+        )
+      ],
+      [
+        "definition suffix",
+        replaceExactly(
+          mcpbInputs.release,
+          "          }\n          assert_stable_github_advance() {",
+          "          }; exit 0\n          assert_stable_github_advance() {"
+        )
+      ],
+      [
+        "comment-disabled call",
+        replaceExactly(
+          mcpbInputs.release,
+          "          assert_remote_tag_identity\n          # A retry may reuse",
+          "          true # assert_remote_tag_identity\n          # A retry may reuse"
+        )
+      ]
+    ] as const) {
+      expect(
+        mcpbContractProblems({ ...mcpbInputs, release: weakenedRelease }),
+        `remote tag identity ${label} must invalidate release provenance`
       ).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
       );
@@ -3240,7 +4973,7 @@ describe("release identity and exact required-job gate", () => {
           mcpbInputs.release,
           `"repos/\${{ github.repository }}/releases?per_page=100"`,
           `"repos/\${{ github.repository }}/releases/tags/$TAG"`,
-          5
+          6
         )
       })
     ).toContain(

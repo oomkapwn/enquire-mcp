@@ -478,18 +478,25 @@ export function evaluateNpmPublication(state, expectedSha, expectedIntegrity, ex
  * Basic asset-name contract.
  *
  * @param {unknown} input - GitHub release and asset snapshot.
- * @param {unknown} expected - Expected tag, channel, and asset names.
+ * @param {unknown} expected - Expected tag, channel, public metadata, and asset names.
  * @returns {{action:"create_draft"|"resume_draft"|"publish_draft"|"reuse_published",missing:string[]}}
  *   Safe next action and the exact missing asset names.
  */
 export function evaluateMcpbReleaseState(input, expected) {
   const expectedNames = Array.isArray(expected?.assetNames) ? expected.assetNames : [];
   if (
+    typeof expected?.tag !== "string" ||
+    expected.tag.length === 0 ||
+    typeof expected?.prerelease !== "boolean" ||
+    typeof expected?.name !== "string" ||
+    expected.name.length === 0 ||
+    typeof expected?.body !== "string" ||
+    expected.body.length === 0 ||
     expectedNames.length === 0 ||
     expectedNames.some((name) => typeof name !== "string" || name.length === 0) ||
     new Set(expectedNames).size !== expectedNames.length
   ) {
-    throw new Error("expected Basic release asset names must be a non-empty unique list");
+    throw new Error("expected Basic release identity and asset names must be complete and canonical");
   }
   if (!isRecord(input) || !Object.hasOwn(input, "release") || !Array.isArray(input.assets)) {
     throw new Error("GitHub release state must explicitly contain release and assets");
@@ -504,10 +511,12 @@ export function evaluateMcpbReleaseState(input, expected) {
     !isRecord(release) ||
     !isPositiveSafeInteger(release.id) ||
     release.tag_name !== expected.tag ||
+    release.name !== expected.name ||
+    release.body !== expected.body ||
     release.prerelease !== expected.prerelease ||
     typeof release.draft !== "boolean"
   ) {
-    throw new Error("GitHub release id, tag, channel, or draft identity diverged");
+    throw new Error("GitHub release id, tag, public metadata, channel, or draft identity diverged");
   }
   const counts = new Map();
   const assetIds = new Set();
@@ -520,6 +529,21 @@ export function evaluateMcpbReleaseState(input, expected) {
     }
     if (assetIds.has(asset.id)) throw new Error(`duplicate GitHub release asset id: ${String(asset.id)}`);
     assetIds.add(asset.id);
+    if (asset.state !== "uploaded") {
+      throw new Error(
+        `GitHub release asset ${asset.name} is not uploaded (state ${String(asset.state)}); ` +
+          `manual recovery is required for asset id ${String(asset.id)}`
+      );
+    }
+    if (asset.content_type !== "application/octet-stream") {
+      throw new Error(`GitHub release asset ${asset.name} has an unexpected content type`);
+    }
+    if (!Number.isSafeInteger(asset.size) || asset.size <= 0) {
+      throw new Error(`GitHub release asset ${asset.name} has an invalid uploaded size`);
+    }
+    if (typeof asset.digest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(asset.digest)) {
+      throw new Error(`GitHub release asset ${asset.name} lacks an exact SHA-256 digest`);
+    }
     counts.set(asset.name, (counts.get(asset.name) ?? 0) + 1);
   }
   for (const [name, count] of counts) {
@@ -532,6 +556,44 @@ export function evaluateMcpbReleaseState(input, expected) {
   }
   if (!release.draft) return { action: "reuse_published", missing: [] };
   return { action: missing.length === 0 ? "publish_draft" : "resume_draft", missing };
+}
+
+/**
+ * Classify one observation in a bounded eventually-consistent count transition.
+ *
+ * @param {unknown} observed - Current authoritative collection count.
+ * @param {unknown} expected - Exact count required by the postcondition.
+ * @param {unknown} attempt - One-based current observation number.
+ * @param {unknown} maxAttempts - Positive bounded observation count.
+ * @param {unknown} label - Human-readable external identity.
+ * @returns {{action:"ready"|"retry",attempt:number}} The only safe next action.
+ * @example
+ * evaluateConvergentCount(0, 1, 1, 12, "draft release"); // { action: "retry", attempt: 1 }
+ */
+export function evaluateConvergentCount(observed, expected, attempt, maxAttempts, label) {
+  if (
+    !Number.isSafeInteger(observed) ||
+    !Number.isSafeInteger(expected) ||
+    !Number.isSafeInteger(attempt) ||
+    !Number.isSafeInteger(maxAttempts) ||
+    observed < 0 ||
+    expected < 1 ||
+    attempt < 1 ||
+    maxAttempts < 1 ||
+    attempt > maxAttempts ||
+    typeof label !== "string" ||
+    label.length === 0
+  ) {
+    throw new Error("external visibility observation is invalid");
+  }
+  if (observed > expected) {
+    throw new Error(`${label} has ${observed} objects; expected exactly ${expected}`);
+  }
+  if (observed === expected) return { action: "ready", attempt };
+  if (attempt === maxAttempts) {
+    throw new Error(`${label} did not converge to ${expected} objects after ${maxAttempts} observations`);
+  }
+  return { action: "retry", attempt };
 }
 
 /**
@@ -660,7 +722,7 @@ function usage() {
     "Usage: check-release-integrity.mjs",
     "assert-tag <tag> <version> | asset-version <version> | channel-advance <candidate> <current> <channel> |",
     "checks <source-sha> | flatten-pages <release|asset> | flatten-field <workflow_runs|jobs|artifacts> |",
-    "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state |",
+    "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state | visibility |",
     "candidate-runs <source-sha> | candidate <source-sha>"
   ].join(" ");
 }
@@ -689,14 +751,41 @@ if (isEntrypoint(import.meta.url)) {
       console.log(JSON.stringify(evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])));
     } else if (mode === "release-state") {
       const [tag, prerelease, ...assetNames] = process.argv.slice(3);
+      if (prerelease !== "true" && prerelease !== "false") {
+        throw new Error("expected GitHub prerelease state must be exactly true or false");
+      }
       const payload = JSON.parse(readFileSync(0, "utf8"));
       console.log(
         JSON.stringify(
           evaluateMcpbReleaseState(payload, {
             tag,
             prerelease: prerelease === "true",
+            name: process.env.EXPECTED_RELEASE_NAME,
+            body: process.env.EXPECTED_RELEASE_BODY,
             assetNames
           })
+        )
+      );
+    } else if (mode === "visibility") {
+      const parseCanonicalInteger = (value, label) => {
+        if (typeof value !== "string" || !/^(0|[1-9]\d*)$/u.test(value)) {
+          throw new Error(`${label} must be one canonical non-negative integer`);
+        }
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed)) {
+          throw new Error(`${label} must be one canonical non-negative integer`);
+        }
+        return parsed;
+      };
+      console.log(
+        JSON.stringify(
+          evaluateConvergentCount(
+            parseCanonicalInteger(first, "observed visibility count"),
+            parseCanonicalInteger(second, "expected visibility count"),
+            parseCanonicalInteger(process.argv[5], "visibility attempt"),
+            parseCanonicalInteger(process.argv[6], "maximum visibility attempts"),
+            process.argv[7]
+          )
         )
       );
     } else if (mode === "candidate-runs") {

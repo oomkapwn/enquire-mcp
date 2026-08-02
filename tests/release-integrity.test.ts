@@ -1374,9 +1374,7 @@ function mcpbContractProblems(inputs: {
   const npmRegistryMutationCommands = npmPublishRun
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) =>
-      /^(?:(?:command|exec)\s+)?(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:dist-tag|unpublish)\b/u.test(line)
-    );
+    .filter((line) => /^(?:(?:command|exec)\s+)?(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:dist-tag|unpublish)\b/u.test(line));
   const npmPackPublishExpectedTail = [
     'echo "::error::npm pack did not produce exactly one canonical tarball"',
     'echo "::error::npm pack returned a divergent package name or version"',

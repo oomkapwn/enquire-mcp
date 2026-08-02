@@ -266,6 +266,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   const mcpbPackageJob = yamlRecord(jobs?.["mcpb-basic-package"]);
   const mcpbMatrixJob = yamlRecord(jobs?.["mcpb-basic-matrix"]);
   const mcpbAggregateJob = yamlRecord(jobs?.["mcpb-basic"]);
+  const dockerJob = yamlRecord(jobs?.docker);
   if (!testJob) return ["missing test job"];
   if (major !== "22") {
     problems.push("engines.node major changed; update the stable release-check inventory");
@@ -609,15 +610,15 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     const exportStep = namedStep(packageSteps, "Export inspectable canonical MCPB candidate and transparency records");
     const exportWith = yamlRecord(exportStep?.with);
     const exportPath = typeof exportWith?.path === "string" ? exportWith.path : "";
+    const packageEnv = yamlRecord(mcpbPackageJob.env);
     if (
       mcpbPackageJob.name !== "mcpb-basic-package" ||
       mcpbPackageJob["runs-on"] !== "ubuntu-latest" ||
-      mcpbPackageJob["timeout-minutes"] !== 30 ||
       "needs" in mcpbPackageJob ||
       "if" in mcpbPackageJob ||
       "continue-on-error" in mcpbPackageJob ||
-      yamlRecord(mcpbPackageJob.env)?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
-      yamlRecord(mcpbPackageJob.env)?.NPM_CONFIG_SCRIPT_SHELL !== "/bin/bash" ||
+      packageEnv?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
+      packageEnv?.NPM_CONFIG_SCRIPT_SHELL !== "/bin/bash" ||
       yamlRecord(setup?.with)?.["node-version"] !== floor ||
       !hasRunLine(install, "npm ci && break") ||
       yamlRecord(mcpbPackageJob.outputs)?.artifact_name !== `\${{ steps.artifact_identity.outputs.name }}` ||
@@ -641,6 +642,94 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
         "mcpb-basic package job must build, verify, and export one fail-closed canonical Linux bundle with inventory, SBOM, and notices"
       );
     }
+
+    const workflowPermissions = yamlRecord(document?.permissions);
+    const packagePermissions = yamlRecord(mcpbPackageJob.permissions);
+    const workflowPermissionKeys = workflowPermissions ? Object.keys(workflowPermissions).sort() : [];
+    const packagePermissionKeys = packagePermissions ? Object.keys(packagePermissions).sort() : [];
+    const permissionedJobIds = Object.entries(jobs ?? {})
+      .filter(([, job]) => {
+        const jobRecord = yamlRecord(job);
+        return jobRecord !== null && "permissions" in jobRecord;
+      })
+      .map(([id]) => id)
+      .sort();
+    const packageEnvKeys = packageEnv ? Object.keys(packageEnv).sort() : [];
+    const exportIndex = exportStep === undefined ? -1 : packageSteps.indexOf(exportStep);
+    const canaryIndex = packageSteps.findIndex(
+      (step) => step.name === "Verify uploaded MCPB artifact through Actions REST"
+    );
+    const canary = packageSteps[canaryIndex];
+    const canaryEnv = yamlRecord(canary?.env);
+    const canaryEnvKeys = canaryEnv ? Object.keys(canaryEnv).sort() : [];
+    const canaryRun = runBody(canary);
+    const expectedCanaryRun = [
+      "set -euo pipefail",
+      'if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then',
+      '  echo "::error::upload-artifact returned an invalid artifact ID"',
+      "  exit 1",
+      "fi",
+      'if [[ ! "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then',
+      '  echo "::error::upload-artifact returned a digest that is not 64 lowercase hex characters"',
+      "  exit 1",
+      "fi",
+      "",
+      `CANDIDATE_ZIP=$(mktemp "$RUNNER_TEMP/mcpb-artifact-\${GITHUB_RUN_ID}-\${GITHUB_RUN_ATTEMPT}-\${ARTIFACT_ID}.XXXXXX.zip")`,
+      "downloaded=false",
+      "for attempt in {1..12}; do",
+      "  if timeout --kill-after=5s 30s gh api \\",
+      '    -H "Accept: application/vnd.github+json" \\',
+      '    "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"; then',
+      "    ACTUAL_DIGEST=$(sha256sum \"$CANDIDATE_ZIP\" | awk '{print $1}')",
+      '    if [ "$ACTUAL_DIGEST" != "$ARTIFACT_DIGEST" ]; then',
+      '      echo "::error::downloaded Actions artifact digest differs from upload output"',
+      "      exit 1",
+      "    fi",
+      "    downloaded=true",
+      "    break",
+      "  fi",
+      '  echo "::warning::Actions artifact $ARTIFACT_ID is not downloadable yet (attempt $attempt/12)"',
+      '  if [ "$attempt" -lt 12 ]; then',
+      "    sleep 5",
+      "  fi",
+      "done",
+      'if [ "$downloaded" != "true" ]; then',
+      '  echo "::error::Actions artifact $ARTIFACT_ID was not downloadable after 12 bounded attempts"',
+      "  exit 1",
+      "fi",
+      'echo "Verified Actions artifact id=$ARTIFACT_ID sha256=$ARTIFACT_DIGEST"'
+    ].join("\n");
+    if (
+      mcpbPackageJob["timeout-minutes"] !== 40 ||
+      JSON.stringify(workflowPermissionKeys) !== JSON.stringify(["contents"]) ||
+      workflowPermissions?.contents !== "read" ||
+      JSON.stringify(packagePermissionKeys) !== JSON.stringify(["actions", "contents"]) ||
+      packagePermissions?.actions !== "read" ||
+      packagePermissions?.contents !== "read" ||
+      JSON.stringify(permissionedJobIds) !== JSON.stringify(["mcpb-basic-package"]) ||
+      "env" in (document ?? {}) ||
+      JSON.stringify(packageEnvKeys) !== JSON.stringify(["NPM_CONFIG_ENGINE_STRICT", "NPM_CONFIG_SCRIPT_SHELL"]) ||
+      "defaults" in mcpbPackageJob ||
+      exportStep?.id !== "mcpb_export" ||
+      exportIndex < 0 ||
+      canaryIndex !== exportIndex + 1 ||
+      !canary ||
+      "if" in (canary ?? {}) ||
+      "continue-on-error" in (canary ?? {}) ||
+      canary?.shell !== "bash" ||
+      JSON.stringify(canaryEnvKeys) !==
+        JSON.stringify(["ARTIFACT_DIGEST", "ARTIFACT_ID", "BASH_ENV", "GH_HOST", "GH_TOKEN"]) ||
+      canaryEnv?.BASH_ENV !== "" ||
+      canaryEnv?.GH_HOST !== "github.com" ||
+      canaryEnv?.GH_TOKEN !== `\${{ github.token }}` ||
+      canaryEnv?.ARTIFACT_ID !== `\${{ steps.mcpb_export.outputs.artifact-id }}` ||
+      canaryEnv?.ARTIFACT_DIGEST !== `\${{ steps.mcpb_export.outputs.artifact-digest }}` ||
+      canaryRun.trimEnd() !== expectedCanaryRun
+    ) {
+      problems.push(
+        "mcpb-basic package job must grant scoped Actions read access and verify the uploaded artifact by exact ID and digest"
+      );
+    }
   }
   const mcpbSteps = yamlSteps(mcpbMatrixJob);
   const mcpbDownload = namedStep(mcpbSteps, "Download canonical Linux MCPB candidate");
@@ -654,6 +743,74 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     "continue-on-error" in (mcpbDownload ?? {})
   ) {
     problems.push("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
+  }
+
+  if (!dockerJob) {
+    problems.push("docker smoke probes must be exactly bounded and fail closed on process status");
+  } else {
+    const dockerSteps = yamlSteps(dockerJob);
+    const dockerCheckoutStep = dockerSteps[0];
+    const dockerBuildStep = dockerSteps[1];
+    const cliDockerSteps = dockerSteps.filter((step) => step.name === "CLI smoke — the bin runs inside the image");
+    const mcpDockerSteps = dockerSteps.filter(
+      (step) => step.name === "MCP tools/list smoke — stdio introspection (what Glama does)"
+    );
+    const cliDockerStep = cliDockerSteps[0];
+    const mcpDockerStep = mcpDockerSteps[0];
+    const cliDockerEnv = yamlRecord(cliDockerStep?.env);
+    const mcpDockerEnv = yamlRecord(mcpDockerStep?.env);
+    const cliDockerRun = runBody(cliDockerStep);
+    const mcpDockerRun = runBody(mcpDockerStep);
+    const expectedCliDockerRun = [
+      "docker_status=0",
+      "out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help) || docker_status=$?",
+      'if [ "$docker_status" -ne 0 ]; then',
+      '  echo "::error::Docker CLI smoke exited with status $docker_status"',
+      "  printf '%s\\n' \"$out\" | tail -c 600",
+      "  exit 1",
+      "fi",
+      'grep -qi \'serve\' <<<"$out" || { echo "::error::--help did not list the serve subcommand"; printf \'%s\\n\' "$out" | tail -c 600; exit 1; }',
+      'echo "OK — bin runs in image; --help lists serve"'
+    ].join("\n");
+    const expectedMcpDockerRun = [
+      "docker_status=0",
+      "out=$(printf '%s\\n' \\",
+      '  \'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\' \\',
+      '  \'{"jsonrpc":"2.0","method":"notifications/initialized"}\' \\',
+      '  \'{"jsonrpc":"2.0","id":2,"method":"tools/list"}\' \\',
+      "  | timeout --kill-after=10s 90s docker run --rm -i enquire-mcp:ci) || docker_status=$?",
+      'if [ "$docker_status" -ne 0 ]; then',
+      '  echo "::error::Docker MCP smoke exited with status $docker_status"',
+      "  printf '%s\\n' \"$out\" | tail -c 1000",
+      "  exit 1",
+      "fi",
+      'grep -q \'"obsidian_search"\' <<<"$out" || { echo "::error::tools/list did not return obsidian_search from the container"; printf \'%s\\n\' "$out" | tail -c 1000; exit 1; }',
+      'echo "OK — tools/list returned obsidian_search over stdio"'
+    ].join("\n");
+    if (
+      JSON.stringify(Object.keys(dockerJob).sort()) !== JSON.stringify(["runs-on", "steps", "timeout-minutes"]) ||
+      dockerJob["runs-on"] !== "ubuntu-latest" ||
+      dockerJob["timeout-minutes"] !== 10 ||
+      dockerSteps.length !== 4 ||
+      JSON.stringify(Object.keys(dockerCheckoutStep ?? {}).sort()) !== JSON.stringify(["uses"]) ||
+      dockerCheckoutStep?.uses !== "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+      JSON.stringify(Object.keys(dockerBuildStep ?? {}).sort()) !== JSON.stringify(["name", "run"]) ||
+      dockerBuildStep?.name !== "Build the introspection image" ||
+      dockerBuildStep?.run !== "docker build -t enquire-mcp:ci ." ||
+      cliDockerSteps.length !== 1 ||
+      mcpDockerSteps.length !== 1 ||
+      JSON.stringify(Object.keys(cliDockerStep ?? {}).sort()) !== JSON.stringify(["env", "name", "run", "shell"]) ||
+      JSON.stringify(Object.keys(mcpDockerStep ?? {}).sort()) !== JSON.stringify(["env", "name", "run", "shell"]) ||
+      cliDockerStep?.shell !== "bash" ||
+      mcpDockerStep?.shell !== "bash" ||
+      JSON.stringify(cliDockerEnv) !== JSON.stringify({ BASH_ENV: "" }) ||
+      JSON.stringify(mcpDockerEnv) !== JSON.stringify({ BASH_ENV: "" }) ||
+      mutationMatchCount(workflow, "docker run") !== 2 ||
+      cliDockerRun.trimEnd() !== expectedCliDockerRun ||
+      mcpDockerRun.trimEnd() !== expectedMcpDockerRun
+    ) {
+      problems.push("docker smoke probes must be exactly bounded and fail closed on process status");
+    }
   }
 
   if (!smokeJob) return [...problems, "missing smoke job"];
@@ -2420,14 +2577,275 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
-          "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@v7"
+          "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
+            "        id: mcpb_export\n" +
+            "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+          "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
+            "        id: mcpb_export\n" +
+            "        uses: actions/upload-artifact@v7"
         ),
         pkg.engines?.node
       )
     ).toContain(
       "mcpb-basic package job must build, verify, and export one fail-closed canonical Linux bundle with inventory, SBOM, and notices"
     );
+    const artifactCanaryProblem =
+      "mcpb-basic package job must grant scoped Actions read access and verify the uploaded artifact by exact ID and digest";
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, "    timeout-minutes: 40", "    timeout-minutes: 30"), pkg.engines?.node)
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "      actions: read\n      contents: read", "      contents: read"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5",
+          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n" +
+            "    permissions:\n      actions: read\n      contents: read"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "permissions:\n  contents: read", "permissions:\n  actions: read\n  contents: read"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "permissions:\n  contents: read", "permissions: read-all"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "permissions:\n  contents: read", "permissions: write-all"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, "permissions:\n  contents: read\n", ""), pkg.engines?.node)
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "permissions:\n  contents: read\n",
+          'permissions:\n  contents: read\n\nenv:\n  BASH_ENV: "/tmp/bypass"\n'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n",
+          '      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n      BASH_ENV: "/tmp/bypass"\n'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "        id: mcpb_export\n" +
+            "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+          "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          `          ARTIFACT_ID: \${{ steps.mcpb_export.outputs.artifact-id }}`,
+          `          ARTIFACT_ID: \${{ steps.mcpb_export.outputs.artifact-url }}`
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, `          ARTIFACT_ID: \${{ steps.mcpb_export.outputs.artifact-id }}\n`, ""),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '"repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"',
+          '"repos/$GITHUB_REPOSITORY/actions/artifacts/$GITHUB_RUN_ID/zip"'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          `          ARTIFACT_DIGEST: \${{ steps.mcpb_export.outputs.artifact-digest }}`,
+          `          ARTIFACT_DIGEST: \${{ steps.mcpb_export.outputs.artifact-id }}`
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, `          ARTIFACT_DIGEST: \${{ steps.mcpb_export.outputs.artifact-digest }}\n`, ""),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '          BASH_ENV: ""\n          GH_HOST: github.com\n',
+          '          BASH_ENV: "/tmp/bypass"\n          GH_HOST: github.com\n'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          `          ARTIFACT_DIGEST: \${{ steps.mcpb_export.outputs.artifact-digest }}\n        shell: bash`,
+          `          ARTIFACT_DIGEST: \${{ steps.mcpb_export.outputs.artifact-digest }}\n        shell: "echo {0}"`
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "    outputs:\n      artifact_name:",
+          '    defaults:\n      run:\n        shell: "echo {0}"\n    outputs:\n      artifact_name:'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, "^[0-9a-f]{64}$", "^(sha256:)?[0-9a-f]{64}$"), pkg.engines?.node)
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "Accept: application/vnd.github+json", "Accept: application/octet-stream"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, '              -H "Accept: application/vnd.github+json" \\\n', ""),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(replaceExactly(ci, "timeout --kill-after=5s 30s gh api", "gh api"), pkg.engines?.node)
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "timeout --kill-after=5s 30s gh api", "timeout 30s gh api"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "for attempt in {1..12}; do", "for attempt in {1..13}; do"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(ci, "          set -euo pipefail\n", "          set -euo pipefail\n          exit 0\n"),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "          downloaded=false\n          for attempt in {1..12}; do",
+          "          downloaded=false\n          downloaded=true\n          for attempt in {1..12}; do"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "              ACTUAL_DIGEST=$(sha256sum \"$CANDIDATE_ZIP\" | awk '{print $1}')\n",
+          "              ACTUAL_DIGEST=$(sha256sum \"$CANDIDATE_ZIP\" | awk '{print $1}')\n" +
+            '              ARTIFACT_DIGEST="$ACTUAL_DIGEST"\n'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '              if [ "$ACTUAL_DIGEST" != "$ARTIFACT_DIGEST" ]; then\n' +
+            '                echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
+            "                exit 1\n" +
+            "              fi",
+          '              if [ "$ACTUAL_DIGEST" = "$ARTIFACT_DIGEST" ]; then\n' +
+            '                echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
+            "                exit 1\n" +
+            "              fi"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '          if [ "$downloaded" != "true" ]; then\n' +
+            '            echo "::error::Actions artifact $ARTIFACT_ID was not downloadable after 12 bounded attempts"\n' +
+            "            exit 1\n" +
+            "          fi",
+          '          if [ "$downloaded" != "true" ]; then\n' +
+            '            echo "::error::Actions artifact $ARTIFACT_ID was not downloadable after 12 bounded attempts"\n' +
+            "            true\n" +
+            "          fi"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '          echo "Verified Actions artifact id=$ARTIFACT_ID sha256=$ARTIFACT_DIGEST"',
+          '          echo "Verified Actions artifact id=$ARTIFACT_ID"'
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "          compression-level: 0\n" + "      - name: Verify uploaded MCPB artifact through Actions REST",
+          "          compression-level: 0\n" +
+            "      - run: true\n" +
+            "      - name: Verify uploaded MCPB artifact through Actions REST"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
         replaceExactly(
@@ -2447,6 +2865,179 @@ describe("release identity and exact required-check gate", () => {
     expect(
       nodeFloorCiProblems(replaceExactly(ci, "          path: artifacts", "          path: ."), pkg.engines?.node)
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
+    const dockerTimeoutProblem = "docker smoke probes must be exactly bounded and fail closed on process status";
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "  docker:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10",
+          "  docker:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    continue-on-error: true"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "  docker:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10",
+          "  docker:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    needs: test-macos"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "      - name: CLI smoke — the bin runs inside the image\n",
+          "      - name: CLI smoke — the bin runs inside the image\n        if: false\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "      - name: MCP tools/list smoke — stdio introspection (what Glama does)\n",
+          "      - name: MCP tools/list smoke — stdio introspection (what Glama does)\n        continue-on-error: true\n"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "      - name: CLI smoke — the bin runs inside the image\n" +
+            "        # here-string `grep <<<` avoids the `grep -q` early-close EPIPE that, under",
+          "      - name: CLI smoke — the bin runs inside the image\n" +
+            "        continue-on-error: true\n" +
+            "        # here-string `grep <<<` avoids the `grep -q` early-close EPIPE that, under"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '        env:\n          BASH_ENV: ""\n        shell: bash\n        run: |\n' +
+            "          docker_status=0\n" +
+            "          out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help)",
+          '        env:\n          BASH_ENV: ""\n        shell: "echo {0}"\n        run: |\n' +
+            "          docker_status=0\n" +
+            "          out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help)"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help",
+          "timeout 60s docker run --rm enquire-mcp:ci --help"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "      - name: Build the introspection image\n        run: docker build -t enquire-mcp:ci .",
+          "      - name: CLI smoke — the bin runs inside the image\n        run: true\n" +
+            "      - name: Build the introspection image\n        run: docker build -t enquire-mcp:ci ."
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '          echo "OK — tools/list returned obsidian_search over stdio"',
+          '          echo "OK — tools/list returned obsidian_search over stdio"\n' +
+            "      - name: Unbounded extra Docker probe\n" +
+            "        run: docker run --rm enquire-mcp:ci --help"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "timeout --kill-after=10s 90s docker run --rm -i enquire-mcp:ci",
+          "timeout 90s docker run --rm -i enquire-mcp:ci"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help) || docker_status=$?",
+          "out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help) || true"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "| timeout --kill-after=10s 90s docker run --rm -i enquire-mcp:ci) || docker_status=$?",
+          "| timeout --kill-after=10s 90s docker run --rm -i enquire-mcp:ci) || true"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          '          if [ "$docker_status" -ne 0 ]; then\n' +
+            '            echo "::error::Docker CLI smoke exited with status $docker_status"\n' +
+            "            printf '%s\\n' \"$out\" | tail -c 600\n" +
+            "            exit 1\n" +
+            "          fi",
+          '          if [ "$docker_status" -ne 0 ]; then\n' +
+            '            echo "::error::Docker CLI smoke exited with status $docker_status"\n' +
+            "            printf '%s\\n' \"$out\" | tail -c 600\n" +
+            "            true\n" +
+            "          fi"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "          docker_status=0\n" +
+            "          out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help)",
+          "          docker_status=0\n" +
+            "          docker run --rm enquire-mcp:ci --help >/dev/null\n" +
+            "          out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help)"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
+    expect(
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "          out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help) || docker_status=$?",
+          '          echo "timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help" >/dev/null\n' +
+            "          out=$(docker run --rm enquire-mcp:ci --help) || docker_status=$?"
+        ),
+        pkg.engines?.node
+      )
+    ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
   });
 });

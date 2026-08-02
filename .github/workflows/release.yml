@@ -706,91 +706,251 @@ jobs:
       - name: Publish with provenance or verify an exact prior publication
         run: |
           set -euo pipefail
+          PACKAGE_NAME="@oomkapwn/enquire-mcp"
+          PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"
           VERSION=$(node -p "require('./package.json').version")
           SOURCE_SHA=$(git rev-parse HEAD)
+          TAG="v$VERSION"
           CHANNEL="${{ steps.dist_tag.outputs.tag }}"
           EXPECTED_CHANNEL_VERSION="$VERSION"
           EXPECTED_POST_ACTION="reuse"
-          parse_git_head() {
-            node -e '
-              let data = "";
-              process.stdin.on("data", (chunk) => { data += chunk; });
-              process.stdin.on("end", () => {
-                const parsed = JSON.parse(data);
-                if (typeof parsed !== "string" || !parsed) process.exit(2);
-                process.stdout.write(parsed);
-              });
-            '
-          }
-          if PUBLISHED=$(npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json 2>&1); then
-            PUBLISHED_SHA=$(printf '%s' "$PUBLISHED" | parse_git_head)
-            CHANNEL_VALUE=$(npm view "@oomkapwn/enquire-mcp" "dist-tags.$CHANNEL" --json)
-            PUBLISHED_CHANNEL_VERSION=$(printf '%s' "$CHANNEL_VALUE" | parse_git_head)
-            NPM_STATE=$(jq -n --arg gitHead "$PUBLISHED_SHA" --arg channelVersion "$PUBLISHED_CHANNEL_VERSION" \
-              '{exists: true, gitHead: $gitHead, channelVersion: $channelVersion}')
-            NPM_RESULT=$(printf '%s' "$NPM_STATE" | node scripts/check-release-integrity.mjs \
-              npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL")
-            NPM_ACTION=$(printf '%s' "$NPM_RESULT" | jq -r '.action')
-            if [ "$NPM_ACTION" = "reuse_superseded" ]; then
-              EXPECTED_CHANNEL_VERSION="$PUBLISHED_CHANNEL_VERSION"
-              EXPECTED_POST_ACTION="reuse_superseded"
-              echo "npm version $VERSION is exact and superseded by $EXPECTED_CHANNEL_VERSION on @$CHANNEL"
-            elif [ "$NPM_ACTION" != "reuse" ]; then
-              exit 1
-            else
-              echo "npm version $VERSION already exists at the exact source SHA — publication is complete"
-            fi
-          elif printf '%s' "$PUBLISHED" | grep -Eq 'E404|404 Not Found'; then
-            NPM_ACTION=$(printf '%s' '{"exists":false}' | node scripts/check-release-integrity.mjs \
-              npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL" | jq -r '.action')
-            if [ "$NPM_ACTION" != "publish" ]; then exit 1; fi
-            CURRENT_CHANNEL_VERSION="-"
-            if CURRENT_TAGS_RAW=$(npm view "@oomkapwn/enquire-mcp" dist-tags --json 2>&1); then
-              CURRENT_CHANNEL_VERSION=$(printf '%s' "$CURRENT_TAGS_RAW" | jq -er \
-                --arg channel "$CHANNEL" \
-                'if type != "object" then error("npm dist-tags is not an object") else (.[$channel] // "-") end')
-            elif ! printf '%s' "$CURRENT_TAGS_RAW" | grep -Eq 'E404|404 Not Found'; then
-              echo "::error::npm dist-tags lookup failed without an authoritative not-found response"
-              exit 1
-            fi
-            node scripts/check-release-integrity.mjs channel-advance \
-              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"
-            npm publish --provenance --access public --tag "$CHANNEL"
-          else
-            echo "::error::npm registry lookup failed without an authoritative not-found response"
+          NPM_PUBLISH_ATTEMPTED=false
+          NPM_PUBLISH_EXIT=0
+          CURL_BIN=$(type -P curl)
+          NODE_BIN=$(type -P node)
+          NPM_BIN=$(type -P npm)
+          TAR_BIN=$(type -P tar)
+          TIMEOUT_BIN=$(type -P timeout)
+          PACKUMENT=$(mktemp "$RUNNER_TEMP/enquire-npm-packument.XXXXXX")
+          if [ ! -f "$PACKUMENT" ] || [ -L "$PACKUMENT" ]; then
+            echo "::error::npm packument scratch file is missing, non-regular, or a symlink"
             exit 1
           fi
-          CONFIRMED_SHA=""
+          registry_read() {
+            local status request_exit
+            set +e
+            status=$("$TIMEOUT_BIN" --kill-after=5s 35s "$CURL_BIN" \
+              --silent --show-error --connect-timeout 10 --max-time 30 --max-filesize 67108864 --retry 0 \
+              --proto '=https' --tlsv1.2 \
+              --header "Accept: application/json" --header "Cache-Control: no-cache" \
+              --output "$PACKUMENT" --write-out '%{http_code}' "$PACKAGE_URL")
+            request_exit=$?
+            set -e
+            if [ "$request_exit" -ne 0 ] || [ "$status" != "200" ] || \
+               [ ! -s "$PACKUMENT" ] || [ -L "$PACKUMENT" ]; then
+              echo "::warning::npm packument read was not one bounded HTTP 200 (exit=$request_exit status=$status)" >&2
+              return 1
+            fi
+            return 0
+          }
+          npm_snapshot() {
+            jq -ce --arg package "$PACKAGE_NAME" --arg version "$VERSION" --arg channel "$CHANNEL" '
+              if type != "object" or .name != $package or (.versions | type) != "object" or
+                 (."dist-tags" | type) != "object" then
+                error("npm packument identity or collection shape is malformed")
+              else
+                (."dist-tags" | has($channel)) as $channelPresent
+                | (if $channelPresent then ."dist-tags"[$channel] else "-" end) as $channelVersion
+                | if ($channelVersion | type) != "string" or ($channelVersion | length) == 0 or
+                     ($channelPresent and ($channelVersion == "-")) then
+                    error("npm channel value is malformed")
+                  elif (.versions | has($version)) then
+                    .versions[$version] as $published
+                    | if ($published | type) != "object" or $published.name != $package or
+                         $published.version != $version or ($published.dist | type) != "object" then
+                        error("npm version identity or dist shape is malformed")
+                      else
+                        {
+                          exists: true,
+                          gitHead: (if ($published | has("gitHead")) then $published.gitHead else null end),
+                          integrity: $published.dist.integrity,
+                          channelVersion: $channelVersion
+                        }
+                      end
+                  else
+                    {exists: false, channelVersion: $channelVersion}
+                  end
+              end
+            ' "$PACKUMENT"
+          }
+          tarball_sri() {
+            "$NODE_BIN" -e '
+              const { createHash } = require("node:crypto");
+              const { readFileSync } = require("node:fs");
+              process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`);
+            ' "$1"
+          }
+          require_job_reserve() {
+            local required="$1"
+            local label="$2"
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              exit 1
+            fi
+            local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))
+            if [ "$remaining" -lt "$required" ]; then
+              echo "::error::$label requires ${required}s of post-write reserve; only ${remaining}s remain"
+              exit 1
+            fi
+          }
+          assert_remote_tag_identity() {
+            REMOTE_TAGS=$("$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin \
+              "refs/tags/$TAG" "refs/tags/$TAG^{}")
+            RAW_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_COUNT=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" \
+              '$2 == ref { count++ } END { print count+0 }')
+            PEELED_TAG_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v ref="refs/tags/$TAG^{}" '$2 == ref { print $1 }')
+            if [ "$RAW_TAG_COUNT" -ne 1 ] || [ "$PEELED_TAG_COUNT" -ne 1 ] || \
+               [ "$PEELED_TAG_SHA" != "$SOURCE_SHA" ]; then
+              echo "::error::Remote tag $TAG must be one annotated tag peeling to exact source SHA $SOURCE_SHA"
+              exit 1
+            fi
+          }
+
+          PACK_JSON=$("$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts \
+            --pack-destination "$RUNNER_TEMP")
+          if [ "$(printf '%s' "$PACK_JSON" | jq 'if type == "array" then length else -1 end')" -ne 1 ]; then
+            echo "::error::npm pack did not produce exactly one canonical tarball"
+            exit 1
+          fi
+          PACK_NAME=$(printf '%s' "$PACK_JSON" | jq -er '.[0].name | select(type == "string" and length > 0)')
+          PACK_VERSION=$(printf '%s' "$PACK_JSON" | jq -er '.[0].version | select(type == "string" and length > 0)')
+          if [ "$PACK_NAME" != "$PACKAGE_NAME" ] || [ "$PACK_VERSION" != "$VERSION" ]; then
+            echo "::error::npm pack returned a divergent package name or version"
+            exit 1
+          fi
+          PACK_BASENAME=$(printf '%s' "$PACK_JSON" | jq -er \
+            '.[0].filename | select(type == "string" and length > 0)')
+          if [ "$(basename "$PACK_BASENAME")" != "$PACK_BASENAME" ]; then
+            echo "::error::npm pack returned a non-basename artifact path"
+            exit 1
+          fi
+          PACKAGE_TARBALL="$RUNNER_TEMP/$PACK_BASENAME"
+          if [ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ]; then
+            echo "::error::npm pack tarball is missing, non-regular, or a symlink"
+            exit 1
+          fi
+          PACK_MANIFEST_COUNT=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -tzf "$PACKAGE_TARBALL" | awk \
+            '$0 == "package/package.json" { count++ } END { print count+0 }')
+          if [ "$PACK_MANIFEST_COUNT" -ne 1 ]; then
+            echo "::error::canonical npm tarball must contain exactly one package/package.json"
+            exit 1
+          fi
+          PACK_MANIFEST=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -xOf "$PACKAGE_TARBALL" \
+            package/package.json)
+          PACKED_NAME=$(printf '%s' "$PACK_MANIFEST" | jq -er '.name | select(type == "string" and length > 0)')
+          PACKED_VERSION=$(printf '%s' "$PACK_MANIFEST" | jq -er '.version | select(type == "string" and length > 0)')
+          if [ "$PACKED_NAME" != "$PACKAGE_NAME" ] || [ "$PACKED_VERSION" != "$VERSION" ]; then
+            echo "::error::canonical npm tarball embeds a divergent package name or version"
+            exit 1
+          fi
+          REPORTED_INTEGRITY=$(printf '%s' "$PACK_JSON" | jq -er \
+            '.[0].integrity | select(type == "string" and test("^sha512-[A-Za-z0-9+/]{86}==$"))')
+          EXPECTED_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")
+          if [ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
+            echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"
+            exit 1
+          fi
+
+          if ! registry_read; then
+            echo "::error::npm preflight requires one authoritative, bounded full-packument HTTP 200"
+            exit 1
+          fi
+          NPM_STATE=$(npm_snapshot)
+          NPM_RESULT=$(printf '%s' "$NPM_STATE" | "$NODE_BIN" scripts/check-release-integrity.mjs \
+            npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL")
+          NPM_ACTION=$(printf '%s' "$NPM_RESULT" | jq -er '.action')
+          PUBLISHED_CHANNEL_VERSION=$(printf '%s' "$NPM_STATE" | jq -er '.channelVersion')
+          if [ "$NPM_ACTION" = "reuse_superseded" ]; then
+            EXPECTED_CHANNEL_VERSION="$PUBLISHED_CHANNEL_VERSION"
+            EXPECTED_POST_ACTION="reuse_superseded"
+            echo "npm version $VERSION has the exact tarball bytes and is superseded by $EXPECTED_CHANNEL_VERSION on @$CHANNEL"
+          elif [ "$NPM_ACTION" = "reuse" ]; then
+            echo "npm version $VERSION already has the exact tarball bytes — publication is complete"
+          elif [ "$NPM_ACTION" = "publish" ]; then
+            node scripts/check-release-integrity.mjs channel-advance \
+              "$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"
+            require_job_reserve 2100 "npm publish"
+            assert_remote_tag_identity
+            if ! registry_read; then
+              echo "::error::npm pre-write check requires one authoritative, bounded full-packument HTTP 200"
+              exit 1
+            fi
+            PRE_WRITE_NPM_STATE=$(npm_snapshot)
+            PRE_WRITE_NPM_ACTION=$(printf '%s' "$PRE_WRITE_NPM_STATE" | "$NODE_BIN" \
+              scripts/check-release-integrity.mjs \
+                npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL" | jq -er '.action')
+            if [ "$PRE_WRITE_NPM_ACTION" != "publish" ]; then
+              echo "::error::npm version state changed after preflight; refusing publication"
+              exit 1
+            fi
+            PRE_WRITE_CHANNEL_VERSION=$(printf '%s' "$PRE_WRITE_NPM_STATE" | jq -er '.channelVersion')
+            node scripts/check-release-integrity.mjs channel-advance \
+              "$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"
+            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")
+            if [ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
+              echo "::error::canonical npm tarball changed after preflight and before publication"
+              exit 1
+            fi
+            NPM_PUBLISH_ATTEMPTED=true
+            set +e
+            "$TIMEOUT_BIN" --kill-after=10s 600s npm publish "$PACKAGE_TARBALL" --provenance --access public --tag "$CHANNEL" --ignore-scripts
+            NPM_PUBLISH_EXIT=$?
+            set -e
+          else
+            echo "::error::npm publication evaluator returned an unknown action"
+            exit 1
+          fi
+
           CONFIRMED_CHANNEL_VERSION=""
-          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if CONFIRMED=$(npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json 2>/dev/null); then
-              CONFIRMED_SHA=$(printf '%s' "$CONFIRMED" | parse_git_head)
-              if [ "$CONFIRMED_SHA" != "$SOURCE_SHA" ]; then
-                echo "::error::npm postcondition gitHead=$CONFIRMED_SHA, expected $SOURCE_SHA"
-                exit 1
-              fi
-              if CHANNEL_VALUE=$(npm view "@oomkapwn/enquire-mcp" "dist-tags.$CHANNEL" --json 2>/dev/null); then
-                CONFIRMED_CHANNEL_VERSION=$(printf '%s' "$CHANNEL_VALUE" | parse_git_head)
-                if [ "$CONFIRMED_CHANNEL_VERSION" = "$EXPECTED_CHANNEL_VERSION" ]; then break; fi
+          CONFIRMED_INTEGRITY=""
+          NPM_POST_ACTION=""
+          for (( attempt=1; attempt<=12; attempt++ )); do
+            if registry_read && NPM_POST_STATE=$(npm_snapshot); then
+              if [ "$(printf '%s' "$NPM_POST_STATE" | jq -r '.exists')" = "true" ]; then
+                NPM_IDENTITY_STATE=$(printf '%s' "$NPM_POST_STATE" | jq -c \
+                  --arg channelVersion "$EXPECTED_CHANNEL_VERSION" '.channelVersion = $channelVersion')
+                NPM_IDENTITY_RESULT=$(printf '%s' "$NPM_IDENTITY_STATE" | "$NODE_BIN" \
+                  scripts/check-release-integrity.mjs \
+                    npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL")
+                NPM_IDENTITY_ACTION=$(printf '%s' "$NPM_IDENTITY_RESULT" | jq -er '.action')
+                if [ "$NPM_IDENTITY_ACTION" != "$EXPECTED_POST_ACTION" ]; then
+                  echo "::error::npm immutable identity converged to an unexpected publication action"
+                  exit 1
+                fi
+                CONFIRMED_INTEGRITY=$(printf '%s' "$NPM_POST_STATE" | jq -er '.integrity')
+                CONFIRMED_CHANNEL_VERSION=$(printf '%s' "$NPM_POST_STATE" | jq -er '.channelVersion')
+                if [ "$CONFIRMED_CHANNEL_VERSION" = "$EXPECTED_CHANNEL_VERSION" ]; then
+                  NPM_POST_ACTION="$NPM_IDENTITY_ACTION"
+                  break
+                fi
               fi
             fi
-            if [ "$attempt" -lt 12 ]; then sleep 10; fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 10
+            fi
           done
-          if [ "$CONFIRMED_SHA" != "$SOURCE_SHA" ]; then
-            echo "::error::npm did not expose the exact published gitHead after 12 checks"
+          if [ "$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION" ]; then
+            echo "::error::npm exact SRI/channel state did not converge after 12 bounded reads; publish exit=$NPM_PUBLISH_EXIT"
+            exit 1
+          fi
+          if [ "$CONFIRMED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
+            echo "::error::npm did not expose the canonical tarball integrity; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi
           if [ "$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION" ]; then
-            echo "::error::npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION"
+            echo "::error::npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi
-          NPM_POST_STATE=$(jq -n --arg gitHead "$CONFIRMED_SHA" --arg channelVersion "$CONFIRMED_CHANNEL_VERSION" \
-            '{exists: true, gitHead: $gitHead, channelVersion: $channelVersion}')
-          NPM_POST_ACTION=$(printf '%s' "$NPM_POST_STATE" | node scripts/check-release-integrity.mjs \
-            npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL" | jq -r '.action')
-          if [ "$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION" ]; then exit 1; fi
+          assert_remote_tag_identity
+          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ] && [ "$NPM_PUBLISH_EXIT" -ne 0 ]; then
+            echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_FETCH_TIMEOUT: "60000"
+          NPM_CONFIG_FETCH_RETRIES: "0"
       # v3.7.14 F5 — automate the GitHub Release (M13 from round-15 audit).
       # Pre-3.7.14 the README claimed "npm + GitHub release per tag" but
       # gh release create was a manual post-release step (CONTRIBUTING.md:87).

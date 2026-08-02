@@ -39,6 +39,14 @@ interface WorkflowJob {
 }
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
+const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))";
+const MUTATED_RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))";
+const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
+const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
+const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
+const RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
+const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
+const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -128,6 +136,17 @@ function mutationMatchCount(source: string, needle: string): number {
     count++;
     offset = match + needle.length;
   }
+}
+
+/** Extract one exact set of positive integer captures for a structural timing contract. */
+function exactPositiveIntegerCaptures(source: string, pattern: RegExp, expectedCaptures: number): number[] | null {
+  if (!pattern.global || !Number.isSafeInteger(expectedCaptures) || expectedCaptures < 1) return null;
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length !== 1) return null;
+  const captures = matches[0]?.slice(1) ?? [];
+  if (captures.length !== expectedCaptures) return null;
+  const values = captures.map(Number);
+  return values.every((value) => Number.isSafeInteger(value) && value > 0) ? values : null;
 }
 
 /** Require an exact live source shape before applying a structural-test mutation. */
@@ -1004,14 +1023,13 @@ function releasePollProblems(workflow: string): string[] {
       (readBody) =>
         !readBody.includes("gh_read() {") ||
         !readBody.includes(`"\${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$`) ||
-        !readBody.includes("local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))") ||
+        mutationMatchCount(readBody, GH_READ_DEADLINE_GUARD) !== 1 ||
         !readBody.includes('for argument in "$@"; do') ||
         !readBody.includes(ghReadMutationArgs) ||
         !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
         !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
     (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 5 ||
-    (workflow.match(/RELEASE_JOB_DEADLINE_EPOCH - \$\(date \+%s\)/g) ?? []).length !== 4 ||
     (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 5 ||
     mutationMatchCount(workflow, ghReadMutationArgs) !== 5 ||
     (workflow.match(/gh_read api/g) ?? []).length !== 30 ||
@@ -1161,8 +1179,17 @@ const MCPB_HYBRID_FALSE_HIT_ASSERTION =
   '!noMatchText.includes("Projects/Hermes.md"), "obsidian_search: negative control leaked a false hit"';
 const MCPB_NPM_CHANNEL_ADVANCE =
   "            node scripts/check-release-integrity.mjs channel-advance \\\n" +
-  '              "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
-  '            npm publish --provenance --access public --tag "$CHANNEL"';
+  '              "$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"\n' +
+  '            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")';
+const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';
+const MCPB_EXACT_NPM_PUBLISH =
+  '            "$TIMEOUT_BIN" --kill-after=10s 600s npm publish "$PACKAGE_TARBALL"' +
+  ' --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+const MCPB_EXACT_NPM_PUBLISH_RUN =
+  '"$TIMEOUT_BIN" --kill-after=10s 600s npm publish "$PACKAGE_TARBALL"' +
+  ' --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+const MCPB_NPM_TARBALL_SRI =
+  'process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1]))' + '.digest("base64")}`);';
 const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
   '          gh_read api -H "Accept: application/vnd.github+json" \\\n' +
   `            "repos/\${{ github.repository }}/actions/artifacts/$PINNED_ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"`;
@@ -1261,6 +1288,167 @@ function mcpbContractProblems(inputs: {
       "release state machine must preflight all deterministic assets before npm, then draft/upload/publish"
     );
   }
+  const npmPublishStep = namedStep(releaseSteps, "Publish with provenance or verify an exact prior publication");
+  const npmPublishRun = runBody(npmPublishStep);
+  const npmPublishEnv = yamlRecord(npmPublishStep?.env);
+  const npmStateInvocation = 'npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL"';
+  const npmReserveIndex = npmPublishRun.indexOf('require_job_reserve 2100 "npm publish"');
+  const npmPrewriteTagIndex = npmPublishRun.indexOf("\n  assert_remote_tag_identity", npmReserveIndex);
+  const npmPrewriteReadIndex = npmPublishRun.indexOf("if ! registry_read; then", npmPrewriteTagIndex);
+  const npmRehashIndex = npmPublishRun.indexOf(
+    'PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")',
+    npmPrewriteReadIndex
+  );
+  const npmAttemptedIndex = npmPublishRun.indexOf("NPM_PUBLISH_ATTEMPTED=true", npmRehashIndex);
+  const npmNonfatalIndex = npmPublishRun.indexOf("set +e", npmAttemptedIndex);
+  const npmPublishIndex = npmPublishRun.indexOf(MCPB_EXACT_NPM_PUBLISH_RUN, npmNonfatalIndex);
+  const npmExitCaptureIndex = npmPublishRun.indexOf("NPM_PUBLISH_EXIT=$?", npmPublishIndex);
+  const npmFatalIndex = npmPublishRun.indexOf("set -e", npmExitCaptureIndex);
+  const npmReadbackIndex = npmPublishRun.indexOf("for (( attempt=1; attempt<=12; attempt++ )); do", npmFatalIndex);
+  const npmFinalTagIndex = npmPublishRun.indexOf("\nassert_remote_tag_identity", npmReadbackIndex);
+  const npmTransactionOrderIsSafe =
+    npmReserveIndex >= 0 &&
+    npmPrewriteTagIndex > npmReserveIndex &&
+    npmPrewriteReadIndex > npmPrewriteTagIndex &&
+    npmRehashIndex > npmPrewriteReadIndex &&
+    npmAttemptedIndex > npmRehashIndex &&
+    npmNonfatalIndex > npmAttemptedIndex &&
+    npmPublishIndex > npmNonfatalIndex &&
+    npmExitCaptureIndex > npmPublishIndex &&
+    npmFatalIndex > npmExitCaptureIndex &&
+    npmReadbackIndex > npmFatalIndex &&
+    npmFinalTagIndex > npmReadbackIndex;
+  const npmReserveTiming = exactPositiveIntegerCaptures(
+    npmPublishRun,
+    /require_job_reserve ([0-9]+) "npm publish"/gu,
+    1
+  );
+  const npmTagTiming = exactPositiveIntegerCaptures(
+    npmPublishRun,
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s git ls-remote --tags origin/gu,
+    2
+  );
+  const npmRegistryTiming = exactPositiveIntegerCaptures(
+    npmPublishRun,
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s "\$CURL_BIN"/gu,
+    2
+  );
+  const npmPublishTiming = exactPositiveIntegerCaptures(
+    npmPublishRun,
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s ([0-9]+)s npm publish "\$PACKAGE_TARBALL"/gu,
+    2
+  );
+  const npmReadbackTiming = exactPositiveIntegerCaptures(
+    npmPublishRun,
+    /for \(\( attempt=1; attempt<=([0-9]+); attempt\+\+ \)\); do/gu,
+    1
+  );
+  const npmSleepTiming = exactPositiveIntegerCaptures(npmPublishRun, /^\s*sleep ([0-9]+)$/gmu, 1);
+  const [npmReserveSeconds = 0] = npmReserveTiming ?? [];
+  const [npmTagKillSeconds = 0, npmTagTimeoutSeconds = 0] = npmTagTiming ?? [];
+  const [npmRegistryKillSeconds = 0, npmRegistryTimeoutSeconds = 0] = npmRegistryTiming ?? [];
+  const [npmPublishKillSeconds = 0, npmPublishTimeoutSeconds = 0] = npmPublishTiming ?? [];
+  const [npmReadbackAttempts = 0] = npmReadbackTiming ?? [];
+  const [npmSleepSeconds = 0] = npmSleepTiming ?? [];
+  const npmTimingContractIsExact =
+    npmReserveTiming !== null &&
+    npmTagTiming !== null &&
+    npmRegistryTiming !== null &&
+    npmPublishTiming !== null &&
+    npmReadbackTiming !== null &&
+    npmSleepTiming !== null &&
+    (npmPublishRun.match(/^\s*assert_remote_tag_identity$/gmu) ?? []).length === 2;
+  const npmReserveCoversWorstCase =
+    npmTimingContractIsExact &&
+    npmReserveSeconds >=
+      2 * (npmTagTimeoutSeconds + npmTagKillSeconds) +
+        (npmRegistryTimeoutSeconds + npmRegistryKillSeconds) +
+        (npmPublishTimeoutSeconds + npmPublishKillSeconds) +
+        npmReadbackAttempts * (npmRegistryTimeoutSeconds + npmRegistryKillSeconds) +
+        (npmReadbackAttempts - 1) * npmSleepSeconds +
+        300;
+  const npmPackPublishSurface = npmPublishRun
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /\bnpm (?:pack|publish)\b/u.test(line) || /\$NPM_BIN"?\s+(?:pack|publish)\b/u.test(line));
+  const npmRegistryMutationCommands = npmPublishRun
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(?:(?:command|exec)\s+)?(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:dist-tag|unpublish)\b/u.test(line));
+  const npmPackPublishExpectedTail = [
+    'echo "::error::npm pack did not produce exactly one canonical tarball"',
+    'echo "::error::npm pack returned a divergent package name or version"',
+    'echo "::error::npm pack returned a non-basename artifact path"',
+    'echo "::error::npm pack tarball is missing, non-regular, or a symlink"',
+    'echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"',
+    'require_job_reserve 2100 "npm publish"',
+    MCPB_EXACT_NPM_PUBLISH_RUN,
+    'echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"'
+  ];
+  const npmCommandSurfaceIsClosed =
+    npmPackPublishSurface.length === npmPackPublishExpectedTail.length + 1 &&
+    npmPackPublishSurface[0]?.startsWith(`PACK_JSON=$(${MCPB_EXACT_NPM_PACK}`) === true &&
+    npmPackPublishSurface[0]?.endsWith("\\") === true &&
+    JSON.stringify(npmPackPublishSurface.slice(1)) === JSON.stringify(npmPackPublishExpectedTail) &&
+    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 31 &&
+    (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 2;
+  const npmPublicationIsByteBound =
+    npmPublishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}` &&
+    npmPublishEnv?.NPM_CONFIG_FETCH_TIMEOUT === "60000" &&
+    npmPublishEnv?.NPM_CONFIG_FETCH_RETRIES === "0" &&
+    npmPublishRun.includes('PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"') &&
+    npmPublishRun.includes('PACKUMENT=$(mktemp "$RUNNER_TEMP/enquire-npm-packument.XXXXXX")') &&
+    npmPublishRun.includes("registry_read() {") &&
+    npmPublishRun.includes('"$TIMEOUT_BIN" --kill-after=5s 35s "$CURL_BIN"') &&
+    npmPublishRun.includes("--connect-timeout 10 --max-time 30 --max-filesize 67108864 --retry 0") &&
+    npmPublishRun.includes("--proto '=https' --tlsv1.2") &&
+    npmPublishRun.includes('--header "Accept: application/json" --header "Cache-Control: no-cache"') &&
+    npmPublishRun.includes("--write-out '%{http_code}'") &&
+    npmPublishRun.includes('[ "$request_exit" -ne 0 ] || [ "$status" != "200" ]') &&
+    !npmPublishRun.includes("application/vnd.npm.install-v1+json") &&
+    npmPublishRun.includes("npm_snapshot() {") &&
+    npmPublishRun.includes(".name != $package") &&
+    npmPublishRun.includes("(.versions | has($version))") &&
+    npmPublishRun.includes('(."dist-tags" | has($channel)) as $channelPresent') &&
+    npmPublishRun.includes('($channelPresent and ($channelVersion == "-"))') &&
+    npmPublishRun.includes('gitHead: (if ($published | has("gitHead")) then $published.gitHead else null end)') &&
+    npmPublishRun.includes("integrity: $published.dist.integrity") &&
+    mutationMatchCount(npmPublishRun, NPM_RESERVE_DEADLINE_GUARD) === 1 &&
+    !npmPublishRun.includes("npm view ") &&
+    (npmPublishRun.match(/registry_read\(\) \{/g) ?? []).length === 1 &&
+    (npmPublishRun.match(/if ! registry_read; then/g) ?? []).length === 2 &&
+    (npmPublishRun.match(/if registry_read && NPM_POST_STATE=\$\(npm_snapshot\); then/g) ?? []).length === 1 &&
+    (npmPublishRun.match(/"\$NPM_BIN" pack --json/g) ?? []).length === 1 &&
+    npmPublishRun.includes(MCPB_EXACT_NPM_PACK) &&
+    npmPublishRun.includes('--pack-destination "$RUNNER_TEMP"') &&
+    npmPublishRun.includes('PACKAGE_TARBALL="$RUNNER_TEMP/$PACK_BASENAME"') &&
+    npmPublishRun.includes('[ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ]') &&
+    npmPublishRun.includes('PACK_MANIFEST_COUNT=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -tzf') &&
+    npmPublishRun.includes('$0 == "package/package.json" { count++ }') &&
+    npmPublishRun.includes('[ "$PACK_MANIFEST_COUNT" -ne 1 ]') &&
+    npmPublishRun.includes("package/package.json)") &&
+    npmPublishRun.includes('[ "$PACKED_NAME" != "$PACKAGE_NAME" ] || [ "$PACKED_VERSION" != "$VERSION" ]') &&
+    npmPublishRun.includes("REPORTED_INTEGRITY=$(printf '%s' \"$PACK_JSON\" | jq -er") &&
+    npmPublishRun.includes('.[0].integrity | select(type == "string" and test("^sha512-') &&
+    npmPublishRun.includes(MCPB_NPM_TARBALL_SRI) &&
+    (npmPublishRun.match(/tarball_sri "\$PACKAGE_TARBALL"/g) ?? []).length === 2 &&
+    npmPublishRun.includes('[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
+    npmPublishRun.includes('[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
+    npmPublishRun.split(npmStateInvocation).length - 1 === 3 &&
+    (
+      npmPublishRun.match(
+        /npm publish "\$PACKAGE_TARBALL" --provenance --access public --tag "\$CHANNEL" --ignore-scripts/g
+      ) ?? []
+    ).length === 1 &&
+    npmPublishRun.includes(MCPB_EXACT_NPM_PUBLISH_RUN) &&
+    npmRegistryMutationCommands.length === 0 &&
+    npmPublishRun.includes("NPM_PUBLISH_ATTEMPTED=true") &&
+    npmPublishRun.includes("NPM_PUBLISH_EXIT=$?") &&
+    npmPublishRun.includes("npm exact SRI/channel state did not converge after 12 bounded reads") &&
+    npmPublishRun.includes("exact tarball SRI, channel, and tag postconditions prove publication completed") &&
+    npmCommandSurfaceIsClosed &&
+    npmTransactionOrderIsSafe &&
+    npmReserveCoversWorstCase;
   if (
     JSON.stringify(toolNames) !== JSON.stringify(BASIC_MCPB_TOOLS) ||
     JSON.stringify(manifest.prompts) !== "[]" ||
@@ -1454,6 +1642,14 @@ function mcpbContractProblems(inputs: {
     ) ||
     inputs.release.includes("--status success") ||
     !inputs.integrity.includes("export function evaluateNpmPublication") ||
+    !inputs.integrity.includes("expected npm source SHA must be one exact lowercase SHA-1") ||
+    !inputs.integrity.includes("isCanonicalSha512Sri") ||
+    !inputs.integrity.includes('decoded.toString("base64") === encoded') ||
+    !inputs.integrity.includes("expected npm tarball integrity must be one canonical SHA-512 SRI") ||
+    !inputs.integrity.includes('Object.hasOwn(state, "gitHead")') ||
+    !inputs.integrity.includes("state.gitHead !== null && !isExactSha1(state.gitHead)") ||
+    !inputs.integrity.includes("state.integrity !== expectedIntegrity") ||
+    !inputs.integrity.includes("evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])") ||
     !inputs.integrity.includes("export function evaluateMcpbReleaseState") ||
     !inputs.integrity.includes("export function evaluateReleaseChecks") ||
     !inputs.integrity.includes("export function flattenPaginatedArrays") ||
@@ -1480,7 +1676,6 @@ function mcpbContractProblems(inputs: {
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
     (inputs.release.match(/release-state "\$TAG" "\$EXPECTED_PRERELEASE"/g) ?? []).length !== 3 ||
     inputs.release.includes('release-state "$TAG" "$SOURCE_SHA"') ||
-    (inputs.release.match(/node scripts\/check-release-integrity\.mjs \\\s+npm-state/gu) ?? []).length !== 3 ||
     !inputs.release.includes("build_artifact_id:") ||
     !inputs.release.includes("build_artifact_digest:") ||
     !inputs.release.includes("build_run_attempt:") ||
@@ -1507,10 +1702,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes("npm run mcpb:verify") ||
     !inputs.release.includes("Existing release provenance does not identify this source/artifact") ||
     !inputs.integrity.includes(`mcpb-basic-candidate-\${producerAttempt}`) ||
-    !inputs.release.includes('npm view "@oomkapwn/enquire-mcp@$VERSION" gitHead --json') ||
-    (inputs.release.match(/npm-state "\$SOURCE_SHA" "\$VERSION" "\$CHANNEL"/g) ?? []).length !== 3 ||
-    !inputs.release.includes("authoritative not-found response") ||
-    !inputs.release.includes("npm did not expose the exact published gitHead after 12 checks") ||
+    !npmPublicationIsByteBound ||
     !inputs.release.includes("npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION") ||
     !inputs.release.includes("Existing release $TAG has incompatible tag, channel, or draft identity") ||
     (inputs.release.match(/releases\?per_page=100/g) ?? []).length < 4 ||
@@ -1518,12 +1710,12 @@ function mcpbContractProblems(inputs: {
     inputs.release.includes("/releases/tags/") ||
     inputs.release.includes("gh release download") ||
     !inputs.release.includes("Existing release asset $NAME differs before npm publication") ||
-    (inputs.release.match(/git ls-remote --tags origin/g) ?? []).length !== 3 ||
-    (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 3 ||
-    (inputs.release.match(/^\s+assert_remote_tag_identity$/gmu) ?? []).length !== 6 ||
-    (inputs.release.match(/"\$RAW_TAG_COUNT" -ne 1/g) ?? []).length !== 3 ||
-    (inputs.release.match(/"\$PEELED_TAG_COUNT" -ne 1/g) ?? []).length !== 3 ||
-    (inputs.release.match(/"\$PEELED_TAG_SHA" != "\$SOURCE_SHA"/g) ?? []).length !== 3 ||
+    (inputs.release.match(/git ls-remote --tags origin/g) ?? []).length !== 4 ||
+    (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 4 ||
+    (inputs.release.match(/^\s+assert_remote_tag_identity$/gmu) ?? []).length !== 8 ||
+    (inputs.release.match(/"\$RAW_TAG_COUNT" -ne 1/g) ?? []).length !== 4 ||
+    (inputs.release.match(/"\$PEELED_TAG_COUNT" -ne 1/g) ?? []).length !== 4 ||
+    (inputs.release.match(/"\$PEELED_TAG_SHA" != "\$SOURCE_SHA"/g) ?? []).length !== 4 ||
     inputs.release.includes("target_commitish") ||
     inputs.release.includes("--target") ||
     !inputs.release.includes("--verify-tag") ||
@@ -1546,14 +1738,13 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes(publicationTagProof) ||
     !inputs.release.includes(finalPostconditionTagProof) ||
     !inputs.release.includes(`PUBLISH_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID")`) ||
-    (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 2 ||
+    (inputs.release.match(/node scripts\/check-release-integrity\.mjs channel-advance/g) ?? []).length !== 3 ||
     inputs.release.lastIndexOf("node scripts/check-release-integrity.mjs channel-advance") >
-      inputs.release.indexOf("npm publish --provenance") ||
+      inputs.release.indexOf(MCPB_EXACT_NPM_PUBLISH) ||
     !inputs.release.includes("assert_stable_github_advance") ||
     !inputs.release.includes("is not GitHub's latest release before npm publication") ||
-    !inputs.release.includes('CURRENT_CHANNEL_VERSION="-"') ||
-    !inputs.release.includes('npm view "@oomkapwn/enquire-mcp" dist-tags --json') ||
-    !inputs.release.includes('"$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"') ||
+    !inputs.release.includes('"$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"') ||
+    !inputs.release.includes('"$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"') ||
     !inputs.release.includes('NPM_ACTION" = "reuse_superseded"') ||
     !inputs.release.includes('EXPECTED_CHANNEL_VERSION="$PUBLISHED_CHANNEL_VERSION"') ||
     !inputs.release.includes('EXPECTED_POST_ACTION="reuse_superseded"') ||
@@ -2036,64 +2227,121 @@ describe("release identity and exact required-job gate", () => {
     expect(() => assertChannelVersionAdvance("4.0.0-rc.02", "4.0.0-rc.1", "rc")).toThrow(/leading zero/);
     expect(() => assertChannelVersionAdvance("4.0.0+build.1", "3.11.7", "latest")).toThrow(/build metadata/);
 
-    expect(evaluateNpmPublication({ exists: false }, "source", "4.0.0-rc.2", "rc")).toEqual({
+    const npmIntegrity = `sha512-${"A".repeat(86)}==`;
+    const otherNpmIntegrity = `sha512-C${"A".repeat(85)}==`;
+    const otherSourceSha = "352c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
+    expect(evaluateNpmPublication({ exists: false }, TRUSTED_SOURCE_SHA, npmIntegrity, "4.0.0-rc.2", "rc")).toEqual({
       action: "publish"
     });
-    expect(
-      evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-rc.2" },
-        "source",
-        "4.0.0-rc.2",
-        "rc"
-      )
-    ).toEqual({ action: "reuse" });
+    for (const state of [
+      { exists: true, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" },
+      { exists: true, gitHead: null, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" },
+      { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" }
+    ]) {
+      expect(evaluateNpmPublication(state, TRUSTED_SOURCE_SHA, npmIntegrity, "4.0.0-rc.2", "rc")).toEqual({
+        action: "reuse"
+      });
+    }
+    for (const gitHead of ["", " ".repeat(40), undefined, 42, {}, "source", otherSourceSha]) {
+      expect(() =>
+        evaluateNpmPublication(
+          { exists: true, gitHead, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" },
+          TRUSTED_SOURCE_SHA,
+          npmIntegrity,
+          "4.0.0-rc.2",
+          "rc"
+        )
+      ).toThrow(/gitHead/);
+    }
+    for (const integrity of [
+      undefined,
+      null,
+      "",
+      `sha1-${"A".repeat(27)}=`,
+      `sha256-${"A".repeat(86)}==`,
+      "sha512-not-base64",
+      otherNpmIntegrity
+    ]) {
+      expect(() =>
+        evaluateNpmPublication(
+          { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity, channelVersion: "4.0.0-rc.2" },
+          TRUSTED_SOURCE_SHA,
+          npmIntegrity,
+          "4.0.0-rc.2",
+          "rc"
+        )
+      ).toThrow(/tarball integrity/);
+    }
+    for (const expectedIntegrity of [
+      undefined,
+      null,
+      "",
+      "sha256-not-sha512",
+      "sha512-not-base64",
+      `sha512-${"B".repeat(86)}==`
+    ]) {
+      expect(() =>
+        evaluateNpmPublication({ exists: false }, TRUSTED_SOURCE_SHA, expectedIntegrity, "4.0.0-rc.2", "rc")
+      ).toThrow(/canonical SHA-512 SRI/);
+    }
+    expect(() => evaluateNpmPublication({ exists: false }, "source", npmIntegrity, "4.0.0-rc.2", "rc")).toThrow(
+      /exact lowercase SHA-1/
+    );
+    for (const malformedState of [null, [], {}, { exists: "false" }]) {
+      expect(() =>
+        evaluateNpmPublication(malformedState, TRUSTED_SOURCE_SHA, npmIntegrity, "4.0.0-rc.2", "rc")
+      ).toThrow(/explicitly present or absent/);
+    }
     expect(() =>
       evaluateNpmPublication(
-        { exists: true, gitHead: "other", channelVersion: "4.0.0-rc.2" },
-        "source",
-        "4.0.0-rc.2",
-        "rc"
-      )
-    ).toThrow(/gitHead/);
-    expect(() =>
-      evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-rc.1" },
-        "source",
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-rc.1" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
         "4.0.0-rc.2",
         "rc"
       )
     ).toThrow(/roll rc back/);
     expect(
       evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-rc.3" },
-        "source",
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-rc.3" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
         "4.0.0-rc.2",
         "rc"
       )
     ).toEqual({ action: "reuse_superseded", channelVersion: "4.0.0-rc.3" });
     expect(() =>
-      evaluateNpmPublication({ exists: true, gitHead: "source", channelVersion: "4.0.1" }, "source", "4.0.0", "latest")
+      evaluateNpmPublication(
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.1" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
+        "4.0.0",
+        "latest"
+      )
     ).toThrow(/dist-tag/);
     expect(() =>
       evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-beta.9" },
-        "source",
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-beta.9" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
         "4.0.0-rc.2",
         "rc"
       )
     ).toThrow(/resolves to beta/);
     expect(() =>
       evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-rc.2" },
-        "source",
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
         "4.0.0-rc.2",
         undefined
       )
     ).toThrow(/not npm channel/);
     expect(() =>
       evaluateNpmPublication(
-        { exists: true, gitHead: "source", channelVersion: "4.0.0-rc.2" },
-        "source",
+        { exists: true, gitHead: TRUSTED_SOURCE_SHA, integrity: npmIntegrity, channelVersion: "4.0.0-rc.2" },
+        TRUSTED_SOURCE_SHA,
+        npmIntegrity,
         "4.0.0-rc.2",
         "beta"
       )
@@ -2371,14 +2619,7 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain("release polling must outlive the blocking package-consumer matrix and leave publication headroom");
     expect(
-      releasePollProblems(
-        replaceExactly(
-          workflow,
-          "RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)",
-          "RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH",
-          4
-        )
-      )
+      releasePollProblems(replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, 4))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 5))).toContain(
       "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
@@ -2736,13 +2977,158 @@ describe("release identity and exact required-job gate", () => {
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
       );
     }
+    const npmPrewriteRegistryGuard =
+      "            if ! registry_read; then\n" +
+      '              echo "::error::npm pre-write check requires one authoritative, bounded full-packument HTTP 200"\n' +
+      "              exit 1\n" +
+      "            fi";
+    const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
+    const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
+    for (const weakenedNpmTransaction of [
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PACK,
+        replaceExactly(MCPB_EXACT_NPM_PACK, " --kill-after=10s", "")
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PACK,
+        replaceExactly(MCPB_EXACT_NPM_PACK, " --ignore-scripts", "")
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PACK,
+        `${MCPB_EXACT_NPM_PACK}\n          : ${MCPB_EXACT_NPM_PACK}`
+      ),
+      replaceExactly(mcpbInputs.release, '[ "$PACK_MANIFEST_COUNT" -ne 1 ]', "false"),
+      replaceExactly(
+        mcpbInputs.release,
+        '$0 == "package/package.json" { count++ }',
+        '$0 == "package/other.json" { count++ }'
+      ),
+      replaceExactly(mcpbInputs.release, 'createHash("sha512")', 'createHash("sha256")'),
+      replaceExactly(mcpbInputs.release, '[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
+      replaceExactly(mcpbInputs.release, '[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        replaceExactly(MCPB_EXACT_NPM_PUBLISH, '"$PACKAGE_TARBALL"', '"."')
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        replaceExactly(MCPB_EXACT_NPM_PUBLISH, " --kill-after=10s", "")
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        replaceExactly(MCPB_EXACT_NPM_PUBLISH, " --ignore-scripts", "")
+      ),
+      replaceExactly(mcpbInputs.release, 'NPM_CONFIG_FETCH_RETRIES: "0"', 'NPM_CONFIG_FETCH_RETRIES: "1"'),
+      replaceExactly(mcpbInputs.release, "--max-filesize 67108864 --retry 0", "--max-filesize 67108864 --retry 1"),
+      replaceExactly(mcpbInputs.release, '[ "$status" != "200" ]', '[ "$status" = "500" ]'),
+      replaceExactly(mcpbInputs.release, "Accept: application/json", "Accept: application/vnd.npm.install-v1+json"),
+      replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
+      replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
+      replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
+      replaceExactly(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD, MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
+      replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
+      replaceAllExactly(
+        mcpbInputs.release,
+        '"$TIMEOUT_BIN" --kill-after=10s 60s git ls-remote --tags origin',
+        '"$TIMEOUT_BIN" --kill-after=10s 600s git ls-remote --tags origin',
+        4
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '            require_job_reserve 2100 "npm publish"\n            assert_remote_tag_identity',
+        '            assert_remote_tag_identity\n            require_job_reserve 2100 "npm publish"'
+      ),
+      replaceExactly(mcpbInputs.release, npmPrewriteTagProof, npmPrewriteRegistryGuard),
+      replaceExactly(mcpbInputs.release, npmPrewriteRegistryGuard, "            registry_read || true"),
+      replaceExactly(mcpbInputs.release, npmFinalTagProof, '          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]'),
+      replaceExactly(
+        replaceExactly(mcpbInputs.release, npmFinalTagProof, '          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]'),
+        "          for (( attempt=1; attempt<=12; attempt++ )); do",
+        "          assert_remote_tag_identity\n          for (( attempt=1; attempt<=12; attempt++ )); do"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "for (( attempt=1; attempt<=12; attempt++ )); do",
+        "for (( attempt=1; attempt<=1; attempt++ )); do"
+      ),
+      replaceExactly(mcpbInputs.release, "NPM_PUBLISH_EXIT=$?", "NPM_PUBLISH_EXIT=0"),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            "$NPM_BIN" publish "$PACKAGE_TARBALL" --tag "$CHANNEL"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            command npm publish "$RUNNER_TEMP/other.tgz" --tag "$CHANNEL"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            command npm pack --json --ignore-scripts`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            npm dist-tag rm "$PACKAGE_NAME" "$CHANNEL"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            npm unpublish "$PACKAGE_NAME@$VERSION"`
+      )
+    ]) {
+      expect(mcpbContractProblems({ ...mcpbInputs, release: weakenedNpmTransaction })).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
+    for (const weakenedNpmEvaluator of [
+      replaceExactly(mcpbInputs.integrity, "state.integrity !== expectedIntegrity", "false"),
+      replaceAllExactly(mcpbInputs.integrity, 'Object.hasOwn(state, "gitHead")', "false", 2),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'decoded.toString("base64") === encoded',
+        'decoded.toString("base64") !== encoded'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "expected npm tarball integrity must be one canonical SHA-512 SRI",
+        "expected npm tarball integrity is optional"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "expected npm source SHA must be one exact lowercase SHA-1",
+        "expected npm source SHA is optional"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])",
+        "evaluateNpmPublication(payload, first, process.argv[5], second, process.argv[6])"
+      )
+    ]) {
+      expect(mcpbContractProblems({ ...mcpbInputs, integrity: weakenedNpmEvaluator })).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
         release: replaceExactly(
           mcpbInputs.release,
-          'npm-state "$SOURCE_SHA" "$VERSION" "$CHANNEL"',
-          'npm-state "$PUBLISHED_SHA" "$VERSION" "$CHANNEL"',
+          'npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL"',
+          'npm-state "$PUBLISHED_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL"',
           3
         )
       })
@@ -2791,17 +3177,12 @@ describe("release identity and exact required-job gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    const releaseWithEarlyChannelGuardDisabled = replaceExactly(
-      mcpbInputs.release,
-      "node scripts/check-release-integrity.mjs channel-advance",
-      "node scripts/check-release-integrity.mjs channel_disabled",
-      2
-    );
     const lateChannelGuard = replaceExactly(
-      releaseWithEarlyChannelGuardDisabled,
-      'npm publish --provenance --access public --tag "$CHANNEL"',
-      'npm publish --provenance --access public --tag "$CHANNEL"\n' +
-        '              node scripts/check-release-integrity.mjs channel-advance "$VERSION" "-" latest'
+      mcpbInputs.release,
+      MCPB_NPM_CHANNEL_ADVANCE,
+      '            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")\n' +
+        "            node scripts/check-release-integrity.mjs channel-advance \\\n" +
+        '              "$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"'
     );
     expect(mcpbContractProblems({ ...mcpbInputs, release: lateChannelGuard })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -2811,9 +3192,9 @@ describe("release identity and exact required-job gate", () => {
       MCPB_NPM_CHANNEL_ADVANCE,
       `            if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
         "              node scripts/check-release-integrity.mjs channel-advance \\\n" +
-        '                "$VERSION" "$CURRENT_CHANNEL_VERSION" "$CHANNEL"\n' +
+        '                "$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"\n' +
         "            fi\n" +
-        '            npm publish --provenance --access public --tag "$CHANNEL"'
+        '            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")'
     );
     expect(mcpbContractProblems({ ...mcpbInputs, release: latestOnlyChannelGuard })).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -2846,7 +3227,7 @@ describe("release identity and exact required-job gate", () => {
       expect(
         mcpbContractProblems({
           ...mcpbInputs,
-          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, 3)
+          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, 4)
         })
       ).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

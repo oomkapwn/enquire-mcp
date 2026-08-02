@@ -43,8 +43,7 @@ const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $
 const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
 const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
 const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
-const RAW_NPM_RESERVE_DEADLINE_GUARD =
-  `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
+const RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",

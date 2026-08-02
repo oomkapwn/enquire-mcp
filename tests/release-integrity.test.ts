@@ -2511,6 +2511,26 @@ function mcpbContractProblems(inputs: {
     visibilityWaitIndex > visibilityTimeoutIndex &&
     visibilityDoneIndex > visibilityWaitIndex &&
     assetReleaseJsonIndex > visibilityDoneIndex;
+  const remoteTagIdentityStepNames = [
+    "Preflight existing GitHub release and every Basic asset before npm",
+    "Publish with provenance or verify an exact prior publication",
+    "Prepare draft GitHub Release",
+    "Upload Basic MCPB asset, checksum, and provenance"
+  ];
+  const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
+  const remoteTagIdentityBodies = remoteTagIdentityStepNames.map((name) => {
+    const body = runBody(namedStep(releaseSteps, name));
+    if (mutationMatchCount(body, remoteTagIdentityMarker) !== 1) return "";
+    const start = body.indexOf(remoteTagIdentityMarker);
+    const end = body.indexOf("\n}", start + remoteTagIdentityMarker.length);
+    return start >= 0 && end > start ? body.slice(start, end + 2) : "";
+  });
+  const canonicalRemoteTagIdentityBody = remoteTagIdentityBodies[0] ?? "";
+  const remoteTagIdentityIsCanonical =
+    canonicalRemoteTagIdentityBody.length > 0 &&
+    remoteTagIdentityBodies.every((body) => body === canonicalRemoteTagIdentityBody) &&
+    createHash("sha256").update(canonicalRemoteTagIdentityBody, "utf8").digest("hex") ===
+      "1c4171ada2237d39b1bcbd02a23ce69a6db4ed3843421d865ebb8795b7bdba76";
   if (
     inputs.release.includes("npm run mcpb:build") ||
     !inputs.release.includes("Download exact CI-gated Basic MCPB release asset") ||
@@ -2603,6 +2623,7 @@ function mcpbContractProblems(inputs: {
     inputs.release.includes("gh release download") ||
     mutationMatchCount(inputs.release, MCPB_PREFLIGHT_ASSET_COMPARE) !== 1 ||
     inputs.release.includes("git ls-remote --tags origin") ||
+    !remoteTagIdentityIsCanonical ||
     (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 4 ||
     (inputs.release.match(/git\/ref\/tags\/\$TAG/g) ?? []).length !== 8 ||
     (inputs.release.match(/git\/tags\/\$TAG_OBJECT_SHA/g) ?? []).length !== 4 ||

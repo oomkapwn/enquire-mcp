@@ -78,6 +78,9 @@ const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_
             if [ "$remaining" -le 10 ]; then`;
 const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
             if [ "$remaining" -lt "$required" ]; then`;
+const GH_READ_GUARD_COUNT = 5;
+const NPM_RESERVE_GUARD_COUNT = 3;
+const RELEASE_SINGLETON_DECODER_COUNT = 2;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -3400,13 +3403,20 @@ describe("release identity and exact required-job gate", () => {
           workflow,
           `RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}`,
           "RELEASE_JOB_DEADLINE_EPOCH: 9999999999",
-          5
+          GH_READ_GUARD_COUNT
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
-    expect(mutationMatchCount(workflow, RAW_GH_READ_DEADLINE_GUARD)).toBe(5);
+    expect(mutationMatchCount(workflow, RAW_GH_READ_DEADLINE_GUARD)).toBe(GH_READ_GUARD_COUNT);
     expect(
-      releasePollProblems(replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, 5))
+      releasePollProblems(
+        replaceExactly(
+          workflow,
+          RAW_GH_READ_DEADLINE_GUARD,
+          MUTATED_RAW_GH_READ_DEADLINE_GUARD,
+          GH_READ_GUARD_COUNT
+        )
+      )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 6))).toContain(
       "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
@@ -3764,7 +3774,7 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
     const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
-    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(3);
+    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(NPM_RESERVE_GUARD_COUNT);
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,
@@ -3854,12 +3864,17 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
       replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
       replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
-      replaceExactly(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD, MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD, 3),
+      replaceExactly(
+        mcpbInputs.release,
+        RAW_NPM_RESERVE_DEADLINE_GUARD,
+        MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD,
+        NPM_RESERVE_GUARD_COUNT
+      ),
       replaceAllExactly(
         mcpbInputs.release,
         'if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then',
         "if now=$(/bin/date +%s); then",
-        9
+        GH_READ_GUARD_COUNT + NPM_RESERVE_GUARD_COUNT
       ),
       replaceExactly(
         mcpbInputs.release,
@@ -4016,7 +4031,7 @@ describe("release identity and exact required-job gate", () => {
         `"repos/\${{ github.repository }}/releases/latest" 2>&1)`,
         2
       ),
-      replaceExactly(mcpbInputs.release, "select(length == 1) | .[0] |", ".[] |", 3),
+      replaceExactly(mcpbInputs.release, "select(length == 1) | .[0] |", ".[] |", RELEASE_SINGLETON_DECODER_COUNT),
       replaceExactly(mcpbInputs.release, "/usr/bin/jq -cse \\", "/usr/bin/jq -ce \\", 2),
       replaceExactly(mcpbInputs.release, "| /usr/bin/jq -se \\", "| /usr/bin/jq -e \\", 2),
       replaceExactly(mcpbInputs.release, '[ "$GITHUB_LATEST_EXIT" -ne 4 ]', '[ "$GITHUB_LATEST_EXIT" -ne 2 ]', 2),

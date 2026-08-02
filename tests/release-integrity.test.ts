@@ -14,6 +14,8 @@ import {
   evaluateConvergentCount,
   evaluateMcpbCandidateRun,
   evaluateMcpbReleaseState,
+  evaluateNpmProvenanceAttestations,
+  evaluateNpmProvenanceContext,
   evaluateNpmPublication,
   evaluateReleaseChecks,
   flattenPaginatedArrays,
@@ -55,6 +57,67 @@ function runReleaseIntegrityCli(args: string[], input = "", extraEnv: Record<str
 }
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
+const NPM_PROVENANCE_TAG = "v4.0.0-rc.2";
+const NPM_PROVENANCE_VERSION = "4.0.0-rc.2";
+const NPM_PROVENANCE_RUN_ID = "30726087813";
+const NPM_PROVENANCE_RUN_ATTEMPT = "2";
+const NPM_PROVENANCE_PUBLISH_PREDICATE = "https://github.com/npm/attestation/tree/main/specs/publish/v0.1";
+const NPM_PROVENANCE_SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
+const NPM_PROVENANCE_SHA512_HEX = "ab".repeat(64);
+const NPM_PROVENANCE_INTEGRITY = `sha512-${Buffer.from(NPM_PROVENANCE_SHA512_HEX, "hex").toString("base64")}`;
+const NPM_PROVENANCE_PUBLISH_KEY_HINT = `SHA256:${Buffer.from("11".repeat(32), "hex").toString("base64").slice(0, -1)}`;
+const NPM_PROVENANCE_SIGNER_URI = `https://github.com/oomkapwn/enquire-mcp/.github/workflows/release.yml@refs/tags/${NPM_PROVENANCE_TAG}`;
+const NPM_PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const NPM_PROVENANCE_SLSA_CERTIFICATE_WITHOUT_ISSUER =
+  "MIICHjCCAYegAwIBAgIJAM7GhthLV625MA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
+  "MjYwODAyMTY1NzEwWhcNMzYwNzMwMTY1NzEwWjAbMRkwFwYDVQQDDBBlbnF1aXJlLW1jcC10ZXN0MIGfMA0GCSqGSIb3DQEB" +
+  "AQUAA4GNADCBiQKBgQCsgolKa0y13lWHBmx2SAtw01UvLQMslKIkltUINUnnjHkKFvTxuFQ/yR5/QVehxqld+eYZRK1mvGWR" +
+  "X2Jw5pXAZFxiXw4mcVL1XzLONm1SVVOlFbPaU2ZZS+LuhAHiVzqxa9G1OQrBGRODcU0x+PV8HXB4wUIvdgwUZQarh9qr4QID" +
+  "AQABo2owaDBmBgNVHREEXzBdhltodHRwczovL2dpdGh1Yi5jb20vb29ta2Fwd24vZW5xdWlyZS1tY3AvLmdpdGh1Yi93b3Jr" +
+  "Zmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3Y0LjAuMC1yYy4yMA0GCSqGSIb3DQEBCwUAA4GBAJHZcjzKxq76TBa8ctTk" +
+  "UdiF0P5Sn2ZczQ3kbmyHS6UI3SPUIWblfq6VKf2uLkwn7dhKm8ArJSF5w7ROo9KsqsF39BjZa2d7zwEtcSgaiilnng5rNPfk" +
+  "jxrjCrQ7Qi/3Ic+zNan75bVYilbvE7uNJ7q33QrieZ8Jl7pW3MfASf4o";
+const NPM_PROVENANCE_SLSA_CERTIFICATE =
+  "MIICWzCCAcSgAwIBAgIJAOoJfZTajzjgMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
+  "MjYwODAyMTcwOTIyWhcNMzYwNzMwMTcwOTIyWjAbMRkwFwYDVQQDDBBlbnF1aXJlLW1jcC10ZXN0MIGfMA0GCSqGSIb3DQEB" +
+  "AQUAA4GNADCBiQKBgQDHWh5M6QghtpUHNJaXcUwO/OQRWp4aRIFQNkeuCOqGHANP4pS6THSPrX9UraD4KZts4JzGp9MY4XIF" +
+  "noIPB2IJuMeokTxFCtoXKN/TE1vuF1neXHSZHOqI2UbnkKD9VFGe9mGq/cAkcomRit65Oxr57/ePnU2zj9QKOSUmg+j64QID" +
+  "AQABo4GmMIGjMGYGA1UdEQRfMF2GW2h0dHBzOi8vZ2l0aHViLmNvbS9vb21rYXB3bi9lbnF1aXJlLW1jcC8uZ2l0aHViL3dv" +
+  "cmtmbG93cy9yZWxlYXNlLnltbEByZWZzL3RhZ3MvdjQuMC4wLXJjLjIwOQYKKwYBBAGDvzABAQQraHR0cHM6Ly90b2tlbi5h" +
+  "Y3Rpb25zLmdpdGh1YnVzZXJjb250ZW50LmNvbTANBgkqhkiG9w0BAQsFAAOBgQCfHNFSPWWSWPGP84oGNAQcyiSZoDGkbjbD" +
+  "DmxvijxxJaAy7su8MuY5r1hYIV0y8WCZtSx7N3AloHwIrAi5dcKF4sw9jQXHPTp1NbFezpCwQI3QOqTN7TNh5TMMGj0LcmHt" +
+  "vtzYxsnigvmamRlAdq6UwX3GV7bZpGo+8xQPjylS9w==";
+const NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE =
+  "MIICXTCCAcagAwIBAgIJAIOLZcM2TTc6MA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
+  "MjYwODAyMTcwOTI5WhcNMzYwNzMwMTcwOTI5WjAbMRkwFwYDVQQDDBBlbnF1aXJlLW1jcC10ZXN0MIGfMA0GCSqGSIb3DQEB" +
+  "AQUAA4GNADCBiQKBgQDRwAlvNOQCo39187885umQjdbJVkquRXzV16yGNi/oG0DvKYJ5HqKIJct+NziQl2SaviD7jltC1Aa7" +
+  "aoDbtn51GmbPkcyVOpbm0CYyIR4iREsTrp+XLDMfITuuidis8sEDiIkveny41R8yEp47Rh356KiTDP2OwZG4mEWz1SKgfQID" +
+  "AQABo4GoMIGlMGYGA1UdEQRfMF2GW2h0dHBzOi8vZ2l0aHViLmNvbS9vb21rYXB3bi9lbnF1aXJlLW1jcC8uZ2l0aHViL3dv" +
+  "cmtmbG93cy9yZWxlYXNlLnltbEByZWZzL3RhZ3MvdjQuMC4wLXJjLjIwOwYKKwYBBAGDvzABCAQtDCtodHRwczovL3Rva2Vu" +
+  "LmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMA0GCSqGSIb3DQEBCwUAA4GBAFwJEDM2bhJkVFpYbM5KBAGKy3zsnjom" +
+  "EdHK18BBVUZeDrEFKboV9piz7IWJonAMsWdSQnD481xtLxazG6JPC9ocDqZBhS60Ft3q6KbGK4xh0t68o1ZJus9WNCv6BIcI" +
+  "iDODPllji3mFSbCvLf+ag+r1yL+EFt4+r3TZS2jaG00i";
+const NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE =
+  "MIICmDCCAgGgAwIBAgIJALn2xJ4HhwaJMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
+  "MjYwODAyMTcwOTM3WhcNMzYwNzMwMTcwOTM3WjAbMRkwFwYDVQQDDBBlbnF1aXJlLW1jcC10ZXN0MIGfMA0GCSqGSIb3DQEB" +
+  "AQUAA4GNADCBiQKBgQDOv9eiItDz1kWHAm4499OYbGrRgEfJBK4bZ3w0CIi29xnYBsDMwjQrFzRmnuGQ1/GWAcHmF0nXJhQq" +
+  "s11WD2jiRpRDEHHc+rFMCapF5S3A0V44S2MRFFcZiIm+hqJI9l9hpV81AAVWqUZ6hGAPgivXi+6MaeG+yt5S/aVKnQu+qwID" +
+  "AQABo4HjMIHgMGYGA1UdEQRfMF2GW2h0dHBzOi8vZ2l0aHViLmNvbS9vb21rYXB3bi9lbnF1aXJlLW1jcC8uZ2l0aHViL3dv" +
+  "cmtmbG93cy9yZWxlYXNlLnltbEByZWZzL3RhZ3MvdjQuMC4wLXJjLjIwOQYKKwYBBAGDvzABAQQraHR0cHM6Ly90b2tlbi5h" +
+  "Y3Rpb25zLmdpdGh1YnVzZXJjb250ZW50LmNvbTA7BgorBgEEAYO/MAEIBC0MK2h0dHBzOi8vdG9rZW4uYWN0aW9ucy5naXRo" +
+  "dWJ1c2VyY29udGVudC5jb20wDQYJKoZIhvcNAQELBQADgYEAJgHMhx+n2p3jRZ8R8AryWRDg3O0t1fXjupajuDxFm4iFF1qQ" +
+  "S2IqX75vPyZI1bWTfDNoviSp2WEcaa7+uFDNsS9joc0pePSRGtSTX7PhOUrNaSOic/wIoZpKFAFQORbIYuHtI7BijlBOJpuL" +
+  "BnDUXBxznOVOe6nCSPcB5r+mBDs=";
+const NPM_PROVENANCE_SLSA_MULTIPLE_SAN_CERTIFICATE =
+  "MIICezCCAeSgAwIBAgIJAJVveVbxIgu4MA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAMMEGVucXVpcmUtbWNwLXRlc3QwHhcN" +
+  "MjYwODAyMTcxMDAxWhcNMzYwNzMwMTcxMDAxWjAbMRkwFwYDVQQDDBBlbnF1aXJlLW1jcC10ZXN0MIGfMA0GCSqGSIb3DQEB" +
+  "AQUAA4GNADCBiQKBgQC1bQ3SzrjivVeeJATcGnIp0bolxed+7SEhBh44GY2AbXj/nLfpHEtDe7LXxpsVsSEE3wFbOK2VhLcn" +
+  "RXIc0LFxJweYny4HSbxua2/fA6O0Jpaqdv2XvHp2aH2RBYPA2YnPo2PqUnRHkwucccPwoXHoIyIdjtaJJ5ct09Q4+i4LGwID" +
+  "AQABo4HGMIHDMIGFBgNVHREEfjB8hltodHRwczovL2dpdGh1Yi5jb20vb29ta2Fwd24vZW5xdWlyZS1tY3AvLmdpdGh1Yi93" +
+  "b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3Y0LjAuMC1yYy4yhh1odHRwczovL2V4YW1wbGUuaW52YWxpZC9leHRy" +
+  "YTA5BgorBgEEAYO/MAEBBCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMA0GCSqGSIb3DQEB" +
+  "CwUAA4GBAGeIrS3YqdYzaVJPqPDvPgl80zC/5F+7VAkUsl8mdnQVaIVvfqbULNzAWIn9lEYZ1KlEQsJt9aVWn7TyFSoLZUsl" +
+  "ZHaHy57VsQPv5YXLOvtbLBFUfUJnpj27d4q0g/xR7gqqrtztbmp8+R8SP7dOpGMvVEYjLWPzc3SE1MbptfGb";
 const RELEASE_JOB_CLOCK_GUARD = `  local now remaining
   if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
     echo "::error::Current epoch is unavailable or malformed" >&2
@@ -79,6 +142,12 @@ const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_
 const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
             if [ "$remaining" -lt "$required" ]; then`;
 const GH_READ_GUARD_COUNT = 5;
+const RELEASE_DEADLINE_ENV_BINDING_COUNT = 6;
+const RELEASE_FIXTURE_GH_CONFIG_COUNT = 6;
+const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 8;
+const RELEASE_HARDENED_ENV_COUNT = 7;
+const RELEASE_HARDENED_SHELL_COUNT = 7;
+const RELEASE_TLS_PIN_COUNT = 6;
 const NPM_RESERVE_GUARD_COUNT = 3;
 const RELEASE_SINGLETON_DECODER_COUNT = 2;
 const TRUSTED_CI_RUN = Object.freeze({
@@ -128,6 +197,256 @@ function releaseAsset(name: string, id: number) {
     content_type: "application/octet-stream",
     size: id,
     digest: `sha256:${id.toString(16).padStart(64, "0")}`
+  };
+}
+
+function npmProvenanceContext() {
+  const exact = {
+    eventName: "push",
+    sha: TRUSTED_SOURCE_SHA,
+    ref: `refs/tags/${NPM_PROVENANCE_TAG}`,
+    refName: NPM_PROVENANCE_TAG,
+    refType: "tag",
+    repository: "oomkapwn/enquire-mcp",
+    repositoryId: "1227411427",
+    repositoryOwnerId: "274092130",
+    serverUrl: "https://github.com",
+    workflowRef: `oomkapwn/enquire-mcp/.github/workflows/release.yml@refs/tags/${NPM_PROVENANCE_TAG}`,
+    workflowSha: TRUSTED_SOURCE_SHA,
+    runId: NPM_PROVENANCE_RUN_ID,
+    runAttempt: NPM_PROVENANCE_RUN_ATTEMPT,
+    runnerEnvironment: "github-hosted"
+  };
+  return { declared: { ...exact }, runtime: { ...exact } };
+}
+
+function npmProvenanceSubject(
+  name = `pkg:npm/%40oomkapwn/enquire-mcp@${NPM_PROVENANCE_VERSION}`,
+  sha512 = NPM_PROVENANCE_SHA512_HEX
+) {
+  return [{ name, digest: { sha512 } }];
+}
+
+interface NpmPublishStatementOptions {
+  statementType?: string;
+  subject?: unknown;
+  predicateType?: string;
+  name?: string;
+  version?: string;
+  registry?: string;
+}
+
+function npmPublishStatement(options: NpmPublishStatementOptions = {}) {
+  return {
+    _type: options.statementType ?? "https://in-toto.io/Statement/v0.1",
+    subject: options.subject ?? npmProvenanceSubject(),
+    predicateType: options.predicateType ?? NPM_PROVENANCE_PUBLISH_PREDICATE,
+    predicate: {
+      name: options.name ?? "@oomkapwn/enquire-mcp",
+      version: options.version ?? NPM_PROVENANCE_VERSION,
+      registry: options.registry ?? "https://registry.npmjs.org"
+    }
+  };
+}
+
+interface NpmSlsaStatementOptions {
+  statementType?: string;
+  subject?: unknown;
+  predicateType?: string;
+  buildType?: string;
+  workflowRef?: string;
+  workflowRepository?: string;
+  workflowPath?: string;
+  eventName?: string;
+  repositoryId?: string;
+  repositoryOwnerId?: string;
+  dependencyUri?: string;
+  gitCommit?: string;
+  builderId?: string;
+  runId?: string;
+  runAttempt?: string;
+  invocationId?: string;
+}
+
+function npmSlsaStatement(options: NpmSlsaStatementOptions = {}) {
+  const runId = options.runId ?? NPM_PROVENANCE_RUN_ID;
+  const runAttempt = options.runAttempt ?? NPM_PROVENANCE_RUN_ATTEMPT;
+  return {
+    _type: options.statementType ?? "https://in-toto.io/Statement/v1",
+    subject: options.subject ?? npmProvenanceSubject(),
+    predicateType: options.predicateType ?? NPM_PROVENANCE_SLSA_PREDICATE,
+    predicate: {
+      buildDefinition: {
+        buildType: options.buildType ?? "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+        externalParameters: {
+          workflow: {
+            ref: options.workflowRef ?? `refs/tags/${NPM_PROVENANCE_TAG}`,
+            repository: options.workflowRepository ?? "https://github.com/oomkapwn/enquire-mcp",
+            path: options.workflowPath ?? ".github/workflows/release.yml"
+          }
+        },
+        internalParameters: {
+          github: {
+            event_name: options.eventName ?? "push",
+            repository_id: options.repositoryId ?? "1227411427",
+            repository_owner_id: options.repositoryOwnerId ?? "274092130"
+          }
+        },
+        resolvedDependencies: [
+          {
+            uri: options.dependencyUri ?? `git+https://github.com/oomkapwn/enquire-mcp@refs/tags/${NPM_PROVENANCE_TAG}`,
+            digest: { gitCommit: options.gitCommit ?? TRUSTED_SOURCE_SHA }
+          }
+        ]
+      },
+      runDetails: {
+        builder: { id: options.builderId ?? "https://github.com/actions/runner/github-hosted" },
+        metadata: {
+          invocationId:
+            options.invocationId ??
+            `https://github.com/oomkapwn/enquire-mcp/actions/runs/${runId}/attempts/${runAttempt}`
+        }
+      }
+    }
+  };
+}
+
+interface NpmAttestationBundleOptions {
+  mediaType?: unknown;
+  verificationMaterial?: unknown;
+  payloadType?: unknown;
+  payload?: unknown;
+  signatures?: unknown;
+}
+
+function npmPublishVerificationMaterial() {
+  return {
+    publicKey: { hint: NPM_PROVENANCE_PUBLISH_KEY_HINT },
+    tlogEntries: [{}],
+    timestampVerificationData: {}
+  };
+}
+
+function npmSlsaVerificationMaterial(certificates: unknown[] = [{ rawBytes: NPM_PROVENANCE_SLSA_CERTIFICATE }]) {
+  return {
+    x509CertificateChain: { certificates },
+    tlogEntries: [{}],
+    timestampVerificationData: {}
+  };
+}
+
+function mutateNpmCertificateBytes(certificate: string, exactBytes: Buffer, replacementBytes: Buffer): string {
+  const certificateDer = Buffer.from(certificate, "base64");
+  const mutationOffset = certificateDer.indexOf(exactBytes);
+  if (
+    replacementBytes.length !== exactBytes.length ||
+    mutationOffset < 0 ||
+    certificateDer.indexOf(exactBytes, mutationOffset + 1) >= 0
+  ) {
+    throw new Error("test certificate mutation must replace one exact equal-length byte sequence");
+  }
+  replacementBytes.copy(certificateDer, mutationOffset);
+  return certificateDer.toString("base64");
+}
+
+function npmCertificateWithSignerUri(signerUri: string): string {
+  return mutateNpmCertificateBytes(
+    NPM_PROVENANCE_SLSA_CERTIFICATE,
+    Buffer.from(NPM_PROVENANCE_SIGNER_URI, "utf8"),
+    Buffer.from(signerUri, "utf8")
+  );
+}
+
+function npmAttestationBundle(
+  predicateType: string,
+  statement: Record<string, unknown>,
+  options: NpmAttestationBundleOptions = {}
+) {
+  const publish = predicateType === NPM_PROVENANCE_PUBLISH_PREDICATE;
+  const verificationMaterial = publish ? npmPublishVerificationMaterial() : npmSlsaVerificationMaterial();
+  return {
+    predicateType,
+    bundle: {
+      mediaType:
+        options.mediaType === undefined ? "application/vnd.dev.sigstore.bundle+json;version=0.2" : options.mediaType,
+      verificationMaterial:
+        options.verificationMaterial === undefined ? verificationMaterial : options.verificationMaterial,
+      dsseEnvelope: {
+        payloadType: options.payloadType === undefined ? "application/vnd.in-toto+json" : options.payloadType,
+        payload:
+          options.payload === undefined
+            ? Buffer.from(JSON.stringify(statement), "utf8").toString("base64")
+            : options.payload,
+        signatures:
+          options.signatures === undefined
+            ? [{ sig: "dGVzdA==", keyid: publish ? NPM_PROVENANCE_PUBLISH_KEY_HINT : "" }]
+            : options.signatures
+      }
+    }
+  };
+}
+
+interface NpmProvenanceReportOptions {
+  publish?: NpmPublishStatementOptions;
+  slsa?: NpmSlsaStatementOptions;
+  bundles?: unknown[];
+  targetOverrides?: Record<string, unknown>;
+  extraVerified?: unknown[];
+  invalid?: unknown[];
+  missing?: unknown[];
+  targetCopies?: number;
+}
+
+function npmProvenanceReport(options: NpmProvenanceReportOptions = {}) {
+  const bundles = options.bundles ?? [
+    npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(options.publish)),
+    npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(options.slsa))
+  ];
+  const target = {
+    name: "@oomkapwn/enquire-mcp",
+    version: NPM_PROVENANCE_VERSION,
+    location: "node_modules/@oomkapwn/enquire-mcp",
+    registry: "https://registry.npmjs.org/",
+    attestations: {
+      url: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+      provenance: { predicateType: NPM_PROVENANCE_SLSA_PREDICATE }
+    },
+    attestationBundles: bundles,
+    ...options.targetOverrides
+  };
+  const targetCopies = options.targetCopies ?? 1;
+  return {
+    invalid: options.invalid ?? [],
+    missing: options.missing ?? [],
+    verified: [
+      ...(options.extraVerified ?? []),
+      ...Array.from({ length: targetCopies }, () => ({ ...target, attestationBundles: [...bundles] }))
+    ]
+  };
+}
+
+function npmProvenanceExpected(
+  publishAttempted: boolean,
+  overrides: Partial<{
+    name: string;
+    version: string;
+    integrity: string;
+    sourceSha: string;
+    tag: string;
+    currentRunId: string;
+    currentRunAttempt: string;
+  }> = {}
+) {
+  return {
+    name: "@oomkapwn/enquire-mcp",
+    version: NPM_PROVENANCE_VERSION,
+    integrity: NPM_PROVENANCE_INTEGRITY,
+    sourceSha: TRUSTED_SOURCE_SHA,
+    tag: NPM_PROVENANCE_TAG,
+    publishAttempted,
+    currentRunId: NPM_PROVENANCE_RUN_ID,
+    currentRunAttempt: NPM_PROVENANCE_RUN_ATTEMPT,
+    ...overrides
   };
 }
 
@@ -1503,20 +1822,21 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const freshGithubConfig =
     'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")\nexport GH_CONFIG_DIR';
   const protectedShell = "/bin/bash --noprofile --norc -p -e -o pipefail {0}";
+  const hasInjectedSecret = (step: YamlRecord) => {
+    const env = yamlRecord(step.env);
+    return (
+      env !== null &&
+      (("GH_TOKEN" in env && env.GH_TOKEN !== "") || ("NODE_AUTH_TOKEN" in env && env.NODE_AUTH_TOKEN !== ""))
+    );
+  };
   const secretStepEnvIsSealed =
     [...githubSecretSteps, ...otherSecretSteps].every(
       (name) => steps.filter((step) => step.name === name).length === 1
     ) &&
     steps
-      .filter((step) => {
-        const env = yamlRecord(step.env);
-        return env !== null && ("GH_TOKEN" in env || "NODE_AUTH_TOKEN" in env);
-      })
+      .filter(hasInjectedSecret)
       .every((step) => typeof step.name === "string" && githubSecretSteps.includes(step.name)) &&
-    steps.filter((step) => {
-      const env = yamlRecord(step.env);
-      return env !== null && ("GH_TOKEN" in env || "NODE_AUTH_TOKEN" in env);
-    }).length === githubSecretSteps.length &&
+    steps.filter(hasInjectedSecret).length === githubSecretSteps.length &&
     mutationMatchCount(workflow, `\${{ github.token }}`) === 1 &&
     mutationMatchCount(workflow, `\${{ secrets.GITHUB_TOKEN }}`) === 5 &&
     mutationMatchCount(workflow, `\${{ secrets.NPM_TOKEN }}`) === 1 &&
@@ -2219,6 +2539,335 @@ const MCPB_PREFLIGHT_ASSET_COMPARE =
   '              echo "::error::Existing release asset $NAME differs before npm publication"\n' +
   "              exit 1\n" +
   "            fi";
+const NPM_PROVENANCE_CONTRACT_PROBLEM =
+  "npm provenance must bind the tag-push context before the sole publish " +
+  "and verify two exact attestations without credentials";
+const NPM_PROVENANCE_STEP_NAME = "Verify exact npm provenance without credentials";
+const NPM_PROVENANCE_CONTEXT_COMMAND =
+  '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"';
+const NPM_PROVENANCE_AUDIT_COMMAND = '"$TIMEOUT_BIN" --kill-after=10s 120s "$NODE_BIN" "$NPM_CLI_JS" audit signatures';
+const NPM_PROVENANCE_EVALUATOR_COMMAND = '"$TIMEOUT_BIN" --kill-after=5s 30s "$NODE_BIN" "$CHECKER" \\';
+const NPM_PROVENANCE_SUCCESS_CONDITION = '[ "$AUDIT_EXIT" -eq 0 ] && [ "$EVALUATOR_EXIT" -eq 0 ]';
+const NPM_PROVENANCE_CLI_SRI =
+  "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==";
+
+function npmProvenanceWorkflowProblems(release: string): string[] {
+  let steps: YamlRecord[];
+  try {
+    const releaseDocument = yamlRecord(load(release));
+    const releaseJob = yamlRecord(yamlRecord(releaseDocument?.jobs)?.publish);
+    steps = yamlSteps(releaseJob ?? {});
+  } catch {
+    return [NPM_PROVENANCE_CONTRACT_PROBLEM];
+  }
+  const publishIndex = steps.findIndex(
+    (step) => step.name === "Publish with provenance or verify an exact prior publication"
+  );
+  const verificationIndex = steps.findIndex((step) => step.name === NPM_PROVENANCE_STEP_NAME);
+  const draftIndex = steps.findIndex((step) => step.name === "Prepare draft GitHub Release");
+  const publishStep = publishIndex >= 0 ? steps[publishIndex] : undefined;
+  const verificationStep = verificationIndex >= 0 ? steps[verificationIndex] : undefined;
+  const publishRun = runBody(publishStep);
+  const verificationRun = runBody(verificationStep);
+  const publishEnv = yamlRecord(publishStep?.env);
+  const verificationEnv = yamlRecord(verificationStep?.env);
+  const contextBindings: Record<string, string> = {
+    PROVENANCE_EVENT_NAME: `\${{ github.event_name }}`,
+    PROVENANCE_REF: `\${{ github.ref }}`,
+    PROVENANCE_REF_NAME: `\${{ github.ref_name }}`,
+    PROVENANCE_REF_TYPE: `\${{ github.ref_type }}`,
+    PROVENANCE_REPOSITORY: `\${{ github.repository }}`,
+    PROVENANCE_REPOSITORY_ID: `\${{ github.repository_id }}`,
+    PROVENANCE_REPOSITORY_OWNER_ID: `\${{ github.repository_owner_id }}`,
+    PROVENANCE_RUN_ATTEMPT: `\${{ github.run_attempt }}`,
+    PROVENANCE_RUN_ID: `\${{ github.run_id }}`,
+    PROVENANCE_RUNNER_ENVIRONMENT: `\${{ runner.environment }}`,
+    PROVENANCE_SERVER_URL: `\${{ github.server_url }}`,
+    PROVENANCE_SHA: `\${{ github.sha }}`,
+    PROVENANCE_WORKFLOW_REF: `\${{ github.workflow_ref }}`,
+    PROVENANCE_WORKFLOW_SHA: `\${{ github.workflow_sha }}`
+  };
+  const verifierBindings: Record<string, string> = {
+    RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
+    EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
+    EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
+    EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
+    EXPECTED_INTEGRITY: `\${{ steps.npm_publication.outputs.integrity }}`,
+    PUBLISH_ATTEMPTED: `\${{ steps.npm_publication.outputs.publish_attempted }}`,
+    CURRENT_RUN_ID: `\${{ github.run_id }}`,
+    CURRENT_RUN_ATTEMPT: `\${{ github.run_attempt }}`
+  };
+
+  const publishReserveIndex = publishRun.indexOf('require_job_reserve 4500 "npm publish"');
+  const prewriteTagIndex = publishRun.indexOf("\n  assert_remote_tag_identity", publishReserveIndex);
+  const prewriteReadIndex = publishRun.indexOf("if ! registry_read; then", prewriteTagIndex);
+  const prewriteRehashIndex = publishRun.indexOf(
+    'PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")',
+    prewriteReadIndex
+  );
+  const contextIndex = publishRun.indexOf(NPM_PROVENANCE_CONTEXT_COMMAND, prewriteRehashIndex);
+  const attemptedIndex = publishRun.indexOf("NPM_PUBLISH_ATTEMPTED=true", contextIndex);
+  const solePublishIndex = publishRun.indexOf(MCPB_EXACT_NPM_PUBLISH_RUN, attemptedIndex);
+  const publishOutputIndex = publishRun.indexOf("printf 'publish_attempted=%s\\n'", solePublishIndex);
+
+  const verifierReserveIndex = verificationRun.indexOf(
+    'require_job_reserve 2700 "token-free npm provenance verification"'
+  );
+  const userConfigIndex = verificationRun.indexOf('NPM_USERCONFIG="$VERIFY_ROOT/user.npmrc"', verifierReserveIndex);
+  const globalConfigIndex = verificationRun.indexOf('NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"', userConfigIndex);
+  const configTouchIndex = verificationRun.indexOf(
+    '/usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"',
+    globalConfigIndex
+  );
+  const configChmodIndex = verificationRun.indexOf(
+    '/bin/chmod 600 "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"',
+    configTouchIndex
+  );
+  const configGuardIndex = verificationRun.indexOf(
+    "npm verifier config files are missing, aliased, or unsafe",
+    configChmodIndex
+  );
+  const globalConfigBindingIndex = verificationRun.indexOf(
+    '"NPM_CONFIG_GLOBALCONFIG=$NPM_GLOBALCONFIG"',
+    configGuardIndex
+  );
+  const userConfigBindingIndex = verificationRun.indexOf(
+    '"NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"',
+    globalConfigBindingIndex
+  );
+  const downloadIndex = verificationRun.indexOf("NPM_CLI_HTTP_STATUS=$(/usr/bin/env -i", userConfigBindingIndex);
+  const sizeIndex = verificationRun.indexOf("NPM_CLI_ACTUAL_SIZE=$(/usr/bin/env -i", downloadIndex);
+  const sriIndex = verificationRun.indexOf("NPM_CLI_ACTUAL_SRI=$(/usr/bin/env -i", sizeIndex);
+  const pathInventoryIndex = verificationRun.indexOf("if ! NPM_CLI_MEMBERS=$(/usr/bin/env -i", sriIndex);
+  const pathInventoryGuardIndex = verificationRun.indexOf(
+    "absolute, escaping, or non-package member path",
+    pathInventoryIndex
+  );
+  const typeInventoryIndex = verificationRun.indexOf(
+    "if ! NPM_CLI_MEMBER_TYPES=$(/usr/bin/env -i",
+    pathInventoryGuardIndex
+  );
+  const typeInventoryGuardIndex = verificationRun.indexOf(
+    "contains a link, device, FIFO, or non-file member",
+    typeInventoryIndex
+  );
+  const extractIndex = verificationRun.indexOf('"$TAR_BIN" --extract --gzip', typeInventoryGuardIndex);
+  const embeddedVersionIndex = verificationRun.indexOf("ACTUAL_NPM_CLI_VERSION=", extractIndex);
+  const installIndex = verificationRun.indexOf('"$NPM_CLI_JS" install', embeddedVersionIndex);
+  const lockIdentityIndex = verificationRun.indexOf(
+    '.packages["node_modules/@oomkapwn/enquire-mcp"].integrity',
+    installIndex
+  );
+  const auditIndex = verificationRun.indexOf(NPM_PROVENANCE_AUDIT_COMMAND, lockIdentityIndex);
+  const auditCleanEnvIndex = verificationRun.lastIndexOf(`/usr/bin/env -i "\${CLEAN_NPM_ENV[@]}"`, auditIndex);
+  const evaluatorIndex = verificationRun.indexOf(NPM_PROVENANCE_EVALUATOR_COMMAND, auditIndex);
+  const evaluatorCleanEnvIndex = verificationRun.lastIndexOf(`/usr/bin/env -i "\${CLEAN_ENV[@]}"`, evaluatorIndex);
+  const evaluatorModeIndex = verificationRun.indexOf('npm-provenance "$PACKAGE_NAME"', evaluatorIndex);
+  const convergenceIndex = verificationRun.indexOf(NPM_PROVENANCE_SUCCESS_CONDITION, evaluatorModeIndex);
+  const verifiedOutputIndex = verificationRun.indexOf("printf 'verified=true\\n'", convergenceIndex);
+  const allRunBodies = steps.map(runBody).join("\n");
+  const verifierWorstCaseSeconds =
+    130 + // pinned CLI download
+    4 * 35 + // SRI, path inventory, type inventory, and extraction
+    610 + // exact consumer install
+    8 * (130 + 35) + // signature audit plus semantic evaluator per read-only attempt
+    7 * 10; // bounded convergence sleeps
+  const verifierReserveCoversWorstCase = 2700 >= verifierWorstCaseSeconds + 300;
+
+  const isExact =
+    publishIndex >= 0 &&
+    verificationIndex === publishIndex + 1 &&
+    draftIndex === verificationIndex + 1 &&
+    publishStep?.id === "npm_publication" &&
+    verificationStep?.id === "npm_provenance" &&
+    Object.entries(contextBindings).every(([name, value]) => publishEnv?.[name] === value) &&
+    Object.entries(verifierBindings).every(([name, value]) => verificationEnv?.[name] === value) &&
+    publishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}` &&
+    verificationEnv?.GH_TOKEN === "" &&
+    verificationEnv?.GITHUB_TOKEN === "" &&
+    verificationEnv?.NODE_AUTH_TOKEN === "" &&
+    verificationEnv?.NPM_TOKEN === "" &&
+    verificationEnv?.ACTIONS_ID_TOKEN_REQUEST_URL === "" &&
+    verificationEnv?.ACTIONS_ID_TOKEN_REQUEST_TOKEN === "" &&
+    verificationEnv?.NPM_CLI_VERSION === "11.18.0" &&
+    verificationEnv?.NPM_CLI_URL === "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz" &&
+    verificationEnv?.NPM_CLI_SRI === NPM_PROVENANCE_CLI_SRI &&
+    verificationEnv?.NPM_CLI_SIZE === "2997746" &&
+    !JSON.stringify(verificationStep).includes("secrets.") &&
+    publishReserveIndex >= 0 &&
+    prewriteTagIndex > publishReserveIndex &&
+    prewriteReadIndex > prewriteTagIndex &&
+    prewriteRehashIndex > prewriteReadIndex &&
+    contextIndex > prewriteRehashIndex &&
+    attemptedIndex > contextIndex &&
+    solePublishIndex > attemptedIndex &&
+    publishOutputIndex > solePublishIndex &&
+    mutationMatchCount(publishRun, NPM_PROVENANCE_CONTEXT_COMMAND) === 1 &&
+    mutationMatchCount(allRunBodies, MCPB_EXACT_NPM_PUBLISH_RUN) === 1 &&
+    verifierReserveIndex >= 0 &&
+    userConfigIndex > verifierReserveIndex &&
+    globalConfigIndex > userConfigIndex &&
+    configTouchIndex > globalConfigIndex &&
+    configChmodIndex > configTouchIndex &&
+    configGuardIndex > configChmodIndex &&
+    globalConfigBindingIndex > configGuardIndex &&
+    userConfigBindingIndex > globalConfigBindingIndex &&
+    downloadIndex > verifierReserveIndex &&
+    downloadIndex > userConfigBindingIndex &&
+    sizeIndex > downloadIndex &&
+    sriIndex > sizeIndex &&
+    pathInventoryIndex > sriIndex &&
+    pathInventoryGuardIndex > pathInventoryIndex &&
+    typeInventoryIndex > pathInventoryGuardIndex &&
+    typeInventoryGuardIndex > typeInventoryIndex &&
+    extractIndex > typeInventoryGuardIndex &&
+    embeddedVersionIndex > extractIndex &&
+    installIndex > embeddedVersionIndex &&
+    lockIdentityIndex > installIndex &&
+    auditCleanEnvIndex > lockIdentityIndex &&
+    auditIndex > lockIdentityIndex &&
+    auditIndex > auditCleanEnvIndex &&
+    evaluatorCleanEnvIndex > auditIndex &&
+    evaluatorIndex > auditIndex &&
+    evaluatorIndex > evaluatorCleanEnvIndex &&
+    evaluatorModeIndex > evaluatorIndex &&
+    convergenceIndex > evaluatorModeIndex &&
+    verifiedOutputIndex > convergenceIndex &&
+    verificationRun.startsWith(
+      "set -euo pipefail\nbuiltin unset -v GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN NPM_TOKEN\n" +
+        "builtin unset -v ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+    ) &&
+    verificationRun.includes("/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/mktemp -d") &&
+    verificationRun.includes("AWK_BIN=$(type -P awk)") &&
+    verificationRun.includes('NPM_USERCONFIG="$VERIFY_ROOT/user.npmrc"') &&
+    verificationRun.includes('NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"') &&
+    verificationRun.includes(
+      `/usr/bin/env -i "\${CLEAN_ENV[@]}" /usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"`
+    ) &&
+    verificationRun.includes(
+      `/usr/bin/env -i "\${CLEAN_ENV[@]}" /bin/chmod 600 "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"`
+    ) &&
+    verificationRun.includes('[ "$NPM_USERCONFIG" = "$NPM_GLOBALCONFIG" ]') &&
+    verificationRun.includes('"NPM_CONFIG_IGNORE_SCRIPTS=true"') &&
+    verificationRun.includes('"NPM_CONFIG_PREFER_ONLINE=true"') &&
+    verificationRun.includes('"NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"') &&
+    verificationRun.includes('"NPM_CONFIG_GLOBALCONFIG=$NPM_GLOBALCONFIG"') &&
+    !verificationRun.includes("NPM_CONFIG_USERCONFIG=/dev/null") &&
+    !verificationRun.includes("NPM_CONFIG_GLOBALCONFIG=/dev/null") &&
+    verificationRun.includes("--max-filesize 4194304 --retry 0") &&
+    verificationRun.includes('[ "$NPM_CLI_ACTUAL_SIZE" != "$NPM_CLI_SIZE" ]') &&
+    verificationRun.includes('[ "$NPM_CLI_ACTUAL_SRI" != "$NPM_CLI_SRI" ]') &&
+    verificationRun.includes("--list --gzip") &&
+    verificationRun.includes("--absolute-names --quoting-style=escape") &&
+    verificationRun.includes("$0 !~ /^package\\//") &&
+    verificationRun.includes("$0 ~ /(^|\\/)\\.\\.?(\\/|$)/") &&
+    verificationRun.includes("$0 ~ /\\/\\//") &&
+    verificationRun.includes("$0 ~ /\\\\/") &&
+    verificationRun.includes("seen[$0]++") &&
+    verificationRun.includes(`/usr/bin/env -i "\${CLEAN_ENV[@]}" "$AWK_BIN"`) &&
+    verificationRun.includes("--list --verbose --gzip") &&
+    verificationRun.includes("--absolute-names --numeric-owner --quoting-style=escape") &&
+    verificationRun.includes('substr($0, 1, 1) != "-"') &&
+    verificationRun.includes('substr($0, 1, 1) != "d"') &&
+    verificationRun.includes('[ "$ACTUAL_NPM_CLI_VERSION" != "$NPM_CLI_VERSION" ]') &&
+    verificationRun.includes(
+      "--save-exact --package-lock=true --ignore-scripts --no-audit --no-fund --omit=optional"
+    ) &&
+    mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=10s 120s "$CURL_BIN"') === 1 &&
+    mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=5s 30s') === 5 &&
+    mutationMatchCount(verificationRun, '"$TIMEOUT_BIN" --kill-after=10s 600s "$NODE_BIN" "$NPM_CLI_JS" install') ===
+      1 &&
+    mutationMatchCount(verificationRun, NPM_PROVENANCE_AUDIT_COMMAND) === 1 &&
+    mutationMatchCount(verificationRun, NPM_PROVENANCE_EVALUATOR_COMMAND) === 1 &&
+    verificationRun.includes("--json --include-attestations --omit=optional --registry=https://registry.npmjs.org/") &&
+    verificationRun.includes("--fetch-retries=0 --fetch-timeout=60000 --prefer-online") &&
+    mutationMatchCount(verificationRun, '"NPM_CONFIG_PREFER_ONLINE=true"') === 1 &&
+    mutationMatchCount(verificationRun, "--prefer-online") === 1 &&
+    verificationRun.includes("for (( attempt=1; attempt<=8; attempt++ )); do") &&
+    verificationRun.includes('[ "$attempt" -lt 8 ]') &&
+    verificationRun.includes("attempt $attempt/8") &&
+    verificationRun.includes("/bin/sleep 10") &&
+    verifierReserveCoversWorstCase &&
+    !/(?:^|\s)(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:publish|unpublish|dist-tag)\b/mu.test(verificationRun);
+  return isExact ? [] : [NPM_PROVENANCE_CONTRACT_PROBLEM];
+}
+
+function npmProvenanceEvaluatorProblems(integrity: string): string[] {
+  const isExact =
+    integrity.includes("export function evaluateNpmProvenanceContext") &&
+    integrity.includes("export function evaluateNpmProvenanceAttestations") &&
+    integrity.includes('eventName: "push"') &&
+    integrity.includes("workflowSha: expectedSourceSha") &&
+    integrity.includes("statement.subject.length !== 1") &&
+    integrity.includes("subject.name !== expectedPurl || digest.sha512 !== expectedSha512") &&
+    integrity.includes("predicateType === NPM_PROVENANCE_IDENTITY.publishPredicateType") &&
+    integrity.includes('["publicKey", "tlogEntries", "timestampVerificationData"]') &&
+    integrity.includes('["x509CertificateChain", "tlogEntries", "timestampVerificationData"]') &&
+    integrity.includes("verified.tlogEntries.length === 0") &&
+    integrity.includes("!isRecord(verified.timestampVerificationData)") &&
+    integrity.includes("/^SHA256:[A-Za-z0-9+/]{43}$/u.test(publicKey.hint)") &&
+    integrity.includes("keyid !== publicKey.hint") &&
+    integrity.includes("chain.certificates.length !== 1") &&
+    integrity.includes("decodeCanonicalBase64(certificate.rawBytes") &&
+    integrity.includes('import { X509Certificate } from "node:crypto";') &&
+    integrity.includes("leafCertificate = new X509Certificate(certificateDer);") &&
+    integrity.includes(`leafCertificate.subjectAltName !== \`URI:\${expectedSignerUri}\``) &&
+    integrity.includes('const FULCIO_GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";') &&
+    integrity.includes('const FULCIO_ISSUER_OID_LEGACY = Buffer.from("2b0601040183bf300101", "hex");') &&
+    integrity.includes('const FULCIO_ISSUER_OID_V2 = Buffer.from("2b0601040183bf300108", "hex");') &&
+    integrity.includes("function readDerElement(bytes, offset, limit, label)") &&
+    integrity.includes("function decodeCanonicalDerUtf8String(bytes, label)") &&
+    integrity.includes("function assertExactFulcioOidcIssuer(certificateDer, label)") &&
+    integrity.includes("lengthOctets === 0 || lengthOctets > 4 || contentStart + lengthOctets > limit") &&
+    integrity.includes("bytes[contentStart] === 0") &&
+    integrity.includes("contentLength < 128") &&
+    integrity.includes("contentEnd > limit") &&
+    integrity.includes("value.tag !== 0x0c || value.next !== bytes.length") &&
+    integrity.includes('!Buffer.from(decoded, "utf8").equals(encoded)') &&
+    integrity.includes("certificate.tag !== 0x30 || certificate.next !== certificateDer.length") &&
+    integrity.includes("signatureValue.next !== certificate.contentEnd") &&
+    integrity.includes(`\`\${label} TBSCertificate\``) &&
+    integrity.includes("field.tag !== 0xa3 || field.next !== tbs.contentEnd") &&
+    integrity.includes("extensions.tag !== 0x30 || extensions.next !== field.contentEnd") &&
+    integrity.includes("while (cursor < extensions.contentEnd)") &&
+    integrity.includes("oid.tag !== 0x06") &&
+    integrity.includes("value.tag !== 0x04 || value.next !== extension.contentEnd") &&
+    integrity.includes("oidBytes.equals(FULCIO_ISSUER_OID_LEGACY)") &&
+    integrity.includes('valueBytes.toString("utf8") !== FULCIO_GITHUB_ACTIONS_ISSUER') &&
+    integrity.includes('Buffer.from(FULCIO_GITHUB_ACTIONS_ISSUER, "utf8").equals(valueBytes)') &&
+    integrity.includes("oidBytes.equals(FULCIO_ISSUER_OID_V2)") &&
+    integrity.includes("decodeCanonicalDerUtf8String(valueBytes") &&
+    integrity.includes("legacyIssuerCount > 1") &&
+    integrity.includes("v2IssuerCount > 1") &&
+    integrity.includes("legacyIssuerCount + v2IssuerCount === 0") &&
+    integrity.includes("assertExactFulcioOidcIssuer(certificateDer, label);") &&
+    integrity.includes(`\`\${NPM_PROVENANCE_IDENTITY.workflowPath}@refs/tags/\${expected.tag}\``) &&
+    integrity.includes("decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri)") &&
+    integrity.includes("    expectedSignerUri,\n    label\n  );") &&
+    integrity.includes('keyid !== ""') &&
+    integrity.includes("statement.predicateType !== item.predicateType") &&
+    integrity.includes("report.invalid.length !== 0") &&
+    integrity.includes("report.missing.length !== 0") &&
+    integrity.includes("report.verified.filter((entry) => entry.name === expected.name)") &&
+    integrity.includes("targets.length !== 1") &&
+    integrity.includes("target.attestationBundles.length !== 2") &&
+    integrity.includes("statements.has(decoded.predicateType)") &&
+    integrity.includes("const statement = decodeCanonicalBase64Json") &&
+    integrity.includes('assertCanonicalPositiveDecimal(invocationMatch[1], "signed npm provenance run id")') &&
+    integrity.includes(
+      "expected.publishAttempted && (runId !== expected.currentRunId || runAttempt !== expected.currentRunAttempt)"
+    ) &&
+    integrity.includes("fresh npm publication provenance does not match the current workflow invocation") &&
+    integrity.includes('} else if (mode === "npm-provenance-context")') &&
+    integrity.includes('} else if (mode === "npm-provenance")');
+  return isExact ? [] : [NPM_PROVENANCE_CONTRACT_PROBLEM];
+}
+
+function npmProvenanceContractProblems(release: string, integrity: string): string[] {
+  const workflowProblems = npmProvenanceWorkflowProblems(release);
+  if (workflowProblems.length !== 0) return workflowProblems;
+  return npmProvenanceEvaluatorProblems(integrity);
+}
 
 function mcpbContractProblems(inputs: {
   manifest: string;
@@ -2266,6 +2915,7 @@ function mcpbContractProblems(inputs: {
         .sort()
     : [];
   const args = Array.isArray(config?.args) ? config.args.filter((arg): arg is string => typeof arg === "string") : [];
+  problems.push(...npmProvenanceContractProblems(inputs.release, inputs.integrity));
   if (
     manifest.manifest_version !== "0.3" ||
     !String(manifest.$schema ?? "").includes("70fe3b34cd6dff1b3bba046638edc72a6467a4fb") ||
@@ -2288,6 +2938,7 @@ function mcpbContractProblems(inputs: {
     "Prepare deterministic Basic release records",
     "Preflight existing GitHub release and every Basic asset before npm",
     "Publish with provenance or verify an exact prior publication",
+    NPM_PROVENANCE_STEP_NAME,
     "Prepare draft GitHub Release",
     "Upload Basic MCPB asset, checksum, and provenance"
   ];
@@ -2333,7 +2984,7 @@ function mcpbContractProblems(inputs: {
     "npm_config_registry|npm_config_@oomkapwn:registry|npm_config_proxy|npm_config_https_proxy|" +
     "npm_config_ca|npm_config_cafile|npm_config_strict_ssl|npm_config_fetch_retries|" +
     "npm_config_fetch_timeout|npm_config_userconfig|npm_config_globalconfig";
-  const npmReserveIndex = npmPublishRun.indexOf('require_job_reserve 2100 "npm publish"');
+  const npmReserveIndex = npmPublishRun.indexOf('require_job_reserve 4500 "npm publish"');
   const npmPrewriteTagIndex = npmPublishRun.indexOf("\n  assert_remote_tag_identity", npmReserveIndex);
   const npmPrewriteReadIndex = npmPublishRun.indexOf("if ! registry_read; then", npmPrewriteTagIndex);
   const npmRehashIndex = npmPublishRun.indexOf(
@@ -2422,6 +3073,7 @@ function mcpbContractProblems(inputs: {
         (npmPublishTimeoutSeconds + npmPublishKillSeconds) +
         npmReadbackAttempts * (npmRegistryTimeoutSeconds + npmRegistryKillSeconds) +
         (npmReadbackAttempts - 1) * npmSleepSeconds +
+        2700 +
         300;
   const npmPackPublishSurface = npmPublishRun
     .split("\n")
@@ -2437,7 +3089,7 @@ function mcpbContractProblems(inputs: {
     'echo "::error::npm pack returned a non-basename artifact path"',
     'echo "::error::npm pack tarball is missing, non-regular, or a symlink"',
     'echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"',
-    'require_job_reserve 2100 "npm publish"',
+    'require_job_reserve 4500 "npm publish"',
     'echo "::error::npm publish scratch directory is missing, non-directory, or a symlink"',
     MCPB_EXACT_NPM_PUBLISH_HEAD,
     'echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"'
@@ -2447,7 +3099,7 @@ function mcpbContractProblems(inputs: {
     npmPackPublishSurface[0]?.startsWith(`PACK_JSON=$(${MCPB_EXACT_NPM_PACK}`) === true &&
     npmPackPublishSurface[0]?.endsWith("\\") === true &&
     JSON.stringify(npmPackPublishSurface.slice(1)) === JSON.stringify(npmPackPublishExpectedTail) &&
-    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 32 &&
+    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 33 &&
     (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 3;
   const npmPublicationIsByteBound =
     npmAssignmentLineCount("NPM_BIN") === 1 &&
@@ -2896,6 +3548,449 @@ function mcpbContractProblems(inputs: {
   return problems;
 }
 
+function assertNpmProvenanceEvaluatorContract() {
+  // Positive control: one exact tag-push context observed through two independent surfaces.
+  expect(evaluateNpmProvenanceContext(npmProvenanceContext(), TRUSTED_SOURCE_SHA, NPM_PROVENANCE_TAG)).toEqual({
+    runId: NPM_PROVENANCE_RUN_ID,
+    runAttempt: NPM_PROVENANCE_RUN_ATTEMPT
+  });
+
+  // Negative control: every context field, side, expected identity, and object shape is fail-closed.
+  {
+    const canonical = npmProvenanceContext();
+    type ContextSide = keyof typeof canonical;
+    type ContextField = keyof (typeof canonical)["declared"];
+    const fields = Object.keys(canonical.declared) as ContextField[];
+    for (const side of ["declared", "runtime"] satisfies ContextSide[]) {
+      for (const field of fields) {
+        const mutated = npmProvenanceContext();
+        mutated[side][field] = `${mutated[side][field]}-mutated`;
+        expect(
+          () => evaluateNpmProvenanceContext(mutated, TRUSTED_SOURCE_SHA, NPM_PROVENANCE_TAG),
+          `${side}.${String(field)}`
+        ).toThrow();
+      }
+    }
+
+    for (const malformed of [
+      null,
+      [],
+      {},
+      { declared: canonical.declared },
+      { runtime: canonical.runtime },
+      { declared: canonical.declared, runtime: { ...canonical.runtime, runId: 30_726_087_813 } },
+      { declared: { ...canonical.declared, extra: "not-allowed" }, runtime: canonical.runtime },
+      { declared: canonical.declared, runtime: { ...canonical.runtime, extra: "not-allowed" } }
+    ]) {
+      expect(() => evaluateNpmProvenanceContext(malformed, TRUSTED_SOURCE_SHA, NPM_PROVENANCE_TAG)).toThrow();
+    }
+    for (const [sourceSha, tag] of [
+      ["source", NPM_PROVENANCE_TAG],
+      ["352c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c", NPM_PROVENANCE_TAG],
+      [TRUSTED_SOURCE_SHA, "4.0.0-rc.2"],
+      [TRUSTED_SOURCE_SHA, "v4.0.0-rc.3"]
+    ]) {
+      expect(() => evaluateNpmProvenanceContext(canonical, sourceSha, tag)).toThrow();
+    }
+  }
+
+  // Positive controls: fresh publication, historical reuse, bundle reorder, and unrelated dependencies.
+  {
+    expect(evaluateNpmProvenanceAttestations(npmProvenanceReport(), npmProvenanceExpected(true))).toEqual({
+      runId: NPM_PROVENANCE_RUN_ID,
+      runAttempt: NPM_PROVENANCE_RUN_ATTEMPT
+    });
+
+    const historicalRunId = "30000000001";
+    expect(
+      evaluateNpmProvenanceAttestations(
+        npmProvenanceReport({ slsa: { runId: historicalRunId, runAttempt: "1" } }),
+        npmProvenanceExpected(false)
+      )
+    ).toEqual({ runId: historicalRunId, runAttempt: "1" });
+
+    const publishBundle = npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement());
+    const slsaBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement());
+    for (const rawBytes of [NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE, NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE]) {
+      const alternateIssuerSlsaBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+        verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }])
+      });
+      expect(
+        evaluateNpmProvenanceAttestations(
+          npmProvenanceReport({ bundles: [publishBundle, alternateIssuerSlsaBundle] }),
+          npmProvenanceExpected(true)
+        )
+      ).toEqual({ runId: NPM_PROVENANCE_RUN_ID, runAttempt: NPM_PROVENANCE_RUN_ATTEMPT });
+    }
+    expect(
+      evaluateNpmProvenanceAttestations(
+        npmProvenanceReport({
+          bundles: [
+            { ...slsaBundle, signedAccessSignatureUrl: "" },
+            { ...publishBundle, signedAccessSignatureUrl: "" }
+          ],
+          extraVerified: [
+            {
+              name: "kleur",
+              version: "4.1.5",
+              location: "node_modules/kleur",
+              registry: "https://registry.npmjs.org/"
+            }
+          ]
+        }),
+        npmProvenanceExpected(true)
+      )
+    ).toEqual({ runId: NPM_PROVENANCE_RUN_ID, runAttempt: NPM_PROVENANCE_RUN_ATTEMPT });
+  }
+
+  // Negative control: the audit must be globally clean and contain one exact target.
+  for (const report of [
+    null,
+    [],
+    {},
+    { invalid: [], missing: [], verified: null },
+    npmProvenanceReport({ invalid: [{ name: "tampered" }] }),
+    npmProvenanceReport({ missing: [{ name: "unsigned" }] }),
+    npmProvenanceReport({ targetCopies: 0 }),
+    npmProvenanceReport({ targetCopies: 2 })
+  ]) {
+    expect(() => evaluateNpmProvenanceAttestations(report, npmProvenanceExpected(true))).toThrow();
+  }
+
+  for (const targetOverrides of [
+    { name: "@oomkapwn/not-enquire" },
+    { version: "4.0.0-rc.1" },
+    { location: "node_modules/enquire-mcp" },
+    { registry: "https://registry.npmjs.org" },
+    {
+      attestations: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`
+    },
+    {
+      attestations: {
+        url: "https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@4.0.0-rc.1",
+        provenance: { predicateType: NPM_PROVENANCE_SLSA_PREDICATE }
+      }
+    },
+    {
+      attestations: {
+        url: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+        provenance: { predicateType: NPM_PROVENANCE_PUBLISH_PREDICATE }
+      }
+    },
+    { unexpected: "not-allowed" }
+  ]) {
+    expect(() =>
+      evaluateNpmProvenanceAttestations(npmProvenanceReport({ targetOverrides }), npmProvenanceExpected(true))
+    ).toThrow();
+  }
+
+  // Negative control: exactly two canonical and decodable bundles are required.
+  {
+    const publishBundle = npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement());
+    const slsaBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement());
+    const unknownBundle = npmAttestationBundle("https://example.invalid/predicate/v1", npmPublishStatement());
+    for (const bundles of [
+      [],
+      [publishBundle],
+      [slsaBundle],
+      [publishBundle, publishBundle],
+      [slsaBundle, slsaBundle],
+      [publishBundle, slsaBundle, unknownBundle]
+    ]) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(npmProvenanceReport({ bundles }), npmProvenanceExpected(true))
+      ).toThrow();
+    }
+
+    const malformedBundles = [
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+        mediaType: "application/json"
+      }),
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+        payloadType: "application/json"
+      }),
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), { payload: "!!!" }),
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+        payload: Buffer.from("{", "utf8").toString("base64")
+      }),
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), { signatures: [] }),
+      npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmSlsaStatement())
+    ];
+    for (const malformed of malformedBundles) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(
+          npmProvenanceReport({ bundles: [malformed, slsaBundle] }),
+          npmProvenanceExpected(true)
+        )
+      ).toThrow();
+    }
+
+    const wrongRepositoryCertificate = npmCertificateWithSignerUri(
+      "https://github.com/attacker/enquire-mcp/.github/workflows/release.yml@refs/tags/v4.0.0-rc.2"
+    );
+    const branchCertificate = npmCertificateWithSignerUri(
+      "https://github.com/oomkapwn/enquire-mcp/.github/workflows/release.yml@refs/heads/release-v4"
+    );
+    for (const rawBytes of [
+      wrongRepositoryCertificate,
+      branchCertificate,
+      NPM_PROVENANCE_SLSA_MULTIPLE_SAN_CERTIFICATE
+    ]) {
+      const wrongSignerBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+        verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }])
+      });
+      expect(() =>
+        evaluateNpmProvenanceAttestations(
+          npmProvenanceReport({ bundles: [publishBundle, wrongSignerBundle] }),
+          npmProvenanceExpected(true)
+        )
+      ).toThrow("SLSA certificate SAN does not match the exact tagged workflow signer");
+    }
+
+    const certificateDer = Buffer.from(NPM_PROVENANCE_SLSA_CERTIFICATE, "base64");
+    const malformedDerCertificate = certificateDer.subarray(0, certificateDer.length - 1).toString("base64");
+    const malformedCertificateBundle = npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+      verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes: malformedDerCertificate }])
+    });
+    expect(() =>
+      evaluateNpmProvenanceAttestations(
+        npmProvenanceReport({ bundles: [publishBundle, malformedCertificateBundle] }),
+        npmProvenanceExpected(true)
+      )
+    ).toThrow("SLSA signing certificate must be valid DER X.509");
+
+    const reportWithCertificate = (rawBytes: string) =>
+      npmProvenanceReport({
+        bundles: [
+          publishBundle,
+          npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+            verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes }])
+          })
+        ]
+      });
+    const wrongLegacyIssuerCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_CERTIFICATE,
+      Buffer.from(NPM_PROVENANCE_OIDC_ISSUER, "utf8"),
+      Buffer.from("https://token.actions.githubusercontent.dev", "utf8")
+    );
+    const exactV2IssuerValue = Buffer.concat([
+      Buffer.from([0x0c, 0x2b]),
+      Buffer.from(NPM_PROVENANCE_OIDC_ISSUER, "utf8")
+    ]);
+    const wrongV2IssuerValue = Buffer.concat([
+      Buffer.from([0x0c, 0x2b]),
+      Buffer.from("https://token.actions.githubusercontent.dev", "utf8")
+    ]);
+    const wrongV2IssuerCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE,
+      exactV2IssuerValue,
+      wrongV2IssuerValue
+    );
+    const dualIssuerConflictCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE,
+      exactV2IssuerValue,
+      wrongV2IssuerValue
+    );
+    const duplicateIssuerCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_DUAL_ISSUER_CERTIFICATE,
+      Buffer.from("060a2b0601040183bf300108", "hex"),
+      Buffer.from("060a2b0601040183bf300101", "hex")
+    );
+    const malformedIssuerLengthCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE,
+      Buffer.from("0c2b68747470", "hex"),
+      Buffer.from("0c2c68747470", "hex")
+    );
+    const malformedIssuerWrapperCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE,
+      Buffer.from("0c2b68747470", "hex"),
+      Buffer.from("162b68747470", "hex")
+    );
+    const malformedIssuerValueCertificate = mutateNpmCertificateBytes(
+      NPM_PROVENANCE_SLSA_UTF8_ISSUER_CERTIFICATE,
+      Buffer.from("0c2b68747470", "hex"),
+      Buffer.from("0c2bff747470", "hex")
+    );
+    for (const [rawBytes, expectedError] of [
+      [NPM_PROVENANCE_SLSA_CERTIFICATE_WITHOUT_ISSUER, "certificate lacks a supported Fulcio OIDC issuer extension"],
+      [wrongLegacyIssuerCertificate, "Fulcio legacy OIDC issuer is not GitHub Actions"],
+      [wrongV2IssuerCertificate, "Fulcio v2 OIDC issuer is not GitHub Actions"],
+      [dualIssuerConflictCertificate, "Fulcio v2 OIDC issuer is not GitHub Actions"],
+      [duplicateIssuerCertificate, "certificate contains duplicate Fulcio legacy OIDC issuer extensions"],
+      [malformedIssuerLengthCertificate, "Fulcio v2 OIDC issuer has a DER element outside its parent boundary"],
+      [malformedIssuerWrapperCertificate, "Fulcio v2 OIDC issuer must contain exactly one DER UTF8String"],
+      [malformedIssuerValueCertificate, "Fulcio v2 OIDC issuer must contain canonical UTF-8"]
+    ] as const) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(reportWithCertificate(rawBytes), npmProvenanceExpected(true))
+      ).toThrow(expectedError);
+    }
+
+    const signingModeMutations: unknown[][] = [
+      [
+        npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+          verificationMaterial: npmSlsaVerificationMaterial()
+        }),
+        slsaBundle
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          verificationMaterial: npmPublishVerificationMaterial()
+        })
+      ],
+      [
+        npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+          signatures: [{ sig: "dGVzdA==", keyid: `SHA256:${"A".repeat(43)}` }]
+        }),
+        slsaBundle
+      ],
+      [
+        npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+          signatures: [{ sig: "dGVzdA==", keyid: "" }]
+        }),
+        slsaBundle
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          signatures: [{ sig: "dGVzdA==", keyid: NPM_PROVENANCE_PUBLISH_KEY_HINT }]
+        })
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          verificationMaterial: npmSlsaVerificationMaterial([])
+        })
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          verificationMaterial: npmSlsaVerificationMaterial([
+            { rawBytes: NPM_PROVENANCE_SLSA_CERTIFICATE },
+            { rawBytes: NPM_PROVENANCE_SLSA_CERTIFICATE }
+          ])
+        })
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          verificationMaterial: npmSlsaVerificationMaterial([{ rawBytes: "not-base64" }])
+        })
+      ],
+      [
+        npmAttestationBundle(NPM_PROVENANCE_PUBLISH_PREDICATE, npmPublishStatement(), {
+          verificationMaterial: {
+            publicKey: { hint: NPM_PROVENANCE_PUBLISH_KEY_HINT },
+            tlogEntries: [],
+            timestampVerificationData: {}
+          }
+        }),
+        slsaBundle
+      ],
+      [
+        publishBundle,
+        npmAttestationBundle(NPM_PROVENANCE_SLSA_PREDICATE, npmSlsaStatement(), {
+          verificationMaterial: {
+            x509CertificateChain: {
+              certificates: [{ rawBytes: NPM_PROVENANCE_SLSA_CERTIFICATE }]
+            },
+            tlogEntries: [{}],
+            timestampVerificationData: null
+          }
+        })
+      ]
+    ];
+    for (const bundles of signingModeMutations) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(npmProvenanceReport({ bundles }), npmProvenanceExpected(true))
+      ).toThrow();
+    }
+  }
+
+  // Negative control: both signed statements bind exact package bytes and source identity.
+  {
+    const otherDigest = "cd".repeat(64);
+    const publishMutations: NpmPublishStatementOptions[] = [
+      { statementType: "https://in-toto.io/Statement/v1" },
+      { subject: npmProvenanceSubject("pkg:npm/enquire-mcp@4.0.0-rc.2") },
+      { subject: npmProvenanceSubject(undefined, otherDigest) },
+      { subject: [...npmProvenanceSubject(), ...npmProvenanceSubject()] },
+      { predicateType: NPM_PROVENANCE_SLSA_PREDICATE },
+      { name: "@oomkapwn/not-enquire" },
+      { version: "4.0.0-rc.1" },
+      { registry: "https://registry.npmjs.org/" }
+    ];
+    for (const publish of publishMutations) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(npmProvenanceReport({ publish }), npmProvenanceExpected(true))
+      ).toThrow();
+    }
+
+    const slsaMutations: NpmSlsaStatementOptions[] = [
+      { statementType: "https://in-toto.io/Statement/v0.1" },
+      { subject: npmProvenanceSubject("pkg:npm/enquire-mcp@4.0.0-rc.2") },
+      { subject: npmProvenanceSubject(undefined, otherDigest) },
+      { subject: [...npmProvenanceSubject(), ...npmProvenanceSubject()] },
+      { predicateType: NPM_PROVENANCE_PUBLISH_PREDICATE },
+      { buildType: "https://example.invalid/build/v1" },
+      { workflowRef: "refs/heads/main" },
+      { workflowRepository: "https://github.com/attacker/enquire-mcp" },
+      { workflowPath: ".github/workflows/other.yml" },
+      { eventName: "workflow_dispatch" },
+      { repositoryId: "1" },
+      { repositoryOwnerId: "1" },
+      { dependencyUri: "git+https://github.com/oomkapwn/enquire-mcp@refs/heads/main" },
+      { gitCommit: "352c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c" },
+      { builderId: "https://example.invalid/runner" }
+    ];
+    for (const slsa of slsaMutations) {
+      expect(() =>
+        evaluateNpmProvenanceAttestations(npmProvenanceReport({ slsa }), npmProvenanceExpected(true))
+      ).toThrow();
+    }
+  }
+
+  // Fresh publication requires this invocation; reuse permits only a canonical historical invocation.
+  for (const slsa of [
+    { runId: "30000000001", runAttempt: NPM_PROVENANCE_RUN_ATTEMPT },
+    { runId: NPM_PROVENANCE_RUN_ID, runAttempt: "1" }
+  ]) {
+    expect(() =>
+      evaluateNpmProvenanceAttestations(npmProvenanceReport({ slsa }), npmProvenanceExpected(true))
+    ).toThrow();
+  }
+
+  for (const slsa of [
+    { runId: "0", runAttempt: "1" },
+    { runId: "01", runAttempt: "1" },
+    { runId: "9007199254740992", runAttempt: "1" },
+    { runId: "30000000001", runAttempt: "0" },
+    { runId: "30000000001", runAttempt: "01" },
+    { invocationId: "https://github.com/oomkapwn/enquire-mcp/actions/runs/30000000001" },
+    { invocationId: "https://github.com/attacker/enquire-mcp/actions/runs/30000000001/attempts/1" }
+  ]) {
+    expect(() =>
+      evaluateNpmProvenanceAttestations(npmProvenanceReport({ slsa }), npmProvenanceExpected(false))
+    ).toThrow();
+  }
+
+  // Negative control: caller-supplied expected identity cannot weaken the signed contract.
+  for (const expected of [
+    npmProvenanceExpected(true, { name: "@oomkapwn/not-enquire" }),
+    npmProvenanceExpected(true, { version: "4.0.0-rc.1" }),
+    npmProvenanceExpected(true, { integrity: `sha512-${Buffer.from("cd".repeat(64), "hex").toString("base64")}` }),
+    npmProvenanceExpected(true, { sourceSha: "352c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c" }),
+    npmProvenanceExpected(true, { tag: "v4.0.0-rc.1" }),
+    npmProvenanceExpected(true, { currentRunId: "30000000001" }),
+    npmProvenanceExpected(true, { currentRunAttempt: "1" }),
+    { ...npmProvenanceExpected(true), publishAttempted: "true" },
+    { ...npmProvenanceExpected(true), extra: "not-allowed" }
+  ]) {
+    expect(() => evaluateNpmProvenanceAttestations(npmProvenanceReport(), expected)).toThrow();
+  }
+}
+
 describe("release identity and exact required-job gate", () => {
   it("accepts only the tag derived from package.json version", () => {
     expect(assertReleaseTagMatchesVersion("v3.12.0-rc.10", "3.12.0-rc.10")).toBe("v3.12.0-rc.10");
@@ -3209,7 +4304,11 @@ describe("release identity and exact required-job gate", () => {
     );
   });
 
+  // This mutation oracle intentionally exercises thousands of structural checks.
+  // Exact-head V8 coverage measured 14,996ms after redundant parse removal, so
+  // keep a scoped ceiling with real hang detection instead of weakening cases.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
+    assertNpmProvenanceEvaluatorContract();
     let replacementCallbackCalls = 0;
     const countingReplacement: MutationReplacer = () => {
       replacementCallbackCalls++;
@@ -3363,6 +4462,286 @@ describe("release identity and exact required-job gate", () => {
     expect(releasePollProblems(workflow)).toEqual([]);
     expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
+    expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
+    const provenanceWorkflowCompositionMutation = replaceExactly(
+      mcpbInputs.release,
+      NPM_PROVENANCE_CONTEXT_COMMAND,
+      "true # provenance context bypassed"
+    );
+    const provenanceEvaluatorCompositionMutation = replaceExactly(
+      mcpbInputs.integrity,
+      'eventName: "push"',
+      'eventName: "workflow_dispatch"'
+    );
+    expect(npmProvenanceContractProblems(provenanceWorkflowCompositionMutation, mcpbInputs.integrity)).toContain(
+      NPM_PROVENANCE_CONTRACT_PROBLEM
+    );
+    expect(npmProvenanceContractProblems(mcpbInputs.release, provenanceEvaluatorCompositionMutation)).toContain(
+      NPM_PROVENANCE_CONTRACT_PROBLEM
+    );
+
+    // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
+    for (const weakenedProvenanceWorkflow of [
+      replaceExactly(
+        mcpbInputs.release,
+        'require_job_reserve 4500 "npm publish"',
+        'require_job_reserve 2100 "npm publish"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'require_job_reserve 2700 "token-free npm provenance verification"',
+        'require_job_reserve 1200 "token-free npm provenance verification"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PROVENANCE_SHA: \${{ github.sha }}`,
+        `PROVENANCE_SHA: \${{ github.workflow_sha }}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `      - name: ${NPM_PROVENANCE_STEP_NAME}`,
+        "      - name: Skipped npm provenance"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_ATTEMPTED: \${{ steps.npm_publication.outputs.publish_attempted }}`,
+        'PUBLISH_ATTEMPTED: "false"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}\n` +
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`,
+        `          RELEASE_JOB_DEADLINE_EPOCH: 9999999999\n` +
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`
+      ),
+      replaceExactly(mcpbInputs.release, '          NPM_TOKEN: ""', `          NPM_TOKEN: \${{ secrets.NPM_TOKEN }}`),
+      replaceExactly(mcpbInputs.release, '          NPM_CLI_VERSION: "11.18.0"', '          NPM_CLI_VERSION: "latest"'),
+      replaceExactly(
+        mcpbInputs.release,
+        '          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"',
+        '          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-latest.tgz"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          NPM_CLI_SRI: "${NPM_PROVENANCE_CLI_SRI}"`,
+        '          NPM_CLI_SRI: "sha512-unpinned"'
+      ),
+      replaceExactly(mcpbInputs.release, '          NPM_CLI_SIZE: "2997746"', '          NPM_CLI_SIZE: "0"'),
+      replaceExactly(
+        mcpbInputs.release,
+        '          NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"',
+        '          NPM_GLOBALCONFIG="$VERIFY_ROOT/user.npmrc"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '/usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"',
+        '/bin/true "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '/bin/chmod 600 "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"',
+        '/bin/chmod 644 "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '"NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"',
+        '"NPM_CONFIG_USERCONFIG=/dev/null"'
+      ),
+      replaceExactly(mcpbInputs.release, '"NPM_CONFIG_PREFER_ONLINE=true"', '"NPM_CONFIG_PREFER_ONLINE=false"'),
+      replaceExactly(mcpbInputs.release, "--max-filesize 4194304 --retry 0", "--max-filesize 4194304 --retry 1"),
+      replaceExactly(mcpbInputs.release, '[ "$NPM_CLI_ACTUAL_SRI" != "$NPM_CLI_SRI" ]', "false"),
+      replaceExactly(mcpbInputs.release, "$0 !~ /^package\\//", "false"),
+      replaceExactly(mcpbInputs.release, "$0 ~ /(^|\\/)\\.\\.?(\\/|$)/", "false"),
+      replaceExactly(mcpbInputs.release, "seen[$0]++", "false"),
+      replaceExactly(mcpbInputs.release, 'NF == 0 || (substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d")', "false"),
+      replaceExactly(
+        mcpbInputs.release,
+        "--save-exact --package-lock=true --ignore-scripts --no-audit --no-fund --omit=optional",
+        "--save-exact --package-lock=true --no-audit --no-fund --omit=optional"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '.packages["node_modules/@oomkapwn/enquire-mcp"].integrity == $integrity',
+        '.packages["node_modules/@oomkapwn/enquire-mcp"].version == $version'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+        `              ${NPM_PROVENANCE_AUDIT_COMMAND}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        NPM_PROVENANCE_AUDIT_COMMAND,
+        replaceExactly(NPM_PROVENANCE_AUDIT_COMMAND, " --kill-after=10s", "")
+      ),
+      replaceExactly(mcpbInputs.release, "--json --include-attestations --omit=optional", "--json --omit=optional"),
+      replaceExactly(
+        mcpbInputs.release,
+        "--fetch-retries=0 --fetch-timeout=60000 --prefer-online",
+        "--fetch-retries=0 --fetch-timeout=60000"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `/usr/bin/env -i "\${CLEAN_ENV[@]}" \\\n              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`,
+        `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        NPM_PROVENANCE_EVALUATOR_COMMAND,
+        replaceExactly(NPM_PROVENANCE_EVALUATOR_COMMAND, " --kill-after=5s", "")
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "for (( attempt=1; attempt<=8; attempt++ )); do",
+        "for (( attempt=1; attempt<=1; attempt++ )); do"
+      ),
+      replaceExactly(mcpbInputs.release, 'if [ "$attempt" -lt 8 ]; then', 'if [ "$attempt" -lt 7 ]; then'),
+      replaceExactly(mcpbInputs.release, "attempt $attempt/8", "attempt $attempt/7"),
+      replaceExactly(mcpbInputs.release, "/bin/sleep 10", "/bin/sleep 1"),
+      replaceExactly(
+        mcpbInputs.release,
+        NPM_PROVENANCE_SUCCESS_CONDITION,
+        '[ "$AUDIT_EXIT" -eq 0 ] || [ "$EVALUATOR_EXIT" -eq 0 ]'
+      ),
+      replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`)
+    ]) {
+      expect(npmProvenanceWorkflowProblems(weakenedProvenanceWorkflow)).toContain(NPM_PROVENANCE_CONTRACT_PROBLEM);
+    }
+
+    // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
+    for (const weakenedProvenanceEvaluator of [
+      replaceExactly(mcpbInputs.integrity, "workflowSha: expectedSourceSha", "workflowSha: declared.workflowSha"),
+      replaceExactly(mcpbInputs.integrity, "statement.subject.length !== 1", "statement.subject.length < 1"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "subject.name !== expectedPurl || digest.sha512 !== expectedSha512",
+        "subject.name !== expectedPurl && digest.sha512 !== expectedSha512"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "predicateType === NPM_PROVENANCE_IDENTITY.publishPredicateType",
+        "predicateType === NPM_PROVENANCE_IDENTITY.slsaPredicateType"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["publicKey", "tlogEntries", "timestampVerificationData"]',
+        '["x509CertificateChain", "tlogEntries", "timestampVerificationData"]'
+      ),
+      replaceExactly(mcpbInputs.integrity, "verified.tlogEntries.length === 0", "false"),
+      replaceExactly(mcpbInputs.integrity, "!isRecord(verified.timestampVerificationData)", "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "/^SHA256:[A-Za-z0-9+/]{43}$/u.test(publicKey.hint)",
+        'publicKey.hint.startsWith("SHA256:")'
+      ),
+      replaceExactly(mcpbInputs.integrity, "keyid !== publicKey.hint", "false"),
+      replaceExactly(mcpbInputs.integrity, "chain.certificates.length !== 1", "chain.certificates.length < 1"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "decodeCanonicalBase64(certificate.rawBytes",
+        "Buffer.from(certificate.rawBytes"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'import { X509Certificate } from "node:crypto";',
+        "const X509Certificate = undefined;"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "leafCertificate = new X509Certificate(certificateDer);",
+        `leafCertificate = { subjectAltName: \`URI:\${expectedSignerUri}\` };`
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        `leafCertificate.subjectAltName !== \`URI:\${expectedSignerUri}\``,
+        "!leafCertificate.subjectAltName?.includes(expectedSignerUri)"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'const FULCIO_GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";',
+        'const FULCIO_GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.dev";'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'const FULCIO_ISSUER_OID_LEGACY = Buffer.from("2b0601040183bf300101", "hex");',
+        'const FULCIO_ISSUER_OID_LEGACY = Buffer.from("2b0601040183bf300108", "hex");'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'const FULCIO_ISSUER_OID_V2 = Buffer.from("2b0601040183bf300108", "hex");',
+        'const FULCIO_ISSUER_OID_V2 = Buffer.from("2b0601040183bf300101", "hex");'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "field.tag !== 0xa3 || field.next !== tbs.contentEnd",
+        "field.tag !== 0xa3 && field.next !== tbs.contentEnd"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "extensions.tag !== 0x30 || extensions.next !== field.contentEnd",
+        "extensions.tag !== 0x30 && extensions.next !== field.contentEnd"
+      ),
+      replaceExactly(mcpbInputs.integrity, "legacyIssuerCount > 1", "legacyIssuerCount > 2"),
+      replaceExactly(mcpbInputs.integrity, "v2IssuerCount > 1", "v2IssuerCount > 2"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "legacyIssuerCount + v2IssuerCount === 0",
+        "legacyIssuerCount + v2IssuerCount < 0"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "assertExactFulcioOidcIssuer(certificateDer, label);",
+        "certificateDer.includes(FULCIO_ISSUER_OID_LEGACY);"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        `\`\${NPM_PROVENANCE_IDENTITY.workflowPath}@refs/tags/\${expected.tag}\``,
+        `\`\${NPM_PROVENANCE_IDENTITY.workflowPath}@refs/heads/\${expected.tag}\``
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri)",
+        'decodeNpmAttestationWrapper(target.attestationBundles[index], index, "")'
+      ),
+      replaceExactly(mcpbInputs.integrity, "    expectedSignerUri,\n    label\n  );", '    "",\n    label\n  );'),
+      replaceExactly(mcpbInputs.integrity, 'keyid !== ""', "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "statement.predicateType !== item.predicateType",
+        "statement.predicateType === item.predicateType"
+      ),
+      replaceExactly(mcpbInputs.integrity, "report.invalid.length !== 0", "report.invalid.length < 0"),
+      replaceExactly(mcpbInputs.integrity, "report.missing.length !== 0", "report.missing.length < 0"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "report.verified.filter((entry) => entry.name === expected.name)",
+        "report.verified.filter((entry) => entry.name.includes(expected.name))"
+      ),
+      replaceExactly(mcpbInputs.integrity, "targets.length !== 1", "targets.length < 1"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "target.attestationBundles.length !== 2",
+        "target.attestationBundles.length < 1"
+      ),
+      replaceExactly(mcpbInputs.integrity, "statements.has(decoded.predicateType)", "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "const statement = decodeCanonicalBase64Json",
+        "const statement = JSON.parse"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'assertCanonicalPositiveDecimal(invocationMatch[1], "signed npm provenance run id")',
+        "invocationMatch[1]"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "expected.publishAttempted && (runId !== expected.currentRunId || runAttempt !== expected.currentRunAttempt)",
+        "false"
+      )
+    ]) {
+      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain(NPM_PROVENANCE_CONTRACT_PROBLEM);
+    }
 
     expect(assertMcpbAssetVersion("4.0.0-rc.2")).toBe("4.0.0-rc.2");
     expect(() => assertMcpbAssetVersion("4.0.0-rc.2+rebuilt.1")).toThrow(/build metadata/);
@@ -3923,7 +5302,7 @@ describe("release identity and exact required-job gate", () => {
           workflow,
           `RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}`,
           "RELEASE_JOB_DEADLINE_EPOCH: 9999999999",
-          GH_READ_GUARD_COUNT
+          RELEASE_DEADLINE_ENV_BINDING_COUNT
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
@@ -4325,7 +5704,6 @@ describe("release identity and exact required-job gate", () => {
         '$0 == "package/package.json" { count++ }',
         '$0 == "package/other.json" { count++ }'
       ),
-      replaceExactly(mcpbInputs.release, 'createHash("sha512")', 'createHash("sha256")'),
       replaceExactly(mcpbInputs.release, '[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
       replaceExactly(mcpbInputs.release, '[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
       replaceExactly(
@@ -4364,7 +5742,6 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(MCPB_EXACT_NPM_PUBLISH, " --ignore-scripts", "")
       ),
       replaceExactly(mcpbInputs.release, "--strict-ssl=true", "--strict-ssl=false"),
-      replaceExactly(mcpbInputs.release, "--fetch-retries=0", "--fetch-retries=1"),
       replaceExactly(
         mcpbInputs.release,
         "npm_config_proxy|npm_config_https_proxy",
@@ -4419,13 +5796,13 @@ describe("release identity and exact required-job gate", () => {
         "                --@oomkapwn:registry=https://registry.npmjs.org/ \\",
         "                --@oomkapwn:registry=https://attacker.invalid/ \\"
       ),
-      replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
+      replaceExactly(mcpbInputs.release, 'require_job_reserve 4500 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
       replaceAllExactly(mcpbInputs.release, "            local limit=20", "            local limit=200", 5),
       replaceExactly(
         mcpbInputs.release,
-        '            require_job_reserve 2100 "npm publish"\n            assert_remote_tag_identity',
-        '            assert_remote_tag_identity\n            require_job_reserve 2100 "npm publish"'
+        '            require_job_reserve 4500 "npm publish"\n            assert_remote_tag_identity',
+        '            assert_remote_tag_identity\n            require_job_reserve 4500 "npm publish"'
       ),
       replaceExactly(mcpbInputs.release, npmPrewriteTagProof, npmPrewriteRegistryGuard),
       replaceExactly(mcpbInputs.release, npmPrewriteRegistryGuard, "            registry_read || true"),
@@ -4776,7 +6153,7 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         `          ${LOWERCASE_PROXY_UNSET}\n`,
         "          builtin true # lowercase proxy cleanup removed\n",
-        7
+        RELEASE_FIXTURE_PROXY_UNSET_COUNT
       ),
       replaceExactly(
         mcpbInputs.release,
@@ -4816,28 +6193,43 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
         "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
-        6
+        RELEASE_HARDENED_SHELL_COUNT
       ),
       replaceAllExactly(
         mcpbInputs.release,
         'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")',
         'GH_CONFIG_DIR="$RUNNER_TEMP"',
-        6
+        RELEASE_FIXTURE_GH_CONFIG_COUNT
       ),
-      replaceExactly(mcpbInputs.release, '          SHELLOPTS: ""', '          SHELLOPTS: "xtrace"', 6),
-      replaceExactly(mcpbInputs.release, '          LD_AUDIT: ""', '          LD_AUDIT: "/tmp/evil.so"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          SHELLOPTS: ""',
+        '          SHELLOPTS: "xtrace"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          LD_AUDIT: ""',
+        '          LD_AUDIT: "/tmp/evil.so"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
       replaceExactly(
         mcpbInputs.release,
         '          TAR_OPTIONS: ""',
         '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
-        6
+        RELEASE_HARDENED_ENV_COUNT
       ),
-      replaceExactly(mcpbInputs.release, '          GODEBUG: ""', '          GODEBUG: "http2debug=2"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          GODEBUG: ""',
+        '          GODEBUG: "http2debug=2"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
       replaceExactly(
         mcpbInputs.release,
         '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
         '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
-        6
+        RELEASE_TLS_PIN_COUNT
       ),
       replaceExactly(mcpbInputs.release, "          persist-credentials: false", "          persist-credentials: true"),
       replaceExactly(
@@ -5136,7 +6528,7 @@ describe("release identity and exact required-job gate", () => {
           mcpbInputs.release,
           "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
           "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
-          6
+          RELEASE_HARDENED_SHELL_COUNT
         )
       )
     ).toContain(
@@ -6164,5 +7556,5 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
-  });
+  }, 30_000);
 });

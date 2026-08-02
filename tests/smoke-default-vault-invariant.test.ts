@@ -72,6 +72,9 @@ describe("smoke default-vault target (audit G-1)", () => {
     // The fix announces a synthetic vault and never touches the sentinel real vault.
     expect(out).toMatch(/synthetic vault/i);
     expect(out).not.toContain(sentinel);
-    expect(run.status).toBe(0);
+    expect(
+      run.status,
+      `smoke process error=${run.error?.message ?? "none"} signal=${run.signal ?? "none"}\n${out}`
+    ).toBe(0);
   }, 90_000);
 });

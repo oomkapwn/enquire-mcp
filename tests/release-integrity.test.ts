@@ -164,8 +164,8 @@ const NPM_LOWERCASE_PIN_BLOCK =
   'npm_config_globalconfig="$NPM_CONFIG_GLOBALCONFIG"\n' +
   'npm_config_fetch_timeout="$NPM_CONFIG_FETCH_TIMEOUT"\n' +
   'npm_config_fetch_retries="$NPM_CONFIG_FETCH_RETRIES"\n' +
-  'export npm_config_registry npm_config_proxy npm_config_https_proxy npm_config_cafile npm_config_ca\n' +
-  'export npm_config_strict_ssl npm_config_globalconfig npm_config_fetch_timeout npm_config_fetch_retries';
+  "export npm_config_registry npm_config_proxy npm_config_https_proxy npm_config_cafile npm_config_ca\n" +
+  "export npm_config_strict_ssl npm_config_globalconfig npm_config_fetch_timeout npm_config_fetch_retries";
 
 function releaseTransactionWrapper(scriptHash: string): string {
   if (!/^[0-9a-f]{64}$/u.test(scriptHash)) throw new Error("release transaction hash must be lowercase SHA-256");
@@ -173,7 +173,7 @@ function releaseTransactionWrapper(scriptHash: string): string {
     "set -euo pipefail",
     LOWERCASE_PROXY_UNSET,
     'RELEASE_TRANSACTION_PATH=".github/scripts/release-mcpb-github-transaction.sh"',
-    'if ! [[ "${MCPB_RELEASE_WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then',
+    `if ! [[ "\${MCPB_RELEASE_WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then`,
     '  echo "::error::Workflow commit SHA is missing or malformed"',
     "  exit 1",
     "fi",
@@ -201,15 +201,16 @@ function releaseTransactionWrapper(scriptHash: string): string {
     '  echo "::error::GitHub Release transaction snapshot could not be hashed"',
     "  exit 1",
     "fi",
-    'RELEASE_TRANSACTION_ACTUAL_SHA256=${RELEASE_TRANSACTION_ACTUAL_SHA256%% *}',
+    `RELEASE_TRANSACTION_ACTUAL_SHA256=\${RELEASE_TRANSACTION_ACTUAL_SHA256%% *}`,
     'if ! [[ "$RELEASE_TRANSACTION_ACTUAL_SHA256" =~ ^[0-9a-f]{64}$ ]] ||',
     '   [ "$RELEASE_TRANSACTION_ACTUAL_SHA256" != "$RELEASE_TRANSACTION_SHA256" ]; then',
     '  echo "::error::GitHub Release transaction script differs from the reviewed workflow identity"',
     "  exit 1",
     "fi",
     "builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |",
-    "  /bin/bash --noprofile --norc -p -e -o pipefail -s --"
-  ].join("\n") + "\n";
+    "  /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+    ""
+  ].join("\n");
 }
 
 function normalizedReleaseTransactionFixture(script: string): string {
@@ -227,9 +228,9 @@ function normalizedReleaseTransactionFixture(script: string): string {
   return script
     .slice(0, -1)
     .split("$MCPB_RELEASE_REPOSITORY")
-    .join("${{ github.repository }}")
+    .join(`\${{ github.repository }}`)
     .split("$MCPB_RELEASE_CHANNEL")
-    .join("${{ steps.dist_tag.outputs.tag }}");
+    .join(`\${{ steps.dist_tag.outputs.tag }}`);
 }
 
 function releaseWorkflowFixture(workflow: string, script: string): string {
@@ -246,16 +247,14 @@ function releaseWorkflowFixture(workflow: string, script: string): string {
 
 function releaseTransactionFixtureBody(document: YamlRecord | null): string {
   const value = document?.[RELEASE_TRANSACTION_FIXTURE_KEY];
-  return typeof value === "string" && value.endsWith("\n") && !value.endsWith("\n\n")
-    ? value.slice(0, -1)
-    : "";
+  return typeof value === "string" && value.endsWith("\n") && !value.endsWith("\n\n") ? value.slice(0, -1) : "";
 }
 
 function releaseTransactionRuntimeSnapshot(fixture: string): string {
   return fixture
-    .split("${{ github.repository }}")
+    .split(`\${{ github.repository }}`)
     .join("$MCPB_RELEASE_REPOSITORY")
-    .split("${{ steps.dist_tag.outputs.tag }}")
+    .split(`\${{ steps.dist_tag.outputs.tag }}`)
     .join("$MCPB_RELEASE_CHANNEL");
 }
 
@@ -270,7 +269,9 @@ function githubWorkflowSchemaProblems(source: string): string[] {
   const problems: string[] = [];
   const walkEnvMaps = (value: unknown, path: string): void => {
     if (Array.isArray(value)) {
-      value.forEach((entry, index) => walkEnvMaps(entry, `${path}[${index}]`));
+      value.forEach((entry, index) => {
+        walkEnvMaps(entry, `${path}[${index}]`);
+      });
       return;
     }
     const record = yamlRecord(value);
@@ -2095,10 +2096,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   ) {
     problems.push("the exact six-asset identity and bytes must remain frozen across publication");
   }
-  const allRunBodies = steps
-    .map(runBody)
-    .concat(upload)
-    .join("\n");
+  const allRunBodies = steps.map(runBody).concat(upload).join("\n");
   const explicitWriteMethods =
     allRunBodies.match(/(?:(?:--method|--request)(?:=|\s+)|-X\s*)(?:POST|PATCH|PUT|DELETE)\b/giu) ?? [];
   const ghApiSurfaceLines = allRunBodies
@@ -2312,9 +2310,7 @@ function mcpbContractProblems(inputs: {
   const releaseTransactionHasCanonicalLf =
     inputs.releaseTransaction.endsWith("\n") && !inputs.releaseTransaction.endsWith("\n\n");
   const releaseTransactionSnapshot = releaseTransactionHasCanonicalLf ? inputs.releaseTransaction.slice(0, -1) : "";
-  const releaseTransactionHash = createHash("sha256")
-    .update(releaseTransactionSnapshot, "utf8")
-    .digest("hex");
+  const releaseTransactionHash = createHash("sha256").update(releaseTransactionSnapshot, "utf8").digest("hex");
   const releaseTransactionIsPinned =
     releaseTransactionHasCanonicalLf &&
     inputs.releaseTransaction.startsWith(`set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n`) &&
@@ -3303,9 +3299,7 @@ describe("release identity and exact required-job gate", () => {
       new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
       "utf8"
     );
-    const releaseTransactionSha256 = createHash("sha256")
-      .update(releaseTransaction.slice(0, -1), "utf8")
-      .digest("hex");
+    const releaseTransactionSha256 = createHash("sha256").update(releaseTransaction.slice(0, -1), "utf8").digest("hex");
     const workflow = releaseWorkflowFixture(releaseWorkflow, releaseTransaction);
     const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
     const workflowFiles = readdirSync(workflowDirectory)

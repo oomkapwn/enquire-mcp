@@ -12,6 +12,7 @@
 // run_attempt per required name.
 
 import { Buffer } from "node:buffer";
+import { X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
@@ -30,6 +31,62 @@ export const REQUIRED_RELEASE_CHECKS = Object.freeze([
   "package-consumer",
   "mcpb-basic"
 ]);
+
+const PROVENANCE_CONTEXT_FIELDS = Object.freeze([
+  "eventName",
+  "sha",
+  "ref",
+  "refName",
+  "refType",
+  "repository",
+  "repositoryId",
+  "repositoryOwnerId",
+  "serverUrl",
+  "workflowRef",
+  "workflowSha",
+  "runId",
+  "runAttempt",
+  "runnerEnvironment"
+]);
+
+const PROVENANCE_ENVIRONMENT_BINDINGS = Object.freeze({
+  eventName: ["PROVENANCE_EVENT_NAME", "GITHUB_EVENT_NAME"],
+  sha: ["PROVENANCE_SHA", "GITHUB_SHA"],
+  ref: ["PROVENANCE_REF", "GITHUB_REF"],
+  refName: ["PROVENANCE_REF_NAME", "GITHUB_REF_NAME"],
+  refType: ["PROVENANCE_REF_TYPE", "GITHUB_REF_TYPE"],
+  repository: ["PROVENANCE_REPOSITORY", "GITHUB_REPOSITORY"],
+  repositoryId: ["PROVENANCE_REPOSITORY_ID", "GITHUB_REPOSITORY_ID"],
+  repositoryOwnerId: ["PROVENANCE_REPOSITORY_OWNER_ID", "GITHUB_REPOSITORY_OWNER_ID"],
+  serverUrl: ["PROVENANCE_SERVER_URL", "GITHUB_SERVER_URL"],
+  workflowRef: ["PROVENANCE_WORKFLOW_REF", "GITHUB_WORKFLOW_REF"],
+  workflowSha: ["PROVENANCE_WORKFLOW_SHA", "GITHUB_WORKFLOW_SHA"],
+  runId: ["PROVENANCE_RUN_ID", "GITHUB_RUN_ID"],
+  runAttempt: ["PROVENANCE_RUN_ATTEMPT", "GITHUB_RUN_ATTEMPT"],
+  runnerEnvironment: ["PROVENANCE_RUNNER_ENVIRONMENT", "RUNNER_ENVIRONMENT"]
+});
+
+const NPM_PROVENANCE_IDENTITY = Object.freeze({
+  packageName: "@oomkapwn/enquire-mcp",
+  repository: "oomkapwn/enquire-mcp",
+  repositoryId: "1227411427",
+  repositoryOwnerId: "274092130",
+  serverUrl: "https://github.com",
+  runnerEnvironment: "github-hosted",
+  workflowPath: ".github/workflows/release.yml",
+  registry: "https://registry.npmjs.org/",
+  publishRegistry: "https://registry.npmjs.org",
+  attestationBaseUrl: "https://registry.npmjs.org/-/npm/v1/attestations/",
+  bundleMediaType: "application/vnd.dev.sigstore.bundle+json;version=0.2",
+  payloadType: "application/vnd.in-toto+json",
+  publishPredicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+  slsaPredicateType: "https://slsa.dev/provenance/v1",
+  slsaBuildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"
+});
+
+const FULCIO_GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
+const FULCIO_ISSUER_OID_LEGACY = Buffer.from("2b0601040183bf300101", "hex");
+const FULCIO_ISSUER_OID_V2 = Buffer.from("2b0601040183bf300108", "hex");
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -56,6 +113,254 @@ function isCanonicalSha512Sri(value) {
   const encoded = value.slice("sha512-".length);
   const decoded = Buffer.from(encoded, "base64");
   return decoded.length === 64 && decoded.toString("base64") === encoded;
+}
+
+function assertExactRecord(value, expectedKeys, label) {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const actualKeys = Object.keys(value);
+  const expected = new Set(expectedKeys);
+  if (actualKeys.length !== expected.size || actualKeys.some((key) => !expected.has(key))) {
+    throw new Error(`${label} must contain exactly ${expectedKeys.join(", ")}`);
+  }
+  return value;
+}
+
+function assertCanonicalPositiveDecimal(value, label) {
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) {
+    throw new Error(`${label} must be one canonical positive decimal string`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || String(parsed) !== value) {
+    throw new Error(`${label} must be one canonical positive safe-integer string`);
+  }
+  return value;
+}
+
+function assertCanonicalReleaseTag(tag) {
+  if (typeof tag !== "string") throw new Error("release tag must be one canonical SemVer tag");
+  const match =
+    /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(tag);
+  if (!match) throw new Error("release tag must be one canonical SemVer tag without build metadata");
+  const prerelease = match[4]?.split(".") ?? [];
+  if (prerelease.some((identifier) => /^\d+$/u.test(identifier) && identifier.length > 1 && identifier[0] === "0")) {
+    throw new Error("release tag has a numeric prerelease identifier with a leading zero");
+  }
+  return tag;
+}
+
+function decodeCanonicalBase64(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
+  ) {
+    throw new Error(`${label} must be canonical base64`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length === 0 || decoded.toString("base64") !== value) {
+    throw new Error(`${label} must be canonical base64`);
+  }
+  return decoded;
+}
+
+function decodeCanonicalBase64Json(value, label) {
+  const decoded = decodeCanonicalBase64(value, label);
+  const json = decoded.toString("utf8");
+  if (!Buffer.from(json, "utf8").equals(decoded)) {
+    throw new Error(`${label} must contain valid UTF-8 JSON`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(`${label} must contain valid JSON`);
+  }
+  if (!isRecord(parsed)) throw new Error(`${label} JSON must be an object`);
+  return parsed;
+}
+
+function readDerElement(bytes, offset, limit, label) {
+  if (!Buffer.isBuffer(bytes) || !Number.isSafeInteger(offset) || !Number.isSafeInteger(limit)) {
+    throw new Error(`${label} has an invalid DER reader boundary`);
+  }
+  if (offset < 0 || limit > bytes.length || offset >= limit || limit - offset < 2) {
+    throw new Error(`${label} has a truncated DER element`);
+  }
+  const tag = bytes[offset];
+  if (tag === undefined || (tag & 0x1f) === 0x1f) {
+    throw new Error(`${label} uses an unsupported DER tag`);
+  }
+  const firstLength = bytes[offset + 1];
+  if (firstLength === undefined) throw new Error(`${label} has a truncated DER length`);
+  let contentStart = offset + 2;
+  let contentLength = firstLength;
+  if ((firstLength & 0x80) !== 0) {
+    const lengthOctets = firstLength & 0x7f;
+    if (lengthOctets === 0 || lengthOctets > 4 || contentStart + lengthOctets > limit) {
+      throw new Error(`${label} has an invalid DER long-form length`);
+    }
+    if (bytes[contentStart] === 0) throw new Error(`${label} has a non-canonical DER length`);
+    contentLength = 0;
+    for (let index = 0; index < lengthOctets; index++) {
+      const octet = bytes[contentStart + index];
+      if (octet === undefined) throw new Error(`${label} has a truncated DER length`);
+      contentLength = contentLength * 256 + octet;
+    }
+    if (contentLength < 128) throw new Error(`${label} has a non-canonical DER long-form length`);
+    contentStart += lengthOctets;
+  }
+  const contentEnd = contentStart + contentLength;
+  if (!Number.isSafeInteger(contentEnd) || contentEnd > limit) {
+    throw new Error(`${label} has a DER element outside its parent boundary`);
+  }
+  return { tag, contentStart, contentEnd, next: contentEnd };
+}
+
+function decodeCanonicalDerUtf8String(bytes, label) {
+  const value = readDerElement(bytes, 0, bytes.length, label);
+  if (value.tag !== 0x0c || value.next !== bytes.length) {
+    throw new Error(`${label} must contain exactly one DER UTF8String`);
+  }
+  const encoded = bytes.subarray(value.contentStart, value.contentEnd);
+  const decoded = encoded.toString("utf8");
+  if (!Buffer.from(decoded, "utf8").equals(encoded)) {
+    throw new Error(`${label} must contain canonical UTF-8`);
+  }
+  return decoded;
+}
+
+function assertExactFulcioOidcIssuer(certificateDer, label) {
+  const certificate = readDerElement(certificateDer, 0, certificateDer.length, `${label} certificate`);
+  if (certificate.tag !== 0x30 || certificate.next !== certificateDer.length) {
+    throw new Error(`${label} certificate must be one exact DER sequence`);
+  }
+  let outerCursor = certificate.contentStart;
+  const tbs = readDerElement(certificateDer, outerCursor, certificate.contentEnd, `${label} TBSCertificate`);
+  if (tbs.tag !== 0x30) throw new Error(`${label} lacks an exact TBSCertificate sequence`);
+  outerCursor = tbs.next;
+  const signatureAlgorithm = readDerElement(
+    certificateDer,
+    outerCursor,
+    certificate.contentEnd,
+    `${label} signature algorithm`
+  );
+  outerCursor = signatureAlgorithm.next;
+  const signatureValue = readDerElement(
+    certificateDer,
+    outerCursor,
+    certificate.contentEnd,
+    `${label} signature value`
+  );
+  if (
+    signatureAlgorithm.tag !== 0x30 ||
+    signatureValue.tag !== 0x03 ||
+    signatureValue.next !== certificate.contentEnd
+  ) {
+    throw new Error(`${label} certificate has an invalid outer DER structure`);
+  }
+
+  let cursor = tbs.contentStart;
+  let field = readDerElement(certificateDer, cursor, tbs.contentEnd, `${label} certificate version`);
+  if (field.tag === 0xa0) {
+    cursor = field.next;
+  }
+  const requiredTags = [0x02, 0x30, 0x30, 0x30, 0x30, 0x30];
+  for (const expectedTag of requiredTags) {
+    field = readDerElement(certificateDer, cursor, tbs.contentEnd, `${label} TBSCertificate field`);
+    if (field.tag !== expectedTag) throw new Error(`${label} has an invalid TBSCertificate field order`);
+    cursor = field.next;
+  }
+  while (cursor < tbs.contentEnd) {
+    field = readDerElement(certificateDer, cursor, tbs.contentEnd, `${label} TBSCertificate optional field`);
+    if (field.tag === 0x81 || field.tag === 0x82) {
+      cursor = field.next;
+      continue;
+    }
+    break;
+  }
+  if (field.tag !== 0xa3 || field.next !== tbs.contentEnd) {
+    throw new Error(`${label} certificate must contain one final extensions field`);
+  }
+  const extensions = readDerElement(
+    certificateDer,
+    field.contentStart,
+    field.contentEnd,
+    `${label} extensions`
+  );
+  if (extensions.tag !== 0x30 || extensions.next !== field.contentEnd) {
+    throw new Error(`${label} certificate extensions must be one exact DER sequence`);
+  }
+
+  let legacyIssuerCount = 0;
+  let v2IssuerCount = 0;
+  cursor = extensions.contentStart;
+  while (cursor < extensions.contentEnd) {
+    const extension = readDerElement(
+      certificateDer,
+      cursor,
+      extensions.contentEnd,
+      `${label} extension`
+    );
+    if (extension.tag !== 0x30) throw new Error(`${label} has a malformed certificate extension`);
+    let extensionCursor = extension.contentStart;
+    const oid = readDerElement(certificateDer, extensionCursor, extension.contentEnd, `${label} extension OID`);
+    if (oid.tag !== 0x06) throw new Error(`${label} certificate extension lacks an OID`);
+    extensionCursor = oid.next;
+    let value = readDerElement(
+      certificateDer,
+      extensionCursor,
+      extension.contentEnd,
+      `${label} extension value`
+    );
+    if (value.tag === 0x01) {
+      if (
+        value.contentEnd - value.contentStart !== 1 ||
+        (certificateDer[value.contentStart] !== 0x00 && certificateDer[value.contentStart] !== 0xff)
+      ) {
+        throw new Error(`${label} certificate extension has a malformed critical flag`);
+      }
+      extensionCursor = value.next;
+      value = readDerElement(
+        certificateDer,
+        extensionCursor,
+        extension.contentEnd,
+        `${label} extension value`
+      );
+    }
+    if (value.tag !== 0x04 || value.next !== extension.contentEnd) {
+      throw new Error(`${label} certificate extension must end in one OCTET STRING`);
+    }
+
+    const oidBytes = certificateDer.subarray(oid.contentStart, oid.contentEnd);
+    const valueBytes = certificateDer.subarray(value.contentStart, value.contentEnd);
+    if (oidBytes.equals(FULCIO_ISSUER_OID_LEGACY)) {
+      legacyIssuerCount++;
+      if (legacyIssuerCount > 1) {
+        throw new Error(`${label} certificate contains duplicate Fulcio legacy OIDC issuer extensions`);
+      }
+      if (
+        valueBytes.toString("utf8") !== FULCIO_GITHUB_ACTIONS_ISSUER ||
+        !Buffer.from(FULCIO_GITHUB_ACTIONS_ISSUER, "utf8").equals(valueBytes)
+      ) {
+        throw new Error(`${label} Fulcio legacy OIDC issuer is not GitHub Actions`);
+      }
+    } else if (oidBytes.equals(FULCIO_ISSUER_OID_V2)) {
+      v2IssuerCount++;
+      if (v2IssuerCount > 1) {
+        throw new Error(`${label} certificate contains duplicate Fulcio v2 OIDC issuer extensions`);
+      }
+      if (
+        decodeCanonicalDerUtf8String(valueBytes, `${label} Fulcio v2 OIDC issuer`) !==
+        FULCIO_GITHUB_ACTIONS_ISSUER
+      ) {
+        throw new Error(`${label} Fulcio v2 OIDC issuer is not GitHub Actions`);
+      }
+    }
+    cursor = extension.next;
+  }
+  if (legacyIssuerCount + v2IssuerCount === 0) {
+    throw new Error(`${label} certificate lacks a supported Fulcio OIDC issuer extension`);
+  }
 }
 
 function isExactSha256DigestOrNull(value) {
@@ -474,6 +779,451 @@ export function evaluateNpmPublication(state, expectedSha, expectedIntegrity, ex
 }
 
 /**
+ * Bind npm's declared provenance inputs to the immutable GitHub tag-push
+ * runtime before the first registry write.
+ *
+ * The two copies deliberately come from different trust surfaces: `declared`
+ * is populated from workflow-expression aliases while `runtime` is populated
+ * from GitHub's default runtime environment. Both must be complete and
+ * byte-equal before their values are compared with the release identity.
+ *
+ * @param {unknown} context - Declared and runtime GitHub provenance fields.
+ * @param {unknown} expectedSourceSha - Exact checked-out release source SHA.
+ * @param {unknown} expectedTag - Exact `v<version>` release tag.
+ * @returns {{runId:string,runAttempt:string}} Canonical invocation identity.
+ * @example
+ * evaluateNpmProvenanceContext({ declared, runtime }, sourceSha, "v4.0.0-rc.3");
+ */
+export function evaluateNpmProvenanceContext(context, expectedSourceSha, expectedTag) {
+  assertExactRecord(context, ["declared", "runtime"], "npm provenance context");
+  const declared = assertExactRecord(
+    context.declared,
+    PROVENANCE_CONTEXT_FIELDS,
+    "declared npm provenance context"
+  );
+  const runtime = assertExactRecord(context.runtime, PROVENANCE_CONTEXT_FIELDS, "runtime npm provenance context");
+  if (!isExactSha1(expectedSourceSha)) {
+    throw new Error("expected npm provenance source SHA must be one exact lowercase SHA-1");
+  }
+  assertCanonicalReleaseTag(expectedTag);
+
+  for (const field of PROVENANCE_CONTEXT_FIELDS) {
+    if (typeof declared[field] !== "string" || typeof runtime[field] !== "string") {
+      throw new Error(`npm provenance ${field} must be declared and observed as strings`);
+    }
+    if (declared[field] !== runtime[field]) {
+      throw new Error(`declared npm provenance ${field} differs from the GitHub runtime`);
+    }
+  }
+
+  const expectedRef = `refs/tags/${expectedTag}`;
+  const expectedWorkflowRef =
+    `${NPM_PROVENANCE_IDENTITY.repository}/${NPM_PROVENANCE_IDENTITY.workflowPath}@${expectedRef}`;
+  const fixed = {
+    eventName: "push",
+    sha: expectedSourceSha,
+    ref: expectedRef,
+    refName: expectedTag,
+    refType: "tag",
+    repository: NPM_PROVENANCE_IDENTITY.repository,
+    repositoryId: NPM_PROVENANCE_IDENTITY.repositoryId,
+    repositoryOwnerId: NPM_PROVENANCE_IDENTITY.repositoryOwnerId,
+    serverUrl: NPM_PROVENANCE_IDENTITY.serverUrl,
+    workflowRef: expectedWorkflowRef,
+    workflowSha: expectedSourceSha,
+    runnerEnvironment: NPM_PROVENANCE_IDENTITY.runnerEnvironment
+  };
+  for (const [field, expected] of Object.entries(fixed)) {
+    if (declared[field] !== expected) {
+      throw new Error(`npm provenance ${field} does not match the exact tag-push release identity`);
+    }
+  }
+
+  return {
+    runId: assertCanonicalPositiveDecimal(declared.runId, "npm provenance run id"),
+    runAttempt: assertCanonicalPositiveDecimal(declared.runAttempt, "npm provenance run attempt")
+  };
+}
+
+function assertExactNpmSubject(statement, expectedPurl, expectedSha512, label) {
+  if (!Array.isArray(statement.subject) || statement.subject.length !== 1) {
+    throw new Error(`${label} must contain exactly one subject`);
+  }
+  const subject = assertExactRecord(statement.subject[0], ["name", "digest"], `${label} subject`);
+  const digest = assertExactRecord(subject.digest, ["sha512"], `${label} subject digest`);
+  if (subject.name !== expectedPurl || digest.sha512 !== expectedSha512) {
+    throw new Error(`${label} subject does not match the exact npm PURL and SHA-512 tarball`);
+  }
+}
+
+function assertExactNpmVerificationMaterial(predicateType, material, keyid, expectedSignerUri, label) {
+  const publish = predicateType === NPM_PROVENANCE_IDENTITY.publishPredicateType;
+  const exactKeys = publish
+    ? ["publicKey", "tlogEntries", "timestampVerificationData"]
+    : ["x509CertificateChain", "tlogEntries", "timestampVerificationData"];
+  const verified = assertExactRecord(material, exactKeys, `${label} verification material`);
+  if (
+    !Array.isArray(verified.tlogEntries) ||
+    verified.tlogEntries.length === 0 ||
+    verified.tlogEntries.some((entry) => !isRecord(entry)) ||
+    !isRecord(verified.timestampVerificationData)
+  ) {
+    throw new Error(`${label} verification material lacks verified transparency evidence`);
+  }
+
+  if (publish) {
+    const publicKey = assertExactRecord(verified.publicKey, ["hint"], `${label} publish public key`);
+    if (typeof publicKey.hint !== "string" || !/^SHA256:[A-Za-z0-9+/]{43}$/u.test(publicKey.hint)) {
+      throw new Error(`${label} publish public-key hint is not canonical`);
+    }
+    const encodedHint = publicKey.hint.slice("SHA256:".length);
+    const hintDigest = Buffer.from(encodedHint, "base64");
+    if (
+      hintDigest.length !== 32 ||
+      hintDigest.toString("base64").replace(/=+$/u, "") !== encodedHint ||
+      keyid !== publicKey.hint
+    ) {
+      throw new Error(`${label} publish DSSE key id does not match the exact SHA-256 public-key hint`);
+    }
+    return;
+  }
+
+  const chain = assertExactRecord(
+    verified.x509CertificateChain,
+    ["certificates"],
+    `${label} SLSA certificate chain`
+  );
+  if (!Array.isArray(chain.certificates) || chain.certificates.length !== 1) {
+    throw new Error(`${label} SLSA verification material must contain exactly one signing certificate`);
+  }
+  const certificate = assertExactRecord(
+    chain.certificates[0],
+    ["rawBytes"],
+    `${label} SLSA signing certificate`
+  );
+  const certificateDer = decodeCanonicalBase64(certificate.rawBytes, `${label} SLSA signing certificate`);
+  if (keyid !== "") {
+    throw new Error(`${label} SLSA DSSE key id must be empty for keyless Fulcio signing`);
+  }
+  let leafCertificate;
+  try {
+    leafCertificate = new X509Certificate(certificateDer);
+  } catch {
+    throw new Error(`${label} SLSA signing certificate must be valid DER X.509`);
+  }
+  if (leafCertificate.subjectAltName !== `URI:${expectedSignerUri}`) {
+    throw new Error(`${label} SLSA certificate SAN does not match the exact tagged workflow signer`);
+  }
+  assertExactFulcioOidcIssuer(certificateDer, label);
+}
+
+function decodeNpmAttestationWrapper(item, index, expectedSignerUri) {
+  const label = `npm attestation bundle ${index + 1}`;
+  if (!isRecord(item)) throw new Error(`${label} must be an object`);
+  const hasSignedAccessUrl = Object.hasOwn(item, "signedAccessSignatureUrl");
+  assertExactRecord(
+    item,
+    hasSignedAccessUrl ? ["predicateType", "bundle", "signedAccessSignatureUrl"] : ["predicateType", "bundle"],
+    label
+  );
+  if (hasSignedAccessUrl && item.signedAccessSignatureUrl !== "") {
+    throw new Error(`${label} has an unexpected signed-access URL`);
+  }
+  if (
+    item.predicateType !== NPM_PROVENANCE_IDENTITY.publishPredicateType &&
+    item.predicateType !== NPM_PROVENANCE_IDENTITY.slsaPredicateType
+  ) {
+    throw new Error(`${label} has an unknown predicate type`);
+  }
+
+  const bundle = assertExactRecord(
+    item.bundle,
+    ["mediaType", "verificationMaterial", "dsseEnvelope"],
+    `${label} Sigstore bundle`
+  );
+  if (bundle.mediaType !== NPM_PROVENANCE_IDENTITY.bundleMediaType || !isRecord(bundle.verificationMaterial)) {
+    throw new Error(`${label} has an invalid Sigstore bundle identity`);
+  }
+  const envelope = assertExactRecord(
+    bundle.dsseEnvelope,
+    ["payload", "payloadType", "signatures"],
+    `${label} DSSE envelope`
+  );
+  if (envelope.payloadType !== NPM_PROVENANCE_IDENTITY.payloadType) {
+    throw new Error(`${label} has an invalid DSSE payload type`);
+  }
+  if (!Array.isArray(envelope.signatures) || envelope.signatures.length !== 1) {
+    throw new Error(`${label} must contain exactly one verified DSSE signature`);
+  }
+  const signature = assertExactRecord(envelope.signatures[0], ["sig", "keyid"], `${label} DSSE signature`);
+  if (!isNonEmptyString(signature.sig) || typeof signature.keyid !== "string") {
+    throw new Error(`${label} has an invalid DSSE signature identity`);
+  }
+  assertExactNpmVerificationMaterial(
+    item.predicateType,
+    bundle.verificationMaterial,
+    signature.keyid,
+    expectedSignerUri,
+    label
+  );
+
+  const statement = decodeCanonicalBase64Json(envelope.payload, `${label} DSSE payload`);
+  assertExactRecord(statement, ["_type", "subject", "predicateType", "predicate"], `${label} statement`);
+  if (statement.predicateType !== item.predicateType) {
+    throw new Error(`${label} wrapper and signed predicate types differ`);
+  }
+  return { predicateType: item.predicateType, statement };
+}
+
+function assertExactNpmPublishStatement(statement, expected) {
+  if (statement._type !== "https://in-toto.io/Statement/v0.1") {
+    throw new Error("npm publish attestation has an invalid statement type");
+  }
+  assertExactNpmSubject(statement, expected.purl, expected.sha512, "npm publish attestation");
+  const predicate = assertExactRecord(
+    statement.predicate,
+    ["name", "version", "registry"],
+    "npm publish attestation predicate"
+  );
+  if (
+    predicate.name !== expected.name ||
+    predicate.version !== expected.version ||
+    predicate.registry !== NPM_PROVENANCE_IDENTITY.publishRegistry
+  ) {
+    throw new Error("npm publish attestation predicate does not match the exact registry package identity");
+  }
+}
+
+function assertExactNpmSlsaStatement(statement, expected) {
+  if (statement._type !== "https://in-toto.io/Statement/v1") {
+    throw new Error("npm SLSA attestation has an invalid statement type");
+  }
+  assertExactNpmSubject(statement, expected.purl, expected.sha512, "npm SLSA attestation");
+  const predicate = assertExactRecord(
+    statement.predicate,
+    ["buildDefinition", "runDetails"],
+    "npm SLSA attestation predicate"
+  );
+  const buildDefinition = assertExactRecord(
+    predicate.buildDefinition,
+    ["buildType", "externalParameters", "internalParameters", "resolvedDependencies"],
+    "npm SLSA build definition"
+  );
+  if (buildDefinition.buildType !== NPM_PROVENANCE_IDENTITY.slsaBuildType) {
+    throw new Error("npm SLSA build type does not match the GitHub Actions workflow contract");
+  }
+
+  const externalParameters = assertExactRecord(
+    buildDefinition.externalParameters,
+    ["workflow"],
+    "npm SLSA external parameters"
+  );
+  const workflow = assertExactRecord(
+    externalParameters.workflow,
+    ["ref", "repository", "path"],
+    "npm SLSA workflow identity"
+  );
+  const expectedRef = `refs/tags/${expected.tag}`;
+  const repositoryUrl = `${NPM_PROVENANCE_IDENTITY.serverUrl}/${NPM_PROVENANCE_IDENTITY.repository}`;
+  if (
+    workflow.ref !== expectedRef ||
+    workflow.repository !== repositoryUrl ||
+    workflow.path !== NPM_PROVENANCE_IDENTITY.workflowPath
+  ) {
+    throw new Error("npm SLSA workflow does not match the exact tagged release workflow");
+  }
+
+  const internalParameters = assertExactRecord(
+    buildDefinition.internalParameters,
+    ["github"],
+    "npm SLSA internal parameters"
+  );
+  const github = assertExactRecord(
+    internalParameters.github,
+    ["event_name", "repository_id", "repository_owner_id"],
+    "npm SLSA GitHub identity"
+  );
+  if (
+    github.event_name !== "push" ||
+    github.repository_id !== NPM_PROVENANCE_IDENTITY.repositoryId ||
+    github.repository_owner_id !== NPM_PROVENANCE_IDENTITY.repositoryOwnerId
+  ) {
+    throw new Error("npm SLSA GitHub identity does not match the exact tag-push repository");
+  }
+
+  if (!Array.isArray(buildDefinition.resolvedDependencies) || buildDefinition.resolvedDependencies.length !== 1) {
+    throw new Error("npm SLSA provenance must contain exactly one resolved source dependency");
+  }
+  const dependency = assertExactRecord(
+    buildDefinition.resolvedDependencies[0],
+    ["uri", "digest"],
+    "npm SLSA resolved source dependency"
+  );
+  const dependencyDigest = assertExactRecord(
+    dependency.digest,
+    ["gitCommit"],
+    "npm SLSA resolved source digest"
+  );
+  if (dependency.uri !== `git+${repositoryUrl}@${expectedRef}` || dependencyDigest.gitCommit !== expected.sourceSha) {
+    throw new Error("npm SLSA resolved dependency does not match the exact tagged source SHA");
+  }
+
+  const runDetails = assertExactRecord(predicate.runDetails, ["builder", "metadata"], "npm SLSA run details");
+  const builder = assertExactRecord(runDetails.builder, ["id"], "npm SLSA builder identity");
+  if (builder.id !== `${NPM_PROVENANCE_IDENTITY.serverUrl}/actions/runner/github-hosted`) {
+    throw new Error("npm SLSA builder is not the exact GitHub-hosted runner identity");
+  }
+  const metadata = assertExactRecord(runDetails.metadata, ["invocationId"], "npm SLSA invocation metadata");
+  if (typeof metadata.invocationId !== "string") {
+    throw new Error("npm SLSA invocation id must be a string");
+  }
+  const invocationMatch =
+    /^https:\/\/github\.com\/oomkapwn\/enquire-mcp\/actions\/runs\/([1-9]\d*)\/attempts\/([1-9]\d*)$/u.exec(
+      metadata.invocationId
+    );
+  if (!invocationMatch) throw new Error("npm SLSA invocation id is not canonical for this repository");
+  const runId = assertCanonicalPositiveDecimal(invocationMatch[1], "signed npm provenance run id");
+  const runAttempt = assertCanonicalPositiveDecimal(invocationMatch[2], "signed npm provenance run attempt");
+  if (expected.publishAttempted && (runId !== expected.currentRunId || runAttempt !== expected.currentRunAttempt)) {
+    throw new Error("fresh npm publication provenance does not match the current workflow invocation");
+  }
+  return { runId, runAttempt };
+}
+
+/**
+ * Validate the exact npm target entry and the semantic identity of its two
+ * already-cryptographically-verified Sigstore attestations.
+ *
+ * A fresh publication binds the signed invocation to the current run. A reuse
+ * accepts a prior canonical invocation so recovery can reconcile an existing
+ * immutable version without replaying `npm publish`; every source, workflow,
+ * repository, event, PURL and byte identity remains exact in both modes. The
+ * SLSA leaf certificate SAN is independently bound to the expected tagged
+ * workflow URI and its Fulcio extension to the GitHub Actions OIDC issuer,
+ * rather than trusting the signed payload to name its own signer.
+ *
+ * @param {unknown} report - JSON from `npm audit signatures --json --include-attestations`.
+ * @param {unknown} expected - Exact package, tarball, source, tag, and invocation identity.
+ * @returns {{runId:string,runAttempt:string}} Signed provenance invocation identity.
+ * @example
+ * evaluateNpmProvenanceAttestations(report, expected);
+ */
+export function evaluateNpmProvenanceAttestations(report, expected) {
+  assertExactRecord(
+    expected,
+    [
+      "name",
+      "version",
+      "integrity",
+      "sourceSha",
+      "tag",
+      "publishAttempted",
+      "currentRunId",
+      "currentRunAttempt"
+    ],
+    "expected npm provenance identity"
+  );
+  if (expected.name !== NPM_PROVENANCE_IDENTITY.packageName) {
+    throw new Error("expected npm provenance package name is not the release package");
+  }
+  assertCanonicalReleaseTag(expected.tag);
+  assertReleaseTagMatchesVersion(expected.tag, expected.version);
+  if (!isCanonicalSha512Sri(expected.integrity)) {
+    throw new Error("expected npm provenance integrity must be one canonical SHA-512 SRI");
+  }
+  if (!isExactSha1(expected.sourceSha)) {
+    throw new Error("expected npm provenance source SHA must be one exact lowercase SHA-1");
+  }
+  if (typeof expected.publishAttempted !== "boolean") {
+    throw new Error("expected npm provenance publication mode must be a boolean");
+  }
+  assertCanonicalPositiveDecimal(expected.currentRunId, "current npm provenance run id");
+  assertCanonicalPositiveDecimal(expected.currentRunAttempt, "current npm provenance run attempt");
+
+  assertExactRecord(report, ["invalid", "missing", "verified"], "npm signature audit report");
+  if (!Array.isArray(report.invalid) || report.invalid.length !== 0) {
+    throw new Error("npm signature audit report contains invalid packages");
+  }
+  if (!Array.isArray(report.missing) || report.missing.length !== 0) {
+    throw new Error("npm signature audit report contains packages with missing signatures");
+  }
+  if (!Array.isArray(report.verified)) throw new Error("npm signature audit verified entries must be an array");
+  for (const entry of report.verified) {
+    if (
+      !isRecord(entry) ||
+      !isNonEmptyString(entry.name) ||
+      !isNonEmptyString(entry.version) ||
+      !isNonEmptyString(entry.location) ||
+      !isNonEmptyString(entry.registry)
+    ) {
+      throw new Error("npm signature audit contains a malformed verified package identity");
+    }
+  }
+  const targets = report.verified.filter((entry) => entry.name === expected.name);
+  if (targets.length !== 1) {
+    throw new Error("npm signature audit must contain exactly one verified release-package entry");
+  }
+  const target = assertExactRecord(
+    targets[0],
+    ["name", "version", "location", "registry", "attestations", "attestationBundles"],
+    "verified npm release-package entry"
+  );
+  if (
+    target.version !== expected.version ||
+    target.location !== `node_modules/${expected.name}` ||
+    target.registry !== NPM_PROVENANCE_IDENTITY.registry
+  ) {
+    throw new Error("verified npm release-package entry does not match the exact installed target");
+  }
+
+  const attestationUrl =
+    `${NPM_PROVENANCE_IDENTITY.attestationBaseUrl}@oomkapwn%2fenquire-mcp@${expected.version}`;
+  const attestations = assertExactRecord(target.attestations, ["url", "provenance"], "npm attestation locator");
+  const provenance = assertExactRecord(
+    attestations.provenance,
+    ["predicateType"],
+    "npm attestation provenance locator"
+  );
+  if (attestations.url !== attestationUrl || provenance.predicateType !== NPM_PROVENANCE_IDENTITY.slsaPredicateType) {
+    throw new Error("npm attestation locator does not match the exact registry target");
+  }
+  if (!Array.isArray(target.attestationBundles) || target.attestationBundles.length !== 2) {
+    throw new Error("verified npm release package must contain exactly two attestation bundles");
+  }
+
+  const expectedSignerUri =
+    `${NPM_PROVENANCE_IDENTITY.serverUrl}/${NPM_PROVENANCE_IDENTITY.repository}/` +
+    `${NPM_PROVENANCE_IDENTITY.workflowPath}@refs/tags/${expected.tag}`;
+  const statements = new Map();
+  for (let index = 0; index < target.attestationBundles.length; index++) {
+    const decoded = decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri);
+    if (statements.has(decoded.predicateType)) {
+      throw new Error(`duplicate npm attestation predicate type: ${decoded.predicateType}`);
+    }
+    statements.set(decoded.predicateType, decoded.statement);
+  }
+  const publishStatement = statements.get(NPM_PROVENANCE_IDENTITY.publishPredicateType);
+  const slsaStatement = statements.get(NPM_PROVENANCE_IDENTITY.slsaPredicateType);
+  if (!publishStatement || !slsaStatement || statements.size !== 2) {
+    throw new Error("verified npm release package lacks the exact publish and SLSA attestations");
+  }
+
+  const expectedSubject = {
+    name: expected.name,
+    version: expected.version,
+    sourceSha: expected.sourceSha,
+    tag: expected.tag,
+    publishAttempted: expected.publishAttempted,
+    currentRunId: expected.currentRunId,
+    currentRunAttempt: expected.currentRunAttempt,
+    purl: `pkg:npm/%40oomkapwn/enquire-mcp@${expected.version}`,
+    sha512: Buffer.from(expected.integrity.slice("sha512-".length), "base64").toString("hex")
+  };
+  assertExactNpmPublishStatement(publishStatement, expectedSubject);
+  return assertExactNpmSlsaStatement(slsaStatement, expectedSubject);
+}
+
+/**
  * Classify an absent, draft, or published GitHub release against the exact
  * Basic asset-name contract.
  *
@@ -717,12 +1467,25 @@ export function evaluateMcpbCandidateRun(input) {
   return { state: "selected", artifactId, digest, runAttempt: producerAttempt };
 }
 
+function npmProvenanceContextFromEnvironment() {
+  const declared = {};
+  const runtime = {};
+  for (const field of PROVENANCE_CONTEXT_FIELDS) {
+    const [declaredName, runtimeName] = PROVENANCE_ENVIRONMENT_BINDINGS[field];
+    declared[field] = process.env[declaredName];
+    runtime[field] = process.env[runtimeName];
+  }
+  return { declared, runtime };
+}
+
 function usage() {
   return [
     "Usage: check-release-integrity.mjs",
     "assert-tag <tag> <version> | asset-version <version> | channel-advance <candidate> <current> <channel> |",
     "checks <source-sha> | flatten-pages <release|asset> | flatten-field <workflow_runs|jobs|artifacts> |",
     "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state | visibility |",
+    "npm-provenance-context <source-sha> <tag> |",
+    "npm-provenance <name> <version> <sha512-sri> <source-sha> <tag> <publish-attempted> <run-id> <run-attempt> |",
     "candidate-runs <source-sha> | candidate <source-sha>"
   ].join(" ");
 }
@@ -749,6 +1512,29 @@ if (isEntrypoint(import.meta.url)) {
     } else if (mode === "npm-state") {
       const payload = JSON.parse(readFileSync(0, "utf8"));
       console.log(JSON.stringify(evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])));
+    } else if (mode === "npm-provenance-context") {
+      console.log(JSON.stringify(evaluateNpmProvenanceContext(npmProvenanceContextFromEnvironment(), first, second)));
+    } else if (mode === "npm-provenance") {
+      const [name, version, integrity, sourceSha, tag, publishAttempted, currentRunId, currentRunAttempt] =
+        process.argv.slice(3);
+      if (publishAttempted !== "true" && publishAttempted !== "false") {
+        throw new Error("npm provenance publish-attempted state must be exactly true or false");
+      }
+      const payload = JSON.parse(readFileSync(0, "utf8"));
+      console.log(
+        JSON.stringify(
+          evaluateNpmProvenanceAttestations(payload, {
+            name,
+            version,
+            integrity,
+            sourceSha,
+            tag,
+            publishAttempted: publishAttempted === "true",
+            currentRunId,
+            currentRunAttempt
+          })
+        )
+      );
     } else if (mode === "release-state") {
       const [tag, prerelease, ...assetNames] = process.argv.slice(3);
       if (prerelease !== "true" && prerelease !== "false") {

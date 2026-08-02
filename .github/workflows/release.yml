@@ -928,6 +928,7 @@ jobs:
             fi
           done
       - name: Publish with provenance or verify an exact prior publication
+        id: npm_publication
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         run: |
           set -euo pipefail
@@ -1121,7 +1122,6 @@ jobs:
               exit 1
             fi
           }
-
           PACK_JSON=$("$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts \
             --pack-destination "$RUNNER_TEMP")
           if [ "$(printf '%s' "$PACK_JSON" | jq 'if type == "array" then length else -1 end')" -ne 1 ]; then
@@ -1185,7 +1185,7 @@ jobs:
           elif [ "$NPM_ACTION" = "publish" ]; then
             node scripts/check-release-integrity.mjs channel-advance \
               "$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"
-            require_job_reserve 2100 "npm publish"
+            require_job_reserve 4500 "npm publish"
             assert_remote_tag_identity
             if ! registry_read; then
               echo "::error::npm pre-write check requires one authoritative, bounded full-packument HTTP 200"
@@ -1207,6 +1207,7 @@ jobs:
               echo "::error::canonical npm tarball changed after preflight and before publication"
               exit 1
             fi
+            "$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"
             NPM_PUBLISH_ATTEMPTED=true
             NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")
             if [ ! -d "$NPM_PUBLISH_CWD" ] || [ -L "$NPM_PUBLISH_CWD" ]; then
@@ -1280,6 +1281,16 @@ jobs:
           if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ] && [ "$NPM_PUBLISH_EXIT" -ne 0 ]; then
             echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"
           fi
+          {
+            printf 'version=%s\n' "$VERSION"
+            printf 'source_sha=%s\n' "$SOURCE_SHA"
+            printf 'tag=%s\n' "$TAG"
+            printf 'integrity=%s\n' "$EXPECTED_INTEGRITY"
+            printf 'publication_action=%s\n' "$NPM_ACTION"
+            printf 'publish_attempted=%s\n' "$NPM_PUBLISH_ATTEMPTED"
+            printf 'run_id=%s\n' "$PROVENANCE_RUN_ID"
+            printf 'run_attempt=%s\n' "$PROVENANCE_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
         env:
           BASH_ENV: ""
           ENV: ""
@@ -1308,6 +1319,20 @@ jobs:
           NODE_OPTIONS: ""
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PROVENANCE_EVENT_NAME: ${{ github.event_name }}
+          PROVENANCE_REF: ${{ github.ref }}
+          PROVENANCE_REF_NAME: ${{ github.ref_name }}
+          PROVENANCE_REF_TYPE: ${{ github.ref_type }}
+          PROVENANCE_REPOSITORY: ${{ github.repository }}
+          PROVENANCE_REPOSITORY_ID: ${{ github.repository_id }}
+          PROVENANCE_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+          PROVENANCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PROVENANCE_RUN_ID: ${{ github.run_id }}
+          PROVENANCE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          PROVENANCE_SERVER_URL: ${{ github.server_url }}
+          PROVENANCE_SHA: ${{ github.sha }}
+          PROVENANCE_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PROVENANCE_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
           NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
           NPM_CONFIG_PROXY: ""
@@ -1318,6 +1343,277 @@ jobs:
           NPM_CONFIG_GLOBALCONFIG: "/dev/null"
           NPM_CONFIG_FETCH_TIMEOUT: "60000"
           NPM_CONFIG_FETCH_RETRIES: "0"
+      - name: Verify exact npm provenance without credentials
+        id: npm_provenance
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          SHELLOPTS: ""
+          PS4: ""
+          LD_PRELOAD: ""
+          LD_LIBRARY_PATH: ""
+          LD_AUDIT: ""
+          LD_DEBUG_OUTPUT: ""
+          LD_PROFILE: ""
+          GLIBC_TUNABLES: ""
+          TAR_OPTIONS: ""
+          OPENSSL_CONF: ""
+          NODE_DEBUG: ""
+          GODEBUG: ""
+          NODE_OPTIONS: ""
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
+          ACTIONS_ID_TOKEN_REQUEST_URL: ""
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
+          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}
+          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}
+          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}
+          PUBLISH_ATTEMPTED: ${{ steps.npm_publication.outputs.publish_attempted }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          NPM_CLI_VERSION: "11.18.0"
+          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"
+          NPM_CLI_SRI: "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w=="
+          NPM_CLI_SIZE: "2997746"
+        run: |
+          set -euo pipefail
+          builtin unset -v GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN NPM_TOKEN
+          builtin unset -v ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          builtin unset -v https_proxy http_proxy all_proxy
+          PACKAGE_NAME="@oomkapwn/enquire-mcp"
+          if ! [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || \
+             ! [[ "$EXPECTED_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]] || \
+             ! [[ "$CURRENT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
+             ! [[ "$CURRENT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
+             { [ "$PUBLISH_ATTEMPTED" != "true" ] && [ "$PUBLISH_ATTEMPTED" != "false" ]; } || \
+             [ "$EXPECTED_TAG" != "v$EXPECTED_VERSION" ]; then
+            echo "::error::npm publication outputs are missing or malformed"
+            exit 1
+          fi
+          require_job_reserve() {
+            local required="$1"
+            local label="$2"
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed"
+              exit 1
+            fi
+            local now remaining
+            now=$(/bin/date +%s)
+            if ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Current epoch is unavailable or malformed"
+              exit 1
+            fi
+            remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))
+            if [ "$remaining" -lt "$required" ]; then
+              echo "::error::$label requires ${required}s; only ${remaining}s remain"
+              exit 1
+            fi
+          }
+          require_job_reserve 2700 "token-free npm provenance verification"
+
+          CURL_BIN=$(type -P curl)
+          AWK_BIN=$(type -P awk)
+          JQ_BIN=$(type -P jq)
+          NODE_BIN=$(type -P node)
+          STAT_BIN=$(type -P stat)
+          TAR_BIN=$(type -P tar)
+          TIMEOUT_BIN=$(type -P timeout)
+          VERIFY_ROOT=$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/mktemp -d \
+            "$RUNNER_TEMP/enquire-npm-provenance.XXXXXX")
+          if [ ! -d "$VERIFY_ROOT" ] || [ -L "$VERIFY_ROOT" ]; then
+            echo "::error::npm provenance scratch root is missing, non-directory, or a symlink"
+            exit 1
+          fi
+          VERIFY_HOME="$VERIFY_ROOT/home"
+          VERIFY_TMP="$VERIFY_ROOT/tmp"
+          VERIFY_CACHE="$VERIFY_ROOT/cache"
+          NPM_CLI_TARBALL="$VERIFY_ROOT/npm-$NPM_CLI_VERSION.tgz"
+          NPM_CLI_ROOT="$VERIFY_ROOT/npm-cli"
+          CONSUMER_ROOT="$VERIFY_ROOT/consumer"
+          AUDIT_JSON="$VERIFY_ROOT/audit-signatures.json"
+          NPM_USERCONFIG="$VERIFY_ROOT/user.npmrc"
+          NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"
+          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/mkdir -p \
+            "$VERIFY_HOME" "$VERIFY_TMP" "$VERIFY_CACHE" "$NPM_CLI_ROOT" "$CONSUMER_ROOT"
+          CLEAN_ENV=(
+            "HOME=$VERIFY_HOME"
+            "PATH=/usr/bin:/bin"
+            "CI=true"
+            "LANG=C"
+            "LC_ALL=C"
+            "TMPDIR=$VERIFY_TMP"
+            "NODE_TLS_REJECT_UNAUTHORIZED=1"
+          )
+          /usr/bin/env -i "${CLEAN_ENV[@]}" /usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"
+          /usr/bin/env -i "${CLEAN_ENV[@]}" /bin/chmod 600 "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"
+          if [ ! -f "$NPM_USERCONFIG" ] || [ -L "$NPM_USERCONFIG" ] || \
+             [ ! -f "$NPM_GLOBALCONFIG" ] || [ -L "$NPM_GLOBALCONFIG" ] || \
+             [ "$NPM_USERCONFIG" = "$NPM_GLOBALCONFIG" ]; then
+            echo "::error::npm verifier config files are missing, aliased, or unsafe"
+            exit 1
+          fi
+          CLEAN_NPM_ENV=(
+            "${CLEAN_ENV[@]}"
+            "NPM_CONFIG_CACHE=$VERIFY_CACHE"
+            "NPM_CONFIG_CAFILE="
+            "NPM_CONFIG_CA="
+            "NPM_CONFIG_COLOR=false"
+            "NPM_CONFIG_FETCH_RETRIES=0"
+            "NPM_CONFIG_FETCH_TIMEOUT=60000"
+            "NPM_CONFIG_FUND=false"
+            "NPM_CONFIG_GLOBALCONFIG=$NPM_GLOBALCONFIG"
+            "NPM_CONFIG_HTTPS_PROXY="
+            "NPM_CONFIG_IGNORE_SCRIPTS=true"
+            "NPM_CONFIG_OMIT=optional"
+            "NPM_CONFIG_PREFER_ONLINE=true"
+            "NPM_CONFIG_PROXY="
+            "NPM_CONFIG_REGISTRY=https://registry.npmjs.org/"
+            "NPM_CONFIG_STRICT_SSL=true"
+            "NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"
+          )
+
+          set +e
+          NPM_CLI_HTTP_STATUS=$(/usr/bin/env -i "${CLEAN_ENV[@]}" \
+            "$TIMEOUT_BIN" --kill-after=10s 120s "$CURL_BIN" --disable --proxy '' \
+              --silent --show-error --connect-timeout 15 --max-time 100 --max-filesize 4194304 --retry 0 \
+              --proto '=https' --tlsv1.2 --header "Accept: application/octet-stream" \
+              --output "$NPM_CLI_TARBALL" --write-out '%{http_code}' "$NPM_CLI_URL")
+          NPM_CLI_DOWNLOAD_EXIT=$?
+          set -e
+          if [ "$NPM_CLI_DOWNLOAD_EXIT" -ne 0 ] || [ "$NPM_CLI_HTTP_STATUS" != "200" ] || \
+             [ ! -f "$NPM_CLI_TARBALL" ] || [ -L "$NPM_CLI_TARBALL" ]; then
+            echo "::error::exact pinned npm CLI download failed closed"
+            exit 1
+          fi
+          NPM_CLI_ACTUAL_SIZE=$(/usr/bin/env -i "${CLEAN_ENV[@]}" "$STAT_BIN" -c '%s' "$NPM_CLI_TARBALL")
+          if [ "$NPM_CLI_ACTUAL_SIZE" != "$NPM_CLI_SIZE" ]; then
+            echo "::error::exact pinned npm CLI size differs from the registry identity"
+            exit 1
+          fi
+          NPM_CLI_ACTUAL_SRI=$(/usr/bin/env -i "${CLEAN_ENV[@]}" \
+            "$TIMEOUT_BIN" --kill-after=5s 30s "$NODE_BIN" -e '
+              const { createHash } = require("node:crypto");
+              const { readFileSync } = require("node:fs");
+              process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`);
+            ' "$NPM_CLI_TARBALL")
+          if [ "$NPM_CLI_ACTUAL_SRI" != "$NPM_CLI_SRI" ]; then
+            echo "::error::exact pinned npm CLI SRI differs from the registry identity"
+            exit 1
+          fi
+          if ! NPM_CLI_MEMBERS=$(/usr/bin/env -i "${CLEAN_ENV[@]}" \
+            "$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" --list --gzip \
+              --absolute-names --quoting-style=escape --file "$NPM_CLI_TARBALL"); then
+            echo "::error::exact pinned npm CLI member-path inventory failed closed"
+            exit 1
+          fi
+          if ! printf '%s\n' "$NPM_CLI_MEMBERS" | /usr/bin/env -i "${CLEAN_ENV[@]}" "$AWK_BIN" '
+            NF == 0 || $0 !~ /^package\// || $0 ~ /(^|\/)\.\.?(\/|$)/ ||
+              $0 ~ /^\// || $0 ~ /\/\// || $0 ~ /\\/ || seen[$0]++ { invalid = 1 }
+            END { exit NR == 0 || invalid }
+          '; then
+            echo "::error::exact pinned npm CLI archive has an absolute, escaping, or non-package member path"
+            exit 1
+          fi
+          if ! NPM_CLI_MEMBER_TYPES=$(/usr/bin/env -i "${CLEAN_ENV[@]}" \
+            "$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" --list --verbose --gzip \
+              --absolute-names --numeric-owner --quoting-style=escape --file "$NPM_CLI_TARBALL"); then
+            echo "::error::exact pinned npm CLI member-type inventory failed closed"
+            exit 1
+          fi
+          if ! printf '%s\n' "$NPM_CLI_MEMBER_TYPES" | /usr/bin/env -i "${CLEAN_ENV[@]}" "$AWK_BIN" '
+            NF == 0 || (substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d") { invalid = 1 }
+            END { exit NR == 0 || invalid }
+          '; then
+            echo "::error::exact pinned npm CLI archive contains a link, device, FIFO, or non-file member"
+            exit 1
+          fi
+          /usr/bin/env -i "${CLEAN_ENV[@]}" "$TIMEOUT_BIN" --kill-after=5s 30s \
+            "$TAR_BIN" --extract --gzip --file "$NPM_CLI_TARBALL" --directory "$NPM_CLI_ROOT" \
+              --no-same-owner --no-same-permissions
+          NPM_CLI_JS="$NPM_CLI_ROOT/package/bin/npm-cli.js"
+          NPM_CLI_PACKAGE="$NPM_CLI_ROOT/package/package.json"
+          if [ ! -f "$NPM_CLI_JS" ] || [ -L "$NPM_CLI_JS" ] || \
+             [ ! -f "$NPM_CLI_PACKAGE" ] || [ -L "$NPM_CLI_PACKAGE" ]; then
+            echo "::error::exact pinned npm CLI archive has an invalid executable identity"
+            exit 1
+          fi
+          ACTUAL_NPM_CLI_VERSION=$(/usr/bin/env -i "${CLEAN_ENV[@]}" "$NODE_BIN" \
+            -e 'process.stdout.write(require(process.argv[1]).version)' "$NPM_CLI_PACKAGE")
+          if [ "$ACTUAL_NPM_CLI_VERSION" != "$NPM_CLI_VERSION" ]; then
+            echo "::error::exact pinned npm CLI embeds a divergent version"
+            exit 1
+          fi
+
+          printf '%s\n' '{"name":"enquire-provenance-verifier","version":"0.0.0","private":true}' \
+            > "$CONSUMER_ROOT/package.json"
+          CHECKER="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"
+          if [ ! -f "$CHECKER" ] || [ -L "$CHECKER" ]; then
+            echo "::error::npm provenance evaluator is missing, non-regular, or a symlink"
+            exit 1
+          fi
+          (
+            cd "$CONSUMER_ROOT"
+            /usr/bin/env -i "${CLEAN_NPM_ENV[@]}" \
+              "$TIMEOUT_BIN" --kill-after=10s 600s "$NODE_BIN" "$NPM_CLI_JS" install \
+                --save-exact --package-lock=true --ignore-scripts --no-audit --no-fund --omit=optional \
+                --registry=https://registry.npmjs.org/ --fetch-retries=0 --fetch-timeout=60000 \
+                "$PACKAGE_NAME@$EXPECTED_VERSION"
+          )
+          /usr/bin/env -i "${CLEAN_ENV[@]}" "$JQ_BIN" -e \
+            --arg package "$PACKAGE_NAME" --arg version "$EXPECTED_VERSION" --arg integrity "$EXPECTED_INTEGRITY" '
+              .lockfileVersion == 3 and
+              .packages[""].dependencies[$package] == $version and
+              .packages["node_modules/@oomkapwn/enquire-mcp"].version == $version and
+              .packages["node_modules/@oomkapwn/enquire-mcp"].integrity == $integrity
+            ' "$CONSUMER_ROOT/package-lock.json" >/dev/null
+
+          PROVENANCE_VERIFIED=false
+          PROVENANCE_RESULT=""
+          for (( attempt=1; attempt<=8; attempt++ )); do
+            set +e
+            (
+              cd "$CONSUMER_ROOT"
+              /usr/bin/env -i "${CLEAN_NPM_ENV[@]}" \
+                "$TIMEOUT_BIN" --kill-after=10s 120s "$NODE_BIN" "$NPM_CLI_JS" audit signatures \
+                  --json --include-attestations --omit=optional --registry=https://registry.npmjs.org/ \
+                  --fetch-retries=0 --fetch-timeout=60000 --prefer-online
+            ) > "$AUDIT_JSON"
+            AUDIT_EXIT=$?
+            PROVENANCE_RESULT=""
+            PROVENANCE_RESULT=$(/usr/bin/env -i "${CLEAN_ENV[@]}" \
+              "$TIMEOUT_BIN" --kill-after=5s 30s "$NODE_BIN" "$CHECKER" \
+                npm-provenance "$PACKAGE_NAME" "$EXPECTED_VERSION" \
+                "$EXPECTED_INTEGRITY" "$EXPECTED_SOURCE_SHA" "$EXPECTED_TAG" "$PUBLISH_ATTEMPTED" \
+                "$CURRENT_RUN_ID" "$CURRENT_RUN_ATTEMPT" < "$AUDIT_JSON")
+            EVALUATOR_EXIT=$?
+            set -e
+            if [ "$AUDIT_EXIT" -eq 0 ] && [ "$EVALUATOR_EXIT" -eq 0 ]; then
+              PROVENANCE_VERIFIED=true
+              break
+            fi
+            if [ "$attempt" -lt 8 ]; then
+              echo "::warning::npm attestations are not yet exact (attempt $attempt/8); retrying read-only verification"
+              /bin/sleep 10
+            fi
+          done
+          if [ "$PROVENANCE_VERIFIED" != "true" ]; then
+            echo "::error::npm provenance did not converge to one exact cryptographically verified identity"
+            exit 1
+          fi
+          ATTESTATION_RUN_ID=$(printf '%s' "$PROVENANCE_RESULT" | \
+            /usr/bin/env -i "${CLEAN_ENV[@]}" "$JQ_BIN" -er '.runId | select(type == "string" and test("^[1-9][0-9]*$"))')
+          ATTESTATION_RUN_ATTEMPT=$(printf '%s' "$PROVENANCE_RESULT" | \
+            /usr/bin/env -i "${CLEAN_ENV[@]}" "$JQ_BIN" -er '.runAttempt | select(type == "string" and test("^[1-9][0-9]*$"))')
+          {
+            printf 'verified=true\n'
+            printf 'run_id=%s\n' "$ATTESTATION_RUN_ID"
+            printf 'run_attempt=%s\n' "$ATTESTATION_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
       # v3.7.14 F5 — automate the GitHub Release (M13 from round-15 audit).
       # Pre-3.7.14 the README claimed "npm + GitHub release per tag" but
       # gh release create was a manual post-release step (CONTRIBUTING.md:87).

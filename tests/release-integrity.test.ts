@@ -978,7 +978,7 @@ function releasePollProblems(workflow: string): string[] {
     runBody(deadline) !== 'echo "RELEASE_JOB_DEADLINE_EPOCH=$(($(date +%s) + 13800))" >> "$GITHUB_ENV"' ||
     !body.includes("CI_GATE_DEADLINE=$((SECONDS + 3600))") ||
     !body.includes("gate_timeout()") ||
-    !body.includes('"$TIMEOUT_BIN" --kill-after=10s "${limit}s" "$@"') ||
+    !body.includes(`"$TIMEOUT_BIN" --kill-after=10s "\${limit}s" "$@"`) ||
     !body.includes('gate_timeout 20 "$GH_BIN" "$@"') ||
     !body.includes('"$TIMEOUT_BIN" --kill-after=10s 120s git fetch origin main --depth=200') ||
     !body.includes("attempt<=120") ||
@@ -1003,12 +1003,12 @@ function releasePollProblems(workflow: string): string[] {
     globalReadBodies.some(
       (readBody) =>
         !readBody.includes("gh_read() {") ||
-        !readBody.includes('"${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$') ||
+        !readBody.includes(`"\${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$`) ||
         !readBody.includes("local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))") ||
         !readBody.includes('for argument in "$@"; do') ||
         !readBody.includes(ghReadMutationArgs) ||
         !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
-        !readBody.includes('"$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"')
+        !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
     (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 5 ||
     (workflow.match(/RELEASE_JOB_DEADLINE_EPOCH - \$\(date \+%s\)/g) ?? []).length !== 4 ||
@@ -1019,7 +1019,7 @@ function releasePollProblems(workflow: string): string[] {
     workflow.includes("gh_read api --method") ||
     rawGhApiLines.length !== 2 ||
     rawGhApiLines.some(
-      (line) => line !== 'gh api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" \\'
+      (line) => line !== `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID" \\`
     )
   ) {
     return ["all post-gate GitHub reads must consume the global deadline without shadowing release writes"];
@@ -1027,10 +1027,10 @@ function releasePollProblems(workflow: string): string[] {
   if (
     !body.includes("actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SHA&per_page=100") ||
     !body.includes("flatten-field workflow_runs") ||
-    !body.includes('CI_RUN_COUNT=$(printf') ||
+    !body.includes("CI_RUN_COUNT=$(printf") ||
     !body.includes('[ "$CI_RUN_COUNT" -gt 1 ]') ||
-    !body.includes('WORKFLOW_RUN=$(printf') ||
-    !body.includes('WORKFLOW_RUN_ID=$(printf') ||
+    !body.includes("WORKFLOW_RUN=$(printf") ||
+    !body.includes("WORKFLOW_RUN_ID=$(printf") ||
     !body.includes(". <= 9007199254740991") ||
     !body.includes("actions/runs/$WORKFLOW_RUN_ID/jobs?filter=all&per_page=100") ||
     !body.includes("flatten-field jobs") ||
@@ -1083,7 +1083,7 @@ function releasePollProblems(workflow: string): string[] {
   const loopIndex = preflight.indexOf("release_preflight_attempt<=12", initIndex);
   const refreshIndex = preflight.indexOf("if ! RELEASE_PAGES=$(gh_read api --paginate --slurp", loopIndex);
   const refreshEndpointIndex = preflight.indexOf(
-    '"repos/${{ github.repository }}/releases?per_page=100"); then',
+    `"repos/\${{ github.repository }}/releases?per_page=100"); then`,
     refreshIndex
   );
   const failureIndex = preflight.indexOf("GitHub release preflight read failed", refreshEndpointIndex);
@@ -1093,7 +1093,7 @@ function releasePollProblems(workflow: string): string[] {
   const countIndex = preflight.indexOf("RELEASE_COUNT=$(printf '%s' \"$RELEASES\"", parseIndex);
   const tagFilter = "'[.[] | select(.tag_name == $tag)] | length')";
   const tagFilterIndex = preflight.indexOf(tagFilter, countIndex);
-  const duplicateGuardIndex = preflight.indexOf('[ "$RELEASE_COUNT" -gt 1 ]; then', tagFilterIndex);
+  const duplicateGuardIndex = preflight.indexOf('if [ "$RELEASE_COUNT" -gt 1 ]; then', tagFilterIndex);
   const duplicateErrorIndex = preflight.indexOf(
     "GitHub returned duplicate draft/published releases for $TAG",
     duplicateGuardIndex
@@ -1475,7 +1475,7 @@ function mcpbContractProblems(inputs: {
     !inputs.release.includes('node scripts/check-release-integrity.mjs asset-version "$VERSION"') ||
     !inputs.release.includes("node scripts/check-release-integrity.mjs candidate-runs") ||
     !inputs.release.includes('candidate "$SOURCE_SHA"') ||
-    !inputs.release.includes('{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}') ||
+    !inputs.release.includes("{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}") ||
     !/node scripts\/check-release-integrity\.mjs \\\s+candidate/u.test(inputs.release) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
     (inputs.release.match(/release-state "\$TAG" "\$EXPECTED_PRERELEASE"/g) ?? []).length !== 3 ||
@@ -1632,9 +1632,7 @@ describe("release identity and exact required-job gate", () => {
     );
     oldFailureNewSuccess.push(job("coverage", 42, "success", "completed", 2));
     expect(evaluateReleaseChecks(oldFailureNewSuccess, rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
-    expect(evaluateReleaseChecks([...oldFailureNewSuccess].reverse(), rerun, TRUSTED_SOURCE_SHA).state).toBe(
-      "ready"
-    );
+    expect(evaluateReleaseChecks([...oldFailureNewSuccess].reverse(), rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
 
     const pendingMaximum = [...allSuccessful(), job("docs", 43, null, "in_progress", 2)];
     expect(evaluateReleaseChecks(pendingMaximum, rerun, TRUSTED_SOURCE_SHA)).toMatchObject({
@@ -1659,9 +1657,9 @@ describe("release identity and exact required-job gate", () => {
     expect(evaluateReleaseChecks(duplicateOldAttempt, rerun, TRUSTED_SOURCE_SHA).state).toBe("ready");
 
     for (const id of [undefined, 0, 1.5, Number.MAX_SAFE_INTEGER + 1, "30726087813"]) {
-      expect(() =>
-        evaluateReleaseChecks(allSuccessful(), { ...TRUSTED_CI_RUN, id }, TRUSTED_SOURCE_SHA)
-      ).toThrow(/trusted CI workflow run identity diverged/);
+      expect(() => evaluateReleaseChecks(allSuccessful(), { ...TRUSTED_CI_RUN, id }, TRUSTED_SOURCE_SHA)).toThrow(
+        /trusted CI workflow run identity diverged/
+      );
     }
     for (const divergentRun of [
       { ...TRUSTED_CI_RUN, name: "Other" },
@@ -1699,9 +1697,9 @@ describe("release identity and exact required-job gate", () => {
       item.name === "audit" ? { ...item, id: allSuccessful()[0]?.id ?? 1 } : item
     );
     expect(() => evaluateChecks(duplicateId)).toThrow(/duplicate CI job id/);
-    expect(() =>
-      evaluateChecks([{ name: "unrelated" } as unknown as WorkflowJob, ...allSuccessful()])
-    ).toThrow(/CI job unrelated diverged/);
+    expect(() => evaluateChecks([{ name: "unrelated" } as unknown as WorkflowJob, ...allSuccessful()])).toThrow(
+      /CI job unrelated diverged/
+    );
     expect(() => evaluateReleaseChecks({}, TRUSTED_CI_RUN, TRUSTED_SOURCE_SHA)).toThrow(/must be an array/);
     expect(
       evaluateReleaseChecks(allSuccessful(), { ...TRUSTED_CI_RUN, status: "in_progress" }, TRUSTED_SOURCE_SHA)
@@ -1709,9 +1707,7 @@ describe("release identity and exact required-job gate", () => {
   });
 
   it("distinguishes in-progress from completed non-success jobs", () => {
-    const pending = allSuccessful().map((item) =>
-      item.name === "docs" ? job("docs", 50, null, "in_progress") : item
-    );
+    const pending = allSuccessful().map((item) => (item.name === "docs" ? job("docs", 50, null, "in_progress") : item));
     expect(evaluateChecks(pending)).toMatchObject({ state: "pending", pending: ["docs"] });
 
     const skipped = allSuccessful().map((item) => (item.name === "smoke" ? job("smoke", 51, "skipped") : item));
@@ -1735,9 +1731,9 @@ describe("release identity and exact required-job gate", () => {
     ]);
     expect(flattenPaginatedArrays([[asset]], "asset")).toEqual([asset]);
     expect(() => flattenPaginatedArrays([[release], [{ ...release }]], "release")).toThrow(/duplicate id/);
-    expect(() =>
-      flattenPaginatedArrays([[asset], [{ ...asset, name: "other.mcpb" }]], "asset")
-    ).toThrow(/duplicate id/);
+    expect(() => flattenPaginatedArrays([[asset], [{ ...asset, name: "other.mcpb" }]], "asset")).toThrow(
+      /duplicate id/
+    );
 
     for (const malformed of [[], {}, null, [null], [{}], [[null]], [[{}]]]) {
       expect(() => flattenPaginatedArrays(malformed, "release")).toThrow(/paginated/);
@@ -1793,9 +1789,7 @@ describe("release identity and exact required-job gate", () => {
       expired: false,
       digest: `sha256:${"7".repeat(64)}`
     };
-    expect(flattenPaginatedField([{ total_count: 1, artifacts: [oneArtifact] }], "artifacts")).toEqual([
-      oneArtifact
-    ]);
+    expect(flattenPaginatedField([{ total_count: 1, artifacts: [oneArtifact] }], "artifacts")).toEqual([oneArtifact]);
     expect(() =>
       flattenPaginatedField(
         [
@@ -1852,9 +1846,9 @@ describe("release identity and exact required-job gate", () => {
       { ...run, run_attempt: "1" },
       { ...run, status: "" }
     ]) {
-      expect(() =>
-        flattenPaginatedField([{ total_count: 1, workflow_runs: [malformedRun] }], "workflow_runs")
-      ).toThrow(/invalid identity/);
+      expect(() => flattenPaginatedField([{ total_count: 1, workflow_runs: [malformedRun] }], "workflow_runs")).toThrow(
+        /invalid identity/
+      );
     }
     for (const malformedJob of [
       { ...oneJob, id: "70" },
@@ -1890,16 +1884,14 @@ describe("release identity and exact required-job gate", () => {
       { ...oneArtifact, digest: 42 },
       { ...oneArtifact, digest: `sha256:${"A".repeat(64)}` }
     ]) {
-      expect(() =>
-        flattenPaginatedField([{ total_count: 1, artifacts: [malformedArtifact] }], "artifacts")
-      ).toThrow(/invalid identity/);
+      expect(() => flattenPaginatedField([{ total_count: 1, artifacts: [malformedArtifact] }], "artifacts")).toThrow(
+        /invalid identity/
+      );
     }
     expect(
       flattenPaginatedField([{ total_count: 1, artifacts: [{ ...oneArtifact, digest: null }] }], "artifacts")
     ).toEqual([{ ...oneArtifact, digest: null }]);
-    expect(() => flattenPaginatedField([{ total_count: 0, other: [] }], "workflow_runs")).toThrow(
-      /invalid envelope/
-    );
+    expect(() => flattenPaginatedField([{ total_count: 0, other: [] }], "workflow_runs")).toThrow(/invalid envelope/);
     expect(() => flattenPaginatedField([{ total_count: 0, workflow_runs: [] }], "unknown")).toThrow(
       /unknown paginated/
     );
@@ -2149,10 +2141,7 @@ describe("release identity and exact required-job gate", () => {
       evaluateMcpbReleaseState({ release: { ...draftRelease, tag_name: "v4.0.0-rc.1" }, assets: [] }, releaseExpected)
     ).toThrow(/identity diverged/);
     expect(() =>
-      evaluateMcpbReleaseState(
-        { release: draftRelease, assets: [{ ...assetA, name: "unexpected" }] },
-        releaseExpected
-      )
+      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ ...assetA, name: "unexpected" }] }, releaseExpected)
     ).toThrow(/unexpected/);
     expect(() =>
       evaluateMcpbReleaseState({ release: draftRelease, assets: [assetA, { ...assetA, id: 103 }] }, releaseExpected)
@@ -2178,9 +2167,7 @@ describe("release identity and exact required-job gate", () => {
 
     const candidateRun10 = { ...TRUSTED_CI_RUN, id: 10 };
     const candidateRun20 = { ...TRUSTED_CI_RUN, id: 20 };
-    expect(
-      candidateRunIds([candidateRun20, candidateRun10], TRUSTED_SOURCE_SHA)
-    ).toEqual(["10", "20"]);
+    expect(candidateRunIds([candidateRun20, candidateRun10], TRUSTED_SOURCE_SHA)).toEqual(["10", "20"]);
     for (const malformedRun of [
       { ...candidateRun10, id: 0 },
       { ...candidateRun10, id: 1.5 },
@@ -2192,19 +2179,15 @@ describe("release identity and exact required-job gate", () => {
     ]) {
       expect(() => candidateRunIds([malformedRun], TRUSTED_SOURCE_SHA)).toThrow(/trusted CI workflow run identity/);
     }
-    expect(() =>
-      candidateRunIds([candidateRun10, { ...candidateRun10 }], TRUSTED_SOURCE_SHA)
-    ).toThrow(/duplicate candidate workflow run id/);
+    expect(() => candidateRunIds([candidateRun10, { ...candidateRun10 }], TRUSTED_SOURCE_SHA)).toThrow(
+      /duplicate candidate workflow run id/
+    );
     expect(() => candidateRunIds([candidateRun10], "source")).toThrow(/source SHA/);
 
     const digest = `sha256:${"a".repeat(64)}`;
     const candidateWorkflowRun = { ...TRUSTED_CI_RUN, run_attempt: 2 };
-    const candidateJob = (
-      name: string,
-      id: number,
-      runAttempt: number,
-      conclusion: string | null = "success"
-    ) => job(name, id, conclusion, "completed", runAttempt);
+    const candidateJob = (name: string, id: number, runAttempt: number, conclusion: string | null = "success") =>
+      job(name, id, conclusion, "completed", runAttempt);
     const unrelatedCandidateJob = candidateJob("unrelated", 200, 1);
     const producerCandidateJob = candidateJob("mcpb-basic-package", 201, 1);
     const aggregateCandidateJob = candidateJob("mcpb-basic", 202, 2);
@@ -2231,10 +2214,7 @@ describe("release identity and exact required-job gate", () => {
     expect(
       evaluateMcpbCandidateRun({
         ...candidate,
-        jobs: [
-          candidateJob("mcpb-basic-package", 204, 2),
-          candidateJob("mcpb-basic", 205, 1)
-        ],
+        jobs: [candidateJob("mcpb-basic-package", 204, 2), candidateJob("mcpb-basic", 205, 1)],
         artifacts: [{ name: "mcpb-basic-candidate-2", expired: false, id: 42, digest }]
       })
     ).toEqual({ state: "skip" });
@@ -2423,8 +2403,8 @@ describe("release identity and exact required-job gate", () => {
       releasePollProblems(
         replaceExactly(
           workflow,
-          'gh api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID"',
-          'gh_read api --method PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID"',
+          `gh api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
+          `gh_read api --method PATCH "repos/\${{ github.repository }}/releases/$RELEASE_ID"`,
           2
         )
       )
@@ -2460,7 +2440,7 @@ describe("release identity and exact required-job gate", () => {
       "          for (( release_preflight_attempt=1; release_preflight_attempt<=12; release_preflight_attempt++ )); do";
     const absenceRefresh =
       "            if ! RELEASE_PAGES=$(gh_read api --paginate --slurp \\\n" +
-      '              "repos/${{ github.repository }}/releases?per_page=100"); then\n' +
+      `              "repos/\${{ github.repository }}/releases?per_page=100"); then\n` +
       '              if [ "$release_preflight_attempt" -eq 12 ]; then\n' +
       '                echo "::error::GitHub release preflight remained unreadable after 12 bounded checks"\n' +
       "                exit 1\n" +

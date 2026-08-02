@@ -176,8 +176,7 @@ export function flattenPaginatedArrays(pages, kind) {
         item.content_type.length === 0 ||
         !Number.isSafeInteger(item.size) ||
         item.size < 0 ||
-        (item.digest !== null &&
-          (typeof item.digest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(item.digest)))
+        (item.digest !== null && (typeof item.digest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(item.digest)))
       ) {
         throw new Error("paginated asset element has an invalid identity");
       }
@@ -529,9 +528,7 @@ export function candidateRunIds(runs, sourceSha) {
     if (seen.has(id)) throw new Error(`duplicate candidate workflow run id: ${id}`);
     seen.add(id);
   }
-  return [...runs]
-    .sort((left, right) => left.id - right.id)
-    .map((run) => String(run.id));
+  return [...runs].sort((left, right) => left.id - right.id).map((run) => String(run.id));
 }
 
 function optionalPositiveSafeIntegerPin(value, label) {

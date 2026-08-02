@@ -1260,9 +1260,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     return body
       .split("\n")
       .map((line) => line.trim())
-      .filter(
-        (line) => line.startsWith(`${name}=`) || modifierAssignment.test(line) || printfAssignment.test(line)
-      ).length;
+      .filter((line) => line.startsWith(`${name}=`) || modifierAssignment.test(line) || printfAssignment.test(line))
+      .length;
   };
   const boundedBlock = (body: string, startNeedle: string, endNeedle: string) => {
     const start = body.indexOf(startNeedle);
@@ -1497,16 +1496,14 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const uploadDraftGuard = 'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
   const uploadConfirmGuard = 'if [ "$CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0 ] ||';
   const uploadConfirmProjectionGuard = '[ "$CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET" ]; then';
-  const prewriteStateSource =
-    `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`;
+  const prewriteStateSource = `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`;
   const prewriteActionSource = `PREWRITE_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`;
   const prewriteNameCountSource = `PREWRITE_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`;
   const prewriteProjectionSource = `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
   const prewriteLocalSubsetSource = `PREWRITE_LOCAL_SUBSET=$(jq -cn --argjson local "$LOCAL_ASSET_PROJECTION"`;
   const prewriteLocalSubsetRemoteSource = '--argjson remote "$CURRENT_ASSETS"';
   const prewriteProjectionGuard = '[ "$PREWRITE_ASSET_PROJECTION" != "$PREWRITE_LOCAL_SUBSET" ]; then';
-  const confirmStateSource =
-    `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`;
+  const confirmStateSource = `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`;
   const confirmActionSource = `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`;
   const confirmNameCountSource = `CONFIRM_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`;
   const confirmProjectionSource = `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
@@ -1678,20 +1675,16 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const finalAssetIdentitySource = `FINAL_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`;
   const publishReleaseSource = "PUBLISH_RELEASE=$CURRENT_RELEASE";
   const publishAssetsSource = "PUBLISH_ASSETS=$CURRENT_ASSETS";
-  const publishStateSource =
-    `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`;
+  const publishStateSource = `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`;
   const publishActionSource = `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`;
   const publishAssetIdentitySource = `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`;
   const immediatePublishStateReleaseSource = `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`;
-  const immediatePublishStateAssetsSource =
-    `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`;
-  const immediatePublishActionSource =
-    `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const immediatePublishStateAssetsSource = `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`;
+  const immediatePublishActionSource = `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`;
   const immediateAssetIdentitySource = `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
   const confirmPublishStateReleaseSource = `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`;
   const confirmPublishStateAssetsSource = `--argjson assets "$CONFIRM_ASSETS" '{release: $release, assets: $assets}')`;
-  const confirmPublishActionSource =
-    `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const confirmPublishActionSource = `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`;
   const confirmAssetIdentitySource = `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
   const publishAssetIdentityGuard = '[ "$PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
   const immediateAssetIdentityGuard = '[ "$IMMEDIATE_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
@@ -1724,8 +1717,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     sha256(immediatePublicationAuthorizationBlock) ===
     "8b4d3468625685260be550e095dc83c684288487cd6f9447236631d87c71ed3a";
   const hasExactConfirmPublicationAuthorizationBlock =
-    sha256(confirmPublicationAuthorizationBlock) ===
-    "0ac17f80d5e5a9e6933c4b68d4aa5dc90fddc73ee377115745bad5cc42f982da";
+    sha256(confirmPublicationAuthorizationBlock) === "0ac17f80d5e5a9e6933c4b68d4aa5dc90fddc73ee377115745bad5cc42f982da";
   const publishFieldsBlock =
     'PUBLISH_FIELDS=(-F draft=false -F "prerelease=$EXPECTED_PRERELEASE")\n' +
     `  if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
@@ -1879,10 +1871,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     publishConfirmIdentitySourceIndex <= publishConfirmActionSourceIndex ||
     publishConfirmActionGuardIndex <= publishConfirmIdentitySourceIndex ||
     publishConfirmIdentityGuardIndex <= publishConfirmActionGuardIndex ||
-    upload.slice(
-      publishConfirmActionGuardIndex + publishConfirmActionGuard.length,
-      publishConfirmIdentityGuardIndex
-    ).trim() !== "\\" ||
+    upload
+      .slice(publishConfirmActionGuardIndex + publishConfirmActionGuard.length, publishConfirmIdentityGuardIndex)
+      .trim() !== "\\" ||
     publishConfirmErrorIndex <= publishConfirmIdentityGuardIndex ||
     latestPrewriteIndex <= publishConfirmErrorIndex ||
     latestAdvanceIndex <= latestPrewriteIndex ||

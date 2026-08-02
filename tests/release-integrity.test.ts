@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import ts from "typescript";
@@ -149,6 +149,164 @@ function namedStep(steps: YamlRecord[], name: string): YamlRecord | undefined {
 
 function runBody(step: YamlRecord | undefined): string {
   return typeof step?.run === "string" ? step.run : "";
+}
+
+const RELEASE_TRANSACTION_FIXTURE_KEY = "x-enquire-release-transaction-script-under-test";
+const GITHUB_RUN_CHARACTER_LIMIT = 21_000;
+const LOWERCASE_PROXY_UNSET = "builtin unset -v https_proxy http_proxy all_proxy";
+const NPM_LOWERCASE_PIN_BLOCK =
+  'npm_config_registry="$NPM_CONFIG_REGISTRY"\n' +
+  'npm_config_proxy="$NPM_CONFIG_PROXY"\n' +
+  'npm_config_https_proxy="$NPM_CONFIG_HTTPS_PROXY"\n' +
+  'npm_config_cafile="$NPM_CONFIG_CAFILE"\n' +
+  'npm_config_ca="$NPM_CONFIG_CA"\n' +
+  'npm_config_strict_ssl="$NPM_CONFIG_STRICT_SSL"\n' +
+  'npm_config_globalconfig="$NPM_CONFIG_GLOBALCONFIG"\n' +
+  'npm_config_fetch_timeout="$NPM_CONFIG_FETCH_TIMEOUT"\n' +
+  'npm_config_fetch_retries="$NPM_CONFIG_FETCH_RETRIES"\n' +
+  "export npm_config_registry npm_config_proxy npm_config_https_proxy npm_config_cafile npm_config_ca\n" +
+  "export npm_config_strict_ssl npm_config_globalconfig npm_config_fetch_timeout npm_config_fetch_retries";
+
+function releaseTransactionWrapper(scriptHash: string): string {
+  if (!/^[0-9a-f]{64}$/u.test(scriptHash)) throw new Error("release transaction hash must be lowercase SHA-256");
+  return [
+    "set -euo pipefail",
+    LOWERCASE_PROXY_UNSET,
+    'RELEASE_TRANSACTION_PATH=".github/scripts/release-mcpb-github-transaction.sh"',
+    `if ! [[ "\${MCPB_RELEASE_WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then`,
+    '  echo "::error::Workflow commit SHA is missing or malformed"',
+    "  exit 1",
+    "fi",
+    "if ! RELEASE_TRANSACTION_SNAPSHOT=$(",
+    "  /usr/bin/env -i \\",
+    "    GIT_CONFIG_NOSYSTEM=1 \\",
+    "    GIT_CONFIG_SYSTEM=/dev/null \\",
+    "    GIT_CONFIG_GLOBAL=/dev/null \\",
+    "    GIT_CONFIG_COUNT=0 \\",
+    "    GIT_NO_LAZY_FETCH=1 \\",
+    "    GIT_NO_REPLACE_OBJECTS=1 \\",
+    "    GIT_OPTIONAL_LOCKS=0 \\",
+    "    GIT_TERMINAL_PROMPT=0 \\",
+    "    /usr/bin/git --no-pager --no-replace-objects \\",
+    '    --git-dir="$GITHUB_WORKSPACE/.git" \\',
+    '    cat-file blob "$MCPB_RELEASE_WORKFLOW_SHA:$RELEASE_TRANSACTION_PATH"',
+    "); then",
+    '  echo "::error::GitHub Release transaction script could not be read from the workflow commit"',
+    "  exit 1",
+    "fi",
+    `RELEASE_TRANSACTION_SHA256="${scriptHash}"`,
+    "if ! RELEASE_TRANSACTION_ACTUAL_SHA256=$(",
+    "  builtin printf '%s' \"$RELEASE_TRANSACTION_SNAPSHOT\" | /usr/bin/sha256sum",
+    "); then",
+    '  echo "::error::GitHub Release transaction snapshot could not be hashed"',
+    "  exit 1",
+    "fi",
+    `RELEASE_TRANSACTION_ACTUAL_SHA256=\${RELEASE_TRANSACTION_ACTUAL_SHA256%% *}`,
+    'if ! [[ "$RELEASE_TRANSACTION_ACTUAL_SHA256" =~ ^[0-9a-f]{64}$ ]] ||',
+    '   [ "$RELEASE_TRANSACTION_ACTUAL_SHA256" != "$RELEASE_TRANSACTION_SHA256" ]; then',
+    '  echo "::error::GitHub Release transaction script differs from the reviewed workflow identity"',
+    "  exit 1",
+    "fi",
+    "builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |",
+    "  /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+    ""
+  ].join("\n");
+}
+
+function normalizedReleaseTransactionFixture(script: string): string {
+  const repositoryCount = mutationMatchCount(script, "$MCPB_RELEASE_REPOSITORY");
+  const channelCount = mutationMatchCount(script, "$MCPB_RELEASE_CHANNEL");
+  if (
+    repositoryCount < 1 ||
+    channelCount < 1 ||
+    script.includes("${{") ||
+    !script.endsWith("\n") ||
+    script.endsWith("\n\n")
+  ) {
+    return "";
+  }
+  return script
+    .slice(0, -1)
+    .split("$MCPB_RELEASE_REPOSITORY")
+    .join(`\${{ github.repository }}`)
+    .split("$MCPB_RELEASE_CHANNEL")
+    .join(`\${{ steps.dist_tag.outputs.tag }}`);
+}
+
+function releaseWorkflowFixture(workflow: string, script: string): string {
+  const normalized = normalizedReleaseTransactionFixture(script);
+  if (normalized.length === 0) {
+    throw new Error("release transaction fixture requires one terminal LF and pinned repository/channel variables");
+  }
+  const fixture = normalized
+    .split("\n")
+    .map((line) => `          ${line}`)
+    .join("\n");
+  return `${workflow.trimEnd()}\n${RELEASE_TRANSACTION_FIXTURE_KEY}: |\n${fixture}\n`;
+}
+
+function releaseTransactionFixtureBody(document: YamlRecord | null): string {
+  const value = document?.[RELEASE_TRANSACTION_FIXTURE_KEY];
+  return typeof value === "string" && value.endsWith("\n") && !value.endsWith("\n\n") ? value.slice(0, -1) : "";
+}
+
+function releaseTransactionRuntimeSnapshot(fixture: string): string {
+  return fixture
+    .split(`\${{ github.repository }}`)
+    .join("$MCPB_RELEASE_REPOSITORY")
+    .split(`\${{ steps.dist_tag.outputs.tag }}`)
+    .join("$MCPB_RELEASE_CHANNEL");
+}
+
+function githubWorkflowSchemaProblems(source: string): string[] {
+  let document: YamlRecord | null;
+  try {
+    document = yamlRecord(load(source));
+  } catch {
+    return ["GitHub workflow must be valid YAML"];
+  }
+  if (document === null) return ["GitHub workflow must be one mapping"];
+  const problems: string[] = [];
+  const walkEnvMaps = (value: unknown, path: string): void => {
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => {
+        walkEnvMaps(entry, `${path}[${index}]`);
+      });
+      return;
+    }
+    const record = yamlRecord(value);
+    if (record === null) return;
+    for (const [key, entry] of Object.entries(record)) {
+      if (key === "env") {
+        const env = yamlRecord(entry);
+        if (env !== null) {
+          const seen = new Map<string, string>();
+          for (const envKey of Object.keys(env)) {
+            const folded = envKey.toLowerCase();
+            const previous = seen.get(folded);
+            if (previous !== undefined && previous !== envKey) {
+              problems.push(`GitHub env map ${path}.env has case-insensitive duplicate ${previous}/${envKey}`);
+            }
+            seen.set(folded, envKey);
+          }
+        }
+      }
+      walkEnvMaps(entry, `${path}.${key}`);
+    }
+  };
+  walkEnvMaps(document, "workflow");
+  const jobs = yamlRecord(document.jobs) ?? {};
+  for (const [jobName, jobValue] of Object.entries(jobs)) {
+    for (const [stepIndex, step] of yamlSteps(yamlRecord(jobValue) ?? {}).entries()) {
+      const body = runBody(step);
+      if (body.length > GITHUB_RUN_CHARACTER_LIMIT) {
+        problems.push(
+          `GitHub run command jobs.${jobName}.steps[${stepIndex}] has ${body.length} characters; maximum is ${GITHUB_RUN_CHARACTER_LIMIT}`
+        );
+      }
+    }
+  }
+  return problems;
 }
 
 function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
@@ -1022,6 +1180,7 @@ function releasePollProblems(workflow: string): string[] {
   }
   const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
   const steps = yamlSteps(publish ?? {});
+  const releaseTransaction = releaseTransactionFixtureBody(document);
   const deadline = namedStep(steps, "Establish global release deadline");
   const gate = namedStep(steps, "Assert tag is on main and required CI checks passed");
   const body = runBody(gate);
@@ -1085,7 +1244,9 @@ function releasePollProblems(workflow: string): string[] {
     namedStep(steps, "Prepare draft GitHub Release"),
     namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance")
   ];
-  const globalReadBodies = globalReadSteps.map(runBody);
+  const globalReadBodies = globalReadSteps.map((step) =>
+    step?.name === "Upload Basic MCPB asset, checksum, and provenance" ? releaseTransaction : runBody(step)
+  );
   const ghReadMutationArgs =
     "graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*";
   const rawGhApiLines = workflow
@@ -1093,6 +1254,7 @@ function releasePollProblems(workflow: string): string[] {
     .map((line) => line.trim())
     .filter((line) => /(?:^|\$\()gh api(?:\s|$)/u.test(line));
   if (
+    releaseTransaction.length === 0 ||
     globalReadSteps.some(
       (step) => yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== `\${{ steps.deadline.outputs.epoch }}`
     ) ||
@@ -1232,16 +1394,20 @@ function releasePollProblems(workflow: string): string[] {
 
 function githubReleaseTransactionProblems(workflow: string): string[] {
   let steps: YamlRecord[];
+  let releaseTransaction: string;
   try {
     const document = yamlRecord(load(workflow));
     const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
     steps = yamlSteps(publish ?? {});
+    releaseTransaction = releaseTransactionFixtureBody(document);
   } catch {
     return ["GitHub Release transaction workflow must parse"];
   }
   const preflight = runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"));
   const prepare = runBody(namedStep(steps, "Prepare draft GitHub Release"));
-  const upload = runBody(namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"));
+  const uploadStep = namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance");
+  const uploadWrapper = runBody(uploadStep);
+  const upload = releaseTransaction;
   if (preflight.length === 0 || prepare.length === 0 || upload.length === 0) {
     return ["GitHub Release transaction steps must exist"];
   }
@@ -1311,11 +1477,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     "NODE_DEBUG",
     "GODEBUG",
     "HTTPS_PROXY",
-    "https_proxy",
     "HTTP_PROXY",
-    "http_proxy",
     "ALL_PROXY",
-    "all_proxy",
     "CURL_CA_BUNDLE",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
@@ -1358,10 +1521,17 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(workflow, `\${{ secrets.GITHUB_TOKEN }}`) === 5 &&
     mutationMatchCount(workflow, `\${{ secrets.NPM_TOKEN }}`) === 1 &&
     checkoutSteps.length === 1 &&
+    yamlRecord(checkout?.with)?.ref === `\${{ github.event.inputs.tag || github.ref }}` &&
+    yamlRecord(checkout?.with)?.["fetch-depth"] === 0 &&
     yamlRecord(checkout?.with)?.["persist-credentials"] === false &&
     githubSecretSteps.every((name) => {
       const env = yamlRecord(namedStep(steps, name)?.env);
-      const stepBody = runBody(namedStep(steps, name));
+      const stepBody =
+        name === "Upload Basic MCPB asset, checksum, and provenance" ? upload : runBody(namedStep(steps, name));
+      const expectedPrefix =
+        name === "Publish with provenance or verify an exact prior publication"
+          ? `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${NPM_LOWERCASE_PIN_BLOCK}\n${freshGithubConfig}`
+          : `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${freshGithubConfig}`;
       return (
         env?.GH_HOST === "github.com" &&
         namedStep(steps, name)?.shell === protectedShell &&
@@ -1369,7 +1539,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
         env?.GH_TOKEN === (githubTokenSteps.has(name) ? `\${{ github.token }}` : `\${{ secrets.GITHUB_TOKEN }}`) &&
         clearedGithubEnv.every((key) => env?.[key] === "") &&
         mutationMatchCount(stepBody, freshGithubConfig) === 1 &&
-        stepBody.startsWith(`set -euo pipefail\n${freshGithubConfig}`)
+        stepBody.startsWith(expectedPrefix)
       );
     }) &&
     otherSecretSteps.every((name) => {
@@ -1385,6 +1555,15 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     problems.push(
       "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
     );
+  }
+  const expectedUploadHash = createHash("sha256")
+    .update(releaseTransactionRuntimeSnapshot(upload), "utf8")
+    .digest("hex");
+  if (
+    uploadWrapper !== releaseTransactionWrapper(expectedUploadHash) ||
+    yamlRecord(uploadStep?.env)?.MCPB_RELEASE_WORKFLOW_SHA !== `\${{ github.workflow_sha }}`
+  ) {
+    problems.push("GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot");
   }
   const releaseTestStep = namedStep(steps, "Test exact source without npm or contents-write tokens");
   const releaseTestEnv = yamlRecord(releaseTestStep?.env);
@@ -1917,7 +2096,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   ) {
     problems.push("the exact six-asset identity and bytes must remain frozen across publication");
   }
-  const allRunBodies = steps.map(runBody).join("\n");
+  const allRunBodies = steps.map(runBody).concat(upload).join("\n");
   const explicitWriteMethods =
     allRunBodies.match(/(?:(?:--method|--request)(?:=|\s+)|-X\s*)(?:POST|PATCH|PUT|DELETE)\b/giu) ?? [];
   const ghApiSurfaceLines = allRunBodies
@@ -2053,6 +2232,7 @@ function mcpbContractProblems(inputs: {
   packageLock: string;
   packageJson: string;
   release: string;
+  releaseTransaction: string;
   versionCheck: string;
   versionSync: string;
 }): string[] {
@@ -2061,6 +2241,7 @@ function mcpbContractProblems(inputs: {
   let lock: Record<string, unknown>;
   let pkg: Record<string, unknown>;
   let releaseSteps: Array<Record<string, unknown>>;
+  let releaseTransactionFixture: string;
   try {
     manifest = JSON.parse(inputs.manifest) as Record<string, unknown>;
     lock = JSON.parse(inputs.packageLock) as Record<string, unknown>;
@@ -2068,6 +2249,7 @@ function mcpbContractProblems(inputs: {
     const releaseDocument = yamlRecord(load(inputs.release));
     const releaseJob = yamlRecord(yamlRecord(releaseDocument?.jobs)?.publish);
     releaseSteps = yamlSteps(releaseJob ?? {});
+    releaseTransactionFixture = releaseTransactionFixtureBody(releaseDocument);
   } catch {
     return ["MCPB manifest/package metadata and release workflow must parse"];
   }
@@ -2121,6 +2303,26 @@ function mcpbContractProblems(inputs: {
   const npmPublishStep = namedStep(releaseSteps, "Publish with provenance or verify an exact prior publication");
   const npmPublishRun = runBody(npmPublishStep);
   const npmPublishEnv = yamlRecord(npmPublishStep?.env);
+  const uploadStep = namedStep(releaseSteps, "Upload Basic MCPB asset, checksum, and provenance");
+  const uploadWrapper = runBody(uploadStep);
+  const uploadEnv = yamlRecord(uploadStep?.env);
+  const expectedReleaseTransactionFixture = normalizedReleaseTransactionFixture(inputs.releaseTransaction);
+  const releaseTransactionHasCanonicalLf =
+    inputs.releaseTransaction.endsWith("\n") && !inputs.releaseTransaction.endsWith("\n\n");
+  const releaseTransactionSnapshot = releaseTransactionHasCanonicalLf ? inputs.releaseTransaction.slice(0, -1) : "";
+  const releaseTransactionHash = createHash("sha256").update(releaseTransactionSnapshot, "utf8").digest("hex");
+  const releaseTransactionIsPinned =
+    releaseTransactionHasCanonicalLf &&
+    inputs.releaseTransaction.startsWith(`set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n`) &&
+    !inputs.releaseTransaction.includes("${{") &&
+    !inputs.releaseTransaction.includes("GH_TOKEN=") &&
+    !inputs.releaseTransaction.includes("GITHUB_ENV") &&
+    releaseTransactionFixture === expectedReleaseTransactionFixture &&
+    uploadWrapper === releaseTransactionWrapper(releaseTransactionHash) &&
+    uploadEnv?.MCPB_RELEASE_REPOSITORY === `\${{ github.repository }}` &&
+    uploadEnv?.MCPB_RELEASE_CHANNEL === `\${{ steps.dist_tag.outputs.tag }}` &&
+    uploadEnv?.MCPB_RELEASE_WORKFLOW_SHA === `\${{ github.workflow_sha }}` &&
+    uploadWrapper.length <= GITHUB_RUN_CHARACTER_LIMIT;
   const npmAssignmentLineCount = (name: string) =>
     npmPublishRun
       .split("\n")
@@ -2260,27 +2462,20 @@ function mcpbContractProblems(inputs: {
     npmAssignmentLineCount("NPM_ENV_KEY_CANONICAL") === 2 &&
     npmPublishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}` &&
     npmPublishEnv?.NPM_CONFIG_REGISTRY === "https://registry.npmjs.org/" &&
-    npmPublishEnv?.npm_config_registry === "https://registry.npmjs.org/" &&
     npmPublishEnv?.NPM_CONFIG_GLOBALCONFIG === "/dev/null" &&
-    npmPublishEnv?.npm_config_globalconfig === "/dev/null" &&
     npmPublishEnv?.NPM_CONFIG_PROXY === "" &&
-    npmPublishEnv?.npm_config_proxy === "" &&
     npmPublishEnv?.NPM_CONFIG_HTTPS_PROXY === "" &&
-    npmPublishEnv?.npm_config_https_proxy === "" &&
     npmPublishEnv?.NPM_CONFIG_CAFILE === "" &&
-    npmPublishEnv?.npm_config_cafile === "" &&
     npmPublishEnv?.NPM_CONFIG_CA === "" &&
-    npmPublishEnv?.npm_config_ca === "" &&
     npmPublishEnv?.NPM_CONFIG_STRICT_SSL === "true" &&
-    npmPublishEnv?.npm_config_strict_ssl === "true" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_TIMEOUT === "60000" &&
-    npmPublishEnv?.npm_config_fetch_timeout === "60000" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_RETRIES === "0" &&
-    npmPublishEnv?.npm_config_fetch_retries === "0" &&
     npmPublishRun.includes('PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"') &&
     npmPublishRun.startsWith(
-      'set -euo pipefail\nGH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")'
+      `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${NPM_LOWERCASE_PIN_BLOCK}\n` +
+        'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")'
     ) &&
+    mutationMatchCount(npmPublishRun, NPM_LOWERCASE_PIN_BLOCK) === 1 &&
     npmPublishRun.includes('NPM_CONFIG_USERCONFIG=$(/usr/bin/mktemp "$RUNNER_TEMP/enquire-npmrc.XXXXXX")') &&
     npmPublishRun.includes('npm_config_userconfig="$NPM_CONFIG_USERCONFIG"') &&
     npmPublishRun.includes("export NPM_CONFIG_USERCONFIG npm_config_userconfig") &&
@@ -2519,7 +2714,11 @@ function mcpbContractProblems(inputs: {
   ];
   const remoteTagIdentityExpectedCalls = [1, 2, 3, 7];
   const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
-  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) => runBody(namedStep(releaseSteps, name)));
+  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) =>
+    name === "Upload Basic MCPB asset, checksum, and provenance"
+      ? releaseTransactionFixture
+      : runBody(namedStep(releaseSteps, name))
+  );
   const remoteTagIdentityBodies = remoteTagIdentityRuns.map((body) => {
     if (mutationMatchCount(body, remoteTagIdentityMarker) !== 1) return "";
     const start = body.indexOf(remoteTagIdentityMarker);
@@ -2544,6 +2743,7 @@ function mcpbContractProblems(inputs: {
     createHash("sha256").update(canonicalRemoteTagIdentityBody, "utf8").digest("hex") ===
       "1c4171ada2237d39b1bcbd02a23ce69a6db4ed3843421d865ebb8795b7bdba76";
   if (
+    !releaseTransactionIsPinned ||
     inputs.release.includes("npm run mcpb:build") ||
     !inputs.release.includes("Download exact CI-gated Basic MCPB release asset") ||
     !inputs.release.includes("actions: read") ||
@@ -3094,7 +3294,37 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toEqual([expect.stringMatching(/raw \.replace\(\) mutation/)]);
 
-    const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    const releaseTransaction = readFileSync(
+      new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
+      "utf8"
+    );
+    const releaseTransactionSha256 = createHash("sha256").update(releaseTransaction.slice(0, -1), "utf8").digest("hex");
+    const workflow = releaseWorkflowFixture(releaseWorkflow, releaseTransaction);
+    const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
+    const workflowFiles = readdirSync(workflowDirectory)
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .sort();
+    expect(workflowFiles.length).toBeGreaterThan(0);
+    for (const name of workflowFiles) {
+      const source = readFileSync(new URL(name, workflowDirectory), "utf8");
+      expect(githubWorkflowSchemaProblems(source), name).toEqual([]);
+    }
+    const caseFoldedEnvMutation = replaceExactly(
+      releaseWorkflow,
+      '          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"\n',
+      '          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"\n' +
+        '          npm_config_registry: "https://registry.npmjs.org/"\n'
+    );
+    expect(githubWorkflowSchemaProblems(caseFoldedEnvMutation)).toContainEqual(
+      expect.stringMatching(/case-insensitive duplicate NPM_CONFIG_REGISTRY\/npm_config_registry/)
+    );
+    const workflowWithRunLength = (length: number) =>
+      `name: boundary\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ${"x".repeat(length)}\n`;
+    expect(githubWorkflowSchemaProblems(workflowWithRunLength(GITHUB_RUN_CHARACTER_LIMIT))).toEqual([]);
+    expect(githubWorkflowSchemaProblems(workflowWithRunLength(GITHUB_RUN_CHARACTER_LIMIT + 1))).toContainEqual(
+      expect.stringMatching(/maximum is 21000/)
+    );
     expect(workflow).toContain('node scripts/check-release-integrity.mjs assert-tag "$TAG" "$VERSION"');
     expect(workflow).toContain("node scripts/check-release-integrity.mjs checks");
     expect(workflow).toMatch(/RELEASE_TAG:\s*\$\{\{\s*github\.event\.inputs\.tag \|\| github\.ref_name\s*\}\}/);
@@ -3121,6 +3351,7 @@ describe("release identity and exact required-job gate", () => {
       packageLock: readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),
       packageJson,
       release: workflow,
+      releaseTransaction,
       versionCheck: readFileSync(new URL("../scripts/check-version-consistency.mjs", import.meta.url), "utf8"),
       versionSync: readFileSync(new URL("../scripts/sync-version.mjs", import.meta.url), "utf8")
     };
@@ -3833,6 +4064,19 @@ describe("release identity and exact required-job gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
+        releaseTransaction: replaceAllExactly(
+          mcpbInputs.releaseTransaction,
+          "$MCPB_RELEASE_CHANNEL",
+          "$UNPINNED_RELEASE_CHANNEL",
+          5
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
         manifest: replaceExactly(mcpbInputs.manifest, '"name": "obsidian_stats"', '"name": "obsidian_create_note"')
       })
     ).toContain("MCPB Basic must expose exactly 13 approved read-only tools and zero prompts");
@@ -4276,6 +4520,14 @@ describe("release identity and exact required-job gate", () => {
     const uploadTarget = '"$UPLOAD_BASE?name=$ENCODED_NAME")';
     const patchTarget = `"repos/\${{ github.repository }}/releases/$RELEASE_ID" "\${PUBLISH_FIELDS[@]}")`;
     const releaseProjection = "[.[] | {id, name, state, content_type, size, digest}] | sort_by(.name)";
+    const releaseTransactionTail =
+      '                echo "::error::Published stable release $TAG did not become GitHub\'s latest release"\n' +
+      "                exit 1\n" +
+      "              fi\n" +
+      "              sleep 5\n" +
+      "            done\n" +
+      "          fi\n" +
+      "          assert_remote_tag_identity";
     const rawCreateChannel =
       `          if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` +
       "            CREATE_ARGS+=(--prerelease)\n" +
@@ -4520,6 +4772,46 @@ describe("release identity and exact required-job gate", () => {
       ...uploadConfirmationMutations,
       ...publicationBoundaryMutations,
       ...snapshotShapeMutations,
+      replaceExactly(
+        mcpbInputs.release,
+        `          ${LOWERCASE_PROXY_UNSET}\n`,
+        "          builtin true # lowercase proxy cleanup removed\n",
+        7
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          npm_config_registry="$NPM_CONFIG_REGISTRY"',
+        '          npm_config_registry="https://attacker.invalid/"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          RELEASE_TRANSACTION_SHA256="${releaseTransactionSha256}"`,
+        `          RELEASE_TRANSACTION_SHA256="${"0".repeat(64)}"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+        '            /bin/bash --noprofile --norc -p -e -o pipefail "$RELEASE_TRANSACTION_PATH"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.workflow_sha }}`,
+        `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.sha }}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n          echo unsafe-wrapper-tail"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+        "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n" +
+          "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --"
+      ),
       replaceAllExactly(
         mcpbInputs.release,
         "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
@@ -4548,6 +4840,22 @@ describe("release identity and exact required-job gate", () => {
         6
       ),
       replaceExactly(mcpbInputs.release, "          persist-credentials: false", "          persist-credentials: true"),
+      replaceExactly(
+        mcpbInputs.release,
+        `          ref: \${{ github.event.inputs.tag || github.ref }}`,
+        `          ref: \${{ github.workflow_sha }}`
+      ),
+      replaceExactly(mcpbInputs.release, "          fetch-depth: 0", "          fetch-depth: 1"),
+      replaceExactly(
+        mcpbInputs.release,
+        "              GIT_NO_LAZY_FETCH=1 \\",
+        "              GIT_NO_LAZY_FETCH=0 \\"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '              --git-dir="$GITHUB_WORKSPACE/.git" \\',
+        '              --git-dir="$RUNNER_TEMP/attacker.git" \\'
+      ),
       replaceExactly(
         mcpbInputs.release,
         `"repos/\${{ github.repository }}/releases/latest" 2>/dev/null)`,
@@ -4748,14 +5056,21 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(mcpbInputs.release, uploadTarget, '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'),
       replaceExactly(
         mcpbInputs.release,
-        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          "$GH_BIN" api --method DELETE "repos/unsafe"\n' +
-          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        releaseTransactionTail,
+        replaceExactly(
+          releaseTransactionTail,
+          "          assert_remote_tag_identity",
+          '          "$GH_BIN" api --method DELETE "repos/unsafe"\n          assert_remote_tag_identity'
+        )
       ),
       replaceExactly(
         mcpbInputs.release,
-        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        releaseTransactionTail,
+        replaceExactly(
+          releaseTransactionTail,
+          "          assert_remote_tag_identity",
+          '          "$GH_BIN" release delete "$TAG"\n          assert_remote_tag_identity'
+        )
       )
     ];
     for (const [mutationIndex, weakenedReleaseTransaction] of releaseTransactionMutations.entries()) {
@@ -4764,6 +5079,18 @@ describe("release identity and exact required-job gate", () => {
         `release transaction mutation ${mutationIndex + 1} must fail closed`
       ).not.toEqual([]);
     }
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        releaseTransaction: replaceExactly(
+          mcpbInputs.releaseTransaction,
+          "Final release contains unexpected asset",
+          "Final release accepted unexpected asset"
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
     for (const weakenedUploadConfirmation of uploadConfirmationMutations) {
       expect(githubReleaseTransactionProblems(weakenedUploadConfirmation)).toContain(
         "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
@@ -4782,19 +5109,26 @@ describe("release identity and exact required-job gate", () => {
     for (const forbiddenReleaseCliMutation of [
       replaceExactly(
         mcpbInputs.release,
-        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        releaseTransactionTail,
+        replaceExactly(
+          releaseTransactionTail,
+          "          assert_remote_tag_identity",
+          '          "$GH_BIN" release delete "$TAG"\n          assert_remote_tag_identity'
+        )
       ),
       replaceExactly(
         mcpbInputs.release,
-        "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
-        '          echo "$("$GH_BIN" release delete "$TAG")"\n' +
-          "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
+        releaseTransactionTail,
+        replaceExactly(
+          releaseTransactionTail,
+          "          assert_remote_tag_identity",
+          '          echo "$("$GH_BIN" release delete "$TAG")"\n          assert_remote_tag_identity'
+        )
       )
     ]) {
-      expect(githubReleaseTransactionProblems(forbiddenReleaseCliMutation)).toEqual([
+      expect(githubReleaseTransactionProblems(forbiddenReleaseCliMutation)).toContain(
         "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
-      ]);
+      );
     }
     expect(
       githubReleaseTransactionProblems(

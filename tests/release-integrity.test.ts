@@ -2517,18 +2517,32 @@ function mcpbContractProblems(inputs: {
     "Prepare draft GitHub Release",
     "Upload Basic MCPB asset, checksum, and provenance"
   ];
+  const remoteTagIdentityExpectedCalls = [1, 2, 3, 7];
   const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
-  const remoteTagIdentityBodies = remoteTagIdentityStepNames.map((name) => {
-    const body = runBody(namedStep(releaseSteps, name));
+  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) =>
+    runBody(namedStep(releaseSteps, name))
+  );
+  const remoteTagIdentityBodies = remoteTagIdentityRuns.map((body) => {
     if (mutationMatchCount(body, remoteTagIdentityMarker) !== 1) return "";
     const start = body.indexOf(remoteTagIdentityMarker);
     const end = body.indexOf("\n}", start + remoteTagIdentityMarker.length);
+    const endLineBreak = end < 0 ? -1 : body.indexOf("\n", end + 2);
+    const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
+    if (end < 0 || body.slice(end + 2, endLineEnd).length !== 0) return "";
     return start >= 0 && end > start ? body.slice(start, end + 2) : "";
   });
   const canonicalRemoteTagIdentityBody = remoteTagIdentityBodies[0] ?? "";
   const remoteTagIdentityIsCanonical =
     canonicalRemoteTagIdentityBody.length > 0 &&
     remoteTagIdentityBodies.every((body) => body === canonicalRemoteTagIdentityBody) &&
+    remoteTagIdentityRuns.every((body, index) => {
+      const expectedCalls = remoteTagIdentityExpectedCalls[index];
+      return (
+        expectedCalls !== undefined &&
+        (body.match(/^[ \t]*assert_remote_tag_identity[ \t]*$/gmu) ?? []).length === expectedCalls &&
+        mutationMatchCount(body, "assert_remote_tag_identity") === expectedCalls + 1
+      );
+    }) &&
     createHash("sha256").update(canonicalRemoteTagIdentityBody, "utf8").digest("hex") ===
       "1c4171ada2237d39b1bcbd02a23ce69a6db4ed3843421d865ebb8795b7bdba76";
   if (
@@ -4917,6 +4931,40 @@ describe("release identity and exact required-job gate", () => {
           ...mcpbInputs,
           release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, count)
         })
+      ).toContain(
+        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+      );
+    }
+    for (const [label, weakenedRelease] of [
+      [
+        "alternate definition",
+        replaceExactly(
+          mcpbInputs.release,
+          "          assert_stable_github_advance() {",
+          "          function assert_remote_tag_identity { return 0; }\n" +
+            "          assert_stable_github_advance() {"
+        )
+      ],
+      [
+        "definition suffix",
+        replaceExactly(
+          mcpbInputs.release,
+          "          }\n          assert_stable_github_advance() {",
+          "          }; exit 0\n          assert_stable_github_advance() {"
+        )
+      ],
+      [
+        "comment-disabled call",
+        replaceExactly(
+          mcpbInputs.release,
+          "          assert_remote_tag_identity\n          # A retry may reuse",
+          "          true # assert_remote_tag_identity\n          # A retry may reuse"
+        )
+      ]
+    ] as const) {
+      expect(
+        mcpbContractProblems({ ...mcpbInputs, release: weakenedRelease }),
+        `remote tag identity ${label} must invalidate release provenance`
       ).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
       );

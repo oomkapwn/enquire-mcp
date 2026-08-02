@@ -39,6 +39,12 @@ interface WorkflowJob {
 }
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
+const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))";
+const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
+const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
+const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
+const RAW_NPM_RESERVE_DEADLINE_GUARD =
+  `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -1015,14 +1021,13 @@ function releasePollProblems(workflow: string): string[] {
       (readBody) =>
         !readBody.includes("gh_read() {") ||
         !readBody.includes(`"\${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$`) ||
-        !readBody.includes("local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))") ||
+        mutationMatchCount(readBody, GH_READ_DEADLINE_GUARD) !== 1 ||
         !readBody.includes('for argument in "$@"; do') ||
         !readBody.includes(ghReadMutationArgs) ||
         !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
         !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
     (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 5 ||
-    (workflow.match(/RELEASE_JOB_DEADLINE_EPOCH - \$\(date \+%s\)/g) ?? []).length !== 5 ||
     (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 5 ||
     mutationMatchCount(workflow, ghReadMutationArgs) !== 5 ||
     (workflow.match(/gh_read api/g) ?? []).length !== 30 ||
@@ -1402,6 +1407,7 @@ function mcpbContractProblems(inputs: {
     npmPublishRun.includes('($channelPresent and ($channelVersion == "-"))') &&
     npmPublishRun.includes('gitHead: (if ($published | has("gitHead")) then $published.gitHead else null end)') &&
     npmPublishRun.includes("integrity: $published.dist.integrity") &&
+    mutationMatchCount(npmPublishRun, NPM_RESERVE_DEADLINE_GUARD) === 1 &&
     !npmPublishRun.includes("npm view ") &&
     (npmPublishRun.match(/registry_read\(\) \{/g) ?? []).length === 1 &&
     (npmPublishRun.match(/if ! registry_read; then/g) ?? []).length === 2 &&
@@ -2611,9 +2617,9 @@ describe("release identity and exact required-job gate", () => {
       releasePollProblems(
         replaceExactly(
           workflow,
-          "RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)",
-          "RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH",
-          5
+          RAW_GH_READ_DEADLINE_GUARD,
+          RAW_GH_READ_DEADLINE_GUARD.replace("$(date +%s)", "RELEASE_JOB_DEADLINE_EPOCH"),
+          4
         )
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
@@ -3032,6 +3038,11 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
       replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
       replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
+      replaceExactly(
+        mcpbInputs.release,
+        RAW_NPM_RESERVE_DEADLINE_GUARD,
+        RAW_NPM_RESERVE_DEADLINE_GUARD.replace("$(date +%s)", "RELEASE_JOB_DEADLINE_EPOCH")
+      ),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
       replaceAllExactly(

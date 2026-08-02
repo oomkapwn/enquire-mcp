@@ -2519,9 +2519,7 @@ function mcpbContractProblems(inputs: {
   ];
   const remoteTagIdentityExpectedCalls = [1, 2, 3, 7];
   const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
-  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) =>
-    runBody(namedStep(releaseSteps, name))
-  );
+  const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) => runBody(namedStep(releaseSteps, name)));
   const remoteTagIdentityBodies = remoteTagIdentityRuns.map((body) => {
     if (mutationMatchCount(body, remoteTagIdentityMarker) !== 1) return "";
     const start = body.indexOf(remoteTagIdentityMarker);
@@ -4941,8 +4939,7 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(
           mcpbInputs.release,
           "          assert_stable_github_advance() {",
-          "          function assert_remote_tag_identity { return 0; }\n" +
-            "          assert_stable_github_advance() {"
+          "          function assert_remote_tag_identity { return 0; }\n" + "          assert_stable_github_advance() {"
         )
       ],
       [

@@ -55,15 +55,13 @@ function runReleaseIntegrityCli(args: string[], input = "", extraEnv: Record<str
 }
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
-const RELEASE_JOB_CLOCK_GUARD =
-  `local now remaining
+const RELEASE_JOB_CLOCK_GUARD = `local now remaining
   if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
     echo "::error::Current epoch is unavailable or malformed" >&2
     return 2
   fi
   remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))`;
-const MUTATED_RELEASE_JOB_CLOCK_GUARD =
-  `local now remaining
+const MUTATED_RELEASE_JOB_CLOCK_GUARD = `local now remaining
   if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
     echo "::error::Current epoch is unavailable or malformed" >&2
     return 2
@@ -1059,7 +1057,7 @@ function releasePollProblems(workflow: string): string[] {
   const ancestryIndex = body.indexOf('git merge-base --is-ancestor "$SHA" origin/main', mainFetchIndex);
   const packageVersionIndex = body.indexOf(
     "VERSION=$(/usr/bin/jq -er \\\n" +
-      "  '.version | select(type == \"string\" and test(\"^[0-9]+\\\\.[0-9]+\\\\.[0-9]+([+-][0-9A-Za-z.-]+)?$\"))' \\\n" +
+      '  \'.version | select(type == "string" and test("^[0-9]+\\\\.[0-9]+\\\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))\' \\\n' +
       "  package.json)",
     ancestryIndex
   );
@@ -1097,8 +1095,7 @@ function releasePollProblems(workflow: string): string[] {
     .filter((line) => /(?:^|\$\()gh api(?:\s|$)/u.test(line));
   if (
     globalReadSteps.some(
-      (step) =>
-        yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== `\${{ steps.deadline.outputs.epoch }}`
+      (step) => yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== `\${{ steps.deadline.outputs.epoch }}`
     ) ||
     globalReadBodies.some(
       (readBody) =>
@@ -1303,9 +1300,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@")
   );
   const checkout = checkoutSteps[0];
-  const githubTokenSteps = new Set([
-    "Assert tag is on main and required CI checks passed"
-  ]);
+  const githubTokenSteps = new Set(["Assert tag is on main and required CI checks passed"]);
   const freshGithubConfig =
     'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")\nexport GH_CONFIG_DIR';
   const protectedShell = "/bin/bash --noprofile --norc -p -e -o pipefail {0}";
@@ -1335,10 +1330,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
         env?.GH_HOST === "github.com" &&
         namedStep(steps, name)?.shell === protectedShell &&
         env?.NODE_TLS_REJECT_UNAUTHORIZED === "1" &&
-        env?.GH_TOKEN ===
-          (githubTokenSteps.has(name)
-            ? `\${{ github.token }}`
-            : `\${{ secrets.GITHUB_TOKEN }}`) &&
+        env?.GH_TOKEN === (githubTokenSteps.has(name) ? `\${{ github.token }}` : `\${{ secrets.GITHUB_TOKEN }}`) &&
         clearedGithubEnv.every((key) => env?.[key] === "") &&
         mutationMatchCount(stepBody, freshGithubConfig) === 1 &&
         stepBody.startsWith(`set -euo pipefail\n${freshGithubConfig}`)
@@ -1372,11 +1364,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   // additive `|| true`, a forced return code, or a second fail-open branch.
   const preflightLatestHelper = boundedBlock(preflight, "github_latest_read() {", "\nVERSION=");
   const uploadLatestHelper = boundedBlock(upload, "github_latest_read() {", "\nVERSION=");
-  const preflightLatestCaller = boundedBlock(
-    preflight,
-    "assert_stable_github_advance() {",
-    "\nfor LOCAL_ASSET"
-  );
+  const preflightLatestCaller = boundedBlock(preflight, "assert_stable_github_advance() {", "\nfor LOCAL_ASSET");
   const uploadLatestCaller = boundedBlock(
     upload,
     "# The stable-channel guard is deliberately after reserve",
@@ -1404,12 +1392,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     problems.push("every release snapshot must bind the exact canonical title and CHANGELOG body");
   }
   const createReserve = 'require_job_reserve 3600 "GitHub draft creation"';
-  const createArgs =
-    `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes "$NOTES" --draft --verify-tag)`;
+  const createArgs = `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes "$NOTES" --draft --verify-tag)`;
   const createChannelBlock =
-    `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` +
-    "  CREATE_ARGS+=(--prerelease)\n" +
-    "fi";
+    `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` + "  CREATE_ARGS+=(--prerelease)\n" + "fi";
   const createCommand = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
   const createRecovery = "for (( create_recovery_attempt=1; create_recovery_attempt<=12;";
   const createReserveIndex = prepare.indexOf(createReserve);
@@ -1469,8 +1454,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     '  -H "Content-Type: application/octet-stream" \\\n' +
     '  --data-binary "@$LOCAL_ASSET" --output "$UPLOAD_RESPONSE" --write-out \'%{http_code}\' \\\n' +
     '  "$UPLOAD_BASE?name=$ENCODED_NAME")';
-  const uploadDraftGuard =
-    'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
+  const uploadDraftGuard = 'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
   const absenceLoop = "for (( absence_attempt=1; absence_attempt<=12;";
   const uploadReserve = 'require_job_reserve 1500 "release asset upload for $NAME"';
   const uploadRecovery = "for (( upload_recovery_attempt=1; upload_recovery_attempt<=12;";
@@ -1488,10 +1472,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     "GitHub release upload URL is not bound to the exact repository and release ID",
     uploadConfirmGuardIndex
   );
-  const uploadRehashIndex = upload.indexOf(
-    "Canonical local release asset changed before upload",
-    uploadUrlGuardIndex
-  );
+  const uploadRehashIndex = upload.indexOf("Canonical local release asset changed before upload", uploadUrlGuardIndex);
   const uploadBaseIndex = upload.indexOf(`UPLOAD_BASE=\${CONFIRM_UPLOAD_URL%%\\{*}`, uploadRehashIndex);
   const uploadPostIndex = upload.indexOf(uploadPost, uploadBaseIndex);
   const uploadTargetIndex = upload.indexOf(uploadTarget, uploadPostIndex);
@@ -1582,16 +1563,12 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     "Final pre-publication snapshot changed before the publication boundary",
     publishConfirmStateIndex
   );
-  const latestPrewriteIndex = upload.indexOf(
-    "if github_latest_read; then",
-    publishConfirmGuardIndex
-  );
+  const latestPrewriteIndex = upload.indexOf("if github_latest_read; then", publishConfirmGuardIndex);
   const latestAdvanceIndex = upload.indexOf(
     `"$VERSION" "$CURRENT_LATEST_VERSION" "\${{ steps.dist_tag.outputs.tag }}"`,
     latestPrewriteIndex
   );
-  const patchPrefix =
-    'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH \\';
+  const patchPrefix = 'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH \\';
   const patchTarget = `"repos/\${{ github.repository }}/releases/$RELEASE_ID" "\${PUBLISH_FIELDS[@]}")`;
   const patchIndex = upload.indexOf(patchPrefix, latestAdvanceIndex);
   const patchTargetIndex = upload.indexOf(patchTarget, patchIndex);
@@ -1602,20 +1579,11 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     '[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]',
     latestLoopIndex
   );
-  const latestFailureIndex = upload.indexOf(
-    "did not become GitHub's latest release",
-    latestConvergenceIndex
-  );
+  const latestFailureIndex = upload.indexOf("did not become GitHub's latest release", latestConvergenceIndex);
   const finalTagIndex = upload.indexOf("assert_remote_tag_identity", latestFailureIndex);
-  const immediateReuseIndex = upload.indexOf(
-    'elif [ "$FINAL_ACTION" = "reuse_published" ]; then',
-    patchTargetIndex
-  );
+  const immediateReuseIndex = upload.indexOf('elif [ "$FINAL_ACTION" = "reuse_published" ]; then', patchTargetIndex);
   const immediateReuseTagIndex = upload.indexOf("assert_remote_tag_identity", immediateReuseIndex);
-  const outerReuseIndex = upload.indexOf(
-    'elif [ "$FINAL_ACTION" = "reuse_published" ]; then',
-    immediateReuseTagIndex
-  );
+  const outerReuseIndex = upload.indexOf('elif [ "$FINAL_ACTION" = "reuse_published" ]; then', immediateReuseTagIndex);
   const outerReuseTagIndex = upload.indexOf("assert_remote_tag_identity", outerReuseIndex);
   if (
     mutationMatchCount(upload, "--method PATCH") !== 1 ||
@@ -1689,9 +1657,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const uploadCurlStart = upload.indexOf('UPLOAD_STATUS=$("$TIMEOUT_BIN"');
   const uploadCurlEnd = upload.indexOf("UPLOAD_EXIT=$?", uploadCurlStart);
   const uploadCurlBody =
-    uploadCurlStart >= 0 && uploadCurlEnd > uploadCurlStart
-      ? upload.slice(uploadCurlStart, uploadCurlEnd)
-      : "";
+    uploadCurlStart >= 0 && uploadCurlEnd > uploadCurlStart ? upload.slice(uploadCurlStart, uploadCurlEnd) : "";
   if (
     explicitWriteMethods.length !== 2 ||
     mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
@@ -1751,30 +1717,29 @@ const MCPB_NPM_CHANNEL_ADVANCE =
 const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';
 const MCPB_EXACT_NPM_PUBLISH =
   `              /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
-  '                NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n' +
-  '                NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n' +
-  '                NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n' +
+  "                NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
+  "                NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
+  "                NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
   '                NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
   '                "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
   '                --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
-  '                --registry=https://registry.npmjs.org/ \\\n' +
-  '                --@oomkapwn:registry=https://registry.npmjs.org/ \\\n' +
-  '                --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n' +
+  "                --registry=https://registry.npmjs.org/ \\\n" +
+  "                --@oomkapwn:registry=https://registry.npmjs.org/ \\\n" +
+  "                --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
   '                --provenance --access public --tag "$CHANNEL" --ignore-scripts';
 const MCPB_EXACT_NPM_PUBLISH_RUN =
   `    /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
-  '      NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n' +
-  '      NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n' +
-  '      NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n' +
+  "      NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
+  "      NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
+  "      NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
   '      NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
   '      "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
   '      --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
-  '      --registry=https://registry.npmjs.org/ \\\n' +
-  '      --@oomkapwn:registry=https://registry.npmjs.org/ \\\n' +
-  '      --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n' +
+  "      --registry=https://registry.npmjs.org/ \\\n" +
+  "      --@oomkapwn:registry=https://registry.npmjs.org/ \\\n" +
+  "      --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
   '      --provenance --access public --tag "$CHANNEL" --ignore-scripts';
-const MCPB_EXACT_NPM_PUBLISH_HEAD =
-  '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\';
+const MCPB_EXACT_NPM_PUBLISH_HEAD = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\';
 const MCPB_NPM_TARBALL_SRI =
   'process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1]))' + '.digest("base64")}`);';
 const MCPB_ACTIONS_ARTIFACT_DOWNLOAD =
@@ -1936,14 +1901,10 @@ function mcpbContractProblems(inputs: {
     /require_job_reserve ([0-9]+) "npm publish"/gu,
     1
   );
-  const npmTagReadLimit = exactPositiveIntegerCaptures(
-    npmPublishRun,
-    /local limit=([0-9]+)/gu,
-    1
-  );
+  const npmTagReadLimit = exactPositiveIntegerCaptures(npmPublishRun, /local limit=([0-9]+)/gu, 1);
   const npmTagReadKill = exactPositiveIntegerCaptures(
     npmPublishRun,
-    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s "\${limit}s" "\$GH_BIN"/gu,
+    /"\$TIMEOUT_BIN" --kill-after=([0-9]+)s "\$\{limit\}s" "\$GH_BIN"/gu,
     1
   );
   const npmRegistryTiming = exactPositiveIntegerCaptures(
@@ -2064,7 +2025,7 @@ function mcpbContractProblems(inputs: {
     npmPublishRun.includes('PACKUMENT=$(mktemp "$RUNNER_TEMP/enquire-npm-packument.XXXXXX")') &&
     npmPublishRun.includes("registry_read() {") &&
     npmPublishRun.includes('"$TIMEOUT_BIN" --kill-after=5s 35s "$CURL_BIN"') &&
-    npmPublishRun.includes('"$CURL_BIN" --disable --proxy \'\'') &&
+    npmPublishRun.includes("\"$CURL_BIN\" --disable --proxy ''") &&
     npmPublishRun.includes("--connect-timeout 10 --max-time 30 --max-filesize 67108864 --retry 0") &&
     npmPublishRun.includes("--proto '=https' --tlsv1.2") &&
     npmPublishRun.includes('--header "Accept: application/json" --header "Cache-Control: no-cache"') &&
@@ -2101,9 +2062,7 @@ function mcpbContractProblems(inputs: {
     npmPublishRun.includes('[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
     npmPublishRun.split(npmStateInvocation).length - 1 === 3 &&
     mutationMatchCount(npmPublishRun, MCPB_EXACT_NPM_PUBLISH_RUN) === 1 &&
-    npmPublishRun.includes(
-      'NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")'
-    ) &&
+    npmPublishRun.includes('NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")') &&
     npmPublishRun.includes('[ ! -d "$NPM_PUBLISH_CWD" ] || [ -L "$NPM_PUBLISH_CWD" ]') &&
     npmPublishRun.includes('cd "$NPM_PUBLISH_CWD" || exit 125') &&
     npmRegistryMutationCommands.length === 0 &&
@@ -3091,10 +3050,7 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toThrow(/duplicate GitHub release asset id/);
     expect(() =>
-      evaluateMcpbReleaseState(
-        { release: draftRelease, assets: [{ ...assetA, state: "starter" }] },
-        releaseExpected
-      )
+      evaluateMcpbReleaseState({ release: draftRelease, assets: [{ ...assetA, state: "starter" }] }, releaseExpected)
     ).toThrow(/manual recovery/);
     for (const malformedAsset of [
       { ...assetA, state: "" },
@@ -3449,13 +3405,7 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(
-      releasePollProblems(
-        replaceExactly(
-          workflow,
-          `"$GH_BIN" api --method PATCH`,
-          `gh_read api --method PATCH`
-        )
-      )
+      releasePollProblems(replaceExactly(workflow, `"$GH_BIN" api --method PATCH`, `gh_read api --method PATCH`))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none"))).toContain(
       "release must grant read-only Actions API access for the exact-SHA MCPB artifact"
@@ -3875,11 +3825,7 @@ describe("release identity and exact required-job gate", () => {
         '            case "$NPM_ENV_KEY_CANONICAL" in',
         '            NPM_ENV_KEY_CANONICAL=other\n            case "$NPM_ENV_KEY_CANONICAL" in'
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        'NPM_CONFIG_STRICT_SSL: "true"',
-        'NPM_CONFIG_STRICT_SSL: "false"'
-      ),
+      replaceExactly(mcpbInputs.release, 'NPM_CONFIG_STRICT_SSL: "true"', 'NPM_CONFIG_STRICT_SSL: "false"'),
       replaceExactly(mcpbInputs.release, 'NPM_CONFIG_FETCH_RETRIES: "0"', 'NPM_CONFIG_FETCH_RETRIES: "1"'),
       replaceExactly(mcpbInputs.release, "--max-filesize 67108864 --retry 0", "--max-filesize 67108864 --retry 1"),
       replaceExactly(mcpbInputs.release, '[ "$status" != "200" ]', '[ "$status" = "500" ]'),
@@ -3891,16 +3837,11 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(mcpbInputs.release, "(.versions | has($version))", "(.versions[$version] != null)"),
       replaceExactly(mcpbInputs.release, '($channelPresent and ($channelVersion == "-"))', "false"),
       replaceExactly(mcpbInputs.release, "integrity: $published.dist.integrity", "integrity: $published.dist.shasum"),
-      replaceExactly(
-        mcpbInputs.release,
-        RAW_NPM_RESERVE_DEADLINE_GUARD,
-        MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD,
-        3
-      ),
+      replaceExactly(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD, MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD, 3),
       replaceAllExactly(
         mcpbInputs.release,
         'if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then',
-        'if now=$(/bin/date +%s); then',
+        "if now=$(/bin/date +%s); then",
         9
       ),
       replaceExactly(
@@ -3920,12 +3861,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
-      replaceAllExactly(
-        mcpbInputs.release,
-        "            local limit=20",
-        "            local limit=200",
-        5
-      ),
+      replaceAllExactly(mcpbInputs.release, "            local limit=20", "            local limit=200", 5),
       replaceExactly(
         mcpbInputs.release,
         '            require_job_reserve 2100 "npm publish"\n            assert_remote_tag_identity',
@@ -4018,8 +3954,7 @@ describe("release identity and exact required-job gate", () => {
     );
     const createWrite = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
     const uploadWrite = "--fail-with-body --silent --show-error --request POST --retry 0";
-    const uploadCurl =
-      `"$CURL_BIN" --disable \\\n                --fail-with-body --silent --show-error --request POST --retry 0`;
+    const uploadCurl = `"$CURL_BIN" --disable \\\n                --fail-with-body --silent --show-error --request POST --retry 0`;
     const patchWrite = '"$GH_BIN" api --method PATCH';
     const createTarget = `release create "$TAG" --repo "\${{ github.repository }}"`;
     const uploadTarget = '"$UPLOAD_BASE?name=$ENCODED_NAME")';
@@ -4042,20 +3977,15 @@ describe("release identity and exact required-job gate", () => {
         'GH_CONFIG_DIR="$RUNNER_TEMP"',
         6
       ),
-      replaceExactly(mcpbInputs.release, "          SHELLOPTS: \"\"", '          SHELLOPTS: "xtrace"', 6),
-      replaceExactly(mcpbInputs.release, "          LD_AUDIT: \"\"", '          LD_AUDIT: "/tmp/evil.so"', 6),
+      replaceExactly(mcpbInputs.release, '          SHELLOPTS: ""', '          SHELLOPTS: "xtrace"', 6),
+      replaceExactly(mcpbInputs.release, '          LD_AUDIT: ""', '          LD_AUDIT: "/tmp/evil.so"', 6),
       replaceExactly(
         mcpbInputs.release,
-        "          TAR_OPTIONS: \"\"",
+        '          TAR_OPTIONS: ""',
         '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
         6
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        "          GODEBUG: \"\"",
-        '          GODEBUG: "http2debug=2"',
-        6
-      ),
+      replaceExactly(mcpbInputs.release, '          GODEBUG: ""', '          GODEBUG: "http2debug=2"', 6),
       replaceExactly(
         mcpbInputs.release,
         '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
@@ -4069,20 +3999,10 @@ describe("release identity and exact required-job gate", () => {
         `"repos/\${{ github.repository }}/releases/latest" 2>&1)`,
         2
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        "select(length == 1) | .[0] |",
-        ".[] |",
-        3
-      ),
+      replaceExactly(mcpbInputs.release, "select(length == 1) | .[0] |", ".[] |", 3),
       replaceExactly(mcpbInputs.release, "/usr/bin/jq -cse \\", "/usr/bin/jq -ce \\", 2),
       replaceExactly(mcpbInputs.release, "| /usr/bin/jq -se \\", "| /usr/bin/jq -e \\", 2),
-      replaceExactly(
-        mcpbInputs.release,
-        '[ "$GITHUB_LATEST_EXIT" -ne 4 ]',
-        '[ "$GITHUB_LATEST_EXIT" -ne 2 ]',
-        2
-      ),
+      replaceExactly(mcpbInputs.release, '[ "$GITHUB_LATEST_EXIT" -ne 4 ]', '[ "$GITHUB_LATEST_EXIT" -ne 2 ]', 2),
       replaceExactly(
         mcpbInputs.release,
         '.message == "Not Found" and .status == "404" and',
@@ -4136,12 +4056,7 @@ describe("release identity and exact required-job gate", () => {
         '              assert_remote_tag_identity\n              echo "Confirmed exact release $TAG',
         '              echo "Confirmed exact release $TAG'
       ),
-      replaceAllExactly(
-        mcpbInputs.release,
-        'awk -v heading="## [$VERSION] — "',
-        'awk -v ver="$VERSION"',
-        3
-      ),
+      replaceAllExactly(mcpbInputs.release, 'awk -v heading="## [$VERSION] — "', 'awk -v ver="$VERSION"', 3),
       replaceExactly(mcpbInputs.release, uploadWrite, `${uploadWrite}\n                ${uploadWrite}`),
       replaceExactly(
         mcpbInputs.release,
@@ -4205,16 +4120,8 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, patchWrite, `${patchWrite}\n            ${patchWrite}`),
       replaceExactly(mcpbInputs.release, patchWrite, `RELEASE_ID=1\n            ${patchWrite}`),
-      replaceExactly(
-        mcpbInputs.release,
-        patchWrite,
-        `PUBLISH_FIELDS+=(-F draft=true)\n            ${patchWrite}`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        patchWrite,
-        `PUBLISH_FIELDS=(-F draft=true)\n            ${patchWrite}`
-      ),
+      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS+=(-F draft=true)\n            ${patchWrite}`),
+      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS=(-F draft=true)\n            ${patchWrite}`),
       replaceExactly(mcpbInputs.release, patchTarget, '"repos/attacker/repo/releases/1"'),
       replaceExactly(
         mcpbInputs.release,
@@ -4287,11 +4194,7 @@ describe("release identity and exact required-job gate", () => {
         "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
         "--proxy '' --resolve uploads.github.com:443:127.0.0.1 --proto '=https' --tlsv1.2 --max-redirs 0"
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        uploadTarget,
-        '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'
-      ),
+      replaceExactly(mcpbInputs.release, uploadTarget, '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'),
       replaceExactly(
         mcpbInputs.release,
         "          assert_remote_tag_identity\n      # v3.9.0-rc.32",
@@ -4368,26 +4271,10 @@ describe("release identity and exact required-job gate", () => {
         'prerelease !== "true" && prerelease !== "false"',
         'prerelease !== "true" && prerelease !== "draft"'
       ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "release.name !== expected.name",
-        "release.name !== release.name"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "release.body !== expected.body",
-        "release.body !== release.body"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "name: process.env.EXPECTED_RELEASE_NAME",
-        "name: payload?.release?.name"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "body: process.env.EXPECTED_RELEASE_BODY",
-        "body: payload?.release?.body"
-      )
+      replaceExactly(mcpbInputs.integrity, "release.name !== expected.name", "release.name !== release.name"),
+      replaceExactly(mcpbInputs.integrity, "release.body !== expected.body", "release.body !== release.body"),
+      replaceExactly(mcpbInputs.integrity, "name: process.env.EXPECTED_RELEASE_NAME", "name: payload?.release?.name"),
+      replaceExactly(mcpbInputs.integrity, "body: process.env.EXPECTED_RELEASE_BODY", "body: payload?.release?.body")
     ]) {
       expect(mcpbContractProblems({ ...mcpbInputs, integrity: weakenedReleaseEvaluator })).toContain(
         "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -4436,21 +4323,13 @@ describe("release identity and exact required-job gate", () => {
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     for (const [guard, weakenedGuard, count] of [
-      [
-        `"repos/\${{ github.repository }}/git/ref/tags/$TAG"`,
-        '"repos/attacker/repo/git/ref/tags/$TAG"',
-        8
-      ],
+      [`"repos/\${{ github.repository }}/git/ref/tags/$TAG"`, '"repos/attacker/repo/git/ref/tags/$TAG"', 8],
       [
         `"repos/\${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"`,
         '"repos/attacker/repo/git/tags/$TAG_OBJECT_SHA"',
         4
       ],
-      [
-        ".sha == $tag_object_sha and .tag == $tag",
-        ".tag == $tag",
-        4
-      ],
+      [".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 4],
       ['.type == "commit" and .sha == $sha', '.type == "commit"', 4],
       ['.type == "tag" and .sha == $sha', '.type == "tag"', 4]
     ] as const) {

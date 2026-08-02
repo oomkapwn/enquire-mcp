@@ -2609,6 +2609,7 @@ function mcpbContractProblems(inputs: {
     (inputs.release.match(/TAG_REF_CONFIRM_JSON/g) ?? []).length !== 8 ||
     (inputs.release.match(/\.sha == \$tag_object_sha and \.tag == \$tag/g) ?? []).length !== 4 ||
     (inputs.release.match(/\.type == "commit" and \.sha == \$sha/g) ?? []).length !== 4 ||
+    (inputs.release.match(/\.type == "tag" and \.sha == \$sha/g) ?? []).length !== 4 ||
     inputs.release.includes("target_commitish") ||
     inputs.release.includes("--target") ||
     !inputs.release.includes("--verify-tag") ||

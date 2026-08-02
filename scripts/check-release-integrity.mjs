@@ -11,6 +11,7 @@
 // evaluator validates every identity before selecting the unique maximum
 // run_attempt per required name.
 
+import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
@@ -48,6 +49,13 @@ function isNonEmptyString(value) {
 
 function isExactSha1(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
+function isCanonicalSha512Sri(value) {
+  if (typeof value !== "string" || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(value)) return false;
+  const encoded = value.slice("sha512-".length);
+  const decoded = Buffer.from(encoded, "base64");
+  return decoded.length === 64 && decoded.toString("base64") === encoded;
 }
 
 function isExactSha256DigestOrNull(value) {
@@ -427,16 +435,33 @@ export function evaluateReleaseChecks(jobs, workflowRun, expectedSourceSha, requ
  *
  * @param {unknown} state - Registry lookup state for the exact version and channel.
  * @param {unknown} expectedSha - Git commit expected in npm's `gitHead`.
+ * @param {unknown} expectedIntegrity - Exact SHA-512 SRI of the canonical tarball.
  * @param {unknown} expectedVersion - Exact package version being released.
  * @param {unknown} expectedChannel - npm dist-tag derived from that version.
  * @returns {{action:"publish"|"reuse"|"reuse_superseded",channelVersion?:string}} Safe next action.
  */
-export function evaluateNpmPublication(state, expectedSha, expectedVersion, expectedChannel) {
+export function evaluateNpmPublication(state, expectedSha, expectedIntegrity, expectedVersion, expectedChannel) {
   assertChannelVersionAdvance(expectedVersion, "-", expectedChannel);
-  if (state?.exists === false) return { action: "publish" };
-  if (state?.exists !== true) throw new Error("npm publication state must be explicitly present or absent");
-  if (state.gitHead !== expectedSha) {
+  if (!isExactSha1(expectedSha)) {
+    throw new Error("expected npm source SHA must be one exact lowercase SHA-1");
+  }
+  if (!isCanonicalSha512Sri(expectedIntegrity)) {
+    throw new Error("expected npm tarball integrity must be one canonical SHA-512 SRI");
+  }
+  if (!isRecord(state) || typeof state.exists !== "boolean") {
+    throw new Error("npm publication state must be explicitly present or absent");
+  }
+  if (state.exists === false) return { action: "publish" };
+  if (Object.hasOwn(state, "gitHead") && state.gitHead !== null && !isExactSha1(state.gitHead)) {
+    throw new Error(`npm gitHead ${JSON.stringify(state.gitHead)} is present but malformed`);
+  }
+  if (Object.hasOwn(state, "gitHead") && state.gitHead !== null && state.gitHead !== expectedSha) {
     throw new Error(`npm gitHead ${JSON.stringify(state.gitHead)} does not match ${JSON.stringify(expectedSha)}`);
+  }
+  if (state.integrity !== expectedIntegrity) {
+    throw new Error(
+      `npm tarball integrity ${JSON.stringify(state.integrity)} does not match ${JSON.stringify(expectedIntegrity)}`
+    );
   }
   if (state.channelVersion === expectedVersion) return { action: "reuse" };
   if (expectedChannel === "latest") {
@@ -635,7 +660,8 @@ function usage() {
     "Usage: check-release-integrity.mjs",
     "assert-tag <tag> <version> | asset-version <version> | channel-advance <candidate> <current> <channel> |",
     "checks <source-sha> | flatten-pages <release|asset> | flatten-field <workflow_runs|jobs|artifacts> |",
-    "npm-state | release-state | candidate-runs <source-sha> | candidate <source-sha>"
+    "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state |",
+    "candidate-runs <source-sha> | candidate <source-sha>"
   ].join(" ");
 }
 
@@ -660,7 +686,7 @@ if (isEntrypoint(import.meta.url)) {
       console.log(JSON.stringify(flattenPaginatedField(payload, first)));
     } else if (mode === "npm-state") {
       const payload = JSON.parse(readFileSync(0, "utf8"));
-      console.log(JSON.stringify(evaluateNpmPublication(payload, first, second, process.argv[5])));
+      console.log(JSON.stringify(evaluateNpmPublication(payload, first, second, process.argv[5], process.argv[6])));
     } else if (mode === "release-state") {
       const [tag, prerelease, ...assetNames] = process.argv.slice(3);
       const payload = JSON.parse(readFileSync(0, "utf8"));

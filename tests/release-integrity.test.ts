@@ -4724,8 +4724,11 @@ describe("release identity and exact required-job gate", () => {
         '          "$GH_BIN" release delete "$TAG"\n' + "          assert_remote_tag_identity\n      # v3.9.0-rc.32"
       )
     ];
-    for (const weakenedReleaseTransaction of releaseTransactionMutations) {
-      expect(githubReleaseTransactionProblems(weakenedReleaseTransaction)).not.toEqual([]);
+    for (const [mutationIndex, weakenedReleaseTransaction] of releaseTransactionMutations.entries()) {
+      expect(
+        githubReleaseTransactionProblems(weakenedReleaseTransaction),
+        `release transaction mutation ${mutationIndex + 1} must fail closed`
+      ).not.toEqual([]);
     }
     for (const weakenedUploadConfirmation of uploadConfirmationMutations) {
       expect(githubReleaseTransactionProblems(weakenedUploadConfirmation)).toContain(

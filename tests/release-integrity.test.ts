@@ -143,6 +143,11 @@ const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_
             if [ "$remaining" -lt "$required" ]; then`;
 const GH_READ_GUARD_COUNT = 5;
 const RELEASE_DEADLINE_ENV_BINDING_COUNT = 6;
+const RELEASE_FIXTURE_GH_CONFIG_COUNT = 6;
+const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 8;
+const RELEASE_HARDENED_ENV_COUNT = 7;
+const RELEASE_HARDENED_SHELL_COUNT = 7;
+const RELEASE_TLS_PIN_COUNT = 6;
 const NPM_RESERVE_GUARD_COUNT = 3;
 const RELEASE_SINGLETON_DECODER_COUNT = 2;
 const TRUSTED_CI_RUN = Object.freeze({
@@ -362,7 +367,8 @@ function npmAttestationBundle(
   return {
     predicateType,
     bundle: {
-      mediaType: options.mediaType === undefined ? "application/vnd.dev.sigstore.bundle+json;version=0.2" : options.mediaType,
+      mediaType:
+        options.mediaType === undefined ? "application/vnd.dev.sigstore.bundle+json;version=0.2" : options.mediaType,
       verificationMaterial:
         options.verificationMaterial === undefined ? verificationMaterial : options.verificationMaterial,
       dsseEnvelope: {
@@ -402,7 +408,7 @@ function npmProvenanceReport(options: NpmProvenanceReportOptions = {}) {
     location: "node_modules/@oomkapwn/enquire-mcp",
     registry: "https://registry.npmjs.org/",
     attestations: {
-      url: `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+      url: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
       provenance: { predicateType: NPM_PROVENANCE_SLSA_PREDICATE }
     },
     attestationBundles: bundles,
@@ -3646,8 +3652,7 @@ function assertNpmProvenanceEvaluatorContract() {
     { location: "node_modules/enquire-mcp" },
     { registry: "https://registry.npmjs.org" },
     {
-      attestations:
-        `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`
+      attestations: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`
     },
     {
       attestations: {
@@ -3657,7 +3662,7 @@ function assertNpmProvenanceEvaluatorContract() {
     },
     {
       attestations: {
-        url: `https://registry.npmjs.org/-/npm/v1/attestations/` + `@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
+        url: `https://registry.npmjs.org/-/npm/v1/attestations/@oomkapwn%2fenquire-mcp@${NPM_PROVENANCE_VERSION}`,
         provenance: { predicateType: NPM_PROVENANCE_PUBLISH_PREDICATE }
       }
     },
@@ -3796,10 +3801,7 @@ function assertNpmProvenanceEvaluatorContract() {
       Buffer.from("0c2bff747470", "hex")
     );
     for (const [rawBytes, expectedError] of [
-      [
-        NPM_PROVENANCE_SLSA_CERTIFICATE_WITHOUT_ISSUER,
-        "certificate lacks a supported Fulcio OIDC issuer extension"
-      ],
+      [NPM_PROVENANCE_SLSA_CERTIFICATE_WITHOUT_ISSUER, "certificate lacks a supported Fulcio OIDC issuer extension"],
       [wrongLegacyIssuerCertificate, "Fulcio legacy OIDC issuer is not GitHub Actions"],
       [wrongV2IssuerCertificate, "Fulcio v2 OIDC issuer is not GitHub Actions"],
       [dualIssuerConflictCertificate, "Fulcio v2 OIDC issuer is not GitHub Actions"],
@@ -4516,21 +4518,13 @@ describe("release identity and exact required-job gate", () => {
         '"NPM_CONFIG_USERCONFIG=$NPM_USERCONFIG"',
         '"NPM_CONFIG_USERCONFIG=/dev/null"'
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        '"NPM_CONFIG_PREFER_ONLINE=true"',
-        '"NPM_CONFIG_PREFER_ONLINE=false"'
-      ),
+      replaceExactly(mcpbInputs.release, '"NPM_CONFIG_PREFER_ONLINE=true"', '"NPM_CONFIG_PREFER_ONLINE=false"'),
       replaceExactly(mcpbInputs.release, "--max-filesize 4194304 --retry 0", "--max-filesize 4194304 --retry 1"),
       replaceExactly(mcpbInputs.release, '[ "$NPM_CLI_ACTUAL_SRI" != "$NPM_CLI_SRI" ]', "false"),
       replaceExactly(mcpbInputs.release, "$0 !~ /^package\\//", "false"),
       replaceExactly(mcpbInputs.release, "$0 ~ /(^|\\/)\\.\\.?(\\/|$)/", "false"),
       replaceExactly(mcpbInputs.release, "seen[$0]++", "false"),
-      replaceExactly(
-        mcpbInputs.release,
-        'NF == 0 || (substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d")',
-        "false"
-      ),
+      replaceExactly(mcpbInputs.release, 'NF == 0 || (substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d")', "false"),
       replaceExactly(
         mcpbInputs.release,
         "--save-exact --package-lock=true --ignore-scripts --no-audit --no-fund --omit=optional",
@@ -4543,8 +4537,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(
         mcpbInputs.release,
-        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n` +
-          `                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n` + `                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
         `              ${NPM_PROVENANCE_AUDIT_COMMAND}`
       ),
       replaceExactly(
@@ -4560,8 +4553,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(
         mcpbInputs.release,
-        `/usr/bin/env -i "\${CLEAN_ENV[@]}" \\\n` +
-          `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`,
+        `/usr/bin/env -i "\${CLEAN_ENV[@]}" \\\n` + `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`,
         `              ${NPM_PROVENANCE_EVALUATOR_COMMAND}`
       ),
       replaceExactly(
@@ -4582,11 +4574,7 @@ describe("release identity and exact required-job gate", () => {
         NPM_PROVENANCE_SUCCESS_CONDITION,
         '[ "$AUDIT_EXIT" -eq 0 ] || [ "$EVALUATOR_EXIT" -eq 0 ]'
       ),
-      replaceExactly(
-        mcpbInputs.release,
-        MCPB_EXACT_NPM_PUBLISH,
-        `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`
-      )
+      replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`)
     ]) {
       expect(npmProvenanceContractProblems(weakenedProvenanceWorkflow, mcpbInputs.integrity)).toContain(
         NPM_PROVENANCE_CONTRACT_PROBLEM
@@ -4630,7 +4618,7 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.integrity,
         'import { X509Certificate } from "node:crypto";',
-        'const X509Certificate = undefined;'
+        "const X509Certificate = undefined;"
       ),
       replaceExactly(
         mcpbInputs.integrity,
@@ -4689,11 +4677,7 @@ describe("release identity and exact required-job gate", () => {
         "decodeNpmAttestationWrapper(target.attestationBundles[index], index, expectedSignerUri)",
         'decodeNpmAttestationWrapper(target.attestationBundles[index], index, "")'
       ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "    expectedSignerUri,\n    label\n  );",
-        '    "",\n    label\n  );'
-      ),
+      replaceExactly(mcpbInputs.integrity, "    expectedSignerUri,\n    label\n  );", '    "",\n    label\n  );'),
       replaceExactly(mcpbInputs.integrity, 'keyid !== ""', "false"),
       replaceExactly(
         mcpbInputs.integrity,
@@ -6145,7 +6129,7 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         `          ${LOWERCASE_PROXY_UNSET}\n`,
         "          builtin true # lowercase proxy cleanup removed\n",
-        7
+        RELEASE_FIXTURE_PROXY_UNSET_COUNT
       ),
       replaceExactly(
         mcpbInputs.release,
@@ -6185,28 +6169,43 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
         "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
-        6
+        RELEASE_HARDENED_SHELL_COUNT
       ),
       replaceAllExactly(
         mcpbInputs.release,
         'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")',
         'GH_CONFIG_DIR="$RUNNER_TEMP"',
-        6
+        RELEASE_FIXTURE_GH_CONFIG_COUNT
       ),
-      replaceExactly(mcpbInputs.release, '          SHELLOPTS: ""', '          SHELLOPTS: "xtrace"', 6),
-      replaceExactly(mcpbInputs.release, '          LD_AUDIT: ""', '          LD_AUDIT: "/tmp/evil.so"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          SHELLOPTS: ""',
+        '          SHELLOPTS: "xtrace"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          LD_AUDIT: ""',
+        '          LD_AUDIT: "/tmp/evil.so"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
       replaceExactly(
         mcpbInputs.release,
         '          TAR_OPTIONS: ""',
         '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
-        6
+        RELEASE_HARDENED_ENV_COUNT
       ),
-      replaceExactly(mcpbInputs.release, '          GODEBUG: ""', '          GODEBUG: "http2debug=2"', 6),
+      replaceExactly(
+        mcpbInputs.release,
+        '          GODEBUG: ""',
+        '          GODEBUG: "http2debug=2"',
+        RELEASE_HARDENED_ENV_COUNT
+      ),
       replaceExactly(
         mcpbInputs.release,
         '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
         '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
-        6
+        RELEASE_TLS_PIN_COUNT
       ),
       replaceExactly(mcpbInputs.release, "          persist-credentials: false", "          persist-credentials: true"),
       replaceExactly(
@@ -6505,7 +6504,7 @@ describe("release identity and exact required-job gate", () => {
           mcpbInputs.release,
           "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
           "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
-          6
+          RELEASE_HARDENED_SHELL_COUNT
         )
       )
     ).toContain(

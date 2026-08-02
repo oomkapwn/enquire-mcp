@@ -2796,14 +2796,14 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          '          if [ "$ACTUAL_DIGEST" != "$ARTIFACT_DIGEST" ]; then\n' +
-            '            echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
-            "            exit 1\n" +
-            "          fi",
-          '          if [ "$ACTUAL_DIGEST" = "$ARTIFACT_DIGEST" ]; then\n' +
-            '            echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
-            "            exit 1\n" +
-            "          fi"
+          '              if [ "$ACTUAL_DIGEST" != "$ARTIFACT_DIGEST" ]; then\n' +
+            '                echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
+            "                exit 1\n" +
+            "              fi",
+          '              if [ "$ACTUAL_DIGEST" = "$ARTIFACT_DIGEST" ]; then\n' +
+            '                echo "::error::downloaded Actions artifact digest differs from upload output"\n' +
+            "                exit 1\n" +
+            "              fi"
         ),
         pkg.engines?.node
       )

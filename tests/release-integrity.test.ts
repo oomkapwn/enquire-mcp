@@ -40,10 +40,14 @@ interface WorkflowJob {
 
 const TRUSTED_SOURCE_SHA = "252c54c0e0d4939c9f7b93470a4a2d7c7a0ac78c";
 const RELEASE_JOB_REMAINING = "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - $(date +%s)))";
+const MUTATED_RELEASE_JOB_REMAINING =
+  "local remaining=$((RELEASE_JOB_DEADLINE_EPOCH - RELEASE_JOB_DEADLINE_EPOCH))";
 const GH_READ_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -le 10 ]; then`;
 const NPM_RESERVE_DEADLINE_GUARD = `${RELEASE_JOB_REMAINING}\n  if [ "$remaining" -lt "$required" ]; then`;
 const RAW_GH_READ_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
 const RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
+const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -le 10 ]; then`;
+const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `            ${MUTATED_RELEASE_JOB_REMAINING}\n            if [ "$remaining" -lt "$required" ]; then`;
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -2617,7 +2621,7 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(
           workflow,
           RAW_GH_READ_DEADLINE_GUARD,
-          RAW_GH_READ_DEADLINE_GUARD.replace("$(date +%s)", "RELEASE_JOB_DEADLINE_EPOCH"),
+          MUTATED_RAW_GH_READ_DEADLINE_GUARD,
           4
         )
       )
@@ -3040,7 +3044,7 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.release,
         RAW_NPM_RESERVE_DEADLINE_GUARD,
-        RAW_NPM_RESERVE_DEADLINE_GUARD.replace("$(date +%s)", "RELEASE_JOB_DEADLINE_EPOCH")
+        MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD
       ),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 2100 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),

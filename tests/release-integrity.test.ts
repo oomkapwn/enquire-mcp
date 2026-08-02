@@ -1247,11 +1247,23 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   }
 
   const problems: string[] = [];
-  const assignmentLineCount = (body: string, name: string) =>
-    body
+  const assignmentLineCount = (body: string, name: string) => {
+    if (!/^[A-Z][A-Z0-9_]*$/u.test(name)) return 0;
+    const modifierAssignment = new RegExp(
+      `^(?:export|readonly|declare|typeset|local)(?:\\s+-[A-Za-z]+)*\\s+${name}=`,
+      "u"
+    );
+    const printfAssignment = new RegExp(
+      `^(?:(?:builtin|command)\\s+)?printf\\s+-v\\s+(?:["']?)${name}(?:["']?)(?:\\s|$)`,
+      "u"
+    );
+    return body
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line.startsWith(`${name}=`)).length;
+      .filter(
+        (line) => line.startsWith(`${name}=`) || modifierAssignment.test(line) || printfAssignment.test(line)
+      ).length;
+  };
   const boundedBlock = (body: string, startNeedle: string, endNeedle: string) => {
     const start = body.indexOf(startNeedle);
     const end = start < 0 ? -1 : body.indexOf(endNeedle, start + startNeedle.length);
@@ -1267,7 +1279,15 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     const endLineBreak = body.indexOf("\n", end);
     const endLineEnd = endLineBreak < 0 ? body.length : endLineBreak;
     const indent = body.slice(startLine, start);
-    if (endLine <= startLine || !/^[ \t]*$/u.test(indent) || body.slice(endLine, endLineEnd) !== indent + endNeedle) {
+    const endIndent = body.slice(endLine, end);
+    const endSuffix = body.slice(end + endNeedle.length, endLineEnd);
+    if (
+      endLine <= startLine ||
+      !/^[ \t]*$/u.test(indent) ||
+      !/^[ \t]*$/u.test(endIndent) ||
+      !endIndent.startsWith(indent) ||
+      endSuffix.length !== 0
+    ) {
       return "";
     }
     const rawBlock = body.slice(startLine, endLine);
@@ -1460,6 +1480,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
 
   const uploadPost = "--fail-with-body --silent --show-error --request POST --retry 0";
   const uploadTarget = '"$UPLOAD_BASE?name=$ENCODED_NAME")';
+  const releaseStatePayload = "'{release: $release, assets: $assets}')";
+  const metadataProjection = "[.[] | {name, content_type, size, digest}] | sort_by(.name)";
   const exactUploadCurl =
     'UPLOAD_STATUS=$("$TIMEOUT_BIN" --kill-after=10s 310s "$CURL_BIN" --disable \\\n' +
     "  --fail-with-body --silent --show-error --request POST --retry 0 \\\n" +
@@ -1473,6 +1495,33 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     '  "$UPLOAD_BASE?name=$ENCODED_NAME")';
   const uploadCurlBody = normalizedIndentedBlock(upload, 'UPLOAD_STATUS=$("$TIMEOUT_BIN"', "UPLOAD_EXIT=$?");
   const uploadDraftGuard = 'if [ "$PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0 ]; then';
+  const uploadConfirmGuard = 'if [ "$CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0 ] ||';
+  const uploadConfirmProjectionGuard = '[ "$CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET" ]; then';
+  const prewriteStateSource =
+    `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`;
+  const prewriteActionSource = `PREWRITE_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`;
+  const prewriteNameCountSource = `PREWRITE_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`;
+  const prewriteProjectionSource = `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
+  const prewriteLocalSubsetSource = `PREWRITE_LOCAL_SUBSET=$(jq -cn --argjson local "$LOCAL_ASSET_PROJECTION"`;
+  const prewriteLocalSubsetRemoteSource = '--argjson remote "$CURRENT_ASSETS"';
+  const prewriteProjectionGuard = '[ "$PREWRITE_ASSET_PROJECTION" != "$PREWRITE_LOCAL_SUBSET" ]; then';
+  const confirmStateSource =
+    `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`;
+  const confirmActionSource = `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`;
+  const confirmNameCountSource = `CONFIRM_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`;
+  const confirmProjectionSource = `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
+  const confirmLocalSubsetSource = `CONFIRM_LOCAL_SUBSET=$(jq -cn --argjson local "$LOCAL_ASSET_PROJECTION"`;
+  const confirmLocalSubsetRemoteSource = '--argjson remote "$CONFIRM_ASSETS"';
+  const localSubsetProjection =
+    "[$local[] | . as $candidate | select(any($remote[]; .name == $candidate.name))] | sort_by(.name)";
+  const uploadConfirmCall = 'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then';
+  const uploadBaseSource = `UPLOAD_BASE=\${CONFIRM_UPLOAD_URL%%\\{*}`;
+  const prewriteAuthorizationBlock = normalizedIndentedBlock(upload, prewriteStateSource, uploadConfirmCall);
+  const confirmAuthorizationBlock = normalizedIndentedBlock(upload, uploadConfirmCall, uploadBaseSource);
+  const hasExactPrewriteAuthorizationBlock =
+    sha256(prewriteAuthorizationBlock) === "1c6761bb54fe84f3adb666b82c80b39261bc023b92dde7c6d1cde631a649d852";
+  const hasExactConfirmAuthorizationBlock =
+    sha256(confirmAuthorizationBlock) === "fa471513b99a728dea4dfdfa7354a7c9a26d71808e417c68c4de455f567f105b";
   const absenceLoop = "for (( absence_attempt=1; absence_attempt<=12;";
   const uploadReserve = 'require_job_reserve 1500 "release asset upload for $NAME"';
   const uploadRecovery = "for (( upload_recovery_attempt=1; upload_recovery_attempt<=12;";
@@ -1480,18 +1529,42 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const uploadReserveIndex = upload.indexOf(uploadReserve, absenceIndex);
   const uploadTagIndex = upload.indexOf("assert_remote_tag_identity", uploadReserveIndex);
   const uploadRefreshIndex = upload.indexOf("Immediate pre-upload reconciliation for $NAME", uploadTagIndex);
-  const uploadDraftGuardIndex = upload.indexOf('PREWRITE_ACTION" != "resume_draft"', uploadRefreshIndex);
-  const uploadNameGuardIndex = upload.indexOf('PREWRITE_NAME_COUNT" -ne 0', uploadDraftGuardIndex);
-  const uploadProjectionIndex = upload.indexOf("PREWRITE_ASSET_PROJECTION", uploadNameGuardIndex);
-  const uploadConfirmIndex = upload.indexOf("Immediate pre-upload confirmation for $NAME", uploadProjectionIndex);
-  const uploadConfirmStateIndex = upload.indexOf("CONFIRM_STATE=$(jq -n", uploadConfirmIndex);
-  const uploadConfirmGuardIndex = upload.indexOf("Final pre-upload snapshot is not", uploadConfirmStateIndex);
+  const prewriteStateSourceIndex = upload.indexOf(prewriteStateSource, uploadRefreshIndex);
+  const prewriteActionSourceIndex = upload.indexOf(prewriteActionSource, prewriteStateSourceIndex);
+  const prewriteNameCountSourceIndex = upload.indexOf(prewriteNameCountSource, prewriteActionSourceIndex);
+  const uploadDraftGuardIndex = upload.indexOf(uploadDraftGuard, prewriteNameCountSourceIndex);
+  const prewriteProjectionSourceIndex = upload.indexOf(prewriteProjectionSource, uploadDraftGuardIndex);
+  const prewriteLocalSubsetSourceIndex = upload.indexOf(prewriteLocalSubsetSource, prewriteProjectionSourceIndex);
+  const prewriteLocalSubsetRemoteSourceIndex = upload.indexOf(
+    prewriteLocalSubsetRemoteSource,
+    prewriteLocalSubsetSourceIndex
+  );
+  const prewriteProjectionGuardIndex = upload.indexOf(prewriteProjectionGuard, prewriteLocalSubsetRemoteSourceIndex);
+  const uploadConfirmIndex = upload.indexOf(
+    "Immediate pre-upload confirmation for $NAME",
+    prewriteProjectionGuardIndex
+  );
+  const uploadConfirmStateIndex = upload.indexOf(confirmStateSource, uploadConfirmIndex);
+  const uploadConfirmActionSourceIndex = upload.indexOf(confirmActionSource, uploadConfirmStateIndex);
+  const uploadConfirmNameCountSourceIndex = upload.indexOf(confirmNameCountSource, uploadConfirmActionSourceIndex);
+  const uploadConfirmProjectionSourceIndex = upload.indexOf(confirmProjectionSource, uploadConfirmNameCountSourceIndex);
+  const uploadConfirmLocalSubsetSourceIndex = upload.indexOf(
+    confirmLocalSubsetSource,
+    uploadConfirmProjectionSourceIndex
+  );
+  const uploadConfirmLocalSubsetRemoteSourceIndex = upload.indexOf(
+    confirmLocalSubsetRemoteSource,
+    uploadConfirmLocalSubsetSourceIndex
+  );
+  const uploadConfirmGuardIndex = upload.indexOf(uploadConfirmGuard, uploadConfirmLocalSubsetRemoteSourceIndex);
+  const uploadConfirmProjectionGuardIndex = upload.indexOf(uploadConfirmProjectionGuard, uploadConfirmGuardIndex);
+  const uploadConfirmErrorIndex = upload.indexOf("Final pre-upload snapshot is not", uploadConfirmProjectionGuardIndex);
   const uploadUrlGuardIndex = upload.indexOf(
     "GitHub release upload URL is not bound to the exact repository and release ID",
-    uploadConfirmGuardIndex
+    uploadConfirmErrorIndex
   );
   const uploadRehashIndex = upload.indexOf("Canonical local release asset changed before upload", uploadUrlGuardIndex);
-  const uploadBaseIndex = upload.indexOf(`UPLOAD_BASE=\${CONFIRM_UPLOAD_URL%%\\{*}`, uploadRehashIndex);
+  const uploadBaseIndex = upload.indexOf(uploadBaseSource, uploadRehashIndex);
   const uploadPostIndex = upload.indexOf(uploadPost, uploadBaseIndex);
   const uploadTargetIndex = upload.indexOf(uploadTarget, uploadPostIndex);
   const uploadRecoveryIndex = upload.indexOf(uploadRecovery, uploadPostIndex);
@@ -1507,6 +1580,24 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(upload, uploadTarget) !== 1 ||
     uploadCurlBody !== exactUploadCurl ||
     mutationMatchCount(upload, uploadDraftGuard) !== 1 ||
+    mutationMatchCount(upload, uploadConfirmGuard) !== 1 ||
+    mutationMatchCount(upload, uploadConfirmProjectionGuard) !== 1 ||
+    mutationMatchCount(upload, prewriteStateSource) !== 1 ||
+    mutationMatchCount(upload, prewriteActionSource) !== 1 ||
+    mutationMatchCount(upload, prewriteNameCountSource) !== 1 ||
+    mutationMatchCount(upload, prewriteProjectionSource) !== 1 ||
+    mutationMatchCount(upload, prewriteLocalSubsetSource) !== 1 ||
+    mutationMatchCount(upload, prewriteLocalSubsetRemoteSource) !== 1 ||
+    mutationMatchCount(upload, prewriteProjectionGuard) !== 1 ||
+    mutationMatchCount(upload, confirmStateSource) !== 1 ||
+    mutationMatchCount(upload, confirmActionSource) !== 1 ||
+    mutationMatchCount(upload, confirmNameCountSource) !== 1 ||
+    mutationMatchCount(upload, confirmProjectionSource) !== 1 ||
+    mutationMatchCount(upload, confirmLocalSubsetSource) !== 1 ||
+    mutationMatchCount(upload, confirmLocalSubsetRemoteSource) !== 1 ||
+    mutationMatchCount(upload, localSubsetProjection) !== 2 ||
+    !hasExactPrewriteAuthorizationBlock ||
+    !hasExactConfirmAuthorizationBlock ||
     mutationMatchCount(upload, '"$CURL_BIN"') !== 1 ||
     assignmentLineCount(upload, "TAG") !== 1 ||
     assignmentLineCount(upload, "RELEASE_ID") !== 1 ||
@@ -1516,6 +1607,16 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     assignmentLineCount(upload, "LOCAL_DIGEST") !== 2 ||
     assignmentLineCount(upload, "UPLOAD_EXIT") !== 2 ||
     assignmentLineCount(upload, "UPLOAD_STATUS") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_STATE") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_ACTION") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_NAME_COUNT") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_ASSET_PROJECTION") !== 1 ||
+    assignmentLineCount(upload, "PREWRITE_LOCAL_SUBSET") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_STATE") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ACTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_NAME_COUNT") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ASSET_PROJECTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_LOCAL_SUBSET") !== 1 ||
     mutationMatchCount(upload, "CONFIRM_UPLOAD_URL=") !== 1 ||
     mutationMatchCount(upload, "UPLOAD_BASE=") !== 1 ||
     !upload.includes(NPM_RESERVE_DEADLINE_GUARD) ||
@@ -1527,9 +1628,6 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     !upload.includes('[ "$ASSET_ABSENCE_OBSERVATIONS" -ne 6 ]') ||
     !upload.includes("Canonical local release asset changed before upload") ||
     !upload.includes('CONFIRM_DRAFT" != "true"') ||
-    !upload.includes('CONFIRM_ACTION" != "resume_draft"') ||
-    !upload.includes('CONFIRM_NAME_COUNT" -ne 0') ||
-    !upload.includes('CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET"') ||
     mutationMatchCount(upload, "confirm_exact_draft_identity()") !== 1 ||
     mutationMatchCount(upload, "confirm_exact_draft_identity ") !== 2 ||
     mutationMatchCount(upload, "UPLOAD_EXIT=$?") !== 1 ||
@@ -1542,13 +1640,27 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     uploadReserveIndex <= absenceIndex ||
     uploadTagIndex <= uploadReserveIndex ||
     uploadRefreshIndex <= uploadTagIndex ||
-    uploadDraftGuardIndex <= uploadRefreshIndex ||
-    uploadNameGuardIndex <= uploadDraftGuardIndex ||
-    uploadProjectionIndex <= uploadNameGuardIndex ||
-    uploadConfirmIndex <= uploadProjectionIndex ||
+    prewriteStateSourceIndex <= uploadRefreshIndex ||
+    prewriteActionSourceIndex <= prewriteStateSourceIndex ||
+    prewriteNameCountSourceIndex <= prewriteActionSourceIndex ||
+    uploadDraftGuardIndex <= prewriteNameCountSourceIndex ||
+    prewriteProjectionSourceIndex <= uploadDraftGuardIndex ||
+    prewriteLocalSubsetSourceIndex <= prewriteProjectionSourceIndex ||
+    prewriteLocalSubsetRemoteSourceIndex <= prewriteLocalSubsetSourceIndex ||
+    prewriteProjectionGuardIndex <= prewriteLocalSubsetRemoteSourceIndex ||
+    uploadConfirmIndex <= prewriteProjectionGuardIndex ||
     uploadConfirmStateIndex <= uploadConfirmIndex ||
-    uploadConfirmGuardIndex <= uploadConfirmStateIndex ||
-    uploadUrlGuardIndex <= uploadConfirmGuardIndex ||
+    uploadConfirmActionSourceIndex <= uploadConfirmStateIndex ||
+    uploadConfirmNameCountSourceIndex <= uploadConfirmActionSourceIndex ||
+    uploadConfirmProjectionSourceIndex <= uploadConfirmNameCountSourceIndex ||
+    uploadConfirmLocalSubsetSourceIndex <= uploadConfirmProjectionSourceIndex ||
+    uploadConfirmLocalSubsetRemoteSourceIndex <= uploadConfirmLocalSubsetSourceIndex ||
+    uploadConfirmGuardIndex <= uploadConfirmLocalSubsetRemoteSourceIndex ||
+    uploadConfirmProjectionGuardIndex <= uploadConfirmGuardIndex ||
+    upload.slice(uploadConfirmGuardIndex + uploadConfirmGuard.length, uploadConfirmProjectionGuardIndex).trim() !==
+      "\\" ||
+    uploadConfirmErrorIndex <= uploadConfirmProjectionGuardIndex ||
+    uploadUrlGuardIndex <= uploadConfirmErrorIndex ||
     uploadRehashIndex <= uploadUrlGuardIndex ||
     uploadBaseIndex <= uploadRehashIndex ||
     uploadPostIndex <= uploadBaseIndex ||
@@ -1563,6 +1675,57 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
 
   const projection = "[.[] | {id, name, state, content_type, size, digest}] | sort_by(.name)";
   const publishReserve = 'require_job_reserve 2400 "GitHub Release publication"';
+  const finalAssetIdentitySource = `FINAL_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`;
+  const publishReleaseSource = "PUBLISH_RELEASE=$CURRENT_RELEASE";
+  const publishAssetsSource = "PUBLISH_ASSETS=$CURRENT_ASSETS";
+  const publishStateSource =
+    `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`;
+  const publishActionSource = `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const publishAssetIdentitySource = `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`;
+  const immediatePublishStateReleaseSource = `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`;
+  const immediatePublishStateAssetsSource =
+    `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`;
+  const immediatePublishActionSource =
+    `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const immediateAssetIdentitySource = `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`;
+  const confirmPublishStateReleaseSource = `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`;
+  const confirmPublishStateAssetsSource = `--argjson assets "$CONFIRM_ASSETS" '{release: $release, assets: $assets}')`;
+  const confirmPublishActionSource =
+    `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`;
+  const confirmAssetIdentitySource = `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`;
+  const publishAssetIdentityGuard = '[ "$PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
+  const immediateAssetIdentityGuard = '[ "$IMMEDIATE_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]';
+  const publishConfirmActionGuard = 'if [ "$CONFIRM_PUBLISH_ACTION" != "publish_draft" ] ||';
+  const publishConfirmIdentityGuard = '[ "$CONFIRM_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]; then';
+  const publishDraftGate = 'if [ "$FINAL_ACTION" = "publish_draft" ]; then';
+  const finalLocalProjectionSource = `FINAL_LOCAL_PROJECTION=$(printf '%s' "$FINAL_ASSETS" | jq -cS`;
+  const finalDirectorySource = 'FINAL_DIR=".mcpb-release-final-$GITHUB_RUN_ID"';
+  const publishFieldsSource = 'PUBLISH_FIELDS=(-F draft=false -F "prerelease=$EXPECTED_PRERELEASE")';
+  const publishDraftConfirmationSource =
+    'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then';
+  const stableChannelComment = "# The stable-channel guard is deliberately after reserve, tag";
+  const finalLocalProjectionBlock = normalizedIndentedBlock(upload, finalLocalProjectionSource, finalDirectorySource);
+  const publicationAuthorizationBlock = normalizedIndentedBlock(upload, publishReleaseSource, publishFieldsSource);
+  const immediatePublicationAuthorizationBlock = normalizedIndentedBlock(
+    upload,
+    immediatePublishStateReleaseSource,
+    publishDraftConfirmationSource
+  );
+  const confirmPublicationAuthorizationBlock = normalizedIndentedBlock(
+    upload,
+    publishDraftConfirmationSource,
+    stableChannelComment
+  );
+  const hasExactFinalLocalProjectionBlock =
+    sha256(finalLocalProjectionBlock) === "19fd4a2754537c71e163f0bb04c209608ed3030871de2e8c54ef9e5108585577";
+  const hasExactPublicationAuthorizationBlock =
+    sha256(publicationAuthorizationBlock) === "76e4fcdf0beed45cb489560f1f904a1f76ed23c39cde0da07c03d4afa1d5f674";
+  const hasExactImmediatePublicationAuthorizationBlock =
+    sha256(immediatePublicationAuthorizationBlock) ===
+    "8b4d3468625685260be550e095dc83c684288487cd6f9447236631d87c71ed3a";
+  const hasExactConfirmPublicationAuthorizationBlock =
+    sha256(confirmPublicationAuthorizationBlock) ===
+    "0ac17f80d5e5a9e6933c4b68d4aa5dc90fddc73ee377115745bad5cc42f982da";
   const publishFieldsBlock =
     'PUBLISH_FIELDS=(-F draft=false -F "prerelease=$EXPECTED_PRERELEASE")\n' +
     `  if [ "\${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then\n` +
@@ -1570,20 +1733,53 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     "  else\n" +
     "    PUBLISH_FIELDS+=(-f make_latest=false)\n" +
     "  fi";
-  const publishReserveIndex = upload.indexOf(publishReserve);
+  const finalIdentitySourceIndex = upload.indexOf(finalAssetIdentitySource);
+  const publishReleaseSourceIndex = upload.indexOf(publishReleaseSource, finalIdentitySourceIndex);
+  const publishAssetsSourceIndex = upload.indexOf(publishAssetsSource, publishReleaseSourceIndex);
+  const publishStateSourceIndex = upload.indexOf(publishStateSource, publishAssetsSourceIndex);
+  const publishActionSourceIndex = upload.indexOf(publishActionSource, publishStateSourceIndex);
+  const publishIdentitySourceIndex = upload.indexOf(publishAssetIdentitySource, publishActionSourceIndex);
+  const publishIdentityGuardIndex = upload.indexOf(publishAssetIdentityGuard, publishIdentitySourceIndex);
+  const outerPublishDraftGateIndex = upload.indexOf(publishDraftGate, publishIdentityGuardIndex);
+  const publishReserveIndex = upload.indexOf(publishReserve, outerPublishDraftGateIndex);
   const publishTagIndex = upload.indexOf("assert_remote_tag_identity", publishReserveIndex);
   const publishRefreshIndex = upload.indexOf("Immediate pre-publication reconciliation", publishTagIndex);
-  const immediateProjectionIndex = upload.indexOf("IMMEDIATE_ASSET_IDENTITY", publishRefreshIndex);
+  const immediatePublishStateReleaseSourceIndex = upload.indexOf(
+    immediatePublishStateReleaseSource,
+    publishRefreshIndex
+  );
+  const immediatePublishStateAssetsSourceIndex = upload.indexOf(
+    immediatePublishStateAssetsSource,
+    immediatePublishStateReleaseSourceIndex
+  );
+  const immediatePublishActionSourceIndex = upload.indexOf(
+    immediatePublishActionSource,
+    immediatePublishStateAssetsSourceIndex
+  );
+  const immediateIdentitySourceIndex = upload.indexOf(immediateAssetIdentitySource, immediatePublishActionSourceIndex);
+  const immediateIdentityGuardIndex = upload.indexOf(immediateAssetIdentityGuard, immediateIdentitySourceIndex);
+  const innerPublishDraftGateIndex = upload.indexOf(publishDraftGate, immediateIdentityGuardIndex);
   const publishDraftConfirmIndex = upload.indexOf(
     "Immediate pre-publication draft confirmation",
-    immediateProjectionIndex
+    innerPublishDraftGateIndex
   );
-  const publishConfirmStateIndex = upload.indexOf("CONFIRM_PUBLISH_STATE=$(jq -n", publishDraftConfirmIndex);
-  const publishConfirmGuardIndex = upload.indexOf(
-    "Final pre-publication snapshot changed before the publication boundary",
+  const publishConfirmStateIndex = upload.indexOf(confirmPublishStateReleaseSource, publishDraftConfirmIndex);
+  const publishConfirmStateAssetsSourceIndex = upload.indexOf(
+    confirmPublishStateAssetsSource,
     publishConfirmStateIndex
   );
-  const latestPrewriteIndex = upload.indexOf("if github_latest_read; then", publishConfirmGuardIndex);
+  const publishConfirmActionSourceIndex = upload.indexOf(
+    confirmPublishActionSource,
+    publishConfirmStateAssetsSourceIndex
+  );
+  const publishConfirmIdentitySourceIndex = upload.indexOf(confirmAssetIdentitySource, publishConfirmActionSourceIndex);
+  const publishConfirmActionGuardIndex = upload.indexOf(publishConfirmActionGuard, publishConfirmIdentitySourceIndex);
+  const publishConfirmIdentityGuardIndex = upload.indexOf(publishConfirmIdentityGuard, publishConfirmActionGuardIndex);
+  const publishConfirmErrorIndex = upload.indexOf(
+    "Final pre-publication snapshot changed before the publication boundary",
+    publishConfirmIdentityGuardIndex
+  );
+  const latestPrewriteIndex = upload.indexOf("if github_latest_read; then", publishConfirmErrorIndex);
   const latestAdvanceIndex = upload.indexOf(
     `"$VERSION" "$CURRENT_LATEST_VERSION" "\${{ steps.dist_tag.outputs.tag }}"`,
     latestPrewriteIndex
@@ -1614,6 +1810,39 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(upload, "PUBLISH_FIELDS+=(") !== 2 ||
     mutationMatchCount(upload, "PUBLISH_FIELDS+=(-f make_latest=true)") !== 1 ||
     mutationMatchCount(upload, "PUBLISH_FIELDS+=(-f make_latest=false)") !== 1 ||
+    mutationMatchCount(upload, finalAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, publishReleaseSource) !== 1 ||
+    mutationMatchCount(upload, publishAssetsSource) !== 1 ||
+    mutationMatchCount(upload, publishStateSource) !== 1 ||
+    mutationMatchCount(upload, publishActionSource) !== 1 ||
+    mutationMatchCount(upload, publishAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishStateReleaseSource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishStateAssetsSource) !== 1 ||
+    mutationMatchCount(upload, immediatePublishActionSource) !== 1 ||
+    mutationMatchCount(upload, immediateAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishStateReleaseSource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishStateAssetsSource) !== 1 ||
+    mutationMatchCount(upload, confirmPublishActionSource) !== 1 ||
+    mutationMatchCount(upload, confirmAssetIdentitySource) !== 1 ||
+    mutationMatchCount(upload, publishAssetIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, immediateAssetIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, publishConfirmActionGuard) !== 1 ||
+    mutationMatchCount(upload, publishConfirmIdentityGuard) !== 1 ||
+    mutationMatchCount(upload, publishDraftGate) !== 2 ||
+    !hasExactPublicationAuthorizationBlock ||
+    !hasExactImmediatePublicationAuthorizationBlock ||
+    !hasExactConfirmPublicationAuthorizationBlock ||
+    assignmentLineCount(upload, "FINAL_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_RELEASE") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_ASSETS") !== 1 ||
+    assignmentLineCount(upload, "PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "FINAL_ACTION") !== 3 ||
+    assignmentLineCount(upload, "PUBLISH_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "IMMEDIATE_PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "IMMEDIATE_ASSET_IDENTITY") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_PUBLISH_STATE") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_PUBLISH_ACTION") !== 1 ||
+    assignmentLineCount(upload, "CONFIRM_ASSET_IDENTITY") !== 1 ||
     !upload.includes("PATCH_EXIT=$?") ||
     !upload.includes("without repeating PATCH") ||
     !upload.includes(
@@ -1625,14 +1854,37 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     !upload.includes("Recovered an externally completed exact publication before repeating PATCH") ||
     !upload.includes('[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]') ||
     !upload.includes(`"$VERSION" "$CURRENT_LATEST_VERSION" "\${{ steps.dist_tag.outputs.tag }}"`) ||
-    publishReserveIndex < 0 ||
+    finalIdentitySourceIndex < 0 ||
+    publishReleaseSourceIndex <= finalIdentitySourceIndex ||
+    publishAssetsSourceIndex <= publishReleaseSourceIndex ||
+    publishStateSourceIndex <= publishAssetsSourceIndex ||
+    publishActionSourceIndex <= publishStateSourceIndex ||
+    publishIdentitySourceIndex <= publishActionSourceIndex ||
+    publishIdentityGuardIndex <= publishIdentitySourceIndex ||
+    outerPublishDraftGateIndex <= publishIdentityGuardIndex ||
+    publishReserveIndex <= outerPublishDraftGateIndex ||
     publishTagIndex <= publishReserveIndex ||
     publishRefreshIndex <= publishTagIndex ||
-    immediateProjectionIndex <= publishRefreshIndex ||
-    publishDraftConfirmIndex <= immediateProjectionIndex ||
+    immediatePublishStateReleaseSourceIndex <= publishRefreshIndex ||
+    immediatePublishStateAssetsSourceIndex <= immediatePublishStateReleaseSourceIndex ||
+    immediatePublishActionSourceIndex <= immediatePublishStateAssetsSourceIndex ||
+    immediateIdentitySourceIndex <= immediatePublishActionSourceIndex ||
+    immediateIdentityGuardIndex <= immediateIdentitySourceIndex ||
+    innerPublishDraftGateIndex <= immediateIdentityGuardIndex ||
+    innerPublishDraftGateIndex <= outerPublishDraftGateIndex ||
+    publishDraftConfirmIndex <= innerPublishDraftGateIndex ||
     publishConfirmStateIndex <= publishDraftConfirmIndex ||
-    publishConfirmGuardIndex <= publishConfirmStateIndex ||
-    latestPrewriteIndex <= publishConfirmGuardIndex ||
+    publishConfirmStateAssetsSourceIndex <= publishConfirmStateIndex ||
+    publishConfirmActionSourceIndex <= publishConfirmStateAssetsSourceIndex ||
+    publishConfirmIdentitySourceIndex <= publishConfirmActionSourceIndex ||
+    publishConfirmActionGuardIndex <= publishConfirmIdentitySourceIndex ||
+    publishConfirmIdentityGuardIndex <= publishConfirmActionGuardIndex ||
+    upload.slice(
+      publishConfirmActionGuardIndex + publishConfirmActionGuard.length,
+      publishConfirmIdentityGuardIndex
+    ).trim() !== "\\" ||
+    publishConfirmErrorIndex <= publishConfirmIdentityGuardIndex ||
+    latestPrewriteIndex <= publishConfirmErrorIndex ||
     latestAdvanceIndex <= latestPrewriteIndex ||
     patchIndex <= latestAdvanceIndex ||
     patchTargetIndex <= patchIndex ||
@@ -1650,6 +1902,18 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     finalTagIndex <= latestFailureIndex
   ) {
     problems.push("release publication must be one bounded PATCH followed by exact-ID convergence without replay");
+  }
+  if (
+    mutationMatchCount(upload, releaseStatePayload) !== 12 ||
+    mutationMatchCount(upload, metadataProjection) !== 3 ||
+    !hasExactPrewriteAuthorizationBlock ||
+    !hasExactConfirmAuthorizationBlock ||
+    !hasExactFinalLocalProjectionBlock ||
+    !hasExactPublicationAuthorizationBlock ||
+    !hasExactImmediatePublicationAuthorizationBlock ||
+    !hasExactConfirmPublicationAuthorizationBlock
+  ) {
+    problems.push("release authorization snapshots must preserve their exact state and metadata projections");
   }
   if (
     mutationMatchCount(upload, projection) !== 5 ||
@@ -3410,12 +3674,7 @@ describe("release identity and exact required-job gate", () => {
     expect(mutationMatchCount(workflow, RAW_GH_READ_DEADLINE_GUARD)).toBe(GH_READ_GUARD_COUNT);
     expect(
       releasePollProblems(
-        replaceExactly(
-          workflow,
-          RAW_GH_READ_DEADLINE_GUARD,
-          MUTATED_RAW_GH_READ_DEADLINE_GUARD,
-          GH_READ_GUARD_COUNT
-        )
+        replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, GH_READ_GUARD_COUNT)
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 6))).toContain(
@@ -3996,7 +4255,246 @@ describe("release identity and exact required-job gate", () => {
       `          if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` +
       "            CREATE_ARGS+=(--prerelease)\n" +
       "          fi";
+    const uploadConfirmationMutations = [
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0',
+        'CONFIRM_ACTION" != "resume_draft" ] && [ "$CONFIRM_NAME_COUNT" -ne 0'
+      ),
+      replaceExactly(mcpbInputs.release, 'CONFIRM_NAME_COUNT" -ne 0 ] ||', 'CONFIRM_NAME_COUNT" -ne 0 ] &&'),
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ASSET_PROJECTION" != "$CONFIRM_LOCAL_SUBSET"',
+        'CONFIRM_ASSET_PROJECTION" = "$CONFIRM_LOCAL_SUBSET"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CURRENT_ASSETS"`,
+        `PREWRITE_STATE=$(jq -n --argjson release "$CURRENT_RELEASE" --argjson assets "$CONFIRM_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`,
+        `PREWRITE_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`,
+        `PREWRITE_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`,
+        `PREWRITE_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, '--argjson remote "$CURRENT_ASSETS"', '--argjson remote "$CONFIRM_ASSETS"'),
+      replaceExactly(
+        mcpbInputs.release,
+        'PREWRITE_ASSET_PROJECTION" != "$PREWRITE_LOCAL_SUBSET"',
+        'PREWRITE_ASSET_PROJECTION" = "$PREWRITE_LOCAL_SUBSET"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`,
+        `CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CURRENT_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$PREWRITE_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_NAME_COUNT=$(printf '%s' "$CONFIRM_ASSETS" | jq --arg name "$NAME"`,
+        `CONFIRM_NAME_COUNT=$(printf '%s' "$CURRENT_ASSETS" | jq --arg name "$NAME"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`,
+        `CONFIRM_ASSET_PROJECTION=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, '--argjson remote "$CONFIRM_ASSETS"', '--argjson remote "$CURRENT_ASSETS"'),
+      replaceExactly(
+        mcpbInputs.release,
+        "[$local[] | . as $candidate | select(any($remote[]; .name == $candidate.name))] | sort_by(.name)",
+        "[$remote[]] | sort_by(.name)",
+        2
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              CONFIRM_ACTION="resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              export CONFIRM_ACTION="resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              printf -v CONFIRM_ACTION '%s' "resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_ACTION=$(printf '%s' "$CONFIRM_STATE" | release_state | jq -r '.action')\n              read -r CONFIRM_ACTION <<< "resume_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          `              CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`,
+        'if ! confirm_exact_draft_identity "Immediate pre-upload confirmation for $NAME"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          "              CONFIRM_ASSETS=$CURRENT_ASSETS\n" +
+          `              CONFIRM_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE" --argjson assets "$CONFIRM_ASSETS"`
+      )
+    ];
+    const publicationBoundaryMutations = [
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_PUBLISH_ACTION" != "publish_draft" ] ||',
+        'CONFIRM_PUBLISH_ACTION" = "publish_draft" ] ||'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'CONFIRM_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'CONFIRM_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$CURRENT_ASSETS" | jq -cS`,
+        `IMMEDIATE_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$CONFIRM_ASSETS" | jq -cS`,
+        `CONFIRM_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'IMMEDIATE_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'IMMEDIATE_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY"',
+        'PUBLISH_ASSET_IDENTITY" = "$FINAL_ASSET_IDENTITY"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ASSET_IDENTITY=$(printf '%s' "$FINAL_ASSETS" | jq -cS`,
+        `FINAL_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`
+      ),
+      replaceExactly(mcpbInputs.release, "PUBLISH_RELEASE=$CURRENT_RELEASE", "PUBLISH_RELEASE=$FINAL_RELEASE"),
+      replaceExactly(mcpbInputs.release, "PUBLISH_ASSETS=$CURRENT_ASSETS", "PUBLISH_ASSETS=$FINAL_ASSETS"),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$PUBLISH_ASSETS"`,
+        `PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE" --argjson assets "$FINAL_ASSETS"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `FINAL_ACTION=$(printf '%s' "$FINAL_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`,
+        `IMMEDIATE_PUBLISH_STATE=$(jq -n --argjson release "$PUBLISH_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`,
+        `--argjson assets "$FINAL_ASSETS" '{release: $release, assets: $assets}')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `FINAL_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `FINAL_ACTION=$(printf '%s' "$PUBLISH_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`,
+        `CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CURRENT_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `--argjson assets "$CONFIRM_ASSETS" '{release: $release, assets: $assets}')`,
+        `--argjson assets "$CURRENT_ASSETS" '{release: $release, assets: $assets}')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$IMMEDIATE_PUBLISH_STATE" | release_state | jq -r '.action')`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS`,
+        `PUBLISH_ASSET_IDENTITY=$(printf '%s' "$PUBLISH_ASSETS" | jq -cS\n          PUBLISH_ASSET_IDENTITY="$FINAL_ASSET_IDENTITY"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')`,
+        `CONFIRM_PUBLISH_ACTION=$(printf '%s' "$CONFIRM_PUBLISH_STATE" | release_state | jq -r '.action')\n              export CONFIRM_PUBLISH_ACTION="publish_draft"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          `              CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`,
+        'if ! confirm_exact_draft_identity "Immediate pre-publication draft confirmation"; then\n' +
+          "                exit 1\n" +
+          "              fi\n" +
+          "              CONFIRM_ASSETS=$CURRENT_ASSETS\n" +
+          `              CONFIRM_PUBLISH_STATE=$(jq -n --argjson release "$CONFIRM_RELEASE"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'if [ "$FINAL_ACTION" = "publish_draft" ]; then',
+        'if [ "$FINAL_ACTION" != "publish_draft" ]; then',
+        2
+      )
+    ];
+    const snapshotShapeMutations = [
+      replaceExactly(
+        mcpbInputs.release,
+        "'{release: $release, assets: $assets}')",
+        "'{release: $assets, assets: $release}')",
+        15
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "[.[] | {name, content_type, size, digest}] | sort_by(.name)",
+        "[.[] | {name, content_type, digest}] | sort_by(.name)",
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "'{release: $release, assets: $assets}')",
+        "'{release: $assets, assets: $release}') # '{release: $release, assets: $assets}')",
+        15
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "'[.[] | {name, content_type, size, digest}] | sort_by(.name)')",
+        "'[.[] | {name, content_type, digest}] | sort_by(.name)') # [.[] | {name, content_type, size, digest}] | sort_by(.name)",
+        3
+      )
+    ];
     const releaseTransactionMutations = [
+      ...uploadConfirmationMutations,
+      ...publicationBoundaryMutations,
+      ...snapshotShapeMutations,
       replaceAllExactly(
         mcpbInputs.release,
         "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
@@ -4136,11 +4634,6 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(
         mcpbInputs.release,
-        'CONFIRM_ACTION" != "resume_draft" ] || [ "$CONFIRM_NAME_COUNT" -ne 0',
-        'CONFIRM_ACTION" != "resume_draft" ] && [ "$CONFIRM_NAME_COUNT" -ne 0'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
         'PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0',
         'PREWRITE_ACTION" != "resume_draft" ] && [ "$PREWRITE_NAME_COUNT" -ne 0'
       ),
@@ -4181,11 +4674,6 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         "Immediate pre-publication draft confirmation",
         "Stale pre-publication draft confirmation"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        'CONFIRM_PUBLISH_ACTION" != "publish_draft" ] ||',
-        'CONFIRM_PUBLISH_ACTION" = "publish_draft" ] ||'
       ),
       replaceExactly(
         mcpbInputs.release,
@@ -4247,6 +4735,21 @@ describe("release identity and exact required-job gate", () => {
     ];
     for (const weakenedReleaseTransaction of releaseTransactionMutations) {
       expect(githubReleaseTransactionProblems(weakenedReleaseTransaction)).not.toEqual([]);
+    }
+    for (const weakenedUploadConfirmation of uploadConfirmationMutations) {
+      expect(githubReleaseTransactionProblems(weakenedUploadConfirmation)).toContain(
+        "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      );
+    }
+    for (const weakenedPublicationBoundary of publicationBoundaryMutations) {
+      expect(githubReleaseTransactionProblems(weakenedPublicationBoundary)).toContain(
+        "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      );
+    }
+    for (const weakenedSnapshotShape of snapshotShapeMutations) {
+      expect(githubReleaseTransactionProblems(weakenedSnapshotShape)).toContain(
+        "release authorization snapshots must preserve their exact state and metadata projections"
+      );
     }
     for (const forbiddenReleaseCliMutation of [
       replaceExactly(

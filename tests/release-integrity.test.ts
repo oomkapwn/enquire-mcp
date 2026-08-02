@@ -655,7 +655,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       .map(([id]) => id)
       .sort();
     const packageEnvKeys = packageEnv ? Object.keys(packageEnv).sort() : [];
-    const exportIndex = packageSteps.findIndex((step) => step === exportStep);
+    const exportIndex = exportStep === undefined ? -1 : packageSteps.indexOf(exportStep);
     const canaryIndex = packageSteps.findIndex(
       (step) => step.name === "Verify uploaded MCPB artifact through Actions REST"
     );
@@ -674,13 +674,13 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       "  exit 1",
       "fi",
       "",
-      'CANDIDATE_ZIP=$(mktemp "$RUNNER_TEMP/mcpb-artifact-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${ARTIFACT_ID}.XXXXXX.zip")',
+      `CANDIDATE_ZIP=$(mktemp "$RUNNER_TEMP/mcpb-artifact-\${GITHUB_RUN_ID}-\${GITHUB_RUN_ATTEMPT}-\${ARTIFACT_ID}.XXXXXX.zip")`,
       "downloaded=false",
       "for attempt in {1..12}; do",
       "  if timeout --kill-after=5s 30s gh api \\",
       '    -H "Accept: application/vnd.github+json" \\',
       '    "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$CANDIDATE_ZIP"; then',
-      '    ACTUAL_DIGEST=$(sha256sum "$CANDIDATE_ZIP" | awk \'{print $1}\')',
+      "    ACTUAL_DIGEST=$(sha256sum \"$CANDIDATE_ZIP\" | awk '{print $1}')",
       '    if [ "$ACTUAL_DIGEST" != "$ARTIFACT_DIGEST" ]; then',
       '      echo "::error::downloaded Actions artifact digest differs from upload output"',
       "      exit 1",
@@ -708,8 +708,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       packagePermissions?.contents !== "read" ||
       JSON.stringify(permissionedJobIds) !== JSON.stringify(["mcpb-basic-package"]) ||
       "env" in (document ?? {}) ||
-      JSON.stringify(packageEnvKeys) !==
-        JSON.stringify(["NPM_CONFIG_ENGINE_STRICT", "NPM_CONFIG_SCRIPT_SHELL"]) ||
+      JSON.stringify(packageEnvKeys) !== JSON.stringify(["NPM_CONFIG_ENGINE_STRICT", "NPM_CONFIG_SCRIPT_SHELL"]) ||
       "defaults" in mcpbPackageJob ||
       exportStep?.id !== "mcpb_export" ||
       exportIndex < 0 ||
@@ -767,7 +766,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       "out=$(timeout --kill-after=10s 60s docker run --rm enquire-mcp:ci --help) || docker_status=$?",
       'if [ "$docker_status" -ne 0 ]; then',
       '  echo "::error::Docker CLI smoke exited with status $docker_status"',
-      '  printf \'%s\\n\' "$out" | tail -c 600',
+      "  printf '%s\\n' \"$out\" | tail -c 600",
       "  exit 1",
       "fi",
       'grep -qi \'serve\' <<<"$out" || { echo "::error::--help did not list the serve subcommand"; printf \'%s\\n\' "$out" | tail -c 600; exit 1; }',
@@ -782,15 +781,14 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       "  | timeout --kill-after=10s 90s docker run --rm -i enquire-mcp:ci) || docker_status=$?",
       'if [ "$docker_status" -ne 0 ]; then',
       '  echo "::error::Docker MCP smoke exited with status $docker_status"',
-      '  printf \'%s\\n\' "$out" | tail -c 1000',
+      "  printf '%s\\n' \"$out\" | tail -c 1000",
       "  exit 1",
       "fi",
       'grep -q \'"obsidian_search"\' <<<"$out" || { echo "::error::tools/list did not return obsidian_search from the container"; printf \'%s\\n\' "$out" | tail -c 1000; exit 1; }',
       'echo "OK — tools/list returned obsidian_search over stdio"'
     ].join("\n");
     if (
-      JSON.stringify(Object.keys(dockerJob).sort()) !==
-        JSON.stringify(["runs-on", "steps", "timeout-minutes"]) ||
+      JSON.stringify(Object.keys(dockerJob).sort()) !== JSON.stringify(["runs-on", "steps", "timeout-minutes"]) ||
       dockerJob["runs-on"] !== "ubuntu-latest" ||
       dockerJob["timeout-minutes"] !== 10 ||
       dockerSteps.length !== 4 ||
@@ -801,10 +799,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       dockerBuildStep?.run !== "docker build -t enquire-mcp:ci ." ||
       cliDockerSteps.length !== 1 ||
       mcpDockerSteps.length !== 1 ||
-      JSON.stringify(Object.keys(cliDockerStep ?? {}).sort()) !==
-        JSON.stringify(["env", "name", "run", "shell"]) ||
-      JSON.stringify(Object.keys(mcpDockerStep ?? {}).sort()) !==
-        JSON.stringify(["env", "name", "run", "shell"]) ||
+      JSON.stringify(Object.keys(cliDockerStep ?? {}).sort()) !== JSON.stringify(["env", "name", "run", "shell"]) ||
+      JSON.stringify(Object.keys(mcpDockerStep ?? {}).sort()) !== JSON.stringify(["env", "name", "run", "shell"]) ||
       cliDockerStep?.shell !== "bash" ||
       mcpDockerStep?.shell !== "bash" ||
       JSON.stringify(cliDockerEnv) !== JSON.stringify({ BASH_ENV: "" }) ||
@@ -2581,8 +2577,12 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
-          "      - name: Export inspectable canonical MCPB candidate and transparency records\n        uses: actions/upload-artifact@v7"
+          "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
+            "        id: mcpb_export\n" +
+            "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+          "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
+            "        id: mcpb_export\n" +
+            "        uses: actions/upload-artifact@v7"
         ),
         pkg.engines?.node
       )
@@ -2613,11 +2613,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
-        replaceExactly(
-          ci,
-          "permissions:\n  contents: read",
-          "permissions:\n  actions: read\n  contents: read"
-        ),
+        replaceExactly(ci, "permissions:\n  contents: read", "permissions:\n  actions: read\n  contents: read"),
         pkg.engines?.node
       )
     ).toContain(artifactCanaryProblem);
@@ -2650,7 +2646,7 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          '      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n',
+          "      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n",
           '      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n      BASH_ENV: "/tmp/bypass"\n'
         ),
         pkg.engines?.node
@@ -2740,10 +2736,7 @@ describe("release identity and exact required-check gate", () => {
       )
     ).toContain(artifactCanaryProblem);
     expect(
-      nodeFloorCiProblems(
-        replaceExactly(ci, "^[0-9a-f]{64}$", "^(sha256:)?[0-9a-f]{64}$"),
-        pkg.engines?.node
-      )
+      nodeFloorCiProblems(replaceExactly(ci, "^[0-9a-f]{64}$", "^(sha256:)?[0-9a-f]{64}$"), pkg.engines?.node)
     ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
@@ -2758,10 +2751,7 @@ describe("release identity and exact required-check gate", () => {
       )
     ).toContain(artifactCanaryProblem);
     expect(
-      nodeFloorCiProblems(
-        replaceExactly(ci, "timeout --kill-after=5s 30s gh api", "gh api"),
-        pkg.engines?.node
-      )
+      nodeFloorCiProblems(replaceExactly(ci, "timeout --kill-after=5s 30s gh api", "gh api"), pkg.engines?.node)
     ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
@@ -2777,11 +2767,7 @@ describe("release identity and exact required-check gate", () => {
     ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
-        replaceExactly(
-          ci,
-          "          set -euo pipefail\n",
-          "          set -euo pipefail\n          exit 0\n"
-        ),
+        replaceExactly(ci, "          set -euo pipefail\n", "          set -euo pipefail\n          exit 0\n"),
         pkg.engines?.node
       )
     ).toContain(artifactCanaryProblem);
@@ -2852,8 +2838,7 @@ describe("release identity and exact required-check gate", () => {
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "          compression-level: 0\n" +
-            "      - name: Verify uploaded MCPB artifact through Actions REST",
+          "          compression-level: 0\n" + "      - name: Verify uploaded MCPB artifact through Actions REST",
           "          compression-level: 0\n" +
             "      - run: true\n" +
             "      - name: Verify uploaded MCPB artifact through Actions REST"
@@ -3017,12 +3002,12 @@ describe("release identity and exact required-check gate", () => {
           ci,
           '          if [ "$docker_status" -ne 0 ]; then\n' +
             '            echo "::error::Docker CLI smoke exited with status $docker_status"\n' +
-            '            printf \'%s\\n\' "$out" | tail -c 600\n' +
+            "            printf '%s\\n' \"$out\" | tail -c 600\n" +
             "            exit 1\n" +
             "          fi",
           '          if [ "$docker_status" -ne 0 ]; then\n' +
             '            echo "::error::Docker CLI smoke exited with status $docker_status"\n' +
-            '            printf \'%s\\n\' "$out" | tail -c 600\n' +
+            "            printf '%s\\n' \"$out\" | tail -c 600\n" +
             "            true\n" +
             "          fi"
         ),

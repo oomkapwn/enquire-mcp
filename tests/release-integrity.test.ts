@@ -3061,7 +3061,7 @@ function logicalShellLines(run: string): string[] {
 function canonicalLogicalShellIdentifierInventory(run: string, identifier: string): string[] {
   return logicalShellLines(run)
     .filter((line) => line.includes(identifier))
-    .map((line) => line.replace(/[ \t]+/gu, " "));
+    .map((line) => line.split(/[ \t]+/u).join(" "));
 }
 
 function conservativeShellLexicalLine(line: string): string {
@@ -4477,9 +4477,7 @@ function assertMcpRegistryEvaluatorContract() {
     },
     {
       mutate: (server) => {
-        mcpRegistryPackage(server).runtimeArguments = [
-          { type: "named", name: "--vault", isRequired: "yes" }
-        ];
+        mcpRegistryPackage(server).runtimeArguments = [{ type: "named", name: "--vault", isRequired: "yes" }];
       },
       expected: /runtimeArguments\[0\]\.isRequired must be boolean/
     },
@@ -4527,17 +4525,13 @@ function assertMcpRegistryEvaluatorContract() {
     },
     {
       mutate: (server) => {
-        mcpRegistryPackage(server).packageArguments = [
-          { type: "named", name: "--silent", variables: [] }
-        ];
+        mcpRegistryPackage(server).packageArguments = [{ type: "named", name: "--silent", variables: [] }];
       },
       expected: /packageArguments\[0\]\.variables must be an object/
     },
     {
       mutate: (server) => {
-        mcpRegistryPackage(server).packageArguments = [
-          { type: "named", name: "--silent", variables: { quiet: null } }
-        ];
+        mcpRegistryPackage(server).packageArguments = [{ type: "named", name: "--silent", variables: { quiet: null } }];
       },
       expected: /packageArguments\[0\]\.variables\.quiet must be an object/
     },
@@ -5814,12 +5808,7 @@ describe("release identity and exact required-job gate", () => {
         "Array.from(server.description).length > 100",
         "Array.from(server.description).length > 1000"
       ),
-      replaceAllExactly(
-        mcpbInputs.integrity,
-        "server.$schema !== MCP_REGISTRY_IDENTITY.schema",
-        "false",
-        2
-      ),
+      replaceAllExactly(mcpbInputs.integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema", "false", 2),
       replaceExactly(mcpbInputs.integrity, 'transport.type !== "stdio"', "false"),
       replaceExactly(
         mcpbInputs.integrity,
@@ -5912,17 +5901,17 @@ describe("release identity and exact required-job gate", () => {
     );
     expect(rawLogicalNodeTokenInventory(registryRun)).toEqual(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY);
     const exactEmptyEnvironmentFixture = { BASH_ENV: "", GH_HOST: "github.com" };
-    expect(hasExactEmptyEnvironmentReference("$GH_HOST ${GH_HOST}", exactEmptyEnvironmentFixture)).toBe(false);
-    expect(hasExactEmptyEnvironmentReference("$BASH_ENV_SUFFIX ${BASH_ENV_SUFFIX}", exactEmptyEnvironmentFixture)).toBe(
+    expect(hasExactEmptyEnvironmentReference(`$GH_HOST \${GH_HOST}`, exactEmptyEnvironmentFixture)).toBe(false);
+    expect(hasExactEmptyEnvironmentReference(`$BASH_ENV_SUFFIX \${BASH_ENV_SUFFIX}`, exactEmptyEnvironmentFixture)).toBe(
       false
     );
     for (const exactEmptyEnvironmentReference of [
       "$BASH_ENV",
-      "${BASH_ENV}",
-      "${BASH_ENV:-fallback}",
-      "${!BASH_ENV}",
-      "${#BASH_ENV}",
-      "empty_name=BASH_ENV; ${!empty_name}"
+      `\${BASH_ENV}`,
+      `\${BASH_ENV:-fallback}`,
+      `\${!BASH_ENV}`,
+      `\${#BASH_ENV}`,
+      `empty_name=BASH_ENV; \${!empty_name}`
     ]) {
       expect(hasExactEmptyEnvironmentReference(exactEmptyEnvironmentReference, exactEmptyEnvironmentFixture)).toBe(
         true
@@ -6010,13 +5999,13 @@ describe("release identity and exact required-job gate", () => {
       registryRun,
       '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
       '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
-        "  command /usr/bin/cu${BASH_ENV}rl --da${BASH_ENV}ta '{}' https://registry.modelcontextprotocol.io/v0.1/servers"
+        `  command /usr/bin/cu\${BASH_ENV}rl --da\${BASH_ENV}ta '{}' https://registry.modelcontextprotocol.io/v0.1/servers`
     );
     const exactEmptyEnvRawNodeEvalRun = replaceExactly(
       registryRun,
       '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"',
       '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"\n' +
-        "  command /usr/bin/no${BASH_ENV}de --eval 'process.exit(0)'"
+        `  command /usr/bin/no\${BASH_ENV}de --eval 'process.exit(0)'`
     );
     expect(hasForbiddenRegistryWriteArguments(fragmentedCurlWriteRun)).toBe(false);
     expect(canonicalLogicalShellIdentifierInventory(fragmentedCurlWriteRun, "CURL_BIN")).not.toEqual(

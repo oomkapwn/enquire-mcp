@@ -1282,16 +1282,7 @@ function assertObservedMcpRegistryServerSchema(server, label) {
   if (server.$schema !== MCP_REGISTRY_IDENTITY.schema) {
     throw new Error(`${label} uses an unsupported MCP Registry schema`);
   }
-  const inputKeys = [
-    "choices",
-    "default",
-    "description",
-    "format",
-    "isRequired",
-    "isSecret",
-    "placeholder",
-    "value"
-  ];
+  const inputKeys = ["choices", "default", "description", "format", "isRequired", "isSecret", "placeholder", "value"];
   const inputWithVariablesKeys = [...inputKeys, "variables"];
   const assertOptionalArray = (value, fieldLabel, assertElement) => {
     if (value === undefined) return;
@@ -1368,11 +1359,7 @@ function assertObservedMcpRegistryServerSchema(server, label) {
     if (argument.valueHint !== undefined && typeof argument.valueHint !== "string") {
       throw new Error(`${argumentLabel}.valueHint must be a string`);
     }
-    if (
-      argument.type === "positional" &&
-      !isNonEmptyString(argument.valueHint) &&
-      !isNonEmptyString(argument.value)
-    ) {
+    if (argument.type === "positional" && !isNonEmptyString(argument.valueHint) && !isNonEmptyString(argument.value)) {
       throw new Error(`${argumentLabel} must name a non-empty valueHint or value string for a positional argument`);
     }
   };

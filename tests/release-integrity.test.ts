@@ -6503,9 +6503,15 @@ describe("release identity and exact required-job gate", () => {
       replaceExactly(
         mcpbInputs.release,
         `          RELEASE_JOB_DEADLINE_EPOCH: \${{ steps.deadline.outputs.epoch }}\n` +
-          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`,
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}\n` +
+          `          EXPECTED_SOURCE_SHA: \${{ steps.npm_publication.outputs.source_sha }}\n` +
+          `          EXPECTED_TAG: \${{ steps.npm_publication.outputs.tag }}\n` +
+          `          EXPECTED_INTEGRITY: \${{ steps.npm_publication.outputs.integrity }}`,
         `          RELEASE_JOB_DEADLINE_EPOCH: 9999999999\n` +
-          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}`
+          `          EXPECTED_VERSION: \${{ steps.npm_publication.outputs.version }}\n` +
+          `          EXPECTED_SOURCE_SHA: \${{ steps.npm_publication.outputs.source_sha }}\n` +
+          `          EXPECTED_TAG: \${{ steps.npm_publication.outputs.tag }}\n` +
+          `          EXPECTED_INTEGRITY: \${{ steps.npm_publication.outputs.integrity }}`
       ),
       replaceExactly(mcpbInputs.release, '          NPM_TOKEN: ""', `          NPM_TOKEN: \${{ secrets.NPM_TOKEN }}`),
       replaceExactly(mcpbInputs.release, '          NPM_CLI_VERSION: "11.18.0"', '          NPM_CLI_VERSION: "latest"'),

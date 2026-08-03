@@ -459,8 +459,7 @@ const MCP_REGISTRY_NAME = "io.github.oomkapwn/enquire-mcp";
 const MCP_REGISTRY_PACKAGE = "@oomkapwn/enquire-mcp";
 const MCP_REGISTRY_VERSION = "4.0.0";
 const MCP_REGISTRY_OFFICIAL_META = "io.modelcontextprotocol.registry/official";
-const MCP_REGISTRY_BASE_URL =
-  `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(MCP_REGISTRY_NAME)}/versions`;
+const MCP_REGISTRY_BASE_URL = `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(MCP_REGISTRY_NAME)}/versions`;
 
 function mcpRegistryServer(version = MCP_REGISTRY_VERSION, overrides: Record<string, unknown> = {}) {
   return {
@@ -1707,8 +1706,7 @@ function releasePollProblems(workflow: string): string[] {
         !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
     (workflow.match(/gh_read\(\) \{/g) ?? []).length !== GH_READ_HELPER_COUNT ||
-    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !==
-      GH_READ_HELPER_COUNT ||
+    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== GH_READ_HELPER_COUNT ||
     mutationMatchCount(workflow, ghReadMutationArgs) !== GH_READ_HELPER_COUNT ||
     (workflow.match(/gh_read api/g) ?? []).length !== GH_READ_API_CALL_COUNT ||
     workflow.includes("gh() {") ||
@@ -3003,9 +3001,7 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
     integrity.includes('schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"') &&
     integrity.includes("export function evaluateMcpRegistryState(input, phase)") &&
     integrity.includes('phase !== "preflight" && phase !== "convergence"') &&
-    integrity.includes(
-      "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);"
-    ) &&
+    integrity.includes("const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);") &&
     integrity.includes("Array.from(server.description).length > 100") &&
     integrity.includes("server.$schema !== MCP_REGISTRY_IDENTITY.schema") &&
     integrity.includes('transport.type !== "stdio"') &&
@@ -3087,9 +3083,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
     return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
   };
-  const preparationReserve = capturePositiveInteger(
-    /require_job_reserve ([0-9]+) "MCP publisher preparation"/u
-  );
+  const preparationReserve = capturePositiveInteger(/require_job_reserve ([0-9]+) "MCP publisher preparation"/u);
   const loginReserve = capturePositiveInteger(/require_job_reserve ([0-9]+) "MCP Registry OIDC login"/u);
   const prewriteReserve = capturePositiveInteger(
     /require_job_reserve ([0-9]+) "MCP Registry publish and convergence"/u
@@ -3097,15 +3091,9 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const publishTimeoutMatch = /deadline_timeout ([0-9]+) ([0-9]+) "MCP Registry publish"/u.exec(run);
   const publishTimeoutCap = Number(publishTimeoutMatch?.[1] ?? Number.NaN);
   const publishReserve = Number(publishTimeoutMatch?.[2] ?? Number.NaN);
-  const registryReadCap = capturePositiveInteger(
-    /deadline_timeout ([0-9]+) 10 "MCP Registry read"/u
-  );
-  const evaluatorCap = capturePositiveInteger(
-    /deadline_timeout ([0-9]+) 10 "MCP Registry evaluator"/u
-  );
-  const convergenceWaitCap = capturePositiveInteger(
-    /deadline_timeout ([0-9]+) 10 "MCP Registry convergence wait"/u
-  );
+  const registryReadCap = capturePositiveInteger(/deadline_timeout ([0-9]+) 10 "MCP Registry read"/u);
+  const evaluatorCap = capturePositiveInteger(/deadline_timeout ([0-9]+) 10 "MCP Registry evaluator"/u);
+  const convergenceWaitCap = capturePositiveInteger(/deadline_timeout ([0-9]+) 10 "MCP Registry convergence wait"/u);
   const ghReadLimit = capturePositiveInteger(/local limit=([0-9]+)/u);
   const timeoutKillGrace = 5;
   const snapshotWorstCase = (registryReadCap + timeoutKillGrace) * 2 + (evaluatorCap + timeoutKillGrace);
@@ -3124,8 +3112,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
       70 + timeoutKillGrace + 30 + timeoutKillGrace + 30 + timeoutKillGrace + 180 + timeoutKillGrace + loginReserve &&
     loginReserve >= 180 + timeoutKillGrace + snapshotWorstCase + prewriteReserve &&
     prewriteReserve >= finalTagProofWorstCase + publishTimeoutCap + timeoutKillGrace + publishReserve &&
-    publishReserve >=
-      12 * snapshotWorstCase + 11 * (convergenceWaitCap + timeoutKillGrace) + finalTagProofWorstCase;
+    publishReserve >= 12 * snapshotWorstCase + 11 * (convergenceWaitCap + timeoutKillGrace) + finalTagProofWorstCase;
   const initialTagIndex = run.indexOf("assert_remote_tag_identity\nPREFLIGHT_RESULT=$(registry_snapshot preflight)");
   const firstReuseTagIndex = run.indexOf(
     'if [ "$PREFLIGHT_ACTION" = "reuse" ]; then\n  assert_remote_tag_identity',
@@ -3173,7 +3160,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     '  HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n' +
     '  "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"';
   const registryActionBody =
-    'registry_action() {\n' +
+    "registry_action() {\n" +
     '  printf \'%s\' "$1" | $JQ_BIN -er --arg first "$2" --arg second "$3" \\\n' +
     "    '.action | select(. == $first or . == $second)'\n" +
     "}";
@@ -3183,9 +3170,9 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     '    --arg latestUrl "$REGISTRY_LATEST_URL" --argjson latestExit "$latest_exit" \\\n' +
     '    --arg latestStatus "$latest_status" --arg latestType "$latest_type" --rawfile latestBody "$latest_body"';
   const registryPayloadObject =
-    '{expected:{server:$server,package:{name:$package,version:$version,mcpName:$mcpName}},\n' +
-    '     exact:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody},\n' +
-    '     latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}}';
+    "{expected:{server:$server,package:{name:$package,version:$version,mcpName:$mcpName}},\n" +
+    "     exact:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody},\n" +
+    "     latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}}";
   const publisherCommandLines = run
     .split("\n")
     .map((line) => line.trim())
@@ -3217,7 +3204,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     .filter((line) => line.includes("GH_BIN"));
   const ghIdentityInventoryIsExact =
     JSON.stringify(ghIdentityLines) ===
-    JSON.stringify(['GH_BIN=$(type -P gh)', '"$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"']);
+    JSON.stringify(["GH_BIN=$(type -P gh)", `"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`]);
   const curlIdentityLines = run
     .split("\n")
     .map((line) => line.trim())
@@ -3225,7 +3212,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const curlIdentityInventoryIsExact =
     JSON.stringify(curlIdentityLines) ===
     JSON.stringify([
-      'CURL_BIN=$(type -P curl)',
+      "CURL_BIN=$(type -P curl)",
       'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
       'deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \\'
     ]);
@@ -3253,10 +3240,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     "  exit 0\n" +
     "fi";
   const confirmedBlock =
-    'if [ "$CONVERGENCE_ACTION" = "confirmed" ]; then\n' +
-    "    MCP_REGISTRY_CONFIRMED=true\n" +
-    "    break\n" +
-    "  fi";
+    'if [ "$CONVERGENCE_ACTION" = "confirmed" ]; then\n' + "    MCP_REGISTRY_CONFIRMED=true\n" + "    break\n" + "  fi";
   const firstDecisionBlock =
     "PREFLIGHT_RESULT=$(registry_snapshot preflight)\n" +
     'PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)\n' +
@@ -3278,9 +3262,9 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     "    exit 1\n" +
     "  fi\n" +
     '  package_digest=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")\n' +
-    "  package_digest=${package_digest%% *}\n" +
+    `  package_digest=\${package_digest%% *}\n` +
     '  server_digest=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")\n' +
-    "  server_digest=${server_digest%% *}\n" +
+    `  server_digest=\${server_digest%% *}\n` +
     '  if [ "$package_digest" != "$PACKAGE_JSON_SHA256" ] || [ "$server_digest" != "$SERVER_JSON_SHA256" ]; then\n' +
     '    echo "::error::Registry manifest snapshot bytes changed" >&2\n' +
     "    exit 1\n" +
@@ -3296,18 +3280,17 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
       /(?:^|\s)(?:--form|--form-string|--json)(?:=|\s)/u.test(trimmed)
     );
   });
-  const hasForbiddenPublisherMutation = run.split("\n").some((line) =>
-    /(?:^|\/)mcp-publisher"?\s+(?:publish|delete|deprecate|undeprecate|status)\b/iu.test(line.trim())
-  );
+  const hasForbiddenPublisherMutation = run
+    .split("\n")
+    .some((line) => /(?:^|\/)mcp-publisher"?\s+(?:publish|delete|deprecate|undeprecate|status)\b/iu.test(line.trim()));
   const hasDirectRegistryGhApiCommand = run
     .split("\n")
     .some((line) => /^(?:(?:env|\/usr\/bin\/env)\s+)?(?:gh|\/usr\/bin\/gh|"\$GH_BIN")\s+api\b/u.test(line.trim()));
   const hasDirectRawCurlCommand = run
     .split("\n")
     .some((line) => /^(?:(?:env|\/usr\/bin\/env)\s+)?(?:curl|\/usr\/bin\/curl)\b/u.test(line.trim()));
-  const hasManifestSnapshotRedirection = /(?:>|>>)[ \t]*"\$(?:PACKAGE_JSON_SNAPSHOT|SERVER_JSON_SNAPSHOT|SNAPSHOT)"/u.test(
-    run
-  );
+  const hasManifestSnapshotRedirection =
+    /(?:>|>>)[ \t]*"\$(?:PACKAGE_JSON_SNAPSHOT|SERVER_JSON_SNAPSHOT|SNAPSHOT)"/u.test(run);
   const httpFunctionIndex = run.indexOf("registry_http_read() {");
   const httpBodyResetIndex = run.indexOf(': > "$body_file"', httpFunctionIndex);
   const httpSetPlusIndex = run.indexOf("set +e", httpBodyResetIndex);
@@ -3372,8 +3355,8 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     run.includes('GH_CONFIG_DIR="$WORK_ROOT/gh-config"') &&
     run.includes('/bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"') &&
     run.includes('EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"') &&
-    run.includes('GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null') &&
-    run.includes('GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1') &&
+    run.includes("GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null") &&
+    run.includes("GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1") &&
     run.includes('if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||') &&
     mutationMatchCount(run, 'registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json') === 2 &&
     run.includes(
@@ -3383,12 +3366,12 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     run.includes('SERVER_JSON_SHA256=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")') &&
     mutationMatchCount(run, manifestSnapshotBody) === 1 &&
     run.includes('PACKAGE_NAME=$($JQ_BIN -er \'.name | select(type == "string")\' "$PACKAGE_JSON_SNAPSHOT")') &&
-    run.includes('EXPECTED_SERVER_JSON=$($JQ_BIN -ce \'.\' "$SERVER_JSON_SNAPSHOT")') &&
+    run.includes("EXPECTED_SERVER_JSON=$($JQ_BIN -ce '.' \"$SERVER_JSON_SNAPSHOT\")") &&
     run.includes('[ "$PACKAGE_NAME" != "@oomkapwn/enquire-mcp" ]') &&
     run.includes('[ "$MCP_NAME" != "io.github.oomkapwn/enquire-mcp" ]') &&
     mutationMatchCount(run, NPM_RESERVE_DEADLINE_GUARD) === 1 &&
     mutationMatchCount(run, GH_READ_DEADLINE_GUARD) === 1 &&
-    mutationMatchCount(run, '"$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"') === 1 &&
+    mutationMatchCount(run, `"$TIMEOUT_BIN" --kill-after=5s "\${cap}s" "$@"`) === 1 &&
     mutationMatchCount(run, "registry_git() {") === 1 &&
     mutationMatchCount(run, "require_job_reserve() {") === 1 &&
     mutationMatchCount(run, "deadline_timeout() {") === 1 &&
@@ -3420,10 +3403,10 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     mutationMatchCount(run, "assert_remote_tag_identity") === 6 &&
     mutationMatchCount(run, "?include_deleted=true") === 2 &&
     run.includes(
-      'REGISTRY_EXACT_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/${VERSION_ENCODED}?include_deleted=true"'
+      `REGISTRY_EXACT_URL="https://registry.modelcontextprotocol.io/v0.1/servers/\${SERVER_NAME_ENCODED}/versions/\${VERSION_ENCODED}?include_deleted=true"`
     ) &&
     run.includes(
-      'REGISTRY_LATEST_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/latest?include_deleted=true"'
+      `REGISTRY_LATEST_URL="https://registry.modelcontextprotocol.io/v0.1/servers/\${SERVER_NAME_ENCODED}/versions/latest?include_deleted=true"`
     ) &&
     run.includes('deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable') &&
     run.includes("--max-filesize 1048576 --retry 0 --proto '=https' --tlsv1.2") &&
@@ -3447,7 +3430,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     run.includes('MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"') &&
     run.includes('MCP_PUBLISHER_SIZE="7297012"') &&
     run.includes(
-      'MCP_PUBLISHER_URL="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"'
+      `MCP_PUBLISHER_URL="https://github.com/modelcontextprotocol/registry/releases/download/\${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"`
     ) &&
     run.includes('deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail') &&
     run.includes('--max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1') &&
@@ -4287,15 +4270,12 @@ function assertMcpRegistryEvaluatorContract() {
     )
   ).toEqual({ action: "reuse" });
   expect(evaluateMcpRegistryState(mcpRegistryState(), "convergence")).toEqual({ action: "confirmed" });
-  const registryCli = runReleaseIntegrityCli(
-    ["mcp-registry-state", "preflight"],
-    JSON.stringify(mcpRegistryState())
-  );
+  const registryCli = runReleaseIntegrityCli(["mcp-registry-state", "preflight"], JSON.stringify(mcpRegistryState()));
   expect(registryCli.status).toBe(0);
   expect(JSON.parse(registryCli.stdout)).toEqual({ action: "reuse" });
-  expect(
-    runReleaseIntegrityCli(["mcp-registry-state", "publish"], JSON.stringify(mcpRegistryState())).status
-  ).not.toBe(0);
+  expect(runReleaseIntegrityCli(["mcp-registry-state", "publish"], JSON.stringify(mcpRegistryState())).status).not.toBe(
+    0
+  );
 
   expect(() =>
     evaluateMcpRegistryState(
@@ -4310,9 +4290,7 @@ function assertMcpRegistryEvaluatorContract() {
   ).toThrow(/do not prove/);
 
   for (const retryState of [
-    mcpRegistryState(
-      mcpRegistryEnvelope("exact", { curlExit: 28, httpStatus: "000", contentType: "", body: "" })
-    ),
+    mcpRegistryState(mcpRegistryEnvelope("exact", { curlExit: 28, httpStatus: "000", contentType: "", body: "" })),
     mcpRegistryState(mcpRegistryNotFoundEnvelope("exact")),
     mcpRegistryState(mcpRegistryEnvelope("exact", { httpStatus: "429", body: "rate limited" })),
     mcpRegistryState(mcpRegistryEnvelope("exact", { httpStatus: "503", body: "unavailable" })),
@@ -4377,12 +4355,14 @@ function assertMcpRegistryEvaluatorContract() {
 
   const unknownRuntimeFieldServer = JSON.parse(JSON.stringify(expectedServer)) as Record<string, unknown>;
   const unknownRuntimePackage = (unknownRuntimeFieldServer.packages as Array<Record<string, unknown>>)[0];
-  const unknownRuntimeArgument = (unknownRuntimePackage?.runtimeArguments as Array<Record<string, unknown>>)[0];
+  const unknownRuntimeArgument = (
+    (unknownRuntimePackage?.runtimeArguments as Array<Record<string, unknown>> | undefined) ?? []
+  )[0];
   if (!unknownRuntimeArgument) throw new Error("MCP Registry fixture runtime argument is missing");
   unknownRuntimeArgument.unexpected = true;
   expect(() =>
     evaluateMcpRegistryState(mcpRegistryState(undefined, undefined, unknownRuntimeFieldServer), "preflight")
-  ).toThrow(/unexpected fields/);
+  ).toThrow(/positional runtime argument must contain exactly/);
 
   for (const invalidExact of [
     mcpRegistryEnvelope("exact", { requestUrl: `${MCP_REGISTRY_BASE_URL}/${MCP_REGISTRY_VERSION}` }),
@@ -4526,10 +4506,7 @@ function assertMcpRegistryTrackedManifestContract(serverSource: string, packageS
   const excessiveDescription = JSON.parse(JSON.stringify(stableServer)) as Record<string, unknown>;
   excessiveDescription.description = "x".repeat(101);
   expect(() =>
-    evaluateMcpRegistryState(
-      { ...state, expected: { ...state.expected, server: excessiveDescription } },
-      "preflight"
-    )
+    evaluateMcpRegistryState({ ...state, expected: { ...state.expected, server: excessiveDescription } }, "preflight")
   ).toThrow(/1 to 100 Unicode characters/);
   expect(() =>
     evaluateMcpRegistryState(
@@ -5522,35 +5499,15 @@ describe("release identity and exact required-job gate", () => {
         '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
         '["requestUrl", "httpStatus", "contentType", "body"]'
       ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "encodeURIComponent(expected.package.mcpName)",
-        "expected.package.mcpName"
-      ),
+      replaceExactly(mcpbInputs.integrity, "encodeURIComponent(expected.package.mcpName)", "expected.package.mcpName"),
       replaceAllExactly(mcpbInputs.integrity, "?include_deleted=true", "?include_deleted=false", 2),
       replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/json"', "false"),
       replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/problem+json"', "false"),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '["detail", "status", "title"]',
-        '["detail", "title"]'
-      ),
+      replaceExactly(mcpbInputs.integrity, '["detail", "status", "title"]', '["detail", "title"]'),
       replaceExactly(mcpbInputs.integrity, 'problem.detail !== "Server not found"', "false"),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'problem.status !== 404 || problem.title !== "Not Found"',
-        "false"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '["isLatest", "publishedAt", "status", "statusChangedAt"]',
-        '["status"]'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '["active", "deprecated", "deleted"]',
-        '["active"]'
-      ),
+      replaceExactly(mcpbInputs.integrity, 'problem.status !== 404 || problem.title !== "Not Found"', "false"),
+      replaceExactly(mcpbInputs.integrity, '["isLatest", "publishedAt", "status", "statusChangedAt"]', '["status"]'),
+      replaceExactly(mcpbInputs.integrity, '["active", "deprecated", "deleted"]', '["active"]'),
       replaceExactly(mcpbInputs.integrity, 'typeof metadata.isLatest !== "boolean"', "false"),
       replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.publishedAt", "void("),
       replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.statusChangedAt", "void("),
@@ -5650,31 +5607,17 @@ describe("release identity and exact required-job gate", () => {
         )
       ),
       registryStepWithRun(replaceAllExactly(registryRun, "?include_deleted=true", "?include_deleted=false", 2)),
+      registryStepWithRun(replaceExactly(registryRun, 'mcp-registry-state "$phase"', 'mcp-registry-read "$phase"')),
       registryStepWithRun(
-        replaceExactly(registryRun, 'mcp-registry-state "$phase"', 'mcp-registry-read "$phase"')
+        replaceExactly(registryRun, ".action | select(. == $first or . == $second)", ".action | select(. == $first)")
       ),
+      registryStepWithRun(replaceExactly(registryRun, '--argjson exactExit "$exact_exit"', "--argjson exactExit 0")),
+      registryStepWithRun(replaceExactly(registryRun, 'exact_exit="$REGISTRY_CURL_EXIT"', "exact_exit=0")),
       registryStepWithRun(
         replaceExactly(
           registryRun,
-          '.action | select(. == $first or . == $second)',
-          '.action | select(. == $first)'
-        )
-      ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          '--argjson exactExit "$exact_exit"',
-          '--argjson exactExit 0'
-        )
-      ),
-      registryStepWithRun(
-        replaceExactly(registryRun, 'exact_exit="$REGISTRY_CURL_EXIT"', 'exact_exit=0')
-      ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          'latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}',
-          'latest:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody}'
+          "latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}",
+          "latest:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody}"
         )
       ),
       registryStepWithRun(
@@ -5729,8 +5672,8 @@ describe("release identity and exact required-job gate", () => {
       registryStepWithRun(
         replaceExactly(
           registryRun,
-          '"$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"',
-          '"$TIMEOUT_BIN" --kill-after=500s "${cap}s" "$@"'
+          `"$TIMEOUT_BIN" --kill-after=5s "\${cap}s" "$@"`,
+          `"$TIMEOUT_BIN" --kill-after=500s "\${cap}s" "$@"`
         )
       ),
       registryStepWithRun(
@@ -5781,7 +5724,7 @@ describe("release identity and exact required-job gate", () => {
       registryStepWithRun(
         replaceExactly(
           registryRun,
-          'releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz',
+          `releases/download/\${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz`,
           "releases/latest/download/mcp-publisher_linux_amd64.tar.gz"
         )
       ),
@@ -5810,7 +5753,7 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(
           registryRun,
           'printf \'%s  %s\\n\' "$MCP_PUBLISHER_SHA256" "$MCP_PUBLISHER_ARCHIVE" | /usr/bin/sha256sum -c -',
-          'true # publisher hash verification bypassed'
+          "true # publisher hash verification bypassed"
         )
       ),
       registryStepWithRun(
@@ -5823,17 +5766,11 @@ describe("release identity and exact required-job gate", () => {
       registryStepWithRun(
         replaceExactly(
           registryRun,
-          'login github-oidc --registry=https://registry.modelcontextprotocol.io',
-          'login none --registry=https://registry.modelcontextprotocol.io'
+          "login github-oidc --registry=https://registry.modelcontextprotocol.io",
+          "login none --registry=https://registry.modelcontextprotocol.io"
         )
       ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          'keys == ["method","registry","token"]',
-          'has("token")'
-        )
-      ),
+      registryStepWithRun(replaceExactly(registryRun, 'keys == ["method","registry","token"]', 'has("token")')),
       registryStepWithRun(
         replaceExactly(
           registryRun,
@@ -5848,20 +5785,8 @@ describe("release identity and exact required-job gate", () => {
           ': > "$body_file"\n  response=$(deadline_timeout 35 10'
         )
       ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          '--rawfile exactBody "$exact_body"',
-          '--arg exactBody "{}"'
-        )
-      ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          'MCP_PUBLISH_EXIT=0\nset +e',
-          'MCP_PUBLISH_EXIT=0'
-        )
-      ),
+      registryStepWithRun(replaceExactly(registryRun, '--rawfile exactBody "$exact_body"', '--arg exactBody "{}"')),
+      registryStepWithRun(replaceExactly(registryRun, "MCP_PUBLISH_EXIT=0\nset +e", "MCP_PUBLISH_EXIT=0")),
       registryStepWithRun(replaceExactly(registryRun, "MCP_PUBLISH_EXIT=$?", "MCP_PUBLISH_EXIT=0")),
       registryStepWithRun(
         replaceExactly(
@@ -5880,9 +5805,9 @@ describe("release identity and exact required-job gate", () => {
       registryStepWithRun(
         replaceExactly(
           registryRun,
-          'assert_manifest_snapshots\nassert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true',
-          'assert_manifest_snapshots\nprintf \'{}\' > "$SERVER_JSON_SNAPSHOT"\n' +
-            'assert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true'
+          "assert_manifest_snapshots\nassert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true",
+          "assert_manifest_snapshots\nprintf '{}' > \"$SERVER_JSON_SNAPSHOT\"\n" +
+            "assert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true"
         )
       ),
       registryStepWithRun(
@@ -5913,9 +5838,7 @@ describe("release identity and exact required-job gate", () => {
           "PREFLIGHT_RESULT=$(registry_snapshot preflight)"
         )
       ),
-      registryStepWithRun(
-        replaceExactly(registryRun, "MCP_PUBLISH_ATTEMPTED=true", "MCP_PUBLISH_ATTEMPTED=false")
-      ),
+      registryStepWithRun(replaceExactly(registryRun, "MCP_PUBLISH_ATTEMPTED=true", "MCP_PUBLISH_ATTEMPTED=false")),
       registryStepWithRun(
         replaceExactly(
           registryRun,
@@ -5944,7 +5867,7 @@ describe("release identity and exact required-job gate", () => {
           registryRun,
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
-            '/usr/bin/curl --disable https://registry.modelcontextprotocol.io/v0.1/servers'
+            "/usr/bin/curl --disable https://registry.modelcontextprotocol.io/v0.1/servers"
         )
       ),
       registryStepWithRun(

@@ -1278,6 +1278,178 @@ function assertMcpRegistryServerShape(value, label) {
   return server;
 }
 
+function assertObservedMcpRegistryServerSchema(server, label) {
+  if (server.$schema !== MCP_REGISTRY_IDENTITY.schema) {
+    throw new Error(`${label} uses an unsupported MCP Registry schema`);
+  }
+  const inputKeys = [
+    "choices",
+    "default",
+    "description",
+    "format",
+    "isRequired",
+    "isSecret",
+    "placeholder",
+    "value"
+  ];
+  const inputWithVariablesKeys = [...inputKeys, "variables"];
+  const assertOptionalArray = (value, fieldLabel, assertElement) => {
+    if (value === undefined) return;
+    if (!Array.isArray(value)) throw new Error(`${fieldLabel} must be an array`);
+    for (let index = 0; index < value.length; index++) {
+      assertElement(value[index], `${fieldLabel}[${index}]`);
+    }
+  };
+  const assertOptionalStrings = (record, fields, recordLabel) => {
+    for (const field of fields) {
+      if (record[field] !== undefined && typeof record[field] !== "string") {
+        throw new Error(`${recordLabel}.${field} must be a string`);
+      }
+    }
+  };
+  const assertOptionalBooleans = (record, fields, recordLabel) => {
+    for (const field of fields) {
+      if (record[field] !== undefined && typeof record[field] !== "boolean") {
+        throw new Error(`${recordLabel}.${field} must be boolean`);
+      }
+    }
+  };
+  const assertInputFields = (input, inputLabel) => {
+    assertOptionalStrings(input, ["default", "description", "placeholder", "value"], inputLabel);
+    assertOptionalBooleans(input, ["isRequired", "isSecret"], inputLabel);
+    if (
+      input.format !== undefined &&
+      input.format !== "string" &&
+      input.format !== "number" &&
+      input.format !== "boolean" &&
+      input.format !== "filepath"
+    ) {
+      throw new Error(`${inputLabel}.format must be string, number, boolean, or filepath`);
+    }
+    assertOptionalArray(input.choices, `${inputLabel}.choices`, (choice, choiceLabel) => {
+      if (typeof choice !== "string") throw new Error(`${choiceLabel} must be a string`);
+    });
+  };
+  const assertInput = (value, inputLabel) => {
+    const input = assertAllowedRecord(value, inputKeys, inputLabel);
+    assertInputFields(input, inputLabel);
+  };
+  const assertVariables = (input, inputLabel) => {
+    if (input.variables === undefined) return;
+    if (!isRecord(input.variables)) throw new Error(`${inputLabel}.variables must be an object`);
+    for (const [name, value] of Object.entries(input.variables)) {
+      assertInput(value, `${inputLabel}.variables.${name}`);
+    }
+  };
+  const assertArgument = (value, argumentLabel) => {
+    const argument = assertAllowedRecord(
+      value,
+      [...inputWithVariablesKeys, "isRepeated", "name", "type", "valueHint"],
+      argumentLabel
+    );
+    if (argument.type !== "named" && argument.type !== "positional") {
+      throw new Error(`${argumentLabel}.type must be named or positional`);
+    }
+    assertAllowedRecord(
+      argument,
+      argument.type === "named"
+        ? [...inputWithVariablesKeys, "isRepeated", "name", "type"]
+        : [...inputWithVariablesKeys, "isRepeated", "type", "valueHint"],
+      argumentLabel
+    );
+    assertInputFields(argument, argumentLabel);
+    assertVariables(argument, argumentLabel);
+    if (argument.isRepeated !== undefined && typeof argument.isRepeated !== "boolean") {
+      throw new Error(`${argumentLabel}.isRepeated must be boolean`);
+    }
+    if (argument.type === "named" && !isNonEmptyString(argument.name)) {
+      throw new Error(`${argumentLabel}.name must be a non-empty string for a named argument`);
+    }
+    if (argument.valueHint !== undefined && typeof argument.valueHint !== "string") {
+      throw new Error(`${argumentLabel}.valueHint must be a string`);
+    }
+    if (
+      argument.type === "positional" &&
+      !isNonEmptyString(argument.valueHint) &&
+      !isNonEmptyString(argument.value)
+    ) {
+      throw new Error(`${argumentLabel} must name a non-empty valueHint or value string for a positional argument`);
+    }
+  };
+  const assertEnvironmentVariable = (value, variableLabel) => {
+    const variable = assertAllowedRecord(value, [...inputWithVariablesKeys, "name"], variableLabel);
+    assertInputFields(variable, variableLabel);
+    assertVariables(variable, variableLabel);
+    if (!isNonEmptyString(variable.name)) throw new Error(`${variableLabel}.name must be a non-empty string`);
+  };
+
+  assertOptionalArray(server.icons, `${label}.icons`, (value, iconLabel) => {
+    const icon = assertAllowedRecord(value, ["mimeType", "sizes", "src", "theme"], iconLabel);
+    if (!isNonEmptyString(icon.src) || Array.from(icon.src).length > 255) {
+      throw new Error(`${iconLabel}.src must be a non-empty string of at most 255 Unicode characters`);
+    }
+    if (
+      icon.mimeType !== undefined &&
+      icon.mimeType !== "image/png" &&
+      icon.mimeType !== "image/jpeg" &&
+      icon.mimeType !== "image/jpg" &&
+      icon.mimeType !== "image/svg+xml" &&
+      icon.mimeType !== "image/webp"
+    ) {
+      throw new Error(`${iconLabel}.mimeType is not an allowed image media type`);
+    }
+    assertOptionalArray(icon.sizes, `${iconLabel}.sizes`, (size, sizeLabel) => {
+      if (typeof size !== "string" || !/^(?:\d+x\d+|any)$/u.test(size)) {
+        throw new Error(`${sizeLabel} must be an icon size or any`);
+      }
+    });
+    if (icon.theme !== undefined && icon.theme !== "light" && icon.theme !== "dark") {
+      throw new Error(`${iconLabel}.theme must be light or dark`);
+    }
+  });
+  if (server.remotes !== undefined && !Array.isArray(server.remotes)) {
+    throw new Error(`${label}.remotes must be an array`);
+  }
+  assertOptionalArray(server.packages, `${label}.packages`, (value, packageLabel) => {
+    const packageEntry = assertAllowedRecord(
+      value,
+      [
+        "environmentVariables",
+        "fileSha256",
+        "identifier",
+        "packageArguments",
+        "registryBaseUrl",
+        "registryType",
+        "runtimeArguments",
+        "runtimeHint",
+        "transport",
+        "version"
+      ],
+      packageLabel
+    );
+    if (
+      packageEntry.fileSha256 !== undefined &&
+      (typeof packageEntry.fileSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(packageEntry.fileSha256))
+    ) {
+      throw new Error(`${packageLabel}.fileSha256 must be 64 lowercase hexadecimal characters`);
+    }
+    for (const field of ["registryBaseUrl", "runtimeHint"]) {
+      if (packageEntry[field] !== undefined && typeof packageEntry[field] !== "string") {
+        throw new Error(`${packageLabel}.${field} must be a string`);
+      }
+    }
+    for (const field of ["runtimeArguments", "packageArguments"]) {
+      assertOptionalArray(packageEntry[field], `${packageLabel}.${field}`, assertArgument);
+    }
+    assertOptionalArray(
+      packageEntry.environmentVariables,
+      `${packageLabel}.environmentVariables`,
+      assertEnvironmentVariable
+    );
+  });
+  return server;
+}
+
 function assertMcpRegistryProjectLineage(server, expectedPackage, label) {
   if (server.name !== expectedPackage.mcpName) throw new Error(`${label} has a different MCP server name`);
   assertStableMcpRegistryVersion(server.version, `${label} version`);
@@ -1472,7 +1644,10 @@ function decodeMcpRegistryObservation(value, expectedUrl, phase, label) {
       responseMeta[MCP_REGISTRY_OFFICIAL_META],
       `${label} official metadata`
     );
-    const server = assertMcpRegistryServerShape(response.server, `${label} server`);
+    const server = assertObservedMcpRegistryServerSchema(
+      assertMcpRegistryServerShape(response.server, `${label} server`),
+      `${label} server`
+    );
     return { kind: "record", response, server, official };
   }
   if (envelope.httpStatus === "404") {

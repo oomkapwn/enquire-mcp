@@ -3003,8 +3003,12 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
     integrity.includes('phase !== "preflight" && phase !== "convergence"') &&
     integrity.includes("const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);") &&
     integrity.includes("Array.from(server.description).length > 100") &&
-    integrity.includes("server.$schema !== MCP_REGISTRY_IDENTITY.schema") &&
+    mutationMatchCount(integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema") === 2 &&
     integrity.includes('transport.type !== "stdio"') &&
+    integrity.includes("function assertObservedMcpRegistryServerSchema(server, label)") &&
+    mutationMatchCount(integrity, "assertObservedMcpRegistryServerSchema") === 2 &&
+    integrity.includes('for (const field of ["runtimeArguments", "packageArguments"])') &&
+    integrity.includes("packageEntry.environmentVariables") &&
     integrity.includes("function assertCanonicalExpectedMcpRegistryManifest(server, label)") &&
     integrity.includes(
       '["$schema", "name", "title", "description", "websiteUrl", "repository", "version", "packages"]'
@@ -3050,13 +3054,62 @@ function logicalShellLines(run: string): string[] {
     .map((line) => line.trim());
 }
 
+/**
+ * Normalize layout-only spacing for positive inventories after shell
+ * continuations have already been joined byte-faithfully for token scans.
+ */
+function canonicalLogicalShellIdentifierInventory(run: string, identifier: string): string[] {
+  return logicalShellLines(run)
+    .filter((line) => line.includes(identifier))
+    .map((line) => line.replace(/[ \t]+/gu, " "));
+}
+
 function conservativeShellLexicalLine(line: string): string {
   return line.split(/["'\\]/u).join("");
+}
+
+function rawLogicalNodeTokenInventory(run: string): string[] {
+  return logicalShellLines(run).filter((line) => /\bnode\b/u.test(conservativeShellLexicalLine(line)));
+}
+
+function hasExactEmptyEnvironmentReference(run: string, environment: Record<string, unknown>): boolean {
+  const exactEmptyNames = new Set(
+    Object.entries(environment)
+      .filter(([, value]) => value === "")
+      .map(([name]) => name)
+  );
+  for (const match of run.matchAll(/[A-Za-z_][A-Za-z0-9_]*/gu)) {
+    const name = match[0];
+    if (exactEmptyNames.has(name)) return true;
+  }
+  return false;
 }
 
 function ansiCQuoteInventory(run: string): string[] {
   return run.match(/\$'(?:\\[\s\S]|[^'\\])*'/gu) ?? [];
 }
+
+const MCP_REGISTRY_CURL_LOGICAL_INVENTORY = [
+  "CURL_BIN=$(type -P curl)",
+  'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable ' +
+    "--silent --show-error --proxy '' --connect-timeout 10 --max-time 30 " +
+    "--max-filesize 1048576 --retry 0 --proto '=https' --tlsv1.2 " +
+    "--header 'Accept: application/json, application/problem+json' " +
+    `--header 'Cache-Control: no-cache' --output "$body_file" --write-out ${MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C} "$url")`,
+  'deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail ' +
+    "--silent --show-error --proxy '' --connect-timeout 10 --max-time 60 " +
+    '--max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1 ' +
+    "--proto '=https' --proto-redir '=https' --tlsv1.2 " +
+    '--output "$MCP_PUBLISHER_ARCHIVE" "$MCP_PUBLISHER_URL"'
+];
+
+const MCP_REGISTRY_NODE_LOGICAL_INVENTORY = [
+  "NODE_BIN=$(type -P node)",
+  'printf \'%s\' "$payload" | deadline_timeout 15 10 "MCP Registry evaluator" /usr/bin/env -i ' +
+    'HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin NODE_TLS_REJECT_UNAUTHORIZED=1 ' +
+    '"$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"'
+];
+const MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY = ["NODE_BIN=$(type -P node)"];
 
 /**
  * Conservatively reject literal or commonly shell-composed write tokens across
@@ -3072,7 +3125,7 @@ function hasForbiddenRegistryWriteArguments(run: string): boolean {
     return (
       /(?:(?:--request|--method)(?:=|\s+)|-X\s*)(?:POST|PUT|PATCH|DELETE)\b/iu.test(lexicalLine) ||
       /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])(?:POST|PUT|PATCH|DELETE)\}/iu.test(lexicalLine) ||
-      /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])(?:--data(?:-ascii|-binary|-raw|-urlencode)?|--upload-file|--form(?:-string)?|--json|--config|--expand-[A-Za-z0-9-]+)(?==|\s|})/u.test(
+      /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])(?:--data(?:-ascii|-binary|-raw|-urlencode)?|--upload-file|--form(?:-string)?|--json|--config|--expand-[A-Za-z0-9-]+)(?=[=}\s])/u.test(
         lexicalLine
       ) ||
       /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])-[A-Za-z0-9#:]*[dFTKX][^}\s]*\}/u.test(lexicalLine) ||
@@ -3126,6 +3179,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     env !== null &&
     JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(expectedEnv).sort()) &&
     Object.entries(expectedEnv).every(([key, value]) => env[key] === value);
+  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, expectedEnv);
   const capturePositiveInteger = (pattern: RegExp) => {
     const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
     return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
@@ -3252,18 +3306,13 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const ghIdentityInventoryIsExact =
     JSON.stringify(ghIdentityLines) ===
     JSON.stringify(["GH_BIN=$(type -P gh)", `"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`]);
-  const curlIdentityLines = run
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.includes("CURL_BIN"));
-  const curlIdentityInventoryIsExact =
-    JSON.stringify(curlIdentityLines) ===
-    JSON.stringify([
-      "CURL_BIN=$(type -P curl)",
-      'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
-      'deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \\'
-    ]);
   const logicalRunLines = logicalShellLines(run);
+  const curlLogicalInventoryIsExact =
+    JSON.stringify(canonicalLogicalShellIdentifierInventory(run, "CURL_BIN")) ===
+    JSON.stringify(MCP_REGISTRY_CURL_LOGICAL_INVENTORY);
+  const nodeLogicalInventoryIsExact =
+    JSON.stringify(canonicalLogicalShellIdentifierInventory(run, "NODE_BIN")) ===
+    JSON.stringify(MCP_REGISTRY_NODE_LOGICAL_INVENTORY);
   const ansiCQuotes = ansiCQuoteInventory(run);
   const ansiCQuoteInventoryIsExact =
     JSON.stringify(ansiCQuotes) === JSON.stringify([MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C]);
@@ -3271,6 +3320,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const rawGhTokenLines = logicalRunLines.filter((line) => /\bgh\b/u.test(conservativeShellLexicalLine(line)));
   const rawNetworkToolInventoryIsExact =
     JSON.stringify(rawCurlTokenLines) === JSON.stringify(["CURL_BIN=$(type -P curl)"]) &&
+    JSON.stringify(rawLogicalNodeTokenInventory(run)) === JSON.stringify(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY) &&
     JSON.stringify(rawGhTokenLines) ===
       JSON.stringify([
         "GH_BIN=$(type -P gh)",
@@ -3498,9 +3548,11 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     publisherCommandsAreExact &&
     publisherIdentityInventoryIsExact &&
     ghIdentityInventoryIsExact &&
-    curlIdentityInventoryIsExact &&
+    curlLogicalInventoryIsExact &&
+    nodeLogicalInventoryIsExact &&
     ansiCQuoteInventoryIsExact &&
     rawNetworkToolInventoryIsExact &&
+    !containsExactEmptyEnvironmentReference &&
     !containsForbiddenRegistryWriteArguments &&
     !hasForbiddenPublisherMutation &&
     !hasDirectRegistryGhApiCommand &&
@@ -4300,7 +4352,55 @@ function assertMcpRegistryEvaluatorContract() {
     )
   ).toEqual({ action: "publish" });
 
-  const priorServer = mcpRegistryServer("3.11.6");
+  const mcpRegistryPackage = (server: Record<string, unknown>) => {
+    const packageEntry = (server.packages as Array<Record<string, unknown>> | undefined)?.[0];
+    if (!packageEntry) throw new Error("MCP Registry fixture package is missing");
+    return packageEntry;
+  };
+  const priorServer = mcpRegistryServer("3.11.6", {
+    icons: [
+      {
+        src: "https://github.com/oomkapwn/enquire-mcp/raw/main/site/enquire-social.png",
+        mimeType: "image/png",
+        sizes: ["1200x630"],
+        theme: "light"
+      }
+    ]
+  });
+  const priorPackage = mcpRegistryPackage(priorServer);
+  priorPackage.fileSha256 = "a".repeat(64);
+  priorPackage.registryBaseUrl = "https://registry.npmjs.org";
+  priorPackage.runtimeHint = "npx";
+  const priorPositionalArgument = (priorPackage.runtimeArguments as Array<Record<string, unknown>> | undefined)?.[0];
+  if (!priorPositionalArgument) throw new Error("MCP Registry fixture positional argument is missing");
+  delete priorPositionalArgument.valueHint;
+  priorPackage.packageArguments = [
+    {
+      type: "named",
+      name: "--silent",
+      description: "Disable package-manager progress output",
+      isRequired: false,
+      format: "boolean",
+      choices: ["true", "false"],
+      default: "false",
+      placeholder: "true or false",
+      variables: {
+        quiet: {
+          description: "Package-manager quiet mode",
+          format: "boolean",
+          value: "true"
+        }
+      }
+    }
+  ];
+  priorPackage.environmentVariables = [
+    {
+      name: "OBSIDIAN_VAULT",
+      description: "Path to the Obsidian vault",
+      isRequired: true,
+      isSecret: false
+    }
+  ];
   expect(
     evaluateMcpRegistryState(
       mcpRegistryState(
@@ -4310,6 +4410,193 @@ function assertMcpRegistryEvaluatorContract() {
       "preflight"
     )
   ).toEqual({ action: "publish" });
+
+  const malformedOlderLatestCases: Array<{
+    mutate: (server: Record<string, unknown>) => void;
+    expected: RegExp;
+  }> = [
+    {
+      mutate: (server) => {
+        server.$schema = "https://example.invalid/server.schema.json";
+      },
+      expected: /server uses an unsupported MCP Registry schema/
+    },
+    {
+      mutate: (server) => {
+        server.icons = {};
+      },
+      expected: /server\.icons must be an array or null/
+    },
+    {
+      mutate: (server) => {
+        server.icons = null;
+      },
+      expected: /server\.icons must be an array/
+    },
+    {
+      mutate: (server) => {
+        server.icons = [null];
+      },
+      expected: /server\.icons\[0\] must be an object/
+    },
+    {
+      mutate: (server) => {
+        server.icons = [{ src: 42 }];
+      },
+      expected: /server\.icons\[0\]\.src must be a non-empty string of at most 255 Unicode characters/
+    },
+    {
+      mutate: (server) => {
+        server.icons = [{ src: "https://example.invalid/icon.png", sizes: [42] }];
+      },
+      expected: /server\.icons\[0\]\.sizes\[0\] must be an icon size or any/
+    },
+    {
+      mutate: (server) => {
+        server.icons = [{ src: "https://example.invalid/icon.png", mimeType: "image/gif" }];
+      },
+      expected: /server\.icons\[0\]\.mimeType is not an allowed image media type/
+    },
+    {
+      mutate: (server) => {
+        server.remotes = null;
+      },
+      expected: /server\.remotes must be an array/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = {};
+      },
+      expected: /packages\[0\]\.runtimeArguments must be an array/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [null];
+      },
+      expected: /packages\[0\]\.runtimeArguments\[0\] must be an object/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [
+          { type: "named", name: "--vault", isRequired: "yes" }
+        ];
+      },
+      expected: /runtimeArguments\[0\]\.isRequired must be boolean/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [{ type: "switch", name: "--vault" }];
+      },
+      expected: /runtimeArguments\[0\]\.type must be named or positional/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [{ type: "positional" }];
+      },
+      expected: /runtimeArguments\[0\] must name a non-empty valueHint or value string/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [{ type: "positional", valueHint: 42, value: "serve" }];
+      },
+      expected: /runtimeArguments\[0\]\.valueHint must be a string/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeArguments = [{ type: "named", name: "--vault", format: "json" }];
+      },
+      expected: /runtimeArguments\[0\]\.format must be string, number, boolean, or filepath/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).packageArguments = {};
+      },
+      expected: /packages\[0\]\.packageArguments must be an array/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).packageArguments = [null];
+      },
+      expected: /packages\[0\]\.packageArguments\[0\] must be an object/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).packageArguments = [{ type: "named", name: 42 }];
+      },
+      expected: /packageArguments\[0\]\.name must be a non-empty string/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).packageArguments = [
+          { type: "named", name: "--silent", variables: [] }
+        ];
+      },
+      expected: /packageArguments\[0\]\.variables must be an object/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).packageArguments = [
+          { type: "named", name: "--silent", variables: { quiet: null } }
+        ];
+      },
+      expected: /packageArguments\[0\]\.variables\.quiet must be an object/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).environmentVariables = {};
+      },
+      expected: /packages\[0\]\.environmentVariables must be an array/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).environmentVariables = [null];
+      },
+      expected: /packages\[0\]\.environmentVariables\[0\] must be an object/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).environmentVariables = [{ name: "TOKEN", isSecret: "yes" }];
+      },
+      expected: /environmentVariables\[0\]\.isSecret must be boolean/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).environmentVariables = [{ name: "TOKEN", choices: [42] }];
+      },
+      expected: /environmentVariables\[0\]\.choices\[0\] must be a string/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).fileSha256 = "A".repeat(64);
+      },
+      expected: /packages\[0\]\.fileSha256 must be 64 lowercase hexadecimal characters/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).registryBaseUrl = 42;
+      },
+      expected: /packages\[0\]\.registryBaseUrl must be a string/
+    },
+    {
+      mutate: (server) => {
+        mcpRegistryPackage(server).runtimeHint = false;
+      },
+      expected: /packages\[0\]\.runtimeHint must be a string/
+    }
+  ];
+  for (const { mutate, expected } of malformedOlderLatestCases) {
+    const malformedPriorServer = JSON.parse(JSON.stringify(priorServer)) as Record<string, unknown>;
+    mutate(malformedPriorServer);
+    expect(() =>
+      evaluateMcpRegistryState(
+        mcpRegistryState(
+          mcpRegistryNotFoundEnvelope("exact"),
+          mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(malformedPriorServer) })
+        ),
+        "preflight"
+      )
+    ).toThrow(expected);
+  }
 
   const expectedServer = mcpRegistryServer();
   const reorderedServer = Object.fromEntries(Object.entries(expectedServer).reverse());
@@ -5527,8 +5814,18 @@ describe("release identity and exact required-job gate", () => {
         "Array.from(server.description).length > 100",
         "Array.from(server.description).length > 1000"
       ),
-      replaceExactly(mcpbInputs.integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema", "false"),
+      replaceAllExactly(
+        mcpbInputs.integrity,
+        "server.$schema !== MCP_REGISTRY_IDENTITY.schema",
+        "false",
+        2
+      ),
       replaceExactly(mcpbInputs.integrity, 'transport.type !== "stdio"', "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "const server = assertObservedMcpRegistryServerSchema(",
+        "const server = assertMcpRegistryServerShape("
+      ),
       replaceExactly(
         mcpbInputs.integrity,
         'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
@@ -5607,15 +5904,37 @@ describe("release identity and exact required-job gate", () => {
     expect(registryStep).toBeDefined();
     if (registryStep === undefined) throw new Error("MCP Registry release step is missing from the baseline");
     const registryRun = runBody(registryStep);
+    expect(canonicalLogicalShellIdentifierInventory(registryRun, "CURL_BIN")).toEqual(
+      MCP_REGISTRY_CURL_LOGICAL_INVENTORY
+    );
+    expect(canonicalLogicalShellIdentifierInventory(registryRun, "NODE_BIN")).toEqual(
+      MCP_REGISTRY_NODE_LOGICAL_INVENTORY
+    );
+    expect(rawLogicalNodeTokenInventory(registryRun)).toEqual(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY);
+    const exactEmptyEnvironmentFixture = { BASH_ENV: "", GH_HOST: "github.com" };
+    expect(hasExactEmptyEnvironmentReference("$GH_HOST ${GH_HOST}", exactEmptyEnvironmentFixture)).toBe(false);
+    expect(hasExactEmptyEnvironmentReference("$BASH_ENV_SUFFIX ${BASH_ENV_SUFFIX}", exactEmptyEnvironmentFixture)).toBe(
+      false
+    );
+    for (const exactEmptyEnvironmentReference of [
+      "$BASH_ENV",
+      "${BASH_ENV}",
+      "${BASH_ENV:-fallback}",
+      "${!BASH_ENV}",
+      "${#BASH_ENV}",
+      "empty_name=BASH_ENV; ${!empty_name}"
+    ]) {
+      expect(hasExactEmptyEnvironmentReference(exactEmptyEnvironmentReference, exactEmptyEnvironmentFixture)).toBe(
+        true
+      );
+    }
     expect(hasForbiddenRegistryWriteArguments(MCP_REGISTRY_WORK_ROOT_INIT)).toBe(false);
     expect(hasForbiddenRegistryWriteArguments('"$CURL_BIN" --disable --retry 0 "$URL"')).toBe(false);
     expect(hasForbiddenRegistryWriteArguments('"$CURL_BIN" -fsS --disable "$URL"')).toBe(false);
     expect(hasForbiddenRegistryWriteArguments("CURL_READ_ARGS=(--disable); REQUEST_METHOD=POSTFIX")).toBe(false);
-    expect(hasForbiddenRegistryWriteArguments('READ_ARG="${ARG:---disable}"')).toBe(false);
+    expect(hasForbiddenRegistryWriteArguments(`READ_ARG="\${ARG:---disable}"`)).toBe(false);
     expect(
-      hasForbiddenRegistryWriteArguments(
-        `"$CURL_BIN" --write-out ${MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C} "$URL"`
-      )
+      hasForbiddenRegistryWriteArguments(`"$CURL_BIN" --write-out ${MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C} "$URL"`)
     ).toBe(false);
     for (const forbiddenRegistryWrite of [
       '"$CURL_BIN" -d\'{}\' "$URL"',
@@ -5631,13 +5950,13 @@ describe("release identity and exact required-job gate", () => {
       "METHOD=POST",
       "METHOD=$'POST'",
       '"$CURL_BIN" --request $\'POST\' "$URL"',
-      '"$CURL_BIN" "${WRITE_ARG:---data}" \'{}\' "$URL"',
-      '"$CURL_BIN" "${WRITE_ARG:--d}" \'{}\' "$URL"',
-      '"$CURL_BIN" "${WRITE_ARG:---config}" payload.curlrc "$URL"',
-      '"$CURL_BIN" "${WRITE_ARG:+--json}" \'{}\' "$URL"',
-      '"$CURL_BIN" $\'\\x2d\\x64\' \'{}\' "$URL"',
-      '"$CURL_BIN" $\'\\055d\' \'{}\' "$URL"',
-      '"$CURL_BIN" $\'\\x2d\\\n\\x64\' \'{}\' "$URL"',
+      `"$CURL_BIN" "\${WRITE_ARG:---data}" '{}' "$URL"`,
+      `"$CURL_BIN" "\${WRITE_ARG:--d}" '{}' "$URL"`,
+      `"$CURL_BIN" "\${WRITE_ARG:---config}" payload.curlrc "$URL"`,
+      `"$CURL_BIN" "\${WRITE_ARG:+--json}" '{}' "$URL"`,
+      "\"$CURL_BIN\" $'\\x2d\\x64' '{}' \"$URL\"",
+      "\"$CURL_BIN\" $'\\055d' '{}' \"$URL\"",
+      "\"$CURL_BIN\" $'\\x2d\\\n\\x64' '{}' \"$URL\"",
       '"$CURL_BIN" -sd\'{}\' "$URL"',
       '"$CURL_BIN" -4d\'{}\' "$URL"',
       '"$CURL_BIN" -#d\'{}\' "$URL"',
@@ -5648,7 +5967,7 @@ describe("release identity and exact required-job gate", () => {
       '"$CURL_BIN" --expand-data \'{}\' "$URL"',
       "command /usr/bin/cu\\rl \\--data '{}' https://registry.modelcontextprotocol.io/v0.1/servers",
       'command /usr/bin/cu""rl --d"a"ta \'{}\' https://registry.modelcontextprotocol.io/v0.1/servers',
-      '"$CURL_BIN" --request "${METHOD:-POST}" "$URL"',
+      `"$CURL_BIN" --request "\${METHOD:-POST}" "$URL"`,
       `${MCP_REGISTRY_WORK_ROOT_INIT}; command /usr/bin/curl -d'{}' "$URL"`,
       '"$CURL_BIN" --header \'X-Debug: -d\' "$URL"'
     ]) {
@@ -5672,6 +5991,51 @@ describe("release identity and exact required-job gate", () => {
       })
     ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     const registryStepWithRun = (run: string): YamlRecord => ({ ...registryStep, run });
+    const fragmentedCurlWriteRun = replaceExactly(
+      registryRun,
+      'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
+      `WRITE_A=--da\n  WRITE_B=ta\n  response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable "\${WRITE_A}\${WRITE_B}" '{}' \\`
+    );
+    const nodeEvalRun = replaceExactly(
+      registryRun,
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"',
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"\n  "$NODE_BIN" --eval \'process.exit(0)\''
+    );
+    const rawNodeEvalRun = replaceExactly(
+      registryRun,
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"',
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"\n  command /usr/bin/node --eval \'process.exit(0)\''
+    );
+    const exactEmptyEnvRawCurlWriteRun = replaceExactly(
+      registryRun,
+      '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+      '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+        "  command /usr/bin/cu${BASH_ENV}rl --da${BASH_ENV}ta '{}' https://registry.modelcontextprotocol.io/v0.1/servers"
+    );
+    const exactEmptyEnvRawNodeEvalRun = replaceExactly(
+      registryRun,
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"',
+      '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"\n' +
+        "  command /usr/bin/no${BASH_ENV}de --eval 'process.exit(0)'"
+    );
+    expect(hasForbiddenRegistryWriteArguments(fragmentedCurlWriteRun)).toBe(false);
+    expect(canonicalLogicalShellIdentifierInventory(fragmentedCurlWriteRun, "CURL_BIN")).not.toEqual(
+      MCP_REGISTRY_CURL_LOGICAL_INVENTORY
+    );
+    expect(canonicalLogicalShellIdentifierInventory(nodeEvalRun, "NODE_BIN")).not.toEqual(
+      MCP_REGISTRY_NODE_LOGICAL_INVENTORY
+    );
+    expect(canonicalLogicalShellIdentifierInventory(rawNodeEvalRun, "NODE_BIN")).toEqual(
+      MCP_REGISTRY_NODE_LOGICAL_INVENTORY
+    );
+    expect(rawLogicalNodeTokenInventory(rawNodeEvalRun)).not.toEqual(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY);
+    expect(hasForbiddenRegistryWriteArguments(exactEmptyEnvRawCurlWriteRun)).toBe(false);
+    expect(canonicalLogicalShellIdentifierInventory(exactEmptyEnvRawCurlWriteRun, "CURL_BIN")).toEqual(
+      MCP_REGISTRY_CURL_LOGICAL_INVENTORY
+    );
+    expect(rawLogicalNodeTokenInventory(exactEmptyEnvRawNodeEvalRun)).toEqual(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY);
+    expect(hasExactEmptyEnvironmentReference(exactEmptyEnvRawCurlWriteRun, exactEmptyEnvironmentFixture)).toBe(true);
+    expect(hasExactEmptyEnvironmentReference(exactEmptyEnvRawNodeEvalRun, exactEmptyEnvironmentFixture)).toBe(true);
     const weakenedRegistrySteps: YamlRecord[] = [
       { ...registryStep, if: "always()" },
       {
@@ -5683,6 +6047,11 @@ describe("release identity and exact required-job gate", () => {
         env: { ...registryEnv, GH_TOKEN: "" }
       },
       registryStepWithRun(`${registryRun}${"x".repeat(GITHUB_RUN_CHARACTER_LIMIT)}`),
+      registryStepWithRun(fragmentedCurlWriteRun),
+      registryStepWithRun(nodeEvalRun),
+      registryStepWithRun(rawNodeEvalRun),
+      registryStepWithRun(exactEmptyEnvRawCurlWriteRun),
+      registryStepWithRun(exactEmptyEnvRawNodeEvalRun),
       registryStepWithRun(
         replaceExactly(
           registryRun,
@@ -5969,7 +6338,7 @@ describe("release identity and exact required-job gate", () => {
           registryRun,
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
-            'command /usr/bin/gh api --method PATCH repos/oomkapwn/enquire-mcp'
+            "command /usr/bin/gh api --method PATCH repos/oomkapwn/enquire-mcp"
         )
       ),
       registryStepWithRun(
@@ -6036,7 +6405,7 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(
           registryRun,
           "--silent --show-error --proxy '' --connect-timeout 10 --max-time 30 \\",
-          '"${WRITE_ARG:---data}" \'{}\' \\\n    ' +
+          `"\${WRITE_ARG:---data}" '{}' \\\n    ` +
             "--silent --show-error --proxy '' --connect-timeout 10 --max-time 30 \\"
         )
       ),

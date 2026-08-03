@@ -3002,7 +3002,7 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
     integrity.includes("export function evaluateMcpRegistryState(input, phase)") &&
     integrity.includes('phase !== "preflight" && phase !== "convergence"') &&
     integrity.includes("const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);") &&
-    integrity.includes("Array.from(server.description).length > 100") &&
+    integrity.includes("Array.from(server.description).length > 100\n  )") &&
     mutationMatchCount(integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema") === 2 &&
     integrity.includes('transport.type !== "stdio"') &&
     integrity.includes("function assertObservedMcpRegistryServerSchema(server, label)") &&
@@ -3031,7 +3031,9 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
     integrity.includes('typeof metadata.isLatest !== "boolean"') &&
     integrity.includes("assertRfc3339Timestamp(metadata.publishedAt") &&
     integrity.includes("assertRfc3339Timestamp(metadata.statusChangedAt") &&
-    integrity.includes("Array.from(metadata.statusMessage).length > 500") &&
+    integrity.includes(
+      '(typeof metadata.statusMessage !== "string" || Array.from(metadata.statusMessage).length > 500)\n  )'
+    ) &&
     integrity.includes('observation.official.status === "deleted"') &&
     integrity.includes('observation.official.status === "deprecated"') &&
     integrity.includes("!isDeepStrictEqual(exact.server, expected.server)") &&
@@ -5902,9 +5904,9 @@ describe("release identity and exact required-job gate", () => {
     expect(rawLogicalNodeTokenInventory(registryRun)).toEqual(MCP_REGISTRY_RAW_NODE_LOGICAL_INVENTORY);
     const exactEmptyEnvironmentFixture = { BASH_ENV: "", GH_HOST: "github.com" };
     expect(hasExactEmptyEnvironmentReference(`$GH_HOST \${GH_HOST}`, exactEmptyEnvironmentFixture)).toBe(false);
-    expect(hasExactEmptyEnvironmentReference(`$BASH_ENV_SUFFIX \${BASH_ENV_SUFFIX}`, exactEmptyEnvironmentFixture)).toBe(
-      false
-    );
+    expect(
+      hasExactEmptyEnvironmentReference(`$BASH_ENV_SUFFIX \${BASH_ENV_SUFFIX}`, exactEmptyEnvironmentFixture)
+    ).toBe(false);
     for (const exactEmptyEnvironmentReference of [
       "$BASH_ENV",
       `\${BASH_ENV}`,

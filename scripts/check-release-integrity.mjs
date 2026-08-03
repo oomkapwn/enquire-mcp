@@ -14,6 +14,7 @@
 import { Buffer } from "node:buffer";
 import { X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 /** Exact GitHub Actions job names required before npm publication. */
@@ -87,6 +88,14 @@ const NPM_PROVENANCE_IDENTITY = Object.freeze({
 const FULCIO_GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
 const FULCIO_ISSUER_OID_LEGACY = Buffer.from("2b0601040183bf300101", "hex");
 const FULCIO_ISSUER_OID_V2 = Buffer.from("2b0601040183bf300108", "hex");
+const MCP_REGISTRY_IDENTITY = Object.freeze({
+  apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers",
+  mcpName: "io.github.oomkapwn/enquire-mcp",
+  packageName: "@oomkapwn/enquire-mcp",
+  repositoryUrl: "https://github.com/oomkapwn/enquire-mcp",
+  schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
+});
+const MCP_REGISTRY_OFFICIAL_META = "io.modelcontextprotocol.registry/official";
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -122,6 +131,14 @@ function assertExactRecord(value, expectedKeys, label) {
   if (actualKeys.length !== expected.size || actualKeys.some((key) => !expected.has(key))) {
     throw new Error(`${label} must contain exactly ${expectedKeys.join(", ")}`);
   }
+  return value;
+}
+
+function assertAllowedRecord(value, allowedKeys, label) {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const allowed = new Set(allowedKeys);
+  const unexpected = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) throw new Error(`${label} has unexpected fields: ${unexpected.join(", ")}`);
   return value;
 }
 
@@ -1172,6 +1189,397 @@ export function evaluateNpmProvenanceAttestations(report, expected) {
   return assertExactNpmSlsaStatement(slsaStatement, expectedSubject);
 }
 
+function assertStableMcpRegistryVersion(value, label) {
+  if (typeof value !== "string") throw new Error(`${label} must be stable SemVer`);
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(value);
+  if (!match) throw new Error(`${label} must be stable SemVer without prerelease or build metadata`);
+  return [BigInt(match[1]), BigInt(match[2]), BigInt(match[3])];
+}
+
+function compareStableMcpRegistryVersions(left, right) {
+  const leftParts = assertStableMcpRegistryVersion(left, "observed MCP Registry version");
+  const rightParts = assertStableMcpRegistryVersion(right, "expected MCP Registry version");
+  for (let index = 0; index < leftParts.length; index++) {
+    if (leftParts[index] < rightParts[index]) return -1;
+    if (leftParts[index] > rightParts[index]) return 1;
+  }
+  return 0;
+}
+
+function assertRfc3339Timestamp(value, label) {
+  if (typeof value !== "string") throw new Error(`${label} must be an RFC 3339 timestamp`);
+  const match =
+    /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/u.exec(
+      value
+    );
+  if (!match || match[1] === "0000") throw new Error(`${label} must be an RFC 3339 timestamp`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (day > new Date(Date.UTC(year, month, 0)).getUTCDate()) {
+    throw new Error(`${label} must contain a real calendar date`);
+  }
+  return value;
+}
+
+function assertMcpRegistryServerShape(value, label) {
+  const server = assertAllowedRecord(
+    value,
+    [
+      "$schema",
+      "_meta",
+      "description",
+      "icons",
+      "name",
+      "packages",
+      "remotes",
+      "repository",
+      "title",
+      "version",
+      "websiteUrl"
+    ],
+    label
+  );
+  if (!isNonEmptyString(server.$schema)) throw new Error(`${label} must name its JSON schema`);
+  if (
+    typeof server.name !== "string" ||
+    Array.from(server.name).length > 200 ||
+    !/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/u.test(server.name)
+  ) {
+    throw new Error(`${label} has an invalid MCP server name`);
+  }
+  if (
+    typeof server.description !== "string" ||
+    Array.from(server.description).length < 1 ||
+    Array.from(server.description).length > 100
+  ) {
+    throw new Error(`${label} description must contain 1 to 100 Unicode characters`);
+  }
+  if (typeof server.version !== "string" || server.version.length < 1 || server.version.length > 255) {
+    throw new Error(`${label} has an invalid version`);
+  }
+  if (server.title !== undefined && (!isNonEmptyString(server.title) || Array.from(server.title).length > 100)) {
+    throw new Error(`${label} has an invalid title`);
+  }
+  if (server.websiteUrl !== undefined && !isNonEmptyString(server.websiteUrl)) {
+    throw new Error(`${label} has an invalid website URL`);
+  }
+  for (const field of ["icons", "packages", "remotes"]) {
+    if (server[field] !== undefined && server[field] !== null && !Array.isArray(server[field])) {
+      throw new Error(`${label}.${field} must be an array or null`);
+    }
+  }
+  if (server.repository !== undefined && !isRecord(server.repository)) {
+    throw new Error(`${label}.repository must be an object`);
+  }
+  if (server._meta !== undefined && !isRecord(server._meta)) {
+    throw new Error(`${label}._meta must be an object`);
+  }
+  return server;
+}
+
+function assertMcpRegistryProjectLineage(server, expectedPackage, label) {
+  if (server.name !== expectedPackage.mcpName) throw new Error(`${label} has a different MCP server name`);
+  assertStableMcpRegistryVersion(server.version, `${label} version`);
+  const repository = assertExactRecord(server.repository, ["url", "source"], `${label} repository`);
+  if (repository.url !== MCP_REGISTRY_IDENTITY.repositoryUrl || repository.source !== "github") {
+    throw new Error(`${label} has a different source repository`);
+  }
+  if (!Array.isArray(server.packages) || server.packages.length !== 1) {
+    throw new Error(`${label} must contain exactly one npm package`);
+  }
+  const packageEntry = assertAllowedRecord(
+    server.packages[0],
+    [
+      "environmentVariables",
+      "fileSha256",
+      "identifier",
+      "packageArguments",
+      "registryBaseUrl",
+      "registryType",
+      "runtimeArguments",
+      "runtimeHint",
+      "transport",
+      "version"
+    ],
+    `${label} package`
+  );
+  if (
+    packageEntry.registryType !== "npm" ||
+    packageEntry.identifier !== expectedPackage.name ||
+    packageEntry.version !== server.version
+  ) {
+    throw new Error(`${label} has a different npm package identity or version`);
+  }
+  const transport = assertExactRecord(packageEntry.transport, ["type"], `${label} package transport`);
+  if (transport.type !== "stdio") throw new Error(`${label} package transport must be stdio`);
+  if (server.remotes !== undefined && server.remotes !== null && server.remotes.length !== 0) {
+    throw new Error(`${label} unexpectedly declares remote transports`);
+  }
+  return server;
+}
+
+function assertCanonicalExpectedMcpRegistryManifest(server, label) {
+  assertExactRecord(
+    server,
+    ["$schema", "name", "title", "description", "websiteUrl", "repository", "version", "packages"],
+    label
+  );
+  if (!isNonEmptyString(server.title) || Array.from(server.title).length > 100) {
+    throw new Error(`${label} title must contain 1 to 100 Unicode characters`);
+  }
+  const packageEntry = assertExactRecord(
+    server.packages[0],
+    ["registryType", "identifier", "version", "transport", "runtimeArguments"],
+    `${label} package`
+  );
+  if (!Array.isArray(packageEntry.runtimeArguments) || packageEntry.runtimeArguments.length !== 2) {
+    throw new Error(`${label} package must contain the two canonical runtime arguments`);
+  }
+  const positional = assertExactRecord(
+    packageEntry.runtimeArguments[0],
+    ["type", "valueHint", "value", "description", "isRequired", "format"],
+    `${label} positional runtime argument`
+  );
+  if (
+    positional.type !== "positional" ||
+    positional.valueHint !== "subcommand" ||
+    positional.value !== "serve" ||
+    !isNonEmptyString(positional.description) ||
+    positional.isRequired !== true ||
+    positional.format !== "string"
+  ) {
+    throw new Error(`${label} positional runtime argument diverged from the canonical serve contract`);
+  }
+  const vault = assertExactRecord(
+    packageEntry.runtimeArguments[1],
+    ["type", "name", "description", "isRequired", "format"],
+    `${label} vault runtime argument`
+  );
+  if (
+    vault.type !== "named" ||
+    vault.name !== "--vault" ||
+    !isNonEmptyString(vault.description) ||
+    vault.isRequired !== true ||
+    vault.format !== "string"
+  ) {
+    throw new Error(`${label} vault runtime argument diverged from the canonical stdio contract`);
+  }
+  return server;
+}
+
+function assertExpectedMcpRegistryState(input) {
+  const state = assertExactRecord(input, ["expected", "exact", "latest"], "MCP Registry state");
+  const expected = assertExactRecord(state.expected, ["server", "package"], "expected MCP Registry identity");
+  const expectedPackage = assertExactRecord(
+    expected.package,
+    ["name", "version", "mcpName"],
+    "expected local package identity"
+  );
+  if (
+    expectedPackage.name !== MCP_REGISTRY_IDENTITY.packageName ||
+    expectedPackage.mcpName !== MCP_REGISTRY_IDENTITY.mcpName
+  ) {
+    throw new Error("expected local package identity does not match enquire-mcp");
+  }
+  assertStableMcpRegistryVersion(expectedPackage.version, "expected local package version");
+  const server = assertMcpRegistryProjectLineage(
+    assertMcpRegistryServerShape(expected.server, "expected local server manifest"),
+    expectedPackage,
+    "expected local server manifest"
+  );
+  assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest");
+  if (
+    server.$schema !== MCP_REGISTRY_IDENTITY.schema ||
+    server.version !== expectedPackage.version ||
+    server.websiteUrl !== MCP_REGISTRY_IDENTITY.repositoryUrl
+  ) {
+    throw new Error("expected local server schema, version, or project URL diverged");
+  }
+  return { state, expected: { server, package: expectedPackage } };
+}
+
+function assertMcpRegistryOfficialMetadata(value, label) {
+  const metadata = assertAllowedRecord(
+    value,
+    ["isLatest", "publishedAt", "status", "statusChangedAt", "statusMessage", "updatedAt"],
+    label
+  );
+  for (const field of ["isLatest", "publishedAt", "status", "statusChangedAt"]) {
+    if (!Object.hasOwn(metadata, field)) throw new Error(`${label} is missing ${field}`);
+  }
+  if (!new Set(["active", "deprecated", "deleted"]).has(metadata.status)) {
+    throw new Error(`${label} has an invalid lifecycle status`);
+  }
+  if (typeof metadata.isLatest !== "boolean") throw new Error(`${label}.isLatest must be boolean`);
+  assertRfc3339Timestamp(metadata.publishedAt, `${label}.publishedAt`);
+  assertRfc3339Timestamp(metadata.statusChangedAt, `${label}.statusChangedAt`);
+  if (metadata.updatedAt !== undefined) assertRfc3339Timestamp(metadata.updatedAt, `${label}.updatedAt`);
+  if (
+    metadata.statusMessage !== undefined &&
+    (typeof metadata.statusMessage !== "string" || Array.from(metadata.statusMessage).length > 500)
+  ) {
+    throw new Error(`${label}.statusMessage must be a string of at most 500 Unicode characters`);
+  }
+  return metadata;
+}
+
+function parseMcpRegistryBody(body, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`${label} body must contain exactly one valid JSON value`);
+  }
+  return parsed;
+}
+
+function decodeMcpRegistryObservation(value, expectedUrl, phase, label) {
+  const envelope = assertExactRecord(
+    value,
+    ["requestUrl", "curlExit", "httpStatus", "contentType", "body"],
+    `${label} HTTP envelope`
+  );
+  if (envelope.requestUrl !== expectedUrl) throw new Error(`${label} request URL differs from the exact pinned URL`);
+  if (!isNonNegativeSafeInteger(envelope.curlExit) || envelope.curlExit > 255) {
+    throw new Error(`${label} curl exit must be an integer from 0 through 255`);
+  }
+  if (typeof envelope.httpStatus !== "string" || !/^(?:000|[1-5]\d{2})$/u.test(envelope.httpStatus)) {
+    throw new Error(`${label} HTTP status must be one canonical three-digit string`);
+  }
+  if (typeof envelope.contentType !== "string" || typeof envelope.body !== "string") {
+    throw new Error(`${label} content type and body must be strings`);
+  }
+  if (envelope.curlExit !== 0) {
+    if (phase === "convergence") return { kind: "retry" };
+    throw new Error(`${label} transport failed during publication preflight`);
+  }
+  if (envelope.httpStatus === "200") {
+    if (envelope.contentType !== "application/json") {
+      throw new Error(`${label} 200 response must use application/json`);
+    }
+    const response = assertExactRecord(
+      parseMcpRegistryBody(envelope.body, label),
+      ["server", "_meta"],
+      `${label} 200 response`
+    );
+    const responseMeta = assertExactRecord(
+      response._meta,
+      [MCP_REGISTRY_OFFICIAL_META],
+      `${label} registry-managed metadata`
+    );
+    const official = assertMcpRegistryOfficialMetadata(
+      responseMeta[MCP_REGISTRY_OFFICIAL_META],
+      `${label} official metadata`
+    );
+    const server = assertMcpRegistryServerShape(response.server, `${label} server`);
+    return { kind: "record", response, server, official };
+  }
+  if (envelope.httpStatus === "404") {
+    if (envelope.contentType !== "application/problem+json") {
+      throw new Error(`${label} 404 response must use application/problem+json`);
+    }
+    const problem = assertExactRecord(
+      parseMcpRegistryBody(envelope.body, label),
+      ["detail", "status", "title"],
+      `${label} production 404 problem`
+    );
+    if (problem.detail !== "Server not found" || problem.status !== 404 || problem.title !== "Not Found") {
+      throw new Error(`${label} 404 response differs from the authoritative production problem`);
+    }
+    return { kind: "absent" };
+  }
+  const status = Number(envelope.httpStatus);
+  if (phase === "convergence" && (status === 429 || status >= 500)) return { kind: "retry" };
+  throw new Error(`${label} returned non-authoritative HTTP status ${envelope.httpStatus}`);
+}
+
+function assertActiveMcpRegistryRecord(observation, label) {
+  if (observation.official.status === "deleted") {
+    throw new Error(`${label} is deleted and must never be treated as absent`);
+  }
+  if (observation.official.status === "deprecated") {
+    throw new Error(`${label} is deprecated and requires manual resolution`);
+  }
+}
+
+/**
+ * Reconcile exact-version and latest MCP Registry reads without performing a write.
+ *
+ * @param {unknown} input - Expected local identity plus raw exact/latest HTTP envelopes.
+ * @param {unknown} phase - `preflight` before the one allowed write, or `convergence` afterwards.
+ * @returns {{action:"publish"|"reuse"|"retry"|"confirmed"}} The only safe next transaction action.
+ * @example
+ * evaluateMcpRegistryState(registrySnapshot, "preflight");
+ */
+export function evaluateMcpRegistryState(input, phase) {
+  if (phase !== "preflight" && phase !== "convergence") {
+    throw new Error("MCP Registry phase must be exactly preflight or convergence");
+  }
+  const { state, expected } = assertExpectedMcpRegistryState(input);
+  const encodedName = encodeURIComponent(expected.package.mcpName);
+  const exactUrl =
+    `${MCP_REGISTRY_IDENTITY.apiBase}/${encodedName}/versions/${encodeURIComponent(expected.package.version)}` +
+    "?include_deleted=true";
+  const latestUrl = `${MCP_REGISTRY_IDENTITY.apiBase}/${encodedName}/versions/latest?include_deleted=true`;
+  const exact = decodeMcpRegistryObservation(state.exact, exactUrl, phase, "exact-version MCP Registry read");
+  const latest = decodeMcpRegistryObservation(state.latest, latestUrl, phase, "latest MCP Registry read");
+
+  if (exact.kind === "record") {
+    assertActiveMcpRegistryRecord(exact, "exact MCP Registry version");
+    assertMcpRegistryProjectLineage(exact.server, expected.package, "exact MCP Registry version");
+    if (!isDeepStrictEqual(exact.server, expected.server)) {
+      throw new Error("exact MCP Registry version diverges from the local server manifest");
+    }
+  }
+  if (latest.kind === "record") {
+    assertActiveMcpRegistryRecord(latest, "latest MCP Registry version");
+    assertMcpRegistryProjectLineage(latest.server, expected.package, "latest MCP Registry version");
+    const comparison = compareStableMcpRegistryVersions(latest.server.version, expected.package.version);
+    if (comparison === 0 && !isDeepStrictEqual(latest.server, expected.server)) {
+      throw new Error("latest MCP Registry version diverges from the local server manifest");
+    }
+    if (comparison > 0) throw new Error("MCP Registry latest version is newer than the release candidate");
+  }
+
+  if (phase === "preflight") {
+    if (exact.kind === "absent") {
+      if (latest.kind === "absent") return { action: "publish" };
+      if (latest.kind !== "record" || latest.official.isLatest !== true) {
+        throw new Error("MCP Registry absence is ambiguous during publication preflight");
+      }
+      if (latest.server.version === expected.package.version) {
+        throw new Error("MCP Registry exact and latest reads disagree about candidate absence");
+      }
+      return { action: "publish" };
+    }
+    if (
+      exact.kind !== "record" ||
+      latest.kind !== "record" ||
+      exact.official.isLatest !== true ||
+      latest.official.isLatest !== true ||
+      latest.server.version !== expected.package.version ||
+      !isDeepStrictEqual(exact.response, latest.response)
+    ) {
+      throw new Error("MCP Registry exact and latest reads do not prove one reusable active latest version");
+    }
+    return { action: "reuse" };
+  }
+
+  if (exact.kind !== "record" || latest.kind !== "record") return { action: "retry" };
+  if (
+    exact.official.isLatest !== true ||
+    latest.official.isLatest !== true ||
+    latest.server.version !== expected.package.version
+  ) {
+    return { action: "retry" };
+  }
+  if (!isDeepStrictEqual(exact.response, latest.response)) {
+    throw new Error("MCP Registry exact and latest candidate records disagree after publication");
+  }
+  return { action: "confirmed" };
+}
+
 /**
  * Classify an absent, draft, or published GitHub release against the exact
  * Basic asset-name contract.
@@ -1435,7 +1843,7 @@ function usage() {
     "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state | visibility |",
     "npm-provenance-context <source-sha> <tag> |",
     "npm-provenance <name> <version> <sha512-sri> <source-sha> <tag> <publish-attempted> <run-id> <run-attempt> |",
-    "candidate-runs <source-sha> | candidate <source-sha>"
+    "mcp-registry-state <preflight|convergence> | candidate-runs <source-sha> | candidate <source-sha>"
   ].join(" ");
 }
 
@@ -1501,6 +1909,9 @@ if (isEntrypoint(import.meta.url)) {
           })
         )
       );
+    } else if (mode === "mcp-registry-state") {
+      const payload = JSON.parse(readFileSync(0, "utf8"));
+      console.log(JSON.stringify(evaluateMcpRegistryState(payload, first)));
     } else if (mode === "visibility") {
       const parseCanonicalInteger = (value, label) => {
         if (typeof value !== "string" || !/^(0|[1-9]\d*)$/u.test(value)) {

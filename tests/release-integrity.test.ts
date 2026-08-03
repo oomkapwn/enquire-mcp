@@ -14,6 +14,7 @@ import {
   evaluateConvergentCount,
   evaluateMcpbCandidateRun,
   evaluateMcpbReleaseState,
+  evaluateMcpRegistryState,
   evaluateNpmProvenanceAttestations,
   evaluateNpmProvenanceContext,
   evaluateNpmPublication,
@@ -141,15 +142,19 @@ const MUTATED_RAW_GH_READ_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_
             if [ "$remaining" -le 10 ]; then`;
 const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_JOB_CLOCK_GUARD)}
             if [ "$remaining" -lt "$required" ]; then`;
-const GH_READ_GUARD_COUNT = 5;
-const RELEASE_DEADLINE_ENV_BINDING_COUNT = 6;
+const GH_READ_GUARD_COUNT = 6;
+const GH_READ_HELPER_COUNT = 7;
+const GH_READ_API_CALL_COUNT = 46;
+const RELEASE_DEADLINE_ENV_BINDING_COUNT = 7;
 const RELEASE_FIXTURE_GH_CONFIG_COUNT = 6;
-const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 8;
-const RELEASE_HARDENED_ENV_COUNT = 7;
-const RELEASE_HARDENED_SHELL_COUNT = 7;
-const RELEASE_TLS_PIN_COUNT = 6;
-const NPM_RESERVE_GUARD_COUNT = 3;
+const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 9;
+const RELEASE_HARDENED_ENV_COUNT = 8;
+const RELEASE_HARDENED_SHELL_COUNT = 8;
+const RELEASE_TLS_PIN_COUNT = 7;
+const RELEASE_RESERVE_GUARD_COUNT = 4;
+const RELEASE_SECRET_GITHUB_TOKEN_COUNT = 6;
 const RELEASE_SINGLETON_DECODER_COUNT = 2;
+const MCP_REGISTRY_STEP_NAME = "Publish to MCP Registry (stable only)";
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -447,6 +452,119 @@ function npmProvenanceExpected(
     currentRunId: NPM_PROVENANCE_RUN_ID,
     currentRunAttempt: NPM_PROVENANCE_RUN_ATTEMPT,
     ...overrides
+  };
+}
+
+const MCP_REGISTRY_NAME = "io.github.oomkapwn/enquire-mcp";
+const MCP_REGISTRY_PACKAGE = "@oomkapwn/enquire-mcp";
+const MCP_REGISTRY_VERSION = "4.0.0";
+const MCP_REGISTRY_OFFICIAL_META = "io.modelcontextprotocol.registry/official";
+const MCP_REGISTRY_BASE_URL =
+  `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(MCP_REGISTRY_NAME)}/versions`;
+
+function mcpRegistryServer(version = MCP_REGISTRY_VERSION, overrides: Record<string, unknown> = {}) {
+  return {
+    $schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    name: MCP_REGISTRY_NAME,
+    title: "enquire-mcp — local Obsidian memory for AI agents",
+    description: "Local Obsidian memory server with cited hybrid search.",
+    websiteUrl: "https://github.com/oomkapwn/enquire-mcp",
+    repository: {
+      url: "https://github.com/oomkapwn/enquire-mcp",
+      source: "github"
+    },
+    version,
+    packages: [
+      {
+        registryType: "npm",
+        identifier: MCP_REGISTRY_PACKAGE,
+        version,
+        transport: { type: "stdio" },
+        runtimeArguments: [
+          {
+            type: "positional",
+            valueHint: "subcommand",
+            value: "serve",
+            description: "Start the stdio MCP server",
+            isRequired: true,
+            format: "string"
+          },
+          {
+            type: "named",
+            name: "--vault",
+            description: "Path to the Obsidian vault",
+            isRequired: true,
+            format: "string"
+          }
+        ]
+      }
+    ],
+    ...overrides
+  };
+}
+
+function mcpRegistryRecordBody(
+  server: Record<string, unknown> = mcpRegistryServer(),
+  officialOverrides: Record<string, unknown> = {}
+) {
+  return JSON.stringify({
+    server,
+    _meta: {
+      [MCP_REGISTRY_OFFICIAL_META]: {
+        isLatest: true,
+        publishedAt: "2026-08-02T12:00:00Z",
+        status: "active",
+        statusChangedAt: "2026-08-02T12:00:00Z",
+        updatedAt: "2026-08-02T12:00:01Z",
+        ...officialOverrides
+      }
+    }
+  });
+}
+
+function mcpRegistryEnvelope(
+  target: "exact" | "latest",
+  overrides: Partial<{
+    requestUrl: string;
+    curlExit: number;
+    httpStatus: string;
+    contentType: string;
+    body: string;
+  }> = {}
+) {
+  return {
+    requestUrl:
+      target === "exact"
+        ? `${MCP_REGISTRY_BASE_URL}/${MCP_REGISTRY_VERSION}?include_deleted=true`
+        : `${MCP_REGISTRY_BASE_URL}/latest?include_deleted=true`,
+    curlExit: 0,
+    httpStatus: "200",
+    contentType: "application/json",
+    body: mcpRegistryRecordBody(),
+    ...overrides
+  };
+}
+
+function mcpRegistryNotFoundEnvelope(target: "exact" | "latest") {
+  return mcpRegistryEnvelope(target, {
+    httpStatus: "404",
+    contentType: "application/problem+json",
+    body: JSON.stringify({ detail: "Server not found", status: 404, title: "Not Found" })
+  });
+}
+
+function mcpRegistryState(
+  exact = mcpRegistryEnvelope("exact"),
+  latest = mcpRegistryEnvelope("latest"),
+  server: Record<string, unknown> = mcpRegistryServer()
+) {
+  return {
+    expected: {
+      server,
+      package: { name: MCP_REGISTRY_PACKAGE, version: MCP_REGISTRY_VERSION, mcpName: MCP_REGISTRY_NAME }
+    },
+    exact,
+    latest
   };
 }
 
@@ -1561,7 +1679,8 @@ function releasePollProblems(workflow: string): string[] {
     namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"),
     namedStep(steps, "Publish with provenance or verify an exact prior publication"),
     namedStep(steps, "Prepare draft GitHub Release"),
-    namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance")
+    namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"),
+    namedStep(steps, MCP_REGISTRY_STEP_NAME)
   ];
   const globalReadBodies = globalReadSteps.map((step) =>
     step?.name === "Upload Basic MCPB asset, checksum, and provenance" ? releaseTransaction : runBody(step)
@@ -1587,10 +1706,11 @@ function releasePollProblems(workflow: string): string[] {
         !readBody.includes("gh_read rejects mutation-capable gh api arguments") ||
         !readBody.includes(`"$TIMEOUT_BIN" --kill-after=5s "\${limit}s" "$GH_BIN" "$@"`)
     ) ||
-    (workflow.match(/gh_read\(\) \{/g) ?? []).length !== 6 ||
-    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !== 6 ||
-    mutationMatchCount(workflow, ghReadMutationArgs) !== 6 ||
-    (workflow.match(/gh_read api/g) ?? []).length !== 43 ||
+    (workflow.match(/gh_read\(\) \{/g) ?? []).length !== GH_READ_HELPER_COUNT ||
+    (workflow.match(/gh_read rejects mutation-capable gh api arguments/g) ?? []).length !==
+      GH_READ_HELPER_COUNT ||
+    mutationMatchCount(workflow, ghReadMutationArgs) !== GH_READ_HELPER_COUNT ||
+    (workflow.match(/gh_read api/g) ?? []).length !== GH_READ_API_CALL_COUNT ||
     workflow.includes("gh() {") ||
     workflow.includes("gh_read api --method") ||
     rawGhApiLines.length !== 0
@@ -1810,7 +1930,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     "Preflight existing GitHub release and every Basic asset before npm",
     "Publish with provenance or verify an exact prior publication",
     "Prepare draft GitHub Release",
-    "Upload Basic MCPB asset, checksum, and provenance"
+    "Upload Basic MCPB asset, checksum, and provenance",
+    MCP_REGISTRY_STEP_NAME
   ];
   const clearedGithubEnv = [...clearedSecretEnv, "GH_HTTP_UNIX_SOCKET"];
   const otherSecretSteps: string[] = [];
@@ -1838,7 +1959,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
       .every((step) => typeof step.name === "string" && githubSecretSteps.includes(step.name)) &&
     steps.filter(hasInjectedSecret).length === githubSecretSteps.length &&
     mutationMatchCount(workflow, `\${{ github.token }}`) === 1 &&
-    mutationMatchCount(workflow, `\${{ secrets.GITHUB_TOKEN }}`) === 5 &&
+    mutationMatchCount(workflow, `\${{ secrets.GITHUB_TOKEN }}`) === RELEASE_SECRET_GITHUB_TOKEN_COUNT &&
     mutationMatchCount(workflow, `\${{ secrets.NPM_TOKEN }}`) === 1 &&
     checkoutSteps.length === 1 &&
     yamlRecord(checkout?.with)?.ref === `\${{ github.event.inputs.tag || github.ref }}` &&
@@ -1848,17 +1969,25 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
       const env = yamlRecord(namedStep(steps, name)?.env);
       const stepBody =
         name === "Upload Basic MCPB asset, checksum, and provenance" ? upload : runBody(namedStep(steps, name));
+      const isRegistryStep = name === MCP_REGISTRY_STEP_NAME;
       const expectedPrefix =
         name === "Publish with provenance or verify an exact prior publication"
           ? `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${NPM_LOWERCASE_PIN_BLOCK}\n${freshGithubConfig}`
-          : `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${freshGithubConfig}`;
+          : isRegistryStep
+            ? `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\nbuiltin umask 077`
+            : `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${freshGithubConfig}`;
+      const githubConfigIsFresh = isRegistryStep
+        ? mutationMatchCount(stepBody, 'GH_CONFIG_DIR="$WORK_ROOT/gh-config"') === 1 &&
+          stepBody.includes('/bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"') &&
+          mutationMatchCount(stepBody, "export GH_CONFIG_DIR") === 1
+        : mutationMatchCount(stepBody, freshGithubConfig) === 1;
       return (
         env?.GH_HOST === "github.com" &&
         namedStep(steps, name)?.shell === protectedShell &&
         env?.NODE_TLS_REJECT_UNAUTHORIZED === "1" &&
         env?.GH_TOKEN === (githubTokenSteps.has(name) ? `\${{ github.token }}` : `\${{ secrets.GITHUB_TOKEN }}`) &&
         clearedGithubEnv.every((key) => env?.[key] === "") &&
-        mutationMatchCount(stepBody, freshGithubConfig) === 1 &&
+        githubConfigIsFresh &&
         stepBody.startsWith(expectedPrefix)
       );
     }) &&
@@ -2436,7 +2565,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
     mutationMatchCount(allRunBodies, "--method PATCH") !== 1 ||
     mutationMatchCount(allRunBodies, '"$GH_BIN" api --method PATCH') !== 1 ||
-    ghApiSurfaceLines.length !== 13 ||
+    ghApiSurfaceLines.length !== 15 ||
     directGhApiLines.length !== 1 ||
     !directGhApiLines[0]?.startsWith(
       'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH'
@@ -2542,6 +2671,10 @@ const MCPB_PREFLIGHT_ASSET_COMPARE =
 const NPM_PROVENANCE_CONTRACT_PROBLEM =
   "npm provenance must bind the tag-push context before the sole publish " +
   "and verify two exact attestations without credentials";
+const MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM =
+  "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+const MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM =
+  "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
 const NPM_PROVENANCE_STEP_NAME = "Verify exact npm provenance without credentials";
 const NPM_PROVENANCE_CONTEXT_COMMAND =
   '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"';
@@ -2863,6 +2996,573 @@ function npmProvenanceEvaluatorProblems(integrity: string): string[] {
   return isExact ? [] : [NPM_PROVENANCE_CONTRACT_PROBLEM];
 }
 
+function mcpRegistryEvaluatorProblems(integrity: string): string[] {
+  const isExact =
+    integrity.includes('import { isDeepStrictEqual } from "node:util";') &&
+    integrity.includes('apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"') &&
+    integrity.includes('schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"') &&
+    integrity.includes("export function evaluateMcpRegistryState(input, phase)") &&
+    integrity.includes('phase !== "preflight" && phase !== "convergence"') &&
+    integrity.includes(
+      "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);"
+    ) &&
+    integrity.includes("Array.from(server.description).length > 100") &&
+    integrity.includes("server.$schema !== MCP_REGISTRY_IDENTITY.schema") &&
+    integrity.includes('transport.type !== "stdio"') &&
+    integrity.includes("function assertCanonicalExpectedMcpRegistryManifest(server, label)") &&
+    integrity.includes(
+      '["$schema", "name", "title", "description", "websiteUrl", "repository", "version", "packages"]'
+    ) &&
+    integrity.includes("packageEntry.runtimeArguments.length !== 2") &&
+    integrity.includes('["type", "valueHint", "value", "description", "isRequired", "format"]') &&
+    integrity.includes('["type", "name", "description", "isRequired", "format"]') &&
+    integrity.includes('assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")') &&
+    integrity.includes('assertExactRecord(input, ["expected", "exact", "latest"]') &&
+    integrity.includes('["requestUrl", "curlExit", "httpStatus", "contentType", "body"]') &&
+    integrity.includes("encodeURIComponent(expected.package.mcpName)") &&
+    mutationMatchCount(integrity, "?include_deleted=true") === 2 &&
+    integrity.includes('envelope.contentType !== "application/json"') &&
+    integrity.includes('envelope.contentType !== "application/problem+json"') &&
+    integrity.includes('["detail", "status", "title"]') &&
+    integrity.includes('problem.detail !== "Server not found"') &&
+    integrity.includes('problem.status !== 404 || problem.title !== "Not Found"') &&
+    integrity.includes('["isLatest", "publishedAt", "status", "statusChangedAt"]') &&
+    integrity.includes('["active", "deprecated", "deleted"]') &&
+    integrity.includes('typeof metadata.isLatest !== "boolean"') &&
+    integrity.includes("assertRfc3339Timestamp(metadata.publishedAt") &&
+    integrity.includes("assertRfc3339Timestamp(metadata.statusChangedAt") &&
+    integrity.includes("Array.from(metadata.statusMessage).length > 500") &&
+    integrity.includes('observation.official.status === "deleted"') &&
+    integrity.includes('observation.official.status === "deprecated"') &&
+    integrity.includes("!isDeepStrictEqual(exact.server, expected.server)") &&
+    integrity.includes("!isDeepStrictEqual(latest.server, expected.server)") &&
+    integrity.includes("!isDeepStrictEqual(exact.response, latest.response)") &&
+    integrity.includes('phase === "convergence" && (status === 429 || status >= 500)') &&
+    integrity.includes('} else if (mode === "mcp-registry-state")') &&
+    integrity.includes("evaluateMcpRegistryState(payload, first)");
+  return isExact ? [] : [MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM];
+}
+
+function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string): string[] {
+  const run = runBody(step);
+  const env = yamlRecord(step?.env);
+  const expectedEnv: Record<string, string> = {
+    BASH_ENV: "",
+    ENV: "",
+    SHELLOPTS: "",
+    PS4: "",
+    LD_PRELOAD: "",
+    LD_LIBRARY_PATH: "",
+    LD_AUDIT: "",
+    LD_DEBUG_OUTPUT: "",
+    LD_PROFILE: "",
+    GLIBC_TUNABLES: "",
+    TAR_OPTIONS: "",
+    OPENSSL_CONF: "",
+    NODE_DEBUG: "",
+    GODEBUG: "",
+    NODE_TLS_REJECT_UNAUTHORIZED: "1",
+    GH_HOST: "github.com",
+    GH_HTTP_UNIX_SOCKET: "",
+    HTTPS_PROXY: "",
+    HTTP_PROXY: "",
+    ALL_PROXY: "",
+    CURL_CA_BUNDLE: "",
+    SSL_CERT_FILE: "",
+    SSL_CERT_DIR: "",
+    NODE_EXTRA_CA_CERTS: "",
+    NODE_OPTIONS: "",
+    GH_TOKEN: `\${{ secrets.GITHUB_TOKEN }}`,
+    RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
+    EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
+    EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
+    EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
+    NPM_PROVENANCE_VERIFIED: `\${{ steps.npm_provenance.outputs.verified }}`
+  };
+  const envIsExact =
+    env !== null &&
+    JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(expectedEnv).sort()) &&
+    Object.entries(expectedEnv).every(([key, value]) => env[key] === value);
+  const capturePositiveInteger = (pattern: RegExp) => {
+    const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
+    return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
+  };
+  const preparationReserve = capturePositiveInteger(
+    /require_job_reserve ([0-9]+) "MCP publisher preparation"/u
+  );
+  const loginReserve = capturePositiveInteger(/require_job_reserve ([0-9]+) "MCP Registry OIDC login"/u);
+  const prewriteReserve = capturePositiveInteger(
+    /require_job_reserve ([0-9]+) "MCP Registry publish and convergence"/u
+  );
+  const publishTimeoutMatch = /deadline_timeout ([0-9]+) ([0-9]+) "MCP Registry publish"/u.exec(run);
+  const publishTimeoutCap = Number(publishTimeoutMatch?.[1] ?? Number.NaN);
+  const publishReserve = Number(publishTimeoutMatch?.[2] ?? Number.NaN);
+  const registryReadCap = capturePositiveInteger(
+    /deadline_timeout ([0-9]+) 10 "MCP Registry read"/u
+  );
+  const evaluatorCap = capturePositiveInteger(
+    /deadline_timeout ([0-9]+) 10 "MCP Registry evaluator"/u
+  );
+  const convergenceWaitCap = capturePositiveInteger(
+    /deadline_timeout ([0-9]+) 10 "MCP Registry convergence wait"/u
+  );
+  const ghReadLimit = capturePositiveInteger(/local limit=([0-9]+)/u);
+  const timeoutKillGrace = 5;
+  const snapshotWorstCase = (registryReadCap + timeoutKillGrace) * 2 + (evaluatorCap + timeoutKillGrace);
+  const finalTagProofWorstCase = 3 * (ghReadLimit + timeoutKillGrace);
+  const reserveCompositionIsExact =
+    preparationReserve === 3300 &&
+    loginReserve === 2700 &&
+    prewriteReserve === 2200 &&
+    publishTimeoutCap === 300 &&
+    publishReserve === 1700 &&
+    registryReadCap === 35 &&
+    evaluatorCap === 15 &&
+    convergenceWaitCap === 11 &&
+    ghReadLimit === 20 &&
+    preparationReserve >=
+      70 + timeoutKillGrace + 30 + timeoutKillGrace + 30 + timeoutKillGrace + 180 + timeoutKillGrace + loginReserve &&
+    loginReserve >= 180 + timeoutKillGrace + snapshotWorstCase + prewriteReserve &&
+    prewriteReserve >= finalTagProofWorstCase + publishTimeoutCap + timeoutKillGrace + publishReserve &&
+    publishReserve >=
+      12 * snapshotWorstCase + 11 * (convergenceWaitCap + timeoutKillGrace) + finalTagProofWorstCase;
+  const initialTagIndex = run.indexOf("assert_remote_tag_identity\nPREFLIGHT_RESULT=$(registry_snapshot preflight)");
+  const firstReuseTagIndex = run.indexOf(
+    'if [ "$PREFLIGHT_ACTION" = "reuse" ]; then\n  assert_remote_tag_identity',
+    initialTagIndex
+  );
+  const preparationIndex = run.indexOf('require_job_reserve 3300 "MCP publisher preparation"', firstReuseTagIndex);
+  const validationIndex = run.indexOf('deadline_timeout 180 10 "MCP manifest validation"', preparationIndex);
+  const loginIndex = run.indexOf('deadline_timeout 180 10 "MCP Registry OIDC login"', validationIndex);
+  const secondPreflightIndex = run.indexOf("SECOND_RESULT=$(registry_snapshot preflight)", loginIndex);
+  const secondReuseTagIndex = run.indexOf(
+    'if [ "$SECOND_ACTION" = "reuse" ]; then\n  assert_remote_tag_identity',
+    secondPreflightIndex
+  );
+  const prewriteReserveIndex = run.indexOf(
+    'require_job_reserve 2200 "MCP Registry publish and convergence"',
+    secondReuseTagIndex
+  );
+  const prewriteSnapshotIndex = run.indexOf("assert_manifest_snapshots", prewriteReserveIndex);
+  const prewriteTagIndex = run.indexOf("assert_remote_tag_identity", prewriteSnapshotIndex);
+  const publishIndex = run.indexOf('"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"', prewriteTagIndex);
+  const convergenceIndex = run.indexOf("for attempt in {1..12}; do", publishIndex);
+  const confirmationIndex = run.indexOf(
+    'if [ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]; then',
+    convergenceIndex
+  );
+  const finalTagIndex = run.indexOf("assert_remote_tag_identity", confirmationIndex);
+  const tagProofCalls = (run.match(/^[ \t]*assert_remote_tag_identity[ \t]*$/gmu) ?? []).length;
+  const publishCalls = mutationMatchCount(run, '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"');
+  const evaluatorInvocation =
+    'printf \'%s\' "$payload" | deadline_timeout 15 10 "MCP Registry evaluator" /usr/bin/env -i \\\n' +
+    '    HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin NODE_TLS_REJECT_UNAUTHORIZED=1 \\\n' +
+    '    "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"';
+  const validationInvocation =
+    'deadline_timeout 180 10 "MCP manifest validation" /usr/bin/env -i \\\n' +
+    '  HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n' +
+    '  "$MCP_PUBLISHER_BIN" validate "$SERVER_JSON_SNAPSHOT"';
+  const loginInvocation =
+    'deadline_timeout 180 10 "MCP Registry OIDC login" /usr/bin/env -i \\\n' +
+    '  HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n' +
+    '  ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \\\n' +
+    '  ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\\n' +
+    '  "$MCP_PUBLISHER_BIN" login github-oidc --registry=https://registry.modelcontextprotocol.io';
+  const publishInvocation =
+    'deadline_timeout 300 1700 "MCP Registry publish" /usr/bin/env -i \\\n' +
+    '  HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n' +
+    '  "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"';
+  const registryActionBody =
+    'registry_action() {\n' +
+    '  printf \'%s\' "$1" | $JQ_BIN -er --arg first "$2" --arg second "$3" \\\n' +
+    "    '.action | select(. == $first or . == $second)'\n" +
+    "}";
+  const registryPayloadBindings =
+    '--arg exactUrl "$REGISTRY_EXACT_URL" --argjson exactExit "$exact_exit" \\\n' +
+    '    --arg exactStatus "$exact_status" --arg exactType "$exact_type" --rawfile exactBody "$exact_body" \\\n' +
+    '    --arg latestUrl "$REGISTRY_LATEST_URL" --argjson latestExit "$latest_exit" \\\n' +
+    '    --arg latestStatus "$latest_status" --arg latestType "$latest_type" --rawfile latestBody "$latest_body"';
+  const registryPayloadObject =
+    '{expected:{server:$server,package:{name:$package,version:$version,mcpName:$mcpName}},\n' +
+    '     exact:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody},\n' +
+    '     latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}}';
+  const publisherCommandLines = run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^"\$MCP_PUBLISHER_BIN"\s+/u.test(line));
+  const publisherCommandsAreExact =
+    JSON.stringify(publisherCommandLines) ===
+    JSON.stringify([
+      '"$MCP_PUBLISHER_BIN" validate "$SERVER_JSON_SNAPSHOT"',
+      '"$MCP_PUBLISHER_BIN" login github-oidc --registry=https://registry.modelcontextprotocol.io',
+      '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"'
+    ]);
+  const publisherIdentityLines = run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("MCP_PUBLISHER_BIN"));
+  const publisherIdentityInventoryIsExact =
+    JSON.stringify(publisherIdentityLines) ===
+    JSON.stringify([
+      'MCP_PUBLISHER_BIN="$PUBLISHER_ROOT/mcp-publisher"',
+      'if [ ! -f "$MCP_PUBLISHER_BIN" ] || [ -L "$MCP_PUBLISHER_BIN" ]; then',
+      '/bin/chmod 0500 "$MCP_PUBLISHER_BIN"',
+      '"$MCP_PUBLISHER_BIN" validate "$SERVER_JSON_SNAPSHOT"',
+      '"$MCP_PUBLISHER_BIN" login github-oidc --registry=https://registry.modelcontextprotocol.io',
+      '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"'
+    ]);
+  const ghIdentityLines = run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("GH_BIN"));
+  const ghIdentityInventoryIsExact =
+    JSON.stringify(ghIdentityLines) ===
+    JSON.stringify(['GH_BIN=$(type -P gh)', '"$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"']);
+  const curlIdentityLines = run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("CURL_BIN"));
+  const curlIdentityInventoryIsExact =
+    JSON.stringify(curlIdentityLines) ===
+    JSON.stringify([
+      'CURL_BIN=$(type -P curl)',
+      'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
+      'deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \\'
+    ]);
+  const controlLoopLines = run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(?:for|while|until)\b/u.test(line));
+  const controlLoopInventoryIsExact =
+    JSON.stringify(controlLoopLines) ===
+    JSON.stringify([
+      "for MANIFEST in package.json server.json; do",
+      'for argument in "$@"; do',
+      "for attempt in {1..12}; do"
+    ]);
+  const firstReuseBlock =
+    'if [ "$PREFLIGHT_ACTION" = "reuse" ]; then\n' +
+    "  assert_remote_tag_identity\n" +
+    '  echo "MCP Registry already exposes exact active/latest $MCP_NAME@$VERSION"\n' +
+    "  exit 0\n" +
+    "fi";
+  const secondReuseBlock =
+    'if [ "$SECOND_ACTION" = "reuse" ]; then\n' +
+    "  assert_remote_tag_identity\n" +
+    '  echo "MCP Registry converged before the sole publish boundary"\n' +
+    "  exit 0\n" +
+    "fi";
+  const confirmedBlock =
+    'if [ "$CONVERGENCE_ACTION" = "confirmed" ]; then\n' +
+    "    MCP_REGISTRY_CONFIRMED=true\n" +
+    "    break\n" +
+    "  fi";
+  const firstDecisionBlock =
+    "PREFLIGHT_RESULT=$(registry_snapshot preflight)\n" +
+    'PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)\n' +
+    firstReuseBlock;
+  const secondDecisionBlock =
+    "SECOND_RESULT=$(registry_snapshot preflight)\n" +
+    'SECOND_ACTION=$(registry_action "$SECOND_RESULT" publish reuse)\n' +
+    secondReuseBlock;
+  const convergenceDecisionBlock =
+    "CONVERGENCE_RESULT=$(registry_snapshot convergence)\n" +
+    '  CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)\n' +
+    `  ${confirmedBlock}`;
+  const manifestSnapshotBody =
+    "assert_manifest_snapshots() {\n" +
+    "  local package_digest server_digest\n" +
+    '  if [ ! -f "$PACKAGE_JSON_SNAPSHOT" ] || [ -L "$PACKAGE_JSON_SNAPSHOT" ] ||\n' +
+    '     [ ! -f "$SERVER_JSON_SNAPSHOT" ] || [ -L "$SERVER_JSON_SNAPSHOT" ]; then\n' +
+    '    echo "::error::Registry manifest snapshot type changed" >&2\n' +
+    "    exit 1\n" +
+    "  fi\n" +
+    '  package_digest=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")\n' +
+    "  package_digest=${package_digest%% *}\n" +
+    '  server_digest=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")\n' +
+    "  server_digest=${server_digest%% *}\n" +
+    '  if [ "$package_digest" != "$PACKAGE_JSON_SHA256" ] || [ "$server_digest" != "$SERVER_JSON_SHA256" ]; then\n' +
+    '    echo "::error::Registry manifest snapshot bytes changed" >&2\n' +
+    "    exit 1\n" +
+    "  fi\n" +
+    "}";
+  const hasForbiddenRegistryWriteArguments = run.split("\n").some((line) => {
+    const trimmed = line.trim();
+    return (
+      /(?:(?:--request|--method)(?:=|\s+)|-X\s*)(?:POST|PUT|PATCH|DELETE)\b/iu.test(trimmed) ||
+      /(?:^|\s)--data(?:-ascii|-binary|-raw|-urlencode)?(?:=|\s)/iu.test(trimmed) ||
+      /(?:^|\s)--upload-file(?:=|\s)/u.test(trimmed) ||
+      /(?:^|\s)(?:-d|-F|-T)(?=\S|\s|$)/u.test(trimmed) ||
+      /(?:^|\s)(?:--form|--form-string|--json)(?:=|\s)/u.test(trimmed)
+    );
+  });
+  const hasForbiddenPublisherMutation = run.split("\n").some((line) =>
+    /(?:^|\/)mcp-publisher"?\s+(?:publish|delete|deprecate|undeprecate|status)\b/iu.test(line.trim())
+  );
+  const hasDirectRegistryGhApiCommand = run
+    .split("\n")
+    .some((line) => /^(?:(?:env|\/usr\/bin\/env)\s+)?(?:gh|\/usr\/bin\/gh|"\$GH_BIN")\s+api\b/u.test(line.trim()));
+  const hasDirectRawCurlCommand = run
+    .split("\n")
+    .some((line) => /^(?:(?:env|\/usr\/bin\/env)\s+)?(?:curl|\/usr\/bin\/curl)\b/u.test(line.trim()));
+  const hasManifestSnapshotRedirection = /(?:>|>>)[ \t]*"\$(?:PACKAGE_JSON_SNAPSHOT|SERVER_JSON_SNAPSHOT|SNAPSHOT)"/u.test(
+    run
+  );
+  const httpFunctionIndex = run.indexOf("registry_http_read() {");
+  const httpBodyResetIndex = run.indexOf(': > "$body_file"', httpFunctionIndex);
+  const httpSetPlusIndex = run.indexOf("set +e", httpBodyResetIndex);
+  const httpResponseIndex = run.indexOf("response=$(deadline_timeout 35 10", httpSetPlusIndex);
+  const httpOutputIndex = run.indexOf('--output "$body_file"', httpResponseIndex);
+  const httpWriteOutIndex = run.indexOf("--write-out $'%{http_code}\\n%{content_type}'", httpOutputIndex);
+  const httpExitCaptureIndex = run.indexOf("request_exit=$?", httpWriteOutIndex);
+  const httpSetMinusIndex = run.indexOf("set -e", httpExitCaptureIndex);
+  const httpCurlExitIndex = run.indexOf('REGISTRY_CURL_EXIT="$request_exit"', httpSetMinusIndex);
+  const httpStatusIndex = run.indexOf("REGISTRY_HTTP_STATUS=$(printf", httpCurlExitIndex);
+  const httpTypeIndex = run.indexOf("REGISTRY_CONTENT_TYPE=$(printf", httpStatusIndex);
+  const snapshotFunctionIndex = run.indexOf("registry_snapshot() {", httpTypeIndex);
+  const snapshotGuardIndex = run.indexOf("assert_manifest_snapshots", snapshotFunctionIndex);
+  const snapshotExactReadIndex = run.indexOf(
+    'registry_http_read "$REGISTRY_EXACT_URL" "$exact_body"',
+    snapshotGuardIndex
+  );
+  const exactExitBindingIndex = run.indexOf('exact_exit="$REGISTRY_CURL_EXIT"', snapshotExactReadIndex);
+  const exactStatusBindingIndex = run.indexOf('exact_status="$REGISTRY_HTTP_STATUS"', exactExitBindingIndex);
+  const exactTypeBindingIndex = run.indexOf('exact_type="$REGISTRY_CONTENT_TYPE"', exactStatusBindingIndex);
+  const snapshotLatestReadIndex = run.indexOf(
+    'registry_http_read "$REGISTRY_LATEST_URL" "$latest_body"',
+    exactTypeBindingIndex
+  );
+  const latestExitBindingIndex = run.indexOf('latest_exit="$REGISTRY_CURL_EXIT"', snapshotLatestReadIndex);
+  const latestStatusBindingIndex = run.indexOf('latest_status="$REGISTRY_HTTP_STATUS"', latestExitBindingIndex);
+  const latestTypeBindingIndex = run.indexOf('latest_type="$REGISTRY_CONTENT_TYPE"', latestStatusBindingIndex);
+  const snapshotPayloadIndex = run.indexOf("payload=$($JQ_BIN -cn", latestTypeBindingIndex);
+  const exactRawfileIndex = run.indexOf('--rawfile exactBody "$exact_body"', snapshotPayloadIndex);
+  const latestRawfileIndex = run.indexOf('--rawfile latestBody "$latest_body"', exactRawfileIndex);
+  const evaluatorInvocationIndex = run.indexOf(evaluatorInvocation, latestRawfileIndex);
+  const validationSnapshotIndex = run.lastIndexOf("assert_manifest_snapshots", validationIndex);
+  const publisherDownloadIndex = run.indexOf('deadline_timeout 70 10 "MCP publisher download"', preparationIndex);
+  const publisherSizeIndex = run.indexOf(
+    '[ "$(/usr/bin/stat -c \'%s\' "$MCP_PUBLISHER_ARCHIVE")" != "$MCP_PUBLISHER_SIZE" ]',
+    publisherDownloadIndex
+  );
+  const publisherHashIndex = run.indexOf("/usr/bin/sha256sum -c -", publisherSizeIndex);
+  const publisherInventoryIndex = run.indexOf(
+    'PUBLISHER_ENTRIES=$(deadline_timeout 30 10 "MCP publisher inventory"',
+    publisherHashIndex
+  );
+  const publisherExtractionIndex = run.indexOf(
+    'deadline_timeout 30 10 "MCP publisher extraction"',
+    publisherInventoryIndex
+  );
+  const publishExitInitIndex = run.indexOf("MCP_PUBLISH_EXIT=0", prewriteTagIndex);
+  const publishSetPlusIndex = run.indexOf("set +e", publishExitInitIndex);
+  const publishExitCaptureIndex = run.indexOf("MCP_PUBLISH_EXIT=$?", publishIndex);
+  const publishSetMinusIndex = run.indexOf("set -e", publishExitCaptureIndex);
+  const workflowIsExact =
+    step?.name === MCP_REGISTRY_STEP_NAME &&
+    step?.if === "steps.dist_tag.outputs.tag == 'latest'" &&
+    step?.shell === "/bin/bash --noprofile --norc -p -e -o pipefail {0}" &&
+    envIsExact &&
+    run.length > 0 &&
+    run.length <= GITHUB_RUN_CHARACTER_LIMIT &&
+    run.startsWith(`set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\nbuiltin umask 077\n`) &&
+    run.includes('! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]') &&
+    run.includes('[ "$TAG" != "v$VERSION" ] || [ "$NPM_PROVENANCE_VERIFIED" != "true" ]') &&
+    run.includes('WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")') &&
+    run.includes('GH_CONFIG_DIR="$WORK_ROOT/gh-config"') &&
+    run.includes('/bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"') &&
+    run.includes('EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"') &&
+    run.includes('GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null') &&
+    run.includes('GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1') &&
+    run.includes('if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||') &&
+    mutationMatchCount(run, 'registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json') === 2 &&
+    run.includes(
+      'if [ "$(registry_git rev-parse "$SOURCE_SHA:$MANIFEST")" != "$(registry_git hash-object "$SNAPSHOT")" ]; then'
+    ) &&
+    run.includes('PACKAGE_JSON_SHA256=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")') &&
+    run.includes('SERVER_JSON_SHA256=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")') &&
+    mutationMatchCount(run, manifestSnapshotBody) === 1 &&
+    run.includes('PACKAGE_NAME=$($JQ_BIN -er \'.name | select(type == "string")\' "$PACKAGE_JSON_SNAPSHOT")') &&
+    run.includes('EXPECTED_SERVER_JSON=$($JQ_BIN -ce \'.\' "$SERVER_JSON_SNAPSHOT")') &&
+    run.includes('[ "$PACKAGE_NAME" != "@oomkapwn/enquire-mcp" ]') &&
+    run.includes('[ "$MCP_NAME" != "io.github.oomkapwn/enquire-mcp" ]') &&
+    mutationMatchCount(run, NPM_RESERVE_DEADLINE_GUARD) === 1 &&
+    mutationMatchCount(run, GH_READ_DEADLINE_GUARD) === 1 &&
+    mutationMatchCount(run, '"$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"') === 1 &&
+    mutationMatchCount(run, "registry_git() {") === 1 &&
+    mutationMatchCount(run, "require_job_reserve() {") === 1 &&
+    mutationMatchCount(run, "deadline_timeout() {") === 1 &&
+    mutationMatchCount(run, "gh_read() {") === 1 &&
+    mutationMatchCount(run, "assert_manifest_snapshots() {") === 1 &&
+    mutationMatchCount(run, "registry_http_read() {") === 1 &&
+    mutationMatchCount(run, "registry_snapshot() {") === 1 &&
+    mutationMatchCount(run, "registry_action() {") === 1 &&
+    mutationMatchCount(run, "registry_action") === 4 &&
+    mutationMatchCount(run, "registry_snapshot") === 4 &&
+    mutationMatchCount(run, "registry_http_read") === 3 &&
+    mutationMatchCount(run, "assert_manifest_snapshots") === 4 &&
+    mutationMatchCount(run, "registry_git") === 6 &&
+    mutationMatchCount(run, "require_job_reserve") === 5 &&
+    mutationMatchCount(run, "deadline_timeout") === 10 &&
+    mutationMatchCount(run, "gh_read") === 6 &&
+    mutationMatchCount(run, "MCP_PUBLISHER_BIN") === 7 &&
+    mutationMatchCount(run, "GH_BIN") === 2 &&
+    mutationMatchCount(run, "CURL_BIN") === 3 &&
+    mutationMatchCount(run, "PACKAGE_JSON_SNAPSHOT") === 8 &&
+    mutationMatchCount(run, "SERVER_JSON_SNAPSHOT") === 9 &&
+    mutationMatchCount(run, "EXPECTED_SERVER_JSON") === 2 &&
+    mutationMatchCount(run, "PACKAGE_JSON_SHA256") === 4 &&
+    mutationMatchCount(run, "SERVER_JSON_SHA256") === 4 &&
+    mutationMatchCount(run, '"$SNAPSHOT"') === 3 &&
+    reserveCompositionIsExact &&
+    mutationMatchCount(run, "assert_remote_tag_identity() {") === 1 &&
+    tagProofCalls === 5 &&
+    mutationMatchCount(run, "assert_remote_tag_identity") === 6 &&
+    mutationMatchCount(run, "?include_deleted=true") === 2 &&
+    run.includes(
+      'REGISTRY_EXACT_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/${VERSION_ENCODED}?include_deleted=true"'
+    ) &&
+    run.includes(
+      'REGISTRY_LATEST_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/latest?include_deleted=true"'
+    ) &&
+    run.includes('deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable') &&
+    run.includes("--max-filesize 1048576 --retry 0 --proto '=https' --tlsv1.2") &&
+    run.includes("--header 'Accept: application/json, application/problem+json'") &&
+    run.includes('registry_http_read "$REGISTRY_EXACT_URL" "$exact_body"') &&
+    run.includes('registry_http_read "$REGISTRY_LATEST_URL" "$latest_body"') &&
+    mutationMatchCount(run, evaluatorInvocation) === 1 &&
+    mutationMatchCount(run, registryPayloadBindings) === 1 &&
+    mutationMatchCount(run, registryPayloadObject) === 1 &&
+    mutationMatchCount(run, "registry_snapshot preflight") === 2 &&
+    mutationMatchCount(run, "registry_snapshot convergence") === 1 &&
+    mutationMatchCount(run, registryActionBody) === 1 &&
+    mutationMatchCount(run, "PREFLIGHT_ACTION=") === 1 &&
+    mutationMatchCount(run, "SECOND_ACTION=") === 1 &&
+    mutationMatchCount(run, "CONVERGENCE_ACTION=") === 1 &&
+    mutationMatchCount(run, firstDecisionBlock) === 1 &&
+    mutationMatchCount(run, secondDecisionBlock) === 1 &&
+    mutationMatchCount(run, convergenceDecisionBlock) === 1 &&
+    controlLoopInventoryIsExact &&
+    run.includes('MCP_PUBLISHER_TAG="v1.7.9"') &&
+    run.includes('MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"') &&
+    run.includes('MCP_PUBLISHER_SIZE="7297012"') &&
+    run.includes(
+      'MCP_PUBLISHER_URL="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"'
+    ) &&
+    run.includes('deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail') &&
+    run.includes('--max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1') &&
+    run.includes('printf \'%s  %s\\n\' "$MCP_PUBLISHER_SHA256" "$MCP_PUBLISHER_ARCHIVE" | /usr/bin/sha256sum -c -') &&
+    run.includes('PUBLISHER_ENTRIES=$(deadline_timeout 30 10 "MCP publisher inventory" "$TAR_BIN" -tzf') &&
+    run.includes('if [ "$PUBLISHER_ENTRIES" != "mcp-publisher" ]; then') &&
+    run.includes('--no-same-owner --no-same-permissions -C "$PUBLISHER_ROOT" -- mcp-publisher') &&
+    run.includes('/bin/chmod 0500 "$MCP_PUBLISHER_BIN"') &&
+    mutationMatchCount(run, validationInvocation) === 1 &&
+    mutationMatchCount(run, loginInvocation) === 1 &&
+    mutationMatchCount(run, publishInvocation) === 1 &&
+    publisherCommandsAreExact &&
+    publisherIdentityInventoryIsExact &&
+    ghIdentityInventoryIsExact &&
+    curlIdentityInventoryIsExact &&
+    !hasForbiddenRegistryWriteArguments &&
+    !hasForbiddenPublisherMutation &&
+    !hasDirectRegistryGhApiCommand &&
+    !hasDirectRawCurlCommand &&
+    !hasManifestSnapshotRedirection &&
+    run.includes('TOKEN_FILE="$MCP_REGISTRY_HOME/.config/mcp-publisher/token.json"') &&
+    run.includes('type == "object" and keys == ["method","registry","token"]') &&
+    run.includes('.method == "github-oidc" and .registry == "https://registry.modelcontextprotocol.io" and') &&
+    run.includes('(.token | type) == "string" and (.token | length) > 0') &&
+    run.includes('\' "$TOKEN_FILE" >/dev/null; then') &&
+    publishCalls === 1 &&
+    mutationMatchCount(run, "MCP_PUBLISH_ATTEMPTED=true") === 1 &&
+    run.includes(
+      "assert_manifest_snapshots\nassert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true\nMCP_PUBLISH_EXIT=0\nset +e"
+    ) &&
+    initialTagIndex >= 0 &&
+    firstReuseTagIndex > initialTagIndex &&
+    preparationIndex > firstReuseTagIndex &&
+    validationIndex > preparationIndex &&
+    validationSnapshotIndex > preparationIndex &&
+    validationSnapshotIndex < validationIndex &&
+    loginIndex > validationIndex &&
+    secondPreflightIndex > loginIndex &&
+    secondReuseTagIndex > secondPreflightIndex &&
+    prewriteReserveIndex > secondReuseTagIndex &&
+    prewriteSnapshotIndex > prewriteReserveIndex &&
+    prewriteTagIndex > prewriteSnapshotIndex &&
+    publishIndex > prewriteTagIndex &&
+    publishExitInitIndex > prewriteTagIndex &&
+    publishSetPlusIndex > publishExitInitIndex &&
+    publishIndex > publishSetPlusIndex &&
+    publishExitCaptureIndex > publishIndex &&
+    publishSetMinusIndex > publishExitCaptureIndex &&
+    convergenceIndex > publishIndex &&
+    convergenceIndex > publishSetMinusIndex &&
+    confirmationIndex > convergenceIndex &&
+    finalTagIndex > confirmationIndex &&
+    httpFunctionIndex >= 0 &&
+    httpBodyResetIndex > httpFunctionIndex &&
+    httpSetPlusIndex > httpBodyResetIndex &&
+    httpResponseIndex > httpSetPlusIndex &&
+    httpOutputIndex > httpResponseIndex &&
+    httpWriteOutIndex > httpOutputIndex &&
+    httpExitCaptureIndex > httpWriteOutIndex &&
+    httpSetMinusIndex > httpExitCaptureIndex &&
+    httpCurlExitIndex > httpSetMinusIndex &&
+    httpStatusIndex > httpCurlExitIndex &&
+    httpTypeIndex > httpStatusIndex &&
+    snapshotFunctionIndex > httpTypeIndex &&
+    snapshotGuardIndex > snapshotFunctionIndex &&
+    snapshotExactReadIndex > snapshotGuardIndex &&
+    exactExitBindingIndex > snapshotExactReadIndex &&
+    exactStatusBindingIndex > exactExitBindingIndex &&
+    exactTypeBindingIndex > exactStatusBindingIndex &&
+    snapshotLatestReadIndex > exactTypeBindingIndex &&
+    latestExitBindingIndex > snapshotLatestReadIndex &&
+    latestStatusBindingIndex > latestExitBindingIndex &&
+    latestTypeBindingIndex > latestStatusBindingIndex &&
+    snapshotPayloadIndex > latestTypeBindingIndex &&
+    exactRawfileIndex > snapshotPayloadIndex &&
+    latestRawfileIndex > exactRawfileIndex &&
+    evaluatorInvocationIndex > latestRawfileIndex &&
+    (run.match(/^[ \t]*assert_manifest_snapshots[ \t]*$/gmu) ?? []).length === 3 &&
+    publisherDownloadIndex > preparationIndex &&
+    publisherSizeIndex > publisherDownloadIndex &&
+    publisherHashIndex > publisherSizeIndex &&
+    publisherInventoryIndex > publisherHashIndex &&
+    publisherExtractionIndex > publisherInventoryIndex &&
+    mutationMatchCount(run.slice(convergenceIndex), '"$MCP_PUBLISHER_BIN" publish') === 0 &&
+    run.includes('CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)') &&
+    run.includes('if [ "$attempt" -lt 12 ]; then') &&
+    run.includes('deadline_timeout 11 10 "MCP Registry convergence wait" /bin/sleep 10') &&
+    mutationMatchCount(run, "MCP_REGISTRY_CONFIRMED=false") === 1 &&
+    mutationMatchCount(run, "MCP_REGISTRY_CONFIRMED=true") === 1 &&
+    mutationMatchCount(run, confirmedBlock) === 1 &&
+    !run.includes("node -e") &&
+    !run.includes('"$NODE_BIN" -e') &&
+    !/(?:^|[ \t])(?:delete|deprecate|undeprecate)(?:[ \t]|$)/mu.test(run) &&
+    mcpRegistryEvaluatorProblems(integrity).length === 0;
+  return workflowIsExact ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+}
+
+function mcpRegistryContractProblems(steps: YamlRecord[], integrity: string, permissions: YamlRecord): string[] {
+  const registryIndices = steps
+    .map((step, index) => (step.name === MCP_REGISTRY_STEP_NAME ? index : -1))
+    .filter((index) => index >= 0);
+  const uploadIndex = steps.findIndex((step) => step.name === "Upload Basic MCPB asset, checksum, and provenance");
+  const registryIndex = registryIndices[0] ?? -1;
+  if (
+    permissions["id-token"] !== "write" ||
+    registryIndices.length !== 1 ||
+    uploadIndex < 0 ||
+    registryIndex !== uploadIndex + 1 ||
+    registryIndex !== steps.length - 1
+  ) {
+    return [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+  }
+  return mcpRegistryStepProblems(steps[registryIndex], integrity);
+}
+
 function npmProvenanceContractProblems(release: string, integrity: string): string[] {
   const workflowProblems = npmProvenanceWorkflowProblems(release);
   if (workflowProblems.length !== 0) return workflowProblems;
@@ -2890,6 +3590,7 @@ function mcpbContractProblems(inputs: {
   let lock: Record<string, unknown>;
   let pkg: Record<string, unknown>;
   let releaseSteps: Array<Record<string, unknown>>;
+  let releasePermissions: YamlRecord;
   let releaseTransactionFixture: string;
   try {
     manifest = JSON.parse(inputs.manifest) as Record<string, unknown>;
@@ -2898,6 +3599,7 @@ function mcpbContractProblems(inputs: {
     const releaseDocument = yamlRecord(load(inputs.release));
     const releaseJob = yamlRecord(yamlRecord(releaseDocument?.jobs)?.publish);
     releaseSteps = yamlSteps(releaseJob ?? {});
+    releasePermissions = yamlRecord(releaseDocument?.permissions) ?? {};
     releaseTransactionFixture = releaseTransactionFixtureBody(releaseDocument);
   } catch {
     return ["MCPB manifest/package metadata and release workflow must parse"];
@@ -2916,6 +3618,7 @@ function mcpbContractProblems(inputs: {
     : [];
   const args = Array.isArray(config?.args) ? config.args.filter((arg): arg is string => typeof arg === "string") : [];
   problems.push(...npmProvenanceContractProblems(inputs.release, inputs.integrity));
+  problems.push(...mcpRegistryContractProblems(releaseSteps, inputs.integrity, releasePermissions));
   if (
     manifest.manifest_version !== "0.3" ||
     !String(manifest.$schema ?? "").includes("70fe3b34cd6dff1b3bba046638edc72a6467a4fb") ||
@@ -2940,7 +3643,8 @@ function mcpbContractProblems(inputs: {
     "Publish with provenance or verify an exact prior publication",
     NPM_PROVENANCE_STEP_NAME,
     "Prepare draft GitHub Release",
-    "Upload Basic MCPB asset, checksum, and provenance"
+    "Upload Basic MCPB asset, checksum, and provenance",
+    MCP_REGISTRY_STEP_NAME
   ];
   const releaseStateIndices = releaseStateSteps.map((name) => releaseSteps.findIndex((step) => step.name === name));
   if (
@@ -3362,9 +4066,10 @@ function mcpbContractProblems(inputs: {
     "Preflight existing GitHub release and every Basic asset before npm",
     "Publish with provenance or verify an exact prior publication",
     "Prepare draft GitHub Release",
-    "Upload Basic MCPB asset, checksum, and provenance"
+    "Upload Basic MCPB asset, checksum, and provenance",
+    MCP_REGISTRY_STEP_NAME
   ];
-  const remoteTagIdentityExpectedCalls = [1, 2, 3, 7];
+  const remoteTagIdentityExpectedCalls = [1, 2, 3, 7, 5];
   const remoteTagIdentityMarker = "assert_remote_tag_identity() {";
   const remoteTagIdentityRuns = remoteTagIdentityStepNames.map((name) =>
     name === "Upload Basic MCPB asset, checksum, and provenance"
@@ -3488,13 +4193,13 @@ function mcpbContractProblems(inputs: {
     mutationMatchCount(inputs.release, MCPB_PREFLIGHT_ASSET_COMPARE) !== 1 ||
     inputs.release.includes("git ls-remote --tags origin") ||
     !remoteTagIdentityIsCanonical ||
-    (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 4 ||
-    (inputs.release.match(/git\/ref\/tags\/\$TAG/g) ?? []).length !== 8 ||
-    (inputs.release.match(/git\/tags\/\$TAG_OBJECT_SHA/g) ?? []).length !== 4 ||
-    (inputs.release.match(/TAG_REF_CONFIRM_JSON/g) ?? []).length !== 8 ||
-    (inputs.release.match(/\.sha == \$tag_object_sha and \.tag == \$tag/g) ?? []).length !== 4 ||
-    (inputs.release.match(/\.type == "commit" and \.sha == \$sha/g) ?? []).length !== 4 ||
-    (inputs.release.match(/\.type == "tag" and \.sha == \$sha/g) ?? []).length !== 4 ||
+    (inputs.release.match(/assert_remote_tag_identity\(\) \{/g) ?? []).length !== 5 ||
+    (inputs.release.match(/git\/ref\/tags\/\$TAG/g) ?? []).length !== 10 ||
+    (inputs.release.match(/git\/tags\/\$TAG_OBJECT_SHA/g) ?? []).length !== 5 ||
+    (inputs.release.match(/TAG_REF_CONFIRM_JSON/g) ?? []).length !== 10 ||
+    (inputs.release.match(/\.sha == \$tag_object_sha and \.tag == \$tag/g) ?? []).length !== 5 ||
+    (inputs.release.match(/\.type == "commit" and \.sha == \$sha/g) ?? []).length !== 5 ||
+    (inputs.release.match(/\.type == "tag" and \.sha == \$sha/g) ?? []).length !== 5 ||
     inputs.release.includes("target_commitish") ||
     inputs.release.includes("--target") ||
     !inputs.release.includes("--verify-tag") ||
@@ -3546,6 +4251,292 @@ function mcpbContractProblems(inputs: {
     );
   }
   return problems;
+}
+
+function assertMcpRegistryEvaluatorContract() {
+  expect(evaluateMcpRegistryState(mcpRegistryState(), "preflight")).toEqual({ action: "reuse" });
+  expect(
+    evaluateMcpRegistryState(
+      mcpRegistryState(mcpRegistryNotFoundEnvelope("exact"), mcpRegistryNotFoundEnvelope("latest")),
+      "preflight"
+    )
+  ).toEqual({ action: "publish" });
+
+  const priorServer = mcpRegistryServer("3.11.6");
+  expect(
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryNotFoundEnvelope("exact"),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(priorServer) })
+      ),
+      "preflight"
+    )
+  ).toEqual({ action: "publish" });
+
+  const expectedServer = mcpRegistryServer();
+  const reorderedServer = Object.fromEntries(Object.entries(expectedServer).reverse());
+  const reorderedBody = mcpRegistryRecordBody(reorderedServer);
+  expect(
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact", { body: reorderedBody }),
+        mcpRegistryEnvelope("latest", { body: reorderedBody }),
+        expectedServer
+      ),
+      "preflight"
+    )
+  ).toEqual({ action: "reuse" });
+  expect(evaluateMcpRegistryState(mcpRegistryState(), "convergence")).toEqual({ action: "confirmed" });
+  const registryCli = runReleaseIntegrityCli(
+    ["mcp-registry-state", "preflight"],
+    JSON.stringify(mcpRegistryState())
+  );
+  expect(registryCli.status).toBe(0);
+  expect(JSON.parse(registryCli.stdout)).toEqual({ action: "reuse" });
+  expect(
+    runReleaseIntegrityCli(["mcp-registry-state", "publish"], JSON.stringify(mcpRegistryState())).status
+  ).not.toBe(0);
+
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact"),
+        mcpRegistryEnvelope("latest", {
+          body: mcpRegistryRecordBody(mcpRegistryServer(), { updatedAt: "2026-08-02T12:00:02Z" })
+        })
+      ),
+      "preflight"
+    )
+  ).toThrow(/do not prove/);
+
+  for (const retryState of [
+    mcpRegistryState(
+      mcpRegistryEnvelope("exact", { curlExit: 28, httpStatus: "000", contentType: "", body: "" })
+    ),
+    mcpRegistryState(mcpRegistryNotFoundEnvelope("exact")),
+    mcpRegistryState(mcpRegistryEnvelope("exact", { httpStatus: "429", body: "rate limited" })),
+    mcpRegistryState(mcpRegistryEnvelope("exact", { httpStatus: "503", body: "unavailable" })),
+    mcpRegistryState(
+      mcpRegistryEnvelope("exact"),
+      mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(priorServer) })
+    ),
+    mcpRegistryState(
+      mcpRegistryEnvelope("exact", { body: mcpRegistryRecordBody(mcpRegistryServer(), { isLatest: false }) })
+    )
+  ]) {
+    expect(evaluateMcpRegistryState(retryState, "convergence")).toEqual({ action: "retry" });
+  }
+
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact", { body: mcpRegistryRecordBody(mcpRegistryServer(), { isLatest: false }) }),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(mcpRegistryServer(), { isLatest: false }) })
+      ),
+      "preflight"
+    )
+  ).toThrow();
+  for (const status of ["deprecated", "deleted"]) {
+    for (const phase of ["preflight", "convergence"] as const) {
+      expect(() =>
+        evaluateMcpRegistryState(
+          mcpRegistryState(
+            mcpRegistryEnvelope("exact", { body: mcpRegistryRecordBody(mcpRegistryServer(), { status }) })
+          ),
+          phase
+        )
+      ).toThrow();
+    }
+  }
+
+  const divergentServer = mcpRegistryServer(MCP_REGISTRY_VERSION, { description: "A different manifest." });
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact", { body: mcpRegistryRecordBody(divergentServer) }),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(divergentServer) })
+      ),
+      "preflight"
+    )
+  ).toThrow(/diverges/);
+
+  const reorderedArrayServer = JSON.parse(JSON.stringify(expectedServer)) as Record<string, unknown>;
+  const reorderedPackage = (reorderedArrayServer.packages as Array<Record<string, unknown>>)[0];
+  if (!reorderedPackage) throw new Error("MCP Registry fixture package is missing");
+  reorderedPackage.runtimeArguments = [...(reorderedPackage.runtimeArguments as unknown[])].reverse();
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact", { body: mcpRegistryRecordBody(reorderedArrayServer) }),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(reorderedArrayServer) }),
+        expectedServer
+      ),
+      "preflight"
+    )
+  ).toThrow(/diverges/);
+
+  const unknownRuntimeFieldServer = JSON.parse(JSON.stringify(expectedServer)) as Record<string, unknown>;
+  const unknownRuntimePackage = (unknownRuntimeFieldServer.packages as Array<Record<string, unknown>>)[0];
+  const unknownRuntimeArgument = (unknownRuntimePackage?.runtimeArguments as Array<Record<string, unknown>>)[0];
+  if (!unknownRuntimeArgument) throw new Error("MCP Registry fixture runtime argument is missing");
+  unknownRuntimeArgument.unexpected = true;
+  expect(() =>
+    evaluateMcpRegistryState(mcpRegistryState(undefined, undefined, unknownRuntimeFieldServer), "preflight")
+  ).toThrow(/unexpected fields/);
+
+  for (const invalidExact of [
+    mcpRegistryEnvelope("exact", { requestUrl: `${MCP_REGISTRY_BASE_URL}/${MCP_REGISTRY_VERSION}` }),
+    mcpRegistryEnvelope("exact", { curlExit: -1 }),
+    mcpRegistryEnvelope("exact", { curlExit: 28, httpStatus: "000", contentType: "", body: "" }),
+    mcpRegistryEnvelope("exact", { httpStatus: "20" }),
+    mcpRegistryEnvelope("exact", { httpStatus: "429", body: "rate limited" }),
+    mcpRegistryEnvelope("exact", { httpStatus: "503", body: "unavailable" }),
+    mcpRegistryEnvelope("exact", { contentType: "application/json; charset=utf-8" }),
+    mcpRegistryEnvelope("exact", { body: "{" }),
+    mcpRegistryEnvelope("exact", { body: `${mcpRegistryRecordBody()} {}` }),
+    mcpRegistryEnvelope("exact", {
+      body: JSON.stringify({
+        server: mcpRegistryServer(),
+        _meta: JSON.parse(mcpRegistryRecordBody())._meta,
+        extra: true
+      })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: mcpRegistryRecordBody(mcpRegistryServer(), { isLatest: undefined })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: mcpRegistryRecordBody(mcpRegistryServer(), { statusChangedAt: "2026-02-30T12:00:00Z" })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: mcpRegistryRecordBody(mcpRegistryServer(), { unexpected: true })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: mcpRegistryRecordBody(mcpRegistryServer(), { statusMessage: "x".repeat(501) })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: JSON.stringify({ server: mcpRegistryServer(), _meta: {} })
+    }),
+    mcpRegistryEnvelope("exact", {
+      body: JSON.stringify({
+        server: mcpRegistryServer(),
+        _meta: { [MCP_REGISTRY_OFFICIAL_META]: "active" }
+      })
+    })
+  ]) {
+    expect(() => evaluateMcpRegistryState(mcpRegistryState(invalidExact), "preflight")).toThrow();
+  }
+
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryNotFoundEnvelope("exact"),
+        mcpRegistryEnvelope("latest", {
+          body: mcpRegistryRecordBody(),
+          contentType: "application/problem+json"
+        })
+      ),
+      "preflight"
+    )
+  ).toThrow();
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryEnvelope("exact", {
+          httpStatus: "404",
+          contentType: "application/problem+json",
+          body: JSON.stringify({ detail: "Not here", status: 404, title: "Not Found" })
+        }),
+        mcpRegistryNotFoundEnvelope("latest")
+      ),
+      "preflight"
+    )
+  ).toThrow();
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryNotFoundEnvelope("exact"),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody() })
+      ),
+      "preflight"
+    )
+  ).toThrow(/disagree/);
+  expect(() =>
+    evaluateMcpRegistryState(
+      mcpRegistryState(
+        mcpRegistryNotFoundEnvelope("exact"),
+        mcpRegistryEnvelope("latest", { body: mcpRegistryRecordBody(mcpRegistryServer("5.0.0")) })
+      ),
+      "preflight"
+    )
+  ).toThrow(/newer/);
+
+  for (const invalidServer of [
+    mcpRegistryServer(MCP_REGISTRY_VERSION, { $schema: "https://example.invalid/server.schema.json" }),
+    mcpRegistryServer(MCP_REGISTRY_VERSION, { description: "x".repeat(101) }),
+    mcpRegistryServer("4.0.0-rc.1"),
+    mcpRegistryServer(MCP_REGISTRY_VERSION, { repository: { url: "https://example.invalid", source: "github" } }),
+    mcpRegistryServer(MCP_REGISTRY_VERSION, {
+      packages: [
+        {
+          registryType: "npm",
+          identifier: MCP_REGISTRY_PACKAGE,
+          version: MCP_REGISTRY_VERSION,
+          transport: { type: "streamable-http" }
+        }
+      ]
+    })
+  ]) {
+    expect(() =>
+      evaluateMcpRegistryState(mcpRegistryState(undefined, undefined, invalidServer), "preflight")
+    ).toThrow();
+  }
+
+  const wrongPackageState = mcpRegistryState();
+  wrongPackageState.expected.package.name = "@attacker/enquire-mcp";
+  expect(() => evaluateMcpRegistryState(wrongPackageState, "preflight")).toThrow(/identity/);
+  expect(() => evaluateMcpRegistryState(mcpRegistryState(), "publish")).toThrow(/phase/);
+}
+
+function assertMcpRegistryTrackedManifestContract(serverSource: string, packageSource: string) {
+  const server = JSON.parse(serverSource) as Record<string, unknown>;
+  const pkg = JSON.parse(packageSource) as Record<string, unknown>;
+  expect(server.version).toBe(pkg.version);
+  expect(pkg.name).toBe(MCP_REGISTRY_PACKAGE);
+  expect(pkg.mcpName).toBe(MCP_REGISTRY_NAME);
+  expect(Array.isArray(server.packages)).toBe(true);
+  for (const packageEntry of server.packages as Array<Record<string, unknown>>) {
+    expect(packageEntry.version).toBe(pkg.version);
+  }
+
+  const stableServer = JSON.parse(JSON.stringify(server)) as Record<string, unknown>;
+  stableServer.version = MCP_REGISTRY_VERSION;
+  for (const packageEntry of stableServer.packages as Array<Record<string, unknown>>) {
+    packageEntry.version = MCP_REGISTRY_VERSION;
+  }
+  const state = {
+    expected: {
+      server: stableServer,
+      package: { name: pkg.name, version: MCP_REGISTRY_VERSION, mcpName: pkg.mcpName }
+    },
+    exact: mcpRegistryNotFoundEnvelope("exact"),
+    latest: mcpRegistryNotFoundEnvelope("latest")
+  };
+  expect(evaluateMcpRegistryState(state, "preflight")).toEqual({ action: "publish" });
+
+  const excessiveDescription = JSON.parse(JSON.stringify(stableServer)) as Record<string, unknown>;
+  excessiveDescription.description = "x".repeat(101);
+  expect(() =>
+    evaluateMcpRegistryState(
+      { ...state, expected: { ...state.expected, server: excessiveDescription } },
+      "preflight"
+    )
+  ).toThrow(/1 to 100 Unicode characters/);
+  expect(() =>
+    evaluateMcpRegistryState(
+      { ...state, expected: { ...state.expected, package: { ...state.expected.package, mcpName: "invalid/name" } } },
+      "preflight"
+    )
+  ).toThrow(/identity/);
 }
 
 function assertNpmProvenanceEvaluatorContract() {
@@ -4308,6 +5299,7 @@ describe("release identity and exact required-job gate", () => {
   // Exact-head V8 coverage measured 14,996ms after redundant parse removal, so
   // keep a scoped ceiling with real hang detection instead of weakening cases.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
+    assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
     let replacementCallbackCalls = 0;
     const countingReplacement: MutationReplacer = () => {
@@ -4438,6 +5430,8 @@ describe("release identity and exact required-job gate", () => {
     const packageConsumer = readFileSync(new URL("../scripts/package-consumer.mjs", import.meta.url), "utf8");
     const protocolConformance = readFileSync(new URL("../scripts/protocol-conformance.mjs", import.meta.url), "utf8");
     const packageJson = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const mcpRegistryManifest = readFileSync(new URL("../server.json", import.meta.url), "utf8");
+    assertMcpRegistryTrackedManifestContract(mcpRegistryManifest, packageJson);
     const mcpbInputs = {
       manifest: readFileSync(new URL("../mcpb/manifest.json", import.meta.url), "utf8"),
       cli: readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8"),
@@ -4463,6 +5457,573 @@ describe("release identity and exact required-job gate", () => {
     expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
     expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
+    expect(mcpRegistryEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
+
+    for (const weakenedMcpRegistryEvaluator of [
+      replaceExactly(
+        mcpbInputs.integrity,
+        'import { isDeepStrictEqual } from "node:util";',
+        "const isDeepStrictEqual = () => true;"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
+        'apiBase: "https://registry.modelcontextprotocol.io/v0/servers"'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
+        'schema: "https://example.invalid/server.schema.json"'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "export function evaluateMcpRegistryState(input, phase)",
+        "function evaluateMcpRegistryState(input, phase)"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'phase !== "preflight" && phase !== "convergence"',
+        'phase !== "preflight" || phase !== "convergence"'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);",
+        "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-rc\\.\\d+)?$/u.exec(value);"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "Array.from(server.description).length > 100",
+        "Array.from(server.description).length > 1000"
+      ),
+      replaceExactly(mcpbInputs.integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema", "false"),
+      replaceExactly(mcpbInputs.integrity, 'transport.type !== "stdio"', "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
+        "void server"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "packageEntry.runtimeArguments.length !== 2",
+        "packageEntry.runtimeArguments.length < 1"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["type", "valueHint", "value", "description", "isRequired", "format"]',
+        '["type", "valueHint", "value"]'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'assertExactRecord(input, ["expected", "exact", "latest"]',
+        'assertExactRecord(input, ["expected", "exact"]'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
+        '["requestUrl", "httpStatus", "contentType", "body"]'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "encodeURIComponent(expected.package.mcpName)",
+        "expected.package.mcpName"
+      ),
+      replaceAllExactly(mcpbInputs.integrity, "?include_deleted=true", "?include_deleted=false", 2),
+      replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/json"', "false"),
+      replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/problem+json"', "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["detail", "status", "title"]',
+        '["detail", "title"]'
+      ),
+      replaceExactly(mcpbInputs.integrity, 'problem.detail !== "Server not found"', "false"),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'problem.status !== 404 || problem.title !== "Not Found"',
+        "false"
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["isLatest", "publishedAt", "status", "statusChangedAt"]',
+        '["status"]'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '["active", "deprecated", "deleted"]',
+        '["active"]'
+      ),
+      replaceExactly(mcpbInputs.integrity, 'typeof metadata.isLatest !== "boolean"', "false"),
+      replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.publishedAt", "void("),
+      replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.statusChangedAt", "void("),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "Array.from(metadata.statusMessage).length > 500",
+        "Array.from(metadata.statusMessage).length > 5000"
+      ),
+      replaceExactly(mcpbInputs.integrity, 'observation.official.status === "deleted"', "false"),
+      replaceExactly(mcpbInputs.integrity, 'observation.official.status === "deprecated"', "false"),
+      replaceExactly(mcpbInputs.integrity, "!isDeepStrictEqual(exact.server, expected.server)", "false"),
+      replaceExactly(mcpbInputs.integrity, "!isDeepStrictEqual(latest.server, expected.server)", "false"),
+      replaceAllExactly(mcpbInputs.integrity, "!isDeepStrictEqual(exact.response, latest.response)", "false", 2),
+      replaceExactly(
+        mcpbInputs.integrity,
+        'phase === "convergence" && (status === 429 || status >= 500)',
+        'phase === "convergence"'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        '} else if (mode === "mcp-registry-state")',
+        '} else if (mode === "mcp-registry-read")'
+      ),
+      replaceExactly(
+        mcpbInputs.integrity,
+        "evaluateMcpRegistryState(payload, first)",
+        "evaluateMcpRegistryState(payload, second)"
+      )
+    ]) {
+      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(
+        MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM
+      );
+    }
+    const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));
+    const registryReleaseJob = yamlRecord(yamlRecord(registryReleaseDocument?.jobs)?.publish);
+    const registryReleaseSteps = yamlSteps(registryReleaseJob ?? {});
+    const registryReleasePermissions = yamlRecord(registryReleaseDocument?.permissions) ?? {};
+    const registryStep = namedStep(registryReleaseSteps, MCP_REGISTRY_STEP_NAME);
+    expect(
+      mcpRegistryContractProblems(registryReleaseSteps, mcpbInputs.integrity, registryReleasePermissions)
+    ).toEqual([]);
+    expect(registryStep).toBeDefined();
+    if (registryStep === undefined) throw new Error("MCP Registry release step is missing from the baseline");
+    const registryRun = runBody(registryStep);
+    const registryEnv = yamlRecord(registryStep.env);
+    expect(registryRun.length).toBeLessThanOrEqual(GITHUB_RUN_CHARACTER_LIMIT);
+    expect(registryEnv).not.toBeNull();
+    if (registryEnv === null) throw new Error("MCP Registry release environment is missing from the baseline");
+    expect(
+      mcpRegistryContractProblems(
+        [...registryReleaseSteps, registryStep],
+        mcpbInputs.integrity,
+        registryReleasePermissions
+      )
+    ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
+    expect(
+      mcpRegistryContractProblems(registryReleaseSteps, mcpbInputs.integrity, {
+        ...registryReleasePermissions,
+        "id-token": "none"
+      })
+    ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
+    const registryStepWithRun = (run: string): YamlRecord => ({ ...registryStep, run });
+    const weakenedRegistrySteps: YamlRecord[] = [
+      { ...registryStep, if: "always()" },
+      {
+        ...registryStep,
+        env: { ...registryEnv, NODE_OPTIONS: "--require=/tmp/attacker.cjs" }
+      },
+      {
+        ...registryStep,
+        env: { ...registryEnv, GH_TOKEN: "" }
+      },
+      registryStepWithRun(`${registryRun}${"x".repeat(GITHUB_RUN_CHARACTER_LIMIT)}`),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "}\nassert_remote_tag_identity\nPREFLIGHT_RESULT=$(registry_snapshot preflight)",
+          "}\nfunction registry_action { printf '%s' '{\"action\":\"confirmed\"}'; }\n" +
+            "assert_remote_tag_identity\nPREFLIGHT_RESULT=$(registry_snapshot preflight)"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "}\nregistry_snapshot() {",
+          "}\nfunction registry_http_read { return 0; }\nregistry_snapshot() {"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(registryRun, 'GH_CONFIG_DIR="$WORK_ROOT/gh-config"', 'GH_CONFIG_DIR="$GITHUB_WORKSPACE"')
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||',
+          'if [ "$(registry_git rev-parse HEAD)" = "$SOURCE_SHA" ] ||'
+        )
+      ),
+      registryStepWithRun(replaceAllExactly(registryRun, "?include_deleted=true", "?include_deleted=false", 2)),
+      registryStepWithRun(
+        replaceExactly(registryRun, 'mcp-registry-state "$phase"', 'mcp-registry-read "$phase"')
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '.action | select(. == $first or . == $second)',
+          '.action | select(. == $first)'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '--argjson exactExit "$exact_exit"',
+          '--argjson exactExit 0'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(registryRun, 'exact_exit="$REGISTRY_CURL_EXIT"', 'exact_exit=0')
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}',
+          'latest:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody}'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)',
+          'PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)\nPREFLIGHT_ACTION=reuse'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'SECOND_ACTION=$(registry_action "$SECOND_RESULT" publish reuse)',
+          'SECOND_ACTION=$(registry_action "$SECOND_RESULT" publish reuse)\nSECOND_ACTION=reuse'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)',
+          'CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)\n  CONVERGENCE_ACTION=confirmed'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'require_job_reserve 3300 "MCP publisher preparation"',
+          'require_job_reserve 3299 "MCP publisher preparation"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'require_job_reserve 2700 "MCP Registry OIDC login"',
+          'require_job_reserve 2699 "MCP Registry OIDC login"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'require_job_reserve 2200 "MCP Registry publish and convergence"',
+          'require_job_reserve 2199 "MCP Registry publish and convergence"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'deadline_timeout 300 1700 "MCP Registry publish"',
+          'deadline_timeout 300 1699 "MCP Registry publish"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"',
+          '"$TIMEOUT_BIN" --kill-after=500s "${cap}s" "$@"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'deadline_timeout 15 10 "MCP Registry evaluator"',
+          'deadline_timeout 1500 10 "MCP Registry evaluator"'
+        )
+      ),
+      registryStepWithRun(replaceExactly(registryRun, "local limit=20", "local limit=2000")),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'deadline_timeout 15 10 "MCP Registry evaluator" /usr/bin/env -i',
+          'deadline_timeout 15 10 "MCP Registry evaluator" /usr/bin/env'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'deadline_timeout 180 10 "MCP manifest validation" /usr/bin/env -i',
+          'deadline_timeout 180 10 "MCP manifest validation" /usr/bin/env'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n  ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL"',
+          'HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" \\\n  ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \\\n  "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          'HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin GH_TOKEN="$GH_TOKEN" \\\n  "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"'
+        )
+      ),
+      registryStepWithRun(replaceExactly(registryRun, 'MCP_PUBLISHER_TAG="v1.7.9"', 'MCP_PUBLISHER_TAG="latest"')),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"',
+          `MCP_PUBLISHER_SHA256="${"0".repeat(64)}"`
+        )
+      ),
+      registryStepWithRun(replaceExactly(registryRun, 'MCP_PUBLISHER_SIZE="7297012"', 'MCP_PUBLISHER_SIZE="0"')),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz',
+          "releases/latest/download/mcp-publisher_linux_amd64.tar.gz"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '--max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1',
+          '--max-filesize "$MCP_PUBLISHER_SIZE" --retry 1 --location --max-redirs 1'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'if [ "$PUBLISHER_ENTRIES" != "mcp-publisher" ]; then',
+          'if [ "$PUBLISHER_ENTRIES" = "mcp-publisher" ]; then'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '[ "$(/usr/bin/stat -c \'%s\' "$MCP_PUBLISHER_ARCHIVE")" != "$MCP_PUBLISHER_SIZE" ]',
+          '[ "$(/usr/bin/stat -c \'%s\' "$MCP_PUBLISHER_ARCHIVE")" = "$MCP_PUBLISHER_SIZE" ]'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'printf \'%s  %s\\n\' "$MCP_PUBLISHER_SHA256" "$MCP_PUBLISHER_ARCHIVE" | /usr/bin/sha256sum -c -',
+          'true # publisher hash verification bypassed'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'deadline_timeout 180 10 "MCP manifest validation"',
+          'deadline_timeout 180 0 "MCP manifest validation"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'login github-oidc --registry=https://registry.modelcontextprotocol.io',
+          'login none --registry=https://registry.modelcontextprotocol.io'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'keys == ["method","registry","token"]',
+          'has("token")'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '(.token | type) == "string" and (.token | length) > 0',
+          '(.token | type) == "string"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          ': > "$body_file"\n  set +e\n  response=$(deadline_timeout 35 10',
+          ': > "$body_file"\n  response=$(deadline_timeout 35 10'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '--rawfile exactBody "$exact_body"',
+          '--arg exactBody "{}"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'MCP_PUBLISH_EXIT=0\nset +e',
+          'MCP_PUBLISH_EXIT=0'
+        )
+      ),
+      registryStepWithRun(replaceExactly(registryRun, "MCP_PUBLISH_EXIT=$?", "MCP_PUBLISH_EXIT=0")),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'assert_manifest_snapshots\ndeadline_timeout 180 10 "MCP manifest validation"',
+          'deadline_timeout 180 10 "MCP manifest validation"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'if [ "$package_digest" != "$PACKAGE_JSON_SHA256" ] || [ "$server_digest" != "$SERVER_JSON_SHA256" ]; then',
+          'if [ "$package_digest" != "$PACKAGE_JSON_SHA256" ] && [ "$server_digest" != "$SERVER_JSON_SHA256" ]; then'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'assert_manifest_snapshots\nassert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true',
+          'assert_manifest_snapshots\nprintf \'{}\' > "$SERVER_JSON_SNAPSHOT"\n' +
+            'assert_remote_tag_identity\nMCP_PUBLISH_ATTEMPTED=true'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "SECOND_RESULT=$(registry_snapshot preflight)",
+          "SECOND_RESULT=$(registry_snapshot convergence)"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'echo "MCP Registry already exposes exact active/latest $MCP_NAME@$VERSION"\n  exit 0',
+          'echo "MCP Registry already exposes exact active/latest $MCP_NAME@$VERSION"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'echo "MCP Registry converged before the sole publish boundary"\n  exit 0',
+          'echo "MCP Registry converged before the sole publish boundary"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "assert_remote_tag_identity\nPREFLIGHT_RESULT=$(registry_snapshot preflight)",
+          "PREFLIGHT_RESULT=$(registry_snapshot preflight)"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(registryRun, "MCP_PUBLISH_ATTEMPTED=true", "MCP_PUBLISH_ATTEMPTED=false")
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            '/usr/bin/env "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            'env "$GH_BIN" api --method PATCH repos/oomkapwn/enquire-mcp'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            '/usr/bin/curl --disable https://registry.modelcontextprotocol.io/v0.1/servers'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n"$CURL_BIN" --request POST https://registry.modelcontextprotocol.io/v0.1/servers'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n"$CURL_BIN" -d \'{}\' https://registry.modelcontextprotocol.io/v0.1/servers'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
+          'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable -d\'{}\' \\'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n"$CURL_BIN" --json \'{}\' https://registry.modelcontextprotocol.io/v0.1/servers'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n"$MCP_PUBLISHER_BIN" delete "$MCP_NAME@$VERSION"'
+        )
+      ),
+      registryStepWithRun(replaceExactly(registryRun, "for attempt in {1..12}; do", "for attempt in {1..1}; do")),
+      registryStepWithRun(
+        replaceExactly(
+          replaceExactly(
+            registryRun,
+            'require_job_reserve 2200 "MCP Registry publish and convergence"',
+            'for replay in {1..2}; do\n  require_job_reserve 2200 "MCP Registry publish and convergence"'
+          ),
+          'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"',
+          'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"\ndone'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "MCP_REGISTRY_CONFIRMED=false",
+          "MCP_REGISTRY_CONFIRMED=false\nMCP_REGISTRY_CONFIRMED=true"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]',
+          '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]'
+        )
+      )
+    ];
+    for (const weakenedRegistryStep of weakenedRegistrySteps) {
+      expect(mcpRegistryStepProblems(weakenedRegistryStep, mcpbInputs.integrity)).toContain(
+        MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
+      );
+    }
+    expect(
+      mcpRegistryStepProblems(
+        registryStep,
+        replaceExactly(
+          mcpbInputs.integrity,
+          'phase === "convergence" && (status === 429 || status >= 500)',
+          'phase === "convergence"'
+        )
+      )
+    ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     const provenanceWorkflowCompositionMutation = replaceExactly(
       mcpbInputs.release,
       NPM_PROVENANCE_CONTEXT_COMMAND,
@@ -5312,7 +6873,11 @@ describe("release identity and exact required-job gate", () => {
         replaceExactly(workflow, RAW_GH_READ_DEADLINE_GUARD, MUTATED_RAW_GH_READ_DEADLINE_GUARD, GH_READ_GUARD_COUNT)
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
-    expect(releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", 6))).toContain(
+    expect(
+      releasePollProblems(
+        replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", GH_READ_HELPER_COUNT)
+      )
+    ).toContain(
       "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
     );
     expect(
@@ -5681,7 +7246,9 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
     const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
-    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(NPM_RESERVE_GUARD_COUNT);
+    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(
+      RELEASE_RESERVE_GUARD_COUNT
+    );
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,
@@ -5773,13 +7340,13 @@ describe("release identity and exact required-job gate", () => {
         mcpbInputs.release,
         RAW_NPM_RESERVE_DEADLINE_GUARD,
         MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD,
-        NPM_RESERVE_GUARD_COUNT
+        RELEASE_RESERVE_GUARD_COUNT
       ),
       replaceAllExactly(
         mcpbInputs.release,
         'if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then',
         "if now=$(/bin/date +%s); then",
-        GH_READ_GUARD_COUNT + NPM_RESERVE_GUARD_COUNT
+        GH_READ_GUARD_COUNT + RELEASE_RESERVE_GUARD_COUNT
       ),
       replaceExactly(
         mcpbInputs.release,
@@ -5798,7 +7365,12 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, 'require_job_reserve 4500 "npm publish"', "true"),
       replaceExactly(mcpbInputs.release, "              sleep 10", "              sleep 200"),
-      replaceAllExactly(mcpbInputs.release, "            local limit=20", "            local limit=200", 5),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "            local limit=20",
+        "            local limit=200",
+        GH_READ_GUARD_COUNT
+      ),
       replaceExactly(
         mcpbInputs.release,
         '            require_job_reserve 4500 "npm publish"\n            assert_remote_tag_identity',

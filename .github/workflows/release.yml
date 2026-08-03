@@ -28,7 +28,7 @@ permissions:
   # Documented as overclaim #9 in v3.7.15 CHANGELOG. The npm publish
   # step is unaffected (it uses NODE_AUTH_TOKEN from `secrets.NPM_TOKEN`).
   contents: write
-  # `id-token: write` — npm provenance OIDC token signing.
+  # `id-token: write` — npm provenance signing and stable-only MCP Registry OIDC login.
   id-token: write
 
 jobs:
@@ -1993,29 +1993,387 @@ jobs:
       # fell ~7 versions behind (stuck at 3.8.4 while npm was at 3.8.8).
       - name: Publish to MCP Registry (stable only)
         if: steps.dist_tag.outputs.tag == 'latest'
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          SHELLOPTS: ""
+          PS4: ""
+          LD_PRELOAD: ""
+          LD_LIBRARY_PATH: ""
+          LD_AUDIT: ""
+          LD_DEBUG_OUTPUT: ""
+          LD_PROFILE: ""
+          GLIBC_TUNABLES: ""
+          TAR_OPTIONS: ""
+          OPENSSL_CONF: ""
+          NODE_DEBUG: ""
+          GODEBUG: ""
+          NODE_TLS_REJECT_UNAUTHORIZED: "1"
+          GH_HOST: github.com
+          GH_HTTP_UNIX_SOCKET: ""
+          HTTPS_PROXY: ""
+          HTTP_PROXY: ""
+          ALL_PROXY: ""
+          CURL_CA_BUNDLE: ""
+          SSL_CERT_FILE: ""
+          SSL_CERT_DIR: ""
+          NODE_EXTRA_CA_CERTS: ""
+          NODE_OPTIONS: ""
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
+          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}
+          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}
+          NPM_PROVENANCE_VERIFIED: ${{ steps.npm_provenance.outputs.verified }}
         run: |
           set -euo pipefail
-          # server.json is version-pinned by check-version-consistency.mjs to
-          # match package.json, so on a stable run it already carries the
-          # just-published stable version. Re-sync defensively in case the tag
-          # was cut from a tree where server.json lagged.
-          VERSION=$(node -p "require('./package.json').version")
-          node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('server.json','utf8'));s.version='${VERSION}';if(s.packages)for(const p of s.packages)p.version='${VERSION}';fs.writeFileSync('server.json',JSON.stringify(s,null,2)+'\n')"
-          # Download the official publisher CLI. v3.9.0-rc.33 (external-audit
-          # M-9): PINNED to an exact release tag (not `releases/latest`) so a
-          # re-tagged/compromised upstream "latest" can't silently change the
-          # binary that runs with our OIDC identity in the publish path.
-          # v3.10.0-rc.26 (SYS-1 / M-9 completion): CONTENT-pin too — a tag can be
-          # force-moved (delete+recreate) or a release asset re-uploaded, so verify
-          # the tarball's SHA256 before it runs. `ubuntu-latest` is linux/amd64;
-          # bump MCP_PUBLISHER_SHA256 *together with* MCP_PUBLISHER_TAG (deliberate;
-          # get the hash from `curl -fsSL <url> | sha256sum`). `sha256sum -c` exits
-          # non-zero on mismatch → the step fails closed, aborting the publish.
+          builtin unset -v https_proxy http_proxy all_proxy
+          builtin umask 077
+          VERSION="$EXPECTED_VERSION"
+          SOURCE_SHA="$EXPECTED_SOURCE_SHA"
+          TAG="$EXPECTED_TAG"
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+             ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$TAG" != "v$VERSION" ] || [ "$NPM_PROVENANCE_VERIFIED" != "true" ]; then
+            echo "::error::Registry publication identity is not one exact provenance-verified stable release"
+            exit 1
+          fi
+          TIMEOUT_BIN=$(type -P timeout)
+          CURL_BIN=$(type -P curl)
+          GH_BIN=$(type -P gh)
+          JQ_BIN=$(type -P jq)
+          NODE_BIN=$(type -P node)
+          TAR_BIN=$(type -P tar)
+          WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")
+          MCP_REGISTRY_HOME="$WORK_ROOT/home"
+          PUBLISHER_ROOT="$WORK_ROOT/publisher"
+          GH_CONFIG_DIR="$WORK_ROOT/gh-config"
+          /bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"
+          export GH_CONFIG_DIR
+          PACKAGE_JSON_SNAPSHOT="$WORK_ROOT/package.json"
+          SERVER_JSON_SNAPSHOT="$WORK_ROOT/server.json"
+          EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"
+          if [ ! -f "$EVALUATOR" ] || [ -L "$EVALUATOR" ]; then
+            echo "::error::Registry evaluator is missing, non-regular, or a symlink"
+            exit 1
+          fi
+          registry_git() {
+            "$TIMEOUT_BIN" --kill-after=3s 15s /usr/bin/env -i \
+              PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null \
+              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1 \
+              GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
+              /usr/bin/git -C "$GITHUB_WORKSPACE" --no-pager --no-replace-objects "$@"
+          }
+          if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||
+             ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then
+            echo "::error::Tracked Registry manifests differ from the exact npm source"
+            exit 1
+          fi
+          for MANIFEST in package.json server.json; do
+            if [ ! -f "$GITHUB_WORKSPACE/$MANIFEST" ] || [ -L "$GITHUB_WORKSPACE/$MANIFEST" ]; then
+              echo "::error::$MANIFEST is missing, non-regular, or a symlink"
+              exit 1
+            fi
+            SNAPSHOT="$WORK_ROOT/$MANIFEST"
+            /bin/cp -- "$GITHUB_WORKSPACE/$MANIFEST" "$SNAPSHOT"
+            /bin/chmod 0400 "$SNAPSHOT"
+            if [ "$(registry_git rev-parse "$SOURCE_SHA:$MANIFEST")" != "$(registry_git hash-object "$SNAPSHOT")" ]; then
+              echo "::error::$MANIFEST snapshot differs from the exact source blob"
+              exit 1
+            fi
+          done
+          if ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then
+            echo "::error::Tracked Registry manifests changed during snapshot"
+            exit 1
+          fi
+          PACKAGE_JSON_SHA256=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")
+          PACKAGE_JSON_SHA256=${PACKAGE_JSON_SHA256%% *}
+          SERVER_JSON_SHA256=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")
+          SERVER_JSON_SHA256=${SERVER_JSON_SHA256%% *}
+          assert_manifest_snapshots() {
+            local package_digest server_digest
+            if [ ! -f "$PACKAGE_JSON_SNAPSHOT" ] || [ -L "$PACKAGE_JSON_SNAPSHOT" ] ||
+               [ ! -f "$SERVER_JSON_SNAPSHOT" ] || [ -L "$SERVER_JSON_SNAPSHOT" ]; then
+              echo "::error::Registry manifest snapshot type changed" >&2
+              exit 1
+            fi
+            package_digest=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")
+            package_digest=${package_digest%% *}
+            server_digest=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")
+            server_digest=${server_digest%% *}
+            if [ "$package_digest" != "$PACKAGE_JSON_SHA256" ] || [ "$server_digest" != "$SERVER_JSON_SHA256" ]; then
+              echo "::error::Registry manifest snapshot bytes changed" >&2
+              exit 1
+            fi
+          }
+          PACKAGE_NAME=$($JQ_BIN -er '.name | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+          PACKAGE_VERSION=$($JQ_BIN -er '.version | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+          MCP_NAME=$($JQ_BIN -er '.mcpName | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+          EXPECTED_SERVER_JSON=$($JQ_BIN -ce '.' "$SERVER_JSON_SNAPSHOT")
+          if [ "$PACKAGE_NAME" != "@oomkapwn/enquire-mcp" ] || [ "$PACKAGE_VERSION" != "$VERSION" ] ||
+             [ "$MCP_NAME" != "io.github.oomkapwn/enquire-mcp" ] ||
+             ! $JQ_BIN -e --arg name "$MCP_NAME" --arg package "$PACKAGE_NAME" --arg version "$VERSION" '
+               .name == $name and .version == $version and (.packages | type) == "array" and
+               (.packages | length) == 1 and
+               all(.packages[]; .identifier == $package and .version == $version)
+             ' "$SERVER_JSON_SNAPSHOT" >/dev/null; then
+            echo "::error::Registry manifest identity differs from npm publication outputs"
+            exit 1
+          fi
+          require_job_reserve() {
+            local required="$1"
+            local label="$2"
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              exit 1
+            fi
+            local now remaining
+            if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Current epoch is unavailable or malformed" >&2
+              return 2
+            fi
+            remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))
+            if [ "$remaining" -lt "$required" ]; then
+              echo "::error::$label requires ${required}s of post-write reserve; only ${remaining}s remain"
+              exit 1
+            fi
+          }
+          deadline_timeout() {
+            local cap="$1" reserve="$2" label="$3"
+            shift 3
+            local now remaining limit
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]] ||
+               ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release clock is unavailable during $label" >&2
+              return 2
+            fi
+            remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))
+            limit=$((remaining - reserve))
+            if [ "$limit" -le 0 ]; then
+              echo "::error::Global release deadline has no reserve for $label" >&2
+              return 124
+            fi
+            if [ "$cap" -gt "$limit" ]; then cap="$limit"; fi
+            "$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"
+          }
+          gh_read() {
+            if [ "${1:-}" != "api" ]; then
+              echo "::error::gh_read accepts read-only gh api calls" >&2
+              return 2
+            fi
+            local argument
+            for argument in "$@"; do
+              case "$argument" in
+                graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*)
+                  echo "::error::gh_read rejects mutation-capable gh api arguments" >&2
+                  return 2
+                  ;;
+              esac
+            done
+            if ! [[ "${RELEASE_JOB_DEADLINE_EPOCH:-}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Global release deadline is missing or malformed" >&2
+              return 2
+            fi
+            local now remaining
+            if ! now=$(/bin/date +%s) || ! [[ "$now" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Current epoch is unavailable or malformed" >&2
+              return 2
+            fi
+            remaining=$((RELEASE_JOB_DEADLINE_EPOCH - now))
+            if [ "$remaining" -le 10 ]; then
+              echo "::error::Global 230-minute release deadline reached during a GitHub read" >&2
+              return 124
+            fi
+            local limit=20
+            if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
+            "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
+          }
+          assert_remote_tag_identity() {
+            if ! TAG_REF_JSON=$(gh_read api \
+              "repos/${{ github.repository }}/git/ref/tags/$TAG"); then
+              echo "::error::Exact-repository tag ref $TAG is unreadable"
+              exit 1
+            fi
+            if ! TAG_OBJECT_SHA=$(printf '%s' "$TAG_REF_JSON" | jq -er --arg ref "refs/tags/$TAG" \
+              'select(type == "object" and .ref == $ref) | .object |
+               select(type == "object" and .type == "tag") | .sha |
+               select(type == "string" and test("^[0-9a-f]{40}$"))'); then
+              echo "::error::Exact-repository ref $TAG is not one annotated-tag object"
+              exit 1
+            fi
+            if ! TAG_OBJECT_JSON=$(gh_read api \
+              "repos/${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"); then
+              echo "::error::Annotated-tag object $TAG_OBJECT_SHA is unreadable"
+              exit 1
+            fi
+            if ! printf '%s' "$TAG_OBJECT_JSON" | jq -e --arg tag "$TAG" --arg sha "$SOURCE_SHA" \
+              --arg tag_object_sha "$TAG_OBJECT_SHA" \
+              'select(type == "object" and .sha == $tag_object_sha and .tag == $tag) | .object |
+               select(type == "object" and .type == "commit" and .sha == $sha)' >/dev/null; then
+              echo "::error::Exact-repository tag $TAG must peel to exact source SHA $SOURCE_SHA"
+              exit 1
+            fi
+            if ! TAG_REF_CONFIRM_JSON=$(gh_read api \
+              "repos/${{ github.repository }}/git/ref/tags/$TAG") || \
+               ! printf '%s' "$TAG_REF_CONFIRM_JSON" | jq -e --arg ref "refs/tags/$TAG" \
+                 --arg sha "$TAG_OBJECT_SHA" \
+                 'select(type == "object" and .ref == $ref) | .object |
+                  select(type == "object" and .type == "tag" and .sha == $sha)' >/dev/null; then
+              echo "::error::Exact-repository tag ref $TAG changed during identity proof"
+              exit 1
+            fi
+          }
+          SERVER_NAME_ENCODED=$(printf '%s' "$MCP_NAME" | $JQ_BIN -sRr @uri)
+          VERSION_ENCODED=$(printf '%s' "$VERSION" | $JQ_BIN -sRr @uri)
+          REGISTRY_EXACT_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/${VERSION_ENCODED}?include_deleted=true"
+          REGISTRY_LATEST_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/latest?include_deleted=true"
+          registry_http_read() {
+            local url="$1" body_file="$2" response request_exit
+            : > "$body_file"
+            set +e
+            response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \
+              --silent --show-error --proxy '' --connect-timeout 10 --max-time 30 \
+              --max-filesize 1048576 --retry 0 --proto '=https' --tlsv1.2 \
+              --header 'Accept: application/json, application/problem+json' \
+              --header 'Cache-Control: no-cache' --output "$body_file" \
+              --write-out $'%{http_code}\n%{content_type}' "$url")
+            request_exit=$?
+            set -e
+            REGISTRY_CURL_EXIT="$request_exit"
+            REGISTRY_HTTP_STATUS=$(printf '%s\n' "$response" | /usr/bin/sed -n '1p')
+            REGISTRY_CONTENT_TYPE=$(printf '%s\n' "$response" | /usr/bin/sed -n '2p')
+            if [ -z "$REGISTRY_HTTP_STATUS" ]; then REGISTRY_HTTP_STATUS="000"; fi
+          }
+          registry_snapshot() {
+            local phase="$1" exact_exit exact_status exact_type latest_exit latest_status latest_type payload
+            local exact_body="$WORK_ROOT/exact-body.json" latest_body="$WORK_ROOT/latest-body.json"
+            assert_manifest_snapshots
+            registry_http_read "$REGISTRY_EXACT_URL" "$exact_body"
+            exact_exit="$REGISTRY_CURL_EXIT"
+            exact_status="$REGISTRY_HTTP_STATUS"
+            exact_type="$REGISTRY_CONTENT_TYPE"
+            registry_http_read "$REGISTRY_LATEST_URL" "$latest_body"
+            latest_exit="$REGISTRY_CURL_EXIT"
+            latest_status="$REGISTRY_HTTP_STATUS"
+            latest_type="$REGISTRY_CONTENT_TYPE"
+            payload=$($JQ_BIN -cn --argjson server "$EXPECTED_SERVER_JSON" \
+              --arg package "$PACKAGE_NAME" --arg version "$VERSION" --arg mcpName "$MCP_NAME" \
+              --arg exactUrl "$REGISTRY_EXACT_URL" --argjson exactExit "$exact_exit" \
+              --arg exactStatus "$exact_status" --arg exactType "$exact_type" --rawfile exactBody "$exact_body" \
+              --arg latestUrl "$REGISTRY_LATEST_URL" --argjson latestExit "$latest_exit" \
+              --arg latestStatus "$latest_status" --arg latestType "$latest_type" --rawfile latestBody "$latest_body" '
+              {expected:{server:$server,package:{name:$package,version:$version,mcpName:$mcpName}},
+               exact:{requestUrl:$exactUrl,curlExit:$exactExit,httpStatus:$exactStatus,contentType:$exactType,body:$exactBody},
+               latest:{requestUrl:$latestUrl,curlExit:$latestExit,httpStatus:$latestStatus,contentType:$latestType,body:$latestBody}}
+            ')
+            printf '%s' "$payload" | deadline_timeout 15 10 "MCP Registry evaluator" /usr/bin/env -i \
+              HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin NODE_TLS_REJECT_UNAUTHORIZED=1 \
+              "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"
+          }
+          registry_action() {
+            printf '%s' "$1" | $JQ_BIN -er --arg first "$2" --arg second "$3" \
+              '.action | select(. == $first or . == $second)'
+          }
+          assert_remote_tag_identity
+          PREFLIGHT_RESULT=$(registry_snapshot preflight)
+          PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)
+          if [ "$PREFLIGHT_ACTION" = "reuse" ]; then
+            assert_remote_tag_identity
+            echo "MCP Registry already exposes exact active/latest $MCP_NAME@$VERSION"
+            exit 0
+          fi
+          require_job_reserve 3300 "MCP publisher preparation"
           MCP_PUBLISHER_TAG="v1.7.9"
           MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
-          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
-          tar -xzf mcp-publisher.tar.gz mcp-publisher
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
-          echo "Published $VERSION to the MCP Registry"
+          MCP_PUBLISHER_SIZE="7297012"
+          MCP_PUBLISHER_URL="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"
+          MCP_PUBLISHER_ARCHIVE="$PUBLISHER_ROOT/mcp-publisher_linux_amd64.tar.gz"
+          deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \
+            --silent --show-error --proxy '' --connect-timeout 10 --max-time 60 \
+            --max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1 \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --output "$MCP_PUBLISHER_ARCHIVE" "$MCP_PUBLISHER_URL"
+          if [ ! -f "$MCP_PUBLISHER_ARCHIVE" ] || [ -L "$MCP_PUBLISHER_ARCHIVE" ] ||
+             [ "$(/usr/bin/stat -c '%s' "$MCP_PUBLISHER_ARCHIVE")" != "$MCP_PUBLISHER_SIZE" ]; then
+            echo "::error::Pinned MCP publisher archive size or type differs"
+            exit 1
+          fi
+          printf '%s  %s\n' "$MCP_PUBLISHER_SHA256" "$MCP_PUBLISHER_ARCHIVE" | /usr/bin/sha256sum -c -
+          PUBLISHER_ENTRIES=$(deadline_timeout 30 10 "MCP publisher inventory" "$TAR_BIN" -tzf "$MCP_PUBLISHER_ARCHIVE")
+          if [ "$PUBLISHER_ENTRIES" != "mcp-publisher" ]; then
+            echo "::error::Pinned MCP publisher archive must contain exactly one root binary"
+            exit 1
+          fi
+          deadline_timeout 30 10 "MCP publisher extraction" "$TAR_BIN" -xzf "$MCP_PUBLISHER_ARCHIVE" \
+            --no-same-owner --no-same-permissions -C "$PUBLISHER_ROOT" -- mcp-publisher
+          MCP_PUBLISHER_BIN="$PUBLISHER_ROOT/mcp-publisher"
+          if [ ! -f "$MCP_PUBLISHER_BIN" ] || [ -L "$MCP_PUBLISHER_BIN" ]; then
+            echo "::error::Extracted MCP publisher is missing, non-regular, or a symlink"
+            exit 1
+          fi
+          /bin/chmod 0500 "$MCP_PUBLISHER_BIN"
+          assert_manifest_snapshots
+          deadline_timeout 180 10 "MCP manifest validation" /usr/bin/env -i \
+            HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
+            "$MCP_PUBLISHER_BIN" validate "$SERVER_JSON_SNAPSHOT"
+          require_job_reserve 2700 "MCP Registry OIDC login"
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::GitHub OIDC request identity is unavailable"
+            exit 1
+          fi
+          deadline_timeout 180 10 "MCP Registry OIDC login" /usr/bin/env -i \
+            HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
+            ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$MCP_PUBLISHER_BIN" login github-oidc --registry=https://registry.modelcontextprotocol.io
+          TOKEN_FILE="$MCP_REGISTRY_HOME/.config/mcp-publisher/token.json"
+          if [ ! -f "$TOKEN_FILE" ] || [ -L "$TOKEN_FILE" ] ||
+             ! $JQ_BIN -e '
+               type == "object" and keys == ["method","registry","token"] and
+               .method == "github-oidc" and .registry == "https://registry.modelcontextprotocol.io" and
+               (.token | type) == "string" and (.token | length) > 0
+             ' "$TOKEN_FILE" >/dev/null; then
+            echo "::error::MCP publisher OIDC token file is malformed"
+            exit 1
+          fi
+          SECOND_RESULT=$(registry_snapshot preflight)
+          SECOND_ACTION=$(registry_action "$SECOND_RESULT" publish reuse)
+          if [ "$SECOND_ACTION" = "reuse" ]; then
+            assert_remote_tag_identity
+            echo "MCP Registry converged before the sole publish boundary"
+            exit 0
+          fi
+          require_job_reserve 2200 "MCP Registry publish and convergence"
+          assert_manifest_snapshots
+          assert_remote_tag_identity
+          MCP_PUBLISH_ATTEMPTED=true
+          MCP_PUBLISH_EXIT=0
+          set +e
+          deadline_timeout 300 1700 "MCP Registry publish" /usr/bin/env -i \
+            HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
+            "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"
+          MCP_PUBLISH_EXIT=$?
+          set -e
+          MCP_REGISTRY_CONFIRMED=false
+          for attempt in {1..12}; do
+            CONVERGENCE_RESULT=$(registry_snapshot convergence)
+            CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)
+            if [ "$CONVERGENCE_ACTION" = "confirmed" ]; then
+              MCP_REGISTRY_CONFIRMED=true
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              require_job_reserve 20 "MCP Registry convergence retry"
+              deadline_timeout 11 10 "MCP Registry convergence wait" /bin/sleep 10
+            fi
+          done
+          if [ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]; then
+            echo "::error::MCP Registry did not converge after the sole publish invocation; exit=$MCP_PUBLISH_EXIT"
+            exit 1
+          fi
+          assert_remote_tag_identity
+          if [ "$MCP_PUBLISH_EXIT" -ne 0 ]; then
+            echo "::warning::MCP publisher exited $MCP_PUBLISH_EXIT, but exact active/latest readback proves completion"
+          fi
+          echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"

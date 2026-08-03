@@ -6596,7 +6596,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       replaceExactly(mcpbInputs.release, 'if [ "$attempt" -lt 8 ]; then', 'if [ "$attempt" -lt 7 ]; then'),
       replaceExactly(mcpbInputs.release, "attempt $attempt/8", "attempt $attempt/7"),
-      replaceExactly(mcpbInputs.release, "/bin/sleep 10", "/bin/sleep 1"),
+      replaceExactly(mcpbInputs.release, "              /bin/sleep 10", "              /bin/sleep 1"),
       replaceExactly(
         mcpbInputs.release,
         NPM_PROVENANCE_SUCCESS_CONDITION,

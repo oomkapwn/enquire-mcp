@@ -3039,6 +3039,53 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
   return isExact ? [] : [MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM];
 }
 
+const MCP_REGISTRY_WORK_ROOT_INIT = 'WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")';
+const MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C = "$'%{http_code}\\n%{content_type}'";
+
+function logicalShellLines(run: string): string[] {
+  return run
+    .split(/\\\r?\n/u)
+    .join("")
+    .split("\n")
+    .map((line) => line.trim());
+}
+
+function conservativeShellLexicalLine(line: string): string {
+  return line.split(/["'\\]/u).join("");
+}
+
+function ansiCQuoteInventory(run: string): string[] {
+  return run.match(/\$'(?:\\[\s\S]|[^'\\])*'/gu) ?? [];
+}
+
+/**
+ * Conservatively reject literal or commonly shell-composed write tokens across
+ * the complete release step. The exact work-root initializer is the sole
+ * reviewed non-network use of `-d`; quoted/diagnostic occurrences fail closed.
+ */
+function hasForbiddenRegistryWriteArguments(run: string): boolean {
+  const ansiCQuotes = ansiCQuoteInventory(run);
+  if (ansiCQuotes.some((quote) => quote !== MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C)) return true;
+  return logicalShellLines(run).some((line) => {
+    if (line === MCP_REGISTRY_WORK_ROOT_INIT) return false;
+    const lexicalLine = conservativeShellLexicalLine(line);
+    return (
+      /(?:(?:--request|--method)(?:=|\s+)|-X\s*)(?:POST|PUT|PATCH|DELETE)\b/iu.test(lexicalLine) ||
+      /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])(?:POST|PUT|PATCH|DELETE)\}/iu.test(lexicalLine) ||
+      /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])(?:--data(?:-ascii|-binary|-raw|-urlencode)?|--upload-file|--form(?:-string)?|--json|--config|--expand-[A-Za-z0-9-]+)(?==|\s|})/u.test(
+        lexicalLine
+      ) ||
+      /\$\{[A-Za-z_][A-Za-z0-9_]*(?::?[-=+?])-[A-Za-z0-9#:]*[dFTKX][^}\s]*\}/u.test(lexicalLine) ||
+      /(?:^|[\s(=:$])(?:POST|PUT|PATCH|DELETE)(?=[\s);,]|$)/iu.test(lexicalLine) ||
+      /(?:^|[\s(=:$])--data(?:-ascii|-binary|-raw|-urlencode)?(?:=|\s)/iu.test(lexicalLine) ||
+      /(?:^|[\s(=:$])--upload-file(?:=|\s)/u.test(lexicalLine) ||
+      /(?:^|[\s(=:$])-[A-Za-z0-9#:]*[dFTKX]\S*(?=\s|$)/u.test(lexicalLine) ||
+      /(?:^|[\s(=:$])(?:--form|--form-string|--json)(?:=|\s)/u.test(lexicalLine) ||
+      /(?:^|[\s(=:$])--(?:config|expand-[A-Za-z0-9-]+)(?:=|\s)/u.test(lexicalLine)
+    );
+  });
+}
+
 function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string): string[] {
   const run = runBody(step);
   const env = yamlRecord(step?.env);
@@ -3216,6 +3263,21 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
       'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
       'deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \\'
     ]);
+  const logicalRunLines = logicalShellLines(run);
+  const ansiCQuotes = ansiCQuoteInventory(run);
+  const ansiCQuoteInventoryIsExact =
+    JSON.stringify(ansiCQuotes) === JSON.stringify([MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C]);
+  const rawCurlTokenLines = logicalRunLines.filter((line) => /\bcurl\b/u.test(conservativeShellLexicalLine(line)));
+  const rawGhTokenLines = logicalRunLines.filter((line) => /\bgh\b/u.test(conservativeShellLexicalLine(line)));
+  const rawNetworkToolInventoryIsExact =
+    JSON.stringify(rawCurlTokenLines) === JSON.stringify(["CURL_BIN=$(type -P curl)"]) &&
+    JSON.stringify(rawGhTokenLines) ===
+      JSON.stringify([
+        "GH_BIN=$(type -P gh)",
+        'GH_CONFIG_DIR="$WORK_ROOT/gh-config"',
+        'echo "::error::gh_read accepts read-only gh api calls" >&2',
+        'echo "::error::gh_read rejects mutation-capable gh api arguments" >&2'
+      ]);
   const controlLoopLines = run
     .split("\n")
     .map((line) => line.trim())
@@ -3270,16 +3332,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     "    exit 1\n" +
     "  fi\n" +
     "}";
-  const hasForbiddenRegistryWriteArguments = run.split("\n").some((line) => {
-    const trimmed = line.trim();
-    return (
-      /(?:(?:--request|--method)(?:=|\s+)|-X\s*)(?:POST|PUT|PATCH|DELETE)\b/iu.test(trimmed) ||
-      /(?:^|\s)--data(?:-ascii|-binary|-raw|-urlencode)?(?:=|\s)/iu.test(trimmed) ||
-      /(?:^|\s)--upload-file(?:=|\s)/u.test(trimmed) ||
-      /(?:^|\s)(?:-d|-F|-T)(?=\S|\s|$)/u.test(trimmed) ||
-      /(?:^|\s)(?:--form|--form-string|--json)(?:=|\s)/u.test(trimmed)
-    );
-  });
+  const containsForbiddenRegistryWriteArguments = hasForbiddenRegistryWriteArguments(run);
   const hasForbiddenPublisherMutation = run
     .split("\n")
     .some((line) => /(?:^|\/)mcp-publisher"?\s+(?:publish|delete|deprecate|undeprecate|status)\b/iu.test(line.trim()));
@@ -3296,7 +3349,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const httpSetPlusIndex = run.indexOf("set +e", httpBodyResetIndex);
   const httpResponseIndex = run.indexOf("response=$(deadline_timeout 35 10", httpSetPlusIndex);
   const httpOutputIndex = run.indexOf('--output "$body_file"', httpResponseIndex);
-  const httpWriteOutIndex = run.indexOf("--write-out $'%{http_code}\\n%{content_type}'", httpOutputIndex);
+  const httpWriteOutIndex = run.indexOf(`--write-out ${MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C}`, httpOutputIndex);
   const httpExitCaptureIndex = run.indexOf("request_exit=$?", httpWriteOutIndex);
   const httpSetMinusIndex = run.indexOf("set -e", httpExitCaptureIndex);
   const httpCurlExitIndex = run.indexOf('REGISTRY_CURL_EXIT="$request_exit"', httpSetMinusIndex);
@@ -3351,7 +3404,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     run.startsWith(`set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\nbuiltin umask 077\n`) &&
     run.includes('! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]') &&
     run.includes('[ "$TAG" != "v$VERSION" ] || [ "$NPM_PROVENANCE_VERIFIED" != "true" ]') &&
-    run.includes('WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")') &&
+    mutationMatchCount(run, MCP_REGISTRY_WORK_ROOT_INIT) === 1 &&
     run.includes('GH_CONFIG_DIR="$WORK_ROOT/gh-config"') &&
     run.includes('/bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"') &&
     run.includes('EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"') &&
@@ -3446,7 +3499,9 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     publisherIdentityInventoryIsExact &&
     ghIdentityInventoryIsExact &&
     curlIdentityInventoryIsExact &&
-    !hasForbiddenRegistryWriteArguments &&
+    ansiCQuoteInventoryIsExact &&
+    rawNetworkToolInventoryIsExact &&
+    !containsForbiddenRegistryWriteArguments &&
     !hasForbiddenPublisherMutation &&
     !hasDirectRegistryGhApiCommand &&
     !hasDirectRawCurlCommand &&
@@ -4355,9 +4410,9 @@ function assertMcpRegistryEvaluatorContract() {
 
   const unknownRuntimeFieldServer = JSON.parse(JSON.stringify(expectedServer)) as Record<string, unknown>;
   const unknownRuntimePackage = (unknownRuntimeFieldServer.packages as Array<Record<string, unknown>>)[0];
-  const unknownRuntimeArgument = (
-    (unknownRuntimePackage?.runtimeArguments as Array<Record<string, unknown>> | undefined) ?? []
-  )[0];
+  const unknownRuntimeArgument = ((unknownRuntimePackage?.runtimeArguments as
+    | Array<Record<string, unknown>>
+    | undefined) ?? [])[0];
   if (!unknownRuntimeArgument) throw new Error("MCP Registry fixture runtime argument is missing");
   unknownRuntimeArgument.unexpected = true;
   expect(() =>
@@ -5546,12 +5601,59 @@ describe("release identity and exact required-job gate", () => {
     const registryReleaseSteps = yamlSteps(registryReleaseJob ?? {});
     const registryReleasePermissions = yamlRecord(registryReleaseDocument?.permissions) ?? {};
     const registryStep = namedStep(registryReleaseSteps, MCP_REGISTRY_STEP_NAME);
-    expect(
-      mcpRegistryContractProblems(registryReleaseSteps, mcpbInputs.integrity, registryReleasePermissions)
-    ).toEqual([]);
+    expect(mcpRegistryContractProblems(registryReleaseSteps, mcpbInputs.integrity, registryReleasePermissions)).toEqual(
+      []
+    );
     expect(registryStep).toBeDefined();
     if (registryStep === undefined) throw new Error("MCP Registry release step is missing from the baseline");
     const registryRun = runBody(registryStep);
+    expect(hasForbiddenRegistryWriteArguments(MCP_REGISTRY_WORK_ROOT_INIT)).toBe(false);
+    expect(hasForbiddenRegistryWriteArguments('"$CURL_BIN" --disable --retry 0 "$URL"')).toBe(false);
+    expect(hasForbiddenRegistryWriteArguments('"$CURL_BIN" -fsS --disable "$URL"')).toBe(false);
+    expect(hasForbiddenRegistryWriteArguments("CURL_READ_ARGS=(--disable); REQUEST_METHOD=POSTFIX")).toBe(false);
+    expect(hasForbiddenRegistryWriteArguments('READ_ARG="${ARG:---disable}"')).toBe(false);
+    expect(
+      hasForbiddenRegistryWriteArguments(
+        `"$CURL_BIN" --write-out ${MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C} "$URL"`
+      )
+    ).toBe(false);
+    for (const forbiddenRegistryWrite of [
+      '"$CURL_BIN" -d\'{}\' "$URL"',
+      '"$CURL_BIN" --disable \\\n  --data-binary @payload.json "$URL"',
+      '"$CURL_BIN" --da\\\nta \'{}\' "$URL"',
+      "command /usr/bin/curl --data '{}' https://registry.modelcontextprotocol.io/v0.1/servers",
+      "command /usr/bin/gh api --method PATCH repos/oomkapwn/enquire-mcp",
+      "CURL_WRITE_ARGS=( --data '{}' )",
+      "CURL_WRITE_ARGS=(--data '{}')",
+      "CURL_WRITE_ARG=-d",
+      "CURL_WRITE_ARG='-d'",
+      "CURL_WRITE_ARG=$'--data'",
+      "METHOD=POST",
+      "METHOD=$'POST'",
+      '"$CURL_BIN" --request $\'POST\' "$URL"',
+      '"$CURL_BIN" "${WRITE_ARG:---data}" \'{}\' "$URL"',
+      '"$CURL_BIN" "${WRITE_ARG:--d}" \'{}\' "$URL"',
+      '"$CURL_BIN" "${WRITE_ARG:---config}" payload.curlrc "$URL"',
+      '"$CURL_BIN" "${WRITE_ARG:+--json}" \'{}\' "$URL"',
+      '"$CURL_BIN" $\'\\x2d\\x64\' \'{}\' "$URL"',
+      '"$CURL_BIN" $\'\\055d\' \'{}\' "$URL"',
+      '"$CURL_BIN" $\'\\x2d\\\n\\x64\' \'{}\' "$URL"',
+      '"$CURL_BIN" -sd\'{}\' "$URL"',
+      '"$CURL_BIN" -4d\'{}\' "$URL"',
+      '"$CURL_BIN" -#d\'{}\' "$URL"',
+      '"$CURL_BIN" -:d\'{}\' "$URL"',
+      '"$CURL_BIN" -sTpayload "$URL"',
+      '"$CURL_BIN" -Kpayload.curlrc "$URL"',
+      '"$CURL_BIN" --config payload.curlrc "$URL"',
+      '"$CURL_BIN" --expand-data \'{}\' "$URL"',
+      "command /usr/bin/cu\\rl \\--data '{}' https://registry.modelcontextprotocol.io/v0.1/servers",
+      'command /usr/bin/cu""rl --d"a"ta \'{}\' https://registry.modelcontextprotocol.io/v0.1/servers',
+      '"$CURL_BIN" --request "${METHOD:-POST}" "$URL"',
+      `${MCP_REGISTRY_WORK_ROOT_INIT}; command /usr/bin/curl -d'{}' "$URL"`,
+      '"$CURL_BIN" --header \'X-Debug: -d\' "$URL"'
+    ]) {
+      expect(hasForbiddenRegistryWriteArguments(forbiddenRegistryWrite)).toBe(true);
+    }
     const registryEnv = yamlRecord(registryStep.env);
     expect(registryRun.length).toBeLessThanOrEqual(GITHUB_RUN_CHARACTER_LIMIT);
     expect(registryEnv).not.toBeNull();
@@ -5867,7 +5969,46 @@ describe("release identity and exact required-job gate", () => {
           registryRun,
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
           '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            'command /usr/bin/gh api --method PATCH repos/oomkapwn/enquire-mcp'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\ncommand /usr/bin/gh --version'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
             "/usr/bin/curl --disable https://registry.modelcontextprotocol.io/v0.1/servers"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            "command /usr/bin/curl --data '{}' https://registry.modelcontextprotocol.io/v0.1/servers"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            "command /usr/bin/curl --disable https://registry.modelcontextprotocol.io/v0.1/servers"
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"',
+          '"$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"\n' +
+            "command /usr/bin/cu\\rl --disable https://registry.modelcontextprotocol.io/v0.1/servers"
         )
       ),
       registryStepWithRun(
@@ -5889,6 +6030,14 @@ describe("release identity and exact required-job gate", () => {
           registryRun,
           'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable \\',
           'response=$(deadline_timeout 35 10 "MCP Registry read" "$CURL_BIN" --disable -d\'{}\' \\'
+        )
+      ),
+      registryStepWithRun(
+        replaceExactly(
+          registryRun,
+          "--silent --show-error --proxy '' --connect-timeout 10 --max-time 30 \\",
+          '"${WRITE_ARG:---data}" \'{}\' \\\n    ' +
+            "--silent --show-error --proxy '' --connect-timeout 10 --max-time 30 \\"
         )
       ),
       registryStepWithRun(
@@ -6797,12 +6946,8 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(
-      releasePollProblems(
-        replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", GH_READ_HELPER_COUNT)
-      )
-    ).toContain(
-      "all post-gate GitHub reads must consume the global deadline without shadowing release writes"
-    );
+      releasePollProblems(replaceExactly(workflow, "--raw-field|--raw-field=*", "--raw-field", GH_READ_HELPER_COUNT))
+    ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
     expect(
       releasePollProblems(
         replaceExactly(
@@ -7169,9 +7314,7 @@ describe("release identity and exact required-job gate", () => {
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
     const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
-    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(
-      RELEASE_RESERVE_GUARD_COUNT
-    );
+    expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(RELEASE_RESERVE_GUARD_COUNT);
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,

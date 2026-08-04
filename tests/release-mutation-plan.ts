@@ -1,6 +1,234 @@
 /** Mutation application mode used by the release-integrity oracle. */
 export type ReleaseMutationMode = "first" | "all";
 
+const globalObject: typeof globalThis = globalThis;
+const arrayConstructor: typeof Array = Array;
+const arrayPrototype = Array.prototype;
+const iteratorSymbol: typeof Symbol.iterator = Symbol.iterator;
+const speciesSymbol: typeof Symbol.species = Symbol.species;
+const arrayEntriesIntrinsic = arrayPrototype.entries;
+const arrayEveryIntrinsic = arrayPrototype.every;
+const arrayFilterIntrinsic = arrayPrototype.filter;
+const arrayIncludesIntrinsic = arrayPrototype.includes;
+const arrayIndexOfIntrinsic = arrayPrototype.indexOf;
+const arrayIteratorIntrinsic = arrayPrototype[iteratorSymbol];
+const arrayJoinIntrinsic = arrayPrototype.join;
+const arrayMapIntrinsic = arrayPrototype.map;
+const arraySomeIntrinsic = arrayPrototype.some;
+const arraySortIntrinsic = arrayPrototype.sort;
+const arraySliceIntrinsic = arrayPrototype.slice;
+const arrayPrototypeConstructorIntrinsic = arrayPrototype.constructor;
+const isArrayIntrinsic: typeof Array.isArray = Array.isArray;
+const errorConstructor: typeof Error = Error;
+const mapConstructor: typeof Map = Map;
+const mapPrototype = Map.prototype;
+const mapGetIntrinsic = mapPrototype.get;
+const mapHasIntrinsic = mapPrototype.has;
+const mapIteratorIntrinsic = mapPrototype[iteratorSymbol];
+const mapKeysIntrinsic = mapPrototype.keys;
+const mapSetIntrinsic = mapPrototype.set;
+const numberConstructor: typeof Number = Number;
+const numberIsFiniteIntrinsic: typeof Number.isFinite = Number.isFinite;
+const numberIsSafeIntegerIntrinsic: typeof Number.isSafeInteger = Number.isSafeInteger;
+const objectConstructor: typeof Object = Object;
+const defineObjectPropertyIntrinsic: typeof Object.defineProperty = Object.defineProperty;
+const freezeObject: typeof Object.freeze = Object.freeze;
+const getObjectPrototypeIntrinsic: typeof Object.getPrototypeOf = Object.getPrototypeOf;
+const getOwnPropertyDescriptorsIntrinsic: typeof Object.getOwnPropertyDescriptors =
+  Object.getOwnPropertyDescriptors;
+const objectKeysIntrinsic: typeof Object.keys = Object.keys;
+const objectValuesIntrinsic: typeof Object.values = Object.values;
+const objectPrototype = Object.prototype;
+const reflectObject: typeof Reflect = Reflect;
+const ownKeysIntrinsic: typeof Reflect.ownKeys = Reflect.ownKeys;
+const sealObject: typeof Object.seal = Object.seal;
+const applyFunction: typeof Reflect.apply = Reflect.apply;
+const pushArrayIntrinsic = arrayPrototype.push;
+const setConstructor: typeof Set = Set;
+const setPrototype = Set.prototype;
+const setAddIntrinsic = setPrototype.add;
+const setDeleteIntrinsic = setPrototype.delete;
+const setHasIntrinsic = setPrototype.has;
+const setIteratorIntrinsic = setPrototype[iteratorSymbol];
+const setKeysIntrinsic = setPrototype.keys;
+const stringConstructor: typeof String = String;
+const stringPrototype = String.prototype;
+const stringIndexOfIntrinsic = stringPrototype.indexOf;
+const stringCharAtIntrinsic = stringPrototype.charAt;
+const stringSliceIntrinsic = stringPrototype.slice;
+const stringSplitIntrinsic = stringPrototype.split;
+const symbolConstructor: typeof Symbol = Symbol;
+const regExpConstructor: typeof RegExp = RegExp;
+const regExpPrototype = RegExp.prototype;
+const execRegExpIntrinsic = regExpPrototype.exec;
+const weakMapConstructor: typeof WeakMap = WeakMap;
+const weakMapPrototype = WeakMap.prototype;
+const weakMapGetIntrinsic = weakMapPrototype.get;
+const weakMapSetIntrinsic = weakMapPrototype.set;
+const weakSetConstructor: typeof WeakSet = WeakSet;
+const weakSetPrototype = WeakSet.prototype;
+const weakSetAddIntrinsic = weakSetPrototype.add;
+const weakSetDeleteIntrinsic = weakSetPrototype.delete;
+const weakSetHasIntrinsic = weakSetPrototype.has;
+const arrayIteratorPrototype = getObjectPrototypeIntrinsic([][iteratorSymbol]()) as object & {
+  readonly next: unknown;
+};
+const mapIteratorPrototype = getObjectPrototypeIntrinsic(new mapConstructor().keys()) as object & {
+  readonly next: unknown;
+};
+const setIteratorPrototype = getObjectPrototypeIntrinsic(new setConstructor().keys()) as object & {
+  readonly next: unknown;
+};
+const iteratorPrototype = getObjectPrototypeIntrinsic(arrayIteratorPrototype) as object & {
+  readonly [iteratorSymbol]: unknown;
+};
+const arrayIteratorNextIntrinsic = arrayIteratorPrototype.next;
+const mapIteratorNextIntrinsic = mapIteratorPrototype.next;
+const setIteratorNextIntrinsic = setIteratorPrototype.next;
+const iteratorSelfIntrinsic = iteratorPrototype[iteratorSymbol];
+const arraySpeciesGetterIntrinsic = (
+  getOwnPropertyDescriptorsIntrinsic(arrayConstructor) as Record<PropertyKey, PropertyDescriptor | undefined>
+)[speciesSymbol]?.get;
+
+const intrinsicDataProperties: readonly (readonly [object, PropertyKey, unknown])[] = [
+  [globalObject, "Array", arrayConstructor],
+  [globalObject, "Error", errorConstructor],
+  [globalObject, "Map", mapConstructor],
+  [globalObject, "Number", numberConstructor],
+  [globalObject, "Object", objectConstructor],
+  [globalObject, "Reflect", reflectObject],
+  [globalObject, "RegExp", regExpConstructor],
+  [globalObject, "Set", setConstructor],
+  [globalObject, "String", stringConstructor],
+  [globalObject, "Symbol", symbolConstructor],
+  [globalObject, "WeakMap", weakMapConstructor],
+  [globalObject, "WeakSet", weakSetConstructor],
+  [arrayConstructor, "prototype", arrayPrototype],
+  [arrayConstructor, "isArray", isArrayIntrinsic],
+  [arrayPrototype, "constructor", arrayPrototypeConstructorIntrinsic],
+  [arrayPrototype, "entries", arrayEntriesIntrinsic],
+  [arrayPrototype, "every", arrayEveryIntrinsic],
+  [arrayPrototype, "filter", arrayFilterIntrinsic],
+  [arrayPrototype, "includes", arrayIncludesIntrinsic],
+  [arrayPrototype, "indexOf", arrayIndexOfIntrinsic],
+  [arrayPrototype, iteratorSymbol, arrayIteratorIntrinsic],
+  [arrayPrototype, "join", arrayJoinIntrinsic],
+  [arrayPrototype, "map", arrayMapIntrinsic],
+  [arrayPrototype, "slice", arraySliceIntrinsic],
+  [arrayPrototype, "some", arraySomeIntrinsic],
+  [arrayPrototype, "sort", arraySortIntrinsic],
+  [mapConstructor, "prototype", mapPrototype],
+  [mapPrototype, "get", mapGetIntrinsic],
+  [mapPrototype, "has", mapHasIntrinsic],
+  [mapPrototype, iteratorSymbol, mapIteratorIntrinsic],
+  [mapPrototype, "keys", mapKeysIntrinsic],
+  [mapPrototype, "set", mapSetIntrinsic],
+  [numberConstructor, "isFinite", numberIsFiniteIntrinsic],
+  [numberConstructor, "isSafeInteger", numberIsSafeIntegerIntrinsic],
+  [objectConstructor, "prototype", objectPrototype],
+  [objectConstructor, "defineProperty", defineObjectPropertyIntrinsic],
+  [objectConstructor, "getOwnPropertyDescriptors", getOwnPropertyDescriptorsIntrinsic],
+  [objectConstructor, "getPrototypeOf", getObjectPrototypeIntrinsic],
+  [objectConstructor, "keys", objectKeysIntrinsic],
+  [objectConstructor, "values", objectValuesIntrinsic],
+  [reflectObject, "apply", applyFunction],
+  [reflectObject, "ownKeys", ownKeysIntrinsic],
+  [regExpConstructor, "prototype", regExpPrototype],
+  [regExpPrototype, "exec", execRegExpIntrinsic],
+  [setConstructor, "prototype", setPrototype],
+  [setPrototype, "add", setAddIntrinsic],
+  [setPrototype, "delete", setDeleteIntrinsic],
+  [setPrototype, "has", setHasIntrinsic],
+  [setPrototype, iteratorSymbol, setIteratorIntrinsic],
+  [setPrototype, "keys", setKeysIntrinsic],
+  [stringConstructor, "prototype", stringPrototype],
+  [stringPrototype, "charAt", stringCharAtIntrinsic],
+  [stringPrototype, "indexOf", stringIndexOfIntrinsic],
+  [stringPrototype, "slice", stringSliceIntrinsic],
+  [stringPrototype, "split", stringSplitIntrinsic],
+  [symbolConstructor, "iterator", iteratorSymbol],
+  [symbolConstructor, "species", speciesSymbol],
+  [weakMapConstructor, "prototype", weakMapPrototype],
+  [weakMapPrototype, "get", weakMapGetIntrinsic],
+  [weakMapPrototype, "set", weakMapSetIntrinsic],
+  [weakSetConstructor, "prototype", weakSetPrototype],
+  [weakSetPrototype, "add", weakSetAddIntrinsic],
+  [weakSetPrototype, "delete", weakSetDeleteIntrinsic],
+  [weakSetPrototype, "has", weakSetHasIntrinsic],
+  [arrayIteratorPrototype, "next", arrayIteratorNextIntrinsic],
+  [mapIteratorPrototype, "next", mapIteratorNextIntrinsic],
+  [setIteratorPrototype, "next", setIteratorNextIntrinsic],
+  [iteratorPrototype, iteratorSymbol, iteratorSelfIntrinsic]
+];
+
+function hasIntrinsicAccessorProperty(
+  owner: object,
+  key: PropertyKey,
+  expectedGet: (() => unknown) | undefined,
+  expectedSet: ((value: unknown) => void) | undefined
+): boolean {
+  try {
+    const descriptor = (
+      getOwnPropertyDescriptorsIntrinsic(owner) as Record<PropertyKey, PropertyDescriptor | undefined>
+    )[key];
+    return (
+      descriptor !== undefined &&
+      !("value" in descriptor) &&
+      descriptor.get === expectedGet &&
+      descriptor.set === expectedSet
+    );
+  } catch {
+    return false;
+  }
+}
+
+function assertAmbientIntrinsics(): void {
+  let dataPropertiesIntact = true;
+  let inspectedOwner: object | null = null;
+  let inspectedDescriptors: Record<PropertyKey, PropertyDescriptor | undefined> | null = null;
+  for (let index = 0; index < intrinsicDataProperties.length; index++) {
+    const entry = intrinsicDataProperties[index];
+    if (entry === undefined) {
+      dataPropertiesIntact = false;
+      break;
+    }
+    if (entry[0] !== inspectedOwner) {
+      inspectedOwner = entry[0];
+      try {
+        inspectedDescriptors = getOwnPropertyDescriptorsIntrinsic(inspectedOwner) as Record<
+          PropertyKey,
+          PropertyDescriptor | undefined
+        >;
+      } catch {
+        inspectedDescriptors = null;
+      }
+    }
+    const descriptor = inspectedDescriptors?.[entry[1]];
+    if (descriptor === undefined || !("value" in descriptor) || descriptor.value !== entry[2]) {
+      dataPropertiesIntact = false;
+      break;
+    }
+  }
+  if (
+    !dataPropertiesIntact ||
+    !hasIntrinsicAccessorProperty(arrayConstructor, speciesSymbol, arraySpeciesGetterIntrinsic, undefined) ||
+    getObjectPrototypeIntrinsic(arrayIteratorPrototype) !== iteratorPrototype ||
+    getObjectPrototypeIntrinsic(mapIteratorPrototype) !== iteratorPrototype ||
+    getObjectPrototypeIntrinsic(setIteratorPrototype) !== iteratorPrototype ||
+    getObjectPrototypeIntrinsic(iteratorPrototype) !== objectPrototype
+  ) {
+    throw new errorConstructor("release mutation ambient intrinsic drift");
+  }
+}
+
+function pushArrayValue<T>(array: T[], value: T): number {
+  return applyFunction(pushArrayIntrinsic, array, [value]) as number;
+}
+
+function testRegExp(regex: RegExp, value: string): boolean {
+  return applyFunction(execRegExpIntrinsic, regex, [value]) !== null;
+}
+
 declare const RELEASE_SOURCE_HANDLE_BRAND: unique symbol;
 declare const RELEASE_MUTATION_HANDLE_BRAND: unique symbol;
 
@@ -72,12 +300,22 @@ export interface ReleaseMutationCase {
   readonly expectations: readonly ReleaseExpectation[];
 }
 
-/** Optional exact inventory projection for a complete mutation matrix. */
-export interface ReleaseMutationInventoryExpectation {
-  readonly total: number;
-  readonly first: number;
-  readonly all: number;
-}
+/** Optional exact mutation-only or full-topology projection for a complete mutation matrix. */
+export type ReleaseMutationInventoryExpectation =
+  | {
+      readonly total: number;
+      readonly first: number;
+      readonly all: number;
+    }
+  | {
+      readonly total: number;
+      readonly first: number;
+      readonly all: number;
+      readonly cases: number;
+      readonly expectations: number;
+      readonly roots: number;
+      readonly dependencyOnly: number;
+    };
 
 /** Lifecycle state of a release-mutation plan. */
 export type ReleaseMutationPlanState = "open" | "sealing" | "sealed" | "rejected" | "executing" | "executed" | "failed";
@@ -158,14 +396,14 @@ interface SnapshotBudget {
   reportedExhaustion: boolean;
 }
 
-const HANDLE_METADATA = new WeakMap<object, HandleMetadata>();
+const HANDLE_METADATA = new weakMapConstructor<object, HandleMetadata>();
 const ID_PATTERN = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*$/u;
 const MAX_SNAPSHOT_DEPTH = 64;
 const MAX_SNAPSHOT_ENTRIES = 10_000;
 const MAX_SNAPSHOT_OBJECTS = 50_000;
 
 function isPositiveSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value > 0;
+  return numberIsSafeIntegerIntrinsic(value) && value > 0;
 }
 
 function displayIdentity(value: unknown, fallback: string): string {
@@ -178,7 +416,9 @@ function objectValue(value: unknown): object | null {
 
 function handleMetadata(value: unknown): HandleMetadata | undefined {
   const object = objectValue(value);
-  return object === null ? undefined : HANDLE_METADATA.get(object);
+  return object === null
+    ? undefined
+    : (applyFunction(weakMapGetIntrinsic, HANDLE_METADATA, [object]) as HandleMetadata | undefined);
 }
 
 function createHandle<T extends ReleaseSourceHandle | ReleaseMutationHandle>(
@@ -186,22 +426,22 @@ function createHandle<T extends ReleaseSourceHandle | ReleaseMutationHandle>(
   kind: HandleKind,
   id: string
 ): T {
-  const handle = Object.freeze({}) as object;
-  HANDLE_METADATA.set(handle, { owner, kind, id });
+  const handle = freezeObject({}) as object;
+  applyFunction(weakMapSetIntrinsic, HANDLE_METADATA, [handle, { owner, kind, id }]);
   return handle as unknown as T;
 }
 
 function isArrayIndex(key: string): boolean {
-  if (!/^(0|[1-9]\d*)$/u.test(key)) return false;
-  const value = Number(key);
-  return Number.isSafeInteger(value) && value >= 0 && value < 4_294_967_295;
+  if (!testRegExp(/^(0|[1-9]\d*)$/u, key)) return false;
+  const value = numberConstructor(key);
+  return numberIsSafeIntegerIntrinsic(value) && value >= 0 && value < 4_294_967_295;
 }
 
 function snapshotPlainData(
   value: unknown,
   path: string,
   problem: RegistrationProblem,
-  ancestors = new WeakSet<object>(),
+  ancestors = new weakSetConstructor<object>(),
   depth = 0,
   budget: SnapshotBudget = { remainingObjects: MAX_SNAPSHOT_OBJECTS, reportedExhaustion: false }
 ): unknown {
@@ -211,7 +451,7 @@ function snapshotPlainData(
     problem("data.depth", path, `release-mutation data exceeds maximum depth ${MAX_SNAPSHOT_DEPTH}`);
     return undefined;
   }
-  if (typeof value === "number" && !Number.isFinite(value)) {
+  if (typeof value === "number" && !numberIsFiniteIntrinsic(value)) {
     problem("data.number", path, "non-finite numbers are not valid release-mutation data");
     return undefined;
   }
@@ -246,7 +486,7 @@ function snapshotPlainData(
     return undefined;
   }
   budget.remainingObjects--;
-  if (ancestors.has(object)) {
+  if (applyFunction(weakSetHasIntrinsic, ancestors, [object]) as boolean) {
     problem("data.cycle", path, "cyclic release-mutation data is not allowed");
     return undefined;
   }
@@ -255,71 +495,85 @@ function snapshotPlainData(
   let descriptors: Record<PropertyKey, PropertyDescriptor>;
   let isArray: boolean;
   try {
-    isArray = Array.isArray(object);
-    prototype = Object.getPrototypeOf(object) as object | null;
-    descriptors = Object.getOwnPropertyDescriptors(object) as Record<PropertyKey, PropertyDescriptor>;
+    isArray = isArrayIntrinsic(object);
+    prototype = getObjectPrototypeIntrinsic(object) as object | null;
+    descriptors = getOwnPropertyDescriptorsIntrinsic(object) as Record<PropertyKey, PropertyDescriptor>;
   } catch {
     problem("data.inspect", path, "release-mutation data must support deterministic structural inspection");
     return undefined;
   }
 
   if (isArray) {
-    if (prototype !== Array.prototype) {
+    if (prototype !== arrayPrototype) {
       problem("data.prototype", path, "arrays must use the built-in Array prototype");
       return undefined;
     }
-    ancestors.add(object);
+    applyFunction(weakSetAddIntrinsic, ancestors, [object]);
     const snapshot: unknown[] = [];
     const lengthDescriptor = descriptors.length;
     const length: unknown = lengthDescriptor && "value" in lengthDescriptor ? lengthDescriptor.value : undefined;
-    if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > MAX_SNAPSHOT_ENTRIES) {
+    if (
+      typeof length !== "number" ||
+      !numberIsSafeIntegerIntrinsic(length) ||
+      length < 0 ||
+      length > MAX_SNAPSHOT_ENTRIES
+    ) {
       problem(
         "data.array",
         path,
         `array length must be a non-negative safe integer no greater than ${MAX_SNAPSHOT_ENTRIES}`
       );
-      ancestors.delete(object);
-      return Object.freeze(snapshot);
+      applyFunction(weakSetDeleteIntrinsic, ancestors, [object]);
+      return freezeObject(snapshot);
     }
     for (let index = 0; index < length; index++) {
-      const descriptor = descriptors[String(index)];
+      const descriptor = descriptors[stringConstructor(index)];
       if (descriptor === undefined) {
         problem("data.array", `${path}[${index}]`, "sparse arrays are not valid release-mutation data");
-        snapshot.push(undefined);
+        pushArrayValue(snapshot, undefined);
       } else if (!("value" in descriptor)) {
         problem("data.accessor", `${path}[${index}]`, "getters and setters are not valid release-mutation data");
-        snapshot.push(undefined);
+        pushArrayValue(snapshot, undefined);
       } else if (!descriptor.enumerable) {
         problem("data.property", `${path}[${index}]`, "non-enumerable properties are not valid release-mutation data");
-        snapshot.push(undefined);
+        pushArrayValue(snapshot, undefined);
       } else {
-        snapshot.push(snapshotPlainData(descriptor.value, `${path}[${index}]`, problem, ancestors, depth + 1, budget));
+        pushArrayValue(
+          snapshot,
+          snapshotPlainData(descriptor.value, `${path}[${index}]`, problem, ancestors, depth + 1, budget)
+        );
       }
     }
-    for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptorKeys = ownKeysIntrinsic(descriptors);
+    for (let keyIndex = 0; keyIndex < descriptorKeys.length; keyIndex++) {
+      const key = descriptorKeys[keyIndex];
+      if (key === undefined) continue;
       if (typeof key === "symbol") {
         problem("data.symbol", path, "symbol properties are not valid release-mutation data");
       } else if (key !== "length" && !isArrayIndex(key)) {
         problem("data.array", `${path}.${key}`, "custom array properties are not valid release-mutation data");
       }
     }
-    ancestors.delete(object);
-    return Object.freeze(snapshot);
+    applyFunction(weakSetDeleteIntrinsic, ancestors, [object]);
+    return freezeObject(snapshot);
   }
 
-  if (prototype !== Object.prototype) {
+  if (prototype !== objectPrototype) {
     problem("data.prototype", path, "only plain objects and arrays are valid release-mutation data");
     return undefined;
   }
 
-  if (Reflect.ownKeys(descriptors).length > MAX_SNAPSHOT_ENTRIES) {
+  const descriptorKeys = ownKeysIntrinsic(descriptors);
+  if (descriptorKeys.length > MAX_SNAPSHOT_ENTRIES) {
     problem("data.size", path, `plain objects may contain at most ${MAX_SNAPSHOT_ENTRIES} own properties`);
     return undefined;
   }
 
-  ancestors.add(object);
+  applyFunction(weakSetAddIntrinsic, ancestors, [object]);
   const snapshot: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(descriptors)) {
+  for (let keyIndex = 0; keyIndex < descriptorKeys.length; keyIndex++) {
+    const key = descriptorKeys[keyIndex];
+    if (key === undefined) continue;
     if (typeof key === "symbol") {
       problem("data.symbol", path, "symbol properties are not valid release-mutation data");
       continue;
@@ -338,40 +592,44 @@ function snapshotPlainData(
       problem("data.thenable", `${path}.then`, "thenables are not valid release-mutation data");
       continue;
     }
-    Object.defineProperty(snapshot, key, {
+    defineObjectPropertyIntrinsic(snapshot, key, {
       configurable: false,
       enumerable: true,
       value: snapshotPlainData(descriptor.value, `${path}.${key}`, problem, ancestors, depth + 1, budget),
       writable: false
     });
   }
-  ancestors.delete(object);
-  return Object.freeze(snapshot);
+  applyFunction(weakSetDeleteIntrinsic, ancestors, [object]);
+  return freezeObject(snapshot);
 }
 
 function plainRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   const object = objectValue(value);
-  if (object === null || Array.isArray(object) || Object.getPrototypeOf(object) !== Object.prototype) return null;
+  if (object === null || isArrayIntrinsic(object) || getObjectPrototypeIntrinsic(object) !== objectPrototype) {
+    return null;
+  }
   return object as Readonly<Record<string, unknown>>;
 }
 
 function hasExactKeys(record: Readonly<Record<string, unknown>>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
+  const actual = objectKeysIntrinsic(record).sort();
   const sortedExpected = [...expected].sort();
   return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index]);
 }
 
-function containsHandle(value: unknown, visited = new WeakSet<object>()): boolean {
+function containsHandle(value: unknown, visited = new weakSetConstructor<object>()): boolean {
   if (handleMetadata(value) !== undefined) return true;
   const object = objectValue(value);
   if (object === null || visited.has(object)) return false;
   visited.add(object);
-  if (Array.isArray(object)) {
+  if (isArrayIntrinsic(object)) {
     const entries = object as readonly unknown[];
     return entries.some((entry) => containsHandle(entry, visited));
   }
-  if (Object.getPrototypeOf(object) !== Object.prototype) return false;
-  return Object.values(object as Readonly<Record<string, unknown>>).some((entry) => containsHandle(entry, visited));
+  if (getObjectPrototypeIntrinsic(object) !== objectPrototype) return false;
+  return objectValuesIntrinsic(object as Readonly<Record<string, unknown>>).some((entry) =>
+    containsHandle(entry, visited)
+  );
 }
 
 function countOccurrences(source: string, needle: string): number {
@@ -387,7 +645,7 @@ function countOccurrences(source: string, needle: string): number {
 }
 
 function isTokenCharacter(value: string): boolean {
-  return value.length > 0 && /[\p{L}\p{N}_]/u.test(value);
+  return value.length > 0 && testRegExp(/[\p{L}\p{N}_]/u, value);
 }
 
 function countWitnessOccurrences(source: string, witness: ReleaseMutationWitness): number {
@@ -446,17 +704,17 @@ function applyLiteralMutation(source: string, needle: string, replacement: strin
   while (true) {
     const offset = source.indexOf(needle, cursor);
     if (offset === -1) break;
-    fragments.push(source.slice(cursor, offset));
-    fragments.push(expandLiteralReplacement(source, needle, replacement, offset));
+    pushArrayValue(fragments, source.slice(cursor, offset));
+    pushArrayValue(fragments, expandLiteralReplacement(source, needle, replacement, offset));
     cursor = offset + needle.length;
   }
-  fragments.push(source.slice(cursor));
+  pushArrayValue(fragments, source.slice(cursor));
   return fragments.join("");
 }
 
 function assertNever(value: never): never {
   void value;
-  throw new Error("unreachable closed release oracle variant");
+  throw new errorConstructor("unreachable closed release oracle variant");
 }
 
 function releaseNamedRegex(identity: ReleaseNamedRegexIdentity): RegExp {
@@ -473,7 +731,7 @@ function fixtureTextProbe(value: string): string {
 }
 
 function fixtureThrowProbe(value: string, message: string): string {
-  if (releaseNamedRegex("fixture.omega-token").test(value)) throw new Error(message);
+  if (testRegExp(releaseNamedRegex("fixture.omega-token"), value)) throw new errorConstructor(message);
   return value;
 }
 
@@ -487,7 +745,9 @@ function materializeOracleValue(
     metadata?.kind === "source"
       ? sourceValues.get(handle as ReleaseSourceHandle)
       : prepared.get(handle as ReleaseMutationHandle)?.output;
-  if (value === undefined) throw new Error("closed release oracle invocation contains an unmaterialized handle");
+  if (value === undefined) {
+    throw new errorConstructor("closed release oracle invocation contains an unmaterialized handle");
+  }
   return value;
 }
 
@@ -501,7 +761,7 @@ function executeReleaseOracleInvocation(
       const baseline = fixtureTextProbe(materializeOracleValue(invocation.baseline, sourceValues, prepared));
       const mutant = fixtureTextProbe(materializeOracleValue(invocation.mutant, sourceValues, prepared));
       if (baseline === mutant) {
-        throw new Error("fixture.text clean baseline must differ from its mutant");
+        throw new errorConstructor("fixture.text clean baseline must differ from its mutant");
       }
       return { kind: "fixture.text", baseline, mutant };
     }
@@ -516,11 +776,11 @@ function executeReleaseOracleInvocation(
       } catch (error) {
         const observedMessage = errorMessage(error);
         if (observedMessage !== invocation.message) {
-          throw new Error("fixture.throw mutant produced an unexpected error identity");
+          throw new errorConstructor("fixture.throw mutant produced an unexpected error identity");
         }
-        problems.push("fixture.mutant-threw");
+        pushArrayValue(problems, "fixture.mutant-threw");
       }
-      return { kind: "fixture.throw", baseline, problems: Object.freeze(problems) };
+      return { kind: "fixture.throw", baseline, problems: freezeObject(problems) };
     }
     default:
       return assertNever(invocation);
@@ -530,19 +790,29 @@ function executeReleaseOracleInvocation(
 function expectationSemanticIdentity(expectation: ReleaseExpectation): string {
   switch (expectation.kind) {
     case "problem":
-      return JSON.stringify([expectation.kind, expectation.problem]);
+      return `${expectation.kind}\u0000${expectation.problem}`;
     case "equal":
     case "not-equal":
-      return JSON.stringify([expectation.kind, expectation.value]);
+      return `${expectation.kind}\u0000${expectation.value}`;
     case "regex":
-      return JSON.stringify([expectation.kind, expectation.regex]);
+      return `${expectation.kind}\u0000${expectation.regex}`;
     default:
       return assertNever(expectation);
   }
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (typeof error === "object" && error !== null) {
+    try {
+      const descriptor = getOwnPropertyDescriptorsIntrinsic(error).message;
+      if (descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string") {
+        return descriptor.value;
+      }
+    } catch {
+      return "uninspectable thrown value";
+    }
+  }
+  return stringConstructor(error);
 }
 
 /**
@@ -571,31 +841,35 @@ function errorMessage(error: unknown): string {
  * });
  */
 export class ReleaseMutationPlan {
-  private readonly owner = Object.freeze({});
+  private readonly owner = freezeObject({});
   private readonly sources: RegisteredSource[] = [];
   private readonly mutations: RegisteredMutation[] = [];
   private readonly cases: RegisteredCase[] = [];
-  private readonly sourceValues = new Map<ReleaseSourceHandle, string>();
-  private readonly prepared = new Map<ReleaseMutationHandle, PreparedMutation>();
+  private readonly sourceValues = new mapConstructor<ReleaseSourceHandle, string>();
+  private readonly prepared = new mapConstructor<ReleaseMutationHandle, PreparedMutation>();
   private readonly preparedCases: PreparedCase[] = [];
   private readonly problems: string[] = [];
   private readonly expectedInventory: unknown;
   private state: ReleaseMutationPlanState = "open";
   private registrationActive = false;
   private executedCases = 0;
+  private executedExpectations = 0;
 
   /**
-   * Create a planner, optionally pinning the final first/all inventory.
+   * Create a planner, optionally pinning the mutation modes or complete graph topology.
    *
-   * @param expectedInventory - Exact complete-matrix totals, or undefined for a focused fixture.
+   * @param expectedInventory - Exact mutation-only or complete-topology totals, or undefined for a focused fixture.
    */
   constructor(expectedInventory?: ReleaseMutationInventoryExpectation) {
+    assertAmbientIntrinsics();
     this.expectedInventory =
       expectedInventory === undefined
         ? undefined
         : snapshotPlainData(expectedInventory, "inventory", (code, path, detail) => {
             this.addProblem(code, "plan", `${path}: ${detail}`);
           });
+    assertAmbientIntrinsics();
+    sealObject(this);
   }
 
   /** @returns Current lifecycle state, exposed for invariant controls. */
@@ -606,6 +880,11 @@ export class ReleaseMutationPlan {
   /** @returns Number of cases whose closed invocation began execution. */
   get caseExecutions(): number {
     return this.executedCases;
+  }
+
+  /** @returns Number of closed expectations whose evaluation began. */
+  get expectationExecutions(): number {
+    return this.executedExpectations;
   }
 
   /** @returns Stable aggregate diagnostics produced by registration and the last seal attempt. */
@@ -632,10 +911,11 @@ export class ReleaseMutationPlan {
       const snapshot = snapshotPlainData(rawValue, `source ${displayId}`, (code, path, detail) => {
         this.addProblem(code, displayId, `${path}: ${detail}`);
       });
-      this.sources.push({ handle, id: rawId, value: snapshot });
+      pushArrayValue(this.sources, { handle, id: rawId, value: snapshot });
       return handle;
     } finally {
       this.registrationActive = false;
+      assertAmbientIntrinsics();
     }
   }
 
@@ -657,10 +937,11 @@ export class ReleaseMutationPlan {
       const snapshot = snapshotPlainData(registration, `mutation ${displayId}`, (code, path, detail) => {
         this.addProblem(code, displayId, `${path}: ${detail}`);
       });
-      this.mutations.push({ handle, id: rawId, registration: snapshot });
+      pushArrayValue(this.mutations, { handle, id: rawId, registration: snapshot });
       return handle;
     } finally {
       this.registrationActive = false;
+      assertAmbientIntrinsics();
     }
   }
 
@@ -679,10 +960,11 @@ export class ReleaseMutationPlan {
       const snapshot = snapshotPlainData(registration, `case ${caseNumber}`, (code, path, detail) => {
         this.addProblem(code, `<case-${caseNumber}>`, `${path}: ${detail}`);
       });
-      this.cases.push({ registration: snapshot });
+      pushArrayValue(this.cases, { registration: snapshot });
       return this;
     } finally {
       this.registrationActive = false;
+      assertAmbientIntrinsics();
     }
   }
 
@@ -705,15 +987,17 @@ export class ReleaseMutationPlan {
       this.prepareMutations(sourceValidation, mutationAnalyses, cyclicMutations);
       const executableRoots = this.validatePreparedCaseValues(caseAnalyses);
       this.validateReachability(mutationAnalyses, executableRoots);
+      assertAmbientIntrinsics();
       if (this.problems.length === 0) {
         for (const analysis of caseAnalyses) {
           if (analysis.valid && analysis.root !== null && analysis.invocation !== null) {
-            this.preparedCases.push(
-              Object.freeze({
+            pushArrayValue(
+              this.preparedCases,
+              freezeObject({
                 id: analysis.id,
                 root: analysis.root,
                 invocation: analysis.invocation,
-                expectations: Object.freeze([...analysis.expectations])
+                expectations: freezeObject([...analysis.expectations])
               })
             );
           }
@@ -734,18 +1018,31 @@ export class ReleaseMutationPlan {
    * @throws If preflight was not clean, an invocation throws unexpectedly, or an expectation fails.
    */
   execute(): void {
+    assertAmbientIntrinsics();
     if (this.state !== "sealed") {
-      throw new Error(`release mutation plan execute requires sealed state; found ${this.state}`);
+      throw new errorConstructor(`release mutation plan execute requires sealed state; found ${this.state}`);
     }
     this.state = "executing";
     try {
-      for (const releaseCase of this.preparedCases) {
+      for (let caseIndex = 0; caseIndex < this.preparedCases.length; caseIndex++) {
+        const releaseCase = this.preparedCases[caseIndex];
+        if (releaseCase === undefined) {
+          throw new errorConstructor(`release mutation prepared case ${caseIndex} is missing`);
+        }
         this.executedCases++;
         const observation = executeReleaseOracleInvocation(releaseCase.invocation, this.sourceValues, this.prepared);
-        for (const expectation of releaseCase.expectations) {
+        for (let expectationIndex = 0; expectationIndex < releaseCase.expectations.length; expectationIndex++) {
+          const expectation = releaseCase.expectations[expectationIndex];
+          if (expectation === undefined) {
+            throw new errorConstructor(
+              `release mutation prepared expectation ${caseIndex}:${expectationIndex} is missing`
+            );
+          }
+          this.executedExpectations++;
           this.applyExpectation(releaseCase.id, expectation, observation);
         }
       }
+      assertAmbientIntrinsics();
       this.state = "executed";
     } catch (error) {
       this.state = "failed";
@@ -754,16 +1051,17 @@ export class ReleaseMutationPlan {
   }
 
   private requireOpen(action: string): void {
+    assertAmbientIntrinsics();
     if (this.state !== "open") {
-      throw new Error(`cannot ${action} after release mutation plan entered ${this.state} state`);
+      throw new errorConstructor(`cannot ${action} after release mutation plan entered ${this.state} state`);
     }
     if (this.registrationActive) {
-      throw new Error(`cannot ${action} during release mutation registration`);
+      throw new errorConstructor(`cannot ${action} during release mutation registration`);
     }
   }
 
   private addProblem(code: string, id: string, detail: string): void {
-    this.problems.push(`[${code}] ${id}: ${detail}`);
+    pushArrayValue(this.problems, `[${code}] ${id}: ${detail}`);
   }
 
   private validateInventory(): void {
@@ -772,8 +1070,24 @@ export class ReleaseMutationPlan {
     }
     if (this.expectedInventory === undefined) return;
     const inventory = plainRecord(this.expectedInventory);
-    if (inventory === null || !hasExactKeys(inventory, ["total", "first", "all"])) {
-      this.addProblem("inventory.invalid", "plan", "expected inventory must be one exact total/first/all record");
+    const mutationKeys = ["total", "first", "all"] as const;
+    const topologyKeys = [
+      "total",
+      "first",
+      "all",
+      "cases",
+      "expectations",
+      "roots",
+      "dependencyOnly"
+    ] as const;
+    const hasMutationInventory = inventory !== null && hasExactKeys(inventory, mutationKeys);
+    const hasTopologyInventory = inventory !== null && hasExactKeys(inventory, topologyKeys);
+    if (inventory === null || (!hasMutationInventory && !hasTopologyInventory)) {
+      this.addProblem(
+        "inventory.invalid",
+        "plan",
+        "expected inventory must be one exact total/first/all record with either zero or all topology fields"
+      );
       return;
     }
     const total = inventory.total;
@@ -783,14 +1097,36 @@ export class ReleaseMutationPlan {
       typeof total !== "number" ||
       !isPositiveSafeInteger(total) ||
       typeof expectedFirst !== "number" ||
-      !Number.isSafeInteger(expectedFirst) ||
+      !numberIsSafeIntegerIntrinsic(expectedFirst) ||
       expectedFirst < 0 ||
       typeof expectedAll !== "number" ||
-      !Number.isSafeInteger(expectedAll) ||
+      !numberIsSafeIntegerIntrinsic(expectedAll) ||
       expectedAll < 0 ||
       expectedFirst + expectedAll !== total
     ) {
       this.addProblem("inventory.invalid", "plan", "expected inventory must be coherent safe integers");
+      return;
+    }
+    const expectedCases = inventory.cases;
+    const expectedExpectations = inventory.expectations;
+    const expectedRoots = inventory.roots;
+    const expectedDependencyOnly = inventory.dependencyOnly;
+    if (
+      hasTopologyInventory &&
+      (typeof expectedCases !== "number" ||
+        !isPositiveSafeInteger(expectedCases) ||
+        typeof expectedExpectations !== "number" ||
+        !isPositiveSafeInteger(expectedExpectations) ||
+        typeof expectedRoots !== "number" ||
+        !isPositiveSafeInteger(expectedRoots) ||
+        typeof expectedDependencyOnly !== "number" ||
+        !numberIsSafeIntegerIntrinsic(expectedDependencyOnly) ||
+        expectedDependencyOnly < 0 ||
+        expectedCases !== expectedRoots ||
+        expectedExpectations < expectedCases ||
+        expectedRoots + expectedDependencyOnly !== total)
+    ) {
+      this.addProblem("inventory.invalid", "plan", "expected topology inventory must be coherent safe integers");
       return;
     }
     let first = 0;
@@ -800,17 +1136,55 @@ export class ReleaseMutationPlan {
       if (registration?.mode === "first") first++;
       if (registration?.mode === "all") all++;
     }
-    if (this.mutations.length !== total || first !== expectedFirst || all !== expectedAll) {
-      const expected = `${total} total (${expectedFirst} first / ${expectedAll} all)`;
-      const found = `${this.mutations.length} total (${first} first / ${all} all)`;
-      this.addProblem("inventory.mismatch", "plan", `expected ${expected}, found ${found}`);
+    let cases = 0;
+    let expectations = 0;
+    const roots = new setConstructor<ReleaseMutationHandle>();
+    let rootCount = 0;
+    const mutationHandles = new setConstructor(this.mutations.map((mutation) => mutation.handle));
+    for (const registeredCase of this.cases) {
+      cases++;
+      const registration = plainRecord(registeredCase.registration);
+      if (isArrayIntrinsic(registration?.expectations)) expectations += registration.expectations.length;
+      const root = registration?.root;
+      const metadata = handleMetadata(root);
+      if (
+        metadata?.owner === this.owner &&
+        metadata.kind === "mutation" &&
+        mutationHandles.has(root as ReleaseMutationHandle) &&
+        !roots.has(root as ReleaseMutationHandle)
+      ) {
+        roots.add(root as ReleaseMutationHandle);
+        rootCount++;
+      }
     }
+    const dependencyOnly = this.mutations.length - rootCount;
+    const mutationMismatch = this.mutations.length !== total || first !== expectedFirst || all !== expectedAll;
+    const topologyMismatch =
+      hasTopologyInventory &&
+      (cases !== expectedCases ||
+        expectations !== expectedExpectations ||
+        rootCount !== expectedRoots ||
+        dependencyOnly !== expectedDependencyOnly);
+    if (!mutationMismatch && !topologyMismatch) return;
+    const expectedMutation = `${total} total (${expectedFirst} first / ${expectedAll} all)`;
+    const foundMutation = `${this.mutations.length} total (${first} first / ${all} all)`;
+    const expectedTopology = hasTopologyInventory
+      ? `, ${expectedCases} cases / ${expectedExpectations} expectations / ${expectedRoots} roots / ${expectedDependencyOnly} dependency-only`
+      : "";
+    const foundTopology = hasTopologyInventory
+      ? `, ${cases} cases / ${expectations} expectations / ${rootCount} roots / ${dependencyOnly} dependency-only`
+      : "";
+    this.addProblem(
+      "inventory.mismatch",
+      "plan",
+      `expected ${expectedMutation}${expectedTopology}, found ${foundMutation}${foundTopology}`
+    );
   }
 
   private validateSources(): SourceValidation {
-    const byHandle = new Map<ReleaseSourceHandle, RegisteredSource>();
-    const byId = new Map<string, RegisteredSource>();
-    const invalid = new Set<ReleaseSourceHandle>();
+    const byHandle = new mapConstructor<ReleaseSourceHandle, RegisteredSource>();
+    const byId = new mapConstructor<string, RegisteredSource>();
+    const invalid = new setConstructor<ReleaseSourceHandle>();
     if (this.sources.length === 0) {
       this.addProblem("source.none", "plan", "plan must register at least one canonical source");
     }
@@ -818,7 +1192,7 @@ export class ReleaseMutationPlan {
       byHandle.set(source.handle, source);
       const id = source.id;
       const displayId = handleMetadata(source.handle)?.id ?? "<source>";
-      if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+      if (typeof id !== "string" || !testRegExp(ID_PATTERN, id)) {
         this.addProblem("source.id", displayId, "id must be one lowercase token path without repeated separators");
         invalid.add(source.handle);
       } else if (byId.has(id)) {
@@ -841,13 +1215,13 @@ export class ReleaseMutationPlan {
   }
 
   private validateMutationIdentities(): ReadonlyMap<ReleaseMutationHandle, RegisteredMutation> {
-    const byHandle = new Map<ReleaseMutationHandle, RegisteredMutation>();
-    const byId = new Map<string, RegisteredMutation>();
+    const byHandle = new mapConstructor<ReleaseMutationHandle, RegisteredMutation>();
+    const byId = new mapConstructor<string, RegisteredMutation>();
     for (const mutation of this.mutations) {
       byHandle.set(mutation.handle, mutation);
       const id = mutation.id;
       const displayId = handleMetadata(mutation.handle)?.id ?? "<mutation>";
-      if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+      if (typeof id !== "string" || !testRegExp(ID_PATTERN, id)) {
         this.addProblem("mutation.id", displayId, "id must be one lowercase token path without repeated separators");
       } else if (byId.has(id)) {
         this.addProblem("mutation.duplicate", id, "mutation id is registered more than once");
@@ -862,7 +1236,7 @@ export class ReleaseMutationPlan {
     sources: SourceValidation,
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): ReadonlyMap<ReleaseMutationHandle, MutationAnalysis> {
-    const analyses = new Map<ReleaseMutationHandle, MutationAnalysis>();
+    const analyses = new mapConstructor<ReleaseMutationHandle, MutationAnalysis>();
     for (const mutation of this.mutations) {
       const id = handleMetadata(mutation.handle)?.id ?? "<mutation>";
       const registration = plainRecord(mutation.registration);
@@ -929,10 +1303,10 @@ export class ReleaseMutationPlan {
         }
         if (
           typeof before !== "number" ||
-          !Number.isSafeInteger(before) ||
+          !numberIsSafeIntegerIntrinsic(before) ||
           before < 0 ||
           typeof after !== "number" ||
-          !Number.isSafeInteger(after) ||
+          !numberIsSafeIntegerIntrinsic(after) ||
           after < 0 ||
           before === after
         ) {
@@ -940,7 +1314,7 @@ export class ReleaseMutationPlan {
           witnessValid = false;
         }
         if (witnessValid) {
-          witness = Object.freeze({
+          witness = freezeObject({
             kind: kind as ReleaseMutationWitness["kind"],
             anchor: anchor as string,
             before: before as number,
@@ -1035,9 +1409,9 @@ export class ReleaseMutationPlan {
 
   private validateCases(mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>): readonly CaseAnalysis[] {
     const analyses: CaseAnalysis[] = [];
-    const caseIds = new Set<string>();
-    const expectationIds = new Set<string>();
-    const rootedBy = new Map<ReleaseMutationHandle, string>();
+    const caseIds = new setConstructor<string>();
+    const expectationIds = new setConstructor<string>();
+    const rootedBy = new mapConstructor<ReleaseMutationHandle, string>();
     if (this.cases.length === 0) {
       this.addProblem("case.none", "plan", "plan must register at least one closed case");
     }
@@ -1051,7 +1425,7 @@ export class ReleaseMutationPlan {
         this.addProblem("case.shape", id, "case must contain only id/root/invoke/expectations");
         valid = false;
       }
-      if (typeof rawId !== "string" || !ID_PATTERN.test(rawId)) {
+      if (typeof rawId !== "string" || !testRegExp(ID_PATTERN, rawId)) {
         this.addProblem("case.id", id, "id must be one lowercase token path without repeated separators");
         valid = false;
       } else if (caseIds.has(rawId)) {
@@ -1122,8 +1496,8 @@ export class ReleaseMutationPlan {
 
       const expectationsValue = registration?.expectations;
       const expectations: PreparedExpectation[] = [];
-      const expectationSemantics = new Set<string>();
-      if (!Array.isArray(expectationsValue) || expectationsValue.length === 0) {
+      const expectationSemantics = new setConstructor<string>();
+      if (!isArrayIntrinsic(expectationsValue) || expectationsValue.length === 0) {
         this.addProblem("expectation.none", id, "case must register at least one expectation");
         valid = false;
       } else {
@@ -1141,7 +1515,7 @@ export class ReleaseMutationPlan {
               valid = false;
             } else {
               expectationSemantics.add(semanticIdentity);
-              expectations.push(expectation);
+              pushArrayValue(expectations, expectation);
             }
           }
         }
@@ -1164,16 +1538,22 @@ export class ReleaseMutationPlan {
 
       let closedInvocation: ReleaseOracleInvocation | null = null;
       if (baseline !== null && invocationRoot !== null && invocationKind === "fixture.text") {
-        closedInvocation = Object.freeze({ kind: invocationKind, baseline, mutant: invocationRoot });
+        closedInvocation = freezeObject({ kind: invocationKind, baseline, mutant: invocationRoot });
       } else if (
         baseline !== null &&
         invocationRoot !== null &&
         invocationKind === "fixture.throw" &&
         message !== null
       ) {
-        closedInvocation = Object.freeze({ kind: invocationKind, baseline, mutant: invocationRoot, message });
+        closedInvocation = freezeObject({ kind: invocationKind, baseline, mutant: invocationRoot, message });
       }
-      analyses.push({ id, root, invocation: closedInvocation, expectations: Object.freeze(expectations), valid });
+      pushArrayValue(analyses, {
+        id,
+        root,
+        invocation: closedInvocation,
+        expectations: freezeObject(expectations),
+        valid
+      });
     }
     return analyses;
   }
@@ -1239,8 +1619,8 @@ export class ReleaseMutationPlan {
     root: ReleaseMutationHandle,
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): ReadonlySet<ReleaseSourceHandle | ReleaseMutationHandle> {
-    const closure = new Set<ReleaseSourceHandle | ReleaseMutationHandle>();
-    const visiting = new Set<ReleaseMutationHandle>();
+    const closure = new setConstructor<ReleaseSourceHandle | ReleaseMutationHandle>();
+    const visiting = new setConstructor<ReleaseMutationHandle>();
     const visit = (handle: ReleaseMutationHandle): void => {
       if (visiting.has(handle)) return;
       visiting.add(handle);
@@ -1276,7 +1656,7 @@ export class ReleaseMutationPlan {
       this.addProblem("expectation.handle", caseId, `${id} must not contain a source or mutation handle`);
       valid = false;
     }
-    if (typeof rawId !== "string" || !ID_PATTERN.test(rawId)) {
+    if (typeof rawId !== "string" || !testRegExp(ID_PATTERN, rawId)) {
       this.addProblem("expectation.id", caseId, `${id} must be one lowercase token path without repeated separators`);
       valid = false;
     } else if (ids.has(rawId)) {
@@ -1302,7 +1682,7 @@ export class ReleaseMutationPlan {
         valid = false;
       }
       return valid
-        ? Object.freeze({ id: rawId as string, kind, problem: expectation?.problem as ReleaseProblemIdentity })
+        ? freezeObject({ id: rawId as string, kind, problem: expectation?.problem as ReleaseProblemIdentity })
         : null;
     }
 
@@ -1319,7 +1699,7 @@ export class ReleaseMutationPlan {
         this.addProblem("expectation.value", caseId, `${id} value must be a string`);
         valid = false;
       }
-      return valid ? Object.freeze({ id: rawId as string, kind, value: expectation?.value as string }) : null;
+      return valid ? freezeObject({ id: rawId as string, kind, value: expectation?.value as string }) : null;
     }
 
     if (expectation === null || !hasExactKeys(expectation, ["id", "kind", "regex"])) {
@@ -1331,16 +1711,16 @@ export class ReleaseMutationPlan {
       valid = false;
     }
     return valid
-      ? Object.freeze({ id: rawId as string, kind, regex: expectation?.regex as ReleaseNamedRegexIdentity })
+      ? freezeObject({ id: rawId as string, kind, regex: expectation?.regex as ReleaseNamedRegexIdentity })
       : null;
   }
 
   private validateCycles(
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>
   ): ReadonlySet<ReleaseMutationHandle> {
-    const visiting = new Set<ReleaseMutationHandle>();
-    const visited = new Set<ReleaseMutationHandle>();
-    const cyclic = new Set<ReleaseMutationHandle>();
+    const visiting = new setConstructor<ReleaseMutationHandle>();
+    const visited = new setConstructor<ReleaseMutationHandle>();
+    const cyclic = new setConstructor<ReleaseMutationHandle>();
     const visit = (handle: ReleaseMutationHandle, path: readonly ReleaseMutationHandle[]): void => {
       if (visited.has(handle)) return;
       if (visiting.has(handle)) {
@@ -1365,10 +1745,10 @@ export class ReleaseMutationPlan {
   private mutationDependencies(mutation: MutationAnalysis): readonly ReleaseMutationHandle[] {
     const dependencies: ReleaseMutationHandle[] = [];
     if (mutation.source !== null && handleMetadata(mutation.source)?.kind === "mutation") {
-      dependencies.push(mutation.source as ReleaseMutationHandle);
+      pushArrayValue(dependencies, mutation.source as ReleaseMutationHandle);
     }
     if (mutation.replacement !== null && typeof mutation.replacement !== "string") {
-      dependencies.push(mutation.replacement);
+      pushArrayValue(dependencies, mutation.replacement);
     }
     return dependencies;
   }
@@ -1378,8 +1758,8 @@ export class ReleaseMutationPlan {
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>,
     cyclic: ReadonlySet<ReleaseMutationHandle>
   ): void {
-    const preparing = new Set<ReleaseMutationHandle>();
-    const failed = new Set<ReleaseMutationHandle>(cyclic);
+    const preparing = new setConstructor<ReleaseMutationHandle>();
+    const failed = new setConstructor<ReleaseMutationHandle>(cyclic);
     for (const [handle, mutation] of mutations) {
       if (mutation.unpreparable) failed.add(handle);
     }
@@ -1420,7 +1800,7 @@ export class ReleaseMutationPlan {
           .map((dependency) => mutations.get(dependency)?.id ?? "<mutation>");
         const detail =
           blockedBy.length > 0
-            ? `blocked by failed mutation(s) ${[...new Set(blockedBy)].join(", ")}`
+            ? `blocked by failed mutation(s) ${[...new setConstructor(blockedBy)].join(", ")}`
             : "blocked by an invalid source or unresolved dependency";
         this.addProblem("mutation.blocked", mutation.id, detail);
         failed.add(handle);
@@ -1461,7 +1841,7 @@ export class ReleaseMutationPlan {
         return null;
       }
 
-      const prepared = Object.freeze({ output });
+      const prepared = freezeObject({ output });
       this.prepared.set(handle, prepared);
       preparing.delete(handle);
       return prepared;
@@ -1471,7 +1851,7 @@ export class ReleaseMutationPlan {
   }
 
   private validatePreparedCaseValues(cases: readonly CaseAnalysis[]): ReadonlySet<ReleaseMutationHandle> {
-    const executableRoots = new Set<ReleaseMutationHandle>();
+    const executableRoots = new setConstructor<ReleaseMutationHandle>();
     for (const releaseCase of cases) {
       if (!releaseCase.valid || releaseCase.root === null || releaseCase.invocation === null) continue;
       const baseline = this.materializeValue(releaseCase.invocation.baseline);
@@ -1490,7 +1870,7 @@ export class ReleaseMutationPlan {
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>,
     executableRoots: ReadonlySet<ReleaseMutationHandle>
   ): void {
-    const reachable = new Set<ReleaseMutationHandle>();
+    const reachable = new setConstructor<ReleaseMutationHandle>();
     const mark = (handle: ReleaseMutationHandle): void => {
       if (reachable.has(handle)) return;
       const mutation = mutations.get(handle);
@@ -1520,12 +1900,16 @@ export class ReleaseMutationPlan {
   ): void {
     if (expectation.kind === "problem") {
       if (observation.kind !== "fixture.throw" || !observation.problems.includes(expectation.problem)) {
-        throw new Error(`release mutation case ${caseId} expectation ${expectation.id} missed an exact problem`);
+        throw new errorConstructor(
+          `release mutation case ${caseId} expectation ${expectation.id} missed an exact problem`
+        );
       }
       return;
     }
     if (observation.kind !== "fixture.text") {
-      throw new Error(`release mutation case ${caseId} expectation ${expectation.id} observed an incompatible result`);
+      throw new errorConstructor(
+        `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible result`
+      );
     }
     const baseline = observation.baseline;
     const mutant = observation.mutant;
@@ -1539,14 +1923,19 @@ export class ReleaseMutationPlan {
         break;
       case "regex": {
         const regex = releaseNamedRegex(expectation.regex);
-        passed = !regex.test(baseline) && regex.test(mutant);
+        passed = !testRegExp(regex, baseline) && testRegExp(regex, mutant);
         break;
       }
       default:
         assertNever(expectation);
     }
     if (!passed) {
-      throw new Error(`release mutation case ${caseId} expectation ${expectation.id} failed (${expectation.kind})`);
+      throw new errorConstructor(
+        `release mutation case ${caseId} expectation ${expectation.id} failed (${expectation.kind})`
+      );
     }
   }
 }
+
+freezeObject(ReleaseMutationPlan.prototype);
+freezeObject(ReleaseMutationPlan);

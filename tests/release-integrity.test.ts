@@ -937,12 +937,30 @@ const RELEASE_MUTATION_MATRIX_START = [
 const RELEASE_MUTATION_SELF_CONTROL_COUNT = 20;
 const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
 const RELEASE_MUTATION_PROJECT_ALL_COUNT = 22;
+const RELEASE_MUTATION_PROJECT_TOTAL_COUNT = RELEASE_MUTATION_PROJECT_FIRST_COUNT + RELEASE_MUTATION_PROJECT_ALL_COUNT;
+const RELEASE_MUTATION_PROJECT_ROOT_COUNT = 536;
+const RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT = 541;
+const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
+const RELEASE_MUTATION_DECLARATIVE_METHODS: ReadonlySet<string> = new Set([
+  "execute",
+  "registerCase",
+  "registerMutation",
+  "registerSource",
+  "seal"
+]);
+const RELEASE_MUTATION_DECLARATIVE_STATUS_PROPERTIES: ReadonlySet<string> = new Set([
+  "caseExecutions",
+  "expectationExecutions",
+  "phase"
+]);
+const RELEASE_MUTATION_EXPECT_STATIC_METHODS: ReadonlySet<string> = new Set(["arrayContaining", "stringMatching"]);
 
 /**
- * Pin the executable legacy inventory that the declarative 5f.5a migration must consume exactly once.
+ * Pin the executable hybrid inventory that the declarative 5f.5a migration must consume exactly once.
  *
  * @param source - Complete release-integrity test source.
- * @returns Stable inventory diagnostics; empty only for 20 helper controls plus 560 explicit project cases.
+ * @returns Stable inventory diagnostics; empty only for 20 helper controls plus 560 explicit legacy or
+ * declarative project mutations.
  */
 function releaseMutationInventoryProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -954,21 +972,56 @@ function releaseMutationInventoryProblems(source: string): string[] {
   );
   const problems: string[] = [];
   let directVitestDescribeImports = 0;
+  let directVitestExpectImports = 0;
   let directVitestItImports = 0;
   let otherDescribeBindings = 0;
+  let otherExpectBindings = 0;
   let otherItBindings = 0;
+  let directReleaseMutationPlanImports = 0;
+  let otherReleaseMutationPlanBindings = 0;
+  let exactVitestImportDeclarations = 0;
+  let otherVitestImportDeclarations = 0;
+  let exactReleasePlanImportDeclarations = 0;
+  let otherReleasePlanImportDeclarations = 0;
   const recordOtherBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "describe") otherDescribeBindings++;
+      if (name.text === "expect") otherExpectBindings++;
       if (name.text === "it") otherItBindings++;
+      if (name.text === "ReleaseMutationPlan") otherReleaseMutationPlanBindings++;
       return;
     }
     for (const element of name.elements) {
       if (ts.isBindingElement(element)) recordOtherBinding(element.name);
     }
   };
+  const isExactNamedImport = (statement: ts.ImportDeclaration, names: readonly string[]): boolean => {
+    const importClause = statement.importClause;
+    const bindings = importClause?.namedBindings;
+    return (
+      importClause !== undefined &&
+      !importClause.isTypeOnly &&
+      importClause.name === undefined &&
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.length === names.length &&
+      bindings.elements.every(
+        (element, index) =>
+          !element.isTypeOnly && element.propertyName === undefined && element.name.text === names[index]
+      )
+    );
+  };
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
+    const moduleName = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null;
+    if (moduleName === "vitest") {
+      if (isExactNamedImport(statement, ["describe", "expect", "it"])) exactVitestImportDeclarations++;
+      else otherVitestImportDeclarations++;
+    }
+    if (moduleName === "./release-mutation-plan.js") {
+      if (isExactNamedImport(statement, ["ReleaseMutationPlan"])) exactReleasePlanImportDeclarations++;
+      else otherReleasePlanImportDeclarations++;
+    }
     const importClause = statement.importClause;
     if (importClause === undefined || importClause.isTypeOnly) continue;
     if (importClause.name !== undefined) recordOtherBinding(importClause.name);
@@ -976,19 +1029,35 @@ function releaseMutationInventoryProblems(source: string): string[] {
     if (namedBindings === undefined) continue;
     if (ts.isNamespaceImport(namedBindings)) {
       recordOtherBinding(namedBindings.name);
+      if (moduleName === "vitest") {
+        otherDescribeBindings++;
+        otherExpectBindings++;
+        otherItBindings++;
+      }
+      if (moduleName === "./release-mutation-plan.js") otherReleaseMutationPlanBindings++;
       continue;
     }
-    const moduleName = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null;
     for (const element of namedBindings.elements) {
       if (element.isTypeOnly) continue;
+      const importedName = element.propertyName?.text ?? element.name.text;
+      const localName = element.name.text;
       const isDirectVitestBinding = moduleName === "vitest" && element.propertyName === undefined;
-      if (element.name.text === "describe") {
+      if (importedName === "describe" || localName === "describe") {
         if (isDirectVitestBinding) directVitestDescribeImports++;
         else otherDescribeBindings++;
       }
-      if (element.name.text === "it") {
+      if (importedName === "expect" || localName === "expect") {
+        if (isDirectVitestBinding) directVitestExpectImports++;
+        else otherExpectBindings++;
+      }
+      if (importedName === "it" || localName === "it") {
         if (isDirectVitestBinding) directVitestItImports++;
         else otherItBindings++;
+      }
+      if (importedName === "ReleaseMutationPlan" || localName === "ReleaseMutationPlan") {
+        if (moduleName === "./release-mutation-plan.js" && element.propertyName === undefined) {
+          directReleaseMutationPlanImports++;
+        } else otherReleaseMutationPlanBindings++;
       }
     }
   }
@@ -1007,17 +1076,45 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ) {
       if (node.name !== undefined && ts.isIdentifier(node.name)) recordOtherBinding(node.name);
     }
+    if (ts.isIdentifier(node) && node.text === "ReleaseMutationPlan") {
+      const parent = node.parent;
+      const exactConstructor = ts.isNewExpression(parent) && parent.expression === node;
+      const exactTypeReference = ts.isTypeReferenceNode(parent) && parent.typeName === node;
+      if (!exactConstructor && !exactTypeReference) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(
+          `release mutation ReleaseMutationPlan may only be one direct constructor or a type reference at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+    }
     ts.forEachChild(node, visitRuntimeBindings);
   };
   visitRuntimeBindings(sourceFile);
+  if (exactVitestImportDeclarations !== 1 || otherVitestImportDeclarations !== 0) {
+    problems.push(
+      `release mutation matrix requires one exact describe/expect/it vitest import declaration and no other vitest imports; found exact ${exactVitestImportDeclarations}, other ${otherVitestImportDeclarations}`
+    );
+  }
   if (
     directVitestDescribeImports !== 1 ||
+    directVitestExpectImports !== 1 ||
     directVitestItImports !== 1 ||
     otherDescribeBindings !== 0 ||
+    otherExpectBindings !== 0 ||
     otherItBindings !== 0
   ) {
     problems.push(
-      `release mutation matrix must bind describe/it to one exact unaliased vitest import with no runtime shadows; found direct ${directVitestDescribeImports}/${directVitestItImports}, other ${otherDescribeBindings}/${otherItBindings}`
+      `release mutation matrix must bind describe/expect/it to one exact unaliased vitest import with no runtime shadows; found direct ${directVitestDescribeImports}/${directVitestExpectImports}/${directVitestItImports}, other ${otherDescribeBindings}/${otherExpectBindings}/${otherItBindings}`
+    );
+  }
+  if (directReleaseMutationPlanImports !== 1 || otherReleaseMutationPlanBindings !== 0) {
+    problems.push(
+      `release mutation matrix must bind ReleaseMutationPlan to one exact unaliased test-support import with no runtime shadows; found direct ${directReleaseMutationPlanImports}, other ${otherReleaseMutationPlanBindings}`
+    );
+  }
+  if (exactReleasePlanImportDeclarations !== 1 || otherReleasePlanImportDeclarations !== 0) {
+    problems.push(
+      `release mutation matrix requires one exact ReleaseMutationPlan import declaration and no other release-plan imports; found exact ${exactReleasePlanImportDeclarations}, other ${otherReleasePlanImportDeclarations}`
     );
   }
   const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
@@ -1072,7 +1169,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
             node.arguments.length === 3 &&
             timeout !== undefined &&
-            timeout.getText(sourceFile) === "60_000" &&
+            timeout.getText(sourceFile) === "120_000" &&
             node.questionDotToken === undefined &&
             testStatement !== null &&
             suiteBlock !== null &&
@@ -1093,7 +1190,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             matrixSuiteCallback = suiteCallback;
           } else {
             problems.push(
-              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
+              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 120_000ms timeout"
             );
           }
         }
@@ -1113,10 +1210,38 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let selfAll = 0;
   let projectFirst = 0;
   let projectAll = 0;
+  let declarativeFirst = 0;
+  let declarativeAll = 0;
+  let declarativeSources = 0;
+  let declarativeCases = 0;
+  let declarativePlanBindings = 0;
+  const declarativePlanInventories: Array<{
+    readonly total: number | null;
+    readonly first: number | null;
+    readonly all: number | null;
+    readonly cases: number | null;
+    readonly expectations: number | null;
+    readonly roots: number | null;
+    readonly dependencyOnly: number | null;
+    readonly structurallyValid: boolean;
+  }> = [];
   let outside = 0;
   let firstDefinitions = 0;
   let allDefinitions = 0;
   const nonStraightLineProjectCalls: string[] = [];
+  const declarativeMutationIds = new Set<string>();
+  const declarativeCaseIds = new Set<string>();
+  const declarativeCaseRoots = new Set<string>();
+  const declarativeExpectationIds = new Set<string>();
+  const declarativeSourceHandles = new Set<string>();
+  const declarativeMutationHandles = new Set<string>();
+  const declarativeCaseDescriptors: ts.ObjectLiteralExpression[] = [];
+  const declarativeSealCalls: ts.CallExpression[] = [];
+  const declarativeExecuteCalls: ts.CallExpression[] = [];
+  const declarativePhaseReads: ts.PropertyAccessExpression[] = [];
+  const declarativeCaseExecutionReads: ts.PropertyAccessExpression[] = [];
+  const declarativeExpectationExecutionReads: ts.PropertyAccessExpression[] = [];
+  let lastDeclarativeRegistrationEnd = -1;
   const nonStraightLineAncestor = (node: ts.Node): ts.Node | null => {
     const isWithin = (container: ts.Node): boolean =>
       node.getStart(sourceFile) >= container.getStart(sourceFile) && node.end <= container.end;
@@ -1154,7 +1279,24 @@ function releaseMutationInventoryProblems(source: string): string[] {
     }
     return null;
   };
+  const topLevelConstHandle = (call: ts.CallExpression): string | null => {
+    const declaration = ts.isVariableDeclaration(call.parent) && call.parent.initializer === call ? call.parent : null;
+    const declarationList =
+      declaration !== null && ts.isVariableDeclarationList(declaration.parent) ? declaration.parent : null;
+    const statement =
+      declarationList !== null && ts.isVariableStatement(declarationList.parent) ? declarationList.parent : null;
+    return declaration !== null &&
+      ts.isIdentifier(declaration.name) &&
+      declarationList !== null &&
+      (declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+      statement !== null &&
+      matrixCallback !== null &&
+      statement.parent === matrixCallback.body
+      ? declaration.name.text
+      : null;
+  };
   const visitCalls = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) return;
     if (ts.isReturnStatement(node)) {
       let owner: ts.Node | undefined = node.parent;
       while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
@@ -1169,6 +1311,38 @@ function releaseMutationInventoryProblems(source: string): string[] {
         problems.push(
           `release mutation suite callback must not return before matrix registration at ${position.line + 1}:${position.character + 1}`
         );
+      }
+    }
+    if (ts.isIdentifier(node)) {
+      const start = node.getStart(sourceFile);
+      if (node.text === "eval" || node.text === "Function") {
+        const position = sourceFile.getLineAndCharacterOfPosition(start);
+        problems.push(
+          `release mutation matrix forbids dynamic code constructor ${node.text} at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      if (node.text === "expect") {
+        const parent = node.parent;
+        const directExpect =
+          ts.isCallExpression(parent) && parent.expression === node && parent.questionDotToken === undefined;
+        const staticAccess =
+          ts.isPropertyAccessExpression(parent) &&
+          parent.expression === node &&
+          parent.questionDotToken === undefined &&
+          RELEASE_MUTATION_EXPECT_STATIC_METHODS.has(parent.name.text)
+            ? parent
+            : null;
+        const directStaticExpect =
+          staticAccess !== null &&
+          ts.isCallExpression(staticAccess.parent) &&
+          staticAccess.parent.expression === staticAccess &&
+          staticAccess.parent.questionDotToken === undefined;
+        if (!directExpect && !directStaticExpect) {
+          const position = sourceFile.getLineAndCharacterOfPosition(start);
+          problems.push(
+            `release mutation matrix expect may only be one direct call or an allowlisted static matcher at ${position.line + 1}:${position.character + 1}`
+          );
+        }
       }
     }
     if (ts.isIdentifier(node) && (node.text === "replaceExactly" || node.text === "replaceAllExactly")) {
@@ -1211,9 +1385,677 @@ function releaseMutationInventoryProblems(source: string): string[] {
         outside++;
       }
     }
+    if (ts.isIdentifier(node) && node.text === "releaseMutationPlan") {
+      const start = node.getStart(sourceFile);
+      if (start >= matrixStart && start < callbackEnd) {
+        const parent = node.parent;
+        const exactBinding = ts.isVariableDeclaration(parent) && parent.name === node;
+        const exactReceiver =
+          ts.isPropertyAccessExpression(parent) &&
+          parent.expression === node &&
+          parent.questionDotToken === undefined &&
+          ts.isIdentifier(parent.name) &&
+          (RELEASE_MUTATION_DECLARATIVE_METHODS.has(parent.name.text) ||
+            RELEASE_MUTATION_DECLARATIVE_STATUS_PROPERTIES.has(parent.name.text));
+        if (!exactBinding && !exactReceiver) {
+          const position = sourceFile.getLineAndCharacterOfPosition(start);
+          problems.push(
+            `release mutation declarative releaseMutationPlan may only be its exact binding or the direct receiver of one closed member at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+      }
+    }
+    const releasePlanBindingCandidate =
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "releaseMutationPlan";
+    let declarativeMethod: string | null = null;
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.name)) {
+      declarativeMethod = node.name.text;
+    } else if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression !== undefined &&
+      (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+    ) {
+      declarativeMethod = node.argumentExpression.text;
+    }
+    const declarativeAccessCandidate =
+      declarativeMethod !== null && RELEASE_MUTATION_DECLARATIVE_METHODS.has(declarativeMethod);
+    const declarativeStatusProperty =
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.name) &&
+      RELEASE_MUTATION_DECLARATIVE_STATUS_PROPERTIES.has(node.name.text)
+        ? node.name.text
+        : null;
+    const start =
+      releasePlanBindingCandidate || declarativeAccessCandidate || declarativeStatusProperty !== null
+        ? node.getStart(sourceFile)
+        : -1;
+    const inProjectMatrix = start >= matrixStart && start < callbackEnd;
+    if (
+      inProjectMatrix &&
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "releaseMutationPlan"
+    ) {
+      declarativePlanBindings++;
+      const declarationList = ts.isVariableDeclarationList(node.parent) ? node.parent : null;
+      const statement =
+        declarationList !== null && ts.isVariableStatement(declarationList.parent) ? declarationList.parent : null;
+      const initializer = node.initializer;
+      const inventory =
+        initializer !== undefined &&
+        ts.isNewExpression(initializer) &&
+        ts.isIdentifier(initializer.expression) &&
+        initializer.expression.text === "ReleaseMutationPlan" &&
+        initializer.arguments?.length === 1 &&
+        initializer.arguments[0] !== undefined &&
+        ts.isObjectLiteralExpression(initializer.arguments[0])
+          ? initializer.arguments[0]
+          : null;
+      const inventoryValue = (name: string): number | null => {
+        if (inventory === null) return null;
+        const matches = inventory.properties.filter(
+          (property): property is ts.PropertyAssignment =>
+            ts.isPropertyAssignment(property) &&
+            ((ts.isIdentifier(property.name) && property.name.text === name) ||
+              (ts.isStringLiteral(property.name) && property.name.text === name))
+        );
+        const value = matches[0]?.initializer;
+        if (matches.length !== 1 || value === undefined || !ts.isNumericLiteral(value)) return null;
+        return Number(value.text);
+      };
+      const isConst = declarationList !== null && (declarationList.flags & ts.NodeFlags.Const) !== 0;
+      const isTopLevel = statement !== null && matrixCallback !== null && statement.parent === matrixCallback.body;
+      declarativePlanInventories.push({
+        total: inventoryValue("total"),
+        first: inventoryValue("first"),
+        all: inventoryValue("all"),
+        cases: inventoryValue("cases"),
+        expectations: inventoryValue("expectations"),
+        roots: inventoryValue("roots"),
+        dependencyOnly: inventoryValue("dependencyOnly"),
+        structurallyValid: isConst && isTopLevel && inventory !== null && inventory.properties.length === 7
+      });
+    }
+    if (
+      inProjectMatrix &&
+      declarativeAccessCandidate &&
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
+    ) {
+      const parent = node.parent;
+      const directCall =
+        ts.isCallExpression(parent) && parent.expression === node && parent.questionDotToken === undefined;
+      const exactReceiver = ts.isIdentifier(node.expression) && node.expression.text === "releaseMutationPlan";
+      const exactProperty = ts.isPropertyAccessExpression(node) && node.questionDotToken === undefined;
+      if (!directCall || !exactReceiver || !exactProperty) {
+        const position = sourceFile.getLineAndCharacterOfPosition(start);
+        problems.push(
+          `release mutation declarative ${declarativeMethod} must be one direct property call on releaseMutationPlan at ${position.line + 1}:${position.character + 1}`
+        );
+      } else {
+        const nonStraightLine = nonStraightLineAncestor(parent);
+        if (nonStraightLine !== null) {
+          const position = sourceFile.getLineAndCharacterOfPosition(start);
+          problems.push(
+            `release mutation declarative ${declarativeMethod} must be one explicit straight-line registration, not nested under ${ts.SyntaxKind[nonStraightLine.kind]} at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+        if (declarativeMethod === "seal" || declarativeMethod === "execute") {
+          if (parent.arguments.length !== 0) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative ${declarativeMethod} requires zero arguments at ${position.line + 1}:${position.character + 1}`
+            );
+          }
+          if (declarativeMethod === "seal") declarativeSealCalls.push(parent);
+          else declarativeExecuteCalls.push(parent);
+        } else if (declarativeMethod === "registerSource") {
+          declarativeSources++;
+          lastDeclarativeRegistrationEnd = Math.max(lastDeclarativeRegistrationEnd, parent.end);
+          const id = parent.arguments[0];
+          const value = parent.arguments[1];
+          const handle = topLevelConstHandle(parent);
+          if (
+            parent.arguments.length !== 2 ||
+            id === undefined ||
+            !ts.isStringLiteral(id) ||
+            value === undefined ||
+            (!ts.isIdentifier(value) && !ts.isStringLiteral(value)) ||
+            handle === null
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative registerSource requires one top-level const handle, literal id and passive identifier/string source value at ${position.line + 1}:${position.character + 1}`
+            );
+          } else {
+            if (declarativeSourceHandles.has(handle) || declarativeMutationHandles.has(handle)) {
+              problems.push(`release mutation declarative duplicate handle binding ${handle}`);
+            }
+            declarativeSourceHandles.add(handle);
+          }
+        } else if (declarativeMethod === "registerMutation") {
+          lastDeclarativeRegistrationEnd = Math.max(lastDeclarativeRegistrationEnd, parent.end);
+          const id = parent.arguments[0];
+          const descriptor = parent.arguments[1];
+          const handle = topLevelConstHandle(parent);
+          if (parent.arguments.length !== 2 || id === undefined || !ts.isStringLiteral(id) || handle === null) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative registerMutation requires one top-level const handle, literal id and object descriptor at ${position.line + 1}:${position.character + 1}`
+            );
+          } else {
+            if (declarativeMutationIds.has(id.text)) {
+              problems.push(`release mutation declarative duplicate mutation id ${id.text}`);
+            }
+            declarativeMutationIds.add(id.text);
+            if (declarativeSourceHandles.has(handle) || declarativeMutationHandles.has(handle)) {
+              problems.push(`release mutation declarative duplicate handle binding ${handle}`);
+            }
+            declarativeMutationHandles.add(handle);
+          }
+          if (descriptor === undefined || !ts.isObjectLiteralExpression(descriptor)) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative registerMutation requires one literal id and one object descriptor at ${position.line + 1}:${position.character + 1}`
+            );
+          } else {
+            const descriptorProperty = (name: string): ts.PropertyAssignment[] =>
+              descriptor.properties.filter(
+                (property): property is ts.PropertyAssignment =>
+                  ts.isPropertyAssignment(property) &&
+                  ((ts.isIdentifier(property.name) && property.name.text === name) ||
+                    (ts.isStringLiteral(property.name) && property.name.text === name))
+              );
+            const descriptorPropertyNames = descriptor.properties.map((property) => {
+              if (!ts.isPropertyAssignment(property)) return null;
+              if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+              return null;
+            });
+            const exactDescriptorFields = ["mode", "source", "needle", "replacement", "expectedOccurrences", "witness"];
+            if (
+              descriptorPropertyNames.some((name) => name === null) ||
+              descriptorPropertyNames.length !== exactDescriptorFields.length ||
+              new Set(descriptorPropertyNames).size !== descriptorPropertyNames.length ||
+              !exactDescriptorFields.every((name) => descriptorPropertyNames.includes(name))
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor requires exact passive mode/source/needle/replacement/expectedOccurrences/witness fields at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            const modeProperties = descriptorProperty("mode");
+            const mode = modeProperties[0]?.initializer;
+            if (
+              modeProperties.length !== 1 ||
+              mode === undefined ||
+              !ts.isStringLiteral(mode) ||
+              (mode.text !== "first" && mode.text !== "all")
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(start);
+              problems.push(
+                `release mutation declarative registerMutation requires one literal first/all mode at ${position.line + 1}:${position.character + 1}`
+              );
+            } else if (mode.text === "all") declarativeAll++;
+            else declarativeFirst++;
+            const source = descriptorProperty("source")[0]?.initializer;
+            if (
+              descriptorProperty("source").length !== 1 ||
+              source === undefined ||
+              !ts.isIdentifier(source) ||
+              (!declarativeSourceHandles.has(source.text) && !declarativeMutationHandles.has(source.text))
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor source must be one explicit registered handle at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            const passiveString = (value: ts.Expression | undefined): boolean =>
+              value !== undefined && (ts.isStringLiteral(value) || ts.isIdentifier(value));
+            const needle = descriptorProperty("needle")[0]?.initializer;
+            if (descriptorProperty("needle").length !== 1 || !passiveString(needle)) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor needle must be one passive identifier/string value at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            const replacement = descriptorProperty("replacement")[0]?.initializer;
+            if (
+              descriptorProperty("replacement").length !== 1 ||
+              !passiveString(replacement) ||
+              (replacement !== undefined &&
+                ts.isIdentifier(replacement) &&
+                declarativeSourceHandles.has(replacement.text))
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor replacement must be one passive string value or mutation handle at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            const expectedOccurrences = descriptorProperty("expectedOccurrences")[0]?.initializer;
+            if (
+              descriptorProperty("expectedOccurrences").length !== 1 ||
+              expectedOccurrences === undefined ||
+              !ts.isNumericLiteral(expectedOccurrences) ||
+              !Number.isSafeInteger(Number(expectedOccurrences.text)) ||
+              Number(expectedOccurrences.text) <= 0
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor expectedOccurrences must be one positive safe integer literal at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            const witness = descriptorProperty("witness")[0]?.initializer;
+            if (
+              descriptorProperty("witness").length !== 1 ||
+              witness === undefined ||
+              !ts.isObjectLiteralExpression(witness)
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+              problems.push(
+                `release mutation declarative descriptor witness must be one literal object at ${position.line + 1}:${position.character + 1}`
+              );
+            } else {
+              const witnessProperty = (name: string): ts.PropertyAssignment[] =>
+                witness.properties.filter(
+                  (property): property is ts.PropertyAssignment =>
+                    ts.isPropertyAssignment(property) &&
+                    ((ts.isIdentifier(property.name) && property.name.text === name) ||
+                      (ts.isStringLiteral(property.name) && property.name.text === name))
+                );
+              const witnessPropertyNames = witness.properties.map((property) => {
+                if (!ts.isPropertyAssignment(property)) return null;
+                if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+                return null;
+              });
+              if (
+                witnessPropertyNames.some((name) => name === null) ||
+                witnessPropertyNames.length !== 4 ||
+                new Set(witnessPropertyNames).size !== witnessPropertyNames.length ||
+                !["kind", "anchor", "before", "after"].every((name) => witnessPropertyNames.includes(name))
+              ) {
+                const position = sourceFile.getLineAndCharacterOfPosition(witness.getStart(sourceFile));
+                problems.push(
+                  `release mutation declarative witness requires exact passive kind/anchor/before/after fields at ${position.line + 1}:${position.character + 1}`
+                );
+              }
+              const witnessKind = witnessProperty("kind")[0]?.initializer;
+              if (
+                witnessProperty("kind").length !== 1 ||
+                witnessKind === undefined ||
+                !ts.isStringLiteral(witnessKind) ||
+                (witnessKind.text !== "token" && witnessKind.text !== "line")
+              ) {
+                const position = sourceFile.getLineAndCharacterOfPosition(witness.getStart(sourceFile));
+                problems.push(
+                  `release mutation declarative witness kind must be one token/line literal at ${position.line + 1}:${position.character + 1}`
+                );
+              }
+              const witnessAnchor = witnessProperty("anchor")[0]?.initializer;
+              if (witnessProperty("anchor").length !== 1 || !passiveString(witnessAnchor)) {
+                const position = sourceFile.getLineAndCharacterOfPosition(witness.getStart(sourceFile));
+                problems.push(
+                  `release mutation declarative witness anchor must be one passive identifier/string value at ${position.line + 1}:${position.character + 1}`
+                );
+              }
+              const before = witnessProperty("before")[0]?.initializer;
+              const after = witnessProperty("after")[0]?.initializer;
+              const nonNegativeSafeLiteral = (value: ts.Expression | undefined): value is ts.NumericLiteral =>
+                value !== undefined &&
+                ts.isNumericLiteral(value) &&
+                Number.isSafeInteger(Number(value.text)) &&
+                Number(value.text) >= 0;
+              if (
+                witnessProperty("before").length !== 1 ||
+                witnessProperty("after").length !== 1 ||
+                !nonNegativeSafeLiteral(before) ||
+                !nonNegativeSafeLiteral(after) ||
+                Number(before.text) === Number(after.text)
+              ) {
+                const position = sourceFile.getLineAndCharacterOfPosition(witness.getStart(sourceFile));
+                problems.push(
+                  `release mutation declarative witness counts must be different non-negative safe integer literals at ${position.line + 1}:${position.character + 1}`
+                );
+              }
+            }
+          }
+        } else {
+          lastDeclarativeRegistrationEnd = Math.max(lastDeclarativeRegistrationEnd, parent.end);
+          const descriptor = parent.arguments[0];
+          const statement =
+            ts.isExpressionStatement(parent.parent) && parent.parent.expression === parent ? parent.parent : null;
+          const isTopLevel = statement !== null && matrixCallback !== null && statement.parent === matrixCallback.body;
+          if (
+            parent.arguments.length !== 1 ||
+            descriptor === undefined ||
+            !ts.isObjectLiteralExpression(descriptor) ||
+            !isTopLevel
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative registerCase requires one top-level expression call with an object and literal id at ${position.line + 1}:${position.character + 1}`
+            );
+          } else {
+            const idProperties = descriptor.properties.filter(
+              (property): property is ts.PropertyAssignment =>
+                ts.isPropertyAssignment(property) &&
+                ((ts.isIdentifier(property.name) && property.name.text === "id") ||
+                  (ts.isStringLiteral(property.name) && property.name.text === "id"))
+            );
+            const id = idProperties[0]?.initializer;
+            if (idProperties.length !== 1 || id === undefined || !ts.isStringLiteral(id)) {
+              const position = sourceFile.getLineAndCharacterOfPosition(start);
+              problems.push(
+                `release mutation declarative registerCase requires one object with a literal id at ${position.line + 1}:${position.character + 1}`
+              );
+            } else {
+              if (declarativeCaseIds.has(id.text)) {
+                problems.push(`release mutation declarative duplicate case id ${id.text}`);
+              }
+              declarativeCaseIds.add(id.text);
+            }
+            declarativeCases++;
+            declarativeCaseDescriptors.push(descriptor);
+          }
+        }
+      }
+    }
+    if (inProjectMatrix && declarativeStatusProperty !== null && ts.isPropertyAccessExpression(node)) {
+      const exactReceiver =
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "releaseMutationPlan" &&
+        node.questionDotToken === undefined;
+      if (!exactReceiver) {
+        const position = sourceFile.getLineAndCharacterOfPosition(start);
+        problems.push(
+          `release mutation declarative ${declarativeStatusProperty} must be one direct property read on releaseMutationPlan at ${position.line + 1}:${position.character + 1}`
+        );
+      } else if (declarativeStatusProperty === "phase") {
+        declarativePhaseReads.push(node);
+      } else if (declarativeStatusProperty === "caseExecutions") {
+        declarativeCaseExecutionReads.push(node);
+      } else {
+        declarativeExpectationExecutionReads.push(node);
+      }
+    }
     ts.forEachChild(node, visitCalls);
   };
   visitCalls(sourceFile);
+
+  for (const descriptor of declarativeCaseDescriptors) {
+    const properties = (name: string): ts.PropertyAssignment[] =>
+      descriptor.properties.filter(
+        (property): property is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(property) &&
+          ((ts.isIdentifier(property.name) && property.name.text === name) ||
+            (ts.isStringLiteral(property.name) && property.name.text === name))
+      );
+    const root = properties("root")[0]?.initializer;
+    const invoke = properties("invoke")[0]?.initializer;
+    const expectations = properties("expectations")[0]?.initializer;
+    const casePropertyNames = descriptor.properties.map((property) => {
+      if (!ts.isPropertyAssignment(property)) return null;
+      if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+      return null;
+    });
+    if (
+      casePropertyNames.length !== 4 ||
+      new Set(casePropertyNames).size !== 4 ||
+      !["id", "root", "invoke", "expectations"].every((name) => casePropertyNames.includes(name))
+    ) {
+      const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative registerCase requires exact id/root/invoke/expectations properties at ${position.line + 1}:${position.character + 1}`
+      );
+    }
+    let rootHandle: string | null = null;
+    if (properties("root").length !== 1 || root === undefined || !ts.isIdentifier(root)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative registerCase requires one explicit mutation-handle root at ${position.line + 1}:${position.character + 1}`
+      );
+    } else if (!declarativeMutationHandles.has(root.text)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(root.getStart(sourceFile));
+      const detail = declarativeSourceHandles.has(root.text)
+        ? "source handle cannot be a case root"
+        : "unknown root handle";
+      problems.push(
+        `release mutation declarative ${detail} ${root.text} at ${position.line + 1}:${position.character + 1}`
+      );
+    } else {
+      rootHandle = root.text;
+      if (declarativeCaseRoots.has(rootHandle)) {
+        problems.push(`release mutation declarative duplicate case root ${rootHandle}`);
+      }
+      declarativeCaseRoots.add(rootHandle);
+    }
+    let invocationKind: "fixture.text" | "fixture.throw" | null = null;
+    if (properties("invoke").length !== 1 || invoke === undefined || !ts.isObjectLiteralExpression(invoke)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative registerCase requires one literal invoke object at ${position.line + 1}:${position.character + 1}`
+      );
+    } else {
+      const invocationProperties = (name: string): ts.PropertyAssignment[] =>
+        invoke.properties.filter(
+          (property): property is ts.PropertyAssignment =>
+            ts.isPropertyAssignment(property) &&
+            ((ts.isIdentifier(property.name) && property.name.text === name) ||
+              (ts.isStringLiteral(property.name) && property.name.text === name))
+        );
+      const baseline = invocationProperties("baseline")[0]?.initializer;
+      const mutant = invocationProperties("mutant")[0]?.initializer;
+      const kind = invocationProperties("kind")[0]?.initializer;
+      const invocationPropertyNames = invoke.properties.map((property) => {
+        if (!ts.isPropertyAssignment(property)) return null;
+        if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+        return null;
+      });
+      if (invocationProperties("kind").length !== 1 || kind === undefined || !ts.isStringLiteral(kind)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative case invocation requires one literal kind at ${position.line + 1}:${position.character + 1}`
+        );
+      } else if (kind.text === "fixture.text" || kind.text === "fixture.throw") {
+        invocationKind = kind.text;
+      } else {
+        const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative case invocation kind must be one closed literal at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      const expectedInvocationProperties =
+        invocationKind === "fixture.text"
+          ? ["kind", "baseline", "mutant"]
+          : invocationKind === "fixture.throw"
+            ? ["kind", "baseline", "mutant", "message"]
+            : null;
+      if (
+        invocationPropertyNames.some((name) => name === null) ||
+        new Set(invocationPropertyNames).size !== invocationPropertyNames.length ||
+        (expectedInvocationProperties !== null &&
+          (invocationPropertyNames.length !== expectedInvocationProperties.length ||
+            !expectedInvocationProperties.every((name) => invocationPropertyNames.includes(name))))
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative case invocation has unexpected, missing, computed or duplicate properties at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      if (
+        invocationProperties("baseline").length !== 1 ||
+        baseline === undefined ||
+        !ts.isIdentifier(baseline) ||
+        (!declarativeSourceHandles.has(baseline.text) && !declarativeMutationHandles.has(baseline.text)) ||
+        baseline.text === rootHandle
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative case invocation requires one explicit clean baseline handle distinct from its root at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      if (
+        invocationProperties("mutant").length !== 1 ||
+        mutant === undefined ||
+        !ts.isIdentifier(mutant) ||
+        rootHandle === null ||
+        mutant.text !== rootHandle
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative case invocation mutant must be the exact case root handle at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      if (invocationKind === "fixture.throw") {
+        const message = invocationProperties("message")[0]?.initializer;
+        if (
+          invocationProperties("message").length !== 1 ||
+          message === undefined ||
+          !ts.isStringLiteral(message) ||
+          message.text.length === 0
+        ) {
+          const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative fixture.throw invocation requires one non-empty literal message at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+      }
+    }
+    if (
+      properties("expectations").length !== 1 ||
+      expectations === undefined ||
+      !ts.isArrayLiteralExpression(expectations) ||
+      expectations.elements.length === 0
+    ) {
+      const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative registerCase requires one non-empty literal expectations array at ${position.line + 1}:${position.character + 1}`
+      );
+      continue;
+    }
+    const caseExpectationSemantics = new Set<string>();
+    for (const expectation of expectations.elements) {
+      if (!ts.isObjectLiteralExpression(expectation)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative expectation must be one object with literal id/kind at ${position.line + 1}:${position.character + 1}`
+        );
+        continue;
+      }
+      const expectationProperty = (name: string): ts.PropertyAssignment[] =>
+        expectation.properties.filter(
+          (property): property is ts.PropertyAssignment =>
+            ts.isPropertyAssignment(property) &&
+            ((ts.isIdentifier(property.name) && property.name.text === name) ||
+              (ts.isStringLiteral(property.name) && property.name.text === name))
+        );
+      const expectationPropertyNames = expectation.properties.map((property) => {
+        if (!ts.isPropertyAssignment(property)) return null;
+        if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+        return null;
+      });
+      if (
+        expectationPropertyNames.some((name) => name === null) ||
+        new Set(expectationPropertyNames).size !== expectationPropertyNames.length
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative expectation forbids spread, computed and duplicate properties at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+      const id = expectationProperty("id")[0]?.initializer;
+      const kind = expectationProperty("kind")[0]?.initializer;
+      if (
+        expectationProperty("id").length !== 1 ||
+        expectationProperty("kind").length !== 1 ||
+        id === undefined ||
+        !ts.isStringLiteral(id) ||
+        kind === undefined ||
+        !ts.isStringLiteral(kind)
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative expectation must be one object with literal id/kind at ${position.line + 1}:${position.character + 1}`
+        );
+        continue;
+      }
+      const closedExpectationKinds = new Set(["problem", "equal", "not-equal", "regex"]);
+      if (!closedExpectationKinds.has(kind.text)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative expectation kind must be one closed literal at ${position.line + 1}:${position.character + 1}`
+        );
+      } else {
+        let semanticIdentity: string | null = null;
+        const expectedExpectationProperties =
+          kind.text === "problem"
+            ? ["id", "kind", "problem"]
+            : kind.text === "regex"
+              ? ["id", "kind", "regex"]
+              : ["id", "kind", "value"];
+        if (
+          expectationPropertyNames.length !== expectedExpectationProperties.length ||
+          !expectedExpectationProperties.every((name) => expectationPropertyNames.includes(name))
+        ) {
+          const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative expectation ${id.text} has unexpected or missing closed fields at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+        if (kind.text === "problem") {
+          const problem = expectationProperty("problem")[0]?.initializer;
+          if (
+            expectationProperty("problem").length !== 1 ||
+            problem === undefined ||
+            !ts.isStringLiteral(problem) ||
+            problem.text !== "fixture.mutant-threw"
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+            problems.push(
+              `release mutation declarative problem expectation ${id.text} requires one exact problem identity at ${position.line + 1}:${position.character + 1}`
+            );
+          } else semanticIdentity = JSON.stringify([kind.text, problem.text]);
+        } else if (kind.text === "regex") {
+          const regex = expectationProperty("regex")[0]?.initializer;
+          if (
+            expectationProperty("regex").length !== 1 ||
+            regex === undefined ||
+            !ts.isStringLiteral(regex) ||
+            regex.text !== "fixture.omega-token"
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+            problems.push(
+              `release mutation declarative regex expectation ${id.text} requires one named regex identity at ${position.line + 1}:${position.character + 1}`
+            );
+          } else semanticIdentity = JSON.stringify([kind.text, regex.text]);
+        } else {
+          const value = expectationProperty("value")[0]?.initializer;
+          if (expectationProperty("value").length !== 1 || value === undefined || !ts.isStringLiteral(value)) {
+            const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+            problems.push(
+              `release mutation declarative ${kind.text} expectation ${id.text} requires one literal string value at ${position.line + 1}:${position.character + 1}`
+            );
+          } else semanticIdentity = JSON.stringify([kind.text, value.text]);
+        }
+        if (semanticIdentity !== null) {
+          if (caseExpectationSemantics.has(semanticIdentity)) {
+            problems.push(`release mutation declarative expectation ${id.text} duplicates one case semantic check`);
+          } else caseExpectationSemantics.add(semanticIdentity);
+        }
+        if (
+          (invocationKind === "fixture.text" && kind.text === "problem") ||
+          (invocationKind === "fixture.throw" && kind.text !== "problem")
+        ) {
+          const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative expectation ${id.text} is incompatible with ${invocationKind} at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+      }
+      if (declarativeExpectationIds.has(id.text)) {
+        problems.push(`release mutation declarative duplicate expectation id ${id.text}`);
+      }
+      declarativeExpectationIds.add(id.text);
+    }
+  }
 
   if (firstDefinitions !== 1 || allDefinitions !== 1) {
     problems.push(
@@ -1226,10 +2068,172 @@ function releaseMutationInventoryProblems(source: string): string[] {
       `release mutation self-controls expected ${RELEASE_MUTATION_SELF_CONTROL_COUNT}, found ${selfCount} (${selfFirst} first / ${selfAll} all)`
     );
   }
-  if (projectFirst !== RELEASE_MUTATION_PROJECT_FIRST_COUNT || projectAll !== RELEASE_MUTATION_PROJECT_ALL_COUNT) {
+  const hybridFirst = projectFirst + declarativeFirst;
+  const hybridAll = projectAll + declarativeAll;
+  const declarativeRegistrations = declarativeSources + declarativeFirst + declarativeAll + declarativeCases;
+  const exactPlanInventories = declarativePlanInventories.filter(
+    (inventory) =>
+      inventory.structurallyValid &&
+      inventory.total === declarativeFirst + declarativeAll &&
+      inventory.first === declarativeFirst &&
+      inventory.all === declarativeAll &&
+      inventory.cases === declarativeCases &&
+      inventory.expectations === declarativeExpectationIds.size &&
+      inventory.roots === declarativeCaseRoots.size &&
+      inventory.dependencyOnly === declarativeMutationHandles.size - declarativeCaseRoots.size
+  ).length;
+  if (declarativeRegistrations > 0 && (declarativePlanBindings !== 1 || exactPlanInventories !== 1)) {
     problems.push(
-      `release mutation project inventory expected ${RELEASE_MUTATION_PROJECT_FIRST_COUNT} first / ${RELEASE_MUTATION_PROJECT_ALL_COUNT} all, found ${projectFirst} first / ${projectAll} all`
+      `release mutation declarative registrations require one top-level const releaseMutationPlan whose literal mutation/topology inventory matches the declarative subset ${declarativeFirst + declarativeAll}/${declarativeFirst}/${declarativeAll}/${declarativeCases}/${declarativeExpectationIds.size}/${declarativeCaseRoots.size}/${declarativeMutationHandles.size - declarativeCaseRoots.size}; found ${declarativePlanBindings} binding(s), ${exactPlanInventories} exact`
     );
+  }
+  if (declarativeRegistrations > 0) {
+    const seal = declarativeSealCalls[0];
+    const execute = declarativeExecuteCalls[0];
+    let exactSealAndExecute = declarativeSealCalls.length === 1 && declarativeExecuteCalls.length === 1;
+    if (seal !== undefined && execute !== undefined && matrixCallback !== null && ts.isBlock(matrixCallback.body)) {
+      const sealDeclaration =
+        ts.isVariableDeclaration(seal.parent) && seal.parent.initializer === seal ? seal.parent : null;
+      const sealList =
+        sealDeclaration !== null && ts.isVariableDeclarationList(sealDeclaration.parent)
+          ? sealDeclaration.parent
+          : null;
+      const sealStatement = sealList !== null && ts.isVariableStatement(sealList.parent) ? sealList.parent : null;
+      const executeStatement =
+        ts.isExpressionStatement(execute.parent) && execute.parent.expression === execute ? execute.parent : null;
+      const statements = matrixCallback.body.statements;
+      const sealIndex = sealStatement === null ? -1 : statements.indexOf(sealStatement);
+      const assertionStatement = sealIndex >= 0 ? statements[sealIndex + 1] : undefined;
+      const expectedExecuteStatement = sealIndex >= 0 ? statements[sealIndex + 2] : undefined;
+      const expectedPhaseStatement = sealIndex >= 0 ? statements[sealIndex + 3] : undefined;
+      const expectedCaseExecutionsStatement = sealIndex >= 0 ? statements[sealIndex + 4] : undefined;
+      const expectedExpectationExecutionsStatement = sealIndex >= 0 ? statements[sealIndex + 5] : undefined;
+      const assertionCall =
+        assertionStatement !== undefined &&
+        ts.isExpressionStatement(assertionStatement) &&
+        ts.isCallExpression(assertionStatement.expression)
+          ? assertionStatement.expression
+          : null;
+      const matcher =
+        assertionCall !== null && ts.isPropertyAccessExpression(assertionCall.expression)
+          ? assertionCall.expression
+          : null;
+      const expectCall = matcher !== null && ts.isCallExpression(matcher.expression) ? matcher.expression : null;
+      const exactCleanSealAssertion =
+        assertionCall !== null &&
+        assertionCall.questionDotToken === undefined &&
+        matcher !== null &&
+        matcher.questionDotToken === undefined &&
+        matcher.name.text === "toEqual" &&
+        expectCall !== null &&
+        expectCall.questionDotToken === undefined &&
+        ts.isIdentifier(expectCall.expression) &&
+        expectCall.expression.text === "expect" &&
+        expectCall.arguments.length === 1 &&
+        expectCall.arguments[0] !== undefined &&
+        ts.isIdentifier(expectCall.arguments[0]) &&
+        expectCall.arguments[0].text === "releaseMutationProblems" &&
+        assertionCall.arguments.length === 1 &&
+        assertionCall.arguments[0] !== undefined &&
+        ts.isArrayLiteralExpression(assertionCall.arguments[0]) &&
+        assertionCall.arguments[0].elements.length === 0;
+      const exactStatusAssertion = (
+        statement: ts.Statement | undefined,
+        access: ts.PropertyAccessExpression | undefined,
+        expected: string | number
+      ): boolean => {
+        if (statement === undefined || access === undefined || !ts.isExpressionStatement(statement)) return false;
+        const call = ts.isCallExpression(statement.expression) ? statement.expression : null;
+        const statusMatcher = call !== null && ts.isPropertyAccessExpression(call.expression) ? call.expression : null;
+        const statusExpectCall =
+          statusMatcher !== null && ts.isCallExpression(statusMatcher.expression) ? statusMatcher.expression : null;
+        const expectedValue = call?.arguments[0];
+        const exactExpectedValue =
+          typeof expected === "string"
+            ? expectedValue !== undefined && ts.isStringLiteral(expectedValue) && expectedValue.text === expected
+            : expectedValue !== undefined &&
+              ts.isNumericLiteral(expectedValue) &&
+              Number(expectedValue.text) === expected;
+        return (
+          call !== null &&
+          call.questionDotToken === undefined &&
+          call.arguments.length === 1 &&
+          statusMatcher !== null &&
+          statusMatcher.questionDotToken === undefined &&
+          statusMatcher.name.text === "toBe" &&
+          statusExpectCall !== null &&
+          statusExpectCall.questionDotToken === undefined &&
+          ts.isIdentifier(statusExpectCall.expression) &&
+          statusExpectCall.expression.text === "expect" &&
+          statusExpectCall.arguments.length === 1 &&
+          statusExpectCall.arguments[0] === access &&
+          exactExpectedValue
+        );
+      };
+      exactSealAndExecute =
+        exactSealAndExecute &&
+        sealDeclaration !== null &&
+        ts.isIdentifier(sealDeclaration.name) &&
+        sealDeclaration.name.text === "releaseMutationProblems" &&
+        sealList !== null &&
+        (sealList.flags & ts.NodeFlags.Const) !== 0 &&
+        sealStatement !== null &&
+        sealStatement.parent === matrixCallback.body &&
+        seal.getStart(sourceFile) > lastDeclarativeRegistrationEnd &&
+        exactCleanSealAssertion &&
+        executeStatement !== null &&
+        executeStatement === expectedExecuteStatement &&
+        execute.getStart(sourceFile) > seal.end &&
+        declarativePhaseReads.length === 1 &&
+        exactStatusAssertion(expectedPhaseStatement, declarativePhaseReads[0], "executed") &&
+        declarativeCaseExecutionReads.length === 1 &&
+        exactStatusAssertion(expectedCaseExecutionsStatement, declarativeCaseExecutionReads[0], declarativeCases) &&
+        declarativeExpectationExecutionReads.length === 1 &&
+        exactStatusAssertion(
+          expectedExpectationExecutionsStatement,
+          declarativeExpectationExecutionReads[0],
+          declarativeExpectationIds.size
+        );
+    } else exactSealAndExecute = false;
+    if (!exactSealAndExecute) {
+      problems.push(
+        "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+      );
+    }
+  } else if (
+    declarativeSealCalls.length !== 0 ||
+    declarativeExecuteCalls.length !== 0 ||
+    declarativePhaseReads.length !== 0 ||
+    declarativeCaseExecutionReads.length !== 0 ||
+    declarativeExpectationExecutionReads.length !== 0
+  ) {
+    problems.push("release mutation declarative lifecycle checks cannot exist without declarative registrations");
+  }
+  if (
+    hybridFirst !== RELEASE_MUTATION_PROJECT_FIRST_COUNT ||
+    hybridAll !== RELEASE_MUTATION_PROJECT_ALL_COUNT ||
+    hybridFirst + hybridAll !== RELEASE_MUTATION_PROJECT_TOTAL_COUNT
+  ) {
+    problems.push(
+      `release mutation hybrid inventory expected ${RELEASE_MUTATION_PROJECT_FIRST_COUNT} first / ${RELEASE_MUTATION_PROJECT_ALL_COUNT} all, found ${hybridFirst} first / ${hybridAll} all (legacy ${projectFirst}/${projectAll}; declarative ${declarativeFirst}/${declarativeAll}; cases ${declarativeCases})`
+    );
+  }
+  // D-58 topology gate only. Before the final legacy=0 boundary can close 5f.5a, the bounded
+  // migration PRs must also land an independently reviewed legacy-to-descriptor identity manifest;
+  // these cardinalities deliberately cannot prove semantic one-for-one substitution by themselves.
+  if (projectFirst + projectAll === 0) {
+    const dependencyOnly = declarativeMutationHandles.size - declarativeCaseRoots.size;
+    if (
+      declarativeMutationIds.size !== RELEASE_MUTATION_PROJECT_TOTAL_COUNT ||
+      declarativeCases !== RELEASE_MUTATION_PROJECT_ROOT_COUNT ||
+      declarativeCaseRoots.size !== RELEASE_MUTATION_PROJECT_ROOT_COUNT ||
+      declarativeExpectationIds.size !== RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT ||
+      dependencyOnly !== RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT
+    ) {
+      problems.push(
+        `release mutation final closed graph expected ${RELEASE_MUTATION_PROJECT_TOTAL_COUNT} unique descriptors / ${RELEASE_MUTATION_PROJECT_ROOT_COUNT} cases and roots / ${RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT} expectations / ${RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT} dependency-only, found ${declarativeMutationIds.size} descriptors / ${declarativeCases} cases / ${declarativeCaseRoots.size} roots / ${declarativeExpectationIds.size} expectations / ${dependencyOnly} dependency-only`
+      );
+    }
   }
   if (outside !== 0) {
     problems.push(`release mutation helpers outside the reviewed matrix/self-control callback: ${outside}`);
@@ -5932,8 +6936,8 @@ describe("release identity and exact required-job gate", () => {
   });
 
   // This mutation oracle intentionally exercises thousands of structural checks.
-  // PR #433 V8 coverage crossed the former 30s ceiling after the source-audit,
-  // runner-reachability, and binding controls; keep scoped 60s hang detection.
+  // PR #434 V8 coverage crossed the former 60s ceiling after the closed-grammar
+  // full-source adversarial controls; keep scoped 120s hang detection.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
@@ -6037,7 +7041,61 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(vitestImportOffset + vitestImport.length)
     ].join("");
     expect(releaseMutationInventoryProblems(aliasedVitestImportMutation)).toContainEqual(
-      expect.stringMatching(/must bind describe\/it to one exact unaliased vitest import with no runtime shadows/)
+      expect.stringMatching(
+        /must bind describe\/expect\/it to one exact unaliased vitest import with no runtime shadows/
+      )
+    );
+    const aliasedExpectImportMutation = [
+      oracleSource.slice(0, vitestImportOffset),
+      'import { describe, expect as assert, it } from "vitest";',
+      oracleSource.slice(vitestImportOffset + vitestImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedExpectImportMutation)).toContainEqual(
+      expect.stringMatching(
+        /must bind describe\/expect\/it to one exact unaliased vitest import with no runtime shadows/
+      )
+    );
+    const additiveProtectedImportAliases = [
+      oracleSource.slice(0, vitestImportOffset + vitestImport.length),
+      '\nimport { expect as mutateExpect } from "vitest";\n' +
+        'import { ReleaseMutationPlan as PlanAlias } from "./release-mutation-plan.js";',
+      oracleSource.slice(vitestImportOffset + vitestImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(additiveProtectedImportAliases)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/must bind describe\/expect\/it to one exact unaliased vitest import/),
+        expect.stringMatching(/must bind ReleaseMutationPlan to one exact unaliased test-support import/)
+      ])
+    );
+    const additiveProtectedNamespaceImports = [
+      oracleSource.slice(0, vitestImportOffset + vitestImport.length),
+      '\nimport * as hiddenVitest from "vitest";\n' + 'import * as hiddenPlan from "./release-mutation-plan.js";',
+      oracleSource.slice(vitestImportOffset + vitestImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(additiveProtectedNamespaceImports)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/must bind describe\/expect\/it to one exact unaliased vitest import/),
+        expect.stringMatching(/must bind ReleaseMutationPlan to one exact unaliased test-support import/)
+      ])
+    );
+    const additiveVitestMockImport = [
+      oracleSource.slice(0, vitestImportOffset + vitestImport.length),
+      '\nimport { vi } from "vitest";\nvi.mock("./release-mutation-plan.js", () => ({}));',
+      oracleSource.slice(vitestImportOffset + vitestImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(additiveVitestMockImport)).toContain(
+      "release mutation matrix requires one exact describe/expect/it vitest import declaration and no other vitest imports; found exact 1, other 1"
+    );
+    const releasePlanImport = 'import { ReleaseMutationPlan } from "./release-mutation-plan.js";';
+    const releasePlanImportOffset = oracleSource.indexOf(releasePlanImport);
+    expect(releasePlanImportOffset).toBeGreaterThan(0);
+    const aliasedReleasePlanImport = [
+      oracleSource.slice(0, releasePlanImportOffset),
+      'import { ReleaseMutationPlan as AliasedPlan } from "./release-mutation-plan.js";',
+      oracleSource.slice(releasePlanImportOffset + releasePlanImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedReleasePlanImport)).toContainEqual(
+      expect.stringMatching(/must bind ReleaseMutationPlan to one exact unaliased test-support import/)
     );
     const shadowedItBindingMutation = [
       oracleSource.slice(0, suiteStartOffset + suiteStart.length),
@@ -6045,7 +7103,35 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset + suiteStart.length)
     ].join("");
     expect(releaseMutationInventoryProblems(shadowedItBindingMutation)).toContainEqual(
-      expect.stringMatching(/must bind describe\/it to one exact unaliased vitest import with no runtime shadows/)
+      expect.stringMatching(
+        /must bind describe\/expect\/it to one exact unaliased vitest import with no runtime shadows/
+      )
+    );
+    const shadowedExpectBindingMutation = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  const expect = (_value: unknown) => ({ toBe: () => undefined, toEqual: () => undefined });",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedExpectBindingMutation)).toContainEqual(
+      expect.stringMatching(
+        /must bind describe\/expect\/it to one exact unaliased vitest import with no runtime shadows/
+      )
+    );
+    const shadowedReleasePlanBinding = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  const ReleaseMutationPlan = class {};",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedReleasePlanBinding)).toContainEqual(
+      expect.stringMatching(/must bind ReleaseMutationPlan to one exact unaliased test-support import/)
+    );
+    const mutableReleasePlanPrototype = [
+      oracleSource.slice(0, suiteStartOffset),
+      '\nReflect.set(ReleaseMutationPlan.prototype, "seal", () => []);\n',
+      oracleSource.slice(suiteStartOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(mutableReleasePlanPrototype)).toContainEqual(
+      expect.stringMatching(/ReleaseMutationPlan may only be one direct constructor or a type reference/)
     );
     const skippedSuiteMutation = [
       oracleSource.slice(0, suiteStartOffset),
@@ -6053,7 +7139,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset + "describe(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(skippedSuiteMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 120_000ms timeout"
     );
     const outerReturnMutation = [
       oracleSource.slice(0, suiteStartOffset + suiteStart.length),
@@ -6072,7 +7158,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + "  it(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(conditionalRegistrationMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 120_000ms timeout"
     );
     const contextSkipMutation = [
       oracleSource.slice(0, matrixRegistrationOffset),
@@ -6080,7 +7166,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + matrixRegistrationStart.length)
     ].join("");
     expect(releaseMutationInventoryProblems(contextSkipMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 120_000ms timeout"
     );
     const extraProjectMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -6088,7 +7174,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation project inventory expected 538 first / 22 all, found 539 first / 22 all"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 539/22; declarative 0/0; cases 0)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -6102,8 +7188,310 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation project inventory expected 538 first / 22 all, found 537 first / 23 all"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 537/23; declarative 0/0; cases 0)"
     );
+    const hybridLegacyRemoval = [
+      oracleSource.slice(0, firstProjectCallOffset),
+      "legacyMigratedExactly(",
+      oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
+    ].join("");
+    const hybridDeclarativePrelude = `
+    const releaseMutationPlan = new ReleaseMutationPlan({
+      total: 1,
+      first: 1,
+      all: 0,
+      cases: 1,
+      expectations: 1,
+      roots: 1,
+      dependencyOnly: 0
+    });
+    const hybridSourceHandle = releaseMutationPlan.registerSource("fixture.hybrid", "inventory");
+    const hybridMutationHandle = releaseMutationPlan.registerMutation("mutation.hybrid", {
+      mode: "first",
+      source: hybridSourceHandle,
+      needle: "inventory",
+      replacement: "mutant",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "inventory", before: 1, after: 0 }
+    });
+    releaseMutationPlan.registerCase({
+      id: "case.hybrid",
+      root: hybridMutationHandle,
+      invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },
+      expectations: [{ id: "expectation.hybrid", kind: "equal", value: "mutant" }]
+    });
+    const releaseMutationProblems = releaseMutationPlan.seal();
+    expect(releaseMutationProblems).toEqual([]);
+    releaseMutationPlan.execute();
+    expect(releaseMutationPlan.phase).toBe("executed");
+    expect(releaseMutationPlan.caseExecutions).toBe(1);
+    expect(releaseMutationPlan.expectationExecutions).toBe(1);`;
+    const hybridDeclarativeMutation = [
+      hybridLegacyRemoval.slice(0, matrixBodyOffset),
+      hybridDeclarativePrelude,
+      hybridLegacyRemoval.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(hybridDeclarativeMutation)).toEqual([]);
+    const hybridPreludeEnd = matrixBodyOffset + hybridDeclarativePrelude.length;
+    const hybridPreludeOffset = (token: string): number => {
+      const fixture = hybridDeclarativeMutation.slice(matrixBodyOffset, hybridPreludeEnd);
+      expect(mutationMatchCount(fixture, token)).toBe(1);
+      const relativeOffset = fixture.indexOf(token);
+      expect(relativeOffset).toBeGreaterThanOrEqual(0);
+      return matrixBodyOffset + relativeOffset;
+    };
+    const boundHandlePrefix = "const hybridMutationHandle = ";
+    expect(hybridDeclarativeMutation.indexOf(boundHandlePrefix)).toBeLessThan(matrixBodyOffset);
+    const boundHandleOffset = hybridPreludeOffset(boundHandlePrefix);
+    expect(boundHandleOffset).toBeGreaterThanOrEqual(matrixBodyOffset);
+    const discardedDeclarativeHandle = [
+      hybridDeclarativeMutation.slice(0, boundHandleOffset),
+      "void ",
+      hybridDeclarativeMutation.slice(boundHandleOffset + boundHandlePrefix.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(discardedDeclarativeHandle)).toContainEqual(
+      expect.stringMatching(/registerMutation requires one top-level const handle/)
+    );
+    const sourceValueToken = 'registerSource("fixture.hybrid", "inventory")';
+    const sourceValueOffset = hybridPreludeOffset(sourceValueToken);
+    const evaluatedDeclarativeSource = [
+      hybridDeclarativeMutation.slice(0, sourceValueOffset),
+      'registerSource("fixture.hybrid", String("inventory"))',
+      hybridDeclarativeMutation.slice(sourceValueOffset + sourceValueToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(evaluatedDeclarativeSource)).toContainEqual(
+      expect.stringMatching(/passive identifier\/string source value/)
+    );
+    const descriptorModeToken = 'mode: "first",\n      source: hybridSourceHandle';
+    const descriptorModeOffset = hybridPreludeOffset(descriptorModeToken);
+    const spreadDeclarativeDescriptor = [
+      hybridDeclarativeMutation.slice(0, descriptorModeOffset),
+      '...dynamicDescriptor,\n      mode: "first",\n      source: hybridSourceHandle',
+      hybridDeclarativeMutation.slice(descriptorModeOffset + descriptorModeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(spreadDeclarativeDescriptor)).toContainEqual(
+      expect.stringMatching(/descriptor requires exact passive/)
+    );
+    const caseRootToken = "root: hybridMutationHandle";
+    const caseRootOffset = hybridPreludeOffset(caseRootToken);
+    const sourceRootDeclarativeCase = [
+      hybridDeclarativeMutation.slice(0, caseRootOffset),
+      "root: hybridSourceHandle",
+      hybridDeclarativeMutation.slice(caseRootOffset + caseRootToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(sourceRootDeclarativeCase)).toContainEqual(
+      expect.stringMatching(/source handle cannot be a case root/)
+    );
+    const expectationToken = 'expectations: [{ id: "expectation.hybrid", kind: "equal", value: "mutant" }]';
+    const expectationOffset = hybridPreludeOffset(expectationToken);
+    const emptyDeclarativeExpectations = [
+      hybridDeclarativeMutation.slice(0, expectationOffset),
+      "expectations: []",
+      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(emptyDeclarativeExpectations)).toContainEqual(
+      expect.stringMatching(/requires one non-empty literal expectations array/)
+    );
+    const invocationKindToken = 'invoke: { kind: "fixture.text"';
+    const invocationKindOffset = hybridPreludeOffset(invocationKindToken);
+    const unknownDeclarativeInvocation = [
+      hybridDeclarativeMutation.slice(0, invocationKindOffset),
+      'invoke: { kind: "fixture.dynamic"',
+      hybridDeclarativeMutation.slice(invocationKindOffset + invocationKindToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(unknownDeclarativeInvocation)).toContainEqual(
+      expect.stringMatching(/case invocation kind must be one closed literal/)
+    );
+    const unknownNamedRegexExpectation = [
+      hybridDeclarativeMutation.slice(0, expectationOffset),
+      'expectations: [{ id: "expectation.hybrid", kind: "regex", regex: "fixture.dynamic" }]',
+      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(unknownNamedRegexExpectation)).toContainEqual(
+      expect.stringMatching(/requires one named regex identity/)
+    );
+    const duplicateSemanticExpectations = [
+      hybridDeclarativeMutation.slice(0, expectationOffset),
+      [
+        "expectations: [",
+        '  { id: "expectation.hybrid", kind: "equal", value: "mutant" },',
+        '  { id: "expectation.hybrid-padding", kind: "equal", value: "mutant" }',
+        "]"
+      ].join("\n      "),
+      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(duplicateSemanticExpectations)).toContainEqual(
+      expect.stringMatching(/duplicates one case semantic check/)
+    );
+    const sealSequence = [
+      "const releaseMutationProblems = releaseMutationPlan.seal();",
+      "expect(releaseMutationProblems).toEqual([]);",
+      "releaseMutationPlan.execute();",
+      'expect(releaseMutationPlan.phase).toBe("executed");',
+      "expect(releaseMutationPlan.caseExecutions).toBe(1);",
+      "expect(releaseMutationPlan.expectationExecutions).toBe(1);"
+    ].join("\n    ");
+    const sealSequenceOffset = hybridPreludeOffset(sealSequence);
+    const outerDynamicCodeMutation = [
+      oracleSource.slice(0, suiteStartOffset),
+      [
+        'eval("releaseMutationPlan.preparedCases.push = () => 0; releaseMutationPlan.executedCases = 1");',
+        'Function("return undefined")();'
+      ].join("\n"),
+      oracleSource.slice(suiteStartOffset)
+    ].join("");
+    expect(
+      releaseMutationInventoryProblems(outerDynamicCodeMutation).filter((problem) =>
+        problem.includes("forbids dynamic code constructor")
+      )
+    ).toHaveLength(2);
+    const outerExpectExtensionMutation = [
+      oracleSource.slice(0, suiteStartOffset),
+      "expect.extend({ toEqual: () => ({ pass: true, message: () => 'suppressed' }) });\n",
+      oracleSource.slice(suiteStartOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(outerExpectExtensionMutation)).toContainEqual(
+      expect.stringMatching(/expect may only be one direct call or an allowlisted static matcher/)
+    );
+    const missingDeclarativeExecution = [
+      hybridDeclarativeMutation.slice(0, sealSequenceOffset),
+      hybridDeclarativeMutation.slice(sealSequenceOffset + sealSequence.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(missingDeclarativeExecution)).toContain(
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    );
+    const caseExecutionAssertion = "expect(releaseMutationPlan.caseExecutions).toBe(1);";
+    const caseExecutionAssertionOffset = hybridPreludeOffset(caseExecutionAssertion);
+    const wrongDeclarativeCaseExecutionCount = [
+      hybridDeclarativeMutation.slice(0, caseExecutionAssertionOffset),
+      "expect(releaseMutationPlan.caseExecutions).toBe(0);",
+      hybridDeclarativeMutation.slice(caseExecutionAssertionOffset + caseExecutionAssertion.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(wrongDeclarativeCaseExecutionCount)).toContain(
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    );
+    const expectationExecutionAssertion = "expect(releaseMutationPlan.expectationExecutions).toBe(1);";
+    const expectationExecutionAssertionOffset = hybridPreludeOffset(expectationExecutionAssertion);
+    const wrongDeclarativeExpectationExecutionCount = [
+      hybridDeclarativeMutation.slice(0, expectationExecutionAssertionOffset),
+      "expect(releaseMutationPlan.expectationExecutions).toBe(0);",
+      hybridDeclarativeMutation.slice(expectationExecutionAssertionOffset + expectationExecutionAssertion.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(wrongDeclarativeExpectationExecutionCount)).toContain(
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    );
+    const phaseAssertion = 'expect(releaseMutationPlan.phase).toBe("executed");';
+    const phaseAssertionOffset = hybridPreludeOffset(phaseAssertion);
+    const optionalDeclarativePhaseAssertion = [
+      hybridDeclarativeMutation.slice(0, phaseAssertionOffset),
+      'expect(releaseMutationPlan.phase)?.toBe("executed");',
+      hybridDeclarativeMutation.slice(phaseAssertionOffset + phaseAssertion.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(optionalDeclarativePhaseAssertion)).toContain(
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    );
+    const sourceOnlyDeclarativeMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      [
+        "",
+        "    const releaseMutationPlan = new ReleaseMutationPlan({ total: 0, first: 0, all: 0 });",
+        '    const sourceOnlyHandle = releaseMutationPlan.registerSource("fixture.source-only", "inventory");',
+        "    void sourceOnlyHandle;"
+      ].join("\n"),
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(sourceOnlyDeclarativeMutation)).toContain(
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    );
+    const legacyFreeMatrix = [
+      oracleSource.slice(0, matrixBodyOffset),
+      oracleSource
+        .slice(matrixBodyOffset)
+        .split("replaceAllExactly(")
+        .join("legacyMigratedAllExactly(")
+        .split("replaceExactly(")
+        .join("legacyMigratedExactly(")
+    ].join("");
+    expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 0 descriptors / 0 cases / 0 roots / 0 expectations / 0 dependency-only"
+    );
+    const loopGeneratedDeclarative = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    for (const id of ["mutation.generated"]) { releaseMutationPlan.registerMutation(id, { mode: "first" }); }',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(loopGeneratedDeclarative)).toContainEqual(
+      expect.stringMatching(
+        /registerMutation must be one explicit straight-line registration, not nested under ForOfStatement/
+      )
+    );
+    const aliasedDeclarative = [
+      oracleSource.slice(0, matrixBodyOffset),
+      "\n    const addMutation = releaseMutationPlan.registerMutation; void addMutation;",
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedDeclarative)).toContainEqual(
+      expect.stringMatching(/registerMutation must be one direct property call on releaseMutationPlan/)
+    );
+    const computedDeclarative = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    releaseMutationPlan["registerMutation"]("mutation.computed", { mode: "first" });',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(computedDeclarative)).toContainEqual(
+      expect.stringMatching(/registerMutation must be one direct property call on releaseMutationPlan/)
+    );
+    const wrongReceiverDeclarative = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    otherPlan.registerMutation("mutation.wrong-receiver", { mode: "first" });',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(wrongReceiverDeclarative)).toContainEqual(
+      expect.stringMatching(/registerMutation must be one direct property call on releaseMutationPlan/)
+    );
+    const mutationIdToken = '"mutation.hybrid"';
+    const mutationIdOffset = hybridPreludeOffset(mutationIdToken);
+    const templateIdDeclarative = [
+      hybridDeclarativeMutation.slice(0, mutationIdOffset),
+      "`mutation.hybrid`",
+      hybridDeclarativeMutation.slice(mutationIdOffset + mutationIdToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(templateIdDeclarative)).toContainEqual(
+      expect.stringMatching(/registerMutation requires one top-level const handle, literal id and object descriptor/)
+    );
+    const caseRegistrationToken = "releaseMutationPlan.registerCase({";
+    const caseRegistrationOffset = hybridPreludeOffset(caseRegistrationToken);
+    const identifierComputedDeclarativeCase = [
+      hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
+      'const caseMethod = "registerCase" as const;\n    releaseMutationPlan[caseMethod]({',
+      hybridDeclarativeMutation.slice(caseRegistrationOffset + caseRegistrationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(identifierComputedDeclarativeCase)).toContainEqual(
+      expect.stringMatching(/releaseMutationPlan may only be its exact binding or the direct receiver/)
+    );
+    const destructuredDeclarativeCase = [
+      hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
+      "const { registerCase } = releaseMutationPlan;\n    registerCase({",
+      hybridDeclarativeMutation.slice(caseRegistrationOffset + caseRegistrationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(destructuredDeclarativeCase)).toContainEqual(
+      expect.stringMatching(/releaseMutationPlan may only be its exact binding or the direct receiver/)
+    );
+    const conditionalDeclarativeCase = [
+      hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
+      `false && ${caseRegistrationToken}`,
+      hybridDeclarativeMutation.slice(caseRegistrationOffset + caseRegistrationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(conditionalDeclarativeCase)).toEqual([
+      expect.stringMatching(
+        /registerCase must be one explicit straight-line registration, not nested under BinaryExpression/
+      ),
+      expect.stringMatching(/registerCase requires one top-level expression call with an object and literal id/),
+      expect.stringMatching(/literal mutation\/topology inventory matches the declarative subset/),
+      expect.stringMatching(
+        /requires one top-level clean seal assertion.*exact executed phase, case-count and expectation-count/
+      )
+    ]);
     const loopGeneratedMutation = [
       oracleSource.slice(0, matrixBodyOffset),
       '\n    for (const value of ["inventory", "inventory"]) { void replaceExactly(value, "inventory", "mutant"); }',
@@ -6165,22 +7553,24 @@ describe("release identity and exact required-job gate", () => {
       '\n    for (const value of [replaceExactly("inventory", "inventory", "mutant")]) { void value; }',
       oracleSource.slice(matrixBodyOffset)
     ].join("");
-    expect(releaseMutationInventoryProblems(iterableLiteralMutation)).not.toContainEqual(
+    const iterableLiteralProblems = releaseMutationInventoryProblems(iterableLiteralMutation);
+    expect(iterableLiteralProblems).not.toContainEqual(
       expect.stringMatching(/must be one explicit straight-line case/)
     );
-    expect(releaseMutationInventoryProblems(iterableLiteralMutation)).toContain(
-      "release mutation project inventory expected 538 first / 22 all, found 539 first / 22 all"
+    expect(iterableLiteralProblems).toContain(
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 539/22; declarative 0/0; cases 0)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
       '\n    void replaceExactly(replaceExactly("inventory", "inventory", "mutant"), "mutant", "final");',
       oracleSource.slice(matrixBodyOffset)
     ].join("");
-    expect(releaseMutationInventoryProblems(nestedStraightLineMutation)).not.toContainEqual(
+    const nestedStraightLineProblems = releaseMutationInventoryProblems(nestedStraightLineMutation);
+    expect(nestedStraightLineProblems).not.toContainEqual(
       expect.stringMatching(/must be one explicit straight-line case/)
     );
-    expect(releaseMutationInventoryProblems(nestedStraightLineMutation)).toContain(
-      "release mutation project inventory expected 538 first / 22 all, found 540 first / 22 all"
+    expect(nestedStraightLineProblems).toContain(
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 540/22; declarative 0/0; cases 0)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -6211,907 +7601,931 @@ describe("release identity and exact required-job gate", () => {
       "release mutation helper definitions expected 1 first / 1 all, found 2 first / 1 all"
     );
 
-    const sourceRef = (id: string) => ({ kind: "source", id }) as const;
-    const mutationRef = (id: string) => ({ kind: "mutation", id }) as const;
-    const literalReplacement = (value: string) => ({ kind: "literal", value }) as const;
+    type FixtureMutationInput = Parameters<ReleaseMutationPlan["registerMutation"]>[1];
+    const registerFixtureMutation = (plan: ReleaseMutationPlan, id: string, registration: FixtureMutationInput) =>
+      plan.registerMutation(id, registration);
+
     const emptyPlan = new ReleaseMutationPlan();
     expect(emptyPlan.seal()).toEqual([
       "[inventory.empty] plan: plan must register at least one mutation",
       "[source.none] plan: plan must register at least one canonical source",
-      "[detector.none] plan: plan must register at least one detector"
+      "[case.none] plan: plan must register at least one closed case"
     ]);
-    expect(emptyPlan.detectorExecutions).toBe(0);
+    expect(emptyPlan.phase).toBe("rejected");
+    expect(emptyPlan.caseExecutions).toBe(0);
     expect(() => emptyPlan.execute()).toThrow(/requires sealed state; found rejected/);
+    expect(() => emptyPlan.registerSource("fixture.late", "late")).toThrow(/entered rejected state/);
 
-    const explosiveSealPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.explosive", "alpha")
-      .registerMutation({
-        id: "mutation.explosive",
+    const ambientObjectSeal = Object.seal;
+    const ambientObjectFreeze = Object.freeze;
+    let ambientSealCalls = 0;
+    let ambientFreezeCalls = 0;
+    let sealPatchApplied = false;
+    let freezePatchApplied = false;
+    let sealPatchRestored = false;
+    let freezePatchRestored = false;
+    let intrinsicPlanSealed = false;
+    let intrinsicHandleFrozen = false;
+    try {
+      sealPatchApplied = Reflect.set(Object, "seal", (value: object) => {
+        ambientSealCalls++;
+        return value;
+      });
+      freezePatchApplied = Reflect.set(Object, "freeze", (value: object) => {
+        ambientFreezeCalls++;
+        return value;
+      });
+      const intrinsicPlan = new ReleaseMutationPlan();
+      const intrinsicHandle = intrinsicPlan.registerSource("fixture.intrinsic", "alpha");
+      intrinsicPlanSealed = Object.isSealed(intrinsicPlan);
+      intrinsicHandleFrozen = Object.isFrozen(intrinsicHandle);
+    } finally {
+      sealPatchRestored = Reflect.set(Object, "seal", ambientObjectSeal);
+      freezePatchRestored = Reflect.set(Object, "freeze", ambientObjectFreeze);
+    }
+    expect(sealPatchApplied).toBe(true);
+    expect(freezePatchApplied).toBe(true);
+    expect(sealPatchRestored).toBe(true);
+    expect(freezePatchRestored).toBe(true);
+    expect(ambientSealCalls).toBe(0);
+    expect(ambientFreezeCalls).toBe(0);
+    expect(intrinsicPlanSealed).toBe(true);
+    expect(intrinsicHandleFrozen).toBe(true);
+
+    const ambientArrayPush = Array.prototype.push;
+    let ambientPushCalls = 0;
+    let pushPatchApplied = false;
+    let pushPatchRestored = false;
+    let intrinsicPushProblems: readonly string[] | null = null;
+    let intrinsicPushPhase: string | null = null;
+    let intrinsicPushCaseExecutions = -1;
+    let intrinsicPushExpectationExecutions = -1;
+    try {
+      pushPatchApplied = Reflect.set(Array.prototype, "push", () => {
+        ambientPushCalls++;
+        throw new Error("ambient Array.prototype.push reached");
+      });
+      const intrinsicPushPlan = new ReleaseMutationPlan({
+        total: 1,
+        first: 1,
+        all: 0,
+        cases: 1,
+        expectations: 1,
+        roots: 1,
+        dependencyOnly: 0
+      });
+      const intrinsicPushSource = intrinsicPushPlan.registerSource("fixture.intrinsic-push", "alpha");
+      const intrinsicPushRoot = registerFixtureMutation(intrinsicPushPlan, "mutation.intrinsic-push", {
         mode: "first",
-        source: sourceRef("fixture.explosive"),
+        source: intrinsicPushSource,
         needle: "alpha",
-        replacement: literalReplacement("omega"),
+        replacement: "omega",
         expectedOccurrences: 1,
         witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.explosive",
-        expectedAssertions: 1,
-        mutations: ["mutation.explosive"],
-        run: () => undefined
       });
-    Object.defineProperty(explosiveSealPlan, "mutations", {
-      configurable: true,
-      get: () => {
-        throw new Error("synthetic seal failure");
+      intrinsicPushPlan.registerCase({
+        id: "case.intrinsic-push",
+        root: intrinsicPushRoot,
+        invoke: { kind: "fixture.text", baseline: intrinsicPushSource, mutant: intrinsicPushRoot },
+        expectations: [{ id: "expectation.intrinsic-push", kind: "equal", value: "omega" }]
+      });
+      intrinsicPushProblems = intrinsicPushPlan.seal();
+      intrinsicPushPlan.execute();
+      intrinsicPushPhase = intrinsicPushPlan.phase;
+      intrinsicPushCaseExecutions = intrinsicPushPlan.caseExecutions;
+      intrinsicPushExpectationExecutions = intrinsicPushPlan.expectationExecutions;
+    } finally {
+      pushPatchRestored = Reflect.set(Array.prototype, "push", ambientArrayPush);
+    }
+    expect(pushPatchApplied).toBe(true);
+    expect(pushPatchRestored).toBe(true);
+    expect(ambientPushCalls).toBe(0);
+    expect(intrinsicPushProblems).toEqual([]);
+    expect(intrinsicPushPhase).toBe("executed");
+    expect(intrinsicPushCaseExecutions).toBe(1);
+    expect(intrinsicPushExpectationExecutions).toBe(1);
+
+    const ambientArrayIterator = Array.prototype[Symbol.iterator];
+    let iteratorPatchApplied = false;
+    let iteratorPatchRestored = false;
+    let iteratorDriftMessage = "";
+    try {
+      iteratorPatchApplied = Reflect.set(Array.prototype, Symbol.iterator, function (this: unknown[]) {
+        return Reflect.apply(ambientArrayIterator, this, []) as ArrayIterator<unknown>;
+      });
+      try {
+        void new ReleaseMutationPlan();
+      } catch (error) {
+        iteratorDriftMessage = error instanceof Error ? error.message : String(error);
       }
+    } finally {
+      iteratorPatchRestored = Reflect.set(Array.prototype, Symbol.iterator, ambientArrayIterator);
+    }
+    expect(iteratorPatchApplied).toBe(true);
+    expect(iteratorPatchRestored).toBe(true);
+    expect(iteratorDriftMessage).toBe("release mutation ambient intrinsic drift");
+
+    const ambientErrorConstructor = Error;
+    const observeAmbientIntrinsicDrift = (
+      owner: object,
+      key: PropertyKey,
+      replacement: unknown
+    ): { readonly message: string; readonly restored: boolean } => {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor === undefined) throw new ambientErrorConstructor("missing intrinsic descriptor control");
+      let message = "";
+      let restored = false;
+      try {
+        Object.defineProperty(owner, key, {
+          configurable: descriptor.configurable,
+          enumerable: descriptor.enumerable,
+          value: replacement,
+          writable: true
+        });
+        try {
+          void new ReleaseMutationPlan();
+        } catch (error) {
+          message = error instanceof ambientErrorConstructor ? error.message : String(error);
+        }
+      } finally {
+        Object.defineProperty(owner, key, descriptor);
+        restored = true;
+      }
+      return { message, restored };
+    };
+    const arrayIteratorPrototypeControl = Object.getPrototypeOf([][Symbol.iterator]()) as object;
+    const mapIteratorPrototypeControl = Object.getPrototypeOf(new Map().keys()) as object;
+    const setIteratorPrototypeControl = Object.getPrototypeOf(new Set().keys()) as object;
+    const sharedIteratorPrototypeControl = Object.getPrototypeOf(arrayIteratorPrototypeControl) as object;
+    const regExpExecDrift = observeAmbientIntrinsicDrift(RegExp.prototype, "exec", () => null);
+    const arrayConstructorDrift = observeAmbientIntrinsicDrift(Array.prototype, "constructor", () => []);
+    const arraySpeciesDrift = observeAmbientIntrinsicDrift(Array, Symbol.species, {});
+    const arrayNextDrift = observeAmbientIntrinsicDrift(arrayIteratorPrototypeControl, "next", () => ({
+      done: true,
+      value: undefined
+    }));
+    const mapNextDrift = observeAmbientIntrinsicDrift(mapIteratorPrototypeControl, "next", () => ({
+      done: true,
+      value: undefined
+    }));
+    const setNextDrift = observeAmbientIntrinsicDrift(setIteratorPrototypeControl, "next", () => ({
+      done: true,
+      value: undefined
+    }));
+    const sharedIteratorDrift = observeAmbientIntrinsicDrift(
+      sharedIteratorPrototypeControl,
+      Symbol.iterator,
+      function (this: object) {
+        return this;
+      }
+    );
+    const numberConstructorDrift = observeAmbientIntrinsicDrift(globalThis, "Number", () => 0);
+    const errorConstructorDrift = observeAmbientIntrinsicDrift(globalThis, "Error", () => ({ message: "forged" }));
+    for (const drift of [
+      regExpExecDrift,
+      arrayConstructorDrift,
+      arraySpeciesDrift,
+      arrayNextDrift,
+      mapNextDrift,
+      setNextDrift,
+      sharedIteratorDrift,
+      numberConstructorDrift,
+      errorConstructorDrift
+    ]) {
+      expect(drift.message).toBe("release mutation ambient intrinsic drift");
+      expect(drift.restored).toBe(true);
+    }
+
+    const ambientArrayMapDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, "map");
+    if (ambientArrayMapDescriptor === undefined || !("value" in ambientArrayMapDescriptor)) {
+      throw new ambientErrorConstructor("missing Array.prototype.map descriptor control");
+    }
+    let accessorGetterCalls = 0;
+    let accessorDriftMessage = "";
+    let accessorRestored = false;
+    try {
+      Object.defineProperty(Array.prototype, "map", {
+        configurable: ambientArrayMapDescriptor.configurable,
+        enumerable: ambientArrayMapDescriptor.enumerable,
+        get: () => {
+          accessorGetterCalls++;
+          return ambientArrayMapDescriptor.value;
+        }
+      });
+      try {
+        void new ReleaseMutationPlan();
+      } catch (error) {
+        accessorDriftMessage = error instanceof ambientErrorConstructor ? error.message : String(error);
+      }
+    } finally {
+      Object.defineProperty(Array.prototype, "map", ambientArrayMapDescriptor);
+      accessorRestored = true;
+    }
+    expect(accessorDriftMessage).toBe("release mutation ambient intrinsic drift");
+    expect(accessorGetterCalls).toBe(0);
+    expect(accessorRestored).toBe(true);
+
+    const ambientArrayIteratorParent = Object.getPrototypeOf(arrayIteratorPrototypeControl);
+    let iteratorPrototypeDriftMessage = "";
+    let iteratorPrototypeRestored = false;
+    try {
+      Object.setPrototypeOf(arrayIteratorPrototypeControl, {});
+      try {
+        void new ReleaseMutationPlan();
+      } catch (error) {
+        iteratorPrototypeDriftMessage = error instanceof ambientErrorConstructor ? error.message : String(error);
+      }
+    } finally {
+      Object.setPrototypeOf(arrayIteratorPrototypeControl, ambientArrayIteratorParent);
+      iteratorPrototypeRestored = true;
+    }
+    expect(iteratorPrototypeDriftMessage).toBe("release mutation ambient intrinsic drift");
+    expect(iteratorPrototypeRestored).toBe(true);
+
+    const cleanPlan = new ReleaseMutationPlan({
+      total: 7,
+      first: 5,
+      all: 2,
+      cases: 6,
+      expectations: 8,
+      roots: 6,
+      dependencyOnly: 1
     });
-    expect(() => explosiveSealPlan.seal()).toThrow("synthetic seal failure");
-    expect(explosiveSealPlan.phase).toBe("failed");
-    expect(() => explosiveSealPlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
+    const cleanPlanPrototype = Object.getPrototypeOf(cleanPlan) as object;
+    expect(Object.isFrozen(cleanPlan.constructor)).toBe(true);
+    expect(Object.isFrozen(cleanPlanPrototype)).toBe(true);
+    expect(Object.isSealed(cleanPlan)).toBe(true);
+    expect(Reflect.set(cleanPlanPrototype, "seal", () => [])).toBe(false);
+    expect(Reflect.set(cleanPlan, "execute", () => undefined)).toBe(false);
+    expect(Reflect.setPrototypeOf(cleanPlan, {})).toBe(false);
+    const cleanSource = cleanPlan.registerSource("fixture.clean", "alpha alpha\nbeta\n");
+    const replacementSource = cleanPlan.registerSource("fixture.replacement", "seed");
+    const replacementTarget = cleanPlan.registerSource("fixture.replacement-target", "slot");
+    const literalSource = cleanPlan.registerSource("fixture.literal", "alpha");
+    const allLiteralSource = cleanPlan.registerSource("fixture.literal-all", "a-a");
+    const throwSource = cleanPlan.registerSource("fixture.throw", "alpha");
+    expect(Object.isFrozen(cleanSource)).toBe(true);
+    expect(Reflect.ownKeys(cleanSource)).toEqual([]);
 
-    let rejectedDetectorCalls = 0;
-    const rejectedPlan = new ReleaseMutationPlan()
-      .registerSource("fixture.synthetic", "alpha alpha\nlimit > 100\nstable\nomega\n")
-      .registerMutation({
-        id: "mutation.missing",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "missing",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "missing", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.duplicate-count",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "alpha",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.empty-needle",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.invalid-count",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "alpha",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 0,
-        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.noop",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "stable",
-        replacement: literalReplacement("stable"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "stable", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.prefix-boundary",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "> 100",
-        replacement: literalReplacement("> 10000"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "> 1000", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.duplicate-id",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "stable",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "stable", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.duplicate-id",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "omega",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.unknown-dependency",
-        mode: "first",
-        source: mutationRef("mutation.not-registered"),
-        needle: "alpha",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cycle-a",
-        mode: "first",
-        source: mutationRef("mutation.cycle-b"),
-        needle: "alpha",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cycle-b",
-        mode: "first",
-        source: mutationRef("mutation.cycle-a"),
-        needle: "alpha",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.orphan",
-        mode: "first",
-        source: sourceRef("fixture.synthetic"),
-        needle: "omega",
-        replacement: literalReplacement("changed"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.synthetic",
-        expectedAssertions: 1,
-        mutations: [
-          "mutation.missing",
-          "mutation.duplicate-count",
-          "mutation.empty-needle",
-          "mutation.invalid-count",
-          "mutation.noop",
-          "mutation.prefix-boundary",
-          "mutation.duplicate-id",
-          "mutation.unknown-dependency",
-          "mutation.cycle-a"
-        ],
-        run: () => {
-          rejectedDetectorCalls++;
-        }
-      });
-    expect(rejectedPlan.seal()).toEqual([
-      "[mutation.duplicate] mutation.duplicate-id: mutation id is registered more than once",
-      "[mutation.needle] mutation.empty-needle: needle must not be empty",
-      "[mutation.count] mutation.invalid-count: expectedOccurrences must be a positive safe integer",
-      "[dependency.mutation] mutation.unknown-dependency: unknown source mutation mutation.not-registered",
-      "[dependency.cycle] mutation.cycle-a: cycle mutation.cycle-a -> mutation.cycle-b -> mutation.cycle-a",
-      "[mutation.cardinality] mutation.missing: needle expected 1 occurrence(s), found 0",
-      "[mutation.cardinality] mutation.duplicate-count: needle expected 1 occurrence(s), found 2",
-      "[mutation.noop] mutation.noop: replacement did not change its source",
-      "[witness.boundary] mutation.noop: anchor expected 1 -> 0, found 1 -> 1",
-      "[witness.boundary] mutation.prefix-boundary: anchor expected 0 -> 1, found 0 -> 0",
-      "[mutation.orphan] mutation.orphan: mutation is unreachable from every detector"
-    ]);
-    expect(rejectedPlan.phase).toBe("rejected");
-    expect(rejectedPlan.detectorExecutions).toBe(0);
-    expect(rejectedDetectorCalls).toBe(0);
-    expect(() => rejectedPlan.execute()).toThrow(/requires sealed state; found rejected/);
-    expect(() => rejectedPlan.registerSource("fixture.late", "late")).toThrow(/cannot register source/);
-
-    let cascadeDetectorCalls = 0;
-    const cascadePlan = new ReleaseMutationPlan({ total: 9, first: 9, all: 0 })
-      .registerSource("fixture.cascade", "alpha\n")
-      .registerMutation({
-        id: "mutation.cascade-parent",
-        mode: "first",
-        source: sourceRef("fixture.cascade"),
-        needle: "missing-parent",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "missing-parent", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-child-needle",
-        mode: "first",
-        source: mutationRef("mutation.cascade-parent"),
-        needle: "",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-child-count",
-        mode: "first",
-        source: mutationRef("mutation.cascade-parent"),
-        needle: "alpha",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 0,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-child-blocked",
-        mode: "first",
-        source: mutationRef("mutation.cascade-parent"),
-        needle: "alpha",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-independent",
-        mode: "first",
-        source: sourceRef("fixture.cascade"),
-        needle: "missing-independent",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "missing-independent", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-witness",
-        mode: "first",
-        source: sourceRef("fixture.cascade"),
-        needle: "missing-witness",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-witness-child",
-        mode: "first",
-        source: mutationRef("mutation.cascade-witness"),
-        needle: "alpha",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-witness-valid",
-        mode: "first",
-        source: sourceRef("fixture.cascade"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.cascade-witness-valid-child",
-        mode: "first",
-        source: mutationRef("mutation.cascade-witness-valid"),
-        needle: "missing-child",
-        replacement: literalReplacement("present"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "missing-child", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.cascade",
-        expectedAssertions: 1,
-        mutations: [
-          "mutation.cascade-child-needle",
-          "mutation.cascade-child-count",
-          "mutation.cascade-child-blocked",
-          "mutation.cascade-independent",
-          "mutation.cascade-witness-child",
-          "mutation.cascade-witness-valid-child"
-        ],
-        run: () => {
-          cascadeDetectorCalls++;
-        }
-      });
-    expect(cascadePlan.seal()).toEqual([
-      "[mutation.needle] mutation.cascade-child-needle: needle must not be empty",
-      "[mutation.count] mutation.cascade-child-count: expectedOccurrences must be a positive safe integer",
-      "[witness.anchor] mutation.cascade-witness: positive witness anchor must not be empty",
-      "[witness.anchor] mutation.cascade-witness-valid: positive witness anchor must not be empty",
-      "[mutation.cardinality] mutation.cascade-parent: needle expected 1 occurrence(s), found 0",
-      "[mutation.blocked] mutation.cascade-child-blocked: blocked by failed mutation(s) mutation.cascade-parent",
-      "[mutation.cardinality] mutation.cascade-independent: needle expected 1 occurrence(s), found 0",
-      "[mutation.cardinality] mutation.cascade-witness: needle expected 1 occurrence(s), found 0",
-      "[mutation.blocked] mutation.cascade-witness-child: blocked by failed mutation(s) mutation.cascade-witness",
-      "[mutation.cardinality] mutation.cascade-witness-valid-child: needle expected 1 occurrence(s), found 0"
-    ]);
-    expect(cascadePlan.detectorExecutions).toBe(0);
-    expect(cascadeDetectorCalls).toBe(0);
-
-    const identityPlan = new ReleaseMutationPlan()
-      .registerSource("fixture.identity", "alpha")
-      .registerSource("fixture.identity", "duplicate")
-      .registerSource("fixture..invalid", "invalid-id")
-      .registerMutation({
-        id: "mutation.identity-valid",
-        mode: "first",
-        source: sourceRef("fixture.identity"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.identity-replacement",
-        mode: "first",
-        source: sourceRef("fixture.identity"),
-        needle: "alpha",
-        replacement: mutationRef("mutation.identity-missing"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.graph-tail",
-        mode: "first",
-        source: mutationRef("mutation.graph-a"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.graph-a",
-        mode: "first",
-        source: mutationRef("mutation.graph-b"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.graph-b",
-        mode: "first",
-        source: mutationRef("mutation.graph-a"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.identity",
-        expectedAssertions: 1,
-        mutations: [
-          "mutation.identity-valid",
-          "mutation.identity-valid",
-          "mutation.identity-unknown",
-          "mutation.identity-replacement"
-        ],
-        run: () => undefined
-      })
-      .registerDetector({
-        id: "detector.identity-cycle",
-        expectedAssertions: 0,
-        mutations: ["mutation.graph-tail"],
-        run: () => undefined
-      })
-      .registerDetector({
-        id: "detector.identity-duplicate",
-        expectedAssertions: 1,
-        mutations: ["mutation.identity-valid"],
-        run: () => undefined
-      })
-      .registerDetector({
-        id: "detector.identity-duplicate",
-        expectedAssertions: 1,
-        mutations: ["mutation.identity-valid"],
-        run: () => undefined
-      });
-    expect(identityPlan.seal()).toEqual([
-      "[source.duplicate] fixture.identity: source id is registered more than once",
-      "[source.id] fixture..invalid: id must be one lowercase token path without repeated separators",
-      "[detector.assertions] detector.identity-cycle: expectedAssertions must be a positive safe integer",
-      "[detector.duplicate] detector.identity-duplicate: detector id is registered more than once",
-      "[dependency.mutation] mutation.identity-replacement: unknown replacement mutation mutation.identity-missing",
-      "[detector.reference] detector.identity: duplicate mutation reference mutation.identity-valid",
-      "[detector.reference] detector.identity: unknown mutation mutation.identity-unknown",
-      "[dependency.cycle] mutation.graph-a: cycle mutation.graph-a -> mutation.graph-b -> mutation.graph-a",
-      "[mutation.blocked] mutation.graph-tail: blocked by failed mutation(s) mutation.graph-a"
-    ]);
-    expect(identityPlan.detectorExecutions).toBe(0);
-
-    const invalidModeDescriptor = {
-      id: "mutation.metadata-mode",
-      mode: "first" as "first" | "all",
-      source: sourceRef("fixture.metadata"),
+    const cleanFirst = registerFixtureMutation(cleanPlan, "mutation.clean-first", {
+      mode: "first",
+      source: cleanSource,
       needle: "alpha",
-      replacement: literalReplacement("omega"),
-      expectedOccurrences: 1,
-      witness: { kind: "token" as "token" | "line", anchor: "alpha", before: 1, after: 0 }
-    };
-    Object.defineProperty(invalidModeDescriptor, "mode", { value: "sideways" });
-    const invalidWitnessKindDescriptor = {
-      id: "mutation.metadata-witness-kind",
-      mode: "first" as const,
-      source: sourceRef("fixture.metadata"),
+      replacement: "omega",
+      expectedOccurrences: 2,
+      witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
+    });
+    const cleanAll = registerFixtureMutation(cleanPlan, "mutation.clean-all", {
+      mode: "all",
+      source: cleanFirst,
       needle: "alpha",
-      replacement: literalReplacement("omega"),
+      replacement: "delta",
       expectedOccurrences: 1,
-      witness: { kind: "token" as "token" | "line", anchor: "alpha", before: 1, after: 0 }
-    };
-    Object.defineProperty(invalidWitnessKindDescriptor.witness, "kind", { value: "substring" });
-    const metadataPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 1 })
-      .registerSource("fixture.metadata", "alpha")
-      .registerSource("fixture.empty", "")
-      .registerMutation({
-        id: "mutation..metadata-id",
-        mode: "first",
-        source: sourceRef("fixture.metadata"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation(invalidModeDescriptor)
-      .registerMutation({
-        id: "mutation.metadata-source",
-        mode: "first",
-        source: sourceRef("fixture.missing"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation(invalidWitnessKindDescriptor)
-      .registerMutation({
-        id: "mutation.metadata-witness-count",
-        mode: "first",
-        source: sourceRef("fixture.metadata"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 1 }
-      })
-      .registerDetector({
-        id: "detector..metadata",
-        expectedAssertions: 1,
-        mutations: [
-          "mutation..metadata-id",
-          "mutation.metadata-mode",
-          "mutation.metadata-source",
-          "mutation.metadata-witness-kind",
-          "mutation.metadata-witness-count"
-        ],
-        run: () => undefined
-      })
-      .registerDetector({
-        id: "detector.metadata-empty",
-        expectedAssertions: 0,
-        mutations: [],
-        run: () => undefined
-      });
-    expect(metadataPlan.seal()).toEqual([
-      "[inventory.invalid] plan: expected inventory must be coherent safe integers",
-      "[source.empty] fixture.empty: canonical source must not be empty",
-      "[mutation.id] mutation..metadata-id: id must be one lowercase token path without repeated separators",
-      "[detector.id] detector..metadata: id must be one lowercase token path without repeated separators",
-      "[detector.empty] detector.metadata-empty: detector must reach at least one mutation",
-      "[detector.assertions] detector.metadata-empty: expectedAssertions must be a positive safe integer",
-      "[mutation.mode] mutation.metadata-mode: mode must be first or all",
-      "[witness.kind] mutation.metadata-witness-kind: positive witness kind must be token or line",
-      "[witness.count] mutation.metadata-witness-count: witness counts must be different non-negative safe integers",
-      "[dependency.source] mutation.metadata-source: unknown canonical source fixture.missing"
-    ]);
-    expect(metadataPlan.detectorExecutions).toBe(0);
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const replacementValue = registerFixtureMutation(cleanPlan, "mutation.replacement-value", {
+      mode: "first",
+      source: replacementSource,
+      needle: "seed",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "seed", before: 1, after: 0 }
+    });
+    const replacementRoot = registerFixtureMutation(cleanPlan, "mutation.replacement-root", {
+      mode: "first",
+      source: replacementTarget,
+      needle: "slot",
+      replacement: replacementValue,
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "slot", before: 1, after: 0 }
+    });
+    const literalRoot = registerFixtureMutation(cleanPlan, "mutation.literal-first", {
+      mode: "first",
+      source: literalSource,
+      needle: "alpha",
+      replacement: "$&|$$|$1",
+      expectedOccurrences: 1,
+      witness: { kind: "line", anchor: "alpha|$|$1", before: 0, after: 1 }
+    });
+    const allLiteralRoot = registerFixtureMutation(cleanPlan, "mutation.literal-all", {
+      mode: "all",
+      source: allLiteralSource,
+      needle: "a",
+      replacement: "$$",
+      expectedOccurrences: 2,
+      witness: { kind: "line", anchor: "$-$", before: 0, after: 1 }
+    });
+    const throwRoot = registerFixtureMutation(cleanPlan, "mutation.throw", {
+      mode: "first",
+      source: throwSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
 
-    const inventoryMismatchPlan = new ReleaseMutationPlan({ total: 2, first: 1, all: 1 })
-      .registerSource("fixture.inventory-mismatch", "alpha")
-      .registerMutation({
-        id: "mutation.inventory-mismatch",
-        mode: "first",
-        source: sourceRef("fixture.inventory-mismatch"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.inventory-mismatch",
-        expectedAssertions: 1,
-        mutations: ["mutation.inventory-mismatch"],
-        run: () => undefined
-      });
-    expect(inventoryMismatchPlan.seal()).toEqual([
-      "[inventory.mismatch] plan: expected 2 total (1 first / 1 all), found 1 total (1 first / 0 all)"
-    ]);
-    expect(inventoryMismatchPlan.detectorExecutions).toBe(0);
-
-    const vacuousDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.vacuous", "alpha")
-      .registerMutation({
-        id: "mutation.vacuous",
-        mode: "first",
-        source: sourceRef("fixture.vacuous"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.vacuous",
-        expectedAssertions: 1,
-        mutations: ["mutation.vacuous"],
-        run: (resolve) => {
-          resolve("mutation.vacuous");
+    cleanPlan.registerCase({
+      id: "case.clean-first",
+      root: cleanFirst,
+      invoke: { kind: "fixture.text", baseline: cleanSource, mutant: cleanFirst },
+      expectations: [
+        { id: "expectation.clean-first-equal", kind: "equal", value: "omega alpha\nbeta\n" },
+        { id: "expectation.clean-first-not-equal", kind: "not-equal", value: "alpha alpha\nbeta\n" },
+        { id: "expectation.clean-first-regex", kind: "regex", regex: "fixture.omega-token" }
+      ]
+    });
+    cleanPlan.registerCase({
+      id: "case.clean-all",
+      root: cleanAll,
+      invoke: { kind: "fixture.text", baseline: cleanFirst, mutant: cleanAll },
+      expectations: [{ id: "expectation.clean-all", kind: "equal", value: "omega delta\nbeta\n" }]
+    });
+    cleanPlan.registerCase({
+      id: "case.replacement-root",
+      root: replacementRoot,
+      invoke: { kind: "fixture.text", baseline: replacementTarget, mutant: replacementRoot },
+      expectations: [{ id: "expectation.replacement-root", kind: "equal", value: "omega" }]
+    });
+    cleanPlan.registerCase({
+      id: "case.literal-first",
+      root: literalRoot,
+      invoke: { kind: "fixture.text", baseline: literalSource, mutant: literalRoot },
+      expectations: [{ id: "expectation.literal-first", kind: "equal", value: "alpha|$|$1" }]
+    });
+    cleanPlan.registerCase({
+      id: "case.literal-all",
+      root: allLiteralRoot,
+      invoke: { kind: "fixture.text", baseline: allLiteralSource, mutant: allLiteralRoot },
+      expectations: [{ id: "expectation.literal-all", kind: "equal", value: "$-$" }]
+    });
+    cleanPlan.registerCase({
+      id: "case.throw",
+      root: throwRoot,
+      invoke: {
+        kind: "fixture.throw",
+        baseline: throwSource,
+        mutant: throwRoot,
+        message: "synthetic omega rejection"
+      },
+      expectations: [
+        {
+          id: "expectation.throw-problem",
+          kind: "problem",
+          problem: "fixture.mutant-threw"
         }
-      });
-    expect(vacuousDetectorPlan.seal()).toEqual([]);
-    expect(() => vacuousDetectorPlan.execute()).toThrow(/assertion count mismatch: 1 expected, 0 executed/);
-    expect(vacuousDetectorPlan.phase).toBe("failed");
-    expect(vacuousDetectorPlan.detectorExecutions).toBe(1);
-
-    const asyncDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.async-detector", "alpha")
-      .registerMutation({
-        id: "mutation.async-detector",
-        mode: "first",
-        source: sourceRef("fixture.async-detector"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.async-detector",
-        expectedAssertions: 1,
-        mutations: ["mutation.async-detector"],
-        run: async (resolve, assert) => {
-          assert(() => {
-            expect(resolve("mutation.async-detector")).toBe("omega");
-          });
-          await Promise.resolve();
-        }
-      });
-    expect(asyncDetectorPlan.seal()).toEqual([]);
-    expect(() => asyncDetectorPlan.execute()).toThrow(/must return undefined synchronously/);
-    expect(asyncDetectorPlan.phase).toBe("failed");
-    expect(asyncDetectorPlan.detectorExecutions).toBe(1);
-
-    const throwingDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.throwing-detector", "alpha")
-      .registerMutation({
-        id: "mutation.throwing-detector",
-        mode: "first",
-        source: sourceRef("fixture.throwing-detector"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.throwing-detector",
-        expectedAssertions: 1,
-        mutations: ["mutation.throwing-detector"],
-        run: () => {
-          throw new Error("synthetic detector failure");
-        }
-      });
-    expect(throwingDetectorPlan.seal()).toEqual([]);
-    expect(() => throwingDetectorPlan.execute()).toThrow("synthetic detector failure");
-    expect(throwingDetectorPlan.phase).toBe("failed");
-    expect(throwingDetectorPlan.detectorExecutions).toBe(1);
-
-    const asyncAssertionPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.async-assertion", "alpha")
-      .registerMutation({
-        id: "mutation.async-assertion",
-        mode: "first",
-        source: sourceRef("fixture.async-assertion"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.async-assertion",
-        expectedAssertions: 1,
-        mutations: ["mutation.async-assertion"],
-        run: (resolve, assert) => {
-          const output = resolve("mutation.async-assertion");
-          assert(async () => {
-            expect(output).toBe("omega");
-            await Promise.resolve();
-          });
-        }
-      });
-    expect(asyncAssertionPlan.seal()).toEqual([]);
-    expect(() => asyncAssertionPlan.execute()).toThrow(/assertions must return undefined synchronously/);
-    expect(asyncAssertionPlan.phase).toBe("failed");
-    expect(asyncAssertionPlan.detectorExecutions).toBe(1);
-
-    const caughtAssertionPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
-      .registerSource("fixture.caught-assertion", "alpha")
-      .registerMutation({
-        id: "mutation.caught-assertion",
-        mode: "first",
-        source: sourceRef("fixture.caught-assertion"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.caught-assertion",
-        expectedAssertions: 2,
-        mutations: ["mutation.caught-assertion"],
-        run: (resolve, assert) => {
-          try {
-            assert(() => {
-              expect(resolve("mutation.caught-assertion")).toBe("wrong");
-            });
-          } catch {
-            // A detector cannot convert a failed assertion into a successful execution.
-          }
-          assert(() => {
-            expect(resolve("mutation.caught-assertion")).toBe("omega");
-          });
-        }
-      });
-    expect(caughtAssertionPlan.seal()).toEqual([]);
-    expect(() => caughtAssertionPlan.execute()).toThrow();
-    expect(caughtAssertionPlan.phase).toBe("failed");
-    expect(caughtAssertionPlan.detectorExecutions).toBe(1);
-
-    let crossScopeSecondDetectorCalls = 0;
-    const crossScopePlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 })
-      .registerSource("fixture.cross-scope", "alpha beta")
-      .registerMutation({
-        id: "mutation.cross-scope-a",
-        mode: "first",
-        source: sourceRef("fixture.cross-scope"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.cross-scope-b",
-        mode: "first",
-        source: sourceRef("fixture.cross-scope"),
-        needle: "beta",
-        replacement: literalReplacement("delta"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "beta", before: 1, after: 0 }
-      })
-      .registerDetector({
-        id: "detector.cross-scope-a",
-        expectedAssertions: 1,
-        mutations: ["mutation.cross-scope-a"],
-        run: (resolve, assert) => {
-          try {
-            resolve("mutation.cross-scope-b");
-          } catch {
-            // The planner must remember a scope violation even when the detector catches it.
-          }
-          try {
-            assert(() => {
-              throw new Error("later assertion failure must not mask the first scope violation");
-            });
-          } catch {
-            // A later wrapped fault must rethrow, but never replace, the first violation.
-          }
-          resolve("mutation.cross-scope-a");
-          throw new Error("later detector failure must not mask the first scope violation");
-        }
-      })
-      .registerDetector({
-        id: "detector.cross-scope-b",
-        expectedAssertions: 1,
-        mutations: ["mutation.cross-scope-b"],
-        run: (resolve, assert) => {
-          crossScopeSecondDetectorCalls++;
-          assert(() => {
-            expect(resolve("mutation.cross-scope-b")).toBe("alpha delta");
-          });
-        }
-      });
-    expect(crossScopePlan.seal()).toEqual([]);
-    expect(() => crossScopePlan.execute()).toThrow(/requested undeclared output mutation\.cross-scope-b/);
-    expect(crossScopePlan.phase).toBe("failed");
-    expect(crossScopePlan.detectorExecutions).toBe(1);
-    expect(crossScopeSecondDetectorCalls).toBe(0);
-
-    let cleanDetectorCalls = 0;
-    const cleanPlan = new ReleaseMutationPlan({ total: 8, first: 6, all: 2 })
-      .registerSource("fixture.clean", "alpha alpha\nbeta\n")
-      .registerSource("fixture.numeric", "limit > 100\n")
-      .registerSource("fixture.literal-tokens", "left alpha right")
-      .registerSource("fixture.all-tokens", "a-a")
-      .registerSource("fixture.output-tokens", "seed $&|$1|$01|$<name>|$0|$$|$`|$'")
-      .registerSource("fixture.output-target", "left slot right")
-      .registerMutation({
-        id: "mutation.clean-first",
-        mode: "first",
-        source: sourceRef("fixture.clean"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 2,
-        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.clean-all",
-        mode: "all",
-        source: mutationRef("mutation.clean-first"),
-        needle: "alpha",
-        replacement: literalReplacement("delta"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.clean-replacement-ref",
-        mode: "first",
-        source: sourceRef("fixture.clean"),
-        needle: "beta",
-        replacement: mutationRef("mutation.clean-all"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "omega delta", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.clean-token-boundary",
-        mode: "first",
-        source: sourceRef("fixture.numeric"),
-        needle: "> 100",
-        replacement: literalReplacement("> 1000"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "> 1000", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.clean-literal-tokens",
-        mode: "first",
-        source: sourceRef("fixture.literal-tokens"),
-        needle: "alpha",
-        replacement: literalReplacement("$`|$&|$'|$$"),
-        expectedOccurrences: 1,
-        witness: { kind: "line", anchor: "left left |alpha| right|$ right", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.clean-all-tokens",
-        mode: "all",
-        source: sourceRef("fixture.all-tokens"),
-        needle: "a",
-        replacement: literalReplacement("$`|$&|$'"),
-        expectedOccurrences: 2,
-        witness: { kind: "line", anchor: "|a|-a-a-|a|", before: 0, after: 1 }
-      })
-      .registerMutation({
-        id: "mutation.clean-output-tokens",
-        mode: "first",
-        source: sourceRef("fixture.output-tokens"),
-        needle: "seed",
-        replacement: literalReplacement("made"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "seed", before: 1, after: 0 }
-      })
-      .registerMutation({
-        id: "mutation.clean-output-replacement",
-        mode: "first",
-        source: sourceRef("fixture.output-target"),
-        needle: "slot",
-        replacement: mutationRef("mutation.clean-output-tokens"),
-        expectedOccurrences: 1,
-        witness: {
-          kind: "line",
-          anchor: "left made slot|$1|$01|$<name>|$0|$|left | right right",
-          before: 0,
-          after: 1
-        }
-      })
-      .registerDetector({
-        id: "detector.clean",
-        expectedAssertions: 8,
-        mutations: [
-          "mutation.clean-replacement-ref",
-          "mutation.clean-token-boundary",
-          "mutation.clean-literal-tokens",
-          "mutation.clean-all-tokens",
-          "mutation.clean-output-replacement"
-        ],
-        run: (resolve, assert) => {
-          cleanDetectorCalls++;
-          assert(() => {
-            expect(resolve("mutation.clean-first")).toBe("omega alpha\nbeta\n");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-all")).toBe("omega delta\nbeta\n");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-replacement-ref")).toContain("alpha alpha\nomega delta\nbeta\n");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-token-boundary")).toBe("limit > 1000\n");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-literal-tokens")).toBe("left left |alpha| right|$ right");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-all-tokens")).toBe("|a|-a-a-|a|");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-output-tokens")).toBe("made $&|$1|$01|$<name>|$0|$$|$`|$'");
-          });
-          assert(() => {
-            expect(resolve("mutation.clean-output-replacement")).toBe(
-              "left made slot|$1|$01|$<name>|$0|$|left | right right"
-            );
-          });
-        }
-      });
-    expect(cleanPlan.detectorExecutions).toBe(0);
+      ]
+    });
+    expect(cleanPlan.caseExecutions).toBe(0);
+    expect(cleanPlan.expectationExecutions).toBe(0);
     expect(cleanPlan.seal()).toEqual([]);
     expect(cleanPlan.phase).toBe("sealed");
-    expect(() =>
-      cleanPlan.registerMutation({
-        id: "mutation.late",
-        mode: "first",
-        source: sourceRef("fixture.clean"),
-        needle: "alpha",
-        replacement: literalReplacement("late"),
-        expectedOccurrences: 2,
-        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
-      })
-    ).toThrow(/cannot register mutation/);
+    expect(cleanPlan.diagnostics).toEqual([]);
+    expect(() => cleanPlan.registerSource("fixture.after-seal", "late")).toThrow(/entered sealed state/);
     cleanPlan.execute();
     expect(cleanPlan.phase).toBe("executed");
-    expect(cleanPlan.detectorExecutions).toBe(1);
-    expect(cleanDetectorCalls).toBe(1);
+    expect(cleanPlan.caseExecutions).toBe(6);
+    expect(cleanPlan.expectationExecutions).toBe(8);
     expect(() => cleanPlan.execute()).toThrow(/requires sealed state; found executed/);
 
-    const mutableInventory = { total: 2, first: 2, all: 0 };
-    const mutableDescriptor = {
-      id: "mutation.snapshot-child",
-      mode: "first" as "first" | "all",
-      source: { kind: "mutation" as const, id: "mutation.snapshot-base" },
+    const topologyPlan = new ReleaseMutationPlan({
+      total: 2,
+      first: 2,
+      all: 0,
+      cases: 1,
+      expectations: 1,
+      roots: 1,
+      dependencyOnly: 1
+    });
+    const topologySource = topologyPlan.registerSource("fixture.topology", "alpha beta");
+    const topologyFirstRoot = registerFixtureMutation(topologyPlan, "mutation.topology-first", {
+      mode: "first",
+      source: topologySource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const topologySecondRoot = registerFixtureMutation(topologyPlan, "mutation.topology-second", {
+      mode: "first",
+      source: topologySource,
       needle: "beta",
-      replacement: { kind: "literal" as const, value: "delta" },
+      replacement: "delta",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "beta", before: 1, after: 0 }
+    });
+    topologyPlan.registerCase({
+      id: "case.topology-first",
+      root: topologyFirstRoot,
+      invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologyFirstRoot },
+      expectations: [{ id: "expectation.topology-first", kind: "equal", value: "omega beta" }]
+    });
+    topologyPlan.registerCase({
+      id: "case.topology-second",
+      root: topologySecondRoot,
+      invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologySecondRoot },
+      expectations: [{ id: "expectation.topology-second", kind: "equal", value: "alpha delta" }]
+    });
+    expect(topologyPlan.seal()).toEqual([
+      "[inventory.mismatch] plan: expected 2 total (2 first / 0 all), 1 cases / 1 expectations / 1 roots / 1 dependency-only, found 2 total (2 first / 0 all), 2 cases / 2 expectations / 2 roots / 0 dependency-only"
+    ]);
+    expect(topologyPlan.phase).toBe("rejected");
+    expect(topologyPlan.caseExecutions).toBe(0);
+
+    const partialTopologyPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0, cases: 1 } as never);
+    expect(partialTopologyPlan.seal()).toContain(
+      "[inventory.invalid] plan: expected inventory must be one exact total/first/all record with either zero or all topology fields"
+    );
+    expect(partialTopologyPlan.phase).toBe("rejected");
+
+    const notEqualDifferentialPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    const notEqualDifferentialSource = notEqualDifferentialPlan.registerSource(
+      "fixture.not-equal-differential",
+      "alpha"
+    );
+    const notEqualDifferentialRoot = registerFixtureMutation(
+      notEqualDifferentialPlan,
+      "mutation.not-equal-differential",
+      {
+        mode: "first",
+        source: notEqualDifferentialSource,
+        needle: "alpha",
+        replacement: "omega",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      }
+    );
+    notEqualDifferentialPlan.registerCase({
+      id: "case.not-equal-differential",
+      root: notEqualDifferentialRoot,
+      invoke: {
+        kind: "fixture.text",
+        baseline: notEqualDifferentialSource,
+        mutant: notEqualDifferentialRoot
+      },
+      expectations: [
+        {
+          id: "expectation.not-equal-differential",
+          kind: "not-equal",
+          value: "forbidden"
+        }
+      ]
+    });
+    expect(notEqualDifferentialPlan.seal()).toEqual([]);
+    expect(() => notEqualDifferentialPlan.execute()).toThrow(
+      /^release mutation case case\.not-equal-differential expectation expectation\.not-equal-differential failed \(not-equal\)$/u
+    );
+    expect(notEqualDifferentialPlan.phase).toBe("failed");
+    expect(notEqualDifferentialPlan.caseExecutions).toBe(1);
+
+    const regexDifferentialPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    const regexDifferentialSource = regexDifferentialPlan.registerSource("fixture.regex-differential", "omega alpha");
+    const regexDifferentialRoot = registerFixtureMutation(regexDifferentialPlan, "mutation.regex-differential", {
+      mode: "first",
+      source: regexDifferentialSource,
+      needle: "alpha",
+      replacement: "beta",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    regexDifferentialPlan.registerCase({
+      id: "case.regex-differential",
+      root: regexDifferentialRoot,
+      invoke: { kind: "fixture.text", baseline: regexDifferentialSource, mutant: regexDifferentialRoot },
+      expectations: [
+        {
+          id: "expectation.regex-differential",
+          kind: "regex",
+          regex: "fixture.omega-token"
+        }
+      ]
+    });
+    expect(regexDifferentialPlan.seal()).toEqual([]);
+    expect(() => regexDifferentialPlan.execute()).toThrow(
+      /^release mutation case case\.regex-differential expectation expectation\.regex-differential failed \(regex\)$/u
+    );
+    expect(regexDifferentialPlan.phase).toBe("failed");
+    expect(regexDifferentialPlan.caseExecutions).toBe(1);
+
+    const failurePlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 });
+    const failureSource = failurePlan.registerSource("fixture.failure", "alpha beta");
+    const failureFirst = registerFixtureMutation(failurePlan, "mutation.failure-first", {
+      mode: "first",
+      source: failureSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const failureLater = registerFixtureMutation(failurePlan, "mutation.failure-later", {
+      mode: "first",
+      source: failureSource,
+      needle: "beta",
+      replacement: "delta",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "beta", before: 1, after: 0 }
+    });
+    failurePlan.registerCase({
+      id: "case.failure-first",
+      root: failureFirst,
+      invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureFirst },
+      expectations: [{ id: "expectation.failure-first", kind: "equal", value: "wrong" }]
+    });
+    failurePlan.registerCase({
+      id: "case.failure-later",
+      root: failureLater,
+      invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureLater },
+      expectations: [{ id: "expectation.failure-later", kind: "equal", value: "alpha delta" }]
+    });
+    expect(failurePlan.seal()).toEqual([]);
+    expect(() => failurePlan.execute()).toThrow(/case case.failure-first expectation expectation.failure-first failed/);
+    expect(failurePlan.phase).toBe("failed");
+    expect(failurePlan.caseExecutions).toBe(1);
+
+    const missingProblemPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    const missingProblemSource = missingProblemPlan.registerSource("fixture.missing-problem", "alpha");
+    const missingProblemRoot = registerFixtureMutation(missingProblemPlan, "mutation.missing-problem", {
+      mode: "first",
+      source: missingProblemSource,
+      needle: "alpha",
+      replacement: "beta",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    missingProblemPlan.registerCase({
+      id: "case.missing-problem",
+      root: missingProblemRoot,
+      invoke: {
+        kind: "fixture.throw",
+        baseline: missingProblemSource,
+        mutant: missingProblemRoot,
+        message: "synthetic missing problem"
+      },
+      expectations: [
+        {
+          id: "expectation.missing-problem",
+          kind: "problem",
+          problem: "fixture.mutant-threw"
+        }
+      ]
+    });
+    expect(missingProblemPlan.seal()).toEqual([]);
+    expect(() => missingProblemPlan.execute()).toThrow(/missed an exact problem/);
+    expect(missingProblemPlan.phase).toBe("failed");
+    expect(missingProblemPlan.caseExecutions).toBe(1);
+
+    const foreignPlan = new ReleaseMutationPlan();
+    const foreignSource = foreignPlan.registerSource("fixture.foreign", "alpha");
+    const invalidPlan = new ReleaseMutationPlan({ total: 2, first: 1, all: 1 });
+    const invalidEmptySource = invalidPlan.registerSource("fixture.empty", "");
+    const invalidIdSource = invalidPlan.registerSource("fixture..invalid", "alpha");
+    const duplicateSource = invalidPlan.registerSource("fixture.duplicate", "alpha");
+    invalidPlan.registerSource("fixture.duplicate", "beta");
+    const invalidMode = invalidPlan.registerMutation("mutation.invalid-mode", {
+      mode: "sideways",
+      source: duplicateSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    } as never);
+    registerFixtureMutation(invalidPlan, "mutation.foreign-source", {
+      mode: "first",
+      source: foreignSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    registerFixtureMutation(invalidPlan, "mutation.missing-cardinality", {
+      mode: "first",
+      source: duplicateSource,
+      needle: "missing",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "missing", before: 1, after: 0 }
+    });
+    registerFixtureMutation(invalidPlan, "mutation.noop", {
+      mode: "first",
+      source: duplicateSource,
+      needle: "alpha",
+      replacement: "alpha",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    invalidPlan.registerCase({
+      id: "case.invalid-mode",
+      root: invalidMode,
+      invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: invalidMode },
+      expectations: [{ id: "expectation.invalid-mode", kind: "equal", value: "omega" }]
+    });
+    invalidPlan.registerCase({
+      id: "case.source-root",
+      root: invalidEmptySource,
+      invoke: { kind: "fixture.text", baseline: invalidIdSource, mutant: invalidEmptySource },
+      expectations: [{ id: "expectation.source-root", kind: "equal", value: "omega" }]
+    } as never);
+    invalidPlan.registerCase({
+      id: "case.forged-root",
+      root: {},
+      invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: {} },
+      expectations: [{ id: "expectation.forged-root", kind: "equal", value: "omega" }]
+    } as never);
+    const invalidDiagnostics = invalidPlan.seal();
+    expect(invalidDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[inventory.mismatch\]/),
+        expect.stringMatching(/^\[source.empty\]/),
+        expect.stringMatching(/^\[source.id\]/),
+        expect.stringMatching(/^\[source.duplicate\]/),
+        expect.stringMatching(/^\[mutation.mode\]/),
+        expect.stringMatching(/^\[dependency.handle\]/),
+        expect.stringMatching(/^\[mutation.cardinality\]/),
+        expect.stringMatching(/^\[mutation.noop\]/),
+        expect.stringMatching(/^\[case.root\]/),
+        expect.stringMatching(/^\[mutation.orphan\]/)
+      ])
+    );
+    expect(invalidPlan.phase).toBe("rejected");
+    expect(invalidPlan.caseExecutions).toBe(0);
+    expect(() => invalidPlan.execute()).toThrow(/requires sealed state; found rejected/);
+
+    const baselinePlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 });
+    const baselineReplacementSource = baselinePlan.registerSource("fixture.baseline-replacement", "seed");
+    const baselineTarget = baselinePlan.registerSource("fixture.baseline-target", "slot");
+    const baselineReplacement = registerFixtureMutation(baselinePlan, "mutation.baseline-replacement", {
+      mode: "first",
+      source: baselineReplacementSource,
+      needle: "seed",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "seed", before: 1, after: 0 }
+    });
+    const baselineRoot = registerFixtureMutation(baselinePlan, "mutation.baseline-root", {
+      mode: "first",
+      source: baselineTarget,
+      needle: "slot",
+      replacement: baselineReplacement,
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "slot", before: 1, after: 0 }
+    });
+    baselinePlan.registerCase({
+      id: "case.baseline-replacement",
+      root: baselineRoot,
+      invoke: { kind: "fixture.text", baseline: baselineReplacement, mutant: baselineRoot },
+      expectations: [{ id: "expectation.baseline-replacement", kind: "equal", value: "omega" }]
+    });
+    expect(baselinePlan.seal()).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[case.baseline\].*source lineage/),
+        expect.stringMatching(/^\[mutation.orphan\]/)
+      ])
+    );
+
+    const equalOutputPlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 });
+    const equalOutputSource = equalOutputPlan.registerSource("fixture.equal-output", "alpha");
+    const equalOutputParent = registerFixtureMutation(equalOutputPlan, "mutation.equal-output-parent", {
+      mode: "first",
+      source: equalOutputSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const equalOutputRoot = registerFixtureMutation(equalOutputPlan, "mutation.equal-output-root", {
+      mode: "first",
+      source: equalOutputParent,
+      needle: "omega",
+      replacement: "alpha",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
+    });
+    equalOutputPlan.registerCase({
+      id: "case.equal-output",
+      root: equalOutputRoot,
+      invoke: { kind: "fixture.text", baseline: equalOutputSource, mutant: equalOutputRoot },
+      expectations: [{ id: "expectation.equal-output", kind: "equal", value: "alpha" }]
+    });
+    expect(equalOutputPlan.seal()).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[case.baseline\].*materializes to the mutant root output/),
+        expect.stringMatching(/^\[mutation.orphan\]/)
+      ])
+    );
+
+    const caseValidationPlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 });
+    const caseValidationSource = caseValidationPlan.registerSource("fixture.case-validation", "alpha beta");
+    const duplicateSemanticRoot = registerFixtureMutation(caseValidationPlan, "mutation.duplicate-semantic", {
+      mode: "first",
+      source: caseValidationSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const incompatibleRoot = registerFixtureMutation(caseValidationPlan, "mutation.incompatible", {
+      mode: "first",
+      source: caseValidationSource,
+      needle: "beta",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "beta", before: 1, after: 0 }
+    });
+    caseValidationPlan.registerCase({
+      id: "case.duplicate-semantic",
+      root: duplicateSemanticRoot,
+      invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
+      expectations: [
+        { id: "expectation.duplicate-semantic-a", kind: "equal", value: "omega beta" },
+        { id: "expectation.duplicate-semantic-b", kind: "equal", value: "omega beta" }
+      ]
+    });
+    caseValidationPlan.registerCase({
+      id: "case.duplicate-root",
+      root: duplicateSemanticRoot,
+      invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
+      expectations: [{ id: "expectation.duplicate-root", kind: "not-equal", value: "alpha beta" }]
+    });
+    caseValidationPlan.registerCase({
+      id: "case.incompatible",
+      root: incompatibleRoot,
+      invoke: {
+        kind: "fixture.throw",
+        baseline: caseValidationSource,
+        mutant: incompatibleRoot,
+        message: "synthetic incompatible expectation"
+      },
+      expectations: [{ id: "expectation.incompatible", kind: "equal", value: "alpha omega" }]
+    } as never);
+    const caseValidationDiagnostics = caseValidationPlan.seal();
+    expect(caseValidationDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[expectation.redundant\]/),
+        expect.stringMatching(/^\[case.root\]/),
+        expect.stringMatching(/^\[expectation.type\]/),
+        expect.stringMatching(/^\[mutation.orphan\]/)
+      ])
+    );
+    expect(caseValidationDiagnostics.filter((problem) => problem.startsWith("[expectation.type]"))).toEqual([
+      "[expectation.type] case.incompatible: fixture.throw requires exact problem expectations"
+    ]);
+
+    const dataPlan = new ReleaseMutationPlan();
+    let getterCalls = 0;
+    const getterRegistration = {};
+    Object.defineProperty(getterRegistration, "mode", {
+      enumerable: true,
+      get: () => {
+        getterCalls++;
+        return "first";
+      }
+    });
+    const cyclicRegistration: Record<string, unknown> = {};
+    cyclicRegistration.self = cyclicRegistration;
+    const sparseRegistration: unknown[] = [];
+    sparseRegistration.length = 2;
+    const thenableRegistration: Record<string, unknown> = {};
+    const thenProperty = ["th", "en"].join("");
+    Object.defineProperty(thenableRegistration, thenProperty, {
+      enumerable: true,
+      value: () => undefined
+    });
+    const deepRegistration: { next?: unknown } = {};
+    let deepCursor = deepRegistration;
+    for (let depth = 0; depth < 70; depth++) {
+      const next: { next?: unknown } = {};
+      deepCursor.next = next;
+      deepCursor = next;
+    }
+    dataPlan.registerMutation("mutation.data-function", (() => undefined) as never);
+    dataPlan.registerMutation("mutation.data-accessor", getterRegistration as never);
+    dataPlan.registerMutation("mutation.data-prototype", new Date(0) as never);
+    dataPlan.registerMutation("mutation.data-cycle", cyclicRegistration as never);
+    dataPlan.registerMutation("mutation.data-thenable", thenableRegistration as never);
+    dataPlan.registerMutation("mutation.data-array", sparseRegistration as never);
+    dataPlan.registerMutation("mutation.data-depth", deepRegistration as never);
+    const dataDiagnostics = dataPlan.seal();
+    expect(getterCalls).toBe(0);
+    expect(dataDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[data.function\]/),
+        expect.stringMatching(/^\[data.accessor\]/),
+        expect.stringMatching(/^\[data.prototype\]/),
+        expect.stringMatching(/^\[data.cycle\]/),
+        expect.stringMatching(/^\[data.thenable\]/),
+        expect.stringMatching(/^\[data.array\]/),
+        expect.stringMatching(/^\[data.depth\]/)
+      ])
+    );
+    expect(dataPlan.caseExecutions).toBe(0);
+
+    const reentrantPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    const reentrantSource = reentrantPlan.registerSource("fixture.reentrant", "alpha");
+    let reentrantInspections = 0;
+    const reentrantDescriptor = new Proxy(
+      {
+        mode: "first" as const,
+        source: reentrantSource,
+        needle: "alpha",
+        replacement: "omega",
+        expectedOccurrences: 1,
+        witness: { kind: "token" as const, anchor: "alpha", before: 1, after: 0 }
+      },
+      {
+        getPrototypeOf: (target) => {
+          reentrantInspections++;
+          expect(() => reentrantPlan.seal()).toThrow(/during release mutation registration/);
+          return Reflect.getPrototypeOf(target);
+        }
+      }
+    );
+    const reentrantRoot = reentrantPlan.registerMutation("mutation.reentrant", reentrantDescriptor);
+    reentrantPlan.registerCase({
+      id: "case.reentrant",
+      root: reentrantRoot,
+      invoke: { kind: "fixture.text", baseline: reentrantSource, mutant: reentrantRoot },
+      expectations: [{ id: "expectation.reentrant", kind: "equal", value: "omega" }]
+    });
+    expect(reentrantInspections).toBe(1);
+    expect(reentrantPlan.seal()).toEqual([]);
+    reentrantPlan.execute();
+    expect(reentrantPlan.phase).toBe("executed");
+
+    const mutableInventory = { total: 2, first: 2, all: 0 };
+    const snapshotPlan = new ReleaseMutationPlan(mutableInventory);
+    const snapshotSource = snapshotPlan.registerSource("fixture.snapshot", "alpha beta");
+    const mutableBase = {
+      mode: "first" as "first" | "all",
+      source: snapshotSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token" as "token" | "line", anchor: "alpha", before: 1, after: 0 }
+    };
+    const snapshotBase = snapshotPlan.registerMutation("mutation.snapshot-base", mutableBase);
+    const mutableChild = {
+      mode: "first" as "first" | "all",
+      source: snapshotBase,
+      needle: "beta",
+      replacement: "delta",
       expectedOccurrences: 1,
       witness: { kind: "token" as "token" | "line", anchor: "beta", before: 1, after: 0 }
     };
-    let snapshotDetectorCalls = 0;
-    let tamperedDetectorCalls = 0;
-    const mutableDetector = {
-      id: "detector.snapshot",
-      expectedAssertions: 2,
-      mutations: ["mutation.snapshot-child"],
-      run: (resolve: (mutationId: string) => string, assert: (assertion: () => unknown) => void) => {
-        snapshotDetectorCalls++;
-        assert(() => {
-          expect(resolve("mutation.snapshot-base")).toBe("omega beta");
-        });
-        assert(() => {
-          expect(resolve("mutation.snapshot-child")).toBe("omega delta");
-        });
-      }
+    const snapshotChild = snapshotPlan.registerMutation("mutation.snapshot-child", mutableChild);
+    const mutableCase = {
+      id: "case.snapshot",
+      root: snapshotChild,
+      invoke: { kind: "fixture.text" as const, baseline: snapshotSource, mutant: snapshotChild },
+      expectations: [{ id: "expectation.snapshot", kind: "equal" as const, value: "omega delta" }]
     };
-    const snapshotPlan = new ReleaseMutationPlan(mutableInventory)
-      .registerSource("fixture.snapshot", "alpha beta")
-      .registerMutation({
-        id: "mutation.snapshot-base",
-        mode: "first",
-        source: sourceRef("fixture.snapshot"),
-        needle: "alpha",
-        replacement: literalReplacement("omega"),
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      })
-      .registerMutation(mutableDescriptor)
-      .registerDetector(mutableDetector);
+    snapshotPlan.registerCase(mutableCase);
     mutableInventory.total = 99;
     mutableInventory.first = 99;
     mutableInventory.all = 99;
-    mutableDescriptor.id = "mutation..snapshot-tampered";
-    mutableDescriptor.mode = "all";
-    mutableDescriptor.needle = "missing";
-    mutableDescriptor.replacement.value = "tampered";
-    mutableDescriptor.expectedOccurrences = 99;
-    mutableDescriptor.witness.kind = "line";
-    mutableDescriptor.witness.anchor = "tampered";
-    mutableDescriptor.witness.before = 99;
-    mutableDescriptor.witness.after = 100;
-    mutableDetector.id = "detector..snapshot-tampered";
-    mutableDetector.expectedAssertions = 99;
+    mutableBase.mode = "all";
+    mutableBase.needle = "missing";
+    mutableBase.replacement = "tampered";
+    mutableBase.expectedOccurrences = 99;
+    mutableBase.witness.kind = "line";
+    mutableBase.witness.anchor = "tampered";
+    mutableBase.witness.before = 99;
+    mutableBase.witness.after = 100;
+    mutableChild.mode = "all";
+    mutableChild.needle = "missing";
+    mutableChild.replacement = "tampered";
+    mutableCase.id = "case..tampered";
+    const mutableExpectation = mutableCase.expectations[0];
+    if (mutableExpectation === undefined) throw new Error("snapshot expectation fixture missing");
+    mutableExpectation.value = "tampered";
     expect(snapshotPlan.seal()).toEqual([]);
-    mutableDescriptor.source.id = "mutation.snapshot-missing";
-    mutableDetector.mutations[0] = "mutation.snapshot-missing";
-    mutableDetector.run = () => {
-      tamperedDetectorCalls++;
-    };
     snapshotPlan.execute();
     expect(snapshotPlan.phase).toBe("executed");
-    expect(snapshotDetectorCalls).toBe(1);
-    expect(tamperedDetectorCalls).toBe(0);
+    expect(snapshotPlan.caseExecutions).toBe(1);
+
+    const explosivePlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    const explosiveSource = explosivePlan.registerSource("fixture.explosive", "alpha");
+    const explosiveRoot = registerFixtureMutation(explosivePlan, "mutation.explosive", {
+      mode: "first",
+      source: explosiveSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    explosivePlan.registerCase({
+      id: "case.explosive",
+      root: explosiveRoot,
+      invoke: { kind: "fixture.text", baseline: explosiveSource, mutant: explosiveRoot },
+      expectations: [{ id: "expectation.explosive", kind: "equal", value: "omega" }]
+    });
+    const explosivePlanView = new Proxy(explosivePlan, {
+      get: (target, property, receiver) => {
+        if (property === "mutations") throw new Error("synthetic seal failure");
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    expect(() => explosivePlanView.seal()).toThrow("synthetic seal failure");
+    expect(explosivePlan.phase).toBe("failed");
+    expect(() => explosivePlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
 
     const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     const releaseTransaction = readFileSync(
@@ -11018,5 +12432,5 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
-  }, 60_000);
+  }, 120_000);
 });

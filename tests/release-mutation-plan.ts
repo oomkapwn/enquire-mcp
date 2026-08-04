@@ -291,12 +291,17 @@ export type ReleaseExpectation =
   | { readonly id: string; readonly kind: "not-equal"; readonly value: string }
   | { readonly id: string; readonly kind: "regex"; readonly regex: ReleaseNamedRegexIdentity };
 
-/** One named, data-only oracle case. */
+/** One ordered, data-only oracle check with an exact invocation/expectation pairing. */
+export interface ReleaseMutationCheck {
+  readonly invoke: ReleaseOracleInvocation;
+  readonly expectation: ReleaseExpectation;
+}
+
+/** One named, data-only oracle case containing one or more ordered checks. */
 export interface ReleaseMutationCase {
   readonly id: string;
   readonly root: ReleaseMutationHandle;
-  readonly invoke: ReleaseOracleInvocation;
-  readonly expectations: readonly ReleaseExpectation[];
+  readonly checks: readonly ReleaseMutationCheck[];
 }
 
 /** Optional exact mutation-only or full-topology projection for a complete mutation matrix. */
@@ -372,20 +377,28 @@ type PreparedExpectation = ReleaseExpectation;
 interface CaseAnalysis {
   readonly id: string;
   readonly root: ReleaseMutationHandle | null;
-  readonly invocation: ReleaseOracleInvocation | null;
-  readonly expectations: readonly PreparedExpectation[];
+  readonly checks: readonly PreparedCheck[];
   readonly valid: boolean;
+}
+
+interface InvocationAnalysis {
+  readonly kind: ReleaseOracleInvocation["kind"] | null;
+  readonly invocation: ReleaseOracleInvocation | null;
 }
 
 interface PreparedMutation {
   readonly output: string;
 }
 
+interface PreparedCheck {
+  readonly invocation: ReleaseOracleInvocation;
+  readonly expectation: PreparedExpectation;
+}
+
 interface PreparedCase {
   readonly id: string;
   readonly root: ReleaseMutationHandle;
-  readonly invocation: ReleaseOracleInvocation;
-  readonly expectations: readonly PreparedExpectation[];
+  readonly checks: readonly PreparedCheck[];
 }
 
 type RegistrationProblem = (code: string, path: string, detail: string) => void;
@@ -800,6 +813,12 @@ function expectationSemanticIdentity(expectation: ReleaseExpectation): string {
   }
 }
 
+function sameOracleInvocation(left: ReleaseOracleInvocation, right: ReleaseOracleInvocation): boolean {
+  if (left.kind !== right.kind || left.baseline !== right.baseline || left.mutant !== right.mutant) return false;
+  if (left.kind === "fixture.throw" && right.kind === "fixture.throw") return left.message === right.message;
+  return left.kind === "fixture.text" && right.kind === "fixture.text";
+}
+
 function errorMessage(error: unknown): string {
   if (typeof error === "object" && error !== null) {
     try {
@@ -818,8 +837,8 @@ function errorMessage(error: unknown): string {
  * Closed, two-phase planner for the release-integrity mutation matrix.
  *
  * Registration is open-only. `seal()` validates and internally materializes the complete mutation
- * graph without executing a case. `execute()` materializes each closed invocation internally and
- * applies its data-only expectations in registration order. Handles carry no public id or value.
+ * graph without executing a case. `execute()` materializes every ordered closed check internally and
+ * applies that check's single data-only expectation. Handles carry no public id or value.
  *
  * @example
  * const plan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
@@ -835,8 +854,10 @@ function errorMessage(error: unknown): string {
  * plan.registerCase({
  *   id: "fixture.detects-omega",
  *   root: mutation,
- *   invoke: { kind: "fixture.text", baseline: source, mutant: mutation },
- *   expectations: [{ id: "fixture.equals-omega", kind: "equal", value: "omega" }]
+ *   checks: [{
+ *     invoke: { kind: "fixture.text", baseline: source, mutant: mutation },
+ *     expectation: { id: "fixture.equals-omega", kind: "equal", value: "omega" }
+ *   }]
  * });
  */
 export class ReleaseMutationPlan {
@@ -876,12 +897,12 @@ export class ReleaseMutationPlan {
     return this.state;
   }
 
-  /** @returns Number of cases whose closed invocation began execution. */
+  /** @returns Number of cases whose first ordered check began execution. */
   get caseExecutions(): number {
     return this.executedCases;
   }
 
-  /** @returns Number of closed expectations whose evaluation began. */
+  /** @returns Number of ordered checks whose single expectation evaluation began. */
   get expectationExecutions(): number {
     return this.executedExpectations;
   }
@@ -947,7 +968,7 @@ export class ReleaseMutationPlan {
   /**
    * Register one closed data-only oracle case.
    *
-   * @param registration - Named invocation and non-empty declarative expectation inventory.
+   * @param registration - Named root and non-empty ordered inventory of closed invocation/expectation checks.
    * @returns This plan for fluent case registration.
    * @throws If registration has already closed.
    */
@@ -989,14 +1010,17 @@ export class ReleaseMutationPlan {
       assertAmbientIntrinsics();
       if (this.problems.length === 0) {
         for (const analysis of caseAnalyses) {
-          if (analysis.valid && analysis.root !== null && analysis.invocation !== null) {
+          if (analysis.valid && analysis.root !== null && analysis.checks.length > 0) {
             pushArrayValue(
               this.preparedCases,
               freezeObject({
                 id: analysis.id,
                 root: analysis.root,
-                invocation: analysis.invocation,
-                expectations: freezeObject([...analysis.expectations])
+                checks: freezeObject(
+                  analysis.checks.map((check) =>
+                    freezeObject({ invocation: check.invocation, expectation: check.expectation })
+                  )
+                )
               })
             );
           }
@@ -1029,16 +1053,14 @@ export class ReleaseMutationPlan {
           throw new errorConstructor(`release mutation prepared case ${caseIndex} is missing`);
         }
         this.executedCases++;
-        const observation = executeReleaseOracleInvocation(releaseCase.invocation, this.sourceValues, this.prepared);
-        for (let expectationIndex = 0; expectationIndex < releaseCase.expectations.length; expectationIndex++) {
-          const expectation = releaseCase.expectations[expectationIndex];
-          if (expectation === undefined) {
-            throw new errorConstructor(
-              `release mutation prepared expectation ${caseIndex}:${expectationIndex} is missing`
-            );
+        for (let checkIndex = 0; checkIndex < releaseCase.checks.length; checkIndex++) {
+          const check = releaseCase.checks[checkIndex];
+          if (check === undefined) {
+            throw new errorConstructor(`release mutation prepared check ${caseIndex}:${checkIndex} is missing`);
           }
+          const observation = executeReleaseOracleInvocation(check.invocation, this.sourceValues, this.prepared);
           this.executedExpectations++;
-          this.applyExpectation(releaseCase.id, expectation, observation);
+          this.applyExpectation(releaseCase.id, check.expectation, observation);
         }
       }
       assertAmbientIntrinsics();
@@ -1135,7 +1157,7 @@ export class ReleaseMutationPlan {
     for (const registeredCase of this.cases) {
       cases++;
       const registration = plainRecord(registeredCase.registration);
-      if (isArrayIntrinsic(registration?.expectations)) expectations += registration.expectations.length;
+      if (isArrayIntrinsic(registration?.checks)) expectations += registration.checks.length;
       const root = registration?.root;
       const metadata = handleMetadata(root);
       if (
@@ -1412,8 +1434,8 @@ export class ReleaseMutationPlan {
       const rawId = registration?.id;
       const id = displayIdentity(rawId, fallbackId);
       let valid = true;
-      if (registration === null || !hasExactKeys(registration, ["id", "root", "invoke", "expectations"])) {
-        this.addProblem("case.shape", id, "case must contain only id/root/invoke/expectations");
+      if (registration === null || !hasExactKeys(registration, ["id", "root", "checks"])) {
+        this.addProblem("case.shape", id, "case must contain only id/root/checks");
         valid = false;
       }
       if (typeof rawId !== "string" || !testRegExp(ID_PATTERN, rawId)) {
@@ -1424,23 +1446,6 @@ export class ReleaseMutationPlan {
         valid = false;
       } else {
         caseIds.add(rawId);
-      }
-
-      const invocation = plainRecord(registration?.invoke);
-      const invocationKind =
-        invocation?.kind === "fixture.text" || invocation?.kind === "fixture.throw" ? invocation.kind : null;
-      if (invocationKind === null) {
-        this.addProblem("invocation.kind", id, "invocation kind must be fixture.text or fixture.throw");
-        valid = false;
-      } else {
-        const expectedKeys =
-          invocationKind === "fixture.text"
-            ? (["kind", "baseline", "mutant"] as const)
-            : (["kind", "baseline", "mutant", "message"] as const);
-        if (invocation === null || !hasExactKeys(invocation, expectedKeys)) {
-          this.addProblem("invocation.shape", id, `${invocationKind} invocation has unexpected or missing fields`);
-          valid = false;
-        }
       }
 
       const root = this.validateCaseRoot(registration?.root, id, "root", mutations);
@@ -1455,98 +1460,136 @@ export class ReleaseMutationPlan {
           rootedBy.set(root, id);
         }
       }
-      const invocationRoot = this.validateCaseRoot(invocation?.mutant, id, "invocation mutant", mutations);
-      if (invocationRoot === null) {
-        valid = false;
-      } else if (root !== null && invocationRoot !== root) {
-        this.addProblem("case.root", id, "invocation must contain the case's exact explicit root handle");
-        valid = false;
-      }
-      const baseline = this.validateCaseBaseline(invocation?.baseline, id, mutations);
-      if (baseline === null) {
-        valid = false;
-      } else if (root !== null) {
-        if (baseline === root) {
-          this.addProblem("case.baseline", id, "clean baseline must not be the mutant root handle");
-          valid = false;
-        } else if (!this.rootBaselineClosure(root, mutations).has(baseline)) {
-          this.addProblem("case.baseline", id, "clean baseline must belong to the root source lineage");
-          valid = false;
-        }
-      }
 
-      let message: string | null = null;
-      if (invocationKind === "fixture.throw") {
-        if (typeof invocation?.message !== "string" || invocation.message.length === 0) {
-          this.addProblem("invocation.message", id, "fixture.throw message must be a non-empty string");
-          valid = false;
-        } else {
-          message = invocation.message;
-        }
-      }
-
-      const expectationsValue = registration?.expectations;
-      const expectations: PreparedExpectation[] = [];
-      const expectationSemantics = new setConstructor<string>();
-      if (!isArrayIntrinsic(expectationsValue) || expectationsValue.length === 0) {
+      const checksValue = registration?.checks;
+      const checks: PreparedCheck[] = [];
+      if (!isArrayIntrinsic(checksValue) || checksValue.length === 0) {
         this.addProblem("expectation.none", id, "case must register at least one expectation");
         valid = false;
       } else {
-        for (const [expectationIndex, value] of expectationsValue.entries()) {
-          const expectation = this.validateExpectation(value, id, expectationIndex, expectationIds);
-          if (expectation === null) valid = false;
-          else {
+        for (const [checkIndex, value] of checksValue.entries()) {
+          const check = plainRecord(value);
+          if (check === null || !hasExactKeys(check, ["invoke", "expectation"])) {
+            this.addProblem(
+              "check.shape",
+              id,
+              `check ${checkIndex + 1} must contain only invoke/expectation`
+            );
+            valid = false;
+          }
+
+          const invocation = this.validateCaseInvocation(check?.invoke, id, root, mutations);
+          const expectation = this.validateExpectation(check?.expectation, id, checkIndex, expectationIds);
+          if (invocation.invocation === null || expectation === null) {
+            valid = false;
+          } else {
+            const closedInvocation = invocation.invocation;
+            const hasProblem = expectation.kind === "problem";
+            if (invocation.kind === "fixture.text" && hasProblem) {
+              this.addProblem("expectation.type", id, "fixture.text requires value expectations");
+              valid = false;
+            }
+            if (invocation.kind === "fixture.throw" && !hasProblem) {
+              this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
+              valid = false;
+            }
+
             const semanticIdentity = expectationSemanticIdentity(expectation);
-            if (expectationSemantics.has(semanticIdentity)) {
+            if (
+              checks.some(
+                (preparedCheck) =>
+                  sameOracleInvocation(preparedCheck.invocation, closedInvocation) &&
+                  expectationSemanticIdentity(preparedCheck.expectation) === semanticIdentity
+              )
+            ) {
               this.addProblem(
                 "expectation.redundant",
                 id,
                 `expectation ${expectation.id} duplicates another expectation in the same case`
               );
               valid = false;
-            } else {
-              expectationSemantics.add(semanticIdentity);
-              pushArrayValue(expectations, expectation);
             }
+            pushArrayValue(checks, freezeObject({ invocation: closedInvocation, expectation }));
           }
         }
-      }
-
-      const hasProblem = expectations.some((expectation) => expectation.kind === "problem");
-      const hasValueExpectation = expectations.some((expectation) => expectation.kind !== "problem");
-      if (hasProblem && hasValueExpectation) {
-        this.addProblem("expectation.mixed", id, "problem expectations cannot be mixed with value expectations");
-        valid = false;
-      }
-      if (invocationKind === "fixture.text" && hasProblem) {
-        this.addProblem("expectation.type", id, "fixture.text requires value expectations");
-        valid = false;
-      }
-      if (invocationKind === "fixture.throw" && hasValueExpectation) {
-        this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
-        valid = false;
-      }
-
-      let closedInvocation: ReleaseOracleInvocation | null = null;
-      if (baseline !== null && invocationRoot !== null && invocationKind === "fixture.text") {
-        closedInvocation = freezeObject({ kind: invocationKind, baseline, mutant: invocationRoot });
-      } else if (
-        baseline !== null &&
-        invocationRoot !== null &&
-        invocationKind === "fixture.throw" &&
-        message !== null
-      ) {
-        closedInvocation = freezeObject({ kind: invocationKind, baseline, mutant: invocationRoot, message });
       }
       pushArrayValue(analyses, {
         id,
         root,
-        invocation: closedInvocation,
-        expectations: freezeObject(expectations),
+        checks: freezeObject(checks),
         valid
       });
     }
     return analyses;
+  }
+
+  private validateCaseInvocation(
+    value: unknown,
+    id: string,
+    root: ReleaseMutationHandle | null,
+    mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
+  ): InvocationAnalysis {
+    const invocation = plainRecord(value);
+    const kind =
+      invocation?.kind === "fixture.text" || invocation?.kind === "fixture.throw" ? invocation.kind : null;
+    let valid = true;
+    if (kind === null) {
+      this.addProblem("invocation.kind", id, "invocation kind must be fixture.text or fixture.throw");
+      valid = false;
+    } else {
+      const expectedKeys =
+        kind === "fixture.text"
+          ? (["kind", "baseline", "mutant"] as const)
+          : (["kind", "baseline", "mutant", "message"] as const);
+      if (invocation === null || !hasExactKeys(invocation, expectedKeys)) {
+        this.addProblem("invocation.shape", id, `${kind} invocation has unexpected or missing fields`);
+        valid = false;
+      }
+    }
+
+    const invocationRoot = this.validateCaseRoot(invocation?.mutant, id, "invocation mutant", mutations);
+    if (invocationRoot === null) {
+      valid = false;
+    } else if (root !== null && invocationRoot !== root) {
+      this.addProblem("case.root", id, "invocation must contain the case's exact explicit root handle");
+      valid = false;
+    }
+    const baseline = this.validateCaseBaseline(invocation?.baseline, id, mutations);
+    if (baseline === null) {
+      valid = false;
+    } else if (root !== null) {
+      if (baseline === root) {
+        this.addProblem("case.baseline", id, "clean baseline must not be the mutant root handle");
+        valid = false;
+      } else if (!this.rootBaselineClosure(root, mutations).has(baseline)) {
+        this.addProblem("case.baseline", id, "clean baseline must belong to the root source lineage");
+        valid = false;
+      }
+    }
+
+    let message: string | null = null;
+    if (kind === "fixture.throw") {
+      if (typeof invocation?.message !== "string" || invocation.message.length === 0) {
+        this.addProblem("invocation.message", id, "fixture.throw message must be a non-empty string");
+        valid = false;
+      } else {
+        message = invocation.message;
+      }
+    }
+
+    let closedInvocation: ReleaseOracleInvocation | null = null;
+    if (valid && baseline !== null && invocationRoot !== null && kind === "fixture.text") {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      kind === "fixture.throw" &&
+      message !== null
+    ) {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, message });
+    }
+    return freezeObject({ kind, invocation: closedInvocation });
   }
 
   private validateCaseRoot(
@@ -1844,13 +1887,19 @@ export class ReleaseMutationPlan {
   private validatePreparedCaseValues(cases: readonly CaseAnalysis[]): ReadonlySet<ReleaseMutationHandle> {
     const executableRoots = new setConstructor<ReleaseMutationHandle>();
     for (const releaseCase of cases) {
-      if (!releaseCase.valid || releaseCase.root === null || releaseCase.invocation === null) continue;
-      const baseline = this.materializeValue(releaseCase.invocation.baseline);
+      if (!releaseCase.valid || releaseCase.root === null || releaseCase.checks.length === 0) continue;
       const mutant = this.materializeValue(releaseCase.root);
-      if (baseline === undefined || mutant === undefined) continue;
-      if (baseline === mutant) {
-        this.addProblem("case.baseline", releaseCase.id, "clean baseline materializes to the mutant root output");
-      } else {
+      let executable = mutant !== undefined;
+      for (const check of releaseCase.checks) {
+        const baseline = this.materializeValue(check.invocation.baseline);
+        if (baseline === undefined || mutant === undefined) {
+          executable = false;
+        } else if (baseline === mutant) {
+          this.addProblem("case.baseline", releaseCase.id, "clean baseline materializes to the mutant root output");
+          executable = false;
+        }
+      }
+      if (executable) {
         executableRoots.add(releaseCase.root);
       }
     }

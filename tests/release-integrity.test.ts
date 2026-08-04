@@ -929,19 +929,20 @@ function rawMutationCallProblems(source: string): string[] {
 
 const RELEASE_MUTATION_MATRIX_TEST_TITLE =
   "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
+const RELEASE_MUTATION_MATRIX_SUITE_TITLE = "release identity and exact required-job gate";
 const RELEASE_MUTATION_MATRIX_START = [
   "    const releaseWorkflow = readFileSync(",
   'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
 ].join("");
 const RELEASE_MUTATION_SELF_CONTROL_COUNT = 20;
 const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
-const RELEASE_MUTATION_PROJECT_ALL_COUNT = 18;
+const RELEASE_MUTATION_PROJECT_ALL_COUNT = 22;
 
 /**
  * Pin the executable legacy inventory that the declarative 5f.5a migration must consume exactly once.
  *
  * @param source - Complete release-integrity test source.
- * @returns Stable inventory diagnostics; empty only for the reviewed 20-control / 556-project split.
+ * @returns Stable inventory diagnostics; empty only for 20 helper controls plus 560 explicit project cases.
  */
 function releaseMutationInventoryProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -952,6 +953,73 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ts.ScriptKind.TS
   );
   const problems: string[] = [];
+  let directVitestDescribeImports = 0;
+  let directVitestItImports = 0;
+  let otherDescribeBindings = 0;
+  let otherItBindings = 0;
+  const recordOtherBinding = (name: ts.BindingName | ts.Identifier): void => {
+    if (ts.isIdentifier(name)) {
+      if (name.text === "describe") otherDescribeBindings++;
+      if (name.text === "it") otherItBindings++;
+      return;
+    }
+    for (const element of name.elements) {
+      if (ts.isBindingElement(element)) recordOtherBinding(element.name);
+    }
+  };
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const importClause = statement.importClause;
+    if (importClause === undefined || importClause.isTypeOnly) continue;
+    if (importClause.name !== undefined) recordOtherBinding(importClause.name);
+    const namedBindings = importClause.namedBindings;
+    if (namedBindings === undefined) continue;
+    if (ts.isNamespaceImport(namedBindings)) {
+      recordOtherBinding(namedBindings.name);
+      continue;
+    }
+    const moduleName = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null;
+    for (const element of namedBindings.elements) {
+      if (element.isTypeOnly) continue;
+      const isDirectVitestBinding = moduleName === "vitest" && element.propertyName === undefined;
+      if (element.name.text === "describe") {
+        if (isDirectVitestBinding) directVitestDescribeImports++;
+        else otherDescribeBindings++;
+      }
+      if (element.name.text === "it") {
+        if (isDirectVitestBinding) directVitestItImports++;
+        else otherItBindings++;
+      }
+    }
+  }
+  const visitRuntimeBindings = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      recordOtherBinding(node.name);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node)
+    ) {
+      if (node.name !== undefined && ts.isIdentifier(node.name)) recordOtherBinding(node.name);
+    }
+    ts.forEachChild(node, visitRuntimeBindings);
+  };
+  visitRuntimeBindings(sourceFile);
+  if (
+    directVitestDescribeImports !== 1 ||
+    directVitestItImports !== 1 ||
+    otherDescribeBindings !== 0 ||
+    otherItBindings !== 0
+  ) {
+    problems.push(
+      `release mutation matrix must bind describe/it to one exact unaliased vitest import with no runtime shadows; found direct ${directVitestDescribeImports}/${directVitestItImports}, other ${otherDescribeBindings}/${otherItBindings}`
+    );
+  }
   const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
   if (matrixStartCount !== 1) {
     return [`release mutation matrix start expected 1 occurrence, found ${matrixStartCount}`];
@@ -959,6 +1027,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
   const matrixStart = source.indexOf(RELEASE_MUTATION_MATRIX_START);
   let callbackStart = -1;
   let callbackEnd = -1;
+  let matrixCallback: ts.ArrowFunction | null = null;
+  let matrixSuiteCallback: ts.ArrowFunction | null = null;
+  let matrixRegistrationStart = -1;
 
   const locateMatrixCallback = (node: ts.Node): void => {
     const title = ts.isCallExpression(node) ? node.arguments[0] : undefined;
@@ -971,13 +1042,64 @@ function releaseMutationInventoryProblems(source: string): string[] {
       title.text === RELEASE_MUTATION_MATRIX_TEST_TITLE
     ) {
       const callback = node.arguments[1];
-      if (callback !== undefined && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
+      if (callback !== undefined && ts.isArrowFunction(callback) && ts.isBlock(callback.body)) {
         if (callbackStart !== -1) {
           problems.push("release mutation matrix test must have one exact callback");
         } else {
           callbackStart = callback.body.getStart(sourceFile);
           callbackEnd = callback.body.end;
+          matrixCallback = callback;
+          matrixRegistrationStart = node.getStart(sourceFile);
+
+          const testStatement = ts.isExpressionStatement(node.parent) ? node.parent : null;
+          const suiteBlock =
+            testStatement !== null && ts.isBlock(testStatement.parent) ? testStatement.parent : null;
+          const suiteCallback =
+            suiteBlock !== null && ts.isArrowFunction(suiteBlock.parent) && suiteBlock.parent.body === suiteBlock
+              ? suiteBlock.parent
+              : null;
+          const suiteCall =
+            suiteCallback !== null &&
+            ts.isCallExpression(suiteCallback.parent) &&
+            suiteCallback.parent.arguments[1] === suiteCallback
+              ? suiteCallback.parent
+              : null;
+          const suiteTitle = suiteCall?.arguments[0];
+          const suiteStatement =
+            suiteCall !== null && ts.isExpressionStatement(suiteCall.parent) ? suiteCall.parent : null;
+          const timeout = node.arguments[2];
+          const isDirectRegistration =
+            callback.parameters.length === 0 &&
+            callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
+            node.arguments.length === 3 &&
+            timeout !== undefined &&
+            timeout.getText(sourceFile) === "30_000" &&
+            node.questionDotToken === undefined &&
+            testStatement !== null &&
+            suiteBlock !== null &&
+            suiteCallback !== null &&
+            suiteCallback.parameters.length === 0 &&
+            suiteCallback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
+            suiteCall !== null &&
+            suiteCall.arguments.length === 2 &&
+            suiteCall.questionDotToken === undefined &&
+            ts.isIdentifier(suiteCall.expression) &&
+            suiteCall.expression.text === "describe" &&
+            suiteTitle !== undefined &&
+            ts.isStringLiteral(suiteTitle) &&
+            suiteTitle.text === RELEASE_MUTATION_MATRIX_SUITE_TITLE &&
+            suiteStatement !== null &&
+            suiteStatement.parent === sourceFile;
+          if (isDirectRegistration && suiteCallback !== null) {
+            matrixSuiteCallback = suiteCallback;
+          } else {
+            problems.push(
+              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+            );
+          }
         }
+      } else {
+        problems.push("release mutation matrix test must use one zero-argument block arrow callback");
       }
     }
     ts.forEachChild(node, locateMatrixCallback);
@@ -995,7 +1117,61 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let outside = 0;
   let firstDefinitions = 0;
   let allDefinitions = 0;
+  const nonStraightLineProjectCalls: string[] = [];
+  const nonStraightLineAncestor = (node: ts.Node): ts.Node | null => {
+    const isWithin = (container: ts.Node): boolean =>
+      node.getStart(sourceFile) >= container.getStart(sourceFile) && node.end <= container.end;
+    let current: ts.Node | undefined = node.parent;
+    while (current && !(current.getStart(sourceFile) === callbackStart && current.end === callbackEnd)) {
+      const isOptionalChain = "questionDotToken" in current && current.questionDotToken !== undefined;
+      if (
+        (ts.isForStatement(current) && (current.initializer === undefined || !isWithin(current.initializer))) ||
+        (ts.isForInStatement(current) && !isWithin(current.expression)) ||
+        (ts.isForOfStatement(current) && !isWithin(current.expression)) ||
+        ts.isWhileStatement(current) ||
+        ts.isDoStatement(current) ||
+        ts.isIfStatement(current) ||
+        ts.isConditionalExpression(current) ||
+        ts.isSwitchStatement(current) ||
+        ts.isTryStatement(current) ||
+        ts.isLabeledStatement(current) ||
+        ts.isWithStatement(current) ||
+        ts.isFunctionLike(current) ||
+        ts.isClassDeclaration(current) ||
+        ts.isClassExpression(current) ||
+        (ts.isBindingElement(current) && current.initializer !== undefined && isWithin(current.initializer)) ||
+        isOptionalChain ||
+        (ts.isBinaryExpression(current) &&
+          (current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+            current.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+            current.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+            current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+            current.operatorToken.kind === ts.SyntaxKind.BarBarEqualsToken ||
+            current.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken))
+      ) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
+  };
   const visitCalls = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node)) {
+      let owner: ts.Node | undefined = node.parent;
+      while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
+      const start = node.getStart(sourceFile);
+      if (owner === matrixCallback && start > callbackStart && node.end <= callbackEnd) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(
+          `release mutation matrix callback must not return before all explicit cases execute at ${position.line + 1}:${position.character + 1}`
+        );
+      } else if (owner === matrixSuiteCallback && start < matrixRegistrationStart) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(
+          `release mutation suite callback must not return before matrix registration at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+    }
     if (ts.isIdentifier(node) && (node.text === "replaceExactly" || node.text === "replaceAllExactly")) {
       const parent = node.parent;
       const isReviewedDefinition =
@@ -1025,6 +1201,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       } else if (start >= matrixStart && start < callbackEnd) {
         if (isAll) projectAll++;
         else projectFirst++;
+        const nonStraightLine = nonStraightLineAncestor(node);
+        if (nonStraightLine !== null) {
+          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+          nonStraightLineProjectCalls.push(
+            `release mutation project helper ${node.expression.text} must be one explicit straight-line case, not nested under ${ts.SyntaxKind[nonStraightLine.kind]} at ${position.line + 1}:${position.character + 1}`
+          );
+        }
       } else {
         outside++;
       }
@@ -1052,7 +1235,17 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (outside !== 0) {
     problems.push(`release mutation helpers outside the reviewed matrix/self-control callback: ${outside}`);
   }
+  problems.push(...nonStraightLineProjectCalls);
   return problems;
+}
+
+const releaseMutationInventoryBootstrapProblems = releaseMutationInventoryProblems(
+  readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8")
+);
+if (releaseMutationInventoryBootstrapProblems.length !== 0) {
+  throw new Error(
+    `release mutation inventory bootstrap failed:\n${releaseMutationInventoryBootstrapProblems.join("\n")}`
+  );
 }
 
 function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
@@ -5833,13 +6026,70 @@ describe("release identity and exact required-job gate", () => {
     const matrixStartOffset = oracleSource.indexOf(RELEASE_MUTATION_MATRIX_START);
     expect(matrixStartOffset).toBeGreaterThan(0);
     const matrixBodyOffset = matrixStartOffset + RELEASE_MUTATION_MATRIX_START.length;
+    const suiteStart = `describe("${RELEASE_MUTATION_MATRIX_SUITE_TITLE}", () => {`;
+    const suiteStartOffset = oracleSource.indexOf(suiteStart);
+    expect(suiteStartOffset).toBeGreaterThan(0);
+    const vitestImport = 'import { describe, expect, it } from "vitest";';
+    const vitestImportOffset = oracleSource.indexOf(vitestImport);
+    expect(vitestImportOffset).toBeGreaterThan(0);
+    const aliasedVitestImportMutation = [
+      oracleSource.slice(0, vitestImportOffset),
+      'import { describe as it, expect, it as describe } from "vitest";',
+      oracleSource.slice(vitestImportOffset + vitestImport.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedVitestImportMutation)).toContainEqual(
+      expect.stringMatching(/must bind describe\/it to one exact unaliased vitest import with no runtime shadows/)
+    );
+    const shadowedItBindingMutation = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  const it = (_name: string, _callback: () => void, _timeout?: number): void => undefined;",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedItBindingMutation)).toContainEqual(
+      expect.stringMatching(/must bind describe\/it to one exact unaliased vitest import with no runtime shadows/)
+    );
+    const skippedSuiteMutation = [
+      oracleSource.slice(0, suiteStartOffset),
+      "describe.skip(",
+      oracleSource.slice(suiteStartOffset + "describe(".length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(skippedSuiteMutation)).toContain(
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+    );
+    const outerReturnMutation = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  return;",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(outerReturnMutation)).toContainEqual(
+      expect.stringMatching(/suite callback must not return before matrix registration/)
+    );
+    const matrixRegistrationStart = `  it("${RELEASE_MUTATION_MATRIX_TEST_TITLE}", () => {`;
+    const matrixRegistrationOffset = oracleSource.indexOf(matrixRegistrationStart);
+    expect(matrixRegistrationOffset).toBeGreaterThan(suiteStartOffset);
+    const conditionalRegistrationMutation = [
+      oracleSource.slice(0, matrixRegistrationOffset),
+      "  false && it(",
+      oracleSource.slice(matrixRegistrationOffset + "  it(".length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(conditionalRegistrationMutation)).toContain(
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+    );
+    const contextSkipMutation = [
+      oracleSource.slice(0, matrixRegistrationOffset),
+      `  it("${RELEASE_MUTATION_MATRIX_TEST_TITLE}", (ctx) => { ctx.skip();`,
+      oracleSource.slice(matrixRegistrationOffset + matrixRegistrationStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(contextSkipMutation)).toContain(
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+    );
     const extraProjectMutation = [
       oracleSource.slice(0, matrixBodyOffset),
       '\n    void replaceExactly("inventory", "inventory", "mutant");',
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation project inventory expected 538 first / 18 all, found 539 first / 18 all"
+      "release mutation project inventory expected 538 first / 22 all, found 539 first / 22 all"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -5853,7 +6103,101 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation project inventory expected 538 first / 18 all, found 537 first / 19 all"
+      "release mutation project inventory expected 538 first / 22 all, found 537 first / 23 all"
+    );
+    const loopGeneratedMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    for (const value of ["inventory", "inventory"]) { void replaceExactly(value, "inventory", "mutant"); }',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(loopGeneratedMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under ForOfStatement/)
+    );
+    const loopBindingMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    for (const [value = replaceExactly("inventory", "inventory", "mutant")] of [[]]) { void value; }',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(loopBindingMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under BindingElement/)
+    );
+    const mappedMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    ["inventory"].map((value) => replaceExactly(value, "inventory", "mutant"));',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(mappedMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under ArrowFunction/)
+    );
+    const optionalMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    ({ run: (_value: string) => undefined }).run?.(replaceExactly("inventory", "inventory", "mutant"));',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(optionalMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under CallExpression/)
+    );
+    const logicalAssignmentMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    let enabled = true; enabled &&= replaceExactly("inventory", "inventory", "mutant") === "mutant";',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(logicalAssignmentMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under BinaryExpression/)
+    );
+    const destructuringDefaultMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    const [value = replaceExactly("inventory", "inventory", "mutant")] = []; void value;',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(destructuringDefaultMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under BindingElement/)
+    );
+    const classInitializerMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    class RepeatedMutation { value = replaceExactly("inventory", "inventory", "mutant"); } void new RepeatedMutation(); void new RepeatedMutation();',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(classInitializerMutation)).toContainEqual(
+      expect.stringMatching(/replaceExactly must be one explicit straight-line case, not nested under ClassDeclaration/)
+    );
+    const iterableLiteralMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    for (const value of [replaceExactly("inventory", "inventory", "mutant")]) { void value; }',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(iterableLiteralMutation)).not.toContainEqual(
+      expect.stringMatching(/must be one explicit straight-line case/)
+    );
+    expect(releaseMutationInventoryProblems(iterableLiteralMutation)).toContain(
+      "release mutation project inventory expected 538 first / 22 all, found 539 first / 22 all"
+    );
+    const nestedStraightLineMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    void replaceExactly(replaceExactly("inventory", "inventory", "mutant"), "mutant", "final");',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(nestedStraightLineMutation)).not.toContainEqual(
+      expect.stringMatching(/must be one explicit straight-line case/)
+    );
+    expect(releaseMutationInventoryProblems(nestedStraightLineMutation)).toContain(
+      "release mutation project inventory expected 538 first / 22 all, found 540 first / 22 all"
+    );
+    const earlyReturnMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      "\n    return;",
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(earlyReturnMutation)).toContainEqual(
+      expect.stringMatching(/matrix callback must not return before all explicit cases execute/)
+    );
+    const earlyReturnBeforeMatrix = [
+      oracleSource.slice(0, matrixStartOffset),
+      "    return;\n",
+      oracleSource.slice(matrixStartOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(earlyReturnBeforeMatrix)).toContainEqual(
+      expect.stringMatching(/matrix callback must not return before all explicit cases execute/)
     );
     const aliasedMutationHelper = `${oracleSource}\nconst mutationAlias = replaceExactly;\n`;
     expect(releaseMutationInventoryProblems(aliasedMutationHelper)).toEqual([
@@ -9728,26 +10072,66 @@ describe("release identity and exact required-job gate", () => {
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
     );
-    for (const [guard, weakenedGuard, count] of [
-      [`"repos/\${{ github.repository }}/git/ref/tags/$TAG"`, '"repos/attacker/repo/git/ref/tags/$TAG"', 10],
-      [
-        `"repos/\${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"`,
-        '"repos/attacker/repo/git/tags/$TAG_OBJECT_SHA"',
-        5
-      ],
-      [".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 5],
-      ['.type == "commit" and .sha == $sha', '.type == "commit"', 5],
-      ['.type == "tag" and .sha == $sha', '.type == "tag"', 5]
-    ] as const) {
-      expect(
-        mcpbContractProblems({
-          ...mcpbInputs,
-          release: replaceAllExactly(mcpbInputs.release, guard, weakenedGuard, count)
-        })
-      ).toContain(
-        "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
-      );
-    }
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceAllExactly(
+          mcpbInputs.release,
+          `"repos/\${{ github.repository }}/git/ref/tags/$TAG"`,
+          '"repos/attacker/repo/git/ref/tags/$TAG"',
+          10
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceAllExactly(
+          mcpbInputs.release,
+          `"repos/\${{ github.repository }}/git/tags/$TAG_OBJECT_SHA"`,
+          '"repos/attacker/repo/git/tags/$TAG_OBJECT_SHA"',
+          5
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceAllExactly(
+          mcpbInputs.release,
+          ".sha == $tag_object_sha and .tag == $tag",
+          ".tag == $tag",
+          5
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceAllExactly(
+          mcpbInputs.release,
+          '.type == "commit" and .sha == $sha',
+          '.type == "commit"',
+          5
+        )
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceAllExactly(mcpbInputs.release, '.type == "tag" and .sha == $sha', '.type == "tag"', 5)
+      })
+    ).toContain(
+      "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
+    );
     for (const [label, weakenedRelease] of [
       [
         "alternate definition",

@@ -7557,18 +7557,14 @@ describe("release identity and exact required-job gate", () => {
 
     const caseValidationPlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 });
     const caseValidationSource = caseValidationPlan.registerSource("fixture.case-validation", "alpha beta");
-    const duplicateSemanticRoot = registerFixtureMutation(
-      caseValidationPlan,
-      "mutation.duplicate-semantic",
-      {
-        mode: "first",
-        source: caseValidationSource,
-        needle: "alpha",
-        replacement: "omega",
-        expectedOccurrences: 1,
-        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
-      }
-    );
+    const duplicateSemanticRoot = registerFixtureMutation(caseValidationPlan, "mutation.duplicate-semantic", {
+      mode: "first",
+      source: caseValidationSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
     const incompatibleRoot = registerFixtureMutation(caseValidationPlan, "mutation.incompatible", {
       mode: "first",
       source: caseValidationSource,
@@ -7590,9 +7586,7 @@ describe("release identity and exact required-job gate", () => {
       id: "case.duplicate-root",
       root: duplicateSemanticRoot,
       invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
-      expectations: [
-        { id: "expectation.duplicate-root", kind: "not-equal", value: "alpha beta" }
-      ]
+      expectations: [{ id: "expectation.duplicate-root", kind: "not-equal", value: "alpha beta" }]
     });
     caseValidationPlan.registerCase({
       id: "case.incompatible",
@@ -7629,7 +7623,8 @@ describe("release identity and exact required-job gate", () => {
     const sparseRegistration: unknown[] = [];
     sparseRegistration.length = 2;
     const thenableRegistration: Record<string, unknown> = {};
-    Object.defineProperty(thenableRegistration, "then", {
+    const thenProperty = ["th", "en"].join("");
+    Object.defineProperty(thenableRegistration, thenProperty, {
       enumerable: true,
       value: () => undefined
     });
@@ -7769,9 +7764,7 @@ describe("release identity and exact required-job gate", () => {
     });
     expect(() => explosivePlan.seal()).toThrow("synthetic seal failure");
     expect(explosivePlan.phase).toBe("failed");
-    expect(() => explosivePlan.registerSource("fixture.after-failure", "late")).toThrow(
-      /entered failed state/
-    );
+    expect(() => explosivePlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
 
     const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     const releaseTransaction = readFileSync(

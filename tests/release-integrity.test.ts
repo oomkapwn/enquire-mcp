@@ -6929,9 +6929,18 @@ describe("release identity and exact required-job gate", () => {
       hybridLegacyRemoval.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(hybridDeclarativeMutation)).toEqual([]);
+    const hybridPreludeEnd = matrixBodyOffset + hybridDeclarativePrelude.length;
+    const hybridPreludeOffset = (token: string): number => {
+      const fixture = hybridDeclarativeMutation.slice(matrixBodyOffset, hybridPreludeEnd);
+      expect(mutationMatchCount(fixture, token)).toBe(1);
+      const relativeOffset = fixture.indexOf(token);
+      expect(relativeOffset).toBeGreaterThanOrEqual(0);
+      return matrixBodyOffset + relativeOffset;
+    };
     const boundHandlePrefix = "const hybridMutationHandle = ";
-    const boundHandleOffset = hybridDeclarativeMutation.indexOf(boundHandlePrefix);
-    expect(boundHandleOffset).toBeGreaterThan(0);
+    expect(hybridDeclarativeMutation.indexOf(boundHandlePrefix)).toBeLessThan(matrixBodyOffset);
+    const boundHandleOffset = hybridPreludeOffset(boundHandlePrefix);
+    expect(boundHandleOffset).toBeGreaterThanOrEqual(matrixBodyOffset);
     const discardedDeclarativeHandle = [
       hybridDeclarativeMutation.slice(0, boundHandleOffset),
       "void ",
@@ -6941,8 +6950,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/registerMutation requires one top-level const handle/)
     );
     const sourceValueToken = 'registerSource("fixture.hybrid", "inventory")';
-    const sourceValueOffset = hybridDeclarativeMutation.indexOf(sourceValueToken);
-    expect(sourceValueOffset).toBeGreaterThan(0);
+    const sourceValueOffset = hybridPreludeOffset(sourceValueToken);
     const evaluatedDeclarativeSource = [
       hybridDeclarativeMutation.slice(0, sourceValueOffset),
       'registerSource("fixture.hybrid", String("inventory"))',
@@ -6952,8 +6960,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/passive identifier\/string source value/)
     );
     const descriptorModeToken = 'mode: "first",\n      source: hybridSourceHandle';
-    const descriptorModeOffset = hybridDeclarativeMutation.indexOf(descriptorModeToken);
-    expect(descriptorModeOffset).toBeGreaterThan(0);
+    const descriptorModeOffset = hybridPreludeOffset(descriptorModeToken);
     const spreadDeclarativeDescriptor = [
       hybridDeclarativeMutation.slice(0, descriptorModeOffset),
       '...dynamicDescriptor,\n      mode: "first",\n      source: hybridSourceHandle',
@@ -6963,8 +6970,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/descriptor requires exact passive/)
     );
     const caseRootToken = "root: hybridMutationHandle";
-    const caseRootOffset = hybridDeclarativeMutation.indexOf(caseRootToken);
-    expect(caseRootOffset).toBeGreaterThan(0);
+    const caseRootOffset = hybridPreludeOffset(caseRootToken);
     const sourceRootDeclarativeCase = [
       hybridDeclarativeMutation.slice(0, caseRootOffset),
       "root: hybridSourceHandle",
@@ -6974,8 +6980,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/source handle cannot be a case root/)
     );
     const expectationToken = 'expectations: [{ id: "expectation.hybrid", kind: "equal", value: "mutant" }]';
-    const expectationOffset = hybridDeclarativeMutation.indexOf(expectationToken);
-    expect(expectationOffset).toBeGreaterThan(0);
+    const expectationOffset = hybridPreludeOffset(expectationToken);
     const emptyDeclarativeExpectations = [
       hybridDeclarativeMutation.slice(0, expectationOffset),
       "expectations: []",
@@ -6985,8 +6990,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/requires one non-empty literal expectations array/)
     );
     const invocationKindToken = 'invoke: { kind: "fixture.text"';
-    const invocationKindOffset = hybridDeclarativeMutation.indexOf(invocationKindToken);
-    expect(invocationKindOffset).toBeGreaterThan(0);
+    const invocationKindOffset = hybridPreludeOffset(invocationKindToken);
     const unknownDeclarativeInvocation = [
       hybridDeclarativeMutation.slice(0, invocationKindOffset),
       'invoke: { kind: "fixture.dynamic"',
@@ -7021,8 +7025,7 @@ describe("release identity and exact required-job gate", () => {
       "expect(releaseMutationProblems).toEqual([]);",
       "releaseMutationPlan.execute();"
     ].join("\n    ");
-    const sealSequenceOffset = hybridDeclarativeMutation.indexOf(sealSequence);
-    expect(sealSequenceOffset).toBeGreaterThan(0);
+    const sealSequenceOffset = hybridPreludeOffset(sealSequence);
     const missingDeclarativeExecution = [
       hybridDeclarativeMutation.slice(0, sealSequenceOffset),
       hybridDeclarativeMutation.slice(sealSequenceOffset + sealSequence.length)

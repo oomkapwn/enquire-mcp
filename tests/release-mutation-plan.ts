@@ -1161,10 +1161,6 @@ export class ReleaseMutationPlan {
         this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
         valid = false;
       }
-      if (invocationKind === "fixture.throw" && expectations.length > 0 && !hasProblem) {
-        this.addProblem("expectation.type", id, "fixture.throw requires at least one exact problem expectation");
-        valid = false;
-      }
 
       let closedInvocation: ReleaseOracleInvocation | null = null;
       if (baseline !== null && invocationRoot !== null && invocationKind === "fixture.text") {

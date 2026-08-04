@@ -80,14 +80,7 @@ export interface ReleaseMutationInventoryExpectation {
 }
 
 /** Lifecycle state of a release-mutation plan. */
-export type ReleaseMutationPlanState =
-  | "open"
-  | "sealing"
-  | "sealed"
-  | "rejected"
-  | "executing"
-  | "executed"
-  | "failed";
+export type ReleaseMutationPlanState = "open" | "sealing" | "sealed" | "rejected" | "executing" | "executed" | "failed";
 
 type HandleKind = "source" | "mutation";
 
@@ -279,12 +272,7 @@ function snapshotPlainData(
     const snapshot: unknown[] = [];
     const lengthDescriptor = descriptors.length;
     const length: unknown = lengthDescriptor && "value" in lengthDescriptor ? lengthDescriptor.value : undefined;
-    if (
-      typeof length !== "number" ||
-      !Number.isSafeInteger(length) ||
-      length < 0 ||
-      length > MAX_SNAPSHOT_ENTRIES
-    ) {
+    if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > MAX_SNAPSHOT_ENTRIES) {
       problem(
         "data.array",
         path,
@@ -753,11 +741,7 @@ export class ReleaseMutationPlan {
     try {
       for (const releaseCase of this.preparedCases) {
         this.executedCases++;
-        const observation = executeReleaseOracleInvocation(
-          releaseCase.invocation,
-          this.sourceValues,
-          this.prepared
-        );
+        const observation = executeReleaseOracleInvocation(releaseCase.invocation, this.sourceValues, this.prepared);
         for (const expectation of releaseCase.expectations) {
           this.applyExpectation(releaseCase.id, expectation, observation);
         }
@@ -885,14 +869,7 @@ export class ReleaseMutationPlan {
       let valid = true;
       if (
         registration === null ||
-        !hasExactKeys(registration, [
-          "mode",
-          "source",
-          "needle",
-          "replacement",
-          "expectedOccurrences",
-          "witness"
-        ])
+        !hasExactKeys(registration, ["mode", "source", "needle", "replacement", "expectedOccurrences", "witness"])
       ) {
         this.addProblem("mutation.shape", id, "registration must contain only the six declared mutation fields");
         valid = false;
@@ -1056,9 +1033,7 @@ export class ReleaseMutationPlan {
     return handle;
   }
 
-  private validateCases(
-    mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
-  ): readonly CaseAnalysis[] {
+  private validateCases(mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>): readonly CaseAnalysis[] {
     const analyses: CaseAnalysis[] = [];
     const caseIds = new Set<string>();
     const expectationIds = new Set<string>();
@@ -1441,9 +1416,7 @@ export class ReleaseMutationPlan {
         source = prepare(mutation.source as ReleaseMutationHandle)?.output;
       }
       const replacement =
-        typeof mutation.replacement === "string"
-          ? mutation.replacement
-          : prepare(mutation.replacement)?.output;
+        typeof mutation.replacement === "string" ? mutation.replacement : prepare(mutation.replacement)?.output;
 
       if (source === undefined || replacement === undefined) {
         const blockedBy = this.mutationDependencies(mutation)
@@ -1574,7 +1547,7 @@ export class ReleaseMutationPlan {
         break;
       }
       default:
-        return assertNever(expectation);
+        assertNever(expectation);
     }
     if (!passed) {
       throw new Error(`release mutation case ${caseId} expectation ${expectation.id} failed (${expectation.kind})`);

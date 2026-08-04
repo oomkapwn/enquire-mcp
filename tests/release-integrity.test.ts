@@ -7084,13 +7084,15 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(computedDeclarative)).toContainEqual(
       expect.stringMatching(/registerMutation must be one direct property call on releaseMutationPlan/)
     );
+    const mutationIdToken = '"mutation.hybrid"';
+    const mutationIdOffset = hybridPreludeOffset(mutationIdToken);
     const templateIdDeclarative = [
-      oracleSource.slice(0, matrixBodyOffset),
-      '\n    releaseMutationPlan.registerMutation(`mutation.template`, { mode: "first" });',
-      oracleSource.slice(matrixBodyOffset)
+      hybridDeclarativeMutation.slice(0, mutationIdOffset),
+      "`mutation.hybrid`",
+      hybridDeclarativeMutation.slice(mutationIdOffset + mutationIdToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(templateIdDeclarative)).toContainEqual(
-      expect.stringMatching(/registerMutation requires one literal id and one object descriptor/)
+      expect.stringMatching(/registerMutation requires one top-level const handle, literal id and object descriptor/)
     );
     const conditionalDeclarativeCase = [
       oracleSource.slice(0, matrixBodyOffset),

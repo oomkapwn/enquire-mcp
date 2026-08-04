@@ -7414,10 +7414,7 @@ describe("release identity and exact required-job gate", () => {
     expect(notEqualDifferentialPlan.caseExecutions).toBe(1);
 
     const regexDifferentialPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
-    const regexDifferentialSource = regexDifferentialPlan.registerSource(
-      "fixture.regex-differential",
-      "omega alpha"
-    );
+    const regexDifferentialSource = regexDifferentialPlan.registerSource("fixture.regex-differential", "omega alpha");
     const regexDifferentialRoot = registerFixtureMutation(regexDifferentialPlan, "mutation.regex-differential", {
       mode: "first",
       source: regexDifferentialSource,

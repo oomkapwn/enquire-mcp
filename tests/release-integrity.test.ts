@@ -7069,8 +7069,7 @@ describe("release identity and exact required-job gate", () => {
     );
     const additiveProtectedNamespaceImports = [
       oracleSource.slice(0, vitestImportOffset + vitestImport.length),
-      '\nimport * as hiddenVitest from "vitest";\n' +
-        'import * as hiddenPlan from "./release-mutation-plan.js";',
+      '\nimport * as hiddenVitest from "vitest";\n' + 'import * as hiddenPlan from "./release-mutation-plan.js";',
       oracleSource.slice(vitestImportOffset + vitestImport.length)
     ].join("");
     expect(releaseMutationInventoryProblems(additiveProtectedNamespaceImports)).toEqual(
@@ -7834,8 +7833,7 @@ describe("release identity and exact required-job gate", () => {
       try {
         void new ReleaseMutationPlan();
       } catch (error) {
-        iteratorPrototypeDriftMessage =
-          error instanceof ambientErrorConstructor ? error.message : String(error);
+        iteratorPrototypeDriftMessage = error instanceof ambientErrorConstructor ? error.message : String(error);
       }
     } finally {
       Object.setPrototypeOf(arrayIteratorPrototypeControl, ambientArrayIteratorParent);

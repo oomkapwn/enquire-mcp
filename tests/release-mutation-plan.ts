@@ -34,8 +34,7 @@ const objectConstructor: typeof Object = Object;
 const defineObjectPropertyIntrinsic: typeof Object.defineProperty = Object.defineProperty;
 const freezeObject: typeof Object.freeze = Object.freeze;
 const getObjectPrototypeIntrinsic: typeof Object.getPrototypeOf = Object.getPrototypeOf;
-const getOwnPropertyDescriptorsIntrinsic: typeof Object.getOwnPropertyDescriptors =
-  Object.getOwnPropertyDescriptors;
+const getOwnPropertyDescriptorsIntrinsic: typeof Object.getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
 const objectKeysIntrinsic: typeof Object.keys = Object.keys;
 const objectValuesIntrinsic: typeof Object.values = Object.values;
 const objectPrototype = Object.prototype;
@@ -1071,15 +1070,7 @@ export class ReleaseMutationPlan {
     if (this.expectedInventory === undefined) return;
     const inventory = plainRecord(this.expectedInventory);
     const mutationKeys = ["total", "first", "all"] as const;
-    const topologyKeys = [
-      "total",
-      "first",
-      "all",
-      "cases",
-      "expectations",
-      "roots",
-      "dependencyOnly"
-    ] as const;
+    const topologyKeys = ["total", "first", "all", "cases", "expectations", "roots", "dependencyOnly"] as const;
     const hasMutationInventory = inventory !== null && hasExactKeys(inventory, mutationKeys);
     const hasTopologyInventory = inventory !== null && hasExactKeys(inventory, topologyKeys);
     if (inventory === null || (!hasMutationInventory && !hasTopologyInventory)) {

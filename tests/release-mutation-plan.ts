@@ -1470,11 +1470,7 @@ export class ReleaseMutationPlan {
         for (const [checkIndex, value] of checksValue.entries()) {
           const check = plainRecord(value);
           if (check === null || !hasExactKeys(check, ["invoke", "expectation"])) {
-            this.addProblem(
-              "check.shape",
-              id,
-              `check ${checkIndex + 1} must contain only invoke/expectation`
-            );
+            this.addProblem("check.shape", id, `check ${checkIndex + 1} must contain only invoke/expectation`);
             valid = false;
           }
 
@@ -1530,8 +1526,7 @@ export class ReleaseMutationPlan {
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): InvocationAnalysis {
     const invocation = plainRecord(value);
-    const kind =
-      invocation?.kind === "fixture.text" || invocation?.kind === "fixture.throw" ? invocation.kind : null;
+    const kind = invocation?.kind === "fixture.text" || invocation?.kind === "fixture.throw" ? invocation.kind : null;
     let valid = true;
     if (kind === null) {
       this.addProblem("invocation.kind", id, "invocation kind must be fixture.text or fixture.throw");
@@ -1580,13 +1575,7 @@ export class ReleaseMutationPlan {
     let closedInvocation: ReleaseOracleInvocation | null = null;
     if (valid && baseline !== null && invocationRoot !== null && kind === "fixture.text") {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
-    } else if (
-      valid &&
-      baseline !== null &&
-      invocationRoot !== null &&
-      kind === "fixture.throw" &&
-      message !== null
-    ) {
+    } else if (valid && baseline !== null && invocationRoot !== null && kind === "fixture.throw" && message !== null) {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, message });
     }
     return freezeObject({ kind, invocation: closedInvocation });

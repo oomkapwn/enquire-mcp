@@ -7908,8 +7908,7 @@ describe("release identity and exact required-job gate", () => {
     );
     const checksStartToken = "checks: [";
     const checksStartOffset = hybridPreludeOffset(checksStartToken);
-    const checksEndOffset =
-      checksStartOffset + hybridDeclarativeMutation.slice(checksStartOffset).indexOf("]") + 1;
+    const checksEndOffset = checksStartOffset + hybridDeclarativeMutation.slice(checksStartOffset).indexOf("]") + 1;
     const emptyDeclarativeChecks = [
       hybridDeclarativeMutation.slice(0, checksStartOffset),
       "checks: []",
@@ -7928,8 +7927,7 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(unknownDeclarativeInvocation)).toContainEqual(
       expect.stringMatching(/case invocation kind must be one closed literal/)
     );
-    const namedRegexToken =
-      'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
+    const namedRegexToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
     const namedRegexOffset = hybridPreludeOffset(namedRegexToken);
     const unknownNamedRegexExpectation = [
       hybridDeclarativeMutation.slice(0, namedRegexOffset),
@@ -7945,17 +7943,22 @@ describe("release identity and exact required-job gate", () => {
       '          expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }',
       "        }"
     ].join("\n");
+    const duplicateTextCheck = [
+      "{",
+      '          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
+      '          expectation: { id: "expectation.hybrid-padding", kind: "equal", value: "mutant" }',
+      "        }"
+    ].join("\n");
     const firstTextCheckOffset = hybridPreludeOffset(firstTextCheck);
     const duplicateSemanticExpectations = [
       hybridDeclarativeMutation.slice(0, firstTextCheckOffset),
-      `${firstTextCheck},\n        ${firstTextCheck.replace("expectation.hybrid-text", "expectation.hybrid-padding")}`,
+      `${firstTextCheck},\n        ${duplicateTextCheck}`,
       hybridDeclarativeMutation.slice(firstTextCheckOffset + firstTextCheck.length)
     ].join("");
     expect(releaseMutationInventoryProblems(duplicateSemanticExpectations)).toContainEqual(
       expect.stringMatching(/duplicates one case semantic check/)
     );
-    const firstExpectationToken =
-      'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
+    const firstExpectationToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
     const firstExpectationOffset = hybridPreludeOffset(firstExpectationToken);
     const missingInvocationExpectationPair = [
       hybridDeclarativeMutation.slice(0, firstExpectationOffset),
@@ -9186,10 +9189,7 @@ describe("release identity and exact required-job gate", () => {
       ]
     } as never);
     expect(malformedCheckPlan.seal()).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/^\[check.shape\]/),
-        expect.stringMatching(/^\[mutation.orphan\]/)
-      ])
+      expect.arrayContaining([expect.stringMatching(/^\[check.shape\]/), expect.stringMatching(/^\[mutation.orphan\]/)])
     );
     expect(malformedCheckPlan.caseExecutions).toBe(0);
     expect(malformedCheckPlan.expectationExecutions).toBe(0);

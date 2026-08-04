@@ -1052,8 +1052,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           matrixRegistrationStart = node.getStart(sourceFile);
 
           const testStatement = ts.isExpressionStatement(node.parent) ? node.parent : null;
-          const suiteBlock =
-            testStatement !== null && ts.isBlock(testStatement.parent) ? testStatement.parent : null;
+          const suiteBlock = testStatement !== null && ts.isBlock(testStatement.parent) ? testStatement.parent : null;
           const suiteCallback =
             suiteBlock !== null && ts.isArrowFunction(suiteBlock.parent) && suiteBlock.parent.body === suiteBlock
               ? suiteBlock.parent
@@ -10101,12 +10100,7 @@ describe("release identity and exact required-job gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: replaceAllExactly(
-          mcpbInputs.release,
-          ".sha == $tag_object_sha and .tag == $tag",
-          ".tag == $tag",
-          5
-        )
+        release: replaceAllExactly(mcpbInputs.release, ".sha == $tag_object_sha and .tag == $tag", ".tag == $tag", 5)
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -10114,12 +10108,7 @@ describe("release identity and exact required-job gate", () => {
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: replaceAllExactly(
-          mcpbInputs.release,
-          '.type == "commit" and .sha == $sha',
-          '.type == "commit"',
-          5
-        )
+        release: replaceAllExactly(mcpbInputs.release, '.type == "commit" and .sha == $sha', '.type == "commit"', 5)
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"

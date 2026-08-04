@@ -32,6 +32,7 @@ import {
 } from "../scripts/lib/mcpb-safety.mjs";
 // @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.
 import { createOwnedScratch, removeOwnedScratch } from "../scripts/mcpb-consumer.mjs";
+import { ReleaseMutationPlan } from "./release-mutation-plan.js";
 
 interface WorkflowJob {
   id: number;
@@ -923,6 +924,134 @@ function rawMutationCallProblems(source: string): string[] {
   }
 
   visit(sourceFile);
+  return problems;
+}
+
+const RELEASE_MUTATION_MATRIX_TEST_TITLE =
+  "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
+const RELEASE_MUTATION_MATRIX_START = [
+  "    const releaseWorkflow = readFileSync(",
+  'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
+].join("");
+const RELEASE_MUTATION_SELF_CONTROL_COUNT = 20;
+const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
+const RELEASE_MUTATION_PROJECT_ALL_COUNT = 18;
+
+/**
+ * Pin the executable legacy inventory that the declarative 5f.5a migration must consume exactly once.
+ *
+ * @param source - Complete release-integrity test source.
+ * @returns Stable inventory diagnostics; empty only for the reviewed 20-control / 556-project split.
+ */
+function releaseMutationInventoryProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "release-integrity.test.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const problems: string[] = [];
+  const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
+  if (matrixStartCount !== 1) {
+    return [`release mutation matrix start expected 1 occurrence, found ${matrixStartCount}`];
+  }
+  const matrixStart = source.indexOf(RELEASE_MUTATION_MATRIX_START);
+  let callbackStart = -1;
+  let callbackEnd = -1;
+
+  const locateMatrixCallback = (node: ts.Node): void => {
+    const title = ts.isCallExpression(node) ? node.arguments[0] : undefined;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "it" &&
+      title !== undefined &&
+      ts.isStringLiteral(title) &&
+      title.text === RELEASE_MUTATION_MATRIX_TEST_TITLE
+    ) {
+      const callback = node.arguments[1];
+      if (callback !== undefined && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
+        if (callbackStart !== -1) {
+          problems.push("release mutation matrix test must have one exact callback");
+        } else {
+          callbackStart = callback.body.getStart(sourceFile);
+          callbackEnd = callback.body.end;
+        }
+      }
+    }
+    ts.forEachChild(node, locateMatrixCallback);
+  };
+  locateMatrixCallback(sourceFile);
+  if (callbackStart === -1 || callbackEnd === -1 || matrixStart <= callbackStart || matrixStart >= callbackEnd) {
+    problems.push("release mutation matrix start must sit inside its exact test callback");
+    return problems;
+  }
+
+  let selfFirst = 0;
+  let selfAll = 0;
+  let projectFirst = 0;
+  let projectAll = 0;
+  let outside = 0;
+  let firstDefinitions = 0;
+  let allDefinitions = 0;
+  const visitCalls = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && (node.text === "replaceExactly" || node.text === "replaceAllExactly")) {
+      const parent = node.parent;
+      const isReviewedDefinition =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const isDirectCall = ts.isCallExpression(parent) && parent.expression === node;
+      if (isReviewedDefinition) {
+        if (node.text === "replaceAllExactly") allDefinitions++;
+        else firstDefinitions++;
+      }
+      if (!isReviewedDefinition && !isDirectCall) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(
+          `release mutation helper ${node.text} must be a direct call to its sole top-level definition at ${position.line + 1}:${position.character + 1}`
+        );
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      (node.expression.text === "replaceExactly" || node.expression.text === "replaceAllExactly")
+    ) {
+      const start = node.getStart(sourceFile);
+      const isAll = node.expression.text === "replaceAllExactly";
+      if (start > callbackStart && start < matrixStart) {
+        if (isAll) selfAll++;
+        else selfFirst++;
+      } else if (start >= matrixStart && start < callbackEnd) {
+        if (isAll) projectAll++;
+        else projectFirst++;
+      } else {
+        outside++;
+      }
+    }
+    ts.forEachChild(node, visitCalls);
+  };
+  visitCalls(sourceFile);
+
+  if (firstDefinitions !== 1 || allDefinitions !== 1) {
+    problems.push(
+      `release mutation helper definitions expected 1 first / 1 all, found ${firstDefinitions} first / ${allDefinitions} all`
+    );
+  }
+  const selfCount = selfFirst + selfAll;
+  if (selfCount !== RELEASE_MUTATION_SELF_CONTROL_COUNT) {
+    problems.push(
+      `release mutation self-controls expected ${RELEASE_MUTATION_SELF_CONTROL_COUNT}, found ${selfCount} (${selfFirst} first / ${selfAll} all)`
+    );
+  }
+  if (projectFirst !== RELEASE_MUTATION_PROJECT_FIRST_COUNT || projectAll !== RELEASE_MUTATION_PROJECT_ALL_COUNT) {
+    problems.push(
+      `release mutation project inventory expected ${RELEASE_MUTATION_PROJECT_FIRST_COUNT} first / ${RELEASE_MUTATION_PROJECT_ALL_COUNT} all, found ${projectFirst} first / ${projectAll} all`
+    );
+  }
+  if (outside !== 0) {
+    problems.push(`release mutation helpers outside the reviewed matrix/self-control callback: ${outside}`);
+  }
   return problems;
 }
 
@@ -4109,11 +4238,11 @@ function mcpbContractProblems(inputs: {
     !inputs.consumer.includes("nativeBinaryReason") ||
     !inputs.consumer.includes("native executable leaked into Basic MCPB") ||
     !inputs.consumer.includes('"@hono/node-server": "^2.0.11"') ||
-    !inputs.consumer.includes('hono: "^4.12.31"') ||
+    !inputs.consumer.includes('hono: "^4.12.34"') ||
     !inputs.consumer.includes('archivedPackageVersions.get("@hono/node-server")') ||
     !inputs.consumer.includes('["2.0.11"]') ||
     !inputs.consumer.includes('archivedPackageVersions.get("hono")') ||
-    !inputs.consumer.includes('["4.12.31"]') ||
+    !inputs.consumer.includes('["4.12.34"]') ||
     !inputs.consumer.includes("stranded embedding index and activation guard") ||
     !inputs.consumer.includes("Basic session changed isolated cache sentinel paths") ||
     !inputs.consumer.includes("XDG_CACHE_HOME") ||
@@ -5700,6 +5829,947 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toEqual([expect.stringMatching(/raw \.replace\(\) mutation/)]);
 
+    expect(releaseMutationInventoryProblems(oracleSource)).toEqual([]);
+    const matrixStartOffset = oracleSource.indexOf(RELEASE_MUTATION_MATRIX_START);
+    expect(matrixStartOffset).toBeGreaterThan(0);
+    const matrixBodyOffset = matrixStartOffset + RELEASE_MUTATION_MATRIX_START.length;
+    const extraProjectMutation = [
+      oracleSource.slice(0, matrixBodyOffset),
+      '\n    void replaceExactly("inventory", "inventory", "mutant");',
+      oracleSource.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
+      "release mutation project inventory expected 538 first / 18 all, found 539 first / 18 all"
+    );
+    const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
+    expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
+      "release mutation helpers outside the reviewed matrix/self-control callback: 1"
+    );
+    const firstProjectCallOffset = oracleSource.indexOf("replaceExactly(", matrixBodyOffset);
+    expect(firstProjectCallOffset).toBeGreaterThan(matrixBodyOffset);
+    const projectModeDrift = [
+      oracleSource.slice(0, firstProjectCallOffset),
+      "replaceAllExactly(",
+      oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
+      "release mutation project inventory expected 538 first / 18 all, found 537 first / 19 all"
+    );
+    const aliasedMutationHelper = `${oracleSource}\nconst mutationAlias = replaceExactly;\n`;
+    expect(releaseMutationInventoryProblems(aliasedMutationHelper)).toEqual([
+      expect.stringMatching(/replaceExactly must be a direct call to its sole top-level definition/)
+    ]);
+    const parenthesizedMutationHelper = `${oracleSource}\nvoid (replaceExactly)("a", "a", "b");\n`;
+    expect(releaseMutationInventoryProblems(parenthesizedMutationHelper)).toEqual([
+      expect.stringMatching(/replaceExactly must be a direct call to its sole top-level definition/)
+    ]);
+    const shadowedMutationHelper = `${oracleSource}\nfunction replaceExactly(): string { return "shadow"; }\n`;
+    expect(releaseMutationInventoryProblems(shadowedMutationHelper)).toContain(
+      "release mutation helper definitions expected 1 first / 1 all, found 2 first / 1 all"
+    );
+
+    const sourceRef = (id: string) => ({ kind: "source", id }) as const;
+    const mutationRef = (id: string) => ({ kind: "mutation", id }) as const;
+    const literalReplacement = (value: string) => ({ kind: "literal", value }) as const;
+    const emptyPlan = new ReleaseMutationPlan();
+    expect(emptyPlan.seal()).toEqual([
+      "[inventory.empty] plan: plan must register at least one mutation",
+      "[source.none] plan: plan must register at least one canonical source",
+      "[detector.none] plan: plan must register at least one detector"
+    ]);
+    expect(emptyPlan.detectorExecutions).toBe(0);
+    expect(() => emptyPlan.execute()).toThrow(/requires sealed state; found rejected/);
+
+    const explosiveSealPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.explosive", "alpha")
+      .registerMutation({
+        id: "mutation.explosive",
+        mode: "first",
+        source: sourceRef("fixture.explosive"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.explosive",
+        expectedAssertions: 1,
+        mutations: ["mutation.explosive"],
+        run: () => undefined
+      });
+    Object.defineProperty(explosiveSealPlan, "mutations", {
+      configurable: true,
+      get: () => {
+        throw new Error("synthetic seal failure");
+      }
+    });
+    expect(() => explosiveSealPlan.seal()).toThrow("synthetic seal failure");
+    expect(explosiveSealPlan.phase).toBe("failed");
+    expect(() => explosiveSealPlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
+
+    let rejectedDetectorCalls = 0;
+    const rejectedPlan = new ReleaseMutationPlan()
+      .registerSource("fixture.synthetic", "alpha alpha\nlimit > 100\nstable\nomega\n")
+      .registerMutation({
+        id: "mutation.missing",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "missing",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "missing", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.duplicate-count",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "alpha",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.empty-needle",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.invalid-count",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "alpha",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 0,
+        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.noop",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "stable",
+        replacement: literalReplacement("stable"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "stable", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.prefix-boundary",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "> 100",
+        replacement: literalReplacement("> 10000"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "> 1000", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.duplicate-id",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "stable",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "stable", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.duplicate-id",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "omega",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.unknown-dependency",
+        mode: "first",
+        source: mutationRef("mutation.not-registered"),
+        needle: "alpha",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cycle-a",
+        mode: "first",
+        source: mutationRef("mutation.cycle-b"),
+        needle: "alpha",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cycle-b",
+        mode: "first",
+        source: mutationRef("mutation.cycle-a"),
+        needle: "alpha",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.orphan",
+        mode: "first",
+        source: sourceRef("fixture.synthetic"),
+        needle: "omega",
+        replacement: literalReplacement("changed"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.synthetic",
+        expectedAssertions: 1,
+        mutations: [
+          "mutation.missing",
+          "mutation.duplicate-count",
+          "mutation.empty-needle",
+          "mutation.invalid-count",
+          "mutation.noop",
+          "mutation.prefix-boundary",
+          "mutation.duplicate-id",
+          "mutation.unknown-dependency",
+          "mutation.cycle-a"
+        ],
+        run: () => {
+          rejectedDetectorCalls++;
+        }
+      });
+    expect(rejectedPlan.seal()).toEqual([
+      "[mutation.duplicate] mutation.duplicate-id: mutation id is registered more than once",
+      "[mutation.needle] mutation.empty-needle: needle must not be empty",
+      "[mutation.count] mutation.invalid-count: expectedOccurrences must be a positive safe integer",
+      "[dependency.mutation] mutation.unknown-dependency: unknown source mutation mutation.not-registered",
+      "[dependency.cycle] mutation.cycle-a: cycle mutation.cycle-a -> mutation.cycle-b -> mutation.cycle-a",
+      "[mutation.cardinality] mutation.missing: needle expected 1 occurrence(s), found 0",
+      "[mutation.cardinality] mutation.duplicate-count: needle expected 1 occurrence(s), found 2",
+      "[mutation.noop] mutation.noop: replacement did not change its source",
+      "[witness.boundary] mutation.noop: anchor expected 1 -> 0, found 1 -> 1",
+      "[witness.boundary] mutation.prefix-boundary: anchor expected 0 -> 1, found 0 -> 0",
+      "[mutation.orphan] mutation.orphan: mutation is unreachable from every detector"
+    ]);
+    expect(rejectedPlan.phase).toBe("rejected");
+    expect(rejectedPlan.detectorExecutions).toBe(0);
+    expect(rejectedDetectorCalls).toBe(0);
+    expect(() => rejectedPlan.execute()).toThrow(/requires sealed state; found rejected/);
+    expect(() => rejectedPlan.registerSource("fixture.late", "late")).toThrow(/cannot register source/);
+
+    let cascadeDetectorCalls = 0;
+    const cascadePlan = new ReleaseMutationPlan({ total: 9, first: 9, all: 0 })
+      .registerSource("fixture.cascade", "alpha\n")
+      .registerMutation({
+        id: "mutation.cascade-parent",
+        mode: "first",
+        source: sourceRef("fixture.cascade"),
+        needle: "missing-parent",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "missing-parent", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-child-needle",
+        mode: "first",
+        source: mutationRef("mutation.cascade-parent"),
+        needle: "",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-child-count",
+        mode: "first",
+        source: mutationRef("mutation.cascade-parent"),
+        needle: "alpha",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 0,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-child-blocked",
+        mode: "first",
+        source: mutationRef("mutation.cascade-parent"),
+        needle: "alpha",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-independent",
+        mode: "first",
+        source: sourceRef("fixture.cascade"),
+        needle: "missing-independent",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "missing-independent", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-witness",
+        mode: "first",
+        source: sourceRef("fixture.cascade"),
+        needle: "missing-witness",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-witness-child",
+        mode: "first",
+        source: mutationRef("mutation.cascade-witness"),
+        needle: "alpha",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-witness-valid",
+        mode: "first",
+        source: sourceRef("fixture.cascade"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.cascade-witness-valid-child",
+        mode: "first",
+        source: mutationRef("mutation.cascade-witness-valid"),
+        needle: "missing-child",
+        replacement: literalReplacement("present"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "missing-child", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.cascade",
+        expectedAssertions: 1,
+        mutations: [
+          "mutation.cascade-child-needle",
+          "mutation.cascade-child-count",
+          "mutation.cascade-child-blocked",
+          "mutation.cascade-independent",
+          "mutation.cascade-witness-child",
+          "mutation.cascade-witness-valid-child"
+        ],
+        run: () => {
+          cascadeDetectorCalls++;
+        }
+      });
+    expect(cascadePlan.seal()).toEqual([
+      "[mutation.needle] mutation.cascade-child-needle: needle must not be empty",
+      "[mutation.count] mutation.cascade-child-count: expectedOccurrences must be a positive safe integer",
+      "[witness.anchor] mutation.cascade-witness: positive witness anchor must not be empty",
+      "[witness.anchor] mutation.cascade-witness-valid: positive witness anchor must not be empty",
+      "[mutation.cardinality] mutation.cascade-parent: needle expected 1 occurrence(s), found 0",
+      "[mutation.blocked] mutation.cascade-child-blocked: blocked by failed mutation(s) mutation.cascade-parent",
+      "[mutation.cardinality] mutation.cascade-independent: needle expected 1 occurrence(s), found 0",
+      "[mutation.cardinality] mutation.cascade-witness: needle expected 1 occurrence(s), found 0",
+      "[mutation.blocked] mutation.cascade-witness-child: blocked by failed mutation(s) mutation.cascade-witness",
+      "[mutation.cardinality] mutation.cascade-witness-valid-child: needle expected 1 occurrence(s), found 0"
+    ]);
+    expect(cascadePlan.detectorExecutions).toBe(0);
+    expect(cascadeDetectorCalls).toBe(0);
+
+    const identityPlan = new ReleaseMutationPlan()
+      .registerSource("fixture.identity", "alpha")
+      .registerSource("fixture.identity", "duplicate")
+      .registerSource("fixture..invalid", "invalid-id")
+      .registerMutation({
+        id: "mutation.identity-valid",
+        mode: "first",
+        source: sourceRef("fixture.identity"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.identity-replacement",
+        mode: "first",
+        source: sourceRef("fixture.identity"),
+        needle: "alpha",
+        replacement: mutationRef("mutation.identity-missing"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.graph-tail",
+        mode: "first",
+        source: mutationRef("mutation.graph-a"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.graph-a",
+        mode: "first",
+        source: mutationRef("mutation.graph-b"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.graph-b",
+        mode: "first",
+        source: mutationRef("mutation.graph-a"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.identity",
+        expectedAssertions: 1,
+        mutations: [
+          "mutation.identity-valid",
+          "mutation.identity-valid",
+          "mutation.identity-unknown",
+          "mutation.identity-replacement"
+        ],
+        run: () => undefined
+      })
+      .registerDetector({
+        id: "detector.identity-cycle",
+        expectedAssertions: 0,
+        mutations: ["mutation.graph-tail"],
+        run: () => undefined
+      })
+      .registerDetector({
+        id: "detector.identity-duplicate",
+        expectedAssertions: 1,
+        mutations: ["mutation.identity-valid"],
+        run: () => undefined
+      })
+      .registerDetector({
+        id: "detector.identity-duplicate",
+        expectedAssertions: 1,
+        mutations: ["mutation.identity-valid"],
+        run: () => undefined
+      });
+    expect(identityPlan.seal()).toEqual([
+      "[source.duplicate] fixture.identity: source id is registered more than once",
+      "[source.id] fixture..invalid: id must be one lowercase token path without repeated separators",
+      "[detector.assertions] detector.identity-cycle: expectedAssertions must be a positive safe integer",
+      "[detector.duplicate] detector.identity-duplicate: detector id is registered more than once",
+      "[dependency.mutation] mutation.identity-replacement: unknown replacement mutation mutation.identity-missing",
+      "[detector.reference] detector.identity: duplicate mutation reference mutation.identity-valid",
+      "[detector.reference] detector.identity: unknown mutation mutation.identity-unknown",
+      "[dependency.cycle] mutation.graph-a: cycle mutation.graph-a -> mutation.graph-b -> mutation.graph-a",
+      "[mutation.blocked] mutation.graph-tail: blocked by failed mutation(s) mutation.graph-a"
+    ]);
+    expect(identityPlan.detectorExecutions).toBe(0);
+
+    const invalidModeDescriptor = {
+      id: "mutation.metadata-mode",
+      mode: "first" as "first" | "all",
+      source: sourceRef("fixture.metadata"),
+      needle: "alpha",
+      replacement: literalReplacement("omega"),
+      expectedOccurrences: 1,
+      witness: { kind: "token" as "token" | "line", anchor: "alpha", before: 1, after: 0 }
+    };
+    Object.defineProperty(invalidModeDescriptor, "mode", { value: "sideways" });
+    const invalidWitnessKindDescriptor = {
+      id: "mutation.metadata-witness-kind",
+      mode: "first" as const,
+      source: sourceRef("fixture.metadata"),
+      needle: "alpha",
+      replacement: literalReplacement("omega"),
+      expectedOccurrences: 1,
+      witness: { kind: "token" as "token" | "line", anchor: "alpha", before: 1, after: 0 }
+    };
+    Object.defineProperty(invalidWitnessKindDescriptor.witness, "kind", { value: "substring" });
+    const metadataPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 1 })
+      .registerSource("fixture.metadata", "alpha")
+      .registerSource("fixture.empty", "")
+      .registerMutation({
+        id: "mutation..metadata-id",
+        mode: "first",
+        source: sourceRef("fixture.metadata"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation(invalidModeDescriptor)
+      .registerMutation({
+        id: "mutation.metadata-source",
+        mode: "first",
+        source: sourceRef("fixture.missing"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation(invalidWitnessKindDescriptor)
+      .registerMutation({
+        id: "mutation.metadata-witness-count",
+        mode: "first",
+        source: sourceRef("fixture.metadata"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 1 }
+      })
+      .registerDetector({
+        id: "detector..metadata",
+        expectedAssertions: 1,
+        mutations: [
+          "mutation..metadata-id",
+          "mutation.metadata-mode",
+          "mutation.metadata-source",
+          "mutation.metadata-witness-kind",
+          "mutation.metadata-witness-count"
+        ],
+        run: () => undefined
+      })
+      .registerDetector({
+        id: "detector.metadata-empty",
+        expectedAssertions: 0,
+        mutations: [],
+        run: () => undefined
+      });
+    expect(metadataPlan.seal()).toEqual([
+      "[inventory.invalid] plan: expected inventory must be coherent safe integers",
+      "[source.empty] fixture.empty: canonical source must not be empty",
+      "[mutation.id] mutation..metadata-id: id must be one lowercase token path without repeated separators",
+      "[detector.id] detector..metadata: id must be one lowercase token path without repeated separators",
+      "[detector.empty] detector.metadata-empty: detector must reach at least one mutation",
+      "[detector.assertions] detector.metadata-empty: expectedAssertions must be a positive safe integer",
+      "[mutation.mode] mutation.metadata-mode: mode must be first or all",
+      "[witness.kind] mutation.metadata-witness-kind: positive witness kind must be token or line",
+      "[witness.count] mutation.metadata-witness-count: witness counts must be different non-negative safe integers",
+      "[dependency.source] mutation.metadata-source: unknown canonical source fixture.missing"
+    ]);
+    expect(metadataPlan.detectorExecutions).toBe(0);
+
+    const inventoryMismatchPlan = new ReleaseMutationPlan({ total: 2, first: 1, all: 1 })
+      .registerSource("fixture.inventory-mismatch", "alpha")
+      .registerMutation({
+        id: "mutation.inventory-mismatch",
+        mode: "first",
+        source: sourceRef("fixture.inventory-mismatch"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.inventory-mismatch",
+        expectedAssertions: 1,
+        mutations: ["mutation.inventory-mismatch"],
+        run: () => undefined
+      });
+    expect(inventoryMismatchPlan.seal()).toEqual([
+      "[inventory.mismatch] plan: expected 2 total (1 first / 1 all), found 1 total (1 first / 0 all)"
+    ]);
+    expect(inventoryMismatchPlan.detectorExecutions).toBe(0);
+
+    const vacuousDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.vacuous", "alpha")
+      .registerMutation({
+        id: "mutation.vacuous",
+        mode: "first",
+        source: sourceRef("fixture.vacuous"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.vacuous",
+        expectedAssertions: 1,
+        mutations: ["mutation.vacuous"],
+        run: (resolve) => {
+          resolve("mutation.vacuous");
+        }
+      });
+    expect(vacuousDetectorPlan.seal()).toEqual([]);
+    expect(() => vacuousDetectorPlan.execute()).toThrow(/assertion count mismatch: 1 expected, 0 executed/);
+    expect(vacuousDetectorPlan.phase).toBe("failed");
+    expect(vacuousDetectorPlan.detectorExecutions).toBe(1);
+
+    const asyncDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.async-detector", "alpha")
+      .registerMutation({
+        id: "mutation.async-detector",
+        mode: "first",
+        source: sourceRef("fixture.async-detector"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.async-detector",
+        expectedAssertions: 1,
+        mutations: ["mutation.async-detector"],
+        run: async (resolve, assert) => {
+          assert(() => {
+            expect(resolve("mutation.async-detector")).toBe("omega");
+          });
+          await Promise.resolve();
+        }
+      });
+    expect(asyncDetectorPlan.seal()).toEqual([]);
+    expect(() => asyncDetectorPlan.execute()).toThrow(/must return undefined synchronously/);
+    expect(asyncDetectorPlan.phase).toBe("failed");
+    expect(asyncDetectorPlan.detectorExecutions).toBe(1);
+
+    const throwingDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.throwing-detector", "alpha")
+      .registerMutation({
+        id: "mutation.throwing-detector",
+        mode: "first",
+        source: sourceRef("fixture.throwing-detector"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.throwing-detector",
+        expectedAssertions: 1,
+        mutations: ["mutation.throwing-detector"],
+        run: () => {
+          throw new Error("synthetic detector failure");
+        }
+      });
+    expect(throwingDetectorPlan.seal()).toEqual([]);
+    expect(() => throwingDetectorPlan.execute()).toThrow("synthetic detector failure");
+    expect(throwingDetectorPlan.phase).toBe("failed");
+    expect(throwingDetectorPlan.detectorExecutions).toBe(1);
+
+    const asyncAssertionPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.async-assertion", "alpha")
+      .registerMutation({
+        id: "mutation.async-assertion",
+        mode: "first",
+        source: sourceRef("fixture.async-assertion"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.async-assertion",
+        expectedAssertions: 1,
+        mutations: ["mutation.async-assertion"],
+        run: (resolve, assert) => {
+          const output = resolve("mutation.async-assertion");
+          assert(async () => {
+            expect(output).toBe("omega");
+            await Promise.resolve();
+          });
+        }
+      });
+    expect(asyncAssertionPlan.seal()).toEqual([]);
+    expect(() => asyncAssertionPlan.execute()).toThrow(/assertions must return undefined synchronously/);
+    expect(asyncAssertionPlan.phase).toBe("failed");
+    expect(asyncAssertionPlan.detectorExecutions).toBe(1);
+
+    const caughtAssertionPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.caught-assertion", "alpha")
+      .registerMutation({
+        id: "mutation.caught-assertion",
+        mode: "first",
+        source: sourceRef("fixture.caught-assertion"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.caught-assertion",
+        expectedAssertions: 2,
+        mutations: ["mutation.caught-assertion"],
+        run: (resolve, assert) => {
+          try {
+            assert(() => {
+              expect(resolve("mutation.caught-assertion")).toBe("wrong");
+            });
+          } catch {
+            // A detector cannot convert a failed assertion into a successful execution.
+          }
+          assert(() => {
+            expect(resolve("mutation.caught-assertion")).toBe("omega");
+          });
+        }
+      });
+    expect(caughtAssertionPlan.seal()).toEqual([]);
+    expect(() => caughtAssertionPlan.execute()).toThrow();
+    expect(caughtAssertionPlan.phase).toBe("failed");
+    expect(caughtAssertionPlan.detectorExecutions).toBe(1);
+
+    let crossScopeSecondDetectorCalls = 0;
+    const crossScopePlan = new ReleaseMutationPlan({ total: 2, first: 2, all: 0 })
+      .registerSource("fixture.cross-scope", "alpha beta")
+      .registerMutation({
+        id: "mutation.cross-scope-a",
+        mode: "first",
+        source: sourceRef("fixture.cross-scope"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.cross-scope-b",
+        mode: "first",
+        source: sourceRef("fixture.cross-scope"),
+        needle: "beta",
+        replacement: literalReplacement("delta"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "beta", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.cross-scope-a",
+        expectedAssertions: 1,
+        mutations: ["mutation.cross-scope-a"],
+        run: (resolve, assert) => {
+          try {
+            resolve("mutation.cross-scope-b");
+          } catch {
+            // The planner must remember a scope violation even when the detector catches it.
+          }
+          try {
+            assert(() => {
+              throw new Error("later assertion failure must not mask the first scope violation");
+            });
+          } catch {
+            // A later wrapped fault must rethrow, but never replace, the first violation.
+          }
+          resolve("mutation.cross-scope-a");
+          throw new Error("later detector failure must not mask the first scope violation");
+        }
+      })
+      .registerDetector({
+        id: "detector.cross-scope-b",
+        expectedAssertions: 1,
+        mutations: ["mutation.cross-scope-b"],
+        run: (resolve, assert) => {
+          crossScopeSecondDetectorCalls++;
+          assert(() => {
+            expect(resolve("mutation.cross-scope-b")).toBe("alpha delta");
+          });
+        }
+      });
+    expect(crossScopePlan.seal()).toEqual([]);
+    expect(() => crossScopePlan.execute()).toThrow(/requested undeclared output mutation\.cross-scope-b/);
+    expect(crossScopePlan.phase).toBe("failed");
+    expect(crossScopePlan.detectorExecutions).toBe(1);
+    expect(crossScopeSecondDetectorCalls).toBe(0);
+
+    let cleanDetectorCalls = 0;
+    const cleanPlan = new ReleaseMutationPlan({ total: 8, first: 6, all: 2 })
+      .registerSource("fixture.clean", "alpha alpha\nbeta\n")
+      .registerSource("fixture.numeric", "limit > 100\n")
+      .registerSource("fixture.literal-tokens", "left alpha right")
+      .registerSource("fixture.all-tokens", "a-a")
+      .registerSource("fixture.output-tokens", "seed $&|$1|$01|$<name>|$0|$$|$`|$'")
+      .registerSource("fixture.output-target", "left slot right")
+      .registerMutation({
+        id: "mutation.clean-first",
+        mode: "first",
+        source: sourceRef("fixture.clean"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 2,
+        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.clean-all",
+        mode: "all",
+        source: mutationRef("mutation.clean-first"),
+        needle: "alpha",
+        replacement: literalReplacement("delta"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.clean-replacement-ref",
+        mode: "first",
+        source: sourceRef("fixture.clean"),
+        needle: "beta",
+        replacement: mutationRef("mutation.clean-all"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "omega delta", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.clean-token-boundary",
+        mode: "first",
+        source: sourceRef("fixture.numeric"),
+        needle: "> 100",
+        replacement: literalReplacement("> 1000"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "> 1000", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.clean-literal-tokens",
+        mode: "first",
+        source: sourceRef("fixture.literal-tokens"),
+        needle: "alpha",
+        replacement: literalReplacement("$`|$&|$'|$$"),
+        expectedOccurrences: 1,
+        witness: { kind: "line", anchor: "left left |alpha| right|$ right", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.clean-all-tokens",
+        mode: "all",
+        source: sourceRef("fixture.all-tokens"),
+        needle: "a",
+        replacement: literalReplacement("$`|$&|$'"),
+        expectedOccurrences: 2,
+        witness: { kind: "line", anchor: "|a|-a-a-|a|", before: 0, after: 1 }
+      })
+      .registerMutation({
+        id: "mutation.clean-output-tokens",
+        mode: "first",
+        source: sourceRef("fixture.output-tokens"),
+        needle: "seed",
+        replacement: literalReplacement("made"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "seed", before: 1, after: 0 }
+      })
+      .registerMutation({
+        id: "mutation.clean-output-replacement",
+        mode: "first",
+        source: sourceRef("fixture.output-target"),
+        needle: "slot",
+        replacement: mutationRef("mutation.clean-output-tokens"),
+        expectedOccurrences: 1,
+        witness: {
+          kind: "line",
+          anchor: "left made slot|$1|$01|$<name>|$0|$|left | right right",
+          before: 0,
+          after: 1
+        }
+      })
+      .registerDetector({
+        id: "detector.clean",
+        expectedAssertions: 8,
+        mutations: [
+          "mutation.clean-replacement-ref",
+          "mutation.clean-token-boundary",
+          "mutation.clean-literal-tokens",
+          "mutation.clean-all-tokens",
+          "mutation.clean-output-replacement"
+        ],
+        run: (resolve, assert) => {
+          cleanDetectorCalls++;
+          assert(() => {
+            expect(resolve("mutation.clean-first")).toBe("omega alpha\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-all")).toBe("omega delta\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-replacement-ref")).toContain("alpha alpha\nomega delta\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-token-boundary")).toBe("limit > 1000\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-literal-tokens")).toBe("left left |alpha| right|$ right");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-all-tokens")).toBe("|a|-a-a-|a|");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-output-tokens")).toBe("made $&|$1|$01|$<name>|$0|$$|$`|$'");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-output-replacement")).toBe(
+              "left made slot|$1|$01|$<name>|$0|$|left | right right"
+            );
+          });
+        }
+      });
+    expect(cleanPlan.detectorExecutions).toBe(0);
+    expect(cleanPlan.seal()).toEqual([]);
+    expect(cleanPlan.phase).toBe("sealed");
+    expect(() =>
+      cleanPlan.registerMutation({
+        id: "mutation.late",
+        mode: "first",
+        source: sourceRef("fixture.clean"),
+        needle: "alpha",
+        replacement: literalReplacement("late"),
+        expectedOccurrences: 2,
+        witness: { kind: "token", anchor: "alpha", before: 2, after: 1 }
+      })
+    ).toThrow(/cannot register mutation/);
+    cleanPlan.execute();
+    expect(cleanPlan.phase).toBe("executed");
+    expect(cleanPlan.detectorExecutions).toBe(1);
+    expect(cleanDetectorCalls).toBe(1);
+    expect(() => cleanPlan.execute()).toThrow(/requires sealed state; found executed/);
+
+    const mutableInventory = { total: 2, first: 2, all: 0 };
+    const mutableDescriptor = {
+      id: "mutation.snapshot-child",
+      mode: "first" as "first" | "all",
+      source: { kind: "mutation" as const, id: "mutation.snapshot-base" },
+      needle: "beta",
+      replacement: { kind: "literal" as const, value: "delta" },
+      expectedOccurrences: 1,
+      witness: { kind: "token" as "token" | "line", anchor: "beta", before: 1, after: 0 }
+    };
+    let snapshotDetectorCalls = 0;
+    let tamperedDetectorCalls = 0;
+    const mutableDetector = {
+      id: "detector.snapshot",
+      expectedAssertions: 2,
+      mutations: ["mutation.snapshot-child"],
+      run: (resolve: (mutationId: string) => string, assert: (assertion: () => unknown) => void) => {
+        snapshotDetectorCalls++;
+        assert(() => {
+          expect(resolve("mutation.snapshot-base")).toBe("omega beta");
+        });
+        assert(() => {
+          expect(resolve("mutation.snapshot-child")).toBe("omega delta");
+        });
+      }
+    };
+    const snapshotPlan = new ReleaseMutationPlan(mutableInventory)
+      .registerSource("fixture.snapshot", "alpha beta")
+      .registerMutation({
+        id: "mutation.snapshot-base",
+        mode: "first",
+        source: sourceRef("fixture.snapshot"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerMutation(mutableDescriptor)
+      .registerDetector(mutableDetector);
+    mutableInventory.total = 99;
+    mutableInventory.first = 99;
+    mutableInventory.all = 99;
+    mutableDescriptor.id = "mutation..snapshot-tampered";
+    mutableDescriptor.mode = "all";
+    mutableDescriptor.needle = "missing";
+    mutableDescriptor.replacement.value = "tampered";
+    mutableDescriptor.expectedOccurrences = 99;
+    mutableDescriptor.witness.kind = "line";
+    mutableDescriptor.witness.anchor = "tampered";
+    mutableDescriptor.witness.before = 99;
+    mutableDescriptor.witness.after = 100;
+    mutableDetector.id = "detector..snapshot-tampered";
+    mutableDetector.expectedAssertions = 99;
+    expect(snapshotPlan.seal()).toEqual([]);
+    mutableDescriptor.source.id = "mutation.snapshot-missing";
+    mutableDetector.mutations[0] = "mutation.snapshot-missing";
+    mutableDetector.run = () => {
+      tamperedDetectorCalls++;
+    };
+    snapshotPlan.execute();
+    expect(snapshotPlan.phase).toBe("executed");
+    expect(snapshotDetectorCalls).toBe(1);
+    expect(tamperedDetectorCalls).toBe(0);
+
     const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     const releaseTransaction = readFileSync(
       new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
@@ -5707,6 +6777,21 @@ describe("release identity and exact required-job gate", () => {
     );
     const releaseTransactionSha256 = createHash("sha256").update(releaseTransaction.slice(0, -1), "utf8").digest("hex");
     const workflow = releaseWorkflowFixture(releaseWorkflow, releaseTransaction);
+    const tagProofCounts = (source: string, repository: string) =>
+      [
+        `"repos/${repository}/git/ref/tags/$TAG"`,
+        `"repos/${repository}/git/tags/$TAG_OBJECT_SHA"`,
+        ".sha == $tag_object_sha and .tag == $tag",
+        '.type == "commit" and .sha == $sha',
+        '.type == "tag" and .sha == $sha'
+      ].map((needle) => mutationMatchCount(source, needle));
+    const githubRepositoryExpression = ["$", "{{ github.repository }}"].join("");
+    expect(tagProofCounts(releaseWorkflow, githubRepositoryExpression)).toEqual([8, 4, 4, 4, 4]);
+    expect(tagProofCounts(releaseTransaction, "$MCPB_RELEASE_REPOSITORY")).toEqual([2, 1, 1, 1, 1]);
+    expect(tagProofCounts(workflow, githubRepositoryExpression)).toEqual([10, 5, 5, 5, 5]);
+    const extraRawTagProofOccurrence = `\n# "repos/${githubRepositoryExpression}/git/ref/tags/$TAG"\n`;
+    const extraRawTagProof = [releaseWorkflow, extraRawTagProofOccurrence].join("");
+    expect(tagProofCounts(extraRawTagProof, githubRepositoryExpression)).toEqual([9, 4, 4, 4, 4]);
     const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
     const workflowFiles = readdirSync(workflowDirectory)
       .filter((name) => /\.ya?ml$/u.test(name))

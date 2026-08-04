@@ -996,10 +996,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let firstDefinitions = 0;
   let allDefinitions = 0;
   const visitCalls = (node: ts.Node): void => {
-    if (
-      ts.isIdentifier(node) &&
-      (node.text === "replaceExactly" || node.text === "replaceAllExactly")
-    ) {
+    if (ts.isIdentifier(node) && (node.text === "replaceExactly" || node.text === "replaceAllExactly")) {
       const parent = node.parent;
       const isReviewedDefinition =
         ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
@@ -1047,10 +1044,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       `release mutation self-controls expected ${RELEASE_MUTATION_SELF_CONTROL_COUNT}, found ${selfCount} (${selfFirst} first / ${selfAll} all)`
     );
   }
-  if (
-    projectFirst !== RELEASE_MUTATION_PROJECT_FIRST_COUNT ||
-    projectAll !== RELEASE_MUTATION_PROJECT_ALL_COUNT
-  ) {
+  if (projectFirst !== RELEASE_MUTATION_PROJECT_FIRST_COUNT || projectAll !== RELEASE_MUTATION_PROJECT_ALL_COUNT) {
     problems.push(
       `release mutation project inventory expected ${RELEASE_MUTATION_PROJECT_FIRST_COUNT} first / ${RELEASE_MUTATION_PROJECT_ALL_COUNT} all, found ${projectFirst} first / ${projectAll} all`
     );
@@ -4244,11 +4238,11 @@ function mcpbContractProblems(inputs: {
     !inputs.consumer.includes("nativeBinaryReason") ||
     !inputs.consumer.includes("native executable leaked into Basic MCPB") ||
     !inputs.consumer.includes('"@hono/node-server": "^2.0.11"') ||
-    !inputs.consumer.includes('hono: "^4.12.31"') ||
+    !inputs.consumer.includes('hono: "^4.12.34"') ||
     !inputs.consumer.includes('archivedPackageVersions.get("@hono/node-server")') ||
     !inputs.consumer.includes('["2.0.11"]') ||
     !inputs.consumer.includes('archivedPackageVersions.get("hono")') ||
-    !inputs.consumer.includes('["4.12.31"]') ||
+    !inputs.consumer.includes('["4.12.34"]') ||
     !inputs.consumer.includes("stranded embedding index and activation guard") ||
     !inputs.consumer.includes("Basic session changed isolated cache sentinel paths") ||
     !inputs.consumer.includes("XDG_CACHE_HOME") ||
@@ -5911,9 +5905,7 @@ describe("release identity and exact required-job gate", () => {
     });
     expect(() => explosiveSealPlan.seal()).toThrow("synthetic seal failure");
     expect(explosiveSealPlan.phase).toBe("failed");
-    expect(() => explosiveSealPlan.registerSource("fixture.after-failure", "late")).toThrow(
-      /entered failed state/
-    );
+    expect(() => explosiveSealPlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
 
     let rejectedDetectorCalls = 0;
     const rejectedPlan = new ReleaseMutationPlan()
@@ -6414,7 +6406,9 @@ describe("release identity and exact required-job gate", () => {
         expectedAssertions: 1,
         mutations: ["mutation.async-detector"],
         run: async (resolve, assert) => {
-          assert(() => expect(resolve("mutation.async-detector")).toBe("omega"));
+          assert(() => {
+            expect(resolve("mutation.async-detector")).toBe("omega");
+          });
           await Promise.resolve();
         }
       });
@@ -6422,6 +6416,30 @@ describe("release identity and exact required-job gate", () => {
     expect(() => asyncDetectorPlan.execute()).toThrow(/must return undefined synchronously/);
     expect(asyncDetectorPlan.phase).toBe("failed");
     expect(asyncDetectorPlan.detectorExecutions).toBe(1);
+
+    const throwingDetectorPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
+      .registerSource("fixture.throwing-detector", "alpha")
+      .registerMutation({
+        id: "mutation.throwing-detector",
+        mode: "first",
+        source: sourceRef("fixture.throwing-detector"),
+        needle: "alpha",
+        replacement: literalReplacement("omega"),
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+      })
+      .registerDetector({
+        id: "detector.throwing-detector",
+        expectedAssertions: 1,
+        mutations: ["mutation.throwing-detector"],
+        run: () => {
+          throw new Error("synthetic detector failure");
+        }
+      });
+    expect(throwingDetectorPlan.seal()).toEqual([]);
+    expect(() => throwingDetectorPlan.execute()).toThrow("synthetic detector failure");
+    expect(throwingDetectorPlan.phase).toBe("failed");
+    expect(throwingDetectorPlan.detectorExecutions).toBe(1);
 
     const asyncAssertionPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 })
       .registerSource("fixture.async-assertion", "alpha")
@@ -6468,11 +6486,15 @@ describe("release identity and exact required-job gate", () => {
         mutations: ["mutation.caught-assertion"],
         run: (resolve, assert) => {
           try {
-            assert(() => expect(resolve("mutation.caught-assertion")).toBe("wrong"));
+            assert(() => {
+              expect(resolve("mutation.caught-assertion")).toBe("wrong");
+            });
           } catch {
             // A detector cannot convert a failed assertion into a successful execution.
           }
-          assert(() => expect(resolve("mutation.caught-assertion")).toBe("omega"));
+          assert(() => {
+            expect(resolve("mutation.caught-assertion")).toBe("omega");
+          });
         }
       });
     expect(caughtAssertionPlan.seal()).toEqual([]);
@@ -6511,7 +6533,15 @@ describe("release identity and exact required-job gate", () => {
           } catch {
             // The planner must remember a scope violation even when the detector catches it.
           }
-          assert(() => expect(resolve("mutation.cross-scope-a")).toBe("omega beta"));
+          try {
+            assert(() => {
+              throw new Error("later assertion failure must not mask the first scope violation");
+            });
+          } catch {
+            // A later wrapped fault must rethrow, but never replace, the first violation.
+          }
+          resolve("mutation.cross-scope-a");
+          throw new Error("later detector failure must not mask the first scope violation");
         }
       })
       .registerDetector({
@@ -6520,7 +6550,9 @@ describe("release identity and exact required-job gate", () => {
         mutations: ["mutation.cross-scope-b"],
         run: (resolve, assert) => {
           crossScopeSecondDetectorCalls++;
-          assert(() => expect(resolve("mutation.cross-scope-b")).toBe("alpha delta"));
+          assert(() => {
+            expect(resolve("mutation.cross-scope-b")).toBe("alpha delta");
+          });
         }
       });
     expect(crossScopePlan.seal()).toEqual([]);
@@ -6626,24 +6658,32 @@ describe("release identity and exact required-job gate", () => {
         ],
         run: (resolve, assert) => {
           cleanDetectorCalls++;
-          assert(() => expect(resolve("mutation.clean-first")).toBe("omega alpha\nbeta\n"));
-          assert(() => expect(resolve("mutation.clean-all")).toBe("omega delta\nbeta\n"));
-          assert(() =>
-            expect(resolve("mutation.clean-replacement-ref")).toContain("alpha alpha\nomega delta\nbeta\n")
-          );
-          assert(() => expect(resolve("mutation.clean-token-boundary")).toBe("limit > 1000\n"));
-          assert(() =>
-            expect(resolve("mutation.clean-literal-tokens")).toBe("left left |alpha| right|$ right")
-          );
-          assert(() => expect(resolve("mutation.clean-all-tokens")).toBe("|a|-a-a-|a|"));
-          assert(() =>
-            expect(resolve("mutation.clean-output-tokens")).toBe("made $&|$1|$01|$<name>|$0|$$|$`|$'")
-          );
-          assert(() =>
+          assert(() => {
+            expect(resolve("mutation.clean-first")).toBe("omega alpha\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-all")).toBe("omega delta\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-replacement-ref")).toContain("alpha alpha\nomega delta\nbeta\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-token-boundary")).toBe("limit > 1000\n");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-literal-tokens")).toBe("left left |alpha| right|$ right");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-all-tokens")).toBe("|a|-a-a-|a|");
+          });
+          assert(() => {
+            expect(resolve("mutation.clean-output-tokens")).toBe("made $&|$1|$01|$<name>|$0|$$|$`|$'");
+          });
+          assert(() => {
             expect(resolve("mutation.clean-output-replacement")).toBe(
               "left made slot|$1|$01|$<name>|$0|$|left | right right"
-            )
-          );
+            );
+          });
         }
       });
     expect(cleanPlan.detectorExecutions).toBe(0);
@@ -6682,13 +6722,14 @@ describe("release identity and exact required-job gate", () => {
       id: "detector.snapshot",
       expectedAssertions: 2,
       mutations: ["mutation.snapshot-child"],
-      run: (
-        resolve: (mutationId: string) => string,
-        assert: (assertion: () => unknown) => void
-      ) => {
+      run: (resolve: (mutationId: string) => string, assert: (assertion: () => unknown) => void) => {
         snapshotDetectorCalls++;
-        assert(() => expect(resolve("mutation.snapshot-base")).toBe("omega beta"));
-        assert(() => expect(resolve("mutation.snapshot-child")).toBe("omega delta"));
+        assert(() => {
+          expect(resolve("mutation.snapshot-base")).toBe("omega beta");
+        });
+        assert(() => {
+          expect(resolve("mutation.snapshot-child")).toBe("omega delta");
+        });
       }
     };
     const snapshotPlan = new ReleaseMutationPlan(mutableInventory)
@@ -6744,14 +6785,13 @@ describe("release identity and exact required-job gate", () => {
         '.type == "commit" and .sha == $sha',
         '.type == "tag" and .sha == $sha'
       ].map((needle) => mutationMatchCount(source, needle));
-    expect(tagProofCounts(releaseWorkflow, "${{ github.repository }}")).toEqual([8, 4, 4, 4, 4]);
+    const githubRepositoryExpression = ["$", "{{ github.repository }}"].join("");
+    expect(tagProofCounts(releaseWorkflow, githubRepositoryExpression)).toEqual([8, 4, 4, 4, 4]);
     expect(tagProofCounts(releaseTransaction, "$MCPB_RELEASE_REPOSITORY")).toEqual([2, 1, 1, 1, 1]);
-    expect(tagProofCounts(workflow, "${{ github.repository }}")).toEqual([10, 5, 5, 5, 5]);
-    const extraRawTagProof = [
-      releaseWorkflow,
-      '\n# "repos/${{ github.repository }}/git/ref/tags/$TAG"\n'
-    ].join("");
-    expect(tagProofCounts(extraRawTagProof, "${{ github.repository }}")).toEqual([9, 4, 4, 4, 4]);
+    expect(tagProofCounts(workflow, githubRepositoryExpression)).toEqual([10, 5, 5, 5, 5]);
+    const extraRawTagProofOccurrence = `\n# "repos/${githubRepositoryExpression}/git/ref/tags/$TAG"\n`;
+    const extraRawTagProof = [releaseWorkflow, extraRawTagProofOccurrence].join("");
+    expect(tagProofCounts(extraRawTagProof, githubRepositoryExpression)).toEqual([9, 4, 4, 4, 4]);
     const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
     const workflowFiles = readdirSync(workflowDirectory)
       .filter((name) => /\.ya?ml$/u.test(name))

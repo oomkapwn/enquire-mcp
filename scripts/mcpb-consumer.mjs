@@ -349,8 +349,8 @@ export async function verifyBasicMcpb(artifact) {
   );
   assert.deepEqual(
     [...(archivedPackageVersions.get("hono") ?? [])],
-    ["4.12.31"],
-    "MCPB must bundle only patched hono 4.12.31"
+    ["4.12.34"],
+    "MCPB must bundle only patched hono 4.12.34"
   );
   for (const entry of licenses.packages) {
     assert.equal(typeof entry.declared_license, "string");
@@ -429,7 +429,7 @@ export async function verifyBasicMcpb(artifact) {
   ]);
   assert.deepEqual(runtimePackage.overrides, {
     "@hono/node-server": "^2.0.11",
-    hono: "^4.12.31"
+    hono: "^4.12.34"
   });
 
   const scratch = createOwnedScratch();

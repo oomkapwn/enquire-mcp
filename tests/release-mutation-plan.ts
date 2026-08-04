@@ -57,14 +57,7 @@ interface ReleaseMutationInventoryExpectation {
 }
 
 /** Lifecycle state of a release-mutation plan. */
-type ReleaseMutationPlanState =
-  | "open"
-  | "sealing"
-  | "sealed"
-  | "rejected"
-  | "executing"
-  | "executed"
-  | "failed";
+type ReleaseMutationPlanState = "open" | "sealing" | "sealed" | "rejected" | "executing" | "executed" | "failed";
 
 interface PreparedMutation {
   readonly descriptor: ReleaseMutationDescriptor;
@@ -112,10 +105,7 @@ function countWitnessOccurrences(source: string, witness: ReleaseMutationWitness
     if (offset === -1) return count;
     const before = offset > 0 ? source.charAt(offset - 1) : "";
     const after = source.charAt(offset + witness.anchor.length);
-    if (
-      (!anchorStartsWithToken || !isTokenCharacter(before)) &&
-      (!anchorEndsWithToken || !isTokenCharacter(after))
-    ) {
+    if ((!anchorStartsWithToken || !isTokenCharacter(before)) && (!anchorEndsWithToken || !isTokenCharacter(after))) {
       count++;
     }
     cursor = offset + witness.anchor.length;
@@ -144,12 +134,7 @@ function expandLiteralReplacement(source: string, needle: string, replacement: s
   return expanded;
 }
 
-function applyLiteralMutation(
-  source: string,
-  needle: string,
-  replacement: string,
-  mode: ReleaseMutationMode
-): string {
+function applyLiteralMutation(source: string, needle: string, replacement: string, mode: ReleaseMutationMode): string {
   if (mode === "first") {
     const offset = source.indexOf(needle);
     if (offset === -1) return source;
@@ -336,11 +321,11 @@ export class ReleaseMutationPlan {
           violationDetected = true;
           stickyViolation = error;
         };
-        const violate = (message: string): never => {
-          const error = new Error(message);
+        const fail = (error: unknown): never => {
           recordViolation(error);
-          throw error;
+          throw stickyViolation;
         };
+        const violate = (message: string): never => fail(new Error(message));
         const markAllowed = (mutationId: string): void => {
           if (allowed.has(mutationId)) return;
           const mutation = this.prepared.get(mutationId);
@@ -372,12 +357,16 @@ export class ReleaseMutationPlan {
               violate(`release mutation detector ${detector.id} assertions must return undefined synchronously`);
             }
           } catch (error) {
-            recordViolation(error);
-            throw error;
+            fail(error);
           }
         };
         this.executedDetectors++;
-        const result = detector.run(resolve, assert);
+        let result: unknown;
+        try {
+          result = detector.run(resolve, assert);
+        } catch (error) {
+          fail(error);
+        }
         if (result !== undefined) {
           void Promise.resolve(result).catch(() => undefined);
           recordViolation(new Error(`release mutation detector ${detector.id} must return undefined synchronously`));
@@ -390,13 +379,10 @@ export class ReleaseMutationPlan {
           );
         }
         if (assertionExecutions !== detector.expectedAssertions) {
-          const assertionSummary = [
-            `${detector.expectedAssertions} expected`,
-            `${assertionExecutions} executed`
-          ].join(", ");
-          throw new Error(
-            `release mutation detector ${detector.id} assertion count mismatch: ${assertionSummary}`
+          const assertionSummary = [`${detector.expectedAssertions} expected`, `${assertionExecutions} executed`].join(
+            ", "
           );
+          throw new Error(`release mutation detector ${detector.id} assertion count mismatch: ${assertionSummary}`);
         }
       }
       this.state = "executed";
@@ -444,11 +430,7 @@ export class ReleaseMutationPlan {
         `(${this.expectedInventory.first} first / ${this.expectedInventory.all} all)`
       ].join(" ");
       const found = `${this.mutations.length} total (${first} first / ${all} all)`;
-      this.addProblem(
-        "inventory.mismatch",
-        "plan",
-        `expected ${expected}, found ${found}`
-      );
+      this.addProblem("inventory.mismatch", "plan", `expected ${expected}, found ${found}`);
     }
   }
 
@@ -540,11 +522,7 @@ export class ReleaseMutationPlan {
       }
       const replacementDependency = valueRefDependency(descriptor.replacement);
       if (replacementDependency !== null && !mutationMap.has(replacementDependency)) {
-        this.addProblem(
-          "dependency.mutation",
-          descriptor.id,
-          `unknown replacement mutation ${replacementDependency}`
-        );
+        this.addProblem("dependency.mutation", descriptor.id, `unknown replacement mutation ${replacementDependency}`);
       }
     }
     for (const detector of this.detectors) {
@@ -576,11 +554,7 @@ export class ReleaseMutationPlan {
         mutationValid = false;
       }
       if (!isPositiveSafeInteger(descriptor.expectedOccurrences)) {
-        this.addProblem(
-          "mutation.count",
-          descriptor.id,
-          "expectedOccurrences must be a positive safe integer"
-        );
+        this.addProblem("mutation.count", descriptor.id, "expectedOccurrences must be a positive safe integer");
         mutationValid = false;
       }
       if (descriptor.witness.kind !== "token" && descriptor.witness.kind !== "line") {
@@ -598,11 +572,7 @@ export class ReleaseMutationPlan {
         descriptor.witness.after < 0 ||
         descriptor.witness.before === descriptor.witness.after
       ) {
-        this.addProblem(
-          "witness.count",
-          descriptor.id,
-          "witness counts must be different non-negative safe integers"
-        );
+        this.addProblem("witness.count", descriptor.id, "witness counts must be different non-negative safe integers");
         witnessValid = false;
       }
       if (!mutationValid) unpreparable.add(descriptor.id);
@@ -664,9 +634,7 @@ export class ReleaseMutationPlan {
           : prepare(descriptor.replacement.id)?.output;
       if (source === undefined || replacement === undefined) {
         const blockedBy = [
-          descriptor.source.kind === "mutation" && failed.has(descriptor.source.id)
-            ? descriptor.source.id
-            : null,
+          descriptor.source.kind === "mutation" && failed.has(descriptor.source.id) ? descriptor.source.id : null,
           descriptor.replacement.kind === "mutation" && failed.has(descriptor.replacement.id)
             ? descriptor.replacement.id
             : null

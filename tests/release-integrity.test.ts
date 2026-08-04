@@ -2258,21 +2258,20 @@ function releaseMutationInventoryProblems(source: string): string[] {
             (ts.isStringLiteral(property.name) && property.name.text === name))
       );
     const root = properties("root")[0]?.initializer;
-    const invoke = properties("invoke")[0]?.initializer;
-    const expectations = properties("expectations")[0]?.initializer;
+    const checks = properties("checks")[0]?.initializer;
     const casePropertyNames = descriptor.properties.map((property) => {
       if (!ts.isPropertyAssignment(property)) return null;
       if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
       return null;
     });
     if (
-      casePropertyNames.length !== 4 ||
-      new Set(casePropertyNames).size !== 4 ||
-      !["id", "root", "invoke", "expectations"].every((name) => casePropertyNames.includes(name))
+      casePropertyNames.length !== 3 ||
+      new Set(casePropertyNames).size !== 3 ||
+      !["id", "root", "checks"].every((name) => casePropertyNames.includes(name))
     ) {
       const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
       problems.push(
-        `release mutation declarative registerCase requires exact id/root/invoke/expectations properties at ${position.line + 1}:${position.character + 1}`
+        `release mutation declarative registerCase requires exact id/root/checks properties at ${position.line + 1}:${position.character + 1}`
       );
     }
     let rootHandle: string | null = null;
@@ -2296,116 +2295,171 @@ function releaseMutationInventoryProblems(source: string): string[] {
       }
       declarativeCaseRoots.add(rootHandle);
     }
-    let invocationKind: "fixture.text" | "fixture.throw" | null = null;
-    if (properties("invoke").length !== 1 || invoke === undefined || !ts.isObjectLiteralExpression(invoke)) {
+    if (
+      properties("checks").length !== 1 ||
+      checks === undefined ||
+      !ts.isArrayLiteralExpression(checks) ||
+      checks.elements.length === 0
+    ) {
       const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
       problems.push(
-        `release mutation declarative registerCase requires one literal invoke object at ${position.line + 1}:${position.character + 1}`
+        `release mutation declarative registerCase requires one non-empty literal checks array at ${position.line + 1}:${position.character + 1}`
       );
-    } else {
-      const invocationProperties = (name: string): ts.PropertyAssignment[] =>
-        invoke.properties.filter(
+      continue;
+    }
+    const caseCheckSemantics = new Set<string>();
+    for (const check of checks.elements) {
+      if (!ts.isObjectLiteralExpression(check)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative check must be one literal invoke/expectation pair at ${position.line + 1}:${position.character + 1}`
+        );
+        continue;
+      }
+      const checkProperty = (name: string): ts.PropertyAssignment[] =>
+        check.properties.filter(
           (property): property is ts.PropertyAssignment =>
             ts.isPropertyAssignment(property) &&
             ((ts.isIdentifier(property.name) && property.name.text === name) ||
               (ts.isStringLiteral(property.name) && property.name.text === name))
         );
-      const baseline = invocationProperties("baseline")[0]?.initializer;
-      const mutant = invocationProperties("mutant")[0]?.initializer;
-      const kind = invocationProperties("kind")[0]?.initializer;
-      const invocationPropertyNames = invoke.properties.map((property) => {
+      const checkPropertyNames = check.properties.map((property) => {
         if (!ts.isPropertyAssignment(property)) return null;
         if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
         return null;
       });
-      if (invocationProperties("kind").length !== 1 || kind === undefined || !ts.isStringLiteral(kind)) {
-        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+      if (
+        checkPropertyNames.length !== 2 ||
+        new Set(checkPropertyNames).size !== 2 ||
+        !["invoke", "expectation"].every((name) => checkPropertyNames.includes(name))
+      ) {
+        const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
         problems.push(
-          `release mutation declarative case invocation requires one literal kind at ${position.line + 1}:${position.character + 1}`
+          `release mutation declarative check requires exact invoke/expectation pairing properties at ${position.line + 1}:${position.character + 1}`
         );
-      } else if (kind.text === "fixture.text" || kind.text === "fixture.throw") {
-        invocationKind = kind.text;
+      }
+      const invoke = checkProperty("invoke")[0]?.initializer;
+      const expectation = checkProperty("expectation")[0]?.initializer;
+      let invocationKind: "fixture.text" | "fixture.throw" | null = null;
+      let invocationIdentity: string | null = null;
+      if (checkProperty("invoke").length !== 1 || invoke === undefined || !ts.isObjectLiteralExpression(invoke)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
+        problems.push(
+          `release mutation declarative check requires one literal invoke object at ${position.line + 1}:${position.character + 1}`
+        );
       } else {
-        const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
-        problems.push(
-          `release mutation declarative case invocation kind must be one closed literal at ${position.line + 1}:${position.character + 1}`
-        );
-      }
-      const expectedInvocationProperties =
-        invocationKind === "fixture.text"
-          ? ["kind", "baseline", "mutant"]
-          : invocationKind === "fixture.throw"
-            ? ["kind", "baseline", "mutant", "message"]
-            : null;
-      if (
-        invocationPropertyNames.some((name) => name === null) ||
-        new Set(invocationPropertyNames).size !== invocationPropertyNames.length ||
-        (expectedInvocationProperties !== null &&
-          (invocationPropertyNames.length !== expectedInvocationProperties.length ||
-            !expectedInvocationProperties.every((name) => invocationPropertyNames.includes(name))))
-      ) {
-        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
-        problems.push(
-          `release mutation declarative case invocation has unexpected, missing, computed or duplicate properties at ${position.line + 1}:${position.character + 1}`
-        );
-      }
-      if (
-        invocationProperties("baseline").length !== 1 ||
-        baseline === undefined ||
-        !ts.isIdentifier(baseline) ||
-        (!declarativeSourceHandles.has(baseline.text) && !declarativeMutationHandles.has(baseline.text)) ||
-        baseline.text === rootHandle
-      ) {
-        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
-        problems.push(
-          `release mutation declarative case invocation requires one explicit clean baseline handle distinct from its root at ${position.line + 1}:${position.character + 1}`
-        );
-      }
-      if (
-        invocationProperties("mutant").length !== 1 ||
-        mutant === undefined ||
-        !ts.isIdentifier(mutant) ||
-        rootHandle === null ||
-        mutant.text !== rootHandle
-      ) {
-        const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
-        problems.push(
-          `release mutation declarative case invocation mutant must be the exact case root handle at ${position.line + 1}:${position.character + 1}`
-        );
-      }
-      if (invocationKind === "fixture.throw") {
-        const message = invocationProperties("message")[0]?.initializer;
+        const invocationProperties = (name: string): ts.PropertyAssignment[] =>
+          invoke.properties.filter(
+            (property): property is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(property) &&
+              ((ts.isIdentifier(property.name) && property.name.text === name) ||
+                (ts.isStringLiteral(property.name) && property.name.text === name))
+          );
+        const baseline = invocationProperties("baseline")[0]?.initializer;
+        const mutant = invocationProperties("mutant")[0]?.initializer;
+        const kind = invocationProperties("kind")[0]?.initializer;
+        const invocationPropertyNames = invoke.properties.map((property) => {
+          if (!ts.isPropertyAssignment(property)) return null;
+          if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) return property.name.text;
+          return null;
+        });
+        if (invocationProperties("kind").length !== 1 || kind === undefined || !ts.isStringLiteral(kind)) {
+          const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative case invocation requires one literal kind at ${position.line + 1}:${position.character + 1}`
+          );
+        } else if (kind.text === "fixture.text" || kind.text === "fixture.throw") {
+          invocationKind = kind.text;
+        } else {
+          const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative case invocation kind must be one closed literal at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+        const expectedInvocationProperties =
+          invocationKind === "fixture.text"
+            ? ["kind", "baseline", "mutant"]
+            : invocationKind === "fixture.throw"
+              ? ["kind", "baseline", "mutant", "message"]
+              : null;
         if (
-          invocationProperties("message").length !== 1 ||
-          message === undefined ||
-          !ts.isStringLiteral(message) ||
-          message.text.length === 0
+          invocationPropertyNames.some((name) => name === null) ||
+          new Set(invocationPropertyNames).size !== invocationPropertyNames.length ||
+          (expectedInvocationProperties !== null &&
+            (invocationPropertyNames.length !== expectedInvocationProperties.length ||
+              !expectedInvocationProperties.every((name) => invocationPropertyNames.includes(name))))
         ) {
           const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
           problems.push(
-            `release mutation declarative fixture.throw invocation requires one non-empty literal message at ${position.line + 1}:${position.character + 1}`
+            `release mutation declarative case invocation has unexpected, missing, computed or duplicate properties at ${position.line + 1}:${position.character + 1}`
           );
         }
+        if (
+          invocationProperties("baseline").length !== 1 ||
+          baseline === undefined ||
+          !ts.isIdentifier(baseline) ||
+          (!declarativeSourceHandles.has(baseline.text) && !declarativeMutationHandles.has(baseline.text)) ||
+          baseline.text === rootHandle
+        ) {
+          const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative case invocation requires one explicit clean baseline handle distinct from its root at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+        if (
+          invocationProperties("mutant").length !== 1 ||
+          mutant === undefined ||
+          !ts.isIdentifier(mutant) ||
+          rootHandle === null ||
+          mutant.text !== rootHandle
+        ) {
+          const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+          problems.push(
+            `release mutation declarative case invocation mutant must be the exact case root handle at ${position.line + 1}:${position.character + 1}`
+          );
+        }
+        if (invocationKind === "fixture.throw") {
+          const message = invocationProperties("message")[0]?.initializer;
+          if (
+            invocationProperties("message").length !== 1 ||
+            message === undefined ||
+            !ts.isStringLiteral(message) ||
+            message.text.length === 0
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+            problems.push(
+              `release mutation declarative fixture.throw invocation requires one non-empty literal message at ${position.line + 1}:${position.character + 1}`
+            );
+          }
+        }
+        const invocationMessage = invocationProperties("message")[0]?.initializer;
+        if (
+          invocationKind !== null &&
+          baseline !== undefined &&
+          ts.isIdentifier(baseline) &&
+          mutant !== undefined &&
+          ts.isIdentifier(mutant) &&
+          (invocationKind === "fixture.text" ||
+            (invocationMessage !== undefined &&
+              ts.isStringLiteral(invocationMessage) &&
+              invocationMessage.text.length > 0))
+        ) {
+          invocationIdentity = JSON.stringify([
+            invocationKind,
+            baseline.text,
+            mutant.text,
+            invocationKind === "fixture.throw" &&
+            invocationMessage !== undefined &&
+            ts.isStringLiteral(invocationMessage)
+              ? invocationMessage.text
+              : null
+          ]);
+        }
       }
-    }
-    if (
-      properties("expectations").length !== 1 ||
-      expectations === undefined ||
-      !ts.isArrayLiteralExpression(expectations) ||
-      expectations.elements.length === 0
-    ) {
-      const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
-      problems.push(
-        `release mutation declarative registerCase requires one non-empty literal expectations array at ${position.line + 1}:${position.character + 1}`
-      );
-      continue;
-    }
-    const caseExpectationSemantics = new Set<string>();
-    for (const expectation of expectations.elements) {
-      if (!ts.isObjectLiteralExpression(expectation)) {
-        const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
+      if (expectation === undefined || !ts.isObjectLiteralExpression(expectation)) {
+        const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
         problems.push(
-          `release mutation declarative expectation must be one object with literal id/kind at ${position.line + 1}:${position.character + 1}`
+          `release mutation declarative check requires one literal expectation object at ${position.line + 1}:${position.character + 1}`
         );
         continue;
       }
@@ -2505,9 +2559,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
           } else semanticIdentity = JSON.stringify([kind.text, value.text]);
         }
         if (semanticIdentity !== null) {
-          if (caseExpectationSemantics.has(semanticIdentity)) {
+          const checkSemanticIdentity =
+            invocationIdentity === null ? null : JSON.stringify([invocationIdentity, semanticIdentity]);
+          if (checkSemanticIdentity !== null && caseCheckSemantics.has(checkSemanticIdentity)) {
             problems.push(`release mutation declarative expectation ${id.text} duplicates one case semantic check`);
-          } else caseExpectationSemantics.add(semanticIdentity);
+          } else if (checkSemanticIdentity !== null) caseCheckSemantics.add(checkSemanticIdentity);
         }
         if (
           (invocationKind === "fixture.text" && kind.text === "problem") ||
@@ -7752,7 +7808,7 @@ describe("release identity and exact required-job gate", () => {
       first: 1,
       all: 0,
       cases: 1,
-      expectations: 1,
+      expectations: 2,
       roots: 1,
       dependencyOnly: 0
     });
@@ -7768,15 +7824,32 @@ describe("release identity and exact required-job gate", () => {
     releaseMutationPlan.registerCase({
       id: "case.hybrid",
       root: hybridMutationHandle,
-      invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },
-      expectations: [{ id: "expectation.hybrid", kind: "equal", value: "mutant" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },
+          expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }
+        },
+        {
+          invoke: {
+            kind: "fixture.throw",
+            baseline: hybridSourceHandle,
+            mutant: hybridMutationHandle,
+            message: "synthetic paired probe"
+          },
+          expectation: {
+            id: "expectation.hybrid-throw",
+            kind: "problem",
+            problem: "fixture.mutant-threw"
+          }
+        }
+      ]
     });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.execute();
     expect(releaseMutationPlan.phase).toBe("executed");
     expect(releaseMutationPlan.caseExecutions).toBe(1);
-    expect(releaseMutationPlan.expectationExecutions).toBe(1);`;
+    expect(releaseMutationPlan.expectationExecutions).toBe(2);`;
     const hybridDeclarativeMutation = [
       hybridLegacyRemoval.slice(0, matrixBodyOffset),
       hybridDeclarativePrelude,
@@ -7833,15 +7906,16 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(sourceRootDeclarativeCase)).toContainEqual(
       expect.stringMatching(/source handle cannot be a case root/)
     );
-    const expectationToken = 'expectations: [{ id: "expectation.hybrid", kind: "equal", value: "mutant" }]';
-    const expectationOffset = hybridPreludeOffset(expectationToken);
-    const emptyDeclarativeExpectations = [
-      hybridDeclarativeMutation.slice(0, expectationOffset),
-      "expectations: []",
-      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+    const checksStartToken = "checks: [";
+    const checksStartOffset = hybridPreludeOffset(checksStartToken);
+    const checksEndOffset = checksStartOffset + hybridDeclarativeMutation.slice(checksStartOffset).indexOf("]") + 1;
+    const emptyDeclarativeChecks = [
+      hybridDeclarativeMutation.slice(0, checksStartOffset),
+      "checks: []",
+      hybridDeclarativeMutation.slice(checksEndOffset)
     ].join("");
-    expect(releaseMutationInventoryProblems(emptyDeclarativeExpectations)).toContainEqual(
-      expect.stringMatching(/requires one non-empty literal expectations array/)
+    expect(releaseMutationInventoryProblems(emptyDeclarativeChecks)).toContainEqual(
+      expect.stringMatching(/requires one non-empty literal checks array/)
     );
     const invocationKindToken = 'invoke: { kind: "fixture.text"';
     const invocationKindOffset = hybridPreludeOffset(invocationKindToken);
@@ -7853,26 +7927,80 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(unknownDeclarativeInvocation)).toContainEqual(
       expect.stringMatching(/case invocation kind must be one closed literal/)
     );
+    const namedRegexToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
+    const namedRegexOffset = hybridPreludeOffset(namedRegexToken);
     const unknownNamedRegexExpectation = [
-      hybridDeclarativeMutation.slice(0, expectationOffset),
-      'expectations: [{ id: "expectation.hybrid", kind: "regex", regex: "fixture.dynamic" }]',
-      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+      hybridDeclarativeMutation.slice(0, namedRegexOffset),
+      'expectation: { id: "expectation.hybrid-text", kind: "regex", regex: "fixture.dynamic" }',
+      hybridDeclarativeMutation.slice(namedRegexOffset + namedRegexToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(unknownNamedRegexExpectation)).toContainEqual(
       expect.stringMatching(/requires one named regex identity/)
     );
+    const firstTextCheck = [
+      "{",
+      '          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
+      '          expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }',
+      "        }"
+    ].join("\n");
+    const duplicateTextCheck = [
+      "{",
+      '          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
+      '          expectation: { id: "expectation.hybrid-padding", kind: "equal", value: "mutant" }',
+      "        }"
+    ].join("\n");
+    const firstTextCheckOffset = hybridPreludeOffset(firstTextCheck);
     const duplicateSemanticExpectations = [
-      hybridDeclarativeMutation.slice(0, expectationOffset),
-      [
-        "expectations: [",
-        '  { id: "expectation.hybrid", kind: "equal", value: "mutant" },',
-        '  { id: "expectation.hybrid-padding", kind: "equal", value: "mutant" }',
-        "]"
-      ].join("\n      "),
-      hybridDeclarativeMutation.slice(expectationOffset + expectationToken.length)
+      hybridDeclarativeMutation.slice(0, firstTextCheckOffset),
+      `${firstTextCheck},\n        ${duplicateTextCheck}`,
+      hybridDeclarativeMutation.slice(firstTextCheckOffset + firstTextCheck.length)
     ].join("");
     expect(releaseMutationInventoryProblems(duplicateSemanticExpectations)).toContainEqual(
       expect.stringMatching(/duplicates one case semantic check/)
+    );
+    const firstExpectationToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
+    const firstExpectationOffset = hybridPreludeOffset(firstExpectationToken);
+    const missingInvocationExpectationPair = [
+      hybridDeclarativeMutation.slice(0, firstExpectationOffset),
+      'expectations: [{ id: "expectation.hybrid-text", kind: "equal", value: "mutant" }]',
+      hybridDeclarativeMutation.slice(firstExpectationOffset + firstExpectationToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(missingInvocationExpectationPair)).toContainEqual(
+      expect.stringMatching(/check requires exact invoke\/expectation pairing properties/)
+    );
+    const secondExpectationToken = [
+      "expectation: {",
+      '            id: "expectation.hybrid-throw",',
+      '            kind: "problem",',
+      '            problem: "fixture.mutant-threw"',
+      "          }"
+    ].join("\n");
+    const secondExpectationOffset = hybridPreludeOffset(secondExpectationToken);
+    const reorderedPairing = [
+      hybridDeclarativeMutation.slice(0, firstExpectationOffset),
+      secondExpectationToken,
+      hybridDeclarativeMutation.slice(firstExpectationOffset + firstExpectationToken.length, secondExpectationOffset),
+      firstExpectationToken,
+      hybridDeclarativeMutation.slice(secondExpectationOffset + secondExpectationToken.length)
+    ].join("");
+    expect(
+      releaseMutationInventoryProblems(reorderedPairing).filter((problem) => problem.includes("is incompatible with"))
+    ).toHaveLength(2);
+    const collapsedDistinctProbes = [
+      hybridDeclarativeMutation.slice(0, checksStartOffset),
+      [
+        "checks: [{",
+        '        invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
+        "        expectations: [",
+        '          { id: "expectation.hybrid-text", kind: "equal", value: "mutant" },',
+        '          { id: "expectation.hybrid-throw", kind: "problem", problem: "fixture.mutant-threw" }',
+        "        ]",
+        "      }]"
+      ].join("\n"),
+      hybridDeclarativeMutation.slice(checksEndOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(collapsedDistinctProbes)).toContainEqual(
+      expect.stringMatching(/check requires exact invoke\/expectation pairing properties/)
     );
     const sealSequence = [
       "const releaseMutationProblems = releaseMutationPlan.seal();",
@@ -7880,7 +8008,7 @@ describe("release identity and exact required-job gate", () => {
       "releaseMutationPlan.execute();",
       'expect(releaseMutationPlan.phase).toBe("executed");',
       "expect(releaseMutationPlan.caseExecutions).toBe(1);",
-      "expect(releaseMutationPlan.expectationExecutions).toBe(1);"
+      "expect(releaseMutationPlan.expectationExecutions).toBe(2);"
     ].join("\n    ");
     const sealSequenceOffset = hybridPreludeOffset(sealSequence);
     const outerDynamicCodeMutation = [
@@ -7921,11 +8049,11 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(wrongDeclarativeCaseExecutionCount)).toContain(
       "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
     );
-    const expectationExecutionAssertion = "expect(releaseMutationPlan.expectationExecutions).toBe(1);";
+    const expectationExecutionAssertion = "expect(releaseMutationPlan.expectationExecutions).toBe(2);";
     const expectationExecutionAssertionOffset = hybridPreludeOffset(expectationExecutionAssertion);
     const wrongDeclarativeExpectationExecutionCount = [
       hybridDeclarativeMutation.slice(0, expectationExecutionAssertionOffset),
-      "expect(releaseMutationPlan.expectationExecutions).toBe(0);",
+      "expect(releaseMutationPlan.expectationExecutions).toBe(1);",
       hybridDeclarativeMutation.slice(expectationExecutionAssertionOffset + expectationExecutionAssertion.length)
     ].join("");
     expect(releaseMutationInventoryProblems(wrongDeclarativeExpectationExecutionCount)).toContain(
@@ -8237,8 +8365,12 @@ describe("release identity and exact required-job gate", () => {
       intrinsicPushPlan.registerCase({
         id: "case.intrinsic-push",
         root: intrinsicPushRoot,
-        invoke: { kind: "fixture.text", baseline: intrinsicPushSource, mutant: intrinsicPushRoot },
-        expectations: [{ id: "expectation.intrinsic-push", kind: "equal", value: "omega" }]
+        checks: [
+          {
+            invoke: { kind: "fixture.text", baseline: intrinsicPushSource, mutant: intrinsicPushRoot },
+            expectation: { id: "expectation.intrinsic-push", kind: "equal", value: "omega" }
+          }
+        ]
       });
       intrinsicPushProblems = intrinsicPushPlan.seal();
       intrinsicPushPlan.execute();
@@ -8398,7 +8530,7 @@ describe("release identity and exact required-job gate", () => {
       first: 5,
       all: 2,
       cases: 6,
-      expectations: 8,
+      expectations: 10,
       roots: 6,
       dependencyOnly: 1
     });
@@ -8478,51 +8610,98 @@ describe("release identity and exact required-job gate", () => {
     cleanPlan.registerCase({
       id: "case.clean-first",
       root: cleanFirst,
-      invoke: { kind: "fixture.text", baseline: cleanSource, mutant: cleanFirst },
-      expectations: [
-        { id: "expectation.clean-first-equal", kind: "equal", value: "omega alpha\nbeta\n" },
-        { id: "expectation.clean-first-not-equal", kind: "not-equal", value: "alpha alpha\nbeta\n" },
-        { id: "expectation.clean-first-regex", kind: "regex", regex: "fixture.omega-token" }
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: cleanSource, mutant: cleanFirst },
+          expectation: { id: "expectation.clean-first-equal", kind: "equal", value: "omega alpha\nbeta\n" }
+        },
+        {
+          invoke: { kind: "fixture.text", baseline: cleanSource, mutant: cleanFirst },
+          expectation: {
+            id: "expectation.clean-first-not-equal",
+            kind: "not-equal",
+            value: "alpha alpha\nbeta\n"
+          }
+        },
+        {
+          invoke: { kind: "fixture.text", baseline: cleanSource, mutant: cleanFirst },
+          expectation: { id: "expectation.clean-first-regex", kind: "regex", regex: "fixture.omega-token" }
+        }
       ]
     });
     cleanPlan.registerCase({
       id: "case.clean-all",
       root: cleanAll,
-      invoke: { kind: "fixture.text", baseline: cleanFirst, mutant: cleanAll },
-      expectations: [{ id: "expectation.clean-all", kind: "equal", value: "omega delta\nbeta\n" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: cleanFirst, mutant: cleanAll },
+          expectation: { id: "expectation.clean-all", kind: "equal", value: "omega delta\nbeta\n" }
+        }
+      ]
     });
     cleanPlan.registerCase({
       id: "case.replacement-root",
       root: replacementRoot,
-      invoke: { kind: "fixture.text", baseline: replacementTarget, mutant: replacementRoot },
-      expectations: [{ id: "expectation.replacement-root", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: replacementTarget, mutant: replacementRoot },
+          expectation: { id: "expectation.replacement-root", kind: "equal", value: "omega" }
+        }
+      ]
     });
     cleanPlan.registerCase({
       id: "case.literal-first",
       root: literalRoot,
-      invoke: { kind: "fixture.text", baseline: literalSource, mutant: literalRoot },
-      expectations: [{ id: "expectation.literal-first", kind: "equal", value: "alpha|$|$1" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: literalSource, mutant: literalRoot },
+          expectation: { id: "expectation.literal-first", kind: "equal", value: "alpha|$|$1" }
+        }
+      ]
     });
     cleanPlan.registerCase({
       id: "case.literal-all",
       root: allLiteralRoot,
-      invoke: { kind: "fixture.text", baseline: allLiteralSource, mutant: allLiteralRoot },
-      expectations: [{ id: "expectation.literal-all", kind: "equal", value: "$-$" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: allLiteralSource, mutant: allLiteralRoot },
+          expectation: { id: "expectation.literal-all", kind: "equal", value: "$-$" }
+        }
+      ]
     });
     cleanPlan.registerCase({
       id: "case.throw",
       root: throwRoot,
-      invoke: {
-        kind: "fixture.throw",
-        baseline: throwSource,
-        mutant: throwRoot,
-        message: "synthetic omega rejection"
-      },
-      expectations: [
+      checks: [
         {
-          id: "expectation.throw-problem",
-          kind: "problem",
-          problem: "fixture.mutant-threw"
+          invoke: { kind: "fixture.text", baseline: throwSource, mutant: throwRoot },
+          expectation: { id: "expectation.throw-text", kind: "equal", value: "omega" }
+        },
+        {
+          invoke: {
+            kind: "fixture.throw",
+            baseline: throwSource,
+            mutant: throwRoot,
+            message: "synthetic omega rejection"
+          },
+          expectation: {
+            id: "expectation.throw-problem",
+            kind: "problem",
+            problem: "fixture.mutant-threw"
+          }
+        },
+        {
+          invoke: {
+            kind: "fixture.throw",
+            baseline: throwSource,
+            mutant: throwRoot,
+            message: "second synthetic omega rejection"
+          },
+          expectation: {
+            id: "expectation.throw-problem-second-probe",
+            kind: "problem",
+            problem: "fixture.mutant-threw"
+          }
         }
       ]
     });
@@ -8535,7 +8714,7 @@ describe("release identity and exact required-job gate", () => {
     cleanPlan.execute();
     expect(cleanPlan.phase).toBe("executed");
     expect(cleanPlan.caseExecutions).toBe(6);
-    expect(cleanPlan.expectationExecutions).toBe(8);
+    expect(cleanPlan.expectationExecutions).toBe(10);
     expect(() => cleanPlan.execute()).toThrow(/requires sealed state; found executed/);
 
     const topologyPlan = new ReleaseMutationPlan({
@@ -8567,14 +8746,22 @@ describe("release identity and exact required-job gate", () => {
     topologyPlan.registerCase({
       id: "case.topology-first",
       root: topologyFirstRoot,
-      invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologyFirstRoot },
-      expectations: [{ id: "expectation.topology-first", kind: "equal", value: "omega beta" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologyFirstRoot },
+          expectation: { id: "expectation.topology-first", kind: "equal", value: "omega beta" }
+        }
+      ]
     });
     topologyPlan.registerCase({
       id: "case.topology-second",
       root: topologySecondRoot,
-      invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologySecondRoot },
-      expectations: [{ id: "expectation.topology-second", kind: "equal", value: "alpha delta" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: topologySource, mutant: topologySecondRoot },
+          expectation: { id: "expectation.topology-second", kind: "equal", value: "alpha delta" }
+        }
+      ]
     });
     expect(topologyPlan.seal()).toEqual([
       "[inventory.mismatch] plan: expected 2 total (2 first / 0 all), 1 cases / 1 expectations / 1 roots / 1 dependency-only, found 2 total (2 first / 0 all), 2 cases / 2 expectations / 2 roots / 0 dependency-only"
@@ -8608,16 +8795,18 @@ describe("release identity and exact required-job gate", () => {
     notEqualDifferentialPlan.registerCase({
       id: "case.not-equal-differential",
       root: notEqualDifferentialRoot,
-      invoke: {
-        kind: "fixture.text",
-        baseline: notEqualDifferentialSource,
-        mutant: notEqualDifferentialRoot
-      },
-      expectations: [
+      checks: [
         {
-          id: "expectation.not-equal-differential",
-          kind: "not-equal",
-          value: "forbidden"
+          invoke: {
+            kind: "fixture.text",
+            baseline: notEqualDifferentialSource,
+            mutant: notEqualDifferentialRoot
+          },
+          expectation: {
+            id: "expectation.not-equal-differential",
+            kind: "not-equal",
+            value: "forbidden"
+          }
         }
       ]
     });
@@ -8641,12 +8830,14 @@ describe("release identity and exact required-job gate", () => {
     regexDifferentialPlan.registerCase({
       id: "case.regex-differential",
       root: regexDifferentialRoot,
-      invoke: { kind: "fixture.text", baseline: regexDifferentialSource, mutant: regexDifferentialRoot },
-      expectations: [
+      checks: [
         {
-          id: "expectation.regex-differential",
-          kind: "regex",
-          regex: "fixture.omega-token"
+          invoke: { kind: "fixture.text", baseline: regexDifferentialSource, mutant: regexDifferentialRoot },
+          expectation: {
+            id: "expectation.regex-differential",
+            kind: "regex",
+            regex: "fixture.omega-token"
+          }
         }
       ]
     });
@@ -8678,19 +8869,34 @@ describe("release identity and exact required-job gate", () => {
     failurePlan.registerCase({
       id: "case.failure-first",
       root: failureFirst,
-      invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureFirst },
-      expectations: [{ id: "expectation.failure-first", kind: "equal", value: "wrong" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureFirst },
+          expectation: { id: "expectation.failure-first-pass", kind: "equal", value: "omega beta" }
+        },
+        {
+          invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureFirst },
+          expectation: { id: "expectation.failure-first-stop", kind: "equal", value: "wrong" }
+        }
+      ]
     });
     failurePlan.registerCase({
       id: "case.failure-later",
       root: failureLater,
-      invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureLater },
-      expectations: [{ id: "expectation.failure-later", kind: "equal", value: "alpha delta" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: failureSource, mutant: failureLater },
+          expectation: { id: "expectation.failure-later", kind: "equal", value: "alpha delta" }
+        }
+      ]
     });
     expect(failurePlan.seal()).toEqual([]);
-    expect(() => failurePlan.execute()).toThrow(/case case.failure-first expectation expectation.failure-first failed/);
+    expect(() => failurePlan.execute()).toThrow(
+      /case case.failure-first expectation expectation.failure-first-stop failed/
+    );
     expect(failurePlan.phase).toBe("failed");
     expect(failurePlan.caseExecutions).toBe(1);
+    expect(failurePlan.expectationExecutions).toBe(2);
 
     const missingProblemPlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
     const missingProblemSource = missingProblemPlan.registerSource("fixture.missing-problem", "alpha");
@@ -8705,17 +8911,19 @@ describe("release identity and exact required-job gate", () => {
     missingProblemPlan.registerCase({
       id: "case.missing-problem",
       root: missingProblemRoot,
-      invoke: {
-        kind: "fixture.throw",
-        baseline: missingProblemSource,
-        mutant: missingProblemRoot,
-        message: "synthetic missing problem"
-      },
-      expectations: [
+      checks: [
         {
-          id: "expectation.missing-problem",
-          kind: "problem",
-          problem: "fixture.mutant-threw"
+          invoke: {
+            kind: "fixture.throw",
+            baseline: missingProblemSource,
+            mutant: missingProblemRoot,
+            message: "synthetic missing problem"
+          },
+          expectation: {
+            id: "expectation.missing-problem",
+            kind: "problem",
+            problem: "fixture.mutant-threw"
+          }
         }
       ]
     });
@@ -8766,20 +8974,32 @@ describe("release identity and exact required-job gate", () => {
     invalidPlan.registerCase({
       id: "case.invalid-mode",
       root: invalidMode,
-      invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: invalidMode },
-      expectations: [{ id: "expectation.invalid-mode", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: invalidMode },
+          expectation: { id: "expectation.invalid-mode", kind: "equal", value: "omega" }
+        }
+      ]
     });
     invalidPlan.registerCase({
       id: "case.source-root",
       root: invalidEmptySource,
-      invoke: { kind: "fixture.text", baseline: invalidIdSource, mutant: invalidEmptySource },
-      expectations: [{ id: "expectation.source-root", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: invalidIdSource, mutant: invalidEmptySource },
+          expectation: { id: "expectation.source-root", kind: "equal", value: "omega" }
+        }
+      ]
     } as never);
     invalidPlan.registerCase({
       id: "case.forged-root",
       root: {},
-      invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: {} },
-      expectations: [{ id: "expectation.forged-root", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: duplicateSource, mutant: {} },
+          expectation: { id: "expectation.forged-root", kind: "equal", value: "omega" }
+        }
+      ]
     } as never);
     const invalidDiagnostics = invalidPlan.seal();
     expect(invalidDiagnostics).toEqual(
@@ -8822,8 +9042,12 @@ describe("release identity and exact required-job gate", () => {
     baselinePlan.registerCase({
       id: "case.baseline-replacement",
       root: baselineRoot,
-      invoke: { kind: "fixture.text", baseline: baselineReplacement, mutant: baselineRoot },
-      expectations: [{ id: "expectation.baseline-replacement", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: baselineReplacement, mutant: baselineRoot },
+          expectation: { id: "expectation.baseline-replacement", kind: "equal", value: "omega" }
+        }
+      ]
     });
     expect(baselinePlan.seal()).toEqual(
       expect.arrayContaining([
@@ -8853,8 +9077,12 @@ describe("release identity and exact required-job gate", () => {
     equalOutputPlan.registerCase({
       id: "case.equal-output",
       root: equalOutputRoot,
-      invoke: { kind: "fixture.text", baseline: equalOutputSource, mutant: equalOutputRoot },
-      expectations: [{ id: "expectation.equal-output", kind: "equal", value: "alpha" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: equalOutputSource, mutant: equalOutputRoot },
+          expectation: { id: "expectation.equal-output", kind: "equal", value: "alpha" }
+        }
+      ]
     });
     expect(equalOutputPlan.seal()).toEqual(
       expect.arrayContaining([
@@ -8884,28 +9112,41 @@ describe("release identity and exact required-job gate", () => {
     caseValidationPlan.registerCase({
       id: "case.duplicate-semantic",
       root: duplicateSemanticRoot,
-      invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
-      expectations: [
-        { id: "expectation.duplicate-semantic-a", kind: "equal", value: "omega beta" },
-        { id: "expectation.duplicate-semantic-b", kind: "equal", value: "omega beta" }
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
+          expectation: { id: "expectation.duplicate-semantic-a", kind: "equal", value: "omega beta" }
+        },
+        {
+          invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
+          expectation: { id: "expectation.duplicate-semantic-b", kind: "equal", value: "omega beta" }
+        }
       ]
     });
     caseValidationPlan.registerCase({
       id: "case.duplicate-root",
       root: duplicateSemanticRoot,
-      invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
-      expectations: [{ id: "expectation.duplicate-root", kind: "not-equal", value: "alpha beta" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: caseValidationSource, mutant: duplicateSemanticRoot },
+          expectation: { id: "expectation.duplicate-root", kind: "not-equal", value: "alpha beta" }
+        }
+      ]
     });
     caseValidationPlan.registerCase({
       id: "case.incompatible",
       root: incompatibleRoot,
-      invoke: {
-        kind: "fixture.throw",
-        baseline: caseValidationSource,
-        mutant: incompatibleRoot,
-        message: "synthetic incompatible expectation"
-      },
-      expectations: [{ id: "expectation.incompatible", kind: "equal", value: "alpha omega" }]
+      checks: [
+        {
+          invoke: {
+            kind: "fixture.throw",
+            baseline: caseValidationSource,
+            mutant: incompatibleRoot,
+            message: "synthetic incompatible expectation"
+          },
+          expectation: { id: "expectation.incompatible", kind: "equal", value: "alpha omega" }
+        }
+      ]
     } as never);
     const caseValidationDiagnostics = caseValidationPlan.seal();
     expect(caseValidationDiagnostics).toEqual(
@@ -8919,6 +9160,90 @@ describe("release identity and exact required-job gate", () => {
     expect(caseValidationDiagnostics.filter((problem) => problem.startsWith("[expectation.type]"))).toEqual([
       "[expectation.type] case.incompatible: fixture.throw requires exact problem expectations"
     ]);
+
+    const malformedCheckPlan = new ReleaseMutationPlan({
+      total: 1,
+      first: 1,
+      all: 0,
+      cases: 1,
+      expectations: 1,
+      roots: 1,
+      dependencyOnly: 0
+    });
+    const malformedCheckSource = malformedCheckPlan.registerSource("fixture.malformed-check", "alpha");
+    const malformedCheckRoot = registerFixtureMutation(malformedCheckPlan, "mutation.malformed-check", {
+      mode: "first",
+      source: malformedCheckSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    malformedCheckPlan.registerCase({
+      id: "case.malformed-check",
+      root: malformedCheckRoot,
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: malformedCheckSource, mutant: malformedCheckRoot }
+        }
+      ]
+    } as never);
+    expect(malformedCheckPlan.seal()).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^\[check.shape\]/), expect.stringMatching(/^\[mutation.orphan\]/)])
+    );
+    expect(malformedCheckPlan.caseExecutions).toBe(0);
+    expect(malformedCheckPlan.expectationExecutions).toBe(0);
+    expect(() => malformedCheckPlan.execute()).toThrow(/requires sealed state; found rejected/);
+
+    const secondBaselinePlan = new ReleaseMutationPlan({
+      total: 2,
+      first: 2,
+      all: 0,
+      cases: 1,
+      expectations: 2,
+      roots: 1,
+      dependencyOnly: 1
+    });
+    const secondBaselineSource = secondBaselinePlan.registerSource("fixture.second-baseline", "alpha");
+    const secondBaselineParent = registerFixtureMutation(secondBaselinePlan, "mutation.second-baseline-parent", {
+      mode: "first",
+      source: secondBaselineSource,
+      needle: "alpha",
+      replacement: "omega",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "alpha", before: 1, after: 0 }
+    });
+    const secondBaselineRoot = registerFixtureMutation(secondBaselinePlan, "mutation.second-baseline-root", {
+      mode: "first",
+      source: secondBaselineParent,
+      needle: "omega",
+      replacement: "alpha",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "omega", before: 1, after: 0 }
+    });
+    secondBaselinePlan.registerCase({
+      id: "case.second-baseline",
+      root: secondBaselineRoot,
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: secondBaselineParent, mutant: secondBaselineRoot },
+          expectation: { id: "expectation.second-baseline-first", kind: "equal", value: "alpha" }
+        },
+        {
+          invoke: { kind: "fixture.text", baseline: secondBaselineSource, mutant: secondBaselineRoot },
+          expectation: { id: "expectation.second-baseline-second", kind: "equal", value: "alpha" }
+        }
+      ]
+    });
+    expect(secondBaselinePlan.seal()).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^\[case.baseline\].*materializes to the mutant root output/),
+        expect.stringMatching(/^\[mutation.orphan\]/)
+      ])
+    );
+    expect(secondBaselinePlan.caseExecutions).toBe(0);
+    expect(secondBaselinePlan.expectationExecutions).toBe(0);
+    expect(() => secondBaselinePlan.execute()).toThrow(/requires sealed state; found rejected/);
 
     const dataPlan = new ReleaseMutationPlan();
     let getterCalls = 0;
@@ -8993,8 +9318,12 @@ describe("release identity and exact required-job gate", () => {
     reentrantPlan.registerCase({
       id: "case.reentrant",
       root: reentrantRoot,
-      invoke: { kind: "fixture.text", baseline: reentrantSource, mutant: reentrantRoot },
-      expectations: [{ id: "expectation.reentrant", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: reentrantSource, mutant: reentrantRoot },
+          expectation: { id: "expectation.reentrant", kind: "equal", value: "omega" }
+        }
+      ]
     });
     expect(reentrantInspections).toBe(1);
     expect(reentrantPlan.seal()).toEqual([]);
@@ -9004,6 +9333,7 @@ describe("release identity and exact required-job gate", () => {
     const mutableInventory = { total: 2, first: 2, all: 0 };
     const snapshotPlan = new ReleaseMutationPlan(mutableInventory);
     const snapshotSource = snapshotPlan.registerSource("fixture.snapshot", "alpha beta");
+    const snapshotAlternateSource = snapshotPlan.registerSource("fixture.snapshot-alternate", "alpha beta");
     const mutableBase = {
       mode: "first" as "first" | "all",
       source: snapshotSource,
@@ -9025,8 +9355,12 @@ describe("release identity and exact required-job gate", () => {
     const mutableCase = {
       id: "case.snapshot",
       root: snapshotChild,
-      invoke: { kind: "fixture.text" as const, baseline: snapshotSource, mutant: snapshotChild },
-      expectations: [{ id: "expectation.snapshot", kind: "equal" as const, value: "omega delta" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text" as const, baseline: snapshotSource, mutant: snapshotChild },
+          expectation: { id: "expectation.snapshot", kind: "equal" as const, value: "omega delta" }
+        }
+      ]
     };
     snapshotPlan.registerCase(mutableCase);
     mutableInventory.total = 99;
@@ -9044,13 +9378,19 @@ describe("release identity and exact required-job gate", () => {
     mutableChild.needle = "missing";
     mutableChild.replacement = "tampered";
     mutableCase.id = "case..tampered";
-    const mutableExpectation = mutableCase.expectations[0];
-    if (mutableExpectation === undefined) throw new Error("snapshot expectation fixture missing");
-    mutableExpectation.value = "tampered";
+    const mutableCheck = mutableCase.checks[0];
+    if (mutableCheck === undefined) throw new Error("snapshot check fixture missing");
+    mutableCheck.invoke.baseline = snapshotAlternateSource;
+    mutableCheck.expectation.value = "tampered";
+    mutableCase.checks.push({
+      invoke: { kind: "fixture.text", baseline: snapshotSource, mutant: snapshotChild },
+      expectation: { id: "expectation.snapshot-added", kind: "equal", value: "tampered" }
+    });
     expect(snapshotPlan.seal()).toEqual([]);
     snapshotPlan.execute();
     expect(snapshotPlan.phase).toBe("executed");
     expect(snapshotPlan.caseExecutions).toBe(1);
+    expect(snapshotPlan.expectationExecutions).toBe(1);
 
     const explosivePlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
     const explosiveSource = explosivePlan.registerSource("fixture.explosive", "alpha");
@@ -9065,8 +9405,12 @@ describe("release identity and exact required-job gate", () => {
     explosivePlan.registerCase({
       id: "case.explosive",
       root: explosiveRoot,
-      invoke: { kind: "fixture.text", baseline: explosiveSource, mutant: explosiveRoot },
-      expectations: [{ id: "expectation.explosive", kind: "equal", value: "omega" }]
+      checks: [
+        {
+          invoke: { kind: "fixture.text", baseline: explosiveSource, mutant: explosiveRoot },
+          expectation: { id: "expectation.explosive", kind: "equal", value: "omega" }
+        }
+      ]
     });
     const explosivePlanView = new Proxy(explosivePlan, {
       get: (target, property, receiver) => {

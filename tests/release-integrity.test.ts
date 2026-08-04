@@ -1072,7 +1072,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
             node.arguments.length === 3 &&
             timeout !== undefined &&
-            timeout.getText(sourceFile) === "30_000" &&
+            timeout.getText(sourceFile) === "60_000" &&
             node.questionDotToken === undefined &&
             testStatement !== null &&
             suiteBlock !== null &&
@@ -1093,7 +1093,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             matrixSuiteCallback = suiteCallback;
           } else {
             problems.push(
-              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
             );
           }
         }
@@ -5932,8 +5932,8 @@ describe("release identity and exact required-job gate", () => {
   });
 
   // This mutation oracle intentionally exercises thousands of structural checks.
-  // Exact-head V8 coverage measured 14,996ms after redundant parse removal, so
-  // keep a scoped ceiling with real hang detection instead of weakening cases.
+  // PR #433 V8 coverage crossed the former 30s ceiling after the source-audit,
+  // runner-reachability, and binding controls; keep scoped 60s hang detection.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
@@ -6053,7 +6053,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset + "describe(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(skippedSuiteMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
     );
     const outerReturnMutation = [
       oracleSource.slice(0, suiteStartOffset + suiteStart.length),
@@ -6072,7 +6072,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + "  it(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(conditionalRegistrationMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
     );
     const contextSkipMutation = [
       oracleSource.slice(0, matrixRegistrationOffset),
@@ -6080,7 +6080,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + matrixRegistrationStart.length)
     ].join("");
     expect(releaseMutationInventoryProblems(contextSkipMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 30_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 60_000ms timeout"
     );
     const extraProjectMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11018,5 +11018,5 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
-  }, 30_000);
+  }, 60_000);
 });

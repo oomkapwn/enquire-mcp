@@ -884,7 +884,35 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(secondGeneration).toBe(firstGeneration);
     expect(firstGeneration).toBe(fixtureBefore);
     expect(await fs.readFile(releaseMutationIdentityFixturePath, "utf8")).toBe(fixtureBefore);
+    // The reviewed baseline itself is the positive control for static property paths,
+    // template expressions, and mutation calls evaluated once in for-of iterables.
     expect(releaseMutationIdentityAuditProblems(matrixSource, fixtureBefore)).toEqual([]);
+
+    const loopBodyMutation = replaceExactly(
+      matrixSource,
+      "    ]) {\n      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(",
+      '    ]) {\n      void replaceExactly(mcpbInputs.integrity, "loop-body", "mutant");\n' +
+        '      ["mapped"].map(() => replaceExactly(mcpbInputs.integrity, "mapped", "mutant"));\n' +
+        "      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain("
+    );
+    expect(releaseMutationIdentityAuditProblems(loopBodyMutation, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/matrix AST execution-multiplying mutation helper sites must be zero; found 2/)
+      ])
+    );
+
+    const unsupportedExpressionMutation = replaceExactly(
+      matrixSource,
+      'replaceExactly(mcpbInputs.integrity, \'transport.type !== "stdio"\', "false")',
+      'replaceExactly(mcpbInputs["integrity"], true ? \'transport.type !== "stdio"\' : "x", ["false"][0])'
+    );
+    expect(releaseMutationIdentityAuditProblems(unsupportedExpressionMutation, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/legacy source expression .* is outside outer-expression-v1/),
+        expect.stringMatching(/legacy needle expression .* is outside outer-expression-v1/),
+        expect.stringMatching(/legacy replacement expression .* is outside outer-expression-v1/)
+      ])
+    );
 
     const duplicateTopLevelKey = replaceExactly(
       fixtureBefore,

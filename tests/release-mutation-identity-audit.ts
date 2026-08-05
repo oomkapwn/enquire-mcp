@@ -1377,16 +1377,40 @@ function identitySpan(sourceFile: ts.SourceFile, node: ts.Node): IdentitySpan {
   };
 }
 
-function executionMultiplyingAncestor(node: ts.Node, matrixCallback: ts.ArrowFunction): ts.Node | null {
+function executionMultiplyingAncestor(
+  node: ts.Node,
+  matrixCallback: ts.ArrowFunction,
+  sourceFile: ts.SourceFile
+): ts.Node | null {
+  const isWithin = (container: ts.Node): boolean =>
+    node.getStart(sourceFile) >= container.getStart(sourceFile) && node.end <= container.end;
   let ancestor: ts.Node | undefined = node.parent;
   while (ancestor !== undefined && ancestor !== matrixCallback) {
+    const isOptionalChain = "questionDotToken" in ancestor && ancestor.questionDotToken !== undefined;
     if (
-      ts.isForStatement(ancestor) ||
-      ts.isForInStatement(ancestor) ||
-      ts.isForOfStatement(ancestor) ||
+      (ts.isForStatement(ancestor) && (ancestor.initializer === undefined || !isWithin(ancestor.initializer))) ||
+      (ts.isForInStatement(ancestor) && !isWithin(ancestor.expression)) ||
+      (ts.isForOfStatement(ancestor) && !isWithin(ancestor.expression)) ||
       ts.isWhileStatement(ancestor) ||
       ts.isDoStatement(ancestor) ||
-      ts.isFunctionLike(ancestor)
+      ts.isIfStatement(ancestor) ||
+      ts.isConditionalExpression(ancestor) ||
+      ts.isSwitchStatement(ancestor) ||
+      ts.isTryStatement(ancestor) ||
+      ts.isLabeledStatement(ancestor) ||
+      ts.isWithStatement(ancestor) ||
+      ts.isFunctionLike(ancestor) ||
+      ts.isClassDeclaration(ancestor) ||
+      ts.isClassExpression(ancestor) ||
+      (ts.isBindingElement(ancestor) && ancestor.initializer !== undefined && isWithin(ancestor.initializer)) ||
+      isOptionalChain ||
+      (ts.isBinaryExpression(ancestor) &&
+        (ancestor.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+          ancestor.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+          ancestor.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+          ancestor.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+          ancestor.operatorToken.kind === ts.SyntaxKind.BarBarEqualsToken ||
+          ancestor.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken))
     ) {
       return ancestor;
     }
@@ -1467,7 +1491,7 @@ function scanMatrix(source: string, problems: string[]): MatrixScan | null {
         const needleExpression = node.arguments[1];
         const replacementExpression = node.arguments[2];
         if (sourceExpression !== undefined && needleExpression !== undefined && replacementExpression !== undefined) {
-          const multiplyingAncestor = executionMultiplyingAncestor(node, callback as ts.ArrowFunction);
+          const multiplyingAncestor = executionMultiplyingAncestor(node, callback as ts.ArrowFunction, sourceFile);
           if (multiplyingAncestor !== null) executionMultiplyingSites++;
           calls.push({
             node,
@@ -1534,33 +1558,50 @@ function validateRawExpressionShape(matrix: MatrixScan, problems: string[]): voi
     replacement: { literal: 0, concatenation: 0, nestedCall: 0, identifier: 0 },
     expectedOccurrences: { integer: 0, identifier: 0, sum: 0 }
   };
+  const isBindingReference = (expression: ts.Expression): boolean =>
+    ts.isIdentifier(expression) ||
+    (ts.isPropertyAccessExpression(expression) &&
+      expression.questionDotToken === undefined &&
+      isBindingReference(expression.expression));
+  const isStringTemplateForm = (expression: ts.Expression): boolean =>
+    ts.isStringLiteral(expression) ||
+    ts.isNoSubstitutionTemplateLiteral(expression) ||
+    ts.isTemplateExpression(expression);
+  const isConcatenation = (expression: ts.Expression): boolean =>
+    ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken;
+  const isNestedMutationCall = (expression: ts.Expression): boolean =>
+    ts.isCallExpression(expression) &&
+    expression.questionDotToken === undefined &&
+    ts.isIdentifier(expression.expression) &&
+    (expression.expression.text === "replaceExactly" || expression.expression.text === "replaceAllExactly");
   for (const call of matrix.calls) {
     const source = call.node.arguments[0];
-    if (source !== undefined && ts.isIdentifier(source)) observed.source.identifier++;
-    else if (source !== undefined && ts.isCallExpression(source)) observed.source.nestedCall++;
+    if (source !== undefined && isBindingReference(source)) observed.source.identifier++;
+    else if (source !== undefined && isNestedMutationCall(source)) observed.source.nestedCall++;
     else problems.push(`legacy source expression at ${call.span.start} is outside outer-expression-v1`);
 
     const needle = call.node.arguments[1];
-    if (needle !== undefined && (ts.isStringLiteral(needle) || ts.isNoSubstitutionTemplateLiteral(needle))) {
+    if (needle !== undefined && isStringTemplateForm(needle)) {
       observed.needle.literal++;
     } else if (needle !== undefined && ts.isIdentifier(needle)) {
       observed.needle.identifier++;
-    } else {
+    } else if (needle !== undefined && isConcatenation(needle)) {
       observed.needle.concatenation++;
+    } else {
+      problems.push(`legacy needle expression at ${call.span.start} is outside outer-expression-v1`);
     }
 
     const replacement = call.node.arguments[2];
-    if (
-      replacement !== undefined &&
-      (ts.isStringLiteral(replacement) || ts.isNoSubstitutionTemplateLiteral(replacement))
-    ) {
+    if (replacement !== undefined && isStringTemplateForm(replacement)) {
       observed.replacement.literal++;
     } else if (replacement !== undefined && ts.isIdentifier(replacement)) {
       observed.replacement.identifier++;
-    } else if (replacement !== undefined && ts.isCallExpression(replacement)) {
+    } else if (replacement !== undefined && isNestedMutationCall(replacement)) {
       observed.replacement.nestedCall++;
-    } else {
+    } else if (replacement !== undefined && isConcatenation(replacement)) {
       observed.replacement.concatenation++;
+    } else {
+      problems.push(`legacy replacement expression at ${call.span.start} is outside outer-expression-v1`);
     }
 
     const occurrences = call.node.arguments[3];
@@ -3061,10 +3102,9 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
             `${expectedBaseline ?? "missing"}`
         );
       }
-      invocationCensus.set(
-        check.invoke.kind,
-        (invocationCensus.get(check.invoke.kind) ?? 0) + (checkIndex === 0 ? 1 : 0)
-      );
+      if (checkIndex === 0) {
+        invocationCensus.set(check.invoke.kind, (invocationCensus.get(check.invoke.kind) ?? 0) + 1);
+      }
       validateSpanAgainstSource(
         check.assertionSpan,
         matrixSource,

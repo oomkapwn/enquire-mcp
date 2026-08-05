@@ -16,6 +16,22 @@ const MATRIX_PREFIX = "    const releaseWorkflow = readFileSync(";
 const MATRIX_START = `${MATRIX_PREFIX}new URL("../.github/workflows/release.yml", import.meta.url), "utf8");`;
 const MATRIX_END = "  }, 120_000);";
 const CALL_NAMES = ["replaceExactly", "replaceAllExactly"];
+const REGEX_PREFIX_KEYWORDS = new Set([
+  "await",
+  "case",
+  "delete",
+  "do",
+  "else",
+  "in",
+  "instanceof",
+  "of",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "yield"
+]);
+const REGEX_PREFIX_OPERATORS = "(:,=![{?;|&>";
 const PAIRS = new Map([
   ["(", ")"],
   ["[", "]"],
@@ -67,7 +83,10 @@ function skipQuoted(text, index, quote) {
 function regexCanStart(text, index) {
   let cursor = index - 1;
   while (cursor >= 0 && /\s/u.test(text[cursor])) cursor--;
-  return cursor < 0 || "(:,=![{?;".includes(text[cursor]);
+  if (cursor < 0 || REGEX_PREFIX_OPERATORS.includes(text[cursor])) return true;
+  const end = cursor + 1;
+  while (cursor >= 0 && identifierPart(text[cursor])) cursor--;
+  return REGEX_PREFIX_KEYWORDS.has(text.slice(cursor + 1, end));
 }
 
 function skipRegex(text, index) {
@@ -403,6 +422,11 @@ function assertDeclarationScanner() {
     "}",
     'const visibleAfter = "ok";',
     "const outerRead = shadow;",
+    'const regexAfterOr = false || /[^}]/u.test("}");',
+    'const regexAfterAnd = true && /[^}]/u.test("}");',
+    'const regexAfterArrow = ["}"].some((value) => /["}]/u.test(value));',
+    'const regexAfterReturn = () => { return /["}]/u; };',
+    "const quotient = 8 / 2;",
     '/* const hidden = "no"; */'
   ].join("\n");
   const declarations = collectDeclarations(sample);
@@ -410,7 +434,12 @@ function assertDeclarationScanner() {
     declarations.has("fake") ||
     declarations.has("hidden") ||
     declarations.get("visibleBefore")?.[0]?.expression !== '"const fake = 1;"' ||
-    declarations.get("visibleAfter")?.[0]?.expression !== '"ok"'
+    declarations.get("visibleAfter")?.[0]?.expression !== '"ok"' ||
+    declarations.get("regexAfterOr")?.[0]?.expression !== 'false || /[^}]/u.test("}")' ||
+    declarations.get("regexAfterAnd")?.[0]?.expression !== 'true && /[^}]/u.test("}")' ||
+    declarations.get("regexAfterArrow")?.[0]?.expression !== '["}"].some((value) => /["}]/u.test(value))' ||
+    declarations.get("regexAfterReturn")?.[0]?.expression !== '() => { return /["}]/u; }' ||
+    declarations.get("quotient")?.[0]?.expression !== "8 / 2"
   ) {
     fail("declaration scanner self-control rejected adjacent quoted declarations");
   }
@@ -796,12 +825,7 @@ function buildSources(text, declarationContext) {
         dependencies: ["fixture.release-workflow"]
       }
     ],
-    fileSource(
-      "workflow.release-raw",
-      ["releaseWorkflow"],
-      "releaseWorkflowRawSource",
-      ".github/workflows/release.yml"
-    )
+    fileSource("workflow.release-raw", ["releaseWorkflow"], "releaseWorkflowRawSource", ".github/workflows/release.yml")
   ];
   const sources = specs.map(([id, aliases, declarativeBinding, origin], index) => {
     const aliasValues = aliases.map((alias) => values.get(alias));
@@ -819,9 +843,7 @@ function buildSources(text, declarationContext) {
     };
     return {
       ...payload,
-      semanticFingerprint: semanticFingerprint(
-        canonical({ normalizer: NORMALIZER, source: payload })
-      )
+      semanticFingerprint: semanticFingerprint(canonical({ normalizer: NORMALIZER, source: payload }))
     };
   });
   if (sources.length !== 30) fail(`source count drift: ${sources.length}`);
@@ -854,10 +876,7 @@ function witnessCount(source, kind, anchor) {
     if (offset === -1) return count;
     const before = offset > 0 ? source[offset - 1] : "";
     const after = offset + anchor.length < source.length ? source[offset + anchor.length] : "";
-    if (
-      (!startsToken || !tokenCharacter(before)) &&
-      (!endsToken || !tokenCharacter(after))
-    ) {
+    if ((!startsToken || !tokenCharacter(before)) && (!endsToken || !tokenCharacter(after))) {
       count++;
     }
     cursor = offset + anchor.length;
@@ -868,10 +887,7 @@ function deriveWitness(source, mutant, needle, replacement) {
   const candidates = [];
   if (needle.length > 0 && needle.length <= 512) candidates.push(["token", needle, "needle"]);
   else if (needle.length > 0) {
-    candidates.push(
-      ["token", needle.slice(0, 512), "token-delta"],
-      ["token", needle.slice(-512), "token-delta"]
-    );
+    candidates.push(["token", needle.slice(0, 512), "token-delta"], ["token", needle.slice(-512), "token-delta"]);
   }
   if (replacement.length > 0 && replacement.length <= 512) {
     candidates.push(["token", replacement, "replacement"]);
@@ -910,10 +926,7 @@ function deriveWitness(source, mutant, needle, replacement) {
     const before = witnessCount(source, kind, anchor);
     const after = witnessCount(mutant, kind, anchor);
     if (before !== after) {
-      if (
-        (derivation === "needle" && anchor !== needle) ||
-        (derivation === "replacement" && anchor !== replacement)
-      ) {
+      if ((derivation === "needle" && anchor !== needle) || (derivation === "replacement" && anchor !== replacement)) {
         fail(`non-exact witness cannot claim ${derivation} derivation`);
       }
       return {
@@ -977,13 +990,11 @@ function materializeMutations(text, calls, sources, sourceValues) {
     if (call === undefined) fail(`unknown mutation order ${legacyOrder}`);
     const sourceChild = children.get(legacyOrder).get(0);
     const replacementChild = children.get(legacyOrder).get(2);
-    const source = sourceChild === undefined
-      ? String(evaluator.evaluate(call.args[0], call.start))
-      : produce(sourceChild);
+    const source =
+      sourceChild === undefined ? String(evaluator.evaluate(call.args[0], call.start)) : produce(sourceChild);
     const needle = String(evaluator.evaluate(call.args[1], call.start));
-    const replacement = replacementChild === undefined
-      ? String(evaluator.evaluate(call.args[2], call.start))
-      : produce(replacementChild);
+    const replacement =
+      replacementChild === undefined ? String(evaluator.evaluate(call.args[2], call.start)) : produce(replacementChild);
     const countExpression = call.args.length === 4 ? call.args[3] : "1";
     const expected = Number(evaluator.evaluate(countExpression, call.start));
     const output = applyMutation(source, needle, replacement, call.mode, expected);
@@ -1026,11 +1037,7 @@ function materializeMutations(text, calls, sources, sourceValues) {
     let owner = legacy;
     while (parentByChild.has(owner)) owner = parentByChild.get(owner);
     const countRaw = call.args.length === 4 ? call.args[3].trim() : "1";
-    const key = canonical([
-      call.mode,
-      ...call.args.slice(0, 3).map((argument) => argument.trim()),
-      countRaw
-    ]);
+    const key = canonical([call.mode, ...call.args.slice(0, 3).map((argument) => argument.trim()), countRaw]);
     occurrence.set(key, (occurrence.get(key) ?? 0) + 1);
     const current = values.get(legacy);
     const expressions = {
@@ -1038,20 +1045,13 @@ function materializeMutations(text, calls, sources, sourceValues) {
       needle: { raw: call.args[1].trim(), resolved: current.needle },
       replacement: {
         raw: call.args[2].trim(),
-        resolved: replacementChild === undefined
-          ? current.replacement
-          : callByOrder.get(replacementChild).id
+        resolved: replacementChild === undefined ? current.replacement : callByOrder.get(replacementChild).id
       },
       expectedOccurrences: { raw: countRaw, resolved: current.expected }
     };
     let witness;
     try {
-      witness = deriveWitness(
-        current.sourceValue,
-        current.output,
-        current.needle,
-        current.replacement
-      );
+      witness = deriveWitness(current.sourceValue, current.output, current.needle, current.replacement);
     } catch (error) {
       fail(`${call.id} witness failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1064,8 +1064,7 @@ function materializeMutations(text, calls, sources, sourceValues) {
       legacyOccurrence: occurrence.get(key),
       expressions,
       source: sourceRef,
-      replacementDependency:
-        replacementChild === undefined ? null : callByOrder.get(replacementChild).id,
+      replacementDependency: replacementChild === undefined ? null : callByOrder.get(replacementChild).id,
       ownerRoot: callByOrder.get(owner).id,
       legacySpan: sourceSpan(text, call.start, call.end),
       witness
@@ -1076,17 +1075,10 @@ function materializeMutations(text, calls, sources, sourceValues) {
     incrementCounter(shapes.source, expressionShape(call.args[0], "source"));
     incrementCounter(shapes.needle, expressionShape(call.args[1], "needle"));
     incrementCounter(shapes.replacement, expressionShape(call.args[2], "replacement"));
-    incrementCounter(
-      shapes.count,
-      expressionShape(call.args.length === 4 ? call.args[3] : "1", "count")
-    );
+    incrementCounter(shapes.count, expressionShape(call.args.length === 4 ? call.args[3] : "1", "count"));
   }
   assertCounter(shapes.source, { identifier: 558, nested: 2 }, "source expression shape");
-  assertCounter(
-    shapes.needle,
-    { literal: 479, identifier: 62, concat: 19 },
-    "needle expression shape"
-  );
+  assertCounter(shapes.needle, { literal: 479, identifier: 62, concat: 19 }, "needle expression shape");
   assertCounter(
     shapes.replacement,
     { literal: 498, concat: 41, nested: 18, identifier: 3 },
@@ -1103,7 +1095,7 @@ function identifierAt(text, index, name) {
 
 function findCalls(text, start) {
   const calls = [];
-  for (let cursor = start; cursor < text.length;) {
+  for (let cursor = start; cursor < text.length; ) {
     const char = text[cursor];
     if (char === "'" || char === '"' || char === "`") {
       cursor = skipQuoted(text, cursor, char);
@@ -1138,10 +1130,7 @@ function findCalls(text, start) {
     const argumentText = text.slice(found.open + 1, close);
     const relativeSpans = splitTopSpans(argumentText);
     const args = relativeSpans.map(([left, right]) => argumentText.slice(left, right).trim());
-    const argumentSpans = relativeSpans.map(([left, right]) => [
-      found.open + 1 + left,
-      found.open + 1 + right
-    ]);
+    const argumentSpans = relativeSpans.map(([left, right]) => [found.open + 1 + left, found.open + 1 + right]);
     const prefix = text.slice(Math.max(start, cursor - 300), cursor);
     const assignment = /\bconst\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=;]+)?=\s*$/u.exec(prefix);
     calls.push({
@@ -1159,9 +1148,7 @@ function findCalls(text, start) {
     cursor += found.name.length;
   }
   for (const child of calls) {
-    const containers = calls.filter(
-      (parent) => parent.start < child.start && child.end < parent.end
-    );
+    const containers = calls.filter((parent) => parent.start < child.start && child.end < parent.end);
     if (containers.length === 0) continue;
     containers.sort((left, right) => left.end - left.start - (right.end - right.start));
     const parent = containers[0];
@@ -1174,9 +1161,7 @@ function findCalls(text, start) {
       }
     }
   }
-  const assigned = new Map(
-    calls.filter((call) => call.assignedName !== null).map((call) => [call.assignedName, call])
-  );
+  const assigned = new Map(calls.filter((call) => call.assignedName !== null).map((call) => [call.assignedName, call]));
   for (const parent of calls) {
     if (parent.parent !== null) continue;
     const child = assigned.get(parent.args[0].trim());
@@ -1190,7 +1175,7 @@ function findCalls(text, start) {
 
 function findAssertions(text, start, end) {
   const result = [];
-  for (let cursor = start; cursor < end;) {
+  for (let cursor = start; cursor < end; ) {
     const char = text[cursor];
     if (char === "'" || char === '"' || char === "`") {
       cursor = skipQuoted(text, cursor, char);
@@ -1289,7 +1274,7 @@ function tokenPairs(text, start, end, desiredOpener) {
 
 function findForOfLoops(text, start, end) {
   const result = [];
-  for (let cursor = start; cursor < end;) {
+  for (let cursor = start; cursor < end; ) {
     const char = text[cursor];
     if (char === "'" || char === '"' || char === "`") {
       cursor = skipQuoted(text, cursor, char);
@@ -1403,11 +1388,7 @@ function mapAssertions(text, matrixStart, matrixEnd, calls) {
       "u"
     );
     for (const assertion of assertions) {
-      if (
-        loop.bodyStart <= assertion.start &&
-        assertion.end <= loop.bodyEnd &&
-        pattern.test(assertion.actual)
-      ) {
+      if (loop.bodyStart <= assertion.start && assertion.end <= loop.bodyEnd && pattern.test(assertion.actual)) {
         for (const legacy of iterableRoots) mapped.get(legacy).push(assertion);
       }
     }
@@ -1461,9 +1442,7 @@ const MCPB_SOURCE_SLOTS = [
   ["versionCheck", "script.version-consistency"],
   ["versionSync", "script.version-sync"]
 ];
-const MCPB_MUTABLE_SLOT_BY_SOURCE = new Map(
-  MCPB_SOURCE_SLOTS.map(([slot, sourceId]) => [sourceId, slot])
-);
+const MCPB_MUTABLE_SLOT_BY_SOURCE = new Map(MCPB_SOURCE_SLOTS.map(([slot, sourceId]) => [sourceId, slot]));
 
 function firstExpectArgument(assertion) {
   const [span] = splitTopSpans(assertion.actual);
@@ -1507,10 +1486,7 @@ function transactionExpectedProblems(text, matrixStart, matrixEnd, calls, roots,
       fail(`transaction expectedProblem must be literal for ${call.id}`);
     }
     const expressionEnd = skipQuoted(text, expressionStart, quote);
-    result.set(
-      legacy,
-      String(evaluator.evaluate(text.slice(expressionStart, expressionEnd), expressionStart))
-    );
+    result.set(legacy, String(evaluator.evaluate(text.slice(expressionStart, expressionEnd), expressionStart)));
   }
   return result;
 }
@@ -1557,19 +1533,13 @@ function invocationInputs(kind, baseline, nodeEngine) {
   if (kind === "remote-gate.package-consumer") {
     return {
       callee: "remoteGateScriptProblems",
-      arguments: [
-        mutant("packageConsumer"),
-        source("protocolConformance", "script.protocol-conformance")
-      ]
+      arguments: [mutant("packageConsumer"), source("protocolConformance", "script.protocol-conformance")]
     };
   }
   if (kind === "remote-gate.protocol-conformance") {
     return {
       callee: "remoteGateScriptProblems",
-      arguments: [
-        source("packageConsumer", "script.package-consumer"),
-        mutant("protocolConformance")
-      ]
+      arguments: [source("packageConsumer", "script.package-consumer"), mutant("protocolConformance")]
     };
   }
   if (kind === "release.poll") {
@@ -1580,14 +1550,16 @@ function invocationInputs(kind, baseline, nodeEngine) {
     if (mutableSlot === undefined) fail(`unknown MCPB mutable baseline ${baseline}`);
     return {
       callee: "mcpbContractProblems",
-      arguments: [{
-        kind: "source-map",
-        slot: "inputs",
-        mutantSlot: mutableSlot,
-        companions: MCPB_SOURCE_SLOTS
-          .filter(([slot]) => slot !== mutableSlot)
-          .map(([slot, id]) => source(slot, id))
-      }]
+      arguments: [
+        {
+          kind: "source-map",
+          slot: "inputs",
+          mutantSlot: mutableSlot,
+          companions: MCPB_SOURCE_SLOTS
+            .filter(([slot]) => slot !== mutableSlot)
+            .map(([slot, id]) => source(slot, id))
+        }
+      ]
     };
   }
   if (kind === "github.release-transaction") {
@@ -1606,21 +1578,15 @@ function primaryKind(callee, baseline) {
   if (callee === "githubWorkflowSchemaProblems") return "workflow.schema";
   if (callee === "mcpRegistryEvaluatorProblems") return "registry.evaluator";
   if (callee === "mcpRegistryStepProblems") {
-    return baseline === "workflow.registry-publish-step"
-      ? "registry.step.run"
-      : "registry.step.integrity";
+    return baseline === "workflow.registry-publish-step" ? "registry.step.run" : "registry.step.integrity";
   }
   if (callee === "npmProvenanceContractProblems") {
-    return baseline === "fixture.release-workflow"
-      ? "npm.contract.release"
-      : "npm.contract.integrity";
+    return baseline === "fixture.release-workflow" ? "npm.contract.release" : "npm.contract.integrity";
   }
   if (callee === "npmProvenanceWorkflowProblems") return "npm.workflow";
   if (callee === "npmProvenanceEvaluatorProblems") return "npm.evaluator";
   if (callee === "remoteGateScriptProblems") {
-    return baseline === "script.package-consumer"
-      ? "remote-gate.package-consumer"
-      : "remote-gate.protocol-conformance";
+    return baseline === "script.package-consumer" ? "remote-gate.package-consumer" : "remote-gate.protocol-conformance";
   }
   if (callee === "releasePollProblems") return "release.poll";
   if (callee === "mcpbContractProblems") return "mcpb.contract";
@@ -1693,8 +1659,7 @@ function buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues
     const [assertion, callee] = primary[0];
     const kind = primaryKind(callee, baseline);
     incrementCounter(kindCounts, kind);
-    const expectationId =
-      `release.expectation.m${String(call.legacyOrder).padStart(3, "0")}.primary`;
+    const expectationId = `release.expectation.m${String(call.legacyOrder).padStart(3, "0")}.primary`;
     let resolved;
     let expectation;
     if (call.legacyOrder === 1) {
@@ -1741,10 +1706,7 @@ function buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues
           }
           return {
             kind: "literal",
-            slot:
-              leafCallee === "canonicalLogicalShellIdentifierInventory"
-                ? "identifier"
-                : "environment",
+            slot: leafCallee === "canonicalLogicalShellIdentifierInventory" ? "identifier" : "environment",
             value: evaluator.evaluate(argument, leafAssertion.start)
           };
         });
@@ -1778,11 +1740,7 @@ function buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues
           value: canonical(profile)
         },
         matcherEvaluations,
-        assertionSpan: sourceSpan(
-          text,
-          sortedAuxiliary[0].start,
-          sortedAuxiliary.at(-1).end
-        )
+        assertionSpan: sourceSpan(text, sortedAuxiliary[0].start, sortedAuxiliary.at(-1).end)
       });
     }
     const casePayload = {
@@ -1793,27 +1751,29 @@ function buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues
     };
     cases.push({
       ...casePayload,
-      semanticFingerprint: semanticFingerprint(
-        canonical({ normalizer: NORMALIZER, case: casePayload })
-      )
+      semanticFingerprint: semanticFingerprint(canonical({ normalizer: NORMALIZER, case: casePayload }))
     });
   }
-  assertCounter(kindCounts, {
-    "workflow.schema": 1,
-    "registry.evaluator": 36,
-    "registry.step.run": 72,
-    "registry.step.integrity": 1,
-    "npm.contract.release": 1,
-    "npm.contract.integrity": 1,
-    "npm.workflow": 36,
-    "npm.evaluator": 37,
-    "remote-gate.package-consumer": 1,
-    "remote-gate.protocol-conformance": 2,
-    "release.poll": 22,
-    "mcpb.contract": 110,
-    "github.release-transaction": 129,
-    "ci.node-floor": 87
-  }, "primary adapter");
+  assertCounter(
+    kindCounts,
+    {
+      "workflow.schema": 1,
+      "registry.evaluator": 36,
+      "registry.step.run": 72,
+      "registry.step.integrity": 1,
+      "npm.contract.release": 1,
+      "npm.contract.integrity": 1,
+      "npm.workflow": 36,
+      "npm.evaluator": 37,
+      "remote-gate.package-consumer": 1,
+      "remote-gate.protocol-conformance": 2,
+      "release.poll": 22,
+      "mcpb.contract": 110,
+      "github.release-transaction": 129,
+      "ci.node-floor": 87
+    },
+    "primary adapter"
+  );
   if (primaryProblemCount !== 535 || primaryRegexCount !== 1) {
     fail(`primary expectation drift ${primaryProblemCount}/${primaryRegexCount}`);
   }
@@ -1846,11 +1806,13 @@ function attachFingerprints(sources, mutations, cases) {
     );
     const owner = caseByRoot.get(mutation.ownerRoot);
     if (owner === undefined) fail(`missing owner case for ${mutation.id}`);
-    mutation.semanticFingerprint = semanticFingerprint(canonical({
-      normalizer: NORMALIZER,
-      mutation: mutationWithoutFingerprint,
-      ownerCaseFingerprint: owner.semanticFingerprint
-    }));
+    mutation.semanticFingerprint = semanticFingerprint(
+      canonical({
+        normalizer: NORMALIZER,
+        mutation: mutationWithoutFingerprint,
+        ownerCaseFingerprint: owner.semanticFingerprint
+      })
+    );
   }
 }
 
@@ -1890,22 +1852,8 @@ function buildManifest() {
   const calls = findCalls(text, matrixStart);
   const { sources, values: sourceValues } = buildSources(text, matrixDeclarationContext);
   const { mutations } = materializeMutations(text, calls, sources, sourceValues);
-  const { assertions, mapped, arrays } = mapAssertions(
-    text,
-    matrixStart,
-    matrixEnd,
-    calls
-  );
-  const cases = buildCases(
-    text,
-    matrixStart,
-    matrixEnd,
-    calls,
-    mutations,
-    sourceValues,
-    mapped,
-    arrays
-  );
+  const { assertions, mapped, arrays } = mapAssertions(text, matrixStart, matrixEnd, calls);
+  const cases = buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues, mapped, arrays);
   attachFingerprints(sources, mutations, cases);
   const parentByChild = new Map(
     calls.filter((call) => call.parent !== null).map((call) => [call.legacyOrder, call.parent])
@@ -1936,10 +1884,7 @@ function buildManifest() {
     logicalChecks: cases.reduce((sum, entry) => sum + entry.checks.length, 0),
     rawMatcherEvaluations: cases.reduce(
       (sum, entry) =>
-        sum + entry.checks.reduce(
-          (caseSum, check) => caseSum + check.matcherEvaluations.length,
-          0
-        ),
+        sum + entry.checks.reduce((caseSum, check) => caseSum + check.matcherEvaluations.length, 0),
       0
     ),
     sourceEdges: calls.filter((call) => call.parentArgument === 0).length,

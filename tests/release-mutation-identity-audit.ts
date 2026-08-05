@@ -2863,9 +2863,7 @@ function rootIsBoundToAssertion(
   let rootAncestor: ts.Node | undefined = rootCall.parent;
   while (rootAncestor !== undefined && !ts.isFunctionLike(rootAncestor)) {
     if (
-      (ts.isForStatement(rootAncestor) ||
-        ts.isForOfStatement(rootAncestor) ||
-        ts.isForInStatement(rootAncestor)) &&
+      (ts.isForStatement(rootAncestor) || ts.isForOfStatement(rootAncestor) || ts.isForInStatement(rootAncestor)) &&
       assertion.getStart(sourceFile) >= rootAncestor.getStart(sourceFile) &&
       assertion.end <= rootAncestor.end
     ) {
@@ -3240,8 +3238,7 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
   if (
     m191?.invoke.kind !== "remote-gate.protocol-conformance" ||
     m191.expectation.kind !== "problem" ||
-    m191.expectation.problem !==
-      "protocol-conformance must pin slash-preserving note resource URIs on every host"
+    m191.expectation.problem !== "protocol-conformance must pin slash-preserving note resource URIs on every host"
   ) {
     problems.push(
       "release.m191 must retain the slash-preserving protocol-conformance detector and exact problem identity"
@@ -3254,8 +3251,7 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
     m001.matcherEvaluations[0]?.matcher !== "toContainEqual" ||
     m001.matcherEvaluations[0]?.negated !== false ||
     m001.matcherEvaluations[0]?.operand.resolved !== "workflow.schema.case-insensitive-env" ||
-    m001.matcherEvaluations[0]?.operand.raw !==
-      NAMED_REGEX_OPERANDS["workflow.schema.case-insensitive-env"]
+    m001.matcherEvaluations[0]?.operand.raw !== NAMED_REGEX_OPERANDS["workflow.schema.case-insensitive-env"]
   ) {
     problems.push("release.m001 must retain the exact case-insensitive workflow-schema named-regex identity");
   }

@@ -792,15 +792,7 @@ function parseSource(value: unknown, index: number, problems: string[]): SourceI
   const record = exactRecord(
     value,
     path,
-    [
-      "order",
-      "id",
-      "legacyExpressions",
-      "declarativeBinding",
-      "origin",
-      "contentSha256",
-      "semanticFingerprint"
-    ],
+    ["order", "id", "legacyExpressions", "declarativeBinding", "origin", "contentSha256", "semanticFingerprint"],
     problems
   );
   if (record === null) return null;
@@ -1013,13 +1005,14 @@ function parseExpectation(value: unknown, path: string, problems: string[]): Exp
     return null;
   }
   const kind = value.kind;
-  const semanticKey = kind === "problem"
-    ? "problem"
-    : kind === "regex"
-      ? "regex"
-      : kind === "equal" || kind === "not-equal"
-        ? "value"
-        : null;
+  const semanticKey =
+    kind === "problem"
+      ? "problem"
+      : kind === "regex"
+        ? "regex"
+        : kind === "equal" || kind === "not-equal"
+          ? "value"
+          : null;
   if (semanticKey === null) {
     problems.push(`${path}.kind must be problem, regex, equal, or not-equal`);
     return null;
@@ -1265,9 +1258,7 @@ function parseManifest(source: string, problems: string[]): IdentityManifest | n
       for (const property of node.properties) {
         if (!ts.isPropertyAssignment(property)) continue;
         const key =
-          ts.isStringLiteral(property.name) ||
-          ts.isNumericLiteral(property.name) ||
-          ts.isIdentifier(property.name)
+          ts.isStringLiteral(property.name) || ts.isNumericLiteral(property.name) || ts.isIdentifier(property.name)
             ? property.name.text
             : property.name.getText(jsonAst);
         if (seen.has(key)) problems.push(`${path} contains duplicate JSON key ${key}`);
@@ -1349,8 +1340,7 @@ function duplicateValues(values: readonly string[]): readonly string[] {
 }
 
 function staticString(expression: ts.Expression | undefined): string | null {
-  return expression !== undefined &&
-    (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression))
+  return expression !== undefined && (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression))
     ? expression.text
     : null;
 }
@@ -1432,8 +1422,7 @@ function scanMatrix(source: string, problems: string[]): MatrixScan | null {
         if (callback === null) {
           callback = candidate;
           matrixEnd = ts.isExpressionStatement(node.parent) ? node.parent.end : node.end;
-        }
-        else problems.push("release mutation identity audit found duplicate matrix callbacks");
+        } else problems.push("release mutation identity audit found duplicate matrix callbacks");
       }
     }
     ts.forEachChild(node, locate);
@@ -1519,9 +1508,7 @@ function validateProvenance(manifest: IdentityManifest, matrix: MatrixScan, prob
   if (manifest.generatedFrom.matrixTitle !== MATRIX_TITLE) {
     problems.push("manifest.generatedFrom.matrixTitle must equal the exact matrix title");
   }
-  if (
-    JSON.stringify(manifest.generatedFrom.rawExpressionShape) !== JSON.stringify(EXPECTED_RAW_EXPRESSION_SHAPE)
-  ) {
+  if (JSON.stringify(manifest.generatedFrom.rawExpressionShape) !== JSON.stringify(EXPECTED_RAW_EXPRESSION_SHAPE)) {
     problems.push("manifest.generatedFrom.rawExpressionShape must equal the exact reviewed outer-expression census");
   }
   const observedMatrixSliceSha256 = sha256(matrix.matrixSlice);
@@ -1579,10 +1566,7 @@ function validateRawExpressionShape(matrix: MatrixScan, problems: string[]): voi
     const occurrences = call.node.arguments[3];
     if (occurrences === undefined || ts.isNumericLiteral(occurrences)) observed.expectedOccurrences.integer++;
     else if (ts.isIdentifier(occurrences)) observed.expectedOccurrences.identifier++;
-    else if (
-      ts.isBinaryExpression(occurrences) &&
-      occurrences.operatorToken.kind === ts.SyntaxKind.PlusToken
-    ) {
+    else if (ts.isBinaryExpression(occurrences) && occurrences.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       observed.expectedOccurrences.sum++;
     } else {
       problems.push(`legacy expectedOccurrences at ${call.span.start} is outside outer-expression-v1`);
@@ -1923,9 +1907,9 @@ function releaseWorkflowFixtureIdentity(workflow: string, transaction: string): 
   const normalized = transaction
     .slice(0, -1)
     .split("$MCPB_RELEASE_REPOSITORY")
-    .join("${{ github.repository }}")
+    .join(`\${{ github.repository }}`)
     .split("$MCPB_RELEASE_CHANNEL")
-    .join("${{ steps.dist_tag.outputs.tag }}");
+    .join(`\${{ steps.dist_tag.outputs.tag }}`);
   const fixture = normalized
     .split("\n")
     .map((line) => `          ${line}`)
@@ -1980,9 +1964,8 @@ function materializeSourceValues(
       }
     } else if (expected.kind === "constant") {
       const declarationName = expected.legacyExpressions[0];
-      value = declarationName === undefined
-        ? null
-        : resolveStaticString(declarations.get(declarationName), declarations);
+      value =
+        declarationName === undefined ? null : resolveStaticString(declarations.get(declarationName), declarations);
     } else if (expected.kind === "derived" && expected.dependencies !== undefined) {
       const dependencies = expected.dependencies.map((dependency) => resolve(dependency, nextActive));
       if (dependencies.some((dependency) => dependency === null)) return null;
@@ -2028,7 +2011,7 @@ function materializeSourceValues(
     ].map((needle) => mutationMatchCount(source, needle));
   if (
     rawWorkflow !== undefined &&
-    JSON.stringify(proofCounts(rawWorkflow, "${{ github.repository }}")) !== JSON.stringify([8, 4, 4, 4, 4])
+    JSON.stringify(proofCounts(rawWorkflow, `\${{ github.repository }}`)) !== JSON.stringify([8, 4, 4, 4, 4])
   ) {
     problems.push("raw release workflow tag-proof identity must remain exactly 8/4/4/4/4");
   }
@@ -2040,7 +2023,7 @@ function materializeSourceValues(
   }
   if (
     combinedWorkflow !== undefined &&
-    JSON.stringify(proofCounts(combinedWorkflow, "${{ github.repository }}")) !== JSON.stringify([10, 5, 5, 5, 5])
+    JSON.stringify(proofCounts(combinedWorkflow, `\${{ github.repository }}`)) !== JSON.stringify([10, 5, 5, 5, 5])
   ) {
     problems.push("combined release fixture tag-proof identity must remain exactly 10/5/5/5/5");
   }
@@ -2109,10 +2092,7 @@ function tokenWitnessCount(value: string, anchor: string): number {
     if (offset === -1) return count;
     const before = offset > 0 ? value[offset - 1] : undefined;
     const after = offset + anchor.length < value.length ? value[offset + anchor.length] : undefined;
-    if (
-      (!startsToken || !isWitnessTokenCharacter(before)) &&
-      (!endsToken || !isWitnessTokenCharacter(after))
-    ) {
+    if ((!startsToken || !isWitnessTokenCharacter(before)) && (!endsToken || !isWitnessTokenCharacter(after))) {
       count++;
     }
     cursor = offset + anchor.length;
@@ -2145,21 +2125,16 @@ function validateWitnessCounterSemantics(problems: string[]): void {
   }
 }
 
-function validateMaterializedMutations(
-  manifest: IdentityManifest,
-  matrix: MatrixScan,
-  problems: string[]
-): void {
+function validateMaterializedMutations(manifest: IdentityManifest, matrix: MatrixScan, problems: string[]): void {
   const sourceValues = materializeSourceValues(manifest, matrix, problems);
   const mutationValues = new Map<string, string>();
   for (const mutation of manifest.mutations) {
     const sourceValue =
-      mutation.source.kind === "source"
-        ? sourceValues.get(mutation.source.id)
-        : mutationValues.get(mutation.source.id);
-    const replacement = mutation.replacementDependency === null
-      ? mutation.expressions.replacement.resolved
-      : mutationValues.get(mutation.replacementDependency);
+      mutation.source.kind === "source" ? sourceValues.get(mutation.source.id) : mutationValues.get(mutation.source.id);
+    const replacement =
+      mutation.replacementDependency === null
+        ? mutation.expressions.replacement.resolved
+        : mutationValues.get(mutation.replacementDependency);
     if (sourceValue === undefined || replacement === undefined) {
       problems.push(`manifest mutation ${mutation.id} cannot materialize dependency bytes in order`);
       continue;
@@ -2261,8 +2236,8 @@ function validateMutationGraph(
         );
         if (argumentIndex === 0 || argumentIndex === 2) {
           nestedParentByCall.set(child, { parent, argument: argumentIndex });
-        }
-        else problems.push(`nested legacy mutation at ${child.span.start} must occupy source or replacement argument`);
+        } else
+          problems.push(`nested legacy mutation at ${child.span.start} must occupy source or replacement argument`);
         break;
       }
       ancestor = ancestor.parent;
@@ -2335,8 +2310,7 @@ function validateMutationGraph(
       const dependency = mutationById.get(mutation.source.id);
       if (dependency === undefined) {
         problems.push(`manifest mutation ${mutation.id} has unknown source mutation ${mutation.source.id}`);
-      }
-      else if (dependency.order >= mutation.order) {
+      } else if (dependency.order >= mutation.order) {
         problems.push(`manifest source dependency ${dependency.id} -> ${mutation.id} is not topologically ordered`);
       }
       if (parentByDependency.has(mutation.source.id)) {
@@ -2386,10 +2360,7 @@ function validateMutationGraph(
     }
     if (mutation.replacementDependency === null) {
       const observedReplacement = resolveStaticString(call.node.arguments[2], stringDeclarations);
-      if (
-        observedReplacement === null ||
-        observedReplacement !== mutation.expressions.replacement.resolved
-      ) {
+      if (observedReplacement === null || observedReplacement !== mutation.expressions.replacement.resolved) {
         problems.push(
           `manifest mutation ${mutation.id} resolved replacement disagrees with independent AST evaluation`
         );
@@ -2416,11 +2387,12 @@ function validateMutationGraph(
     if (childId === undefined || parentId === undefined) continue;
     const parent = mutationById.get(parentId);
     if (parent === undefined) continue;
-    const expected = edge.argument === 0
-      ? parent.source.kind === "mutation"
-        ? parent.source.id
-        : null
-      : parent.replacementDependency;
+    const expected =
+      edge.argument === 0
+        ? parent.source.kind === "mutation"
+          ? parent.source.id
+          : null
+        : parent.replacementDependency;
     if (expected !== childId) {
       problems.push(`manifest dependency edge ${childId} -> ${parentId} argument ${edge.argument} disagrees with AST`);
     }
@@ -2440,10 +2412,7 @@ function validateMutationGraph(
   if (JSON.stringify(observedSourceEdges) !== JSON.stringify([...EXPECTED_SOURCE_DEPENDENCY_EDGES].sort())) {
     problems.push("manifest source-dependency identities disagree with the exact six reviewed edges");
   }
-  if (
-    JSON.stringify(observedReplacementEdges) !==
-    JSON.stringify([...EXPECTED_REPLACEMENT_DEPENDENCY_EDGES].sort())
-  ) {
+  if (JSON.stringify(observedReplacementEdges) !== JSON.stringify([...EXPECTED_REPLACEMENT_DEPENDENCY_EDGES].sort())) {
     problems.push("manifest replacement-dependency identities disagree with the exact 18 reviewed edges");
   }
 
@@ -2637,11 +2606,7 @@ function expectationSemantic(expectation: ExpectationIdentity): string {
   return expectation.value;
 }
 
-function invocationArgument(
-  value: unknown,
-  path: string,
-  problems: string[]
-): InvocationArgumentIdentity | null {
+function invocationArgument(value: unknown, path: string, problems: string[]): InvocationArgumentIdentity | null {
   if (!isRecord(value)) {
     problems.push(`${path} must be an invocation argument object`);
     return null;
@@ -2731,9 +2696,7 @@ function validatePrimaryInvocation(
     return;
   }
   if (check.invoke.baseline !== contract.mutantSourceId) {
-    problems.push(
-      `${path}.baseline must equal ${check.invoke.kind} mutant source ${contract.mutantSourceId}`
-    );
+    problems.push(`${path}.baseline must equal ${check.invoke.kind} mutant source ${contract.mutantSourceId}`);
   }
   const inputs = exactRecord(check.invoke.inputs, `${path}.inputs`, ["callee", "arguments"], problems);
   if (inputs === null) return;
@@ -2832,11 +2795,7 @@ interface VariableBindingFlow {
 function variableBindingFlows(sourceFile: ts.SourceFile): readonly VariableBindingFlow[] {
   const flows: VariableBindingFlow[] = [];
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined
-    ) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
       const references = new Set<string>();
       const collect = (candidate: ts.Node): void => {
         if (ts.isIdentifier(candidate)) references.add(candidate.text);
@@ -2851,10 +2810,7 @@ function variableBindingFlows(sourceFile: ts.SourceFile): readonly VariableBindi
   return flows;
 }
 
-function rootBindingNames(
-  call: ts.CallExpression,
-  flows: readonly VariableBindingFlow[]
-): ReadonlySet<string> {
+function rootBindingNames(call: ts.CallExpression, flows: readonly VariableBindingFlow[]): ReadonlySet<string> {
   const names = new Set<string>();
   let ancestor: ts.Node | undefined = call.parent;
   while (ancestor !== undefined) {
@@ -2901,10 +2857,7 @@ function rootIsBoundToAssertion(
   sourceFile: ts.SourceFile,
   flows: readonly VariableBindingFlow[]
 ): boolean {
-  if (
-    rootCall.getStart(sourceFile) >= assertion.getStart(sourceFile) &&
-    rootCall.end <= assertion.end
-  ) {
+  if (rootCall.getStart(sourceFile) >= assertion.getStart(sourceFile) && rootCall.end <= assertion.end) {
     return true;
   }
   let rootAncestor: ts.Node | undefined = rootCall.parent;
@@ -2963,12 +2916,7 @@ function literalExpectedProblemForRoot(rootCall: ts.CallExpression): string | nu
   return null;
 }
 
-function validateCases(
-  manifest: IdentityManifest,
-  matrixSource: string,
-  matrix: MatrixScan,
-  problems: string[]
-): void {
+function validateCases(manifest: IdentityManifest, matrixSource: string, matrix: MatrixScan, problems: string[]): void {
   const matrixSourceFile = matrix.sourceFile;
   if (manifest.cases.length !== 536) {
     problems.push(`manifest cases must contain exactly 536 entries; found ${manifest.cases.length}`);
@@ -2979,9 +2927,7 @@ function validateCases(
   const sourceIds = new Set(manifest.sources.map((source) => source.id));
   const caseIds = manifest.cases.map((identityCase) => identityCase.id);
   const caseRoots = manifest.cases.map((identityCase) => identityCase.root);
-  const mutationByLegacyOrder = new Map(
-    manifest.mutations.map((mutation) => [mutation.legacyOrder, mutation])
-  );
+  const mutationByLegacyOrder = new Map(manifest.mutations.map((mutation) => [mutation.legacyOrder, mutation]));
   const expectedCaseRoots = matrix.calls
     .map((_call, index) => mutationByLegacyOrder.get(index + 1))
     .filter((mutation): mutation is MutationIdentity => mutation?.role === "root")
@@ -3056,12 +3002,7 @@ function validateCases(
         );
       }
       if (checkIndex === 0) {
-        validatePrimaryInvocation(
-          check,
-          `${identityCase.id}.checks[${checkIndex}].invoke`,
-          mcpbMutantSlots,
-          problems
-        );
+        validatePrimaryInvocation(check, `${identityCase.id}.checks[${checkIndex}].invoke`, mcpbMutantSlots, problems);
       } else {
         validateCompositeInvocation(
           check,
@@ -3099,15 +3040,10 @@ function validateCases(
       if (check.expectation.kind === "regex") {
         const expectedOperand = NAMED_REGEX_OPERANDS[check.expectation.regex];
         if (expectedOperand === undefined) {
-          problems.push(
-            `manifest case ${identityCase.id} check ${checkIndex} uses an unknown named-regex identity`
-          );
+          problems.push(`manifest case ${identityCase.id} check ${checkIndex} uses an unknown named-regex identity`);
         }
         for (const matcher of check.matcherEvaluations) {
-          if (
-            matcher.operand.resolved !== check.expectation.regex ||
-            matcher.operand.raw !== expectedOperand
-          ) {
+          if (matcher.operand.resolved !== check.expectation.regex || matcher.operand.raw !== expectedOperand) {
             problems.push(
               `manifest case ${identityCase.id} check ${checkIndex} named-regex operand ` +
                 "disagrees with its exact AST catalogue"
@@ -3345,9 +3281,7 @@ function validateCases(
   };
   for (const [root, expectedProfile] of Object.entries(expectedAuxiliaryProfiles)) {
     const auxiliary = manifest.cases.find((identityCase) => identityCase.root === root)?.checks[1];
-    const observedProfile = auxiliary?.matcherEvaluations.map(
-      (matcher) => [matcher.matcher, matcher.negated] as const
-    );
+    const observedProfile = auxiliary?.matcherEvaluations.map((matcher) => [matcher.matcher, matcher.negated] as const);
     if (JSON.stringify(observedProfile) !== JSON.stringify(expectedProfile)) {
       problems.push(`${root} must preserve its exact ordered auxiliary matcher and polarity profile`);
     }

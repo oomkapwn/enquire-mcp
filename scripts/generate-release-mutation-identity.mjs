@@ -11,11 +11,9 @@ const NORMALIZER = "release-matrix-balanced-v2";
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const MATRIX_TITLE =
-  "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
+const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
 const MATRIX_PREFIX = "    const releaseWorkflow = readFileSync(";
-const MATRIX_START =
-  MATRIX_PREFIX + 'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");';
+const MATRIX_START = `${MATRIX_PREFIX}new URL("../.github/workflows/release.yml", import.meta.url), "utf8");`;
 const MATRIX_END = "  }, 120_000);";
 const CALL_NAMES = ["replaceExactly", "replaceAllExactly"];
 const PAIRS = new Map([
@@ -334,11 +332,7 @@ function collectDeclarations(text) {
       }
       continue;
     }
-    if (
-      !text.startsWith("const", cursor) ||
-      identifierPart(text[cursor - 1]) ||
-      identifierPart(text[cursor + 5])
-    ) {
+    if (!text.startsWith("const", cursor) || identifierPart(text[cursor - 1]) || identifierPart(text[cursor + 5])) {
       continue;
     }
     const declarationStart = cursor;
@@ -491,10 +485,7 @@ function applyMutation(source, needle, replacement, mode, expected) {
     while (true) {
       const offset = source.indexOf(needle, cursor);
       if (offset === -1) break;
-      fragments.push(
-        source.slice(cursor, offset),
-        expandReplacement(source, needle, replacement, offset)
-      );
+      fragments.push(source.slice(cursor, offset), expandReplacement(source, needle, replacement, offset));
       cursor = offset + needle.length;
     }
     fragments.push(source.slice(cursor));
@@ -514,10 +505,7 @@ class StaticEvaluator {
 
   declaration(name, context) {
     const values = (this.declarations.get(name) ?? [])
-      .filter(
-        (entry) =>
-          entry.start < context && entry.scopeStart < context && context <= entry.scopeEnd
-      )
+      .filter((entry) => entry.start < context && entry.scopeStart < context && context <= entry.scopeEnd)
       .sort((left, right) => left.scopeStart - right.scopeStart || left.start - right.start);
     if (values.length === 0) fail(`unresolved identifier ${name} at ${context}`);
     return values.at(-1);
@@ -564,9 +552,7 @@ class StaticEvaluator {
     const plus = splitTop(value, "+");
     if (plus.length > 1) {
       const values = plus.map((entry) => this.evaluate(entry, context));
-      return values.every(Number.isInteger)
-        ? values.reduce((sum, entry) => sum + entry, 0)
-        : values.join("");
+      return values.every(Number.isInteger) ? values.reduce((sum, entry) => sum + entry, 0) : values.join("");
     }
     if (value.length >= 2 && (value[0] === "'" || value[0] === '"') && value.at(-1) === value[0]) {
       return decodeJsString(value);
@@ -580,9 +566,7 @@ class StaticEvaluator {
     if (value === "null") return null;
     if (value.startsWith("[") && balancedEnd(value, 0) === value.length - 1) {
       const inner = value.slice(1, -1);
-      return inner.trim() === ""
-        ? []
-        : splitTop(inner).map((entry) => this.evaluate(entry, context));
+      return inner.trim() === "" ? [] : splitTop(inner).map((entry) => this.evaluate(entry, context));
     }
     if (value.startsWith("{") && balancedEnd(value, 0) === value.length - 1) {
       const result = {};
@@ -608,16 +592,11 @@ class StaticEvaluator {
     }
     const repeatMatch = /^([\s\S]+)\.repeat\(([\s\S]+)\)$/u.exec(value);
     if (repeatMatch !== null) {
-      return String(this.evaluate(repeatMatch[1], context)).repeat(
-        Number(this.evaluate(repeatMatch[2], context))
-      );
+      return String(this.evaluate(repeatMatch[1], context)).repeat(Number(this.evaluate(repeatMatch[2], context)));
     }
     const rawClockMatch = /^rawClockGuard\(([\s\S]+)\)$/u.exec(value);
     if (rawClockMatch !== null) {
-      return `          ${String(this.evaluate(rawClockMatch[1], context)).replaceAll(
-        "\n",
-        "\n          "
-      )}`;
+      return `          ${String(this.evaluate(rawClockMatch[1], context)).replaceAll("\n", "\n          ")}`;
     }
     const callMatch = /^(replaceExactly|replaceAllExactly)\s*\(/u.exec(value);
     if (callMatch !== null) {
@@ -628,13 +607,7 @@ class StaticEvaluator {
       const needle = String(this.evaluate(args[1], context));
       const replacement = String(this.evaluate(args[2], context));
       const count = args.length === 4 ? Number(this.evaluate(args[3], context)) : 1;
-      return applyMutation(
-        source,
-        needle,
-        replacement,
-        callMatch[1] === "replaceAllExactly" ? "all" : "first",
-        count
-      );
+      return applyMutation(source, needle, replacement, callMatch[1] === "replaceAllExactly" ? "all" : "first", count);
     }
     fail(`unsupported expression at ${context}: ${compact(value).slice(0, 180)}`);
   }
@@ -644,9 +617,7 @@ function registryRun(release) {
   const lines = release.split("\n");
   const nameIndex = lines.indexOf("      - name: Publish to MCP Registry (stable only)");
   if (nameIndex === -1) fail("registry publish step name is absent");
-  const runIndex = lines.findIndex(
-    (line, index) => index > nameIndex && line === "        run: |"
-  );
+  const runIndex = lines.findIndex((line, index) => index > nameIndex && line === "        run: |");
   if (runIndex === -1) fail("registry publish run block is absent");
   const body = [];
   for (const line of lines.slice(runIndex + 1)) {
@@ -662,8 +633,8 @@ function releaseFixture(release, transaction) {
   }
   const normalized = transaction
     .slice(0, -1)
-    .replaceAll("$MCPB_RELEASE_REPOSITORY", "${{ github.repository }}")
-    .replaceAll("$MCPB_RELEASE_CHANNEL", "${{ steps.dist_tag.outputs.tag }}");
+    .replaceAll("$MCPB_RELEASE_REPOSITORY", `\${{ github.repository }}`)
+    .replaceAll("$MCPB_RELEASE_CHANNEL", `\${{ steps.dist_tag.outputs.tag }}`);
   const fixture = normalized
     .split("\n")
     .map((line) => `          ${line}`)
@@ -673,10 +644,7 @@ function releaseFixture(release, transaction) {
 
 function buildSources(text, declarationContext) {
   const rawRelease = readFileSync(join(ROOT, ".github/workflows/release.yml"), "utf8");
-  const transaction = readFileSync(
-    join(ROOT, ".github/scripts/release-mcpb-github-transaction.sh"),
-    "utf8"
-  );
+  const transaction = readFileSync(join(ROOT, ".github/scripts/release-mcpb-github-transaction.sh"), "utf8");
   const combined = releaseFixture(rawRelease, transaction);
   const files = new Map([
     ["mcpbInputs.docsApi", "docs/api.md"],
@@ -699,9 +667,7 @@ function buildSources(text, declarationContext) {
     ["ci", ".github/workflows/ci.yml"],
     ["releaseWorkflow", ".github/workflows/release.yml"]
   ]);
-  const values = new Map(
-    [...files].map(([alias, path]) => [alias, readFileSync(join(ROOT, path), "utf8")])
-  );
+  const values = new Map([...files].map(([alias, path]) => [alias, readFileSync(join(ROOT, path), "utf8")]));
   values.set("workflow", combined);
   values.set("mcpbInputs.release", combined);
   values.set("registryRun", registryRun(combined));
@@ -723,12 +689,7 @@ function buildSources(text, declarationContext) {
   for (const name of constants) {
     values.set(name, String(evaluator.evaluateIdentifier(name, declarationContext)));
   }
-  const fileSource = (id, aliases, binding, path) => [
-    id,
-    aliases,
-    binding,
-    { kind: "file", path }
-  ];
+  const fileSource = (id, aliases, binding, path) => [id, aliases, binding, { kind: "file", path }];
   const constantSource = (id, alias, binding) => [
     id,
     [alias],
@@ -750,11 +711,7 @@ function buildSources(text, declarationContext) {
         dependencies: ["workflow.release-raw", "script.release-transaction"]
       }
     ],
-    constantSource(
-      "fragment.github-create-channel",
-      "rawCreateChannel",
-      "githubCreateChannelSource"
-    ),
+    constantSource("fragment.github-create-channel", "rawCreateChannel", "githubCreateChannelSource"),
     constantSource(
       "fragment.github-release-transaction-tail",
       "releaseTransactionTail",
@@ -776,67 +733,30 @@ function buildSources(text, declarationContext) {
       "NPM_PROVENANCE_EVALUATOR_COMMAND",
       "npmProvenanceEvaluatorCommandSource"
     ),
-    constantSource(
-      "fragment.npm-publish-command",
-      "MCPB_EXACT_NPM_PUBLISH",
-      "npmPublishCommandSource"
-    ),
+    constantSource("fragment.npm-publish-command", "MCPB_EXACT_NPM_PUBLISH", "npmPublishCommandSource"),
     constantSource(
       "fragment.release-visibility-duplicate-guard",
       "MCPB_RELEASE_VISIBILITY_DUPLICATE_GUARD",
       "releaseVisibilityDuplicateGuardSource"
     ),
-    constantSource(
-      "fragment.release-visibility-poll",
-      "MCPB_RELEASE_VISIBILITY_POLL",
-      "releaseVisibilityPollSource"
-    ),
+    constantSource("fragment.release-visibility-poll", "MCPB_RELEASE_VISIBILITY_POLL", "releaseVisibilityPollSource"),
     constantSource(
       "fragment.release-visibility-timeout-guard",
       "MCPB_RELEASE_VISIBILITY_TIMEOUT_GUARD",
       "releaseVisibilityTimeoutGuardSource"
     ),
-    constantSource(
-      "fragment.release-visibility-wait",
-      "MCPB_RELEASE_VISIBILITY_WAIT",
-      "releaseVisibilityWaitSource"
-    ),
-    fileSource(
-      "manifest.mcpb",
-      ["mcpbInputs.manifest"],
-      "mcpbManifestSource",
-      "mcpb/manifest.json"
-    ),
+    constantSource("fragment.release-visibility-wait", "MCPB_RELEASE_VISIBILITY_WAIT", "releaseVisibilityWaitSource"),
+    fileSource("manifest.mcpb", ["mcpbInputs.manifest"], "mcpbManifestSource", "mcpb/manifest.json"),
     fileSource(
       "manifest.package-json",
       ["packageJson", "mcpbInputs.packageJson"],
       "packageManifestSource",
       "package.json"
     ),
-    fileSource(
-      "manifest.package-lock",
-      ["mcpbInputs.packageLock"],
-      "packageLockSource",
-      "package-lock.json"
-    ),
-    fileSource(
-      "script.mcpb-build",
-      ["mcpbInputs.build"],
-      "mcpbBuildSource",
-      "scripts/build-mcpb.mjs"
-    ),
-    fileSource(
-      "script.mcpb-consumer",
-      ["mcpbInputs.consumer"],
-      "mcpbConsumerSource",
-      "scripts/mcpb-consumer.mjs"
-    ),
-    fileSource(
-      "script.package-consumer",
-      ["packageConsumer"],
-      "packageConsumerSource",
-      "scripts/package-consumer.mjs"
-    ),
+    fileSource("manifest.package-lock", ["mcpbInputs.packageLock"], "packageLockSource", "package-lock.json"),
+    fileSource("script.mcpb-build", ["mcpbInputs.build"], "mcpbBuildSource", "scripts/build-mcpb.mjs"),
+    fileSource("script.mcpb-consumer", ["mcpbInputs.consumer"], "mcpbConsumerSource", "scripts/mcpb-consumer.mjs"),
+    fileSource("script.package-consumer", ["packageConsumer"], "packageConsumerSource", "scripts/package-consumer.mjs"),
     fileSource(
       "script.protocol-conformance",
       ["protocolConformance"],
@@ -861,12 +781,7 @@ function buildSources(text, declarationContext) {
       "versionConsistencySource",
       "scripts/check-version-consistency.mjs"
     ),
-    fileSource(
-      "script.version-sync",
-      ["mcpbInputs.versionSync"],
-      "versionSyncSource",
-      "scripts/sync-version.mjs"
-    ),
+    fileSource("script.version-sync", ["mcpbInputs.versionSync"], "versionSyncSource", "scripts/sync-version.mjs"),
     fileSource("source.cli", ["mcpbInputs.cli"], "cliSource", "src/cli.ts"),
     fileSource("source.cli-help", ["mcpbInputs.cliHelp"], "cliHelpSource", "src/cli-help.ts"),
     fileSource("source.server-ts", ["mcpbInputs.server"], "serverSource", "src/server.ts"),
@@ -1964,13 +1879,16 @@ function buildManifest() {
   }
   const matrixEndStart = text.lastIndexOf(MATRIX_END);
   if (matrixEndStart < matrixStart) fail("exact matrix end marker is absent");
+  const matrixClosingBraceOffset = MATRIX_END.indexOf("}");
+  if (matrixClosingBraceOffset === -1) fail("exact matrix end marker has no callback closing brace");
+  const matrixDeclarationContext = matrixEndStart + matrixClosingBraceOffset - 1;
   const matrixEnd = matrixEndStart + MATRIX_END.length;
   const matrixSliceSha256 = digest(text.slice(matrixStart, matrixEnd));
   if (matrixSliceSha256 !== MATRIX_SLICE_SHA256) {
     fail("release matrix slice SHA-256 drift");
   }
   const calls = findCalls(text, matrixStart);
-  const { sources, values: sourceValues } = buildSources(text, matrixEnd - 1);
+  const { sources, values: sourceValues } = buildSources(text, matrixDeclarationContext);
   const { mutations } = materializeMutations(text, calls, sources, sourceValues);
   const { assertions, mapped, arrays } = mapAssertions(
     text,
@@ -2076,10 +1994,10 @@ function buildManifest() {
 function serializeManifest(manifest) {
   const lines = [
     "{",
-    `  \"schemaVersion\": ${canonical(manifest.schemaVersion)},`,
-    `  \"normalizer\": ${canonical(manifest.normalizer)},`,
-    `  \"generatedFrom\": ${canonical(manifest.generatedFrom)},`,
-    `  \"inventory\": ${canonical(manifest.inventory)},`
+    `  "schemaVersion": ${canonical(manifest.schemaVersion)},`,
+    `  "normalizer": ${canonical(manifest.normalizer)},`,
+    `  "generatedFrom": ${canonical(manifest.generatedFrom)},`,
+    `  "inventory": ${canonical(manifest.inventory)},`
   ];
   for (const [arrayIndex, key] of ["sources", "mutations", "cases"].entries()) {
     lines.push(`  ${canonical(key)}: [`);

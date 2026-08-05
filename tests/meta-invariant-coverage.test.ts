@@ -29,16 +29,9 @@ import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./h
 import { releaseMutationIdentityAuditProblems } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
-const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 =
-  "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
-const releaseMutationIdentityGeneratorPath = path.join(
-  repoRoot,
-  "scripts/generate-release-mutation-identity.mjs"
-);
-const releaseMutationIdentityFixturePath = path.join(
-  repoRoot,
-  "tests/fixtures/release-mutation-identity.v2.json"
-);
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
+const releaseMutationIdentityGeneratorPath = path.join(repoRoot, "scripts/generate-release-mutation-identity.mjs");
+const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
 
 interface MutableIdentityControlManifest {
@@ -72,9 +65,7 @@ function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function refreshSourceSemanticFingerprint(
-  source: MutableIdentityControlManifest["sources"][number]
-): void {
+function refreshSourceSemanticFingerprint(source: MutableIdentityControlManifest["sources"][number]): void {
   source.semanticFingerprint = `sha256:${sha256Text(
     JSON.stringify({
       normalizer: "release-matrix-balanced-v2",
@@ -105,7 +96,7 @@ function runReleaseMutationIdentityGenerator(): string {
   });
   if (result.error !== undefined) throw result.error;
   expect(result.signal).toBeNull();
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toBe("");
   return result.stdout;
 }

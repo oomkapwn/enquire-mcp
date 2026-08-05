@@ -16,6 +16,7 @@ const MATRIX_PREFIX = "    const releaseWorkflow = readFileSync(";
 const MATRIX_START = `${MATRIX_PREFIX}new URL("../.github/workflows/release.yml", import.meta.url), "utf8");`;
 const MATRIX_END = "  }, 120_000);";
 const CALL_NAMES = ["replaceExactly", "replaceAllExactly"];
+const RAW_ASSERTION_CENSUS = 332;
 const REGEX_PREFIX_KEYWORDS = new Set([
   "await",
   "case",
@@ -1347,10 +1348,7 @@ function mapAssertions(text, matrixStart, matrixEnd, calls) {
   }
   for (const call of roots) {
     if (call.assignedName === null) continue;
-    const pattern = new RegExp(
-      `(^|[^A-Za-z0-9_$])${escapedRegExp(call.assignedName)}([^A-Za-z0-9_$]|$)`,
-      "u"
-    );
+    const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escapedRegExp(call.assignedName)}([^A-Za-z0-9_$]|$)`, "u");
     for (const assertion of assertions) {
       if (assertion.start > call.end && pattern.test(assertion.actual)) {
         mapped.get(call.legacyOrder).push(assertion);
@@ -1365,10 +1363,7 @@ function mapAssertions(text, matrixStart, matrixEnd, calls) {
     const arrayText = text.slice(opening, closing);
     for (const call of roots) {
       if (call.assignedName === null || call.end >= opening) continue;
-      const pattern = new RegExp(
-        `(^|[^A-Za-z0-9_$])${escapedRegExp(call.assignedName)}([^A-Za-z0-9_$]|$)`,
-        "u"
-      );
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escapedRegExp(call.assignedName)}([^A-Za-z0-9_$]|$)`, "u");
       if (pattern.test(arrayText)) contained.push(call.legacyOrder);
     }
     if (contained.length === 0) continue;
@@ -1383,10 +1378,7 @@ function mapAssertions(text, matrixStart, matrixEnd, calls) {
       .map((call) => call.legacyOrder);
     if (iterableRoots.length === 0) iterableRoots = arrays.get(loop.iterable) ?? [];
     if (iterableRoots.length === 0) continue;
-    const pattern = new RegExp(
-      `(^|[^A-Za-z0-9_$])${escapedRegExp(loop.binding)}([^A-Za-z0-9_$]|$)`,
-      "u"
-    );
+    const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escapedRegExp(loop.binding)}([^A-Za-z0-9_$]|$)`, "u");
     for (const assertion of assertions) {
       if (loop.bodyStart <= assertion.start && assertion.end <= loop.bodyEnd && pattern.test(assertion.actual)) {
         for (const legacy of iterableRoots) mapped.get(legacy).push(assertion);
@@ -1407,7 +1399,10 @@ function mapAssertions(text, matrixStart, matrixEnd, calls) {
   }
   for (const [legacy, entries] of mapped) {
     const unique = new Map(entries.map((assertion) => [assertion.start, assertion]));
-    mapped.set(legacy, [...unique.values()].sort((left, right) => left.start - right.start));
+    mapped.set(
+      legacy,
+      [...unique.values()].sort((left, right) => left.start - right.start)
+    );
   }
   return { assertions, mapped, arrays };
 }
@@ -1471,8 +1466,7 @@ function transactionExpectedProblems(text, matrixStart, matrixEnd, calls, roots,
     const call = callByOrder.get(legacy);
     const containers = pairs.filter(
       ([opening, closing]) =>
-        opening < call.start && call.end < closing &&
-        text.slice(opening, closing).includes("expectedProblem")
+        opening < call.start && call.end < closing && text.slice(opening, closing).includes("expectedProblem")
     );
     if (containers.length === 0) fail(`transaction object missing for ${call.id}`);
     containers.sort((left, right) => left[1] - left[0] - (right[1] - right[0]));
@@ -1555,9 +1549,7 @@ function invocationInputs(kind, baseline, nodeEngine) {
           kind: "source-map",
           slot: "inputs",
           mutantSlot: mutableSlot,
-          companions: MCPB_SOURCE_SLOTS
-            .filter(([slot]) => slot !== mutableSlot)
-            .map(([slot, id]) => source(slot, id))
+          companions: MCPB_SOURCE_SLOTS.filter(([slot]) => slot !== mutableSlot).map(([slot, id]) => source(slot, id))
         }
       ]
     };
@@ -1674,22 +1666,26 @@ function buildCases(text, matrixStart, matrixEnd, calls, mutations, sourceValues
       expectation = { id: expectationId, kind: "problem", problem: resolved };
       primaryProblemCount++;
     }
-    const checks = [{
-      invoke: {
-        kind,
-        baseline,
-        mutant: call.id,
-        inputs: invocationInputs(kind, baseline, nodeEngine)
-      },
-      expectation,
-      matcherEvaluations: [{
-        matcher: assertion.matcher,
-        negated: assertion.negated,
-        operand: { raw: assertion.expected, resolved },
+    const checks = [
+      {
+        invoke: {
+          kind,
+          baseline,
+          mutant: call.id,
+          inputs: invocationInputs(kind, baseline, nodeEngine)
+        },
+        expectation,
+        matcherEvaluations: [
+          {
+            matcher: assertion.matcher,
+            negated: assertion.negated,
+            operand: { raw: assertion.expected, resolved },
+            assertionSpan: sourceSpan(text, assertion.start, assertion.end)
+          }
+        ],
         assertionSpan: sourceSpan(text, assertion.start, assertion.end)
-      }],
-      assertionSpan: sourceSpan(text, assertion.start, assertion.end)
-    }];
+      }
+    ];
     if (auxiliary.length > 0) {
       if (![38, 39, 40, 41, 42].includes(call.legacyOrder)) {
         fail(`unexpected auxiliary checks for ${call.id}`);
@@ -1883,8 +1879,7 @@ function buildManifest() {
     compositeChecks: cases.reduce((sum, entry) => sum + entry.checks.length - 1, 0),
     logicalChecks: cases.reduce((sum, entry) => sum + entry.checks.length, 0),
     rawMatcherEvaluations: cases.reduce(
-      (sum, entry) =>
-        sum + entry.checks.reduce((caseSum, check) => caseSum + check.matcherEvaluations.length, 0),
+      (sum, entry) => sum + entry.checks.reduce((caseSum, check) => caseSum + check.matcherEvaluations.length, 0),
       0
     ),
     sourceEdges: calls.filter((call) => call.parentArgument === 0).length,
@@ -1909,8 +1904,8 @@ function buildManifest() {
     maxDependencyDepth: 2,
     transactionCases: 76
   });
-  if (assertions.length < inventory.rawMatcherEvaluations) {
-    fail(`assertion census underflow: ${assertions.length}`);
+  if (assertions.length !== RAW_ASSERTION_CENSUS) {
+    fail(`raw assertion census drift: expected ${RAW_ASSERTION_CENSUS}, found ${assertions.length}`);
   }
   const rawExpressionShape = {
     classifier: "outer-expression-v1",

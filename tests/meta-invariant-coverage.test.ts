@@ -19,13 +19,87 @@
 // useful matcher from a tautology. It also does not resolve whether
 // `expect`/`assert` identifiers are shadowed.
 
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./helpers/exact-source-mutation.js";
+import { releaseMutationIdentityAuditProblems } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
+const releaseMutationIdentityGeneratorPath = path.join(repoRoot, "scripts/generate-release-mutation-identity.mjs");
+const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
+const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
+
+interface MutableIdentityControlManifest {
+  readonly cases: Array<{
+    readonly checks: Array<{
+      readonly expectation: { regex?: string };
+      readonly invoke: {
+        readonly inputs: { readonly arguments: unknown[]; callee: string };
+        kind: string;
+      };
+    }>;
+  }>;
+  readonly mutations: Array<{
+    readonly expressions: {
+      readonly needle: { raw: string; resolved: string };
+      readonly source: { resolved: string };
+    };
+  }>;
+  readonly sources: Array<{
+    contentSha256: string;
+    readonly declarativeBinding: string;
+    readonly id: string;
+    readonly legacyExpressions: string[];
+    readonly order: number;
+    readonly origin: unknown;
+    semanticFingerprint: string;
+  }>;
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function refreshSourceSemanticFingerprint(source: MutableIdentityControlManifest["sources"][number]): void {
+  source.semanticFingerprint = `sha256:${sha256Text(
+    JSON.stringify({
+      normalizer: "release-matrix-balanced-v2",
+      source: {
+        order: source.order,
+        id: source.id,
+        legacyExpressions: source.legacyExpressions,
+        declarativeBinding: source.declarativeBinding,
+        origin: source.origin,
+        contentSha256: source.contentSha256
+      }
+    })
+  )}`;
+}
+
+function firstIdentityEntry<T>(values: readonly T[], label: string): T {
+  const value = values[0];
+  if (value === undefined) throw new Error(`release identity fixture has no ${label}`);
+  return value;
+}
+
+function runReleaseMutationIdentityGenerator(): string {
+  const result = spawnSync(process.execPath, [releaseMutationIdentityGeneratorPath], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 30_000
+  });
+  if (result.error !== undefined) throw result.error;
+  expect(result.signal).toBeNull();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  return result.stdout;
+}
 
 // Freeze the convention-named side too: a one-for-one delete/add swap must not
 // evade review merely because the total count remains 34.
@@ -798,6 +872,99 @@ function checkInvariantHasNegativeCoverage(filename: string, content: string): s
 }
 
 describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {
+  beforeAll(async () => {
+    const [matrixSource, fixtureBefore] = await Promise.all([
+      fs.readFile(releaseIntegritySourcePath, "utf8"),
+      fs.readFile(releaseMutationIdentityFixturePath, "utf8")
+    ]);
+    expect(sha256Text(fixtureBefore)).toBe(RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256);
+
+    const firstGeneration = runReleaseMutationIdentityGenerator();
+    const secondGeneration = runReleaseMutationIdentityGenerator();
+    expect(secondGeneration).toBe(firstGeneration);
+    expect(firstGeneration).toBe(fixtureBefore);
+    expect(await fs.readFile(releaseMutationIdentityFixturePath, "utf8")).toBe(fixtureBefore);
+    // The reviewed baseline itself is the positive control for static property paths,
+    // template expressions, and mutation calls evaluated once in for-of iterables.
+    expect(releaseMutationIdentityAuditProblems(matrixSource, fixtureBefore)).toEqual([]);
+
+    const loopBodyMutation = replaceExactly(
+      matrixSource,
+      "    ]) {\n      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(",
+      '    ]) {\n      void replaceExactly(mcpbInputs.integrity, "loop-body", "mutant");\n' +
+        '      ["mapped"].map(() => replaceExactly(mcpbInputs.integrity, "mapped", "mutant"));\n' +
+        "      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain("
+    );
+    expect(releaseMutationIdentityAuditProblems(loopBodyMutation, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/matrix AST execution-multiplying mutation helper sites must be zero; found 2/)
+      ])
+    );
+
+    const unsupportedExpressionMutation = replaceExactly(
+      matrixSource,
+      'replaceExactly(mcpbInputs.integrity, \'transport.type !== "stdio"\', "false")',
+      'replaceExactly(mcpbInputs["integrity"], true ? \'transport.type !== "stdio"\' : "x", ["false"][0])'
+    );
+    expect(releaseMutationIdentityAuditProblems(unsupportedExpressionMutation, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/legacy source expression .* is outside outer-expression-v1/),
+        expect.stringMatching(/legacy needle expression .* is outside outer-expression-v1/),
+        expect.stringMatching(/legacy replacement expression .* is outside outer-expression-v1/)
+      ])
+    );
+
+    const duplicateTopLevelKey = replaceExactly(
+      fixtureBefore,
+      '"schemaVersion": 2,',
+      '"schemaVersion": 2,\n  "schemaVersion": 2,'
+    );
+    expect(releaseMutationIdentityAuditProblems(matrixSource, duplicateTopLevelKey)).toEqual([
+      expect.stringMatching(/duplicate JSON key schemaVersion/)
+    ]);
+
+    const referencedDeclarationDrift = replaceExactly(
+      matrixSource,
+      `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';`,
+      `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scriptz';`
+    );
+    expect(releaseMutationIdentityAuditProblems(referencedDeclarationDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release-integrity source must remain exact reviewed SHA-256/),
+        expect.stringMatching(/manifest source row 6 disagrees with the exact reviewed catalogue identity/)
+      ])
+    );
+
+    const tampered = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
+    const firstSource = firstIdentityEntry(tampered.sources, "source identities");
+    const unrelatedSource = tampered.sources[1];
+    if (unrelatedSource === undefined) throw new Error("release identity fixture has no unrelated source identity");
+    const firstMutation = firstIdentityEntry(tampered.mutations, "mutation identities");
+    const firstCase = firstIdentityEntry(tampered.cases, "case identities");
+    const firstCheck = firstIdentityEntry(firstCase.checks, "case checks");
+    firstSource.contentSha256 = "0".repeat(64);
+    refreshSourceSemanticFingerprint(firstSource);
+    firstMutation.expressions.needle.raw += " /* manifest raw-expression drift */";
+    firstMutation.expressions.needle.resolved += "\n# resolved-needle drift";
+    firstMutation.expressions.source.resolved = unrelatedSource.id;
+    firstCheck.invoke.kind = "release.poll";
+    firstCheck.invoke.inputs.callee = "unreviewedDetector";
+    firstCheck.expectation.regex = "workflow.schema.unreviewed-regex";
+    const tamperProblems = releaseMutationIdentityAuditProblems(matrixSource, JSON.stringify(tampered));
+    expect(tamperProblems).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/contentSha256 must identify exact materialized bytes/),
+        expect.stringMatching(/needle raw expression disagrees with exact AST identity/),
+        expect.stringMatching(/resolved source must equal/),
+        expect.stringMatching(/resolved needle disagrees with independent AST evaluation/),
+        expect.stringMatching(/baseline must equal release\.poll mutant source fixture\.release-workflow/),
+        expect.stringMatching(/inputs\.callee must be releasePollProblems/),
+        expect.stringMatching(/inputs\.arguments disagree with the exact release\.poll detector signature/),
+        expect.stringMatching(/uses an unknown named-regex identity/)
+      ])
+    );
+  }, 90_000);
+
   it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker", async () => {
     const completeSet = new Set<string>(EXPECTED_STRUCTURAL_FILES);
     const missingReleaseIntegrity = new Set(completeSet);

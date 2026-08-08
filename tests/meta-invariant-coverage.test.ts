@@ -858,6 +858,9 @@ function checkInvariantHasNegativeCoverage(filename: string, content: string): s
 }
 
 describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {
+  // Exact-tree main coverage ran the 22 complete hybrid identity audits in 125-127s
+  // on two westus workers after the PR runner completed them in 64s. Keep a scoped
+  // 180s hang bound for this exhaustive hook without widening the global suite.
   beforeAll(async () => {
     const [matrixSource, fixtureBefore] = await Promise.all([
       fs.readFile(releaseIntegritySourcePath, "utf8"),
@@ -1305,7 +1308,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/uses an unknown named-regex identity/)
       ])
     );
-  }, 90_000);
+  }, 180_000);
 
   it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker", async () => {
     const completeSet = new Set<string>(EXPECTED_STRUCTURAL_FILES);

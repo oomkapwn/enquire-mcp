@@ -1,0 +1,35 @@
+name: Capture release mutation fixture
+
+on:
+  push:
+    branches: [codex/security-pdfjs-nanoid]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: |
+          for n in 1 2 3; do
+            npm ci && break
+            if [ "$n" -eq 3 ]; then exit 1; fi
+            sleep 15
+          done
+      - name: Generate fixture
+        run: node scripts/generate-release-mutation-identity.mjs > "$RUNNER_TEMP/release-mutation-identity.v2.json"
+      - name: Upload fixture
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-mutation-identity-${{ github.sha }}
+          path: ${{ runner.temp }}/release-mutation-identity.v2.json
+          if-no-files-found: error
+          retention-days: 1

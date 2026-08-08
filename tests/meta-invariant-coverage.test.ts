@@ -934,7 +934,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "    void replaceExactly(",
         "        mcpbInputs.integrity,",
-        '        \'import { isDeepStrictEqual } from "node:util";\',',
+        "        'import { isDeepStrictEqual } from \"node:util\";',",
         '        "const isDeepStrictEqual = () => true;"',
         "      );",
         "    const releaseIntegrityText = mcpbInputs.integrity;",
@@ -946,6 +946,44 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m002 must exist in exactly one legacy XOR declarative representation; found 1\/1/
         )
+      ])
+    );
+
+    const sameHashRemainingFixture = replaceExactly(
+      fixtureBefore,
+      "6339e5c510913eafb1defe67939b667f2d19461df01fe4e791b3ee7afb2a8909",
+      "2523c1c577061ab48258e780f02ccda0cba9ca0ac209d9cf3362a2e7680fc9b1"
+    );
+    const sameHashRemainingProblems = releaseMutationIdentityAuditProblems(matrixSource, sameHashRemainingFixture);
+    expect(
+      sameHashRemainingProblems.filter((problem) =>
+        problem.includes("release mutation hybrid frozen ID release.m002 must exist in exactly one legacy XOR")
+      )
+    ).toEqual([]);
+
+    const uniqueHashSecondOccurrenceDrift = replaceExactly(
+      matrixSource,
+      [
+        "        replaceExactly(",
+        "          mcpbInputs.integrity,",
+        "          'phase === \"convergence\" && (status === 429 || status >= 500)',",
+        "          'phase === \"convergence\"'",
+        "        )"
+      ].join("\n"),
+      [
+        "        replaceExactly(",
+        "          mcpbInputs.integrity,",
+        "          'phase === \"convergence\" && (status === 429 || status >= 500)',",
+        "          'phase === \"submission\"'",
+        "        )"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(uniqueHashSecondOccurrenceDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m111 must exist in exactly one legacy XOR declarative representation; found 0\/0/
+        ),
+        expect.stringMatching(/release mutation hybrid legacy case release\.case\.m111 has no remaining root call/)
       ])
     );
 
@@ -1160,7 +1198,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const mutationMatchCountAlias = `${matrixSource}\nconst mutationCounterAlias = mutationMatchCount;\nvoid mutationCounterAlias;\n`;
     expect(releaseMutationIdentityAuditProblems(mutationMatchCountAlias, fixtureBefore)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid mutationMatchCount must have no aliases; found 1 alias initializer/)
+        expect.stringMatching(
+          /release mutation hybrid mutationMatchCount must have no aliases; found 1 alias initializer/
+        )
       ])
     );
 
@@ -1197,7 +1237,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     const unsupportedExpressionMutation = replaceExactly(
       matrixSource,
-      'replaceExactly(registryRun, \'mcp-registry-state "$phase"\', \'mcp-registry-read "$phase"\')',
+      "replaceExactly(registryRun, 'mcp-registry-state \"$phase\"', 'mcp-registry-read \"$phase\"')",
       'replaceExactly(true ? registryRun : "", true ? \'mcp-registry-state "$phase"\' : "x", [\'mcp-registry-read "$phase"\'][0])'
     );
     expect(releaseMutationIdentityAuditProblems(unsupportedExpressionMutation, fixtureBefore)).toEqual(

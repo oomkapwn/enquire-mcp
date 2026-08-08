@@ -1661,11 +1661,7 @@ export class ReleaseMutationPlan {
                 break;
               case "registry.evaluator":
                 if (expectation.kind !== "problem") {
-                  this.addProblem(
-                    "expectation.type",
-                    id,
-                    "registry.evaluator requires exact problem expectations"
-                  );
+                  this.addProblem("expectation.type", id, "registry.evaluator requires exact problem expectations");
                   valid = false;
                 } else if (expectation.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
                   this.addProblem(
@@ -1901,10 +1897,7 @@ export class ReleaseMutationPlan {
         this.addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
         valid = false;
       }
-      if (
-        expectation?.problem !== "fixture.mutant-threw" &&
-        expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM
-      ) {
+      if (expectation?.problem !== "fixture.mutant-threw" && expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
         this.addProblem("expectation.problem", caseId, `${id} has an unknown exact problem identity`);
         valid = false;
       }
@@ -2154,10 +2147,7 @@ export class ReleaseMutationPlan {
               `release mutation case ${caseId} expectation ${expectation.id} found a problem in the clean baseline`
             );
           }
-          if (
-            observation.mutantProblems.length !== 1 ||
-            observation.mutantProblems[0] !== expectation.problem
-          ) {
+          if (observation.mutantProblems.length !== 1 || observation.mutantProblems[0] !== expectation.problem) {
             throw new errorConstructor(
               `release mutation case ${caseId} expectation ${expectation.id} missed the exact mutant problem`
             );
@@ -2168,7 +2158,7 @@ export class ReleaseMutationPlan {
             `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible result`
           );
         default:
-          return assertNever(observation);
+          assertNever(observation);
       }
     }
     if (observation.kind !== "fixture.text") {

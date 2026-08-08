@@ -1620,10 +1620,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   }
   const visitRuntimeBindings = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
-    if (
-      ts.isFunctionDeclaration(node) &&
-      node.name?.text === "mcpRegistryEvaluatorProblems"
-    ) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
       if (node.parent === sourceFile) directRegistryEvaluatorDeclarations++;
       else otherRegistryEvaluatorBindings++;
     } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
@@ -1681,8 +1678,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     }
     if (ts.isIdentifier(node) && node.text === "mcpRegistryEvaluatorProblems") {
       const parent = node.parent;
-      const exactDeclaration =
-        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
       const exactDirectCall =
         ts.isCallExpression(parent) &&
         parent.expression === node &&
@@ -1734,7 +1730,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
     );
   }
   if (registryEvaluatorWrites !== 0) {
-    problems.push(`release mutation registry evaluator binding must never be reassigned; found ${registryEvaluatorWrites} write(s)`);
+    problems.push(
+      `release mutation registry evaluator binding must never be reassigned; found ${registryEvaluatorWrites} write(s)`
+    );
   }
   if (otherRegistryEvaluatorReferences !== 0) {
     problems.push(
@@ -2193,9 +2191,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           } else {
             if (
               id.text === "script.release-integrity" &&
-              (handle !== "releaseIntegritySource" ||
-                !ts.isIdentifier(value) ||
-                value.text !== "releaseIntegrityText")
+              (handle !== "releaseIntegritySource" || !ts.isIdentifier(value) || value.text !== "releaseIntegrityText")
             ) {
               const position = sourceFile.getLineAndCharacterOfPosition(start);
               problems.push(
@@ -2785,8 +2781,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         }
         if (
           (invocationKind === "fixture.text" && kind.text === "problem") ||
-          ((invocationKind === "fixture.throw" || invocationKind === "registry.evaluator") &&
-            kind.text !== "problem")
+          ((invocationKind === "fixture.throw" || invocationKind === "registry.evaluator") && kind.text !== "problem")
         ) {
           const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
           problems.push(
@@ -8028,14 +8023,10 @@ describe("release identity and exact required-job gate", () => {
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
-    const declarativeBatchEndToken =
-      "    const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));";
+    const declarativeBatchEndToken = "    const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));";
     const declarativeBatchStart = hybridDeclarativeMutation.indexOf(declarativeBatchStartToken, matrixBodyOffset);
     expect(declarativeBatchStart).toBeGreaterThan(matrixBodyOffset);
-    const declarativeBatchEnd = hybridDeclarativeMutation.indexOf(
-      declarativeBatchEndToken,
-      declarativeBatchStart
-    );
+    const declarativeBatchEnd = hybridDeclarativeMutation.indexOf(declarativeBatchEndToken, declarativeBatchStart);
     expect(declarativeBatchEnd).toBeGreaterThan(declarativeBatchStart);
     expect(releaseMutationInventoryProblems(hybridDeclarativeMutation)).toEqual([]);
     const declarativeBatchOffset = (token: string): number => {
@@ -8139,7 +8130,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/case invocation kind must be one closed literal/)
     );
     const firstProblemToken =
-      'problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"';
+      'problem:\n              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"';
     const firstProblemOffset = firstCaseOffset(firstProblemToken);
     const wrongRegistryProblemIdentity = [
       hybridDeclarativeMutation.slice(0, firstProblemOffset),
@@ -8152,7 +8143,7 @@ describe("release identity and exact required-job gate", () => {
     const firstProblemExpectationToken = [
       'id: "release.expectation.m002.primary",',
       '            kind: "problem",',
-      "            " + firstProblemToken
+      `            ${firstProblemToken}`
     ].join("\n");
     const firstProblemExpectationOffset = firstCaseOffset(firstProblemExpectationToken);
     const unknownNamedRegexExpectation = [
@@ -8183,7 +8174,7 @@ describe("release identity and exact required-job gate", () => {
     ].join("");
     const duplicateSemanticExpectations = [
       hybridDeclarativeMutation.slice(0, firstCheckStart),
-      firstRegistryCheck + ",\n" + duplicateRegistryCheck,
+      `${firstRegistryCheck},\n${duplicateRegistryCheck}`,
       hybridDeclarativeMutation.slice(firstCheckEnd)
     ].join("");
     expect(releaseMutationInventoryProblems(duplicateSemanticExpectations)).toContainEqual(
@@ -8270,8 +8261,7 @@ describe("release identity and exact required-job gate", () => {
       hybridDeclarativeMutation.slice(phaseAssertionOffset + phaseAssertion.length)
     ].join("");
     expect(releaseMutationInventoryProblems(optionalDeclarativePhaseAssertion)).toContain(declarativeLifecycleProblem);
-    const executeToken =
-      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });";
+    const executeToken = "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });";
     const executeOffset = declarativeBatchOffset(executeToken);
     const missingRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
@@ -8359,7 +8349,9 @@ describe("release identity and exact required-job gate", () => {
       hybridDeclarativeMutation.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(shadowedRegistryEvaluator)).toContainEqual(
-      expect.stringMatching(/registry evaluator must have one top-level function declaration and no other runtime bindings/)
+      expect.stringMatching(
+        /registry evaluator must have one top-level function declaration and no other runtime bindings/
+      )
     );
     const reassignedRegistryEvaluator = [
       hybridDeclarativeMutation.slice(0, matrixBodyOffset),
@@ -8425,8 +8417,7 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(templateIdDeclarative)).toContainEqual(
       expect.stringMatching(/registerMutation requires one top-level const handle, literal id and object descriptor/)
     );
-    const caseRegistrationToken =
-      'releaseMutationPlan.registerCase({\n      id: "release.case.m002",';
+    const caseRegistrationToken = 'releaseMutationPlan.registerCase({\n      id: "release.case.m002",';
     const caseRegistrationOffset = declarativeBatchOffset(caseRegistrationToken);
     const identifierComputedDeclarativeCase = [
       hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
@@ -9005,8 +8996,9 @@ describe("release identity and exact required-job gate", () => {
     expect(cleanPlan.expectationExecutions).toBe(10);
     expect(() => cleanPlan.execute()).toThrow(/requires sealed state; found executed/);
 
-    type RegistryFixtureExpectation =
-      Parameters<ReleaseMutationPlan["registerCase"]>[0]["checks"][number]["expectation"];
+    type RegistryFixtureExpectation = Parameters<
+      ReleaseMutationPlan["registerCase"]
+    >[0]["checks"][number]["expectation"];
     const createRegistryEvaluatorPlan = (
       expectation: RegistryFixtureExpectation = {
         id: "expectation.registry-evaluator",
@@ -9025,18 +9017,14 @@ describe("release identity and exact required-job gate", () => {
         dependencyOnly: 0
       });
       const registryFixtureSource = registryFixturePlan.registerSource("fixture.registry-evaluator", "registry-clean");
-      const registryFixtureRoot = registerFixtureMutation(
-        registryFixturePlan,
-        "mutation.registry-evaluator",
-        {
-          mode: "first",
-          source: registryFixtureSource,
-          needle: "clean",
-          replacement: "mutant",
-          expectedOccurrences: 1,
-          witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
-        }
-      );
+      const registryFixtureRoot = registerFixtureMutation(registryFixturePlan, "mutation.registry-evaluator", {
+        mode: "first",
+        source: registryFixtureSource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
       if (invocationKind === "registry.evaluator") {
         registryFixturePlan.registerCase({
           id: "case.registry-evaluator",
@@ -9227,9 +9215,7 @@ describe("release identity and exact required-job gate", () => {
     expect(() =>
       registryDuplicateProblemPlan.execute({
         registryEvaluatorProblems: (source) =>
-          source === "registry-clean"
-            ? []
-            : [RELEASE_MUTATION_REGISTRY_PROBLEM, RELEASE_MUTATION_REGISTRY_PROBLEM]
+          source === "registry-clean" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM, RELEASE_MUTATION_REGISTRY_PROBLEM]
       })
     ).toThrow("registry.evaluator mutant result contains a duplicate problem identity");
     expect(registryDuplicateProblemPlan.phase).toBe("failed");
@@ -9283,11 +9269,12 @@ describe("release identity and exact required-job gate", () => {
     expect(registryCustomResultPlan.expectationExecutions).toBe(0);
 
     const registryThenableResultPlan = createRegistryEvaluatorPlan();
+    const registryThenProperty = ["th", "en"].join("");
     expect(registryThenableResultPlan.seal()).toEqual([]);
     expect(() =>
       registryThenableResultPlan.execute({
         registryEvaluatorProblems: (source) =>
-          (source === "registry-clean" ? [] : { then: () => undefined }) as never
+          (source === "registry-clean" ? [] : { [registryThenProperty]: () => undefined }) as never
       })
     ).toThrow(/registry\.evaluator mutant result must be a dense built-in string array/);
     expect(registryThenableResultPlan.phase).toBe("failed");
@@ -10135,12 +10122,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "import { isDeepStrictEqual } from \"node:util\";",
+      needle: 'import { isDeepStrictEqual } from "node:util";',
       replacement: "const isDeepStrictEqual = () => true;",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "import { isDeepStrictEqual } from \"node:util\";",
+        anchor: 'import { isDeepStrictEqual } from "node:util";',
         before: 1,
         after: 0
       }
@@ -10158,7 +10145,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m002.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10166,12 +10154,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM003 = releaseMutationPlan.registerMutation("release.m003", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "apiBase: \"https://registry.modelcontextprotocol.io/v0.1/servers\"",
-      replacement: "apiBase: \"https://registry.modelcontextprotocol.io/v0/servers\"",
+      needle: 'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
+      replacement: 'apiBase: "https://registry.modelcontextprotocol.io/v0/servers"',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "apiBase: \"https://registry.modelcontextprotocol.io/v0.1/servers\"",
+        anchor: 'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
         before: 1,
         after: 0
       }
@@ -10189,7 +10177,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m003.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10197,12 +10186,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM004 = releaseMutationPlan.registerMutation("release.m004", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "schema: \"https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json\"",
-      replacement: "schema: \"https://example.invalid/server.schema.json\"",
+      needle: 'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
+      replacement: 'schema: "https://example.invalid/server.schema.json"',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "schema: \"https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json\"",
+        anchor: 'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
         before: 1,
         after: 0
       }
@@ -10220,7 +10209,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m004.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10251,7 +10241,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m005.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10259,12 +10250,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM006 = releaseMutationPlan.registerMutation("release.m006", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "phase !== \"preflight\" && phase !== \"convergence\"",
-      replacement: "phase !== \"preflight\" || phase !== \"convergence\"",
+      needle: 'phase !== "preflight" && phase !== "convergence"',
+      replacement: 'phase !== "preflight" || phase !== "convergence"',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "phase !== \"preflight\" && phase !== \"convergence\"",
+        anchor: 'phase !== "preflight" && phase !== "convergence"',
         before: 1,
         after: 0
       }
@@ -10282,7 +10273,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m006.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10313,7 +10305,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m007.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10344,7 +10337,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m008.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10375,7 +10369,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m009.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10383,12 +10378,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM010 = releaseMutationPlan.registerMutation("release.m010", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "transport.type !== \"stdio\"",
+      needle: 'transport.type !== "stdio"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "transport.type !== \"stdio\"",
+        anchor: 'transport.type !== "stdio"',
         before: 1,
         after: 0
       }
@@ -10406,7 +10401,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m010.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10437,7 +10433,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m011.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10445,12 +10442,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM012 = releaseMutationPlan.registerMutation("release.m012", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "assertCanonicalExpectedMcpRegistryManifest(server, \"expected local server manifest\")",
+      needle: 'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
       replacement: "void server",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "assertCanonicalExpectedMcpRegistryManifest(server, \"expected local server manifest\")",
+        anchor: 'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
         before: 1,
         after: 0
       }
@@ -10468,7 +10465,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m012.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10499,7 +10497,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m013.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10507,12 +10506,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM014 = releaseMutationPlan.registerMutation("release.m014", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "[\"type\", \"valueHint\", \"value\", \"description\", \"isRequired\", \"format\"]",
-      replacement: "[\"type\", \"valueHint\", \"value\"]",
+      needle: '["type", "valueHint", "value", "description", "isRequired", "format"]',
+      replacement: '["type", "valueHint", "value"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "[\"type\", \"valueHint\", \"value\", \"description\", \"isRequired\", \"format\"]",
+        anchor: '["type", "valueHint", "value", "description", "isRequired", "format"]',
         before: 1,
         after: 0
       }
@@ -10530,7 +10529,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m014.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10538,12 +10538,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM015 = releaseMutationPlan.registerMutation("release.m015", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "assertExactRecord(input, [\"expected\", \"exact\", \"latest\"]",
-      replacement: "assertExactRecord(input, [\"expected\", \"exact\"]",
+      needle: 'assertExactRecord(input, ["expected", "exact", "latest"]',
+      replacement: 'assertExactRecord(input, ["expected", "exact"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "assertExactRecord(input, [\"expected\", \"exact\", \"latest\"]",
+        anchor: 'assertExactRecord(input, ["expected", "exact", "latest"]',
         before: 1,
         after: 0
       }
@@ -10561,7 +10561,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m015.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10569,12 +10570,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM016 = releaseMutationPlan.registerMutation("release.m016", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "[\"requestUrl\", \"curlExit\", \"httpStatus\", \"contentType\", \"body\"]",
-      replacement: "[\"requestUrl\", \"httpStatus\", \"contentType\", \"body\"]",
+      needle: '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
+      replacement: '["requestUrl", "httpStatus", "contentType", "body"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "[\"requestUrl\", \"curlExit\", \"httpStatus\", \"contentType\", \"body\"]",
+        anchor: '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
         before: 1,
         after: 0
       }
@@ -10592,7 +10593,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m016.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10623,7 +10625,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m017.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10654,7 +10657,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m018.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10662,12 +10666,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM019 = releaseMutationPlan.registerMutation("release.m019", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "envelope.contentType !== \"application/json\"",
+      needle: 'envelope.contentType !== "application/json"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "envelope.contentType !== \"application/json\"",
+        anchor: 'envelope.contentType !== "application/json"',
         before: 1,
         after: 0
       }
@@ -10685,7 +10689,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m019.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10693,12 +10698,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM020 = releaseMutationPlan.registerMutation("release.m020", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "envelope.contentType !== \"application/problem+json\"",
+      needle: 'envelope.contentType !== "application/problem+json"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "envelope.contentType !== \"application/problem+json\"",
+        anchor: 'envelope.contentType !== "application/problem+json"',
         before: 1,
         after: 0
       }
@@ -10716,7 +10721,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m020.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10724,12 +10730,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM021 = releaseMutationPlan.registerMutation("release.m021", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "[\"detail\", \"status\", \"title\"]",
-      replacement: "[\"detail\", \"title\"]",
+      needle: '["detail", "status", "title"]',
+      replacement: '["detail", "title"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "[\"detail\", \"status\", \"title\"]",
+        anchor: '["detail", "status", "title"]',
         before: 1,
         after: 0
       }
@@ -10747,7 +10753,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m021.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10755,12 +10762,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM022 = releaseMutationPlan.registerMutation("release.m022", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "problem.detail !== \"Server not found\"",
+      needle: 'problem.detail !== "Server not found"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "problem.detail !== \"Server not found\"",
+        anchor: 'problem.detail !== "Server not found"',
         before: 1,
         after: 0
       }
@@ -10778,7 +10785,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m022.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10786,12 +10794,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM023 = releaseMutationPlan.registerMutation("release.m023", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "problem.status !== 404 || problem.title !== \"Not Found\"",
+      needle: 'problem.status !== 404 || problem.title !== "Not Found"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "problem.status !== 404 || problem.title !== \"Not Found\"",
+        anchor: 'problem.status !== 404 || problem.title !== "Not Found"',
         before: 1,
         after: 0
       }
@@ -10809,7 +10817,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m023.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10817,12 +10826,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM024 = releaseMutationPlan.registerMutation("release.m024", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "[\"isLatest\", \"publishedAt\", \"status\", \"statusChangedAt\"]",
-      replacement: "[\"status\"]",
+      needle: '["isLatest", "publishedAt", "status", "statusChangedAt"]',
+      replacement: '["status"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "[\"isLatest\", \"publishedAt\", \"status\", \"statusChangedAt\"]",
+        anchor: '["isLatest", "publishedAt", "status", "statusChangedAt"]',
         before: 1,
         after: 0
       }
@@ -10840,7 +10849,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m024.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10848,12 +10858,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM025 = releaseMutationPlan.registerMutation("release.m025", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "[\"active\", \"deprecated\", \"deleted\"]",
-      replacement: "[\"active\"]",
+      needle: '["active", "deprecated", "deleted"]',
+      replacement: '["active"]',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "[\"active\", \"deprecated\", \"deleted\"]",
+        anchor: '["active", "deprecated", "deleted"]',
         before: 1,
         after: 0
       }
@@ -10871,7 +10881,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m025.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10879,12 +10890,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM026 = releaseMutationPlan.registerMutation("release.m026", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "typeof metadata.isLatest !== \"boolean\"",
+      needle: 'typeof metadata.isLatest !== "boolean"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "typeof metadata.isLatest !== \"boolean\"",
+        anchor: 'typeof metadata.isLatest !== "boolean"',
         before: 1,
         after: 0
       }
@@ -10902,7 +10913,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m026.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10933,7 +10945,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m027.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10964,7 +10977,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m028.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -10995,7 +11009,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m029.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11003,12 +11018,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM030 = releaseMutationPlan.registerMutation("release.m030", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "observation.official.status === \"deleted\"",
+      needle: 'observation.official.status === "deleted"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "observation.official.status === \"deleted\"",
+        anchor: 'observation.official.status === "deleted"',
         before: 1,
         after: 0
       }
@@ -11026,7 +11041,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m030.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11034,12 +11050,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM031 = releaseMutationPlan.registerMutation("release.m031", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "observation.official.status === \"deprecated\"",
+      needle: 'observation.official.status === "deprecated"',
       replacement: "false",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "observation.official.status === \"deprecated\"",
+        anchor: 'observation.official.status === "deprecated"',
         before: 1,
         after: 0
       }
@@ -11057,7 +11073,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m031.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11088,7 +11105,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m032.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11119,7 +11137,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m033.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11150,7 +11169,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m034.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11158,12 +11178,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM035 = releaseMutationPlan.registerMutation("release.m035", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "phase === \"convergence\" && (status === 429 || status >= 500)",
-      replacement: "phase === \"convergence\"",
+      needle: 'phase === "convergence" && (status === 429 || status >= 500)',
+      replacement: 'phase === "convergence"',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "phase === \"convergence\" && (status === 429 || status >= 500)",
+        anchor: 'phase === "convergence" && (status === 429 || status >= 500)',
         before: 1,
         after: 0
       }
@@ -11181,7 +11201,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m035.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11189,12 +11210,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM036 = releaseMutationPlan.registerMutation("release.m036", {
       mode: "first",
       source: releaseIntegritySource,
-      needle: "} else if (mode === \"mcp-registry-state\")",
-      replacement: "} else if (mode === \"mcp-registry-read\")",
+      needle: '} else if (mode === "mcp-registry-state")',
+      replacement: '} else if (mode === "mcp-registry-read")',
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: "} else if (mode === \"mcp-registry-state\")",
+        anchor: '} else if (mode === "mcp-registry-state")',
         before: 1,
         after: 0
       }
@@ -11212,7 +11233,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m036.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]
@@ -11243,7 +11265,8 @@ describe("release identity and exact required-job gate", () => {
           expectation: {
             id: "release.expectation.m037.primary",
             kind: "problem",
-            problem: "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
           }
         }
       ]

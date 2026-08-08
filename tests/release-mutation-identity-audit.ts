@@ -235,8 +235,8 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "33e5de79f0617f50053d0d4c00a8c8c59e6501ccb53cf23b1425feb27170264d";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "12cc6d215e917f9a39855667ff0b705463a0438820d569bf9882e360f41e153c";
+const CURRENT_HYBRID_SOURCE_SHA256 = "fe4792f49e07312fd4504b7851342e276b3336a14fe9541fee86cf801dcf81a6";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "2505517fb8f065e70405b065527921a747295082563b645dcbf75c10018a9741";
 const IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
@@ -1617,10 +1617,7 @@ function exactObjectProperties(
   const properties = new Map<string, ts.Expression>();
   let structurallyValid = true;
   for (const property of value.properties) {
-    if (
-      !ts.isPropertyAssignment(property) ||
-      (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name))
-    ) {
+    if (!ts.isPropertyAssignment(property) || (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name))) {
       structurallyValid = false;
       continue;
     }
@@ -1637,10 +1634,7 @@ function exactObjectProperties(
   return properties;
 }
 
-function directTopLevelConst(
-  statement: ts.Statement,
-  name: string
-): ts.VariableDeclaration | null {
+function directTopLevelConst(statement: ts.Statement, name: string): ts.VariableDeclaration | null {
   if (!ts.isVariableStatement(statement) || (statement.declarationList.flags & ts.NodeFlags.Const) === 0) return null;
   if (statement.declarationList.declarations.length !== 1) return null;
   const declaration = statement.declarationList.declarations[0];
@@ -2069,9 +2063,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   const baselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 1], "toEqual");
   const baselineDetector = baselineAssertion?.actual;
   const baselineInput =
-    baselineDetector !== undefined && ts.isCallExpression(baselineDetector)
-      ? baselineDetector.arguments[0]
-      : undefined;
+    baselineDetector !== undefined && ts.isCallExpression(baselineDetector) ? baselineDetector.arguments[0] : undefined;
   const exactBaselineAssertion =
     baselineAssertion !== null &&
     baselineDetector !== undefined &&
@@ -3582,10 +3574,7 @@ function variableBindingFlows(sourceFile: ts.SourceFile): VariableBindingGraph {
         references: referencedSymbols(node.initializer, checker)
       });
     }
-    if (
-      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
-      ts.isVariableDeclarationList(node.initializer)
-    ) {
+    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && ts.isVariableDeclarationList(node.initializer)) {
       flows.push({
         bindings: node.initializer.declarations.flatMap((declaration) => bindingSymbols(declaration.name, checker)),
         references: referencedSymbols(node.expression, checker)
@@ -4394,10 +4383,7 @@ function validateFrozenCaseTopology(manifest: IdentityManifest, problems: string
         compositeProfiles.push(check.matcherEvaluations.length);
       }
       rawMatchers += check.matcherEvaluations.length;
-      expectationCensus.set(
-        check.expectation.kind,
-        (expectationCensus.get(check.expectation.kind) ?? 0) + 1
-      );
+      expectationCensus.set(check.expectation.kind, (expectationCensus.get(check.expectation.kind) ?? 0) + 1);
       if (checkIndex === 0 && check.expectation.kind === "problem") {
         const leaf = check.matcherEvaluations[0];
         if (leaf?.operand.resolved !== check.expectation.problem) {
@@ -4608,16 +4594,6 @@ function validateHybridPartition(
   const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
   const expectedLegacy = frozenLegacyOrder.filter((mutation) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id));
   const legacyById = new Map<string, LegacyMutationCall>();
-  const legacyCallsByHash = new Map<string, LegacyMutationCall[]>();
-  for (const call of matrix.calls) {
-    const calls = legacyCallsByHash.get(call.span.sha256) ?? [];
-    calls.push(call);
-    legacyCallsByHash.set(call.span.sha256, calls);
-  }
-  for (const mutation of expectedLegacy) {
-    const exactCall = legacyCallsByHash.get(mutation.legacySpan.sha256)?.[mutation.legacyOccurrence - 1];
-    if (exactCall !== undefined && exactCall.mode === mutation.mode) legacyById.set(mutation.id, exactCall);
-  }
   const numericDeclarations = numericConstDeclarations(matrix.sourceFile);
   const stringDeclarations = constDeclarations(matrix.sourceFile);
   if (matrix.calls.length !== 524) {
@@ -4632,6 +4608,11 @@ function validateHybridPartition(
       problems.push(
         `release mutation hybrid remaining legacy order ${index + 1} must retain ${frozen.id} exact node-text identity`
       );
+    } else {
+      // `legacyOccurrence` is keyed by the raw expression tuple, not by AST-node hash.
+      // Once an earlier tuple peer migrates, only the exact filtered legacy order can preserve
+      // the immutable ID-to-node relation without conflating those two ordinal domains.
+      legacyById.set(frozen.id, current);
     }
     const currentExpressions = {
       source: current.sourceExpression,
@@ -4696,12 +4677,25 @@ function validateHybridPartition(
   for (const mutation of declarative.mutations) {
     declarativeCounts.set(mutation.id, (declarativeCounts.get(mutation.id) ?? 0) + 1);
   }
+  const exactLegacyKey = (mode: MutationMode, hash: string): string => `${mode}:${hash}`;
+  const observedLegacyMultiplicity = new Map<string, number>();
+  for (const call of matrix.calls) {
+    const key = exactLegacyKey(call.mode, call.span.sha256);
+    observedLegacyMultiplicity.set(key, (observedLegacyMultiplicity.get(key) ?? 0) + 1);
+  }
+  const expectedLegacyMultiplicity = new Map<string, number>();
+  for (const mutation of expectedLegacy) {
+    const key = exactLegacyKey(mutation.mode, mutation.legacySpan.sha256);
+    expectedLegacyMultiplicity.set(key, (expectedLegacyMultiplicity.get(key) ?? 0) + 1);
+  }
   for (const mutation of manifest.mutations) {
     const migrated = MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id);
-    const matchingLegacyCalls = legacyCallsByHash
-      .get(mutation.legacySpan.sha256)
-      ?.filter((call) => call.mode === mutation.mode);
-    const legacyCount = migrated ? (matchingLegacyCalls?.length ?? 0) : Number(legacyById.has(mutation.id));
+    const key = exactLegacyKey(mutation.mode, mutation.legacySpan.sha256);
+    const observedMultiplicity = observedLegacyMultiplicity.get(key) ?? 0;
+    const expectedMultiplicity = expectedLegacyMultiplicity.get(key) ?? 0;
+    const legacyCount = migrated
+      ? Math.max(0, observedMultiplicity - expectedMultiplicity)
+      : Number(legacyById.has(mutation.id));
     const declarativeCount = declarativeCounts.get(mutation.id) ?? 0;
     if (legacyCount + declarativeCount !== 1) {
       problems.push(
@@ -4832,9 +4826,7 @@ function validateRemainingLegacyMatchers(
     manifest.cases
       .filter((identityCase) => MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root))
       .flatMap((identityCase) =>
-        identityCase.checks.flatMap((check) =>
-          check.matcherEvaluations.map((matcher) => matcher.assertionSpan.sha256)
-        )
+        identityCase.checks.flatMap((check) => check.matcherEvaluations.map((matcher) => matcher.assertionSpan.sha256))
       )
   );
   for (const hash of migratedMatcherHashes) {

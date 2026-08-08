@@ -29,7 +29,7 @@ import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./h
 import { releaseMutationIdentityAuditProblems } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
-const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
 const releaseMutationIdentityGeneratorPath = path.join(repoRoot, "scripts/generate-release-mutation-identity.mjs");
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");

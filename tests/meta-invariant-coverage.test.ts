@@ -25,7 +25,10 @@ import * as path from "node:path";
 import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./helpers/exact-source-mutation.js";
-import { releaseMutationIdentityAuditProblems } from "./release-mutation-identity-audit.js";
+import {
+  createReleaseMutationIdentityAuditor,
+  releaseMutationIdentityAuditProblems
+} from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
@@ -858,9 +861,9 @@ function checkInvariantHasNegativeCoverage(filename: string, content: string): s
 }
 
 describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {
-  // Exact-tree main coverage ran the 22 complete hybrid identity audits in 125-127s
-  // on two westus workers after the PR runner completed them in 64s. Keep a scoped
-  // 180s hang bound for this exhaustive hook without widening the global suite.
+  // Exact-tree main coverage ran the former 22 complete hybrid identity audits in
+  // 125-127s on two westus workers after the PR runner completed them in 64s. Keep
+  // the scoped 180s hang bound until remote CI proves the prepared-auditor class fix.
   beforeAll(async () => {
     const [matrixSource, fixtureBefore] = await Promise.all([
       fs.readFile(releaseIntegritySourcePath, "utf8"),
@@ -871,18 +874,23 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // The immutable fixture remains historical authority after the current source deliberately
     // adopts a mixed legacy/declarative representation; it is never regenerated or rewritten here.
     expect(await fs.readFile(releaseMutationIdentityFixturePath, "utf8")).toBe(fixtureBefore);
-    // The reviewed mixed baseline is the positive control for the exact partition, descriptor,
-    // case, detector and remaining-legacy identities.
-    expect(releaseMutationIdentityAuditProblems(matrixSource, fixtureBefore)).toEqual([]);
-
     const outsideSliceDetectorDrift = replaceExactly(
       matrixSource,
       "            const folded = envKey.toLowerCase();",
       "            const folded = envKey;"
     );
-    expect(releaseMutationIdentityAuditProblems(outsideSliceDetectorDrift, fixtureBefore)).toEqual([
+    const preparedAudit = createReleaseMutationIdentityAuditor(fixtureBefore);
+    // Seed the execution-scoped projection with a candidate whose matrix and all 30 materialized
+    // sources remain exact, then prove that a clean baseline between two identical mutants cannot
+    // inherit diagnostics or mutable caller state from either neighbour.
+    const firstRepeatedProblems = preparedAudit.auditMatrix(outsideSliceDetectorDrift);
+    const stableRepeatedProblems = [...firstRepeatedProblems];
+    expect(firstRepeatedProblems).toEqual([
       expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/)
     ]);
+    // The reviewed mixed baseline is the positive control for the exact partition, descriptor,
+    // case, detector and remaining-legacy identities.
+    expect(preparedAudit.auditMatrix(matrixSource)).toEqual([]);
 
     const mcpbSpreadOverride = replaceExactly(
       matrixSource,
@@ -896,7 +904,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         '      packageLock: readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),'
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(mcpbSpreadOverride, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mcpbSpreadOverride)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -919,7 +927,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      source: releaseIntegritySource"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(missingDeclarativeIdentity, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(missingDeclarativeIdentity)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m002 must exist in exactly one legacy XOR declarative representation; found 0\/0/
@@ -944,7 +952,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    const releaseMutationPlan = new ReleaseMutationPlan({"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(overlappingLegacyIdentity, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(overlappingLegacyIdentity)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m002 must exist in exactly one legacy XOR declarative representation; found 1\/1/
@@ -984,7 +992,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "        )"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(uniqueHashSecondOccurrenceDrift, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(uniqueHashSecondOccurrenceDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m111 must exist in exactly one legacy XOR declarative representation; found 0\/0/
@@ -1006,7 +1014,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      source: releaseIntegritySource"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(declarativeDescriptorDrift, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(declarativeDescriptorDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid descriptor release\.m002 mode disagrees with frozen identity/)
       ])
@@ -1051,7 +1059,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      source: releaseIntegritySource"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(declarativeSemanticSwap, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(declarativeSemanticSwap)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid descriptor release\.m002 disagrees with its exact frozen semantics/
@@ -1075,7 +1083,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      root: releaseMutationM004,"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(declarativeRootTransplant, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(declarativeRootTransplant)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid case release\.case\.m002 invocation must retain the exact registry\.evaluator adapter/
@@ -1101,7 +1109,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM002"
       ].join("\n")
     );
-    expect(releaseMutationIdentityAuditProblems(declarativeInvocationDrift, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(declarativeInvocationDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid case release\.case\.m002 invocation must retain the exact registry\.evaluator adapter/
@@ -1159,7 +1167,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ].join("\n")
     );
     const registryDetectorAliasDrift = `${registryProblemPreludeDrift}\nconst registryEvaluatorAlias = mcpRegistryEvaluatorProblems;\n`;
-    expect(releaseMutationIdentityAuditProblems(registryDetectorAliasDrift, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(registryDetectorAliasDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid alias must be exact const releaseIntegrityText = mcpbInputs\.integrity/
@@ -1185,7 +1193,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "    count++;\n    offset = match + needle.length;",
       "    count += 2;\n    offset = match + needle.length;"
     );
-    expect(releaseMutationIdentityAuditProblems(mutationMatchCountBodyDrift, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mutationMatchCountBodyDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid pinned mutationMatchCount AST node must retain exact SHA-256/)
@@ -1193,7 +1201,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     const mutationMatchCountShadow = `${matrixSource}\nfunction mutationMatchCountShadow(): void {\n  const mutationMatchCount = () => 0;\n  void mutationMatchCount;\n}\n`;
-    expect(releaseMutationIdentityAuditProblems(mutationMatchCountShadow, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mutationMatchCountShadow)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid mutationMatchCount binding must have one top-level declaration and no runtime shadows; found 1\/1/
@@ -1202,7 +1210,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     const mutationMatchCountAlias = `${matrixSource}\nconst mutationCounterAlias = mutationMatchCount;\nvoid mutationCounterAlias;\n`;
-    expect(releaseMutationIdentityAuditProblems(mutationMatchCountAlias, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mutationMatchCountAlias)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid mutationMatchCount must have no aliases; found 1 alias initializer/
@@ -1211,7 +1219,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     const mutationMatchCountWrite = `${matrixSource}\nmutationMatchCount = (_source: string, _needle: string) => 0;\n`;
-    expect(releaseMutationIdentityAuditProblems(mutationMatchCountWrite, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mutationMatchCountWrite)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid mutationMatchCount binding must never be reassigned; found 1 write/
@@ -1220,7 +1228,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     const mutationMatchCountIndirect = `${matrixSource}\nvoid [mutationMatchCount];\n`;
-    expect(releaseMutationIdentityAuditProblems(mutationMatchCountIndirect, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(mutationMatchCountIndirect)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid mutationMatchCount may only be called directly with two arguments; found 1 other reference/
@@ -1235,7 +1243,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         '      ["mapped"].map(() => replaceExactly(mcpbInputs.integrity, "mapped", "mutant"));\n' +
         "      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain("
     );
-    expect(releaseMutationIdentityAuditProblems(loopBodyMutation, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(loopBodyMutation)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/matrix AST execution-multiplying mutation helper sites must be zero; found 2/)
       ])
@@ -1246,7 +1254,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "replaceExactly(registryRun, 'mcp-registry-state \"$phase\"', 'mcp-registry-read \"$phase\"')",
       'replaceExactly(true ? registryRun : "", true ? \'mcp-registry-state "$phase"\' : "x", [\'mcp-registry-read "$phase"\'][0])'
     );
-    expect(releaseMutationIdentityAuditProblems(unsupportedExpressionMutation, fixtureBefore)).toEqual(
+    expect(preparedAudit.auditMatrix(unsupportedExpressionMutation)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/legacy source expression .* is outside outer-expression-v1/),
         expect.stringMatching(/legacy needle expression .* is outside outer-expression-v1/),
@@ -1259,7 +1267,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '"schemaVersion": 2,',
       '"schemaVersion": 2,\n  "schemaVersion": 2,'
     );
-    expect(releaseMutationIdentityAuditProblems(matrixSource, duplicateTopLevelKey)).toEqual([
+    const duplicateKeyProblems = releaseMutationIdentityAuditProblems(matrixSource, duplicateTopLevelKey);
+    expect(duplicateKeyProblems).toEqual([
       expect.stringMatching(/duplicate JSON key schemaVersion/),
       expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/)
     ]);
@@ -1269,11 +1278,17 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';`,
       `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scriptz';`
     );
-    expect(releaseMutationIdentityAuditProblems(referencedDeclarationDrift, fixtureBefore)).toEqual(
+    const beforeSourceCatalogueDrift = preparedAudit.telemetry();
+    expect(preparedAudit.auditMatrix(referencedDeclarationDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/manifest source row 6 disagrees with the exact reviewed catalogue identity/)
       ])
     );
+    const afterSourceCatalogueDrift = preparedAudit.telemetry();
+    expect(afterSourceCatalogueDrift.sourceCatalogueBypasses).toBe(
+      beforeSourceCatalogueDrift.sourceCatalogueBypasses + 1
+    );
+    expect(afterSourceCatalogueDrift.materializedGraphReuses).toBe(beforeSourceCatalogueDrift.materializedGraphReuses);
 
     const tampered = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
     const firstSource = firstIdentityEntry(tampered.sources, "source identities");
@@ -1308,6 +1323,22 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/uses an unknown named-regex identity/)
       ])
     );
+
+    // Prepared execution is order-independent and returns fresh diagnostics on every call.
+    const secondRepeatedProblems = preparedAudit.auditMatrix(outsideSliceDetectorDrift);
+    expect(secondRepeatedProblems).toEqual(stableRepeatedProblems);
+    firstRepeatedProblems.push("caller-owned sentinel");
+    expect(secondRepeatedProblems).toEqual(stableRepeatedProblems);
+    expect(secondRepeatedProblems).toEqual(
+      releaseMutationIdentityAuditProblems(outsideSliceDetectorDrift, fixtureBefore)
+    );
+    expect(preparedAudit.telemetry()).toEqual({
+      fixturePreparations: 1,
+      materializedGraphEvaluations: 1,
+      materializedGraphReuses: 17,
+      sourceCatalogueBypasses: 2,
+      sourceProjectionBypasses: 0
+    });
   }, 180_000);
 
   it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker", async () => {

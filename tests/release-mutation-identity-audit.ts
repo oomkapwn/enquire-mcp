@@ -186,6 +186,21 @@ interface IdentityManifest {
   readonly sources: readonly SourceIdentity[];
 }
 
+interface ReleaseMutationIdentityAuditTelemetry {
+  readonly fixturePreparations: 1;
+  readonly materializedGraphEvaluations: number;
+  readonly materializedGraphReuses: number;
+  readonly sourceCatalogueBypasses: number;
+  readonly sourceProjectionBypasses: number;
+}
+
+interface ReleaseMutationIdentityAuditor {
+  /** Audits one current matrix candidate while retaining the prepared immutable fixture. */
+  auditMatrix(matrixSource: string): string[];
+  /** Returns a fresh immutable snapshot of execution-scoped reuse counters. */
+  telemetry(): Readonly<ReleaseMutationIdentityAuditTelemetry>;
+}
+
 interface LegacyMutationCall {
   readonly assignedName: null | string;
   readonly expectedOccurrencesExpression: string;
@@ -200,6 +215,7 @@ interface LegacyMutationCall {
 interface MatrixScan {
   readonly callback: ts.ArrowFunction;
   readonly calls: readonly LegacyMutationCall[];
+  readonly declarations: ReadonlyMap<string, ts.Expression>;
   readonly matrixStart: number;
   readonly matrixSlice: string;
   readonly sourceFile: ts.SourceFile;
@@ -1599,6 +1615,7 @@ function scanMatrix(source: string, problems: string[]): MatrixScan | null {
     callback: callback as ts.ArrowFunction,
     sourceFile,
     calls,
+    declarations: constDeclarations(sourceFile),
     matrixStart,
     matrixSlice: source.slice(matrixStart, matrixEnd)
   };
@@ -2267,7 +2284,7 @@ function validateSources(manifest: IdentityManifest, matrix: MatrixScan, problem
       problems.push(`manifest source ${label} must be unique; duplicates: ${duplicates.join(", ")}`);
     }
   }
-  const declarations = constDeclarations(matrix.sourceFile);
+  const declarations = matrix.declarations;
   for (let index = 0; index < manifest.sources.length; index++) {
     const source = manifest.sources[index];
     const expected = EXPECTED_SOURCES[index];
@@ -2451,24 +2468,6 @@ function validateSources(manifest: IdentityManifest, matrix: MatrixScan, problem
   return problems.length === initialProblemCount;
 }
 
-function numericConstDeclarations(sourceFile: ts.SourceFile): ReadonlyMap<string, ts.Expression> {
-  const declarations = new Map<string, ts.Expression>();
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      ts.isVariableDeclarationList(node.parent) &&
-      (node.parent.flags & ts.NodeFlags.Const) !== 0
-    ) {
-      declarations.set(node.name.text, node.initializer);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return declarations;
-}
-
 function resolveStaticInteger(
   expression: ts.Expression | undefined,
   declarations: ReadonlyMap<string, ts.Expression>,
@@ -2509,7 +2508,7 @@ function resolveStaticInteger(
 }
 
 function validateCardinalityConstants(matrix: MatrixScan, problems: string[]): void {
-  const declarations = numericConstDeclarations(matrix.sourceFile);
+  const declarations = matrix.declarations;
   for (const [name, expected] of Object.entries(EXPECTED_CARDINALITY_CONSTANTS)) {
     const resolved = resolveStaticInteger(declarations.get(name), declarations);
     if (resolved !== expected) {
@@ -2668,7 +2667,7 @@ function materializeSourceValues(
   problems: string[]
 ): ReadonlyMap<string, string> {
   const values = new Map<string, string>();
-  const declarations = constDeclarations(matrix.sourceFile);
+  const declarations = matrix.declarations;
   const sourceById = new Map(manifest.sources.map((source) => [source.id, source]));
   const expectedById = new Map(EXPECTED_SOURCES.map((source) => [source.id, source]));
   const resolve = (id: string, active = new Set<string>()): string | null => {
@@ -2851,8 +2850,11 @@ function validateWitnessCounterSemantics(problems: string[]): void {
   }
 }
 
-function validateMaterializedMutations(manifest: IdentityManifest, matrix: MatrixScan, problems: string[]): void {
-  const sourceValues = materializeSourceValues(manifest, matrix, problems);
+function validateMaterializedMutationValues(
+  manifest: IdentityManifest,
+  sourceValues: ReadonlyMap<string, string>,
+  problems: string[]
+): void {
   const mutationValues = new Map<string, string>();
   for (const mutation of manifest.mutations) {
     const sourceValue =
@@ -2899,6 +2901,11 @@ function validateMaterializedMutations(manifest: IdentityManifest, matrix: Matri
   }
 }
 
+function validateMaterializedMutations(manifest: IdentityManifest, matrix: MatrixScan, problems: string[]): void {
+  const sourceValues = materializeSourceValues(manifest, matrix, problems);
+  validateMaterializedMutationValues(manifest, sourceValues, problems);
+}
+
 function validateMutationGraph(
   manifest: IdentityManifest,
   matrix: MatrixScan,
@@ -2906,8 +2913,8 @@ function validateMutationGraph(
   problems: string[]
 ): void {
   validateCardinalityConstants(matrix, problems);
-  const numericDeclarations = numericConstDeclarations(matrix.sourceFile);
-  const stringDeclarations = constDeclarations(matrix.sourceFile);
+  const numericDeclarations = matrix.declarations;
+  const stringDeclarations = matrix.declarations;
   if (manifest.mutations.length !== EXPECTED_INVENTORY.mutations) {
     problems.push(`manifest mutations must contain exactly 560 entries; found ${manifest.mutations.length}`);
   }
@@ -3520,7 +3527,7 @@ interface VariableBindingFlow {
 
 interface VariableBindingGraph {
   readonly checker: ts.TypeChecker;
-  readonly flows: readonly VariableBindingFlow[];
+  readonly downstreamBindings: ReadonlyMap<ts.Symbol, readonly ts.Symbol[]>;
 }
 
 function lexicalTypeChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
@@ -3564,6 +3571,24 @@ function referencedSymbols(node: ts.Node, checker: ts.TypeChecker): ReadonlySet<
   return references;
 }
 
+function downstreamBindingsForFlows<T>(
+  flows: readonly { readonly bindings: readonly T[]; readonly references: ReadonlySet<T> }[]
+): ReadonlyMap<T, readonly T[]> {
+  const mutableDownstreamBindings = new Map<T, Set<T>>();
+  for (const flow of flows) {
+    for (const reference of flow.references) {
+      const bindings = mutableDownstreamBindings.get(reference) ?? new Set<T>();
+      for (const binding of flow.bindings) bindings.add(binding);
+      mutableDownstreamBindings.set(reference, bindings);
+    }
+  }
+  const downstreamBindings = new Map<T, readonly T[]>();
+  for (const [reference, bindings] of mutableDownstreamBindings) {
+    downstreamBindings.set(reference, Object.freeze([...bindings]));
+  }
+  return downstreamBindings;
+}
+
 function variableBindingFlows(sourceFile: ts.SourceFile): VariableBindingGraph {
   const checker = lexicalTypeChecker(sourceFile);
   const flows: VariableBindingFlow[] = [];
@@ -3583,7 +3608,46 @@ function variableBindingFlows(sourceFile: ts.SourceFile): VariableBindingGraph {
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return { checker, flows };
+  return { checker, downstreamBindings: downstreamBindingsForFlows(flows) };
+}
+
+function transitiveClosure<T>(seeds: Iterable<T>, downstream: ReadonlyMap<T, readonly T[]>): ReadonlySet<T> {
+  const reached = new Set(seeds);
+  const pending = [...reached];
+  for (let index = 0; index < pending.length; index++) {
+    const current = pending[index];
+    if (current === undefined) continue;
+    for (const next of downstream.get(current) ?? []) {
+      if (reached.has(next)) continue;
+      reached.add(next);
+      pending.push(next);
+    }
+  }
+  return reached;
+}
+
+function validateBindingClosureSemantics(problems: string[]): void {
+  const downstream = downstreamBindingsForFlows([
+    { references: new Set(["root", "alternate"]), bindings: ["level-1", "shared"] },
+    { references: new Set(["root"]), bindings: ["shared"] },
+    { references: new Set(["level-1"]), bindings: ["level-2"] },
+    { references: new Set(["level-2"]), bindings: ["root"] },
+    { references: new Set(["unrelated"]), bindings: ["unreachable"] }
+  ]);
+  const forward = [...transitiveClosure(["root"], downstream)].sort();
+  const alternate = [...transitiveClosure(["alternate"], downstream)].sort();
+  const unrelated = [...transitiveClosure(["unrelated"], downstream)].sort();
+  const rootEdges = downstream.get("root") ?? [];
+  if (
+    rootEdges.length !== 2 ||
+    !rootEdges.includes("level-1") ||
+    !rootEdges.includes("shared") ||
+    JSON.stringify(forward) !== JSON.stringify(["level-1", "level-2", "root", "shared"]) ||
+    JSON.stringify(alternate) !== JSON.stringify(["alternate", "level-1", "level-2", "root", "shared"]) ||
+    JSON.stringify(unrelated) !== JSON.stringify(["unreachable", "unrelated"])
+  ) {
+    problems.push("release mutation binding graph must preserve directed, deduplicated, multi-hop and cyclic identity");
+  }
 }
 
 function rootBindingSymbols(call: ts.CallExpression, graph: VariableBindingGraph): ReadonlySet<ts.Symbol> {
@@ -3605,28 +3669,7 @@ function rootBindingSymbols(call: ts.CallExpression, graph: VariableBindingGraph
     }
     ancestor = ancestor.parent;
   }
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const flow of graph.flows) {
-      let referencesKnownBinding = false;
-      for (const reference of flow.references) {
-        if (symbols.has(reference)) {
-          referencesKnownBinding = true;
-          break;
-        }
-      }
-      if (referencesKnownBinding) {
-        for (const binding of flow.bindings) {
-          if (!symbols.has(binding)) {
-            symbols.add(binding);
-            changed = true;
-          }
-        }
-      }
-    }
-  }
-  return symbols;
+  return transitiveClosure(symbols, graph.downstreamBindings);
 }
 
 function nodeContainsBinding(node: ts.Node, bindings: ReadonlySet<ts.Symbol>, checker: ts.TypeChecker): boolean {
@@ -3729,7 +3772,7 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
   const expectationCensus = new Map<string, number>();
   const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
   const mcpbMutantSlots = new Map<string, number>();
-  const declarations = constDeclarations(matrixSourceFile);
+  const declarations = matrix.declarations;
   const callsBySpan = callExpressionsBySpan(matrixSourceFile);
   const bindingFlows = variableBindingFlows(matrixSourceFile);
   const ultimateSource = (mutationId: string): string | null => {
@@ -4128,13 +4171,7 @@ function validateFrozenProvenance(manifest: IdentityManifest, problems: string[]
   }
 }
 
-function validateFrozenMutationTopology(
-  manifest: IdentityManifest,
-  matrix: MatrixScan,
-  sourceCatalogueValid: boolean,
-  problems: string[]
-): void {
-  validateCardinalityConstants(matrix, problems);
+function validateFrozenManifestMutationTopology(manifest: IdentityManifest, problems: string[]): void {
   if (manifest.mutations.length !== EXPECTED_INVENTORY.mutations) {
     problems.push(`manifest mutations must contain exactly 560 entries; found ${manifest.mutations.length}`);
   }
@@ -4290,7 +4327,6 @@ function validateFrozenMutationTopology(
     );
   }
   if (maximumDepth !== 2) problems.push(`manifest maximum dependency depth must be 2; found ${maximumDepth}`);
-  if (sourceCatalogueValid) validateMaterializedMutations(manifest, matrix, problems);
 }
 
 function validateFrozenCaseTopology(manifest: IdentityManifest, problems: string[]): void {
@@ -4594,8 +4630,8 @@ function validateHybridPartition(
   const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
   const expectedLegacy = frozenLegacyOrder.filter((mutation) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id));
   const legacyById = new Map<string, LegacyMutationCall>();
-  const numericDeclarations = numericConstDeclarations(matrix.sourceFile);
-  const stringDeclarations = constDeclarations(matrix.sourceFile);
+  const numericDeclarations = matrix.declarations;
+  const stringDeclarations = matrix.declarations;
   if (matrix.calls.length !== 524) {
     problems.push(`release mutation hybrid remaining legacy calls must equal 524; found ${matrix.calls.length}`);
   }
@@ -5203,6 +5239,205 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
   }
 }
 
+interface PreparedReleaseMutationManifest {
+  readonly caseTopologyProblems: readonly string[];
+  readonly fingerprintProblems: readonly string[];
+  readonly fixtureIdentityProblems: readonly string[];
+  readonly inventoryProblems: readonly string[];
+  readonly manifest: IdentityManifest | null;
+  readonly mutationTopologyProblems: readonly string[];
+  readonly parseProblems: readonly string[];
+  readonly provenanceProblems: readonly string[];
+  readonly witnessProblems: readonly string[];
+}
+
+function collectProblems(validate: (problems: string[]) => void): readonly string[] {
+  const problems: string[] = [];
+  validate(problems);
+  return Object.freeze(problems);
+}
+
+function deepFreezePlainJson<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined && "value" in descriptor) deepFreezePlainJson(descriptor.value);
+  }
+  Object.freeze(value);
+  return value;
+}
+
+function prepareReleaseMutationManifest(manifestSource: string): PreparedReleaseMutationManifest {
+  const witnessProblems = collectProblems((problems) => {
+    validateWitnessCounterSemantics(problems);
+    validateProjectionComparatorSemantics(problems);
+    validateBindingClosureSemantics(problems);
+  });
+  const mutableParseProblems: string[] = [];
+  const parsedManifest = parseManifest(manifestSource, mutableParseProblems);
+  const parseProblems = Object.freeze(mutableParseProblems);
+  if (parsedManifest === null) {
+    return {
+      manifest: null,
+      witnessProblems,
+      parseProblems,
+      fixtureIdentityProblems: Object.freeze([]),
+      provenanceProblems: Object.freeze([]),
+      inventoryProblems: Object.freeze([]),
+      mutationTopologyProblems: Object.freeze([]),
+      caseTopologyProblems: Object.freeze([]),
+      fingerprintProblems: Object.freeze([])
+    };
+  }
+  const manifest = deepFreezePlainJson(parsedManifest);
+  return {
+    manifest,
+    witnessProblems,
+    parseProblems,
+    fixtureIdentityProblems: collectProblems((problems) => {
+      if (sha256(manifestSource) !== IDENTITY_FIXTURE_SHA256) {
+        problems.push(`release mutation identity fixture must remain byte-exact SHA-256 ${IDENTITY_FIXTURE_SHA256}`);
+      }
+    }),
+    provenanceProblems: collectProblems((problems) => validateFrozenProvenance(manifest, problems)),
+    inventoryProblems: collectProblems((problems) => validateInventory(manifest, problems)),
+    mutationTopologyProblems: collectProblems((problems) => validateFrozenManifestMutationTopology(manifest, problems)),
+    caseTopologyProblems: collectProblems((problems) => validateFrozenCaseTopology(manifest, problems)),
+    fingerprintProblems: collectProblems((problems) => validateSemanticFingerprints(manifest, problems))
+  };
+}
+
+function exactSourceProjection(sourceValues: ReadonlyMap<string, string>): readonly string[] | null {
+  const projection: string[] = [];
+  for (const source of EXPECTED_SOURCES) {
+    const value = sourceValues.get(source.id);
+    if (value === undefined) return null;
+    projection.push(value);
+  }
+  return Object.freeze(projection);
+}
+
+function projectionsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function validateProjectionComparatorSemantics(problems: string[]): void {
+  const baseline = EXPECTED_SOURCES.map((source, index) => `${index}:${source.id}`);
+  if (!projectionsEqual(baseline, [...baseline]) || projectionsEqual(baseline, baseline.slice(0, -1))) {
+    problems.push("release mutation source projection comparator must preserve exact length and equality");
+    return;
+  }
+  for (let index = 0; index < baseline.length; index++) {
+    const candidate = [...baseline];
+    const current = candidate[index];
+    if (current === undefined) continue;
+    candidate[index] = `${current}#byte-drift`;
+    if (projectionsEqual(baseline, candidate)) {
+      problems.push(
+        `release mutation source projection comparator must distinguish all ${EXPECTED_SOURCES.length} exact slots`
+      );
+      return;
+    }
+  }
+}
+
+/**
+ * Creates an execution-scoped auditor for repeated matrix checks against one immutable fixture.
+ *
+ * Fixture parsing and manifest-only topology are prepared once. Every matrix candidate still gets
+ * a fresh TypeScript AST, matrix-only validation and complete cross-axis validation. The expensive
+ * materialized mutation graph is reused only after all 30 independently materialized source byte
+ * strings compare exactly with the clean projection captured by this auditor instance.
+ *
+ * @param manifestSource - Immutable generated schema-v2 manifest JSON bytes.
+ * @returns An opaque auditor whose cache cannot escape this explicit execution scope.
+ * @example
+ * const auditor = createReleaseMutationIdentityAuditor(fixtureSource);
+ * const problems = auditor.auditMatrix(matrixSource);
+ */
+export function createReleaseMutationIdentityAuditor(manifestSource: string): ReleaseMutationIdentityAuditor {
+  const prepared = prepareReleaseMutationManifest(manifestSource);
+  let cachedProjection: readonly string[] | null = null;
+  let cachedGraphProblems: readonly string[] = Object.freeze([]);
+  let materializedGraphEvaluations = 0;
+  let materializedGraphReuses = 0;
+  let sourceCatalogueBypasses = 0;
+  let sourceProjectionBypasses = 0;
+
+  return Object.freeze({
+    auditMatrix(matrixSource: string): string[] {
+      const problems: string[] = [...prepared.witnessProblems];
+      const observedHybridSourceSha256 = sha256(matrixSource);
+      if (observedHybridSourceSha256 !== CURRENT_HYBRID_SOURCE_SHA256) {
+        problems.push(
+          `release mutation hybrid current source must retain exact SHA-256 ` +
+            `${CURRENT_HYBRID_SOURCE_SHA256}; found ${observedHybridSourceSha256}`
+        );
+      }
+      problems.push(...prepared.parseProblems);
+      const manifest = prepared.manifest;
+      if (manifest === null) return problems;
+      problems.push(...prepared.fixtureIdentityProblems);
+
+      const matrix = scanMatrix(matrixSource, problems);
+      if (matrix === null) return problems;
+      const observedHybridMatrixSha256 = sha256(matrix.matrixSlice);
+      if (observedHybridMatrixSha256 !== CURRENT_HYBRID_MATRIX_SLICE_SHA256) {
+        problems.push(
+          `release mutation hybrid current matrix slice must retain exact SHA-256 ` +
+            `${CURRENT_HYBRID_MATRIX_SLICE_SHA256}; found ${observedHybridMatrixSha256}`
+        );
+      }
+
+      validateRawExpressionShape(matrix, problems, false);
+      problems.push(...prepared.provenanceProblems);
+      problems.push(...prepared.inventoryProblems);
+      const sourceCatalogueValid = validateSources(manifest, matrix, problems);
+      validateCardinalityConstants(matrix, problems);
+      problems.push(...prepared.mutationTopologyProblems);
+      if (!sourceCatalogueValid) {
+        sourceCatalogueBypasses++;
+      } else {
+        const sourceProblems: string[] = [];
+        const sourceValues = materializeSourceValues(manifest, matrix, sourceProblems);
+        problems.push(...sourceProblems);
+        const projection = sourceProblems.length === 0 ? exactSourceProjection(sourceValues) : null;
+        if (projection !== null && cachedProjection !== null && projectionsEqual(projection, cachedProjection)) {
+          materializedGraphReuses++;
+          problems.push(...cachedGraphProblems);
+        } else {
+          if (cachedProjection !== null) sourceProjectionBypasses++;
+          const graphProblems: string[] = [];
+          validateMaterializedMutationValues(manifest, sourceValues, graphProblems);
+          materializedGraphEvaluations++;
+          problems.push(...graphProblems);
+          if (cachedProjection === null && projection !== null && graphProblems.length === 0) {
+            cachedProjection = projection;
+            cachedGraphProblems = Object.freeze([...graphProblems]);
+          }
+        }
+      }
+      problems.push(...prepared.caseTopologyProblems);
+      problems.push(...prepared.fingerprintProblems);
+
+      const declarative = scanHybridDeclarativeMatrix(matrix, problems);
+      const legacyById = validateHybridPartition(manifest, matrix, declarative, problems);
+      validateRemainingLegacyMatchers(manifest, matrix, legacyById, problems);
+      validateRegistryEvaluatorPins(matrix, problems);
+      return problems;
+    },
+    telemetry(): Readonly<ReleaseMutationIdentityAuditTelemetry> {
+      return Object.freeze({
+        fixturePreparations: 1,
+        materializedGraphEvaluations,
+        materializedGraphReuses,
+        sourceCatalogueBypasses,
+        sourceProjectionBypasses
+      });
+    }
+  });
+}
+
 /**
  * Audits a generated schema-v2 release mutation identity manifest against the exact legacy matrix AST.
  *
@@ -5250,41 +5485,5 @@ export function releaseMutationExactLegacyIdentityAuditProblems(
  * @returns Stable diagnostics; empty only for the exact m002-m037 hybrid boundary.
  */
 export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
-  const problems: string[] = [];
-  validateWitnessCounterSemantics(problems);
-  const observedHybridSourceSha256 = sha256(matrixSource);
-  if (observedHybridSourceSha256 !== CURRENT_HYBRID_SOURCE_SHA256) {
-    problems.push(
-      `release mutation hybrid current source must retain exact SHA-256 ` +
-        `${CURRENT_HYBRID_SOURCE_SHA256}; found ${observedHybridSourceSha256}`
-    );
-  }
-  const manifest = parseManifest(manifestSource, problems);
-  if (manifest === null) return problems;
-  if (sha256(manifestSource) !== IDENTITY_FIXTURE_SHA256) {
-    problems.push(`release mutation identity fixture must remain byte-exact SHA-256 ${IDENTITY_FIXTURE_SHA256}`);
-  }
-  const matrix = scanMatrix(matrixSource, problems);
-  if (matrix === null) return problems;
-  const observedHybridMatrixSha256 = sha256(matrix.matrixSlice);
-  if (observedHybridMatrixSha256 !== CURRENT_HYBRID_MATRIX_SLICE_SHA256) {
-    problems.push(
-      `release mutation hybrid current matrix slice must retain exact SHA-256 ` +
-        `${CURRENT_HYBRID_MATRIX_SLICE_SHA256}; found ${observedHybridMatrixSha256}`
-    );
-  }
-
-  validateRawExpressionShape(matrix, problems, false);
-  validateFrozenProvenance(manifest, problems);
-  validateInventory(manifest, problems);
-  const sourceCatalogueValid = validateSources(manifest, matrix, problems);
-  validateFrozenMutationTopology(manifest, matrix, sourceCatalogueValid, problems);
-  validateFrozenCaseTopology(manifest, problems);
-  validateSemanticFingerprints(manifest, problems);
-
-  const declarative = scanHybridDeclarativeMatrix(matrix, problems);
-  const legacyById = validateHybridPartition(manifest, matrix, declarative, problems);
-  validateRemainingLegacyMatchers(manifest, matrix, legacyById, problems);
-  validateRegistryEvaluatorPins(matrix, problems);
-  return problems;
+  return createReleaseMutationIdentityAuditor(manifestSource).auditMatrix(matrixSource);
 }
